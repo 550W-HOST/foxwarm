@@ -369,7 +369,7 @@ Example:
         {
             name: 'get_session_messages',
             defaultInject: true,
-            description: 'Get messages from a session with optional pagination. Defaults to last 10 messages. Output uses a total previewLength budget (auto-clamped to 1000-20000), folds tool calls/results by default, and can post-filter the selected result set with contentFilter/includeRegex/excludeRegex.',
+            description: 'Get messages and the current execution state from a session with optional pagination. Defaults to last 10 messages. Output uses a total previewLength budget (auto-clamped to 1000-20000), folds tool calls/results by default, and can post-filter the selected result set with contentFilter/includeRegex/excludeRegex.',
             parameters: {
                 type: 'object',
                 properties: {

@@ -53,7 +53,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 ### toolsSessionAgent/archiveRecall.ts — Archive retrieval and recall
 | Function | Description |
 |----------|-------------|
-| `tool_get_session_messages` | Returns recent messages through the shared total-budget preview renderer |
+| `tool_get_session_messages` | Returns recent messages plus the target session's canonical execution-state summary through the shared total-budget preview renderer |
 | `tool_get_archived_messages` | Fetches archived messages by sequence range |
 | `tool_get_archived_blocks` | Fetches archived context blocks by ID range |
 | `tool_recall` | Retrieves archived context via target selector syntax |
@@ -147,7 +147,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 
 ## Behavior
 
-- `get_session_messages` and `recall` render through the shared context preview renderer: `previewLength` is a total output budget, values are clamped to 1000-20000 with a warning, tool calls/results default to name/id/status-only, and `contentFilter` / `includeRegex` / `excludeRegex` post-filter full message/block/tool content with match-centered snippets.
+- `get_session_messages` and `recall` render through the shared context preview renderer: `previewLength` is a total output budget, values are clamped to 1000-20000 with a warning, tool calls/results default to name/id/status-only, and `contentFilter` / `includeRegex` / `excludeRegex` post-filter full message/block/tool content with match-centered snippets. Every successful `get_session_messages` result also includes the target session's concise canonical runtime-state summary, including empty pages and pages reduced to zero matches; a nonzero queue length is appended without changing message selection or filter semantics.
 - `contentFilter` is a literal case-insensitive result post-filter, never a semantic or retrieval query. `get_session_messages` first selects its page; exact recall first resolves `target`; vector recall first searches with `vector_query` and reloads source archive items; only then does the shared renderer filter. Filter stages run in the documented order `contentFilter` -> `includeRegex` -> `excludeRegex`, report separate exclusion counts, and keep the notice visible even when zero items remain or body previews are truncated.
 - For CTX-BLOCK drill-down, the block metadata/summary header is not counted as a raw source message. Message-backed blocks post-filter/count source messages; block-backed blocks post-filter/count immediate child block summary items. When `contentFilter` excludes anything, recall tells the caller to omit it for complete target contents and use `vector_query` for semantic search.
 - The old `query` argument has been removed from both model-facing schemas and is explicitly rejected by the `recall` / `get_session_messages` runtime rather than silently ignored or compatibility-read.
@@ -175,6 +175,8 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - The `__toolLoopControl` return shape is consumed by the orchestration layer to halt or continue the agent turn loop.
 
 ## Design Decisions
+
+- [2026-08-01] Every successful `get_session_messages` response must include the target session's execution state via the shared `buildSessionRuntimeState` and `formatSessionRuntimeStateSummary` path, including empty and fully filtered pages. Keep the four-state runtime taxonomy canonical rather than defining retrieval-specific labels; append only a nonzero queue count when the compact summary would otherwise omit pending work.
 
 - [2026-07-22] Rename the shared literal result filter on `recall` and `get_session_messages` from ambiguous `query` to `contentFilter`. It is explicitly a case-insensitive post-filter after target/page/vector retrieval; `target` owns exact CTX-BLOCK/range selection and `vector_query` owns semantic search. Do not preserve old `query` compatibility: reject it clearly. Report staged literal/include/exclude exclusion counts, and preserve the count/omit-filter hint even for zero-result or truncated previews.
 

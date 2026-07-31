@@ -161,6 +161,73 @@ test('get_session_messages treats previewLength as a clamped total preview budge
   }
 });
 
+test('get_session_messages reports canonical execution state for populated, filtered, and empty pages', async () => {
+  const { sessionManager, toolsSessionAgent } = await loadDeps();
+  const sessionId = makeId('session_messages_execution_state');
+  const startedAt = Date.now() - 1000;
+
+  try {
+    const session = await ensureSession(sessionManager, sessionId);
+    await appendTextMessages(sessionManager, session, ['execution state probe']);
+
+    const idleResult = String(await toolsSessionAgent.tool_get_session_messages({ sessionId }, {}));
+    assert.match(idleResult, /Session execution state: idle\./);
+
+    sessionManager.setActiveSessionRuntimeState(sessionId, {
+      state: 'requesting-model',
+      since: startedAt,
+      active: { phase: 'normal-turn', modelKey: 'test-model' },
+    });
+    const modelResult = String(await toolsSessionAgent.tool_get_session_messages({ sessionId }, {}));
+    assert.match(modelResult, /Session execution state: requesting-model\./);
+
+    session.queue = [{ type: 'background', parts: [{ text: 'queued work' }] } as any];
+    sessionManager.setActiveSessionRuntimeState(sessionId, {
+      state: 'running-tool',
+      since: startedAt,
+      active: { phase: 'normal-turn' },
+      tool: { name: 'exec', index: 0, total: 1, startedAt },
+    });
+    const toolResult = String(await toolsSessionAgent.tool_get_session_messages({ sessionId }, {}));
+    assert.match(toolResult, /Session execution state: running-tool:exec 1\/1; queue: 1\./);
+
+    sessionManager.clearActiveSessionRuntimeState(sessionId);
+    session.queue = [];
+    session.meta.wait = {
+      id: 'session-messages-wait',
+      startedAt,
+      waitAll: {
+        sessions: ['child-a', 'child-b'],
+        satisfiedSessions: ['child-a'],
+        deferredQueue: [],
+      },
+    } as any;
+    const filteredResult = String(await toolsSessionAgent.tool_get_session_messages({
+      sessionId,
+      contentFilter: 'does not match',
+    }, {}));
+    assert.match(filteredResult, /Session execution state: waiting:sessions 1\/2\./);
+    assert.equal((filteredResult.match(/Session execution state:/g) || []).length, 1);
+    assert.match(filteredResult, /No messages matched the requested filters/);
+
+    delete session.meta.wait;
+    const emptyPageResult = String(await toolsSessionAgent.tool_get_session_messages({
+      sessionId,
+      start: 99,
+      count: 1,
+    }, {}));
+    assert.match(emptyPageResult, /Session execution state: idle\./);
+    assert.match(emptyPageResult, /No messages found in session/);
+  } finally {
+    sessionManager.clearActiveSessionRuntimeState(sessionId);
+    try {
+      await sessionManager.deleteSession(sessionId);
+    } catch {
+      // ignore cleanup failure in tests
+    }
+  }
+});
+
 test('archived message/block tools use the clamped total preview budget', async () => {
   const deps = await loadDeps();
   const sessionId = makeId('archive_guard_archived_items');

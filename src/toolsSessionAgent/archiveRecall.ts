@@ -1,7 +1,7 @@
 import * as sessionManager from '../sessionManager';
 import { formatArchiveBlockContextText, formatArchiveBlockTimeRange, getArchiveBlockEndTimestamp, getArchiveBlockStartTimestamp, renderBlockMessage, type ArchiveBlockRecord } from '../session/layeredContext';
 import type { ArchiveMessageRecord } from '../session/archive';
-import type { Message } from '../types';
+import type { Message, Session } from '../types';
 import * as vector from '../vector';
 import {
   createArchivedBlockContextPreviewItem,
@@ -658,6 +658,11 @@ async function resolveRecallBlockMessageRange(
   };
 }
 
+function formatSessionExecutionState(session: Session): string {
+  const runtimeState = sessionManager.buildSessionRuntimeState(session);
+  const queue = runtimeState.queueLength > 0 ? `; queue: ${runtimeState.queueLength}` : '';
+  return `Session execution state: ${sessionManager.formatSessionRuntimeStateSummary(runtimeState)}${queue}.`;
+}
 
 export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContext) {
   assertNoRemovedQueryArg(args, 'get_session_messages');
@@ -669,6 +674,7 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
     return `Session \`${sessionId}\` not found.`;
   }
 
+  const executionState = formatSessionExecutionState(session);
   const totalMessages = session.history.length;
   let actualStart = start;
   let actualCount = count;
@@ -692,7 +698,7 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
   const messages = await sessionManager.getSessionMessages(sessionId, actualStart, actualCount);
 
   if (messages.length === 0) {
-    return `No messages found in session \`${sessionId}\` (total: ${totalMessages} messages).`;
+    return `${executionState}\n\nNo messages found in session \`${sessionId}\` (total: ${totalMessages} messages).`;
   }
 
   const toolDetail = args.toolDetail as ContextPreviewToolDetail | undefined;
@@ -718,7 +724,7 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
     items,
     title: ({ matchedCount }) => {
       const filterSuffix = matchedCount === messages.length ? '' : ` (${matchedCount} matched after filters from ${messages.length} selected)`;
-      return `Session \`${sessionId}\` - showing ${matchedCount} of ${totalMessages} message(s)${filterSuffix}:`;
+      return `${executionState}\n\nSession \`${sessionId}\` - showing ${matchedCount} of ${totalMessages} message(s)${filterSuffix}:`;
     },
     emptyMessage: `No messages matched the requested filters in session \`${sessionId}\` (total: ${totalMessages} messages).`,
     options: {
