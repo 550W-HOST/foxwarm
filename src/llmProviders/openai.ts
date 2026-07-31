@@ -330,6 +330,10 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
             message.tool_calls = toolCalls;
         }
 
+        if (role === 'assistant' && msg.providerMeta?.providerSpecificFields) {
+            message.provider_specific_fields = msg.providerMeta.providerSpecificFields;
+        }
+
         openaiMessages.push(message);
     }
 
@@ -945,6 +949,12 @@ export async function collectOpenAIChatCompletionsStream(
                 if (nextReasoning !== message.reasoning) {
                     message.reasoning = nextReasoning;
                     changed = true;
+                }
+
+                // Opaque provider fields (e.g. reasoning_signature) are captured
+                // verbatim so later requests can echo them back unchanged.
+                if (delta.provider_specific_fields && typeof delta.provider_specific_fields === 'object') {
+                    message.provider_specific_fields = delta.provider_specific_fields;
                 }
 
                 if (Array.isArray(delta.tool_calls)) {

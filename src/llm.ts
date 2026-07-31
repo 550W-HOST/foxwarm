@@ -1642,6 +1642,7 @@ export async function chat(
         const assistantMsg: Message = {
             role: 'model',
             parts: result.allParts,
+            ...(result.providerMeta ? { providerMeta: result.providerMeta } : {}),
             ...(Object.keys(assistantMeta).length > 0 ? { __meta: assistantMeta } : {}),
         };
         await appendMessage(assistantMsg);
@@ -1936,6 +1937,7 @@ function buildConcreteRequestPlan(options: {
 function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): ChatResult {
     let responseText = '';
     const allParts: Message['parts'] = [];
+    let messageProviderMeta: ChatResult['providerMeta'];
 
     if (plan.useOpenAIResponsesApi) {
         const outputItems = Array.isArray(resp?.output) ? resp.output : [];
@@ -1977,6 +1979,9 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
     } else if (plan.useOpenAIChatCompletionsApi) {
         const choice = resp?.choices?.[0];
         const message = choice?.message;
+        if (message?.provider_specific_fields && typeof message.provider_specific_fields === 'object') {
+            messageProviderMeta = { providerSpecificFields: message.provider_specific_fields };
+        }
         if (message?.reasoning_content) {
             logger.info({ reasoningLength: message.reasoning_content.length }, 'Received reasoning content from OpenAI');
             allParts.push({ thinking: message.reasoning_content });
@@ -2074,6 +2079,7 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
         usage,
         toolCalls,
         allParts: allParts.length > 0 ? allParts : undefined,
+        ...(messageProviderMeta ? { providerMeta: messageProviderMeta } : {}),
     };
 }
 

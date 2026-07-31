@@ -47,7 +47,7 @@ Implements the OpenAI LLM provider, handling conversion of internal message form
 - **SSE stream collection**: Both stream collectors parse chunked SSE data using a buffer with `\n\n` delimiters, handle `[DONE]` sentinel, and support abort signals. They incrementally build up the response object from deltas. They also expose optional `onRawChunk(text)` and `onRawSseBlock(block)` callbacks so the caller can log exact decoded provider stream data without changing parser semantics.
 - **Progress reporting**: Both collectors emit `onProgress` callbacks with current snapshot state (reasoning text, output text, tool call names/indices) as deltas arrive.
 - **Responses API specifics**: Handles `response.output_item.added`, text/refusal/arguments deltas, reasoning summary parts, and `response.completed`. Merges streamed output with the final completed response, preferring streamed content when the completed payload has empty arrays.
-- **Chat Completions specifics**: Accumulates `content` string and `tool_calls` array from choice deltas, tracks `finish_reason` and `usage`.
+- **Chat Completions specifics**: Accumulates `content` string and `tool_calls` array from choice deltas, tracks `finish_reason` and `usage`. Captures `delta.provider_specific_fields` verbatim onto the assembled message, and `convertToOpenAIFormat` echoes persisted `Message.providerMeta.providerSpecificFields` back as `provider_specific_fields` on assistant messages.
 
 ## Integration
 

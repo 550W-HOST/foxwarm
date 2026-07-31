@@ -42,6 +42,21 @@ test('collectOpenAIChatCompletionsStream aggregates streamed text and usage', as
   assert.ok(progress.some(snapshot => snapshot.text === 'Hello'));
 });
 
+test('collectOpenAIChatCompletionsStream captures delta provider_specific_fields', async () => {
+  const stream = makeStream([
+    {
+      choices: [{ index: 0, delta: { role: 'assistant', content: '', provider_specific_fields: { reasoning_signature: 'abc123' } }, finish_reason: null }],
+    },
+    {
+      choices: [{ index: 0, delta: { content: 'Hi' }, finish_reason: 'stop' }],
+    },
+    '[DONE]',
+  ]);
+
+  const response = await collectOpenAIChatCompletionsStream(stream, new AbortController().signal);
+  assert.deepEqual(response.choices[0].message.provider_specific_fields, { reasoning_signature: 'abc123' });
+});
+
 test('collectOpenAIChatCompletionsStream reports raw SSE body and blocks', async () => {
   const stream = makeStream([
     {
@@ -309,4 +324,21 @@ test('OpenAI tool serializers prepend one persisted LLM timing marker before ima
   assert.ok(Array.isArray(firstResponse.output));
   assert.match(firstResponse.output[0].text, /prevLLMReqTime="8.2s"/);
   assert.equal(firstResponse.output.filter((part: any) => String(part.text || '').includes('prevLLMReqTime')).length, 1);
+});
+
+test('convertToOpenAIFormat echoes assistant providerSpecificFields verbatim', () => {
+  const history: Message[] = [
+    { role: 'user', parts: [{ text: 'hi' }] },
+    {
+      role: 'model',
+      parts: [{ text: 'hello' }],
+      providerMeta: { providerSpecificFields: { reasoning_signature: 'sig-xyz' } },
+    },
+    { role: 'model', parts: [{ text: 'no meta' }] },
+  ];
+
+  const chat = convertToOpenAIFormat(history);
+  assert.deepEqual(chat[1].provider_specific_fields, { reasoning_signature: 'sig-xyz' });
+  assert.equal('provider_specific_fields' in chat[0], false);
+  assert.equal('provider_specific_fields' in chat[2], false);
 });

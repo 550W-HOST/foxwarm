@@ -10,6 +10,7 @@ Defines the core TypeScript interfaces and type aliases used throughout the syst
 
 - `MessagePart` — Polymorphic message content block (text, thinking, function calls, inline data, etc.)
 - `FunctionCall` / `FunctionResponse` — Tool invocation and result structures
+- `MessageProviderMeta` — Message-level opaque provider metadata persisted on assistant messages and echoed back verbatim on later requests; `providerSpecificFields` carries the OpenAI Chat Completions `provider_specific_fields` (e.g. `reasoning_signature`) round-trip
 - `Message` — Role-tagged message with parts and metadata
 - `Session` — Full session state including history, queue, stats, model config, and context frontier
 - `QueueItem` / `QueueSource` — Inbound work items and their origin metadata; `QueueSource.weworkStreamId` carries WeWork stream/card binding from channel intake into the turn loop

@@ -26,6 +26,20 @@ export interface FunctionCall {
   argsParseError?: string;
 }
 
+/**
+ * Message-level opaque provider metadata. Persisted with assistant messages
+ * and echoed back verbatim on later provider requests.
+ */
+export interface MessageProviderMeta {
+  /**
+   * OpenAI Chat Completions `provider_specific_fields` (e.g.
+   * `reasoning_signature`), captured from the assistant message and sent back
+   * unchanged on subsequent requests.
+   */
+  providerSpecificFields?: Record<string, any>;
+  [key: string]: any;
+}
+
 export interface FunctionResponse {
   tool_use_id: string;
   name: string;
@@ -82,6 +96,8 @@ export type SessionBroadcast = (text: string, options?: any) => void;
 
 export interface Message {
   role: 'user' | 'model' | 'tool';
+  /** Message-level provider metadata echoed back on later requests. */
+  providerMeta?: MessageProviderMeta;
   /**
    * Whether this persisted timeline message should be included in future
    * model-facing context. Defaults to true for legacy/ordinary messages.
@@ -302,6 +318,8 @@ export interface ChatResult {
   usage?: TokenUsage;
   toolCalls?: Array<FunctionCall>;
   allParts?: MessagePart[];
+  /** Message-level provider metadata carried to the persisted assistant message. */
+  providerMeta?: MessageProviderMeta;
   /** Timing of the successful provider request which produced this result. */
   previousLlmRequest?: {
     completedAt: number;
