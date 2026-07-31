@@ -160,7 +160,11 @@ function mergeResponseOutputItem(existing: any, incoming: any): any {
     return merged;
 }
 
-export function convertToOpenAIFormat(contents: Message[]): any[] {
+function isProviderSpecificFields(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+export function convertToOpenAIFormat(contents: Message[], concreteModelId?: string): any[] {
     const openaiMessages = [];
 
     for (const msg of contents) {
@@ -330,7 +334,12 @@ export function convertToOpenAIFormat(contents: Message[]): any[] {
             message.tool_calls = toolCalls;
         }
 
-        if (role === 'assistant' && msg.providerMeta?.providerSpecificFields) {
+        if (
+            role === 'assistant'
+            && concreteModelId
+            && msg.providerMeta?.sourceModelId === concreteModelId
+            && isProviderSpecificFields(msg.providerMeta.providerSpecificFields)
+        ) {
             message.provider_specific_fields = msg.providerMeta.providerSpecificFields;
         }
 
@@ -853,8 +862,11 @@ export async function collectOpenAIChatCompletionsStream(
         let usage: any = null;
         let sawChoice = false;
         const decoder = new StringDecoder('utf8');
-        const toolCalls: any[] = [];
-        const toolCallByIndex = new Map<number, any>();
+        const toolCallEntries: Array<{ streamIndex: number; progressIndex: number; sequence: number; toolCall: any }> = [];
+        const toolCallByIndex = new Map<number, { streamIndex: number; progressIndex: number; sequence: number; toolCall: any }>();
+        const usedProgressIndices = new Set<number>();
+        let nextToolCallSequence = 0;
+        let nextFallbackProgressIndex = 0;
         const message: any = {
             role: 'assistant',
             content: '',
@@ -885,35 +897,59 @@ export async function collectOpenAIChatCompletionsStream(
             },
         });
 
-        const ensureToolCall = (index: number, id?: string) => {
-            let entry = toolCallByIndex.get(index);
-            if (!entry) {
-                entry = makeToolCall();
-                toolCalls.push(entry);
-                toolCallByIndex.set(index, entry);
-                return entry;
+        const addToolCall = (index: number) => {
+            let progressIndex = index;
+            if (usedProgressIndices.has(progressIndex)) {
+                while (usedProgressIndices.has(nextFallbackProgressIndex)) {
+                    nextFallbackProgressIndex++;
+                }
+                progressIndex = nextFallbackProgressIndex++;
             }
-            // Some providers reuse the same index for each parallel tool call
-            // instead of incrementing it. A fresh non-empty id different from
-            // the current one marks the start of a new tool call.
-            if (id && entry.id && id !== entry.id) {
-                entry = makeToolCall();
-                toolCalls.push(entry);
-                toolCallByIndex.set(index, entry);
-            }
+            usedProgressIndices.add(progressIndex);
+            const entry = {
+                streamIndex: index,
+                progressIndex,
+                sequence: nextToolCallSequence++,
+                toolCall: makeToolCall(),
+            };
+            toolCallEntries.push(entry);
+            toolCallByIndex.set(index, entry);
             return entry;
         };
+
+        const ensureToolCall = (index: number, id?: string, hasInitialIdentity = false) => {
+            let entry = toolCallByIndex.get(index);
+            if (!entry) {
+                return addToolCall(index).toolCall;
+            }
+            // Some providers reuse the same index for each parallel tool call
+            // instead of incrementing it. Only split when the differing id is
+            // accompanied by the initial function identity/type expected at a
+            // genuinely new call; an id-only delta may be a normal fragment.
+            if (id && entry.toolCall.id && id !== entry.toolCall.id && hasInitialIdentity) {
+                entry = addToolCall(index);
+            }
+            return entry.toolCall;
+        };
+
+        const getOrderedToolCallEntries = () => [...toolCallEntries]
+            .sort((left, right) => left.streamIndex - right.streamIndex || left.sequence - right.sequence);
+
+        const getOrderedToolCalls = () => getOrderedToolCallEntries().map(entry => entry.toolCall);
 
         const buildReasoningSnapshot = (): string => [message.reasoning_content, message.reasoning]
             .filter((value: unknown): value is string => typeof value === 'string' && value.length > 0)
             .join('\n');
 
         const buildToolCallSnapshot = (): OpenAIStreamToolCallSnapshot[] =>
-            toolCalls.map((toolCall, index) => ({
-                    index,
+            getOrderedToolCallEntries().map(entry => {
+                const toolCall = entry.toolCall;
+                return {
+                    index: entry.progressIndex,
                     ...(cleanSnapshotString(toolCall.id) ? { id: cleanSnapshotString(toolCall.id) } : {}),
                     ...(cleanSnapshotString(toolCall.function?.name) ? { name: cleanSnapshotString(toolCall.function?.name) } : {}),
-                }));
+                };
+            });
 
         const emitProgressUpdate = () => {
             options?.onProgress?.({
@@ -965,14 +1001,19 @@ export async function collectOpenAIChatCompletionsStream(
                 }
 
                 // Opaque provider fields (e.g. reasoning_signature) are captured
-                // verbatim so later requests can echo them back unchanged.
-                if (delta.provider_specific_fields && typeof delta.provider_specific_fields === 'object') {
+                // verbatim so later requests to the same concrete model can
+                // echo them back unchanged.
+                if (isProviderSpecificFields(delta.provider_specific_fields)) {
                     message.provider_specific_fields = delta.provider_specific_fields;
                 }
 
                 if (Array.isArray(delta.tool_calls)) {
                     for (const toolCallDelta of delta.tool_calls) {
-                        const entry = ensureToolCall(toolCallDelta.index ?? 0, toolCallDelta.id);
+                        const hasInitialIdentity = !!(
+                            toolCallDelta.type
+                            || (typeof toolCallDelta.function?.name === 'string' && toolCallDelta.function.name.length > 0)
+                        );
+                        const entry = ensureToolCall(toolCallDelta.index ?? 0, toolCallDelta.id, hasInitialIdentity);
                         if (toolCallDelta.id) {
                             entry.id = appendDelta(entry.id, toolCallDelta.id) || entry.id;
                         }
@@ -1045,8 +1086,9 @@ export async function collectOpenAIChatCompletionsStream(
                     return;
                 }
 
-                if (toolCalls.length > 0) {
-                    message.tool_calls = toolCalls;
+                const orderedToolCalls = getOrderedToolCalls();
+                if (orderedToolCalls.length > 0) {
+                    message.tool_calls = orderedToolCalls;
                 }
 
                 resolve({

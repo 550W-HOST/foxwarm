@@ -34,10 +34,11 @@ export interface MessageProviderMeta {
   /**
    * OpenAI Chat Completions `provider_specific_fields` (e.g.
    * `reasoning_signature`), captured from the assistant message and sent back
-   * unchanged on subsequent requests.
+   * unchanged on subsequent requests to the same concrete model.
    */
-  providerSpecificFields?: Record<string, any>;
-  [key: string]: any;
+  providerSpecificFields: Record<string, unknown>;
+  /** Canonical concrete model id which produced `providerSpecificFields`. */
+  sourceModelId: string;
 }
 
 export interface FunctionResponse {

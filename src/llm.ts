@@ -1835,7 +1835,7 @@ function buildConcreteRequestPlan(options: {
             stream: true,
         };
     } else if (useOpenAIChatCompletionsApi) {
-        messages = convertToOpenAIFormatProvider(fixedContents);
+        messages = convertToOpenAIFormatProvider(fixedContents, modelId);
         url = `${baseUrl}/chat/completions`;
         headers = {
             'Content-Type': 'application/json',
@@ -1979,8 +1979,15 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
     } else if (plan.useOpenAIChatCompletionsApi) {
         const choice = resp?.choices?.[0];
         const message = choice?.message;
-        if (message?.provider_specific_fields && typeof message.provider_specific_fields === 'object') {
-            messageProviderMeta = { providerSpecificFields: message.provider_specific_fields };
+        if (
+            message?.provider_specific_fields
+            && typeof message.provider_specific_fields === 'object'
+            && !Array.isArray(message.provider_specific_fields)
+        ) {
+            messageProviderMeta = {
+                providerSpecificFields: message.provider_specific_fields,
+                sourceModelId: plan.modelId,
+            };
         }
         if (message?.reasoning_content) {
             logger.info({ reasoningLength: message.reasoning_content.length }, 'Received reasoning content from OpenAI');
