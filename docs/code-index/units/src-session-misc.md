@@ -11,7 +11,7 @@ Provides session archiving (persisting messages with canonical image references)
 - `ArchiveMessageRecord` — interface for serialized archive message entries
 - `buildArchiveRecord`, `appendMessagesToArchive`, `readArchiveMessages`, `readLocalArchiveMessages`, `readArchiveMessagesBySeqRange`, `readLocalArchiveMessagesBySeqRange` — archive read/write functions
 - `ensureMessageSeq`, `getNextSessionMessageSeq`, `stripMessageSeq` — message sequence utilities
-- `setSessionParent`, `updateChildSessionParentIds`, `getChildSessionIds`, `isDirectSessionLink` — session relationship management
+- `setSessionParent`, `resolveSessionParentId`, `updateChildSessionParentIds`, `getChildSessionIds`, `getCanonicalChildSessionIds`, `collectSessionDescendants`, `isDirectSessionLink` — session relationship management and alias-normalized lifecycle traversal
 - `resolvePermittedSessionTarget`, `sendToSession` — inter-session messaging with special target resolution (`<main>`, `<parent>`), isolation checks, self-send rejection, and source-boundary timestamped metadata
 - `ManagedSessionState`, `getManagedSessionState`, `setManagedSessionState`, `isManagedSessionActive`, `isManagedSessionLeaseExpired`, `shouldRouteQueueItemToManagedInbox` — managed session lease/state
 - `isModelVisibleMessage`, `createDisplayOnlyModelMessage`, `redactDisplayOnlyMessageForModel`, `formatModelVisibilitySuffix` — message visibility helpers
@@ -34,6 +34,9 @@ Provides session archiving (persisting messages with canonical image references)
 | `readLocalArchiveMessagesBySeqRange(sessionId, start, end)` | ~167 | Reads local archive messages within a seq range |
 | `persistSessionMetadataUpdate(deps, sessionId, updates)` | ~20 | Persists partial session metadata to history file |
 | `getChildSessionIds(sessions, parentSessionId)` | ~34 | Returns IDs of child sessions for a parent |
+| `getCanonicalChildSessionIds(sessions, parentSessionId)` | relations.ts | Returns alias-normalized direct child IDs without traversing deeper relations |
+| `collectSessionDescendants(sessions, rootSessionId)` | relations.ts | Returns canonical descendants/direct children/deepest-first order and rejects corrupt cycles |
+| `resolveSessionParentId(deps, childSessionId, parentSessionId)` | relations.ts | Resolves aliases and validates existence/self/cycle constraints without mutating the relation |
 | `setSessionParent(deps, childSessionId, parentSessionId)` | ~40 | Sets or clears a session's parent relationship |
 | `updateChildSessionParentIds(deps, oldParentId, newParentId)` | ~82 | Re-parents all children from old to new parent |
 | `isDirectSessionLink(a, b)` | ~100 | Checks if two sessions are the same or direct parent/child |

@@ -954,7 +954,8 @@ Example:
                     newSessionId: { type: 'string', description: 'New session ID without agent prefix (cannot contain /). Default to "main" if createAgent=true.' },
                     createAgent: { type: 'boolean', description: 'Whether to create a new agent (default: false)' },
                     newAgentName: { type: 'string', description: 'Target agent name. Required if createAgent=true or moving to different agent. If omitted, renames within same agent.' },
-                    createAgentInheritMemory: { type: 'boolean', description: 'Whether to inherit memory when creating agent (only valid when createAgent=true)' }
+                    createAgentInheritMemory: { type: 'boolean', description: 'Whether to inherit memory when creating agent (only valid when createAgent=true)' },
+                    parentSessionId: { type: 'string', description: 'Optional existing parent session ID to assign after the identity move. Omit to preserve the current incoming parent relation.' }
                 }
             }
         }

@@ -7,6 +7,7 @@ import { getSessionRuntimeSummary, getSessionRuntimeStateName, isSessionRuntimeA
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import { compareSessionListSessions, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
 import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
+import { getCanonicalSessionDescendantIds } from '../sessionTreeActions'
 
 export interface Session {
   id: string
@@ -474,6 +475,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const [visibleRootCount, setVisibleRootCount] = useState(DEFAULT_VISIBLE_ROOTS)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [deleteIncludeDescendants, setDeleteIncludeDescendants] = useState(false)
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+  const [archiveConfirm, setArchiveConfirm] = useState<string | null>(null)
+  const [archiveIncludeDescendants, setArchiveIncludeDescendants] = useState(false)
+  const [archiveSubmitting, setArchiveSubmitting] = useState(false)
+  const [archiveError, setArchiveError] = useState('')
   const [renameSessionId, setRenameSessionId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [renameSubmitting, setRenameSubmitting] = useState(false)
@@ -506,6 +514,15 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const isFiltering = normalizedFilterQuery.length > 0
 
   const sessionMap = useMemo(() => new Map(sessions.map(session => [session.id, session])), [sessions])
+
+  const getLifecycleDescendantIds = (sessionId: string): string[] => {
+    try {
+      return getCanonicalSessionDescendantIds(sessions, sessionId)
+    } catch (error) {
+      console.error('[SESSION TREE] Failed to traverse descendants:', error)
+      return []
+    }
+  }
 
   const aliasMap = useMemo(() => {
     const map = new Map<string, string>()
@@ -792,8 +809,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }
 
   // API calls
-  const deleteSession = async (sessionId: string) => {
+  const deleteSession = async (sessionId: string, includeDescendants: boolean) => {
+    if (deleteSubmitting) return
     try {
+      setDeleteSubmitting(true)
+      setDeleteError('')
       const token = getStoredAuthToken()
       const url = `${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}`
       console.log('[DELETE] Sending request to:', url)
@@ -802,35 +822,43 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       const response = await fetch(url, {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${token}`
-        }
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ includeDescendants })
       })
       
       console.log('[DELETE] Response status:', response.status)
       console.log('[DELETE] Response ok:', response.ok)
       
       if (!response.ok) {
-        const error = await response.json()
+        const error = await response.json().catch(() => ({ error: `Request failed with ${response.status}` }))
         console.error('[DELETE] Error response:', error)
-        alert(`Failed to delete session: ${error.error}`)
+        setDeleteError(error.error || `Request failed with ${response.status}`)
       } else {
         console.log('[DELETE] Success')
+        setContextMenu(null)
+        setDeleteConfirm(null)
+        setDeleteIncludeDescendants(false)
       }
     } catch (err) {
       console.error('[DELETE] Exception:', err)
-      alert('Failed to delete session')
+      setDeleteError('Failed to reach Foxwarm. Check the connection and retry.')
+    } finally {
+      setDeleteSubmitting(false)
     }
-    setContextMenu(null)
-    setDeleteConfirm(null)
   }
 
-  const toggleArchive = async (sessionId: string, archived: boolean) => {
+  const toggleArchive = async (sessionId: string, archived: boolean, includeDescendants: boolean = false) => {
+    if (archiveSubmitting) return
     try {
+      setArchiveSubmitting(true)
+      setArchiveError('')
       const token = getStoredAuthToken()
       const url = `${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/archive`
       console.log('[ARCHIVE] Sending request to:', url)
       console.log('[ARCHIVE] Token:', token ? 'present' : 'missing')
-      console.log('[ARCHIVE] Body:', { archived })
+      console.log('[ARCHIVE] Body:', { archived, includeDescendants })
       
       const response = await fetch(url, {
         method: 'POST',
@@ -838,23 +866,43 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ archived })
+        body: JSON.stringify({ archived, includeDescendants })
       })
       
       console.log('[ARCHIVE] Response status:', response.status)
       console.log('[ARCHIVE] Response ok:', response.ok)
       
       if (!response.ok) {
-        const error = await response.json()
+        const error = await response.json().catch(() => ({ error: `Request failed with ${response.status}` }))
         console.error('[ARCHIVE] Error response:', error)
-        alert(`Failed to archive session: ${error.error}`)
+        if (archiveConfirm) setArchiveError(error.error || `Request failed with ${response.status}`)
+        else alert(`Failed to archive session: ${error.error || `Request failed with ${response.status}`}`)
       } else {
         console.log('[ARCHIVE] Success')
+        setArchiveConfirm(null)
+        setArchiveIncludeDescendants(false)
+        setContextMenu(null)
       }
     } catch (err) {
       console.error('[ARCHIVE] Exception:', err)
-      alert('Failed to archive session')
+      if (archiveConfirm) setArchiveError('Failed to reach Foxwarm. Check the connection and retry.')
+      else alert('Failed to archive session')
+    } finally {
+      setArchiveSubmitting(false)
     }
+  }
+
+  const openDeleteDialog = (sessionId: string) => {
+    setDeleteConfirm(sessionId)
+    setDeleteIncludeDescendants(false)
+    setDeleteError('')
+    setContextMenu(null)
+  }
+
+  const openArchiveDialog = (sessionId: string) => {
+    setArchiveConfirm(sessionId)
+    setArchiveIncludeDescendants(false)
+    setArchiveError('')
     setContextMenu(null)
   }
 
@@ -1159,6 +1207,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const hasParent = !!session?.parentSessionId
     const parentSession = hasParent ? sessionMap.get(session!.parentSessionId!) : undefined
     const grandparentId = parentSession?.parentSessionId || undefined
+    const descendantCount = getLifecycleDescendantIds(contextMenu.sessionId).length
 
     return [
       {
@@ -1177,7 +1226,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         key: 'archive',
         icon: isArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />,
         label: isArchived ? 'Unarchive' : 'Archive',
-        onSelect: () => { void toggleArchive(contextMenu.sessionId, !isArchived) },
+        onSelect: () => {
+          if (!isArchived && descendantCount > 0) openArchiveDialog(contextMenu.sessionId)
+          else void toggleArchive(contextMenu.sessionId, !isArchived)
+        },
       },
       {
         key: 'fork',
@@ -1219,11 +1271,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         icon: <Trash2 size={14} />,
         label: 'Delete',
         danger: true,
-        onSelect: () => setDeleteConfirm(contextMenu.sessionId),
+        onSelect: () => openDeleteDialog(contextMenu.sessionId),
       },
     ] as ContextMenuEntry[]
   })() : []
 
+  const deleteDescendantCount = deleteConfirm ? getLifecycleDescendantIds(deleteConfirm).length : 0
+  const archiveDescendantCount = archiveConfirm ? getLifecycleDescendantIds(archiveConfirm).length : 0
   const ViewModeIcon = SESSION_LIST_VIEW_MODE_ICONS[viewMode]
 
   return (
@@ -1369,26 +1423,104 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       {/* Delete Confirmation Dialog */}
       {deleteConfirm && (
         <div className="foxwarm-session-delete-modal-backdrop fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="foxwarm-session-delete-modal bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md mx-4">
+          <div className="foxwarm-session-delete-modal bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
             <h3 className="foxwarm-session-delete-modal-title text-lg font-semibold mb-4 text-gray-900 dark:text-white">
               Delete Session
             </h3>
-            <p className="foxwarm-session-delete-modal-body text-gray-600 dark:text-gray-400 mb-6">
+            <p className="foxwarm-session-delete-modal-body text-gray-600 dark:text-gray-400 mb-4">
               Are you sure you want to delete session <span className="foxwarm-session-delete-session-id font-mono text-sm">{deleteConfirm}</span>?
               This action cannot be undone.
             </p>
+            {deleteDescendantCount > 0 && (
+              <label className="mb-4 flex cursor-pointer items-start gap-2 rounded border border-gray-200 p-3 text-sm text-gray-700 dark:border-gray-700 dark:text-gray-300">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={deleteIncludeDescendants}
+                  onChange={(event) => setDeleteIncludeDescendants(event.currentTarget.checked)}
+                  disabled={deleteSubmitting}
+                />
+                <span>Also delete {deleteDescendantCount} descendant session{deleteDescendantCount === 1 ? '' : 's'} (all levels)</span>
+              </label>
+            )}
+            {deleteError && (
+              <p role="alert" className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900/70 dark:bg-red-950/40 dark:text-red-200">
+                {deleteError}
+              </p>
+            )}
             <div className="foxwarm-session-delete-modal-actions flex justify-end gap-3">
               <button
-                onClick={() => setDeleteConfirm(null)}
+                onClick={() => {
+                  setDeleteConfirm(null)
+                  setDeleteIncludeDescendants(false)
+                  setDeleteError('')
+                }}
                 className="foxwarm-session-delete-cancel-button px-4 py-2 text-sm rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+                disabled={deleteSubmitting}
               >
                 Cancel
               </button>
               <button
-                onClick={() => deleteSession(deleteConfirm)}
-                className="foxwarm-session-delete-confirm-button px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700"
+                onClick={() => deleteSession(deleteConfirm, deleteIncludeDescendants)}
+                className="foxwarm-session-delete-confirm-button px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
+                disabled={deleteSubmitting}
               >
-                Delete
+                {deleteSubmitting
+                  ? 'Deleting...'
+                  : deleteIncludeDescendants
+                    ? `Delete ${deleteDescendantCount + 1} sessions`
+                    : 'Delete session'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Archive Confirmation Dialog */}
+      {archiveConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="mx-4 w-full max-w-md rounded-lg bg-white p-6 dark:bg-gray-800">
+            <h3 className="mb-4 text-lg font-semibold text-gray-900 dark:text-white">Archive Session</h3>
+            <p className="mb-4 text-gray-600 dark:text-gray-400">
+              Archive session <span className="font-mono text-sm">{archiveConfirm}</span>?
+            </p>
+            <label className="mb-4 flex cursor-pointer items-start gap-2 rounded border border-gray-200 p-3 text-sm text-gray-700 dark:border-gray-700 dark:text-gray-300">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={archiveIncludeDescendants}
+                onChange={(event) => setArchiveIncludeDescendants(event.currentTarget.checked)}
+                disabled={archiveSubmitting}
+              />
+              <span>Also archive {archiveDescendantCount} descendant session{archiveDescendantCount === 1 ? '' : 's'} (all levels)</span>
+            </label>
+            {archiveError && (
+              <p role="alert" className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900/70 dark:bg-red-950/40 dark:text-red-200">
+                {archiveError}
+              </p>
+            )}
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setArchiveConfirm(null)
+                  setArchiveIncludeDescendants(false)
+                  setArchiveError('')
+                }}
+                className="rounded bg-gray-200 px-4 py-2 text-sm text-gray-700 hover:bg-gray-300 disabled:opacity-60 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+                disabled={archiveSubmitting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => toggleArchive(archiveConfirm, true, archiveIncludeDescendants)}
+                className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-60"
+                disabled={archiveSubmitting}
+              >
+                {archiveSubmitting
+                  ? 'Archiving...'
+                  : archiveIncludeDescendants
+                    ? `Archive ${archiveDescendantCount + 1} sessions`
+                    : 'Archive session'}
               </button>
             </div>
           </div>

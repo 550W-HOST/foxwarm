@@ -784,3 +784,162 @@ test('WebUI move route reparents, detaches, reorders, and rejects parent cycles'
     }
   }
 });
+
+test('WebUI recursive archive includes deep descendants while unarchive remains single-session', async () => {
+  const rootId = makeSessionId('webui_archive_tree_root');
+  const childId = makeSessionId('webui_archive_tree_child');
+  const grandchildId = makeSessionId('webui_archive_tree_grandchild');
+  for (const sessionId of [rootId, childId, grandchildId]) {
+    const session = await sessionManager.getSession(sessionId);
+    session.agent = 'main';
+    session.busy = false;
+    session.queue = [];
+    await sessionManager.saveSession(sessionId);
+  }
+  await sessionManager.setSessionParent(childId, rootId);
+  await sessionManager.setSessionParent(grandchildId, childId);
+  await sessionManager.archiveSession(childId, true);
+
+  const port = 35800 + Math.floor(Math.random() * 300);
+  const token = 'archive-tree-token';
+  const server = new HttpServer(port, token);
+  setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
+  await server.start();
+  const postArchive = (sessionId: string, body: Record<string, unknown>) => fetch(
+    `http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/archive`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  );
+
+  try {
+    let response = await postArchive(rootId, { archived: true });
+    assert.equal(response.status, 200);
+    let payload = await response.json() as any;
+    assert.equal(payload.includeDescendants, false);
+    assert.equal(payload.matchedCount, 1);
+    assert.equal((await sessionManager.getExistingSession(grandchildId))?.archived, undefined);
+
+    await postArchive(rootId, { archived: false });
+    response = await postArchive(rootId, { archived: true, includeDescendants: true });
+    assert.equal(response.status, 200);
+    payload = await response.json() as any;
+    assert.equal(payload.matchedCount, 3);
+    assert.deepEqual(new Set(payload.changedSessionIds), new Set([rootId, grandchildId]));
+    assert.equal((await sessionManager.getExistingSession(rootId))?.archived, true);
+    assert.equal((await sessionManager.getExistingSession(childId))?.archived, true);
+    assert.equal((await sessionManager.getExistingSession(grandchildId))?.archived, true);
+
+    response = await postArchive(rootId, { archived: false, includeDescendants: true });
+    assert.equal(response.status, 200);
+    payload = await response.json() as any;
+    assert.equal(payload.includeDescendants, false);
+    assert.equal((await sessionManager.getExistingSession(rootId))?.archived, false);
+    assert.equal((await sessionManager.getExistingSession(childId))?.archived, true);
+    assert.equal((await sessionManager.getExistingSession(grandchildId))?.archived, true);
+  } finally {
+    await server.stop();
+    setHttpServer(null);
+    for (const sessionId of [grandchildId, childId, rootId]) {
+      await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+  }
+});
+
+test('WebUI delete detaches surviving children and recursively preflights before deepest-first deletion', async () => {
+  const rootId = makeSessionId('webui_delete_tree_root');
+  const childId = makeSessionId('webui_delete_tree_child');
+  const grandchildId = makeSessionId('webui_delete_tree_grandchild');
+  for (const sessionId of [rootId, childId, grandchildId]) {
+    const session = await sessionManager.getSession(sessionId);
+    session.agent = 'main';
+    session.busy = false;
+    session.queue = [];
+    await sessionManager.saveSession(sessionId);
+  }
+  await sessionManager.setSessionParent(childId, rootId);
+  await sessionManager.setSessionParent(grandchildId, childId);
+
+  const port = 36100 + Math.floor(Math.random() * 300);
+  const token = 'delete-tree-token';
+  const server = new HttpServer(port, token);
+  setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
+  await server.start();
+  const deleteSession = (sessionId: string, includeDescendants?: boolean) => fetch(
+    `http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}`,
+    {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(includeDescendants === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(includeDescendants === undefined ? {} : { body: JSON.stringify({ includeDescendants }) }),
+    },
+  );
+
+  let replacementRootId: string | undefined;
+  try {
+    let response = await deleteSession(rootId);
+    assert.equal(response.status, 200);
+    let payload = await response.json() as any;
+    assert.deepEqual(payload.deletedSessionIds, [rootId]);
+    assert.deepEqual(payload.detachedChildSessionIds, [childId]);
+    assert.equal((await sessionManager.getExistingSession(childId))?.parentSessionId, undefined);
+    assert.equal((await sessionManager.getExistingSession(grandchildId))?.parentSessionId, childId);
+
+    replacementRootId = makeSessionId('webui_delete_tree_replacement');
+    const replacement = await sessionManager.getSession(replacementRootId);
+    replacement.agent = 'main';
+    replacement.busy = false;
+    replacement.queue = [];
+    await sessionManager.saveSession(replacementRootId);
+    await sessionManager.setSessionParent(childId, replacementRootId);
+
+    sessionManager.attachChannel('telegram', 'delete-tree-blocker', childId);
+    response = await deleteSession(replacementRootId, true);
+    assert.equal(response.status, 409);
+    payload = await response.json() as any;
+    assert.equal(payload.code, 'SESSION_DELETE_CHANNEL_BLOCKED');
+    assert.deepEqual(payload.blockingSessionIds, [childId]);
+    assert.ok(await sessionManager.getExistingSession(replacementRootId));
+    assert.ok(await sessionManager.getExistingSession(childId));
+    sessionManager.detachChannel('telegram', 'delete-tree-blocker');
+
+    const grandchild = await sessionManager.getSession(grandchildId);
+    grandchild.busy = true;
+    grandchild.queue = [{ type: 'background', parts: [{ text: 'queued work' }] }];
+    await sessionManager.saveSession(grandchildId);
+    response = await deleteSession(replacementRootId, true);
+    assert.equal(response.status, 409);
+    payload = await response.json() as any;
+    assert.equal(payload.code, 'SESSION_DELETE_BUSY');
+    assert.deepEqual(payload.busySessionIds, [grandchildId]);
+    assert.ok(await sessionManager.getExistingSession(replacementRootId));
+    assert.ok(await sessionManager.getExistingSession(childId));
+    assert.equal((await sessionManager.getExistingSession(grandchildId))?.queue.length, 0);
+
+    grandchild.busy = false;
+    grandchild.stopping = false;
+    await sessionManager.saveSession(grandchildId);
+    response = await deleteSession(replacementRootId, true);
+    assert.equal(response.status, 200);
+    payload = await response.json() as any;
+    assert.deepEqual(payload.deletedSessionIds, [grandchildId, childId, replacementRootId]);
+    assert.equal(await sessionManager.getExistingSession(replacementRootId), null);
+    assert.equal(await sessionManager.getExistingSession(childId), null);
+    assert.equal(await sessionManager.getExistingSession(grandchildId), null);
+  } finally {
+    sessionManager.detachChannel('telegram', 'delete-tree-blocker');
+    await server.stop();
+    setHttpServer(null);
+    for (const sessionId of [grandchildId, childId, rootId, replacementRootId].filter((id): id is string => !!id)) {
+      const session = await sessionManager.getExistingSession(sessionId);
+      if (session) session.busy = false;
+      await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+  }
+});

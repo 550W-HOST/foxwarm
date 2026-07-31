@@ -15,8 +15,8 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 /session create <agent> <session>
 /session fork
 /session rename <name>
-/session move <new-session-id>
-/session move <existing-agent>/<new-session-id>
+/session move <new-session-id> [--parent <parent-session-id>]
+/session move <existing-agent>/<new-session-id> [--parent <parent-session-id>]
 /session clear
 /session delete <sessionId>
 /session archive [session-id]
@@ -48,6 +48,9 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 
 - `/session move my-project`：在当前 agent 内重命名当前 session
 - `/session move my-agent/main`：把当前 session 移动到**已存在的** agent `my-agent` 下，并改名为 `main`
+- 默认保留当前 `parentSessionId`，并自动把直接 child 的 parent 引用改成移动后的新 ID；迁移一棵 session tree 时无需逐项重建已有关系
+- `/session move my-agent/task --parent my-agent/main`：移动后明确把该 session 设为 `my-agent/main` 的 child
+- 移除 parent 关系继续使用 `/session unparent`，不通过 `/session move` 隐式完成
 - 该命令**不会创建 agent**；如果目标 agent 不存在，请先用 `/agent create`
 - 该命令也**不会重命名 agent 本身**；agent 级别变更更适合走新建/迁移/清理流程
 

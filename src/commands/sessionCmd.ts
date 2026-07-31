@@ -2,7 +2,7 @@ import { ChannelContext, getChannelId, getConversationId } from '../channel';
 import { Session } from '../types';
 import * as sessionManager from '../sessionManager';
 import { resolveModelConfig } from '../config';
-import { parseSessionMoveTarget, parseCompactThresholdInput, resolveCommandModelSelection } from './helpers';
+import { parseSessionMoveArgs, parseCompactThresholdInput, resolveCommandModelSelection } from './helpers';
 
 export function formatSessionListChannels(channelKeys: Iterable<string>): string {
   const visibleChannels = Array.from(channelKeys).filter(channelKey => !channelKey.startsWith('webui:'));
@@ -35,7 +35,7 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
     resp += '`/session update-snapshot [session-id]` - Refresh session prompt snapshot\n'
     resp += '`/session compact-threshold [tokens|Nk|clear|unset]` - Get/set auto-compact threshold override for current session\n'
     resp += '`/session index` - Index messages to vector database\n'
-    resp += '`/session move <new-session-id>|<existing-agent>/<new-session-id>` - Move/rename session\n'
+    resp += '`/session move <new-session-id>|<existing-agent>/<new-session-id> [--parent <parent-session-id>]` - Move/rename session\n'
     resp += '`/session parent <parent-session-id> [child-session-id]` - Set parent session\n'
     resp += '`/session unparent [child-session-id]` - Remove parent session\n'
     resp += '`/session archive [session-id]` - Archive session (default: current)\n'
@@ -402,18 +402,17 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
         return
       }
       if (subArgs.length === 0) {
-        ctx.reply('Usage: /session move <new-session-id>|<existing-agent>/<new-session-id>\nExample: /session move my-project\nExample: /session move my-agent/main\nNote: /session move only renames the current session or moves it to an existing agent. It does not create agents.')
+        ctx.reply('Usage: /session move <new-session-id>|<existing-agent>/<new-session-id> [--parent <parent-session-id>]\nExample: /session move my-project\nExample: /session move my-agent/main --parent my-agent/root\nNote: omit --parent to preserve the current parent. /session move only renames the current session or moves it to an existing agent. It does not create agents.')
         return
       }
 
-      const targetId = subArgs[0]
-      
       try {
-        const { newSessionId, newAgentName } = parseSessionMoveTarget(targetId)
+        const { newSessionId, newAgentName, parentSessionId } = parseSessionMoveArgs(subArgs)
         const result = await sessionManager.moveSessionToTarget({
           sourceSessionId: sessionId,
           newSessionId,
           newAgentName,
+          ...(parentSessionId ? { parentSessionId } : {}),
         })
 
         let message = `✅ Session \`${sessionId}\` moved to \`${result.targetSessionId}\`.`
@@ -425,6 +424,12 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
         }
         if (result.updatedChildren.length > 0) {
           message += `\nUpdated ${result.updatedChildren.length} child session parent reference(s).`
+        }
+        message += `\nPrevious parent: ${result.previousParentSessionId ? `\`${result.previousParentSessionId}\`` : '(none)'}.`
+        message += `\nResulting parent: ${result.parentSessionId ? `\`${result.parentSessionId}\`` : '(none)'}.`
+        if (result.parentUpdateError) {
+          message += `\n⚠️ Identity move committed, but the requested parent update was not confirmed: ${result.parentUpdateError}`
+          message += `\nRequested parent: ${result.requestedParentSessionId ? `\`${result.requestedParentSessionId}\`` : '(none)'}.`
         }
         ctx.reply(message)
       } catch (e: any) {

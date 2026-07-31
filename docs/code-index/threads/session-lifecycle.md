@@ -64,11 +64,14 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 ## Archive and deletion
 
 - `archiveSession(id, archived)` is a presentation/lifecycle flag, not physical deletion.
+- WebUI archive may optionally apply the archived flag to the backend-recomputed canonical descendant graph. Recursive archive traverses through descendants that are already archived; unarchive remains a single-session operation.
 - `deleteSession(id)` clears active runtime state and pending compact work, removes the in-memory session, detaches its channels, deletes the per-session history JSON plus any legacy frontier file, rewrites metadata/channels, and publishes deletion state.
+- WebUI recursive delete preflights the complete backend-recomputed subtree before deletion. Any non-WebUI channel blocker or busy target prevents every deletion; busy targets receive the existing stop/queue-clear preparation and the caller retries after they become idle. Successful deletion is deepest-first. A nonrecursive WebUI delete detaches surviving direct children to root instead of retaining a dangling parent ID.
 - Current deletion does **not** remove archive JSONL/SQLite records, archive branch metadata, vector rows/checkpoints, or independent managed/ToolScript state. Those durable sources may therefore outlive the live session record.
 - While any archive branch/log/committed-alias-ledger record for a deleted lifetime remains discoverable, its exact internal session ID remains reserved. Explicit named-session creation, agent-main recreation, and internal-ID moves/renames must reject that target instead of merging generations. Agent creation without a main session remains allowed because it creates no session lifetime.
 - Successful internal-ID moves commit old-to-current canonical aliases only after strict live/filesystem/archive/index/metadata/channel persistence succeeds. Known failures reverse moved state and do not reserve the uncommitted target; if any reverse write fails, the pending journal remains for startup retry. The journal explicitly records `rolling-back` or `finishing` intent plus target-agent-directory ownership, so startup follows recorded intent rather than inferring it from partially persisted metadata. SQLite rows move to the target, while bootstrap canonicalizes historical JSONL payload IDs only through proven durable aliases so old, intermediate, and current IDs remain reserved and archive-readable after restart or SQLite rebuild.
 - Agent/session move and rename operations coordinate metadata, history path, relations, attachments, archive store, and vector IDs through their dedicated façades.
+- An identity move preserves the moved session's incoming `parentSessionId` when no override is supplied and rewrites direct child references from the old real ID to the target ID. The shared move façade may accept an explicit existing `parentSessionId` for intentional post-move reparenting; identity success and any later relation-write failure are reported separately rather than claiming that the committed identity move rolled back.
 
 ## Modules and units
 
@@ -116,3 +119,11 @@ Unbound channel resolution has a separate per-channel serialization boundary. It
 ### Follow-up: attachment replacement transaction
 
 Detach-then-attach command flows await both persistence operations but are not yet one atomic durable transaction. A failure can leave the old binding detached, but must not delete session/archive data; making replacement atomic remains an explicit follow-up.
+
+### D-lifecycle-descendant-actions
+
+[2026-08-01] Recursive WebUI archive/delete always derives descendants from the complete canonical live relation graph on the backend; presentation filtering, pinning, and frontend-provided ID lists are not lifecycle authority. Both options default off. Archive is one metadata-state update and unarchive stays nonrecursive. Delete performs whole-subtree channel/busy preflight, deletes deepest-first only after the subtree is ready, reports unexpected partial progress without inventing rollback, and detaches direct survivors to root when recursion is not selected.
+
+### D-lifecycle-identity-move-relations
+
+[2026-08-01] Session identity moves preserve the existing incoming parent when no parent option is supplied and rewrite direct child references to the new canonical ID, so individually moving every member of an existing tree preserves its topology independent of move order. An explicit `parentSessionId` is an intentional post-move override, not a requirement for ordinary tree migration. There is no recursive tree-move API. If that separate relation write fails after the journaled identity move commits, callers must report identity success plus the unconfirmed parent update instead of implying rollback.

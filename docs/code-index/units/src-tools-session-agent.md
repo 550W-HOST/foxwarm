@@ -91,7 +91,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 | `tool_list_agents` | Lists all agents with session counts |
 | `tool_set_agent_inherit` | Configures agent shared memory inheritance |
 | `tool_set_agent_isolated` | Sets or clears agent node isolation |
-| `tool_move_session` | Moves a session to a new ID or agent |
+| `tool_move_session` | Moves a session to a new ID or agent, preserving its incoming parent unless an optional existing `parentSessionId` intentionally reparents it |
 | `tool_create_session` | Creates a new session under an agent |
 
 ### toolsSessionAgent/skills.ts — Skill discovery
@@ -161,6 +161,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `tool_skill({ action: "load" })` is progressive-disclosure oriented: it returns `SKILL.md` plus skill directory/resource-path guidance, not full companion resources. The list/load actions share the same resolution, and isolated sessions may use them for their own agent only.
 - Path resolution expands `~` and resolves relative paths against the agent directory or session CWD.
 - All mutating tools check isolation status via `requireNotIsolated` before proceeding.
+- `move_session` reports the previous/resulting parent after identity success. If its optional post-move parent write fails, the result explicitly says the identity move committed and the requested parent was not confirmed; canonical semantics: [D-lifecycle-identity-move-relations](../threads/session-lifecycle.md#d-lifecycle-identity-move-relations).
 - Goal setting normalizes text, resolves remind-every defaults, and persists to session state.
 - `tool_compact_session` starts async-capable snapshot planning immediately without a compact-planning queue item; for a busy `asyncCompact:false` target it reports that the target must become idle first. Only ready compact commits use the queue safe point.
 - Timer create/update delegates to the `timers` module and returns formatted summaries; list/delete remain scoped by current or explicit session ID.

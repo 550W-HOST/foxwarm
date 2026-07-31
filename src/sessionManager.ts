@@ -1180,6 +1180,7 @@ export async function moveSessionToTarget(options: {
   createAgent?: boolean;
   newAgentName?: string;
   createAgentInheritMemory?: boolean;
+  parentSessionId?: string;
 }): Promise<{
   oldSessionId: string;
   targetSessionId: string;
@@ -1187,8 +1188,47 @@ export async function moveSessionToTarget(options: {
   createdAgent: boolean;
   aliases: string[];
   updatedChildren: string[];
+  previousParentSessionId?: string;
+  parentSessionId?: string;
+  requestedParentSessionId?: string;
+  parentUpdateError?: string;
 }> {
-  return withSessionIdentityLock(() => sessionAgentOps.moveSessionToTarget(options, getSessionAgentOpsDeps(true)));
+  let previousParentSessionId: string | undefined;
+  let requestedParentSessionId: string | undefined;
+  const parentWasProvided = options.parentSessionId !== undefined;
+  const requestedParentInput = options.parentSessionId?.trim();
+  if (parentWasProvided && !requestedParentInput) {
+    throw new Error('parentSessionId must be a non-empty existing session ID when provided. Use the explicit unparent operation to detach.');
+  }
+  const result = await withSessionIdentityLock(async () => {
+    const sourceSession = await getExistingSessionUnlocked(options.sourceSessionId);
+    if (!sourceSession) throw new Error(`Session "${options.sourceSessionId}" not found.`);
+    previousParentSessionId = sourceSession.parentSessionId || undefined;
+    requestedParentSessionId = parentWasProvided
+      ? (await sessionRelations.resolveSessionParentId({ getExistingSession: getExistingSessionUnlocked }, sourceSession.id, requestedParentInput)).parentSessionId
+      : undefined;
+    return sessionAgentOps.moveSessionToTarget(options, getSessionAgentOpsDeps(true));
+  });
+
+  let parentSessionId = (await getExistingSession(result.targetSessionId))?.parentSessionId || undefined;
+  let parentUpdateError: string | undefined;
+  if (parentWasProvided && parentSessionId !== requestedParentSessionId) {
+    try {
+      const parentResult = await setSessionParent(result.targetSessionId, requestedParentSessionId);
+      parentSessionId = parentResult.parentSessionId;
+    } catch (error: any) {
+      parentSessionId = (await getExistingSession(result.targetSessionId))?.parentSessionId || undefined;
+      parentUpdateError = error?.message || String(error);
+    }
+  }
+
+  return {
+    ...result,
+    previousParentSessionId,
+    parentSessionId,
+    ...(parentWasProvided ? { requestedParentSessionId } : {}),
+    ...(parentUpdateError ? { parentUpdateError } : {}),
+  };
 }
 
 /**
@@ -1302,6 +1342,14 @@ export function getChannelsBySession(sessionId: string): Array<{ channelId: stri
 
 export function getChildSessionIds(parentSessionId: string): string[] {
   return sessionRelations.getChildSessionIds(sessions, parentSessionId);
+}
+
+export function collectSessionDescendants(sessionId: string): { descendantIds: string[]; directChildIds: string[]; postOrderIds: string[] } {
+  return sessionRelations.collectSessionDescendants(sessions, sessionId);
+}
+
+export function getCanonicalChildSessionIds(parentSessionId: string): string[] {
+  return sessionRelations.getCanonicalChildSessionIds(sessions, parentSessionId);
 }
 
 export function getChannelBySession(sessionId: string): { channelId: string; conversationId: string } | undefined {
@@ -2408,6 +2456,30 @@ export async function archiveSession(sessionId: string, archived: boolean = true
   notifySessionUpdated(sessionId);
   
   return true;
+}
+
+export async function archiveSessions(sessionIds: string[], archived: boolean = true): Promise<{
+  matchedSessionIds: string[];
+  changedSessionIds: string[];
+}> {
+  const matchedSessionIds: string[] = [];
+  const changedSessionIds: string[] = [];
+
+  for (const sessionId of sessionIds) {
+    const session = sessions.get(sessionId);
+    if (!session) continue;
+    matchedSessionIds.push(sessionId);
+    if (!!session.archived === archived) continue;
+    session.archived = archived;
+    changedSessionIds.push(sessionId);
+  }
+
+  if (changedSessionIds.length > 0) {
+    await saveSessionsMetadata();
+    for (const sessionId of changedSessionIds) notifySessionUpdated(sessionId);
+  }
+
+  return { matchedSessionIds, changedSessionIds };
 }
 
 /**

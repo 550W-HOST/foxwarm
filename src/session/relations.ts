@@ -37,6 +37,80 @@ export function getChildSessionIds(sessions: Map<string, Session>, parentSession
     .map(([sessionId]) => sessionId);
 }
 
+export class SessionRelationCycleError extends Error {
+  readonly code = 'SESSION_RELATION_CYCLE';
+
+  constructor(sessionId: string) {
+    super(`Session relation cycle detected while traversing descendants of "${sessionId}".`);
+    this.name = 'SessionRelationCycleError';
+  }
+}
+
+function buildCanonicalChildMap(sessions: Map<string, Session>): {
+  aliases: Map<string, string>;
+  children: Map<string, string[]>;
+} {
+  const aliases = new Map<string, string>();
+  for (const [sessionId, session] of sessions) {
+    aliases.set(sessionId, sessionId);
+    for (const alias of session.aliases || []) aliases.set(alias, sessionId);
+  }
+
+  const children = new Map<string, string[]>();
+  for (const [sessionId, session] of sessions) {
+    if (!session.parentSessionId) continue;
+    const parentSessionId = aliases.get(session.parentSessionId) || session.parentSessionId;
+    const siblings = children.get(parentSessionId) || [];
+    siblings.push(sessionId);
+    children.set(parentSessionId, siblings);
+  }
+  for (const siblingIds of children.values()) siblingIds.sort((a, b) => a.localeCompare(b));
+  return { aliases, children };
+}
+
+export function getCanonicalChildSessionIds(sessions: Map<string, Session>, parentSessionId: string): string[] {
+  const { aliases, children } = buildCanonicalChildMap(sessions);
+  const canonicalParentId = aliases.get(parentSessionId) || parentSessionId;
+  return [...(children.get(canonicalParentId) || [])];
+}
+
+/**
+ * Collect the canonical live subtree beneath one session. Parent aliases are
+ * normalized so lifecycle actions use the same logical relation graph as the
+ * session list rather than its filtered/pinned presentation tree.
+ */
+export function collectSessionDescendants(
+  sessions: Map<string, Session>,
+  rootSessionId: string,
+): { descendantIds: string[]; directChildIds: string[]; postOrderIds: string[] } {
+  const { aliases, children } = buildCanonicalChildMap(sessions);
+  const canonicalRootId = aliases.get(rootSessionId) || rootSessionId;
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const descendantIds: string[] = [];
+  const postOrderIds: string[] = [];
+
+  const visit = (sessionId: string, includeInDescendants: boolean): void => {
+    if (visiting.has(sessionId)) throw new SessionRelationCycleError(canonicalRootId);
+    if (visited.has(sessionId)) return;
+    visiting.add(sessionId);
+    if (includeInDescendants) descendantIds.push(sessionId);
+    for (const childSessionId of children.get(sessionId) || []) {
+      visit(childSessionId, true);
+    }
+    visiting.delete(sessionId);
+    visited.add(sessionId);
+    postOrderIds.push(sessionId);
+  };
+
+  visit(canonicalRootId, false);
+  return {
+    descendantIds,
+    directChildIds: [...(children.get(canonicalRootId) || [])],
+    postOrderIds,
+  };
+}
+
 async function assertNoParentCycle(
   deps: Pick<SessionRelationsDeps, 'getExistingSession'>,
   childSessionId: string,
@@ -62,6 +136,22 @@ async function assertNoParentCycle(
   }
 }
 
+export async function resolveSessionParentId(
+  deps: Pick<SessionRelationsDeps, 'getExistingSession'>,
+  childSessionId: string,
+  parentSessionId?: string,
+): Promise<{ childSession: Session; parentSessionId?: string }> {
+  const childSession = await deps.getExistingSession(childSessionId);
+  if (!childSession) throw new Error(`Session "${childSessionId}" not found.`);
+
+  if (!parentSessionId) return { childSession };
+  const parentSession = await deps.getExistingSession(parentSessionId);
+  if (!parentSession) throw new Error(`Session "${parentSessionId}" not found.`);
+  if (parentSession.id === childSession.id) throw new Error('A session cannot be its own parent.');
+  await assertNoParentCycle(deps, childSession.id, parentSession.id);
+  return { childSession, parentSessionId: parentSession.id };
+}
+
 export async function setSessionParent(
   deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'saveSession' | 'saveSessionsMetadata' | 'notifySessionListUpdated'>,
   childSessionId: string,
@@ -71,28 +161,12 @@ export async function setSessionParent(
   parentSessionId?: string;
   previousParentSessionId?: string;
 }> {
-  const childSession = await deps.getExistingSession(childSessionId);
-  if (!childSession) {
-    throw new Error(`Session "${childSessionId}" not found.`);
-  }
+  const resolved = await resolveSessionParentId(deps, childSessionId, parentSessionId);
+  const childSession = resolved.childSession;
 
   const realChildId = childSession.id;
   const previousParentSessionId = childSession.parentSessionId || undefined;
-
-  let realParentId: string | undefined;
-  if (parentSessionId) {
-    const parentSession = await deps.getExistingSession(parentSessionId);
-    if (!parentSession) {
-      throw new Error(`Session "${parentSessionId}" not found.`);
-    }
-
-    realParentId = parentSession.id;
-    if (realParentId === realChildId) {
-      throw new Error('A session cannot be its own parent.');
-    }
-
-    await assertNoParentCycle(deps, realChildId, realParentId);
-  }
+  const realParentId = resolved.parentSessionId;
 
   if (previousParentSessionId === realParentId) {
     return {
