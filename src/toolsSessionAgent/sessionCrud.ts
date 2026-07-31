@@ -146,18 +146,18 @@ export async function tool_compact_session(args: ToolArgs, ctx: ToolContext) {
     completionMarker: isSelf
       ? 'Compaction completed. You can continue working now.'
       : 'Compaction completed.',
-    stopAfterCurrentTurn: false,
-    requestedBy: compactGuidance ? 'manual' : 'tool',
   });
 
   if (result.alreadyQueued) {
-    return `Compaction is already queued for session \`${targetSessionId}\`.`;
+    return `Compaction is already pending for session \`${targetSessionId}\`.`;
   }
 
   const mode = compactGuidance ? 'guided compaction plan' : 'automatic compaction plan';
   if (result.startedImmediately) {
-    return `Compaction requested for session \`${targetSessionId}\`. It is entering the compact planning flow now using ${mode}.`;
+    return result.runsInBackground
+      ? `Compaction requested for session \`${targetSessionId}\`. It is entering the background compact planning flow now using ${mode}.`
+      : `Compaction started for session \`${targetSessionId}\` using ${mode}. The session remains busy until awaited compaction finishes.`;
   }
 
-  return `Compaction requested for session \`${targetSessionId}\` using ${mode}. Pending queue length: ${result.queueLength}`;
+  return `Compaction was not started for session \`${targetSessionId}\`: its model disables background compaction, so the session must be idle before compaction can run.`;
 }

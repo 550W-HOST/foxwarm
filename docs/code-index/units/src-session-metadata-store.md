@@ -54,7 +54,7 @@ Manages persistence of session metadata and history as separate JSON files on di
 
 ## Dependencies
 
-- `../types` — `Message`, `Session` types
+- `../types` — `Message`, `Session`, and current queue-record validation
 - `../common` — `logger`
 - `../config` — `SESSIONS_DIR`, `SESSIONS_FILE`
 - `../utils/diskJsonData` — `DiskJsonData`, `getNumberedBackupPath`
@@ -69,7 +69,7 @@ Manages persistence of session metadata and history as separate JSON files on di
 - Legacy goal-state end-turn flags remain readable, but history and metadata serializers omit them from current writes. The canonical goal contract is [D-goal-direct-safe-boundary](src-session-goal.md#d-goal-direct-safe-boundary).
 - Recovery path: if the metadata index and all backups are unreadable, rebuilds from individual history files by scanning `SESSIONS_DIR` recursively.
 - Metadata recovery deliberately ignores legacy `*.frontier.json` files so they are not mistaken for sessions named `*.frontier`.
-- `applySessionHistoryState` sets defaults for `currentNode` (`'master'`) and `queue` (`[]`) when missing.
+- `applySessionHistoryState` sets defaults for `currentNode` (`'master'`) and `queue` (`[]`) when missing, and filters loaded queue state through the current `isQueueItem` boundary so invalid persisted records are not retained.
 - `buildRecoveredSessionMetadata` infers agent name from session ID path segments and computes `nextMessageSeq` from message history when not stored.
 
 ## Design Decisions

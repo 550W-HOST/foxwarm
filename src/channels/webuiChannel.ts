@@ -229,7 +229,7 @@ function buildNonUserQueuedPreviewParts(item: QueueItem, parts: MessagePart[]): 
 }
 
 function buildQueuedPreviewMessage(item: QueueItem, index: number): Message | null {
-  if (item.type === 'compact' || item.type === 'compact-commit' || item.type === 'retry') {
+  if (item.type === 'compact-commit') {
     return null;
   }
 

@@ -1,6 +1,6 @@
 import fs from 'fs-extra';
 import path from 'path';
-import { Message, Session } from '../types';
+import { isQueueItem, Message, Session } from '../types';
 import { logger } from '../common';
 import { SESSIONS_DIR, SESSIONS_FILE } from '../config';
 import { DiskJsonData } from '../utils/diskJsonData';
@@ -107,6 +107,8 @@ export function applySessionHistoryState(target: Session, historyData: Record<st
 
   if (!Array.isArray(target.queue)) {
     target.queue = [];
+  } else {
+    target.queue = target.queue.filter(isQueueItem);
   }
 }
 

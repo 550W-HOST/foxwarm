@@ -25,7 +25,7 @@ Message routing owns inbound channel-to-session routing, command dispatch, side 
 
 - One processing loop owns a session at a time.
 - Authorization is checked before command or session routing.
-- Queue items are consumed in insertion order, subject to explicit internal turn boundaries.
+- Queue items are consumed in insertion order, subject to ready compact-commit safe points; retry and compact planning do not enter the queue.
 - Each consumed queue item remains a separate canonical history message; only provider-facing serialization may normalize adjacent roles.
 - Direct user input, inter-session messages, timers, triggers, and internal events enter the same queue gate.
 - Platform stream/card identifiers remain turn metadata and prevent incompatible queued items from being merged.

@@ -479,8 +479,8 @@ async function main(): Promise<void> {
       assertLastModelText(finalSession, 'continued after compact');
     });
 
-    await test('queued compact request can run asynchronously and commit a compatible prefix later', async () => {
-      const sessionId = makeSessionId('selftest_async_compact_queue');
+    await test('background compact planning can commit a compatible prefix later', async () => {
+      const sessionId = makeSessionId('selftest_async_compact');
       createdSessionIds.push(sessionId);
       const session = await ensureSession(sessionId);
 

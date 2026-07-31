@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MessageRouter, shouldBroadcastChannelText } from './messageRouter';
 import * as sessionManager from './sessionManager';
+import * as sessionHistory from './session/history';
 import * as llm from './llm';
 import type { Message, MessagePart, Session } from './types';
 
@@ -383,26 +384,6 @@ test('MessageRouter queue draining keeps different WeWork stream ids separate', 
   assert.equal(session.queue.length, 1);
 });
 
-test('MessageRouter queue draining stops before retry control items', async () => {
-  const router = new MessageRouter() as any;
-  const session: any = {
-    queue: [
-      { type: 'user', parts: [{ text: 'first input' }] },
-      { type: 'retry' },
-      { type: 'user', parts: [{ text: 'after retry' }] },
-    ],
-  };
-
-  const drained = router.drainLeadingQueuedTurnInputs(session);
-  assert.deepEqual(drained.items.map((item: any) => item.parts), [[{ text: 'first input' }]]);
-  assert.deepEqual(session.queue.map((item: any) => item.type), ['retry', 'user']);
-
-  const consumed = await router.consumeLeadingQueuedTurnInputs(session, [{ text: 'pending' }]);
-  assert.deepEqual(consumed.parts, [{ text: 'pending' }]);
-  assert.equal(consumed.consumedInput, false);
-  assert.deepEqual(session.queue.map((item: any) => item.type), ['retry', 'user']);
-});
-
 test('MessageRouter emits turn progress as an empty targeted channel broadcast', () => {
   const router = new MessageRouter() as any;
   const events: Array<{ text: string; options: any }> = [];
@@ -566,7 +547,7 @@ test('MessageRouter LLM final failure keeps retry notice display-only without ap
   }
 });
 
-test('retrySession runs one ordinary turn with queued inputs and no retry marker text', async () => {
+test('retrySession enters the router directly and runs one ordinary turn without queue control state', async () => {
   const router = new MessageRouter() as any;
   const session = await createRouterQueueTestSession('retry_control_session');
   const sessionId = session.id;
@@ -581,7 +562,10 @@ test('retrySession runs one ordinary turn with queued inputs and no retry marker
   const seenParts: Array<MessagePart[] | null> = [];
   const seenRequests: Message[][] = [];
 
-  sessionManager.setSessionTriggerCallback(() => {});
+  sessionManager.setSessionRetryCallback(async (targetSessionId) => {
+    assert.equal(targetSessionId, sessionId);
+    await router.processSessionRetry(targetSessionId);
+  });
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
     chatCallCount += 1;
     seenParts.push(parts);
@@ -606,7 +590,6 @@ test('retrySession runs one ordinary turn with queued inputs and no retry marker
   };
 
   try {
-    await sessionManager.retrySession(sessionId);
     session.queue.push(
       { type: 'user', parts: [{ text: 'queued after retry' }] },
       {
@@ -614,9 +597,9 @@ test('retrySession runs one ordinary turn with queued inputs and no retry marker
         message: { role: 'user', parts: [{ system: 'queued intersession after retry' }] },
       },
     );
-    assert.deepEqual(session.queue.map(item => item.type), ['retry', 'user', 'intersession']);
+    assert.deepEqual(session.queue.map(item => item.type), ['user', 'intersession']);
 
-    await router.processSessionQueue(sessionId);
+    await sessionManager.retrySession(sessionId);
 
     assert.equal(chatCallCount, 2);
     assert.equal(seenParts[0], null);
@@ -637,8 +620,92 @@ test('retrySession runs one ordinary turn with queued inputs and no retry marker
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
-    sessionManager.setSessionTriggerCallback(() => {});
+    sessionManager.setSessionRetryCallback(() => {});
     sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('router drops an unrecognized persisted queue record without executing it', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('unknown_queue_record');
+  const originalChat = llm.chat;
+  let chatCalls = 0;
+  session.queue = [
+    { type: 'obsolete-control' } as any,
+  ];
+  await sessionManager.saveSession(session.id);
+
+  (llm as any).chat = async () => {
+    chatCalls += 1;
+    return { text: 'unexpected', allParts: [{ text: 'unexpected' }] };
+  };
+
+  try {
+    await router.processSessionQueue(session.id);
+
+    assert.equal(chatCalls, 0);
+    assert.equal(session.queue.length, 0);
+    assert.equal(session.busy, false);
+  } finally {
+    (llm as any).chat = originalChat;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('busy async compaction starts snapshot planning directly without a compact queue item', async () => {
+  const session = await createRouterQueueTestSession('busy_async_compact_direct');
+  const originalIsAsyncCompactEnabled = sessionHistory.isAsyncCompactEnabled;
+  const originalProcessSessionCompactionRequest = sessionHistory.processSessionCompactionRequest;
+  const modes: string[] = [];
+  session.busy = true;
+  session.queue.push({ type: 'user', parts: [{ text: 'ordinary queued content' }] });
+  await sessionManager.saveSession(session.id);
+  (sessionHistory as any).isAsyncCompactEnabled = () => true;
+  (sessionHistory as any).processSessionCompactionRequest = async (_deps: any, _sessionId: string, _item: any, mode: string) => {
+    modes.push(mode);
+  };
+
+  try {
+    const result = await sessionManager.requestSessionCompaction(session.id, { keepPercent: 0.5 });
+
+    assert.equal(result.startedImmediately, true);
+    assert.equal(result.runsInBackground, true);
+    assert.equal(result.backgroundUnavailable, undefined);
+    assert.deepEqual(modes, ['background']);
+    assert.deepEqual(session.queue.map(item => item.type), ['user']);
+  } finally {
+    (sessionHistory as any).isAsyncCompactEnabled = originalIsAsyncCompactEnabled;
+    (sessionHistory as any).processSessionCompactionRequest = originalProcessSessionCompactionRequest;
+    session.busy = false;
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('busy asyncCompact false request reports unavailable without queueing hidden planning work', async () => {
+  const session = await createRouterQueueTestSession('busy_sync_compact_rejected');
+  const originalIsAsyncCompactEnabled = sessionHistory.isAsyncCompactEnabled;
+  const originalProcessSessionCompactionRequest = sessionHistory.processSessionCompactionRequest;
+  let planningCalls = 0;
+  session.busy = true;
+  await sessionManager.saveSession(session.id);
+  (sessionHistory as any).isAsyncCompactEnabled = () => false;
+  (sessionHistory as any).processSessionCompactionRequest = async () => {
+    planningCalls += 1;
+  };
+
+  try {
+    const result = await sessionManager.requestSessionCompaction(session.id, { keepPercent: 0.5 });
+
+    assert.equal(result.startedImmediately, false);
+    assert.equal(result.backgroundUnavailable, true);
+    assert.equal(planningCalls, 0);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (sessionHistory as any).isAsyncCompactEnabled = originalIsAsyncCompactEnabled;
+    (sessionHistory as any).processSessionCompactionRequest = originalProcessSessionCompactionRequest;
+    session.busy = false;
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
 });
@@ -700,7 +767,7 @@ test('stop signal commits queued work to history without running it', async () =
   }
 });
 
-test('stop commits all queued content in order, cancels retry, and retains maintenance controls', async () => {
+test('stop commits content and applies a ready compact commit', async () => {
   const router = new MessageRouter() as any;
   const sessionId = `stop_commit_mixed_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const session = await sessionManager.getSession(sessionId) as Session;
@@ -713,7 +780,9 @@ test('stop commits all queued content in order, cancels retry, and retains maint
 
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
+  const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
   let chatCallCount = 0;
+  let compactCommitCalls = 0;
 
   (llm as any).chat = async () => {
     chatCallCount += 1;
@@ -726,12 +795,10 @@ test('stop commits all queued content in order, cancels retry, and retains maint
       clientMessageId: 'mixed-user-client-id',
       parts: [{ text: 'queued user first' }],
     });
-    await sessionManager.enqueueSessionItem(sessionId, { type: 'retry' });
     await sessionManager.enqueueSessionItem(sessionId, {
       type: 'intersession',
       message: { role: 'user', parts: [{ text: 'queued structured second' }] },
     });
-    await sessionManager.enqueueSessionItem(sessionId, { type: 'compact' });
     await sessionManager.enqueueSessionItem(sessionId, {
       type: 'background',
       parts: [{ system: 'queued background third' }],
@@ -740,12 +807,17 @@ test('stop commits all queued content in order, cancels retry, and retains maint
     await sessionManager.requestSessionStop(sessionId);
     return { parts: [{ functionResponse: { tool_use_id: 'stop-mixed-tool', name: 'read', response: { output: 'stopped' } } }] };
   };
+  (sessionManager as any).applyCompletedCompactJob = async () => {
+    compactCommitCalls += 1;
+    return true;
+  };
 
   try {
     await router.runSessionTurn(sessionId, { parts: [{ text: 'start mixed turn' }], session });
 
     assert.equal(chatCallCount, 1);
-    assert.deepEqual(session.queue.map(item => item.type), ['compact', 'compact-commit']);
+    assert.equal(session.queue.length, 0);
+    assert.equal(compactCommitCalls, 1);
     const queuedHistory = session.history.filter(message => message.parts.some(part => (
       part.text === 'queued user first'
       || part.text === 'queued structured second'
@@ -760,6 +832,7 @@ test('stop commits all queued content in order, cancels retry, and retains maint
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
+    (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }

@@ -12,6 +12,7 @@ This thread owns the end-to-end contract that keeps long sessions within model l
 - Explicit compact requests enter `processSessionCompactionRequest()`.
 - The default compact request keeps the newest 30% of rendered history (`llm.compactPercent`, default `0.3`).
 - Async and awaited modes use the same snapshot/job/result path. Planning mutates a transient session clone; live state changes only during a compatible commit.
+- For async-capable models, an explicit request starts snapshot planning immediately even while the live session is busy; planning is not a session queue item. Only the ready `compact-commit` enters the router queue for safe application. A busy explicit request on a model with `asyncCompact:false` reports background compaction unavailable instead of storing hidden deferred work; idle explicit and normal end-of-turn awaited compaction remain supported.
 
 ### 2. Candidate policy and planning
 
@@ -96,6 +97,10 @@ Canonical implementation: `formatCompactionCompletionMarker()` in [src-session-h
 ### D-context-one-compact-engine
 
 Async and awaited compaction share one snapshot/job/commit engine. Planning never mutates the live session, and commit replaces only a compatible consumed prefix.
+
+### D-context-compact-scheduling-boundary
+
+[2026-08-01] Compact planning is not ordinary queued session work. An async-capable explicit request snapshots and starts planning immediately, including while a normal turn is active; only the resulting `compact-commit` is queued so live prefix replacement occurs at a router safe point. `asyncCompact:false` remains a provider boundary: idle explicit compaction and normal end-of-turn awaited compaction may block that owner, but a busy explicit request fails clearly rather than enqueueing or persisting a deferred plan. No planning-control queue type or migration exists; generic queue validation discards unrecognized records, and automatic threshold checks can request planning again on a later turn.
 
 ### D-context-compact-runtime-gate
 

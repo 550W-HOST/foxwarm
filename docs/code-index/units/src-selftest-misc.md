@@ -67,5 +67,5 @@ These files have no exports — they are standalone self-test scripts executed v
 
 - Exercises `MessageRouter.runSessionTurn` and `MessageRouter.processSessionQueue` — the core turn-execution paths used by the production message handling pipeline.
 - Validates the contract between the router, session manager queue operations, and LLM call/tool-execution cycle.
-- Tests the compaction flow boundary where `processSessionCompactionRequest` interleaves with ordinary queued work.
+- Tests the compaction flow boundary where background `processSessionCompactionRequest` planning interleaves with ordinary queued work and publishes only a ready commit safe point.
 - Confirms parent/child session notification via `send_to_session` tool integration.

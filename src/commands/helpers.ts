@@ -339,17 +339,19 @@ export async function handleCompactCommand(ctx: ChannelContext, args: string[], 
     }
   }
 
-  const result = await sessionManager.requestSessionCompaction(sessionId, { keepPercent, requestedBy: 'command' })
+  const result = await sessionManager.requestSessionCompaction(sessionId, { keepPercent })
 
   if (result.alreadyQueued) {
-    ctx.reply('ℹ️ Compaction is already queued for this session.')
+    ctx.reply('ℹ️ Compaction is already pending for this session.')
     return
   }
 
   if (result.startedImmediately) {
-    ctx.reply('🗜️ Compaction requested. It runs in parallel, so this chat can continue normally.')
+    ctx.reply(result.runsInBackground
+      ? '🗜️ Compaction requested. It runs in parallel, so this chat can continue normally.'
+      : '🗜️ Compaction started. This session will remain busy until awaited compaction finishes.')
     return
   }
 
-  ctx.reply(`⏳ Background compaction queued. Once it starts, it will run without blocking this chat. Pending queue length: ${result.queueLength}`)
+  ctx.reply('⚠️ This model disables background compaction. Stop or wait for the current run to finish, then request compaction again.')
 }

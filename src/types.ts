@@ -229,7 +229,7 @@ export interface QueueSource {
 }
 
 export interface QueueItem {
-  type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot' | 'retry' | 'compact' | 'compact-commit';
+  type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot' | 'compact-commit';
   source?: QueueSource;
   sourceSessionId?: string;
   /** Browser-generated identity propagated to the persisted user message. */
@@ -237,11 +237,30 @@ export interface QueueItem {
   parts?: MessagePart[];
   message?: Message;
   waitTimeoutId?: string;
+}
+
+export interface CompactionRequest {
   keepPercent?: number;
   compactGuidance?: string;
   completionMarker?: string;
-  stopAfterCurrentTurn?: boolean;
-  requestedBy?: 'auto' | 'command' | 'tool' | 'manual';
+}
+
+const CURRENT_QUEUE_ITEM_TYPES = new Set<QueueItem['type']>([
+  'user',
+  'intersession',
+  'background',
+  'trigger',
+  'onboot',
+  'compact-commit',
+]);
+
+export function isQueueItem(value: unknown): value is QueueItem {
+  if (!value || typeof value !== 'object') return false;
+  const item = value as Record<string, unknown>;
+  if (!CURRENT_QUEUE_ITEM_TYPES.has(item.type as QueueItem['type'])) return false;
+  if (item.type === 'compact-commit') return true;
+  return (Array.isArray(item.parts) && item.parts.length > 0)
+    || (!!item.message && typeof item.message === 'object');
 }
 
 export type ContextFrontierItem =

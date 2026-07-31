@@ -215,7 +215,7 @@ test('WebUI history route returns queued preview messages separately from commit
       },
       parts: [{ inlineData: { data: imageBuffer.toString('base64'), mimeType: 'image/png' } }],
     },
-    { type: 'compact' },
+    { type: 'compact-commit' },
   ];
   session.meta = { lastMessageTime: Date.now() } as Session['meta'];
   await sessionManager.saveSession(sessionId);
@@ -472,7 +472,7 @@ test('WebUI per-session SSE sends initial and live canonical runtime state witho
 
     session.busy = true;
     session.busyStartedAt = Date.now();
-    session.queue.push({ type: 'retry' });
+    session.queue.push({ type: 'compact-commit' });
     sessionManager.setActiveSessionRuntimeState(sessionId, {
       state: 'running-tool',
       tool: {

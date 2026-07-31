@@ -26,8 +26,8 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - `enqueueSessionItem` — canonical queue insertion with wait-state and managed-inbox handling.
 - `queueSessionEvent`, `queueSessionStructuredEvent`, `queueSessionMessageEvent`, `queueSessionSystemEvent` — typed event wrappers.
 - `startSessionWait`, `clearSessionWaitById`, `queueSessionWaitTimeoutEvent`, `clearSessionWaitForDirectTurn` — persisted wait state, token-aware surgical cleanup, and race-safe timeout events.
-- `requestSessionStop`, `requestSessionDequeue`, `retrySession` — current run/queue controls.
-- `setSessionTriggerCallback`, `triggerSessionProcessing`, `resumeBusySessions` — router/scheduler integration and restart recovery.
+- `requestSessionStop`, `requestSessionDequeue`, `retrySession` — current run/queue controls; retry delegates directly to the router without queue persistence.
+- `setSessionTriggerCallback`, `setSessionRetryCallback`, `triggerSessionProcessing`, `resumeBusySessions` — router/scheduler integration and restart recovery.
 - `registerSessionAbortController`, `clearSessionAbortController`, `abortSessionInFlight` — active provider-request cancellation.
 
 ### Relations, agents, and inter-session delivery
@@ -77,6 +77,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - One `MessageRouter.processSessionQueue()` invocation may claim a session at a time; this façade persists and exposes the `busy` compatibility/concurrency flag.
 - Session history files are authoritative for conversation content and the embedded `contextFrontier`; the shared metadata file is an index and presentation-metadata store.
 - Queue insertion passes through wait-state and managed-inbox transitions before work is persisted or triggered.
+- Retry and compact planning are not queue insertion paths. Async compact planning starts immediately from a snapshot; a busy `asyncCompact:false` explicit request reports unavailable; ready compact commits alone use the queue safe point.
 - Generic history append persists and notifies only its supplied messages; router-owned goal evaluation is intentionally outside this low-level persistence path.
 - Active `requesting-model` and `running-tool` phases are transient; persisted waits can survive restart.
 - Forks share parent prompt/cache/archive prefix lineage; non-fork children start a fresh prefix.
