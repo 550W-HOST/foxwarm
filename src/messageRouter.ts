@@ -496,32 +496,37 @@ export class MessageRouter {
     }
   }
 
-  private async commitQueuedInputsAfterStop(session: Session): Promise<number> {
+  private async finalizeStoppedSession(session: Session): Promise<number> {
     let committedMessages = 0;
+    let committedAnyInput = false;
 
     while (true) {
       const retainedControls: QueueItem[] = [];
       const messages: Message[] = [];
-      let firstInputItem = true;
       let removedQueueItems = 0;
 
       for (const item of session.queue) {
-        if (item.type === 'compact' || item.type === 'compact-commit' || item.type === 'retry') {
+        if (item.type === 'compact' || item.type === 'compact-commit') {
           retainedControls.push(item);
           continue;
         }
 
         removedQueueItems += 1;
+        // Retry is execution intent rather than content. A genuine Stop cancels
+        // it instead of leaving a hidden provider turn behind.
+        if (item.type === 'retry') {
+          continue;
+        }
         if (item.message) {
           messages.push(item.message);
-          firstInputItem = false;
+          committedAnyInput = true;
           continue;
         }
         if (!item.parts?.length) {
           continue;
         }
 
-        const parts = firstInputItem
+        const parts = !committedAnyInput
           ? this.prepareTurnParts(session, session.id, item.parts)
           : item.parts;
         messages.push({
@@ -529,10 +534,18 @@ export class MessageRouter {
           parts,
           ...(item.clientMessageId ? { __meta: { clientMessageId: item.clientMessageId } } : {}),
         });
-        firstInputItem = false;
+        committedAnyInput = true;
       }
 
       if (removedQueueItems === 0) {
+        // Keep the stop boundary and the final queue scan in one synchronous
+        // section. Queue insertions before this point are passive stop inputs;
+        // insertions after it see an idle session and start a new turn.
+        session.stopping = false;
+        sessionManager.clearActiveSessionRuntimeState(session.id);
+        session.busy = false;
+        session.busyStartedAt = undefined;
+        await sessionManager.saveSession(session.id);
         return committedMessages;
       }
 
@@ -1031,7 +1044,6 @@ export class MessageRouter {
 
         if (session.stopping) {
           logger.info({ sessionId: session.id }, 'Session stopping flag detected, halting tool call loop');
-          session.stopping = false;
           stoppedByUser = true;
           await sessionManager.saveSession(session.id);
 
@@ -1064,7 +1076,6 @@ export class MessageRouter {
         } catch (e: any) {
           if (session.stopping && llm.isAbortError(e)) {
             logger.info({ sessionId: session.id }, 'In-flight LLM request aborted by stop signal');
-            session.stopping = false;
             stoppedByUser = true;
             await sessionManager.saveSession(session.id);
 
@@ -1179,7 +1190,6 @@ export class MessageRouter {
 
         if (session.stopping) {
           logger.info({ sessionId: session.id, iteration }, 'Session stopping flag detected after tool execution, halting tool call loop');
-          session.stopping = false;
           stoppedByUser = true;
           await sessionManager.saveSession(session.id);
 
@@ -1278,12 +1288,13 @@ export class MessageRouter {
         delete session.meta.runQueuedAfterStop;
       }
       const stopCompleted = stoppedByUser || !!session.stopping;
-      if (session.stopping) {
-        session.stopping = false;
-      }
 
       if (stopCompleted && !runQueuedAfterStop) {
-        await this.commitQueuedInputsAfterStop(session);
+        await this.finalizeStoppedSession(session);
+        return;
+      }
+      if (session.stopping) {
+        session.stopping = false;
       }
 
       if ((!stopCompleted || runQueuedAfterStop) && !getManagedSessionState(session)?.currentStep && await this.continueWithQueuedWork(session)) {
@@ -1408,6 +1419,18 @@ export class MessageRouter {
       await sessionManager.saveSession(session.id);
     } finally {
       this.processingSessions.delete(sessionId);
+      // An item can become visible after the previous loop's final queue scan
+      // but before this processor releases ownership. If it arrived after the
+      // stop boundary it is new work, so hand it to a fresh processor rather
+      // than losing the enqueue trigger to this re-entrancy guard.
+      const session = await sessionManager.getExistingSession(sessionId);
+      if (session && !session.busy && session.queue.some(item => (
+        item.type !== 'compact'
+        && item.type !== 'compact-commit'
+        && item.type !== 'retry'
+      ))) {
+        void this.processSessionQueue(sessionId);
+      }
     }
   }
 }

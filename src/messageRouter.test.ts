@@ -700,7 +700,7 @@ test('stop signal commits queued work to history without running it', async () =
   }
 });
 
-test('stop commits all queued content in order while retaining execution controls', async () => {
+test('stop commits all queued content in order, cancels retry, and retains maintenance controls', async () => {
   const router = new MessageRouter() as any;
   const sessionId = `stop_commit_mixed_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const session = await sessionManager.getSession(sessionId) as Session;
@@ -745,7 +745,7 @@ test('stop commits all queued content in order while retaining execution control
     await router.runSessionTurn(sessionId, { parts: [{ text: 'start mixed turn' }], session });
 
     assert.equal(chatCallCount, 1);
-    assert.deepEqual(session.queue.map(item => item.type), ['retry', 'compact', 'compact-commit']);
+    assert.deepEqual(session.queue.map(item => item.type), ['compact', 'compact-commit']);
     const queuedHistory = session.history.filter(message => message.parts.some(part => (
       part.text === 'queued user first'
       || part.text === 'queued structured second'
@@ -757,6 +757,121 @@ test('stop commits all queued content in order while retaining execution control
       'queued background third',
     ]);
     assert.equal(queuedHistory[0]?.__meta?.clientMessageId, 'mixed-user-client-id');
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('stop commits content that arrives while stop history is being finalized', async () => {
+  const router = new MessageRouter() as any;
+  const sessionId = `stop_commit_finalizing_arrival_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const session = await sessionManager.getSession(sessionId) as Session;
+  session.history = [];
+  session.persistentMemorySnapshot = 'system prompt';
+  session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+  session.busy = false;
+  session.queue = [];
+  session.meta = { lastMessageTime: Date.now() };
+
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  const originalAppendSessionMessages = sessionManager.appendSessionMessages;
+  let chatCallCount = 0;
+  let injectedDuringFinalization = false;
+
+  (llm as any).chat = async () => {
+    chatCallCount += 1;
+    const toolCall = { id: 'stop-finalizing-tool', name: 'read', args: { filePath: 'README.md' } };
+    return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+  };
+  (llm as any).executeTools = async () => {
+    await sessionManager.enqueueSessionItem(sessionId, { type: 'user', parts: [{ text: 'queued before finalization' }] });
+    await sessionManager.requestSessionStop(sessionId);
+    return { parts: [{ functionResponse: { tool_use_id: 'stop-finalizing-tool', name: 'read', response: { output: 'stopped' } } }] };
+  };
+  (sessionManager as any).appendSessionMessages = async (...args: Parameters<typeof sessionManager.appendSessionMessages>) => {
+    await originalAppendSessionMessages(...args);
+    const messages = args[1];
+    if (!injectedDuringFinalization && messages.some(message => message.parts.some(part => part.text === 'queued before finalization'))) {
+      injectedDuringFinalization = true;
+      assert.equal(session.stopping, true);
+      await sessionManager.enqueueSessionItem(sessionId, {
+        type: 'intersession',
+        message: { role: 'user', parts: [{ text: 'arrived during finalization' }] },
+      });
+    }
+  };
+
+  try {
+    await router.runSessionTurn(sessionId, { parts: [{ text: 'start finalizing turn' }], session });
+
+    assert.equal(chatCallCount, 1);
+    assert.equal(session.queue.length, 0);
+    assert.equal(session.busy, false);
+    assert.equal(session.stopping, false);
+    assert.deepEqual(session.history
+      .filter(message => message.parts.some(part => (
+        part.text === 'queued before finalization' || part.text === 'arrived during finalization'
+      )))
+      .map(message => message.parts.find(part => part.text)?.text), [
+        'queued before finalization',
+        'arrived during finalization',
+      ]);
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    (sessionManager as any).appendSessionMessages = originalAppendSessionMessages;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('input after the stop boundary is handed to a fresh processor instead of losing its trigger', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('stop_post_boundary_handoff');
+  const sessionId = session.id;
+  session.queue = [{ type: 'user', parts: [{ text: 'start stop-boundary turn' }] }];
+  await sessionManager.saveSession(sessionId);
+
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  const originalFinalizeStoppedSession = router.finalizeStoppedSession.bind(router);
+  const processedAfterBoundary = new Promise<void>((resolve) => {
+    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+      const call = session.history.some(message => message.parts.some(part => part.text === 'after stop boundary')) ? 2 : 1;
+      if (call === 1) {
+        const toolCall = { id: 'stop-boundary-tool', name: 'read', args: { filePath: 'README.md' } };
+        await appendMockChatMessages(activeSession, parts, [{ functionCall: toolCall }]);
+        return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+      }
+      await appendMockChatMessages(activeSession, parts, [{ text: 'processed after boundary' }]);
+      resolve();
+      return { text: 'processed after boundary', allParts: [{ text: 'processed after boundary' }] };
+    };
+  });
+  (llm as any).executeTools = async () => {
+    await sessionManager.requestSessionStop(sessionId);
+    return { parts: [{ functionResponse: { tool_use_id: 'stop-boundary-tool', name: 'read', response: { output: 'stopped' } } }] };
+  };
+  router.finalizeStoppedSession = async (...args: any[]) => {
+    const committed = await originalFinalizeStoppedSession(...args);
+    session.queue.push({ type: 'user', parts: [{ text: 'after stop boundary' }] });
+    return committed;
+  };
+
+  try {
+    await router.processSessionQueue(sessionId);
+    await processedAfterBoundary;
+    while (session.busy) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
+
+    assert.equal(userTextOccurrences(session, 'after stop boundary'), 1);
+    assert.equal(session.history.some(message => message.parts.some(part => part.text === 'processed after boundary')), true);
+    assert.equal(session.queue.length, 0);
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;

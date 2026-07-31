@@ -34,7 +34,7 @@ Routes incoming channel messages to the appropriate session, handles authorizati
 | `MessageRouter.prepareTurnParts(session, sessionId, parts)` | ~137 | Adds compact time/session-id `<foxwarm-system ... />` metadata parts for a new turn; does not inject channel source prefixes |
 | `MessageRouter.drainLeadingQueuedTurnInputs(session)` | ~152 | Pops compatible queued input/event items as one provider batch while preserving their individual history boundaries |
 | `MessageRouter.consumeLeadingQueuedTurnInputs(session, pendingParts, turnStreamKey?)` | ~170 | Appends non-control queued inputs separately before the next in-turn LLM call until a different stream/card boundary is reached |
-| `MessageRouter.commitQueuedInputsAfterStop(session)` | ~mid | Moves all queued message/event inputs into canonical history after a genuine Stop without invoking another provider turn; retains non-content queue controls |
+| `MessageRouter.finalizeStoppedSession(session)` | ~mid | Moves queued message/event inputs into canonical history through the final Stop boundary, cancels retry intent, and retains compaction maintenance controls |
 | `MessageRouter.tryClaimSession(session)` | ~205 | Atomically marks session busy; returns false if already claimed |
 | `MessageRouter.continueWithQueuedWork(session)` | ~215 | Main loop: drains queue, runs LLM turns, handles retry controls, compaction, and tool calls |
 | `MessageRouter.executeLlmTurn(session, sessionId, parts)` | ~280 | Sends prepared parts to LLM, processes response and tool calls |
