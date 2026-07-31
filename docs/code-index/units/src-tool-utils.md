@@ -77,12 +77,18 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 
 ## Behavior
 
-- `parseFunctionCallArgs` gracefully handles malformed JSON by preserving the raw text and a structured error message, preventing 400 errors on provider APIs.
+- `parseFunctionCallArgs` canonicalizes an exact empty raw argument string to an empty object, while malformed JSON is preserved with a structured error message to prevent 400 errors on provider APIs.
 - `guardToolOutputForModel` applies a two-stage truncation to the non-image response that remains after image promotion: Stage A targets the `output` field specifically; Stage B catches any remaining oversized payload. Both stages save the complete text to disk and return a line-aware excerpt with location metadata, Foxwarm placeholder notes, and original line/character counts. A fallback path handles save failures. Canonical ordering is [D-dispatch-output-boundary](../threads/tool-dispatch.md#d-dispatch-output-boundary).
 - The guard preserves a curated set of shallow metadata keys (paths, IDs, status, error) in truncated summaries so the model retains actionable context.
 - `normalizeToolResultImages` accepts only current structured `inlineData` / `inlineDataItems` fields with `mimeType` and turns them into consistent `MessagePart[]` values with probed metadata. Source-specific old node shapes are outside this generic unit and are owned by [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
 - `cropImageById` resolves inline, canonical blob, or legacy archive-path images by walking session history backwards (including archives), then uses sharp to extract a sub-region. `image_write_to_file` uses the same reference reader.
 - The `wait` tool's stop-current-turn behavior is suppressed when any other tool in the batch returns an error.
+
+## Design Decisions
+
+### D-tool-args-empty-string
+
+[2026-07-31] An exact empty `rawArgsText` string means the model supplied no tool arguments. Parse it as `{ args: {} }` without retaining raw text or an error so later provider serialization emits `{}`. Whitespace-only strings remain invalid JSON and continue through the structured parse-error path.
 
 ## Integration
 

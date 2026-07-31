@@ -28,31 +28,60 @@ test('parseFunctionCallArgs preserves malformed raw JSON and reports structured 
   assert.match(parsed.argsParseError || '', /Invalid tool arguments JSON:/);
 });
 
-test('executeTools turns malformed tool arguments into a structured tool error', async () => {
-  const toolMessage = await executeTools(
-    [{
-      id: 'call_bad_args',
-      name: 'read',
-      args: {},
-      rawArgsText: '{"filePath":',
-      argsParseError: 'Invalid tool arguments JSON: Unexpected end of JSON input',
-    }],
-    { sessionId: 'tool-args-test/main', session: { agent: 'main' } },
-    { agent: 'main', verbose: false },
-  );
+test('exact empty raw tool arguments canonicalize to an empty object for serialization', () => {
+  const parsed = parseFunctionCallArgs('');
+  assert.deepEqual(parsed, { args: {} });
 
-  assert.equal(toolMessage.role, 'tool');
-  assert.equal(toolMessage.parts.length, 1);
-  assert.deepEqual(toolMessage.parts[0].functionResponse, {
-    tool_use_id: 'call_bad_args',
-    name: 'read',
-    response: {
-      error: {
-        type: 'invalid_tool_arguments',
-        message: 'Invalid tool arguments JSON: Unexpected end of JSON input',
+  const whitespace = parseFunctionCallArgs(' ');
+  assert.equal(whitespace.rawArgsText, ' ');
+  assert.match(whitespace.argsParseError || '', /Invalid tool arguments JSON:/);
+
+  const history = [{
+    role: 'model' as const,
+    parts: [{
+      functionCall: {
+        id: 'call_empty_args',
+        name: 'no_args_tool',
+        ...parsed,
       },
-    },
-  });
+    }],
+  }];
+  const chatMessages = convertToOpenAIFormat(history);
+  assert.equal(chatMessages[0].tool_calls[0].function.arguments, '{}');
+  const responsesItems = convertToOpenAIResponsesFormat(history);
+  assert.equal(responsesItems.find(item => item.type === 'function_call')?.arguments, '{}');
+});
+
+test('executeTools turns malformed tool arguments into a structured tool error', async () => {
+  const sessionId = makeSessionId('tool_args_test');
+  try {
+    const toolMessage = await executeTools(
+      [{
+        id: 'call_bad_args',
+        name: 'read',
+        args: {},
+        rawArgsText: '{"filePath":',
+        argsParseError: 'Invalid tool arguments JSON: Unexpected end of JSON input',
+      }],
+      { sessionId, session: { agent: 'main' } },
+      { agent: 'main', verbose: false },
+    );
+
+    assert.equal(toolMessage.role, 'tool');
+    assert.equal(toolMessage.parts.length, 1);
+    assert.deepEqual(toolMessage.parts[0].functionResponse, {
+      tool_use_id: 'call_bad_args',
+      name: 'read',
+      response: {
+        error: {
+          type: 'invalid_tool_arguments',
+          message: 'Invalid tool arguments JSON: Unexpected end of JSON input',
+        },
+      },
+    });
+  } finally {
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
 });
 
 test('executeTools persists previous LLM timing only on the first tool response', async () => {
