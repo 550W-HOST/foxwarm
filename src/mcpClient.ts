@@ -119,9 +119,15 @@ export function createMcpConfigStore(filePath: string = MCP_CONFIG_PATH): DiskJs
 }
 
 let mcpConfigStore = createMcpConfigStore();
+let liveMcpConfig: McpConfig | null = null;
+let liveMcpConfigLoad: Promise<McpConfig> | null = null;
+let mcpConfigMutationQueue: Promise<void> = Promise.resolve();
 
 export function setMcpConfigStoreForTests(store: DiskJsonData<McpConfig> | null): void {
   mcpConfigStore = store || createMcpConfigStore();
+  liveMcpConfig = null;
+  liveMcpConfigLoad = null;
+  mcpConfigMutationQueue = Promise.resolve();
 }
 
 function normalizeTransport(server: McpServerConfig): McpTransport {
@@ -182,22 +188,76 @@ export function summarizeServers(servers: Record<string, McpServerConfig> | unde
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-async function loadConfig(): Promise<McpConfig> {
+function cloneMcpConfig(config: McpConfig): McpConfig {
+  return {
+    servers: Object.fromEntries(
+      Object.entries(config.servers || {}).map(([name, server]) => [name, {
+        ...sanitizeServerConfig(server),
+        ...(Array.isArray(server.args) ? { args: [...server.args] } : {}),
+        ...(server.env ? { env: { ...server.env } } : {}),
+        ...(server.headers ? { headers: { ...server.headers } } : {}),
+      }]),
+    ),
+  };
+}
+
+async function loadConfigFromStore(store: DiskJsonData<McpConfig>): Promise<McpConfig> {
   try {
-    const loaded = await mcpConfigStore.loadFirstAvailable();
+    const loaded = await store.loadFirstAvailable();
     if (!loaded) return { servers: {} };
-    if (loaded.source !== mcpConfigStore.filePath) {
+    if (loaded.source !== store.filePath) {
       logger.warn({ source: loaded.source }, 'Recovering MCP config from fallback source');
-      await mcpConfigStore.write(loaded.data);
+      await store.write(loaded.data);
     }
-    return loaded.data;
+    return cloneMcpConfig(loaded.data);
   } catch (e) {
     throw new Error(`Failed to load MCP config: ${e}`);
   }
 }
 
-async function saveConfig(config: McpConfig) {
-  await mcpConfigStore.write(config);
+async function loadConfig(): Promise<McpConfig> {
+  if (liveMcpConfig) {
+    return liveMcpConfig;
+  }
+
+  const store = mcpConfigStore;
+  if (!liveMcpConfigLoad) {
+    liveMcpConfigLoad = loadConfigFromStore(store);
+  }
+  const pendingLoad = liveMcpConfigLoad;
+
+  try {
+    const loaded = await pendingLoad;
+    if (store !== mcpConfigStore) {
+      return loadConfig();
+    }
+    liveMcpConfig = loaded;
+    return liveMcpConfig;
+  } finally {
+    if (store === mcpConfigStore && liveMcpConfigLoad === pendingLoad) {
+      liveMcpConfigLoad = null;
+    }
+  }
+}
+
+async function saveConfig(config: McpConfig): Promise<void> {
+  const store = mcpConfigStore;
+  const nextConfig = cloneMcpConfig(config);
+  await store.write(nextConfig);
+  if (store === mcpConfigStore) {
+    liveMcpConfig = nextConfig;
+    liveMcpConfigLoad = null;
+  }
+}
+
+function mutateConfig(mutator: (config: McpConfig) => void): Promise<void> {
+  const operation = mcpConfigMutationQueue.then(async () => {
+    const nextConfig = cloneMcpConfig(await loadConfig());
+    mutator(nextConfig);
+    await saveConfig(nextConfig);
+  });
+  mcpConfigMutationQueue = operation.catch(() => {});
+  return operation;
 }
 
 async function getServerConfig(name?: string): Promise<{ name: string; config: McpServerConfig }> {
@@ -573,25 +633,24 @@ export async function callTool(serverName: string | undefined, tool: string, arg
 }
 
 export async function upsertServer(name: string, server: McpServerConfig) {
-  const cfg = await loadConfig();
-  cfg.servers = cfg.servers || {};
-  cfg.servers[name] = sanitizeServerConfig({ ...cfg.servers[name], ...server });
-  await saveConfig(cfg);
+  await mutateConfig((config) => {
+    config.servers = config.servers || {};
+    config.servers[name] = sanitizeServerConfig({ ...config.servers[name], ...server });
+  });
 }
 
 export async function setServerEnabled(name: string, enable: boolean) {
-  const cfg = await loadConfig();
-  cfg.servers = cfg.servers || {};
-  if (!cfg.servers[name]) {
-    throw new Error(`MCP server \"${name}\" not found.`);
-  }
-  cfg.servers[name].enable = enable;
-  await saveConfig(cfg);
+  await mutateConfig((config) => {
+    config.servers = config.servers || {};
+    if (!config.servers[name]) {
+      throw new Error(`MCP server \"${name}\" not found.`);
+    }
+    config.servers[name].enable = enable;
+  });
 }
 
 export async function getServers() {
-  const cfg = await loadConfig();
-  return cfg.servers || {};
+  return cloneMcpConfig(await loadConfig()).servers;
 }
 
 export async function listServers() {

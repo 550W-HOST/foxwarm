@@ -533,6 +533,7 @@ test('search_tools and call_tool descriptions include usage guidance and example
 
   assert.match(String(searchDef?.description), /builtin results include file\/edit tools, exec, session\/channel tools, vector\/archive tools, timers/i);
   assert.match(String(searchDef?.description), /example search_tools calls/i);
+  assert.match(String(searchDef?.description), /mcp-management skill/i);
   assert.match(String((searchDef?.parameters?.properties as any)?.nodeId?.description), /current node/i);
 
   assert.match(String(callDef?.description), /argsJson.*JSON object string fallback/i);
@@ -540,6 +541,11 @@ test('search_tools and call_tool descriptions include usage guidance and example
   assert.match(String(callDef?.description), /source:\"mcp\"/i);
   assert.match(String((callDef?.parameters?.properties as any)?.args?.description), /wrapper object/i);
   assert.match(String((callDef?.parameters?.properties as any)?.argsJson?.description), /providers that do not expose free-form object fields/i);
+
+  const mcpConfigDef = definitions.find((entry) => entry.name === 'mcp_config');
+  assert.match(String(mcpConfigDef?.description), /apply immediately/i);
+  assert.match(String(mcpConfigDef?.description), /no Foxwarm restart/i);
+  assert.match(String(mcpConfigDef?.description), /Do not edit the backing state\/config file manually/i);
 });
 
 test('default model-facing tool definitions exclude hidden browser and legacy wrapper tools', () => {
@@ -704,7 +710,7 @@ test('default model-facing tool names and serialized schema size stay consolidat
   ]);
 
   const serializedBytes = Buffer.byteLength(JSON.stringify(modelFacingDefinitions), 'utf8');
-  assert.equal(serializedBytes, 34_092);
+  assert.equal(serializedBytes, 34_164);
   assert.ok(serializedBytes < 38_069, 'serialized default schema should stay below the pre-consolidation baseline');
 });
 

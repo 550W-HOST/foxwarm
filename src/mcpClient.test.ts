@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 
-import { buildMcpHttpHeadersForTests, createMcpConfigStore, listServers, normalizeMcpToolResult, setMcpConfigStoreForTests, summarizeServerConfig, summarizeServers, upsertServer } from './mcpClient';
+import { buildMcpHttpHeadersForTests, createMcpConfigStore, listServers, normalizeMcpToolResult, setMcpConfigStoreForTests, setServerEnabled, summarizeServerConfig, summarizeServers, upsertServer } from './mcpClient';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-mcp-config-'));
@@ -89,6 +89,59 @@ test('MCP config uses lightweight no-backup writes', async () => {
     assert.deepEqual(Object.keys(rewritten.servers).sort(), ['alpha', 'beta']);
     assert.deepEqual(createMcpConfigStore(filePath).listCandidatePaths(), [filePath]);
     assert.deepEqual(await listBackupMatches(filePath), []);
+  });
+});
+
+test('live MCP config ignores manual file edits until the runtime store is reset', async () => {
+  await withTempDir(async (dirPath) => {
+    const filePath = path.join(dirPath, 'mcp.json');
+    await fs.writeJson(filePath, {
+      servers: { alpha: { url: 'https://example.com/alpha' } },
+    });
+    setMcpConfigStoreForTests(createMcpConfigStore(filePath));
+
+    assert.deepEqual((await listServers()).map((item) => item.name), ['alpha']);
+
+    await fs.writeJson(filePath, {
+      servers: { manual: { url: 'https://example.com/manual' } },
+    });
+    assert.deepEqual((await listServers()).map((item) => item.name), ['alpha']);
+
+    setMcpConfigStoreForTests(createMcpConfigStore(filePath));
+    assert.deepEqual((await listServers()).map((item) => item.name), ['manual']);
+  });
+});
+
+test('managed MCP updates become live only after their durable write succeeds', async () => {
+  await withTempDir(async (dirPath) => {
+    const filePath = path.join(dirPath, 'mcp.json');
+    const store = createMcpConfigStore(filePath);
+    setMcpConfigStoreForTests(store);
+
+    await upsertServer('alpha', { url: 'https://example.com/alpha' });
+    assert.deepEqual((await listServers()).map((item) => [item.name, item.enabled]), [['alpha', true]]);
+
+    const originalWrite = store.write.bind(store);
+    (store as any).write = async () => {
+      throw new Error('simulated durable write failure');
+    };
+    await assert.rejects(
+      () => upsertServer('beta', { url: 'https://example.com/beta' }),
+      /simulated durable write failure/,
+    );
+    assert.deepEqual((await listServers()).map((item) => item.name), ['alpha']);
+
+    (store as any).write = originalWrite;
+    await Promise.all([
+      upsertServer('beta', { url: 'https://example.com/beta' }),
+      upsertServer('gamma', { url: 'https://example.com/gamma' }),
+    ]);
+    await setServerEnabled('alpha', false);
+    assert.deepEqual((await listServers()).map((item) => [item.name, item.enabled]), [
+      ['alpha', false],
+      ['beta', true],
+      ['gamma', true],
+    ]);
   });
 });
 

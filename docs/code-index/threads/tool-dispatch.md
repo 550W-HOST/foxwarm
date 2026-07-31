@@ -44,6 +44,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 - An isolated session cannot use master file paths outside its own agent directory.
 - Unified wrappers do not bypass the concrete target's existing guards.
 - Tool output is bounded before it enters model context.
+- MCP configuration reads use one authoritative live snapshot after first load; managed updates persist before replacing that snapshot.
 - Recognized image bytes stay in structured image parts rather than entering text excerpts; non-image text, JSON, audio, resource, and blob content remain subject to the normal output budget.
 - MCP and node credentials remain transport/runtime state and are not exposed to the model through tool summaries.
 - Tool batches emit one result for every call and append one tool message only after the batch settles. Image/result parts and function responses remain in original model-call order rather than completion order.
@@ -71,6 +72,10 @@ Tool results remain structured through execution and are normalized/guarded exac
 ### D-dispatch-exec-parallel-segments
 
 Phase-one batch concurrency is intentionally narrow: only adjacent direct calls whose tool name is exactly `exec` run concurrently, with an internal maximum concurrency of four. Every non-`exec` call—including unified `call_tool`, MCP, node-dynamic, ToolScript, file, session, and wait/control tools—flushes the previous exec segment and runs serially. Each exec segment snapshots session node/cwd routing once, settles all calls, then replays cwd changes in model-call order before the next barrier; the last model call therefore owns the resulting session cwd. Results, images, errors, and progress stay model-ordered and one failure does not discard siblings. A stop request waits for the active segment, skips later barriers, and does not claim to terminate already-started operating-system processes. This is an internal scheduler contract, not a public configuration or generalized resource-lock API.
+
+### D-dispatch-mcp-live-configuration
+
+[2026-08-01] The first managed/runtime MCP configuration read establishes one authoritative in-memory snapshot. Subsequent MCP listing, discovery, and calls read that snapshot rather than rereading the backing file. `mcp_config` mutations must persist successfully before replacing the live snapshot, become visible to subsequent MCP operations immediately, and require no Foxwarm restart. Manual backing-file edits do not alter the live snapshot; do not add file watching or an agent-facing manual reload path.
 
 ## Canonical ownership
 

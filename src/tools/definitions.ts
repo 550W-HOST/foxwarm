@@ -643,7 +643,7 @@ Example:
         {
             name: 'search_tools',
             defaultInject: true,
-            description: 'Search or list callable tools across builtin, MCP, and remote-node sources. Builtin results include file/edit tools, exec, session/channel tools, vector/archive tools, timers, and wrapper tools such as MCP/node discovery helpers. Prefer this unified catalog before calling long-tail tools via call_tool; for timer tools, load the timer-automation skill first. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falls back to `master` when no current node is available, instead of listing every node). Example search_tools calls: `{query:"read file", sources:["builtin"]}` or `{query:"screenshot android", sources:["node"]}`.',
+            description: 'Search or list callable tools across builtin, MCP, and remote-node sources. Builtin results include file/edit tools, exec, session/channel tools, vector/archive tools, timers, and wrapper tools such as MCP/node discovery helpers. Prefer this unified catalog before calling long-tail tools via call_tool; load the timer-automation skill before using timer tools and the mcp-management skill before changing MCP server configuration. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falls back to `master` when no current node is available, instead of listing every node). Example search_tools calls: `{query:"read file", sources:["builtin"]}` or `{query:"screenshot android", sources:["node"]}`.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -787,7 +787,7 @@ Example:
         },
         {
             name: 'mcp_config',
-            description: 'Configure an MCP server (store in state/mcp.json). Use enable=false to disable an existing server.',
+            description: 'Manage MCP server configuration through the authoritative live runtime. Successful changes apply immediately to subsequent MCP listing, discovery, and calls; no Foxwarm restart is required. Do not edit the backing state/config file manually because manual edits do not update the live configuration immediately. Use enable=false to disable an existing server.',
             parameters: {
                 type: 'object',
                 properties: {
