@@ -16,6 +16,23 @@ export async function tool_mcp_config(args: ToolArgs) {
     if (!name) {
         throw new Error('mcp_config requires name');
     }
+    const hasConnectionUpdate = Boolean(
+        url
+        || command
+        || commandArgs !== undefined
+        || env !== undefined
+        || cwd !== undefined
+        || stderr !== undefined
+        || token !== undefined
+        || headers !== undefined
+        || transport !== undefined
+        || type !== undefined
+        || description !== undefined
+    );
+    if (typeof enable === 'boolean' && !hasConnectionUpdate) {
+        await mcpClient.setServerEnabled(name, enable);
+        return `MCP server "${name}" ${enable ? 'enabled' : 'disabled'}.`;
+    }
     if (resolvedTransport === 'stdio') {
         if (!command) {
             throw new Error('mcp_config with stdio transport requires command');

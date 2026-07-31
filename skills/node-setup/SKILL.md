@@ -18,8 +18,8 @@ Examples in this area include:
 - `node_bootstrap_info`
 - `node_pair_list`
 - `node_pair_approve`
-- `list_nodes`
-- general inspection tools such as `search_tools`, `load_skill`, file tools, etc.
+- `node({ action: "list" })`
+- general inspection tools such as `search_tools`, `skill({ action: "load", ... })`, file tools, etc.
 
 Use tools when you need agent-side reasoning help or machine-readable/bootstrap-ready information.
 
@@ -197,7 +197,7 @@ After approval:
 - future restarts use stored node credentials
 - the pairing token is mainly for first-time pairing / re-pairing
 
-`list_nodes` is the agent-facing online-node check. A node that is approved but
+`node({ action: "list" })` is the agent-facing online-node check. A node that is approved but
 offline will not be usable for worker execution and may not appear there.
 
 ## Fastest startup: Linux bare-metal bootstrap
@@ -454,7 +454,7 @@ So when sandbox behavior looks wrong, check the data root before debugging pairi
 
 After startup and approval:
 
-1. use `list_nodes` to confirm the node is online, or tell the user to run `/node` when approved/offline detail is needed
+1. use `node({ action: "list" })` to confirm the node is online, or tell the user to run `/node` when approved/offline detail is needed
 2. if approval is pending, use the reviewed `node_pair_list` / `node_pair_approve` tool path or the user-facing `/node approve` path
 3. if using isolated agents, confirm the agent is actually bound to that node
 4. confirm tool execution is happening on the expected node, not accidentally on `master`

@@ -753,8 +753,8 @@ async function appendSkillCatalogForAgent(agentName: string): Promise<string> {
 
     let combined = '';
     combined += 'The following skills provide specialized instructions for specific tasks.\n';
-    combined += 'When a task matches a skill\'s description, call the load_skill tool\n';
-    combined += 'with the skill\'s name to load its full instructions and resource list.\n';
+    combined += 'When a task matches a skill\'s description, call skill with action="load"\n';
+    combined += 'and the skill\'s name to load its full instructions and resource list.\n';
     combined += 'Read listed resources only when the loaded skill or current task needs them:\n';
     combined += '<available_skills>\n';
 

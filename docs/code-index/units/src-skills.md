@@ -54,7 +54,7 @@ Test file additionally imports:
 - `./commands` — `COMMANDS`
 - `./llm` — `buildSessionSystemPromptSnapshot`
 - `./tools` — `definitions`
-- `./toolsSessionAgent` — `tool_load_skill`
+- `./toolsSessionAgent` — `tool_skill({ action: "load" })`
 
 ## Behavior
 
@@ -62,7 +62,7 @@ Test file additionally imports:
 - Agent inheritance is walked via `agents.json` with circular reference detection.
 - Metadata comes from `SKILL.md` (YAML frontmatter, with heading/first paragraph fallback). `skill.json` is not a supported skill manifest.
 - Document files loaded by `loadSkillDocuments` include only the skill's explicit entry document (`SKILL.md`).
-- `loadSkillDocuments` also returns a capped list of supporting resource paths (references, scripts, assets, examples, docs, evals, etc.) without reading them; callers include this list in the `load_skill` header for progressive disclosure.
+- `loadSkillDocuments` also returns a capped list of supporting resource paths (references, scripts, assets, examples, docs, evals, etc.) without reading them; callers include this list in the `skill({ action: "load" })` header for progressive disclosure.
 - Skill discovery recursively scans directories that do not already contain `SKILL.md`; once a directory has `SKILL.md`, it is a skill boundary and nested `SKILL.md` files below it are treated as resources, not independent catalog entries.
 - Nested skill names such as `vendor/skill-name` remain supported only when the parent directories are ordinary containers without their own `SKILL.md`.
 - Resource listing skips non-resource/runtime directories such as `.git`, `node_modules`, `memory`, `build`, `dist`, and `__pycache__`, and caps large listings.
@@ -77,7 +77,7 @@ Test file additionally imports:
 
 ## Integration
 
-- Used by `toolsSessionAgent` (`tool_load_skill`) to load skill documents on demand during agent sessions.
+- Used by `toolsSessionAgent` (`tool_skill`) to load skill documents on demand during agent sessions.
 - Used by `llm` module (`buildSessionSystemPromptSnapshot`) to inject an `<available_skills>` catalog into the system prompt; the prompt renders the winning `SkillInfo.sourceType` alongside name/description, preserving this unit's precedence and deduplication result.
 - The `/skill` command in `commands` exposes skill listing to users.
 - Relies on `config` for directory layout (agent dirs, global skills dir, agents metadata file).

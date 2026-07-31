@@ -20,7 +20,7 @@ Isolation is agent-level. All sessions belonging to one isolated agent share its
 ## Before running
 
 1. Load `node-setup` if the node still needs bootstrap or pairing.
-2. Confirm the node is approved and connected with `list_nodes`. The current agent-facing `list_nodes` result proves a node is online; it does not list approved-but-offline nodes.
+2. Confirm the node is approved and connected with `node({ action: "list" })`. The current agent-facing node list proves a node is online; it does not list approved-but-offline nodes.
 3. Choose a unique ASCII `agentName` and `sessionName` using letters, digits, `_`, or `-`.
 4. Keep the coordinator non-isolated. The underlying `create_agent` and `create_session` tools are unavailable to an isolated caller.
 5. Decide whether the temporary agent should inherit durable memory from an existing agent. Omit `inheritAgent` unless that shared context is actually needed.
@@ -36,7 +36,7 @@ skills/isolated-worker/create_isolated_worker.py
 It calls existing builtins through ToolScript:
 
 1. `session` — resolve and verify the current parent session;
-2. `list_nodes` — require the selected non-master node to be connected;
+2. `node({ action: "list" })` — require the selected non-master node to be connected;
 3. `list_agents` — fail if the requested agent already exists;
 4. `create_agent` — create the isolated agent with `createMainSession=false`;
 5. `create_session` — create one worker session with `parentSessionId` set to the current session;

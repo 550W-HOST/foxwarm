@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { nodesManager } from '../nodes/manager';
-import { list_nodes } from '../tools';
+import { node } from '../tools';
 
-test('list_nodes marks the current session node', async () => {
+test('node list marks the current session node', async () => {
   const originalListNodes = nodesManager.listNodes;
   const originalGetCurrentNode = nodesManager.getCurrentNode;
 
@@ -15,7 +15,7 @@ test('list_nodes marks the current session node', async () => {
     ]);
     (nodesManager as any).getCurrentNode = async () => 'remote-a';
 
-    const result = await list_nodes({}, { sessionId: 'test-session' } as any);
+    const result = await node({ action: 'list' }, { sessionId: 'test-session' } as any);
 
     assert.match(result, /Current node: `remote-a`/);
     assert.match(result, /- `remote-a` \(remote\) ✅ current - Last activity:/);
@@ -26,7 +26,7 @@ test('list_nodes marks the current session node', async () => {
   }
 });
 
-test('list_nodes uses current node from provided session context', async () => {
+test('node list uses current node from provided session context', async () => {
   const originalListNodes = nodesManager.listNodes;
   const originalGetCurrentNode = nodesManager.getCurrentNode;
   let getCurrentNodeCalled = false;
@@ -40,7 +40,7 @@ test('list_nodes uses current node from provided session context', async () => {
       return 'remote-a';
     };
 
-    const result = await list_nodes({}, { sessionId: 'test-session', session: { currentNode: 'master' } } as any);
+    const result = await node({ action: 'list' }, { sessionId: 'test-session', session: { currentNode: 'master' } } as any);
 
     assert.match(result, /Current node: `master`/);
     assert.match(result, /- `master` \(local\) ✅ current - Last activity:/);
@@ -51,7 +51,7 @@ test('list_nodes uses current node from provided session context', async () => {
   }
 });
 
-test('list_nodes reports when current node is not registered', async () => {
+test('node list reports when current node is not registered', async () => {
   const originalListNodes = nodesManager.listNodes;
   const originalGetCurrentNode = nodesManager.getCurrentNode;
 
@@ -61,7 +61,7 @@ test('list_nodes reports when current node is not registered', async () => {
     ]);
     (nodesManager as any).getCurrentNode = async () => 'offline-node';
 
-    const result = await list_nodes({}, { sessionId: 'test-session' } as any);
+    const result = await node({ action: 'list' }, { sessionId: 'test-session' } as any);
 
     assert.match(result, /Current node: `offline-node`/);
     assert.match(result, /Current node `offline-node` is not currently registered\/connected\./);

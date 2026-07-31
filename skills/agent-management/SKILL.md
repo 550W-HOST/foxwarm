@@ -68,8 +68,8 @@ An agent session normally works from a prompt snapshot assembled from:
 Important details from current implementation:
 
 - the skills catalog injected into the snapshot is only a **catalog/summary**
-- full skill documents are loaded on demand with `load_skill`
-- `load_skill` returns the skill entry and may list supporting resource paths; those resources are not read until needed
+- full skill documents are loaded on demand with `skill({ action: "load", skillName: ... })`
+- `skill({ action: "load", ... })` returns the skill entry and may list supporting resource paths; those resources are not read until needed
 - session snapshots are cached per session, so editing memory on disk does not always change an already-open session immediately
 - the prompt snapshot also includes runtime hints such as the current agent folder and context-recall guidance
 
@@ -80,7 +80,7 @@ Use progressive disclosure so future sessions see the right amount of knowledge 
 1. **Framework/system prompt** — universal rules every agent must know. Keep tiny and generic.
 2. **Agent memory** — always-needed stable behavior, repeated user preferences, durable environment facts, confirmed decisions, and short pointers. This is injected into prompt snapshots.
 3. **Agent docs** — detailed analysis, runbooks, historical notes, design writeups, and artifacts. These are available on disk but not injected by default.
-4. **Skills** — reusable workflows or capability packages. Only name + description are shown in the catalog until `load_skill` is called.
+4. **Skills** — reusable workflows or capability packages. Only name + description are shown in the catalog until `skill({ action: "load", ... })` is called.
 5. **Skill resources** — references, scripts, assets, examples, evals, or other supporting files listed or linked by the skill entry. Read these only when needed.
 
 When deciding where to put information, ask:
@@ -153,7 +153,7 @@ Read the reference docs next to this skill first:
 - `references/COLLABORATION-PATTERNS.md` — organizer/executor defaults, role detection, fork/non-fork/reuse guidance, handoff checklists, tunable preferences, and memory hygiene.
 - `references/memory-templates/` — copyable starter memory files for shared base agents and specialized agents.
 
-These reference files are intentionally not part of the normal `load_skill` payload. Keep this `SKILL.md` as the short entry point; read references explicitly when configuring agent memory.
+These reference files are intentionally not part of the normal `skill({ action: "load", ... })` payload. Keep this `SKILL.md` as the short entry point; read references explicitly when configuring agent memory.
 
 Recommended default: use an **Organizer / Executor** pattern inside each agent. The main/direct session coordinates scope, ownership, parallelism, and user-facing decisions; child sessions execute bounded tasks and report back through the required reply path.
 
@@ -345,7 +345,7 @@ Important behavior:
 - changing isolation updates affected sessions accordingly
 - an isolated session cannot switch itself to some other arbitrary node for normal work
 - if a different node is really required, the right model is usually to change the agent's isolation binding deliberately, not to let the isolated agent use other nodes directly
-- binding currently does not guarantee that the node is online or exclusively assigned; verify with `list_nodes` before starting work
+- binding currently does not guarantee that the node is online or exclusively assigned; verify with `node({ action: "list" })` before starting work
 
 ## Common workflow: move work between agents/sessions
 

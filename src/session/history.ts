@@ -897,7 +897,7 @@ export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: La
   return operations.sort((a, b) => a.startIndex - b.startIndex || a.planIndex - b.planIndex);
 }
 
-/** Extract skill names from load_skill calls in the compacted portion of history */
+/** Extract skill names from current skill(load) and persisted legacy load_skill calls. */
 function extractCompactedSkillNames(history: Message[], consumedFrontierCount: number): string[] {
   const skillNames = new Set<string>();
   // Scan messages that correspond to the consumed frontier portion
@@ -906,8 +906,11 @@ function extractCompactedSkillNames(history: Message[], consumedFrontierCount: n
     const msg = history[i];
     if (!msg.parts) continue;
     for (const part of msg.parts) {
-      if (part.functionCall?.name === 'load_skill') {
-        const skillName = part.functionCall.args?.skillName;
+      const call = part.functionCall;
+      const isCurrentLoad = call?.name === 'skill' && call.args?.action === 'load';
+      const isLegacyLoad = call?.name === 'load_skill';
+      if (isCurrentLoad || isLegacyLoad) {
+        const skillName = call?.args?.skillName;
         if (typeof skillName === 'string' && skillName.trim()) {
           skillNames.add(skillName.trim());
         }
@@ -991,7 +994,7 @@ export function formatCompactionCompletionMarker(sessionId: string, completionMa
   }
   if (compactedSkillNames.length > 0) {
     const skillList = compactedSkillNames.map(s => `\`${s}\``).join(', ');
-    hintParts.push(`Note: The following skill(s) were loaded via load_skill but their content was compacted away: ${skillList}. If you still need them, call load_skill again.`);
+    hintParts.push(`Note: The following skill(s) were loaded with skill(action="load") but their content was compacted away: ${skillList}. If you still need them, call skill with action="load" again.`);
   }
 
   return formatFoxwarmSystemTag({
@@ -1218,7 +1221,7 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     [...rewrittenOlderFrontier, ...currentFrontier.slice(result.consumedFrontierCount)],
   );
 
-  // Scan compacted messages for load_skill calls to remind agent after compaction
+  // Scan compacted messages for current and persisted legacy skill-load calls.
   const compactedSkillNames = extractCompactedSkillNames(session.history, result.consumedFrontierCount);
 
   await finalizeCompaction(

@@ -17,14 +17,12 @@ import {
     tool_send_file,
     tool_session,
     tool_list_agents,
-    tool_list_skills,
-    tool_load_skill,
+    tool_skill,
     tool_get_session_messages,
     tool_get_archived_messages,
     tool_get_archived_blocks,
     tool_recall,
     tool_delete_session,
-    tool_update_session_name,
     tool_set_goal,
     tool_set_session_child_model,
     tool_set_session_compact_threshold,
@@ -52,7 +50,7 @@ import { tool_exec } from './tools/execTools';
 import { tool_image_crop, tool_image_write_to_file } from './tools/imageTools';
 import { tool_browse_open, tool_browse_list, tool_browse_get, tool_browse_close, tool_browse_interact } from './tools/browserTools';
 import { tool_mcp_config, tool_call_mcp, tool_search_mcp_tools, tool_list_mcp_servers } from './tools/mcpTools';
-import { tool_copy_between_nodes, tool_remote_node, tool_list_nodes, tool_change_current_node, tool_node_bootstrap_info, tool_node_pair_approve, tool_node_pair_list } from './tools/nodeTools';
+import { tool_copy_between_nodes, tool_remote_node, tool_node, tool_node_bootstrap_info, tool_node_pair_approve, tool_node_pair_list } from './tools/nodeTools';
 import { tool_get_memory_context, resolveMemorySearchOptions } from './tools/vectorTools';
 import { tool_search_tools, tool_call_tool, setDefinitionsRef } from './tools/unifiedSearch';
 import { definitions } from './tools/definitions';
@@ -62,21 +60,20 @@ fs.ensureDirSync(getAgentDir('main'));
 
 // --- Master-only tool names ---
 export const MASTER_ONLY_TOOL_NAMES = [
-    'remote_node', 'list_nodes', 'node_tools',
+    'remote_node', 'node', 'node_tools',
     'get_memory_context',
     'read_memory', 'write_memory', 'edit_memory', 'delete_memory', 'apply_patch_memory',
     'copy_between_nodes',
     'image_crop', 'image_write_to_file',
     'create_child_session', 'send_to_session', 'wait', 'submit_compact_plan', 'send_to_channel', 'send_file',
-    'session', 'list_agents', 'list_skills', 'load_skill',
+    'session', 'list_agents', 'skill',
     'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'recall', 'delete_session',
-    'update_session_name', 'set_goal', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
+    'set_goal', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
     'compact_session',
     'create_timer', 'list_timers', 'update_timer', 'delete_timer',
     'mcp_config', 'call_mcp', 'search_mcp_tools', 'list_mcp_servers',
     'search_tools', 'call_tool',
     'run_script', 'start_toolscript_run', 'continue_script', 'list_toolscript_runs', 'get_toolscript_run', 'cancel_toolscript_run',
-    'change_current_node',
     'node_bootstrap_info', 'node_pair_approve', 'node_pair_list',
     'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
 ];
@@ -133,8 +130,7 @@ export async function callTool(toolName: string, args: any, context: any): Promi
         list_mcp_servers: tool_list_mcp_servers,
         remote_node: tool_remote_node,
         node_tools: tool_remote_node,
-        list_nodes: tool_list_nodes,
-        change_current_node: tool_change_current_node,
+        node: tool_node,
         node_bootstrap_info: tool_node_bootstrap_info,
         node_pair_approve: tool_node_pair_approve,
         node_pair_list: tool_node_pair_list,
@@ -149,14 +145,12 @@ export async function callTool(toolName: string, args: any, context: any): Promi
         send_file: tool_send_file,
         session: tool_session,
         list_agents: tool_list_agents,
-        list_skills: tool_list_skills,
-        load_skill: tool_load_skill,
+        skill: tool_skill,
         get_session_messages: tool_get_session_messages,
         get_archived_messages: tool_get_archived_messages,
         get_archived_blocks: tool_get_archived_blocks,
         recall: tool_recall,
         delete_session: tool_delete_session,
-        update_session_name: tool_update_session_name,
         set_goal: tool_set_goal,
         set_session_child_model: tool_set_session_child_model,
         set_session_compact_threshold: tool_set_session_compact_threshold,
@@ -217,14 +211,12 @@ export const send_to_channel = tool_send_to_channel;
 export const send_file = tool_send_file;
 export const session = tool_session;
 export const list_agents = tool_list_agents;
-export const list_skills = tool_list_skills;
-export const load_skill = tool_load_skill;
+export const skill = tool_skill;
 export const get_session_messages = tool_get_session_messages;
 export const get_archived_messages = tool_get_archived_messages;
 export const get_archived_blocks = tool_get_archived_blocks;
 export const recall = tool_recall;
 export const delete_session = tool_delete_session;
-export const update_session_name = tool_update_session_name;
 export const set_goal = tool_set_goal;
 export const set_session_child_model = tool_set_session_child_model;
 export const set_session_compact_threshold = tool_set_session_compact_threshold;
@@ -254,8 +246,7 @@ export const continue_script = tool_continue_script;
 export const list_toolscript_runs = tool_list_toolscript_runs;
 export const get_toolscript_run = tool_get_toolscript_run;
 export const cancel_toolscript_run = tool_cancel_toolscript_run;
-export const list_nodes = tool_list_nodes;
-export const change_current_node = tool_change_current_node;
+export const node = tool_node;
 export const node_bootstrap_info = tool_node_bootstrap_info;
 export const node_pair_approve = tool_node_pair_approve;
 export const node_pair_list = tool_node_pair_list;

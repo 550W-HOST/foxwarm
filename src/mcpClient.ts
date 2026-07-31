@@ -206,7 +206,7 @@ async function getServerConfig(name?: string): Promise<{ name: string; config: M
   const fallbackName = name || 'default';
   const serverName = servers[fallbackName] ? fallbackName : Object.keys(servers)[0];
   if (!serverName) {
-    throw new Error('No MCP servers configured. Use mcp_config to add one.');
+    throw new Error('No MCP servers configured. Discover the hidden mcp_config builtin with search_tools and invoke it through call_tool.');
   }
   const server = sanitizeServerConfig(servers[serverName]);
   if (server.enable === false) {

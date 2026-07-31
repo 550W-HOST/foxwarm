@@ -11,9 +11,10 @@ Scripting owns ToolScript: a constrained Python-like automation runtime implemen
 ## Public interfaces
 
 - `run_script` — start a foreground ToolScript run.
-- `start_toolscript_run` — start a background run.
+- `run_script({ mode: "background" })` — start a background run through the same current entry point.
 - `continue_script` — resume a run waiting for agent input or a timeout checkpoint.
 - Hidden management tools list, inspect, and cancel persisted runs.
+- Hidden `start_toolscript_run` remains callable only for documented user-automation compatibility.
 - `resumeBackgroundToolScriptRunForManagedSession` resumes controllers when a managed-session event arrives.
 - Scripts call the external host functions `call_tool`, `request_model_without_context`, `ask_agent`, `open_managed_session`, `session_step`, `release_managed_session`, and `wait_for_managed_event`; Monty provides ordinary language/runtime behavior such as `print`.
 

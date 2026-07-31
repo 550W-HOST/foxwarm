@@ -13,7 +13,7 @@ The Foxwarm `SKILL.md` entry point was rewritten to fit Foxwarm's SKILL.md-first
 
 ## Foxwarm notes
 
-- Load the skill with `load_skill("agent-skill-creator")` to read the Foxwarm entry point.
+- Load the skill with `skill({ action: "load", skillName: "agent-skill-creator" })` to read the Foxwarm entry point.
 - Read `references/` files explicitly when deeper upstream methodology is needed.
 - Helper scripts live under `scripts/` and should be run by path from this skill directory.
 - Do not assume upstream platform installer behavior is the right action for a Foxwarm deployment; prefer generating Foxwarm-compatible skills under the user's chosen workspace.

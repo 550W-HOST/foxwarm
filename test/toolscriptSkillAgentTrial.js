@@ -126,7 +126,7 @@ async function main() {
 
     const automationPrompt = [
       'You have new ToolScript skills available.',
-      'Before guessing APIs, inspect the relevant ToolScript skill docs with load_skill, then read the canonical example path mentioned in that skill.',
+      'Before guessing APIs, inspect the relevant ToolScript skill docs with skill(action="load"), then read the canonical example path mentioned in that skill.',
       `Then create a ToolScript file named \`${automationScriptName}\` in the current agent folder.`,
       'Prefer using any helper mentioned in the skill/example if it fits. Avoid repo-wide grep unless the skill/example is still insufficient.',
       'The script should use a small known tool flow: list files under `examples/toolscript`, print the count, read `skills/toolscript-automation/SKILL.md`, print a short excerpt, ask_agent("Reply with a short label"), and return a dict with the label and file count.',
@@ -142,7 +142,7 @@ async function main() {
 
     const controllerPrompt = [
       `A target session already exists with session id \`${targetSessionId}\`.`,
-      'Before guessing APIs, inspect the relevant ToolScript managed-controller skill docs with load_skill, then read the canonical example path mentioned in that skill.',
+      'Before guessing APIs, inspect the relevant ToolScript managed-controller skill docs with skill(action="load"), then read the canonical example path mentioned in that skill.',
       `Then create a ToolScript file named \`${controllerScriptName}\` in the current agent folder.`,
       'Prefer using any helper mentioned in the skill/example if it fits. Avoid repo-wide grep unless the skill/example is still insufficient.',
       'The controller should open managed control of the target session, wait for one managed event, handle it with a short manager message like "Controller handled this request.", then release the session.',
@@ -190,7 +190,7 @@ async function main() {
         replies: automationResult.replies,
         functionCalls: extractFunctionCallNames(automationSession),
         functionCallDetails: extractFunctionCalls(automationSession),
-        usedLoadSkill: extractFunctionCallNames(automationSession).includes('load_skill'),
+        usedLoadSkill: extractFunctionCalls(automationSession).some(call => call.name === 'skill' && call.rawArgsText.includes('load')),
         usedExampleRead: extractFunctionCalls(automationSession).some(call => call.name === 'read' && /examples\/toolscript\/automation_basic\.py/.test(call.rawArgsText || '')),
         usedExec: extractFunctionCallNames(automationSession).includes('exec'),
         scriptExists: automationScriptExists,
@@ -212,7 +212,7 @@ async function main() {
         replies: controllerResult.replies,
         functionCalls: extractFunctionCallNames(controllerSession),
         functionCallDetails: extractFunctionCalls(controllerSession),
-        usedLoadSkill: extractFunctionCallNames(controllerSession).includes('load_skill'),
+        usedLoadSkill: extractFunctionCalls(controllerSession).some(call => call.name === 'skill' && call.rawArgsText.includes('load')),
         usedExampleRead: extractFunctionCalls(controllerSession).some(call => call.name === 'read' && /examples\/toolscript\/managed_controller_basic\.py/.test(call.rawArgsText || '')),
         usedExec: extractFunctionCallNames(controllerSession).includes('exec'),
         scriptExists: controllerScriptExists,

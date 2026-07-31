@@ -14,8 +14,12 @@ export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
     return buildSessionListOutput(args, ctx?.sessionId);
   }
 
+  if (action === 'rename') {
+    return renameSession(args, ctx);
+  }
+
   if (action !== 'status') {
-    throw new Error('session.action must be "status" or "list".');
+    throw new Error('session.action must be "status", "list", or "rename".');
   }
 
   const targetSessionId = ctx?.sessionId;
@@ -55,12 +59,15 @@ export async function tool_delete_session(args: ToolArgs, ctx: ToolContext) {
   return `Session \`${sessionId}\` not found.`;
 }
 
-export async function tool_update_session_name(args: ToolArgs, ctx: ToolContext) {
+async function renameSession(args: ToolArgs, ctx?: ToolContext) {
   const { sessionId, name } = args;
   const targetId = sessionId || ctx?.sessionId;
 
   if (!targetId) {
     throw new Error('Session ID is required.');
+  }
+  if (typeof name !== 'string') {
+    throw new Error('session.name is required for action="rename".');
   }
 
   const session = await sessionManager.getExistingSession(targetId);

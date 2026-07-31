@@ -231,6 +231,22 @@ test('mcp_config rejects non-string values from envJson', async () => {
   );
 });
 
+test('mcp_config can disable an existing server without repeating its connection config', async () => {
+  const originalSetServerEnabled = mcpClient.setServerEnabled;
+  const captured: Array<{ name: string; enable: boolean }> = [];
+  (mcpClient as any).setServerEnabled = async (name: string, enable: boolean) => {
+    captured.push({ name, enable });
+  };
+
+  try {
+    const result = await mcp_config({ name: 'existing-server', enable: false });
+    assert.equal(String(result), 'MCP server "existing-server" disabled.');
+    assert.deepEqual(captured, [{ name: 'existing-server', enable: false }]);
+  } finally {
+    (mcpClient as any).setServerEnabled = originalSetServerEnabled;
+  }
+});
+
 test('search_tools and call_tool cover MCP tools with schema-preserving structured results', async () => {
   const originalListServers = mcpClient.listServers;
   const originalListTools = mcpClient.listTools;
@@ -545,6 +561,7 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
     'list_toolscript_runs',
     'get_toolscript_run',
     'cancel_toolscript_run',
+    'start_toolscript_run',
     'set_session_child_model',
     'set_session_compact_threshold',
     'update_session_snapshot',
@@ -557,6 +574,8 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
     'list_timers',
     'update_timer',
     'delete_timer',
+    'mcp_config',
+    'list_mcp_servers',
   ]) {
     assert.equal(modelFacingDefinitions.some(def => def.name === name), false, `${name} should be hidden from default model-facing tools`);
     assert.equal(definitions.some(def => def.name === name), true, `${name} should remain available for runtime compatibility`);
@@ -571,6 +590,11 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
   assert.equal(modelFacingDefinitions.some(def => def.name === 'submit_compact_plan'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'set_goal'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'session'), true);
+  assert.equal(modelFacingDefinitions.some(def => def.name === 'skill'), true);
+  assert.equal(modelFacingDefinitions.some(def => def.name === 'node'), true);
+  for (const removedName of ['update_session_name', 'list_skills', 'load_skill', 'list_nodes', 'change_current_node']) {
+    assert.equal(definitions.some(def => def.name === removedName), false, `${removedName} should be removed from the builtin registry`);
+  }
   assert.equal(definitions.some(def => def.name === 'list_sessions'), false);
   assert.equal(MASTER_ONLY_TOOL_NAMES.includes('session'), true);
   assert.equal(MASTER_ONLY_TOOL_NAMES.includes('list_sessions'), false);
@@ -644,19 +668,68 @@ test('defaultInject metadata is the single source of truth for default model inj
   assert.equal(modelFacingDefinitions.some(def => def.name === 'browse_list'), false);
 });
 
+test('default model-facing tool names and serialized schema size stay consolidated', () => {
+  assert.deepEqual(modelFacingDefinitions.map(def => def.name), [
+    'read',
+    'write',
+    'edit',
+    'apply_patch',
+    'read_memory',
+    'write_memory',
+    'edit_memory',
+    'delete_memory',
+    'apply_patch_memory',
+    'delete_file',
+    'copy_between_nodes',
+    'image_crop',
+    'image_write_to_file',
+    'exec',
+    'create_child_session',
+    'send_to_session',
+    'wait',
+    'send_to_channel',
+    'send_file',
+    'session',
+    'list_agents',
+    'skill',
+    'get_session_messages',
+    'recall',
+    'set_goal',
+    'submit_compact_plan',
+    'search_tools',
+    'call_tool',
+    'run_script',
+    'continue_script',
+    'node',
+  ]);
+
+  const serializedBytes = Buffer.byteLength(JSON.stringify(modelFacingDefinitions), 'utf8');
+  assert.equal(serializedBytes, 34_092);
+  assert.ok(serializedBytes < 38_069, 'serialized default schema should stay below the pre-consolidation baseline');
+});
+
 test('change_directory, compress_session, and list_sessions are removed entirely', () => {
   assert.equal(definitions.some(def => def.name === 'change_directory'), false);
   assert.equal(definitions.some(def => def.name === 'compress_session'), false);
   assert.equal(definitions.some(def => def.name === 'list_sessions'), false);
 });
 
-test('session tool schema exposes status/list actions and list pagination args', () => {
+test('consolidated resource tool schemas expose their approved actions', () => {
   const definition = definitions.find(def => def.name === 'session');
   assert.ok(definition);
   assert.equal(definition.defaultInject, true);
-  assert.deepEqual((definition.parameters?.properties as any)?.action?.enum, ['status', 'list']);
+  assert.deepEqual((definition.parameters?.properties as any)?.action?.enum, ['status', 'list', 'rename']);
   assert.equal((definition.parameters?.properties as any)?.start?.type, 'number');
   assert.equal((definition.parameters?.properties as any)?.count?.type, 'number');
+  assert.equal((definition.parameters?.properties as any)?.name?.type, 'string');
+
+  const skillDefinition = definitions.find(def => def.name === 'skill');
+  assert.deepEqual((skillDefinition?.parameters?.properties as any)?.action?.enum, ['list', 'load']);
+  assert.deepEqual(skillDefinition?.parameters?.required, ['action']);
+
+  const nodeDefinition = definitions.find(def => def.name === 'node');
+  assert.deepEqual((nodeDefinition?.parameters?.properties as any)?.action?.enum, ['list', 'select']);
+  assert.deepEqual(nodeDefinition?.parameters?.required, ['action']);
 });
 
 test('builtin file/browser tool schemas no longer expose node selector parameters', () => {

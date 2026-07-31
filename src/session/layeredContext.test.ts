@@ -69,7 +69,7 @@ test('formatCompactionCompletionMarker uses foxwarm metadata without a duplicate
   assert.equal(formatCompactionCompletionMarker('session-123', 'Compaction completed.', 'parent-456'), '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123" />');
   assert.equal(
     formatCompactionCompletionMarker('session-123', 'Compaction completed. You can continue working now.', 'parent-456', ['code-index']),
-    '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123" hint="You can continue working now. Note: The following skill(s) were loaded via load_skill but their content was compacted away: `code-index`. If you still need them, call load_skill again." />'
+    '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent-456" currentSessionId="session-123" hint="You can continue working now. Note: The following skill(s) were loaded with skill(action=&quot;load&quot;) but their content was compacted away: `code-index`. If you still need them, call skill with action=&quot;load&quot; again." />'
   );
   assert.equal(isIgnoredCompactLifecycleSystemText(text), true);
 });

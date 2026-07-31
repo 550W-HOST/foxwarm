@@ -10,7 +10,7 @@ Implements persisted foreground/background ToolScript runs in the Monty Python-s
 ## Actual exports
 
 - `tool_run_script(args, ctx)` — start a run; mode may be foreground or background.
-- `tool_start_toolscript_run(args, ctx)` — explicit background starter.
+- `tool_start_toolscript_run(args, ctx)` — hidden compatibility-only background starter; current callers use `tool_run_script` with background mode.
 - `tool_continue_script(args, ctx)` — resume an agent-input or timeout-checkpoint wait owned by the current session.
 - `tool_list_toolscript_runs`, `tool_get_toolscript_run`, `tool_cancel_toolscript_run` — hidden management handlers.
 - `resumeBackgroundToolScriptRunForManagedSession(args)` — internal managed-event continuation.
@@ -56,6 +56,7 @@ Unknown external function names are returned to Monty as runtime exceptions. The
 
 - `call_tool` accepts the supported string shorthand and the current unified descriptor. New examples use the descriptor.
 - `continue_script.input` is a string at the tool boundary; structured input is passed as JSON text and parsed by the script.
+- Documented user automation may still call hidden `start_toolscript_run`; current model guidance and bundled skills use `run_script({ mode: "background" })`.
 - Hidden direct MCP runtime handlers still exist, but ToolScript examples use unified `call_tool` so builtin/MCP/node dispatch shares one path.
 
 ## Design decisions

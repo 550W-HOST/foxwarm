@@ -482,18 +482,18 @@ test('isolated sessions may load visible skills for their own agent only', async
     const session = await sessionManager.getSession(sessionId);
     session.agent = agentName;
 
-    await assert.doesNotReject(() => checkToolPermission('list_skills', sessionId, 'master', {}));
-    await assert.doesNotReject(() => checkToolPermission('load_skill', sessionId, 'master', { skillName: 'code-index' }));
+    await assert.doesNotReject(() => checkToolPermission('skill', sessionId, 'master', { action: 'list' }));
+    await assert.doesNotReject(() => checkToolPermission('skill', sessionId, 'master', { action: 'load', skillName: 'code-index' }));
 
-    const ownListResult = await callTool('list_skills', {}, { sessionId, session });
+    const ownListResult = await callTool('skill', { action: 'list' }, { sessionId, session });
     assert.match(String(ownListResult), /Found \d+ skill/);
 
     await assert.rejects(
-      () => callTool('list_skills', { agentName: otherAgentName }, { sessionId, session }),
+      () => callTool('skill', { action: 'list', agentName: otherAgentName }, { sessionId, session }),
       /Isolated session cannot list skills for agent/,
     );
     await assert.rejects(
-      () => callTool('load_skill', { skillName: 'code-index', agentName: otherAgentName }, { sessionId, session }),
+      () => callTool('skill', { action: 'load', skillName: 'code-index', agentName: otherAgentName }, { sessionId, session }),
       /Isolated session cannot load skills for agent/,
     );
   } finally {

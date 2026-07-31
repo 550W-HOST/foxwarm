@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import * as sessionManager from '../sessionManager';
 import { getAgentDir } from '../config';
 import { nodesManager } from '../nodes/manager';
-import { change_current_node } from '../tools';
+import { node } from '../tools';
 
-test('change_current_node clears session cwd and reports master default cwd', async () => {
+test('node select clears session cwd and reports master default cwd', async () => {
   const originalGetSession = sessionManager.getSession;
   const originalSaveSession = sessionManager.saveSession;
   const originalIsSessionEffectivelyIsolated = sessionManager.isSessionEffectivelyIsolated;
@@ -19,7 +19,7 @@ test('change_current_node clears session cwd and reports master default cwd', as
     (sessionManager as any).isSessionEffectivelyIsolated = () => false;
     (nodesManager as any).setCurrentNode = () => {};
 
-    const result = await change_current_node({ nodeId: 'master' }, { sessionId: 'test-session', session } as any);
+    const result = await node({ action: 'select', nodeId: 'master' }, { sessionId: 'test-session', session } as any);
 
     assert.equal(session.currentNode, 'master');
     assert.equal(Object.prototype.hasOwnProperty.call(session, 'cwd'), false);
@@ -34,7 +34,7 @@ test('change_current_node clears session cwd and reports master default cwd', as
   }
 });
 
-test('change_current_node reports remote default cwd through lightweight node tool when available', async () => {
+test('node select reports remote default cwd through lightweight node tool when available', async () => {
   const originalGetSession = sessionManager.getSession;
   const originalSaveSession = sessionManager.saveSession;
   const originalIsSessionEffectivelyIsolated = sessionManager.isSessionEffectivelyIsolated;
@@ -55,7 +55,7 @@ test('change_current_node reports remote default cwd through lightweight node to
       return '/remote/default-cwd';
     };
 
-    const result = await change_current_node({ nodeId: 'remote-test' }, { sessionId: 'test-session', session } as any);
+    const result = await node({ action: 'select', nodeId: 'remote-test' }, { sessionId: 'test-session', session } as any);
 
     assert.deepEqual(executedTool, { nodeId: 'remote-test', tool: 'get_default_cwd' });
     assert.equal(session.currentNode, 'remote-test');

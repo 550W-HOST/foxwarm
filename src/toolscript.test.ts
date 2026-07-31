@@ -95,6 +95,8 @@ test('run_script and start_toolscript_run schemas expose argsJson fallback and i
   const startDef = tools.definitions.find((item: any) => item.name === 'start_toolscript_run');
   assert.ok(runDef);
   assert.ok(startDef);
+  assert.equal(runDef?.defaultInject, true);
+  assert.equal(startDef?.defaultInject, undefined);
   assert.equal(runDef?.parameters?.properties?.code?.type, 'string');
   assert.equal(runDef?.parameters?.properties?.args?.type, 'object');
   assert.equal(runDef?.parameters?.properties?.argsJson?.type, 'string');
