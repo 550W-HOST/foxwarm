@@ -496,6 +496,56 @@ export class MessageRouter {
     }
   }
 
+  private async commitQueuedInputsAfterStop(session: Session): Promise<number> {
+    let committedMessages = 0;
+
+    while (true) {
+      const retainedControls: QueueItem[] = [];
+      const messages: Message[] = [];
+      let firstInputItem = true;
+      let removedQueueItems = 0;
+
+      for (const item of session.queue) {
+        if (item.type === 'compact' || item.type === 'compact-commit' || item.type === 'retry') {
+          retainedControls.push(item);
+          continue;
+        }
+
+        removedQueueItems += 1;
+        if (item.message) {
+          messages.push(item.message);
+          firstInputItem = false;
+          continue;
+        }
+        if (!item.parts?.length) {
+          continue;
+        }
+
+        const parts = firstInputItem
+          ? this.prepareTurnParts(session, session.id, item.parts)
+          : item.parts;
+        messages.push({
+          role: 'user',
+          parts,
+          ...(item.clientMessageId ? { __meta: { clientMessageId: item.clientMessageId } } : {}),
+        });
+        firstInputItem = false;
+      }
+
+      if (removedQueueItems === 0) {
+        return committedMessages;
+      }
+
+      session.queue = retainedControls;
+      if (messages.length > 0) {
+        await sessionManager.appendSessionMessages(session, messages);
+        committedMessages += messages.length;
+      } else {
+        await sessionManager.saveSession(session.id);
+      }
+    }
+  }
+
   private tryClaimSession(session: Session): boolean {
     if (session.busy) {
       return false;
@@ -1227,8 +1277,16 @@ export class MessageRouter {
       if (session.meta?.runQueuedAfterStop) {
         delete session.meta.runQueuedAfterStop;
       }
+      const stopCompleted = stoppedByUser || !!session.stopping;
+      if (session.stopping) {
+        session.stopping = false;
+      }
 
-      if ((!stoppedByUser || runQueuedAfterStop) && !getManagedSessionState(session)?.currentStep && await this.continueWithQueuedWork(session)) {
+      if (stopCompleted && !runQueuedAfterStop) {
+        await this.commitQueuedInputsAfterStop(session);
+      }
+
+      if ((!stopCompleted || runQueuedAfterStop) && !getManagedSessionState(session)?.currentStep && await this.continueWithQueuedWork(session)) {
         return;
       }
 

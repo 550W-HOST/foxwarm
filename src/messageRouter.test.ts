@@ -643,7 +643,7 @@ test('retrySession runs one ordinary turn with queued inputs and no retry marker
   }
 });
 
-test('stop signal preserves queued work until a later trigger', async () => {
+test('stop signal commits queued work to history without running it', async () => {
   const router = new MessageRouter() as any;
   const sessionId = `stop_preserve_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const session = await sessionManager.getSession(sessionId) as Session;
@@ -667,7 +667,11 @@ test('stop signal preserves queued work until a later trigger', async () => {
     return { text: 'queued response', allParts: [{ text: 'queued response' }] };
   };
   (llm as any).executeTools = async () => {
-    await sessionManager.enqueueSessionItem(sessionId, { type: 'user', parts: [{ text: 'queued after stop' }] });
+    await sessionManager.enqueueSessionItem(sessionId, {
+      type: 'user',
+      clientMessageId: 'queued-after-stop-client-id',
+      parts: [{ text: 'queued after stop' }],
+    });
     await sessionManager.requestSessionStop(sessionId);
     return { parts: [{ functionResponse: { tool_use_id: 'stop-tool', name: 'read', response: { output: 'stopped' } } }] };
   };
@@ -676,14 +680,83 @@ test('stop signal preserves queued work until a later trigger', async () => {
     await router.runSessionTurn(sessionId, { parts: [{ text: 'start current turn' }], session });
 
     assert.equal(seenParts.length, 1);
-    assert.deepEqual(session.queue.map(item => item.type), ['user']);
+    assert.equal(session.queue.length, 0);
     assert.equal(session.busy, false);
+    assert.equal(userTextOccurrences(session, 'queued after stop'), 1);
+    const queuedHistoryMessage = session.history.find(message => message.parts.some(part => part.text === 'queued after stop'));
+    assert.equal(queuedHistoryMessage?.__meta?.clientMessageId, 'queued-after-stop-client-id');
 
     await router.processSessionQueue(sessionId);
-    assert.equal(seenParts.length, 2);
-    assert.equal(seenParts[1], null);
-    assert.equal(userTextOccurrences(session, 'queued after stop'), 1);
-    assert.equal(session.queue.length, 0);
+    assert.equal(seenParts.length, 1);
+
+    const deletion = await sessionManager.deleteMessages(sessionId, -1);
+    assert.equal(deletion.deleted, 1);
+    assert.equal(userTextOccurrences(session, 'queued after stop'), 0);
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('stop commits all queued content in order while retaining execution controls', async () => {
+  const router = new MessageRouter() as any;
+  const sessionId = `stop_commit_mixed_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const session = await sessionManager.getSession(sessionId) as Session;
+  session.history = [];
+  session.persistentMemorySnapshot = 'system prompt';
+  session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+  session.busy = false;
+  session.queue = [];
+  session.meta = { lastMessageTime: Date.now() };
+
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  let chatCallCount = 0;
+
+  (llm as any).chat = async () => {
+    chatCallCount += 1;
+    const toolCall = { id: 'stop-mixed-tool', name: 'read', args: { filePath: 'README.md' } };
+    return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+  };
+  (llm as any).executeTools = async () => {
+    await sessionManager.enqueueSessionItem(sessionId, {
+      type: 'user',
+      clientMessageId: 'mixed-user-client-id',
+      parts: [{ text: 'queued user first' }],
+    });
+    await sessionManager.enqueueSessionItem(sessionId, { type: 'retry' });
+    await sessionManager.enqueueSessionItem(sessionId, {
+      type: 'intersession',
+      message: { role: 'user', parts: [{ text: 'queued structured second' }] },
+    });
+    await sessionManager.enqueueSessionItem(sessionId, { type: 'compact' });
+    await sessionManager.enqueueSessionItem(sessionId, {
+      type: 'background',
+      parts: [{ system: 'queued background third' }],
+    });
+    await sessionManager.enqueueSessionItem(sessionId, { type: 'compact-commit' });
+    await sessionManager.requestSessionStop(sessionId);
+    return { parts: [{ functionResponse: { tool_use_id: 'stop-mixed-tool', name: 'read', response: { output: 'stopped' } } }] };
+  };
+
+  try {
+    await router.runSessionTurn(sessionId, { parts: [{ text: 'start mixed turn' }], session });
+
+    assert.equal(chatCallCount, 1);
+    assert.deepEqual(session.queue.map(item => item.type), ['retry', 'compact', 'compact-commit']);
+    const queuedHistory = session.history.filter(message => message.parts.some(part => (
+      part.text === 'queued user first'
+      || part.text === 'queued structured second'
+      || part.system === 'queued background third'
+    )));
+    assert.deepEqual(queuedHistory.map(message => message.parts[0]?.text || message.parts[0]?.system), [
+      'queued user first',
+      'queued structured second',
+      'queued background third',
+    ]);
+    assert.equal(queuedHistory[0]?.__meta?.clientMessageId, 'mixed-user-client-id');
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
