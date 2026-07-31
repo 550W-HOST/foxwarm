@@ -162,7 +162,7 @@ test('active wait timeout queues a system event and clears wait state', async ()
   }
 });
 
-test('compact maintenance queue items are wait-neutral and keep timeout token valid', async () => {
+test('compact commit queue item is wait-neutral and keeps timeout token valid', async () => {
   const sessionId = makeSessionId('wait_compact_maintenance');
   try {
     await sessionManager.getSession(sessionId);
@@ -173,11 +173,6 @@ test('compact maintenance queue items are wait-neutral and keep timeout token va
     assert.equal(session.meta.wait?.id, wait.id);
     assert.deepEqual(session.queue.map(item => item.type), ['compact-commit']);
 
-    await sessionManager.enqueueSessionItem(sessionId, { type: 'compact', completionMarker: 'Compaction completed.' });
-    session = await sessionManager.getSession(sessionId);
-    assert.equal(session.meta.wait?.id, wait.id);
-    assert.deepEqual(session.queue.map(item => item.type), ['compact-commit', 'compact']);
-
     await sessionManager.queueSessionWaitTimeoutEvent(
       sessionId,
       wait.id,
@@ -186,9 +181,9 @@ test('compact maintenance queue items are wait-neutral and keep timeout token va
 
     session = await sessionManager.getSession(sessionId);
     assert.equal(session.meta.wait, undefined);
-    assert.equal(session.queue.length, 3);
-    assert.equal(session.queue[2].waitTimeoutId, wait.id);
-    assert.match(String(session.queue[2].parts?.[0]?.system), /wait timeout reached after 20s/);
+    assert.equal(session.queue.length, 2);
+    assert.equal(session.queue[1].waitTimeoutId, wait.id);
+    assert.match(String(session.queue[1].parts?.[0]?.system), /wait timeout reached after 20s/);
   } finally {
     await cleanupSession(sessionId);
   }
@@ -261,7 +256,7 @@ test('stop during tool execution does not launch auto compact from stale usage',
     const finalSession = await sessionManager.getSession(sessionId);
     assert.equal(mainTurnCallCount, 1);
     assert.equal(compactJobCallCount, 0);
-    assert.equal(finalSession.queue.some(item => item.type === 'compact' || item.type === 'compact-commit'), false);
+    assert.equal(finalSession.queue.some(item => item.type === 'compact-commit'), false);
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
@@ -311,7 +306,6 @@ test('idle compaction request starts immediately without enqueueing compact init
     }
 
     assert.equal(session.busy, false);
-    assert.equal(session.queue.some(item => item.type === 'compact'), false);
     assert.equal(session.queue.filter(item => item.type === 'compact-commit').length, 1);
   } finally {
     (llm as any).chat = originalChat;
@@ -375,7 +369,6 @@ test('wait survives compact request and compact commit before timeout turn', asy
       session = await sessionManager.getSession(sessionId);
     }
     assert.equal(session.meta.wait?.id, wait.id);
-    assert.equal(session.queue.some(item => item.type === 'compact'), false);
     assert.equal(session.queue.some(item => item.type === 'compact-commit'), true);
 
     await router.processSessionQueue(sessionId);

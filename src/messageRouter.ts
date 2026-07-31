@@ -14,7 +14,7 @@ import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
 import { maybeBuildGoalReminderMessage } from './session/goal';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
-import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
+import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
 import { formatLocalTimestamp } from './utils/localTime';
 import { formatFoxwarmMessage, formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemTag, parseFoxwarmOpeningTag } from './utils/promptWrappers';
 
@@ -397,10 +397,14 @@ export class MessageRouter {
     let broadcastSource: QueueSource | undefined;
     let streamKey: string | undefined;
 
-    while (session.queue[0]
-      && session.queue[0].type !== 'compact'
-      && session.queue[0].type !== 'compact-commit'
-      && session.queue[0].type !== 'retry') {
+    while (session.queue[0]) {
+      if (!isQueueItem(session.queue[0])) {
+        session.queue.shift();
+        continue;
+      }
+      if (session.queue[0].type === 'compact-commit') {
+        break;
+      }
       const nextStreamKey = this.getSourceStreamKey(session.queue[0].source);
       if (items.length > 0 && streamKey !== nextStreamKey) {
         break;
@@ -428,10 +432,14 @@ export class MessageRouter {
     let parts = pendingParts;
     let consumedInput = false;
 
-    while (session.queue[0]
-      && session.queue[0].type !== 'compact'
-      && session.queue[0].type !== 'compact-commit'
-      && session.queue[0].type !== 'retry') {
+    while (session.queue[0]) {
+      if (!isQueueItem(session.queue[0])) {
+        session.queue.shift();
+        continue;
+      }
+      if (session.queue[0].type === 'compact-commit') {
+        break;
+      }
       const queuedStreamKey = this.getSourceStreamKey(session.queue[0].source);
       // A different WeWork stream id already has its own passive card. Leave it
       // queued so the next turn's broadcasts update/finish that card instead
@@ -496,6 +504,79 @@ export class MessageRouter {
     }
   }
 
+  private async finalizeStoppedSession(session: Session): Promise<number> {
+    let committedMessages = 0;
+    let committedAnyInput = false;
+
+    while (true) {
+      const messages: Message[] = [];
+      let removedQueueItems = 0;
+      let applyCompactCommit = false;
+
+      for (const item of session.queue) {
+        if (!isQueueItem(item)) {
+          removedQueueItems += 1;
+          continue;
+        }
+        if (item.type === 'compact-commit') {
+          removedQueueItems += 1;
+          applyCompactCommit = true;
+          continue;
+        }
+
+        removedQueueItems += 1;
+        if (item.message) {
+          messages.push(item.message);
+          committedAnyInput = true;
+          continue;
+        }
+        if (!item.parts?.length) {
+          continue;
+        }
+
+        const parts = !committedAnyInput
+          ? this.prepareTurnParts(session, session.id, item.parts)
+          : item.parts;
+        messages.push({
+          role: 'user',
+          parts,
+          ...(item.clientMessageId ? { __meta: { clientMessageId: item.clientMessageId } } : {}),
+        });
+        committedAnyInput = true;
+      }
+
+      if (removedQueueItems === 0) {
+        // Keep the stop boundary and the final queue scan in one synchronous
+        // section. Queue insertions before this point are passive stop inputs;
+        // insertions after it see an idle session and start a new turn.
+        session.stopping = false;
+        sessionManager.clearActiveSessionRuntimeState(session.id);
+        session.busy = false;
+        session.busyStartedAt = undefined;
+        await sessionManager.saveSession(session.id);
+        return committedMessages;
+      }
+
+      session.queue = [];
+      if (messages.length > 0) {
+        await sessionManager.appendSessionMessages(session, messages);
+        committedMessages += messages.length;
+      } else {
+        await sessionManager.saveSession(session.id);
+      }
+      if (applyCompactCommit) {
+        try {
+          await sessionManager.applyCompletedCompactJob(session.id);
+        } catch (error: any) {
+          logger.error({ err: error, sessionId: session.id }, 'Stop finalization failed to apply completed compact job');
+          if (session.broadcast) {
+            session.broadcast(`Error: ${error?.message || 'Compaction commit failed'}`);
+          }
+        }
+      }
+    }
+  }
+
   private tryClaimSession(session: Session): boolean {
     if (session.busy) {
       return false;
@@ -506,23 +587,16 @@ export class MessageRouter {
   }
 
   private async continueWithQueuedWork(session: Session): Promise<boolean> {
+    while (session.queue[0] && !isQueueItem(session.queue[0])) {
+      session.queue.shift();
+    }
     if (session.queue.length === 0) {
       return false;
     }
 
     await sessionManager.saveSession(session.id);
 
-    if (session.queue[0]?.type === 'compact' || session.queue[0]?.type === 'compact-commit') {
-      const nextItem = session.queue.shift();
-      if (!nextItem) {
-        return false;
-      }
-
-      await this.processQueuedItem(session.id, session, nextItem);
-      return true;
-    }
-
-    if (session.queue[0]?.type === 'retry') {
+    if (session.queue[0]?.type === 'compact-commit') {
       const nextItem = session.queue.shift();
       if (!nextItem) {
         return false;
@@ -547,9 +621,12 @@ export class MessageRouter {
     return true;
   }
 
-  private async runPendingCompactionIfNeeded(sessionId: string, session: Session): Promise<'continued' | 'stop' | false> {
+  private async runPendingCompactionIfNeeded(sessionId: string, session: Session): Promise<'continued' | false> {
+    while (session.queue[0] && !isQueueItem(session.queue[0])) {
+      session.queue.shift();
+    }
     const nextItem = session.queue[0];
-    if (nextItem?.type !== 'compact' && nextItem?.type !== 'compact-commit') {
+    if (nextItem?.type !== 'compact-commit') {
       return false;
     }
 
@@ -561,39 +638,23 @@ export class MessageRouter {
         since: Date.now(),
         active: { phase: 'compaction' },
       });
-      if (nextItem.type === 'compact-commit') {
-        await sessionManager.applyCompletedCompactJob(sessionId);
-      } else {
-        await sessionManager.processSessionCompactionRequest(sessionId, {
-          keepPercent: nextItem.keepPercent,
-          compactGuidance: nextItem.compactGuidance,
-          completionMarker: nextItem.completionMarker || 'Compaction completed. You can continue working now.',
-        }, 'await');
-      }
+      await sessionManager.applyCompletedCompactJob(sessionId);
     } catch (e: any) {
       logger.error({ err: e, sessionId }, 'In-turn queued compaction failed');
       await this.sendSessionError(session, undefined, e);
     }
 
-    return nextItem.stopAfterCurrentTurn ? 'stop' : 'continued';
+    return 'continued';
   }
 
-  private async runQueuedCompaction(sessionId: string, session: Session, item: QueueItem): Promise<void> {
+  private async runQueuedCompaction(sessionId: string, session: Session): Promise<void> {
     try {
       sessionManager.setActiveSessionRuntimeState(sessionId, {
         state: 'requesting-model',
         since: Date.now(),
         active: { phase: 'compaction' },
       });
-      if (item.type === 'compact-commit') {
-        await sessionManager.applyCompletedCompactJob(sessionId);
-      } else {
-        await sessionManager.processSessionCompactionRequest(sessionId, {
-          keepPercent: item.keepPercent,
-          compactGuidance: item.compactGuidance,
-          completionMarker: item.completionMarker || 'Compaction completed.',
-        });
-      }
+      await sessionManager.applyCompletedCompactJob(sessionId);
     } catch (e: any) {
       logger.error({ err: e, sessionId }, 'Queued compaction failed');
       await this.sendSessionError(session, undefined, e);
@@ -610,17 +671,8 @@ export class MessageRouter {
   }
 
   private async processQueuedItem(sessionId: string, session: Session, item: QueueItem): Promise<void> {
-    if (item.type === 'compact' || item.type === 'compact-commit') {
-      await this.runQueuedCompaction(sessionId, session, item);
-      return;
-    }
-
-    if (item.type === 'retry') {
-      await this.runSessionTurn(sessionId, {
-        parts: null,
-        session,
-        preclaimed: true,
-      });
+    if (item.type === 'compact-commit') {
+      await this.runQueuedCompaction(sessionId, session);
       return;
     }
 
@@ -960,9 +1012,6 @@ export class MessageRouter {
       let lastTextBroadcasted = false;
       while (iteration < 500) {
         const pendingCompaction = await this.runPendingCompactionIfNeeded(sessionId, session);
-        if (pendingCompaction === 'stop') {
-          break;
-        }
         if (pendingCompaction === 'continued') {
           continue;
         }
@@ -981,7 +1030,6 @@ export class MessageRouter {
 
         if (session.stopping) {
           logger.info({ sessionId: session.id }, 'Session stopping flag detected, halting tool call loop');
-          session.stopping = false;
           stoppedByUser = true;
           await sessionManager.saveSession(session.id);
 
@@ -1014,7 +1062,6 @@ export class MessageRouter {
         } catch (e: any) {
           if (session.stopping && llm.isAbortError(e)) {
             logger.info({ sessionId: session.id }, 'In-flight LLM request aborted by stop signal');
-            session.stopping = false;
             stoppedByUser = true;
             await sessionManager.saveSession(session.id);
 
@@ -1129,7 +1176,6 @@ export class MessageRouter {
 
         if (session.stopping) {
           logger.info({ sessionId: session.id, iteration }, 'Session stopping flag detected after tool execution, halting tool call loop');
-          session.stopping = false;
           stoppedByUser = true;
           await sessionManager.saveSession(session.id);
 
@@ -1150,9 +1196,6 @@ export class MessageRouter {
         }
 
         const compactionAfterTools = await this.runPendingCompactionIfNeeded(sessionId, session);
-        if (compactionAfterTools === 'stop') {
-          break;
-        }
         if (compactionAfterTools === 'continued') {
           iteration++;
           continue;
@@ -1227,8 +1270,17 @@ export class MessageRouter {
       if (session.meta?.runQueuedAfterStop) {
         delete session.meta.runQueuedAfterStop;
       }
+      const stopCompleted = stoppedByUser || !!session.stopping;
 
-      if ((!stoppedByUser || runQueuedAfterStop) && !getManagedSessionState(session)?.currentStep && await this.continueWithQueuedWork(session)) {
+      if (stopCompleted && !runQueuedAfterStop) {
+        await this.finalizeStoppedSession(session);
+        return;
+      }
+      if (session.stopping) {
+        session.stopping = false;
+      }
+
+      if ((!stopCompleted || runQueuedAfterStop) && !getManagedSessionState(session)?.currentStep && await this.continueWithQueuedWork(session)) {
         return;
       }
 
@@ -1327,8 +1379,15 @@ export class MessageRouter {
   /**
    * Process queue for a session by ID (works for both child sessions and channel sessions)
    */
-  async processSessionQueue(sessionId: string): Promise<void> {
+  async processSessionRetry(sessionId: string): Promise<void> {
+    await this.processSessionQueue(sessionId, { retry: true });
+  }
+
+  async processSessionQueue(sessionId: string, options: { retry?: boolean } = {}): Promise<void> {
     if (this.processingSessions.has(sessionId)) {
+      if (options.retry) {
+        throw new Error('Session is already busy');
+      }
       return;
     }
 
@@ -1338,7 +1397,21 @@ export class MessageRouter {
       if (!session) {
         return;
       }
-      if (!this.tryClaimSession(session)) return;
+      if (!this.tryClaimSession(session)) {
+        if (options.retry) {
+          throw new Error('Session is already busy');
+        }
+        return;
+      }
+
+      if (options.retry) {
+        await this.runSessionTurn(sessionId, {
+          parts: null,
+          session,
+          preclaimed: true,
+        });
+        return;
+      }
 
       if (await this.continueWithQueuedWork(session)) {
         return;
@@ -1350,6 +1423,14 @@ export class MessageRouter {
       await sessionManager.saveSession(session.id);
     } finally {
       this.processingSessions.delete(sessionId);
+      // An item can become visible after the previous loop's final queue scan
+      // but before this processor releases ownership. If it arrived after the
+      // stop boundary it is new work, so hand it to a fresh processor rather
+      // than losing the enqueue trigger to this re-entrancy guard.
+      const session = await sessionManager.getExistingSession(sessionId);
+      if (session && !session.busy && session.queue.some(isQueueItem)) {
+        void this.processSessionQueue(sessionId);
+      }
     }
   }
 }

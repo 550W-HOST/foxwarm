@@ -92,7 +92,7 @@ function getQueueItemsEligibleForManagedInbox(queue: QueueItem[]): { intercepted
   const retained: QueueItem[] = [];
 
   for (const item of queue || []) {
-    if (item.type === 'compact' || item.type === 'compact-commit') {
+    if (item.type === 'compact-commit') {
       retained.push(item);
       continue;
     }

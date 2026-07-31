@@ -6,7 +6,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { Session, Message, MessagePart, QueueItem, TokenUsage, SessionStreamEvent } from './types';
+import { CompactionRequest, isQueueItem, Session, Message, MessagePart, QueueItem, TokenUsage, SessionStreamEvent } from './types';
 import { logger } from './common';
 import { ChannelFile, ChannelSendFileOptions } from './channel';
 import * as llm from './llm';
@@ -176,10 +176,10 @@ function clearSessionWaitState(session: Session): boolean {
 }
 
 function isWaitNeutralMaintenanceQueueItem(item: QueueItem): boolean {
-  // These items represent internal compaction maintenance, not external input.
-  // They may be processed while a session is waiting, but should not consume the
+  // This item represents internal compaction maintenance, not external input.
+  // It may be processed while a session is waiting, but should not consume the
   // wait token or make a later wait-timeout event stale.
-  return item.type === 'compact' || item.type === 'compact-commit';
+  return item.type === 'compact-commit';
 }
 
 function getWaitAllState(wait: SessionWaitState): SessionWaitAllState | undefined {
@@ -616,6 +616,7 @@ export type ChannelMode = sessionChannels.ChannelMode;
 
 // Callback to trigger agent turn
 let onSessionTriggered: ((sessionId: string) => void | Promise<void>) | null = null;
+let onSessionRetryRequested: ((sessionId: string) => void | Promise<void>) | null = null;
 
 // Callback when history is updated (for SSE broadcasting)
 let onHistoryUpdated: ((sessionId: string, message: Message) => void) | null = null;
@@ -1717,7 +1718,9 @@ export async function loadSessions(): Promise<void> {
         stats: metadataWithoutPromptCacheKey.stats || { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
         systemPromptFiles: llm.normalizeSystemPromptFiles(metadataWithoutPromptCacheKey.systemPromptFiles),
         history: [], // Empty, will be loaded when getSession is called
-        queue: metadataWithoutPromptCacheKey.queue || [],
+        queue: Array.isArray(metadataWithoutPromptCacheKey.queue)
+          ? metadataWithoutPromptCacheKey.queue.filter(isQueueItem)
+          : [],
       };
 
       delete (session as any).isolated;
@@ -1781,6 +1784,10 @@ export function getAllAttachments(): Map<string, sessionChannels.ChannelConfig> 
  */
 export function setSessionTriggerCallback(onTrigger: (sessionId: string) => void | Promise<void>): void {
   onSessionTriggered = onTrigger;
+}
+
+export function setSessionRetryCallback(onRetry: (sessionId: string) => void | Promise<void>): void {
+  onSessionRetryRequested = onRetry;
 }
 
 export async function triggerSessionProcessing(sessionId: string): Promise<void> {
@@ -1967,17 +1974,11 @@ export async function enqueueSessionItem(sessionId: string, item: QueueItem): Pr
 
 export async function requestSessionCompaction(
   sessionId: string,
-  options: {
-    compactGuidance?: string;
-    keepPercent?: number;
-    completionMarker?: string;
-    stopAfterCurrentTurn?: boolean;
-    requestedBy?: 'auto' | 'command' | 'tool' | 'manual';
-  } = {}
-): Promise<{ alreadyQueued: boolean; startedImmediately: boolean; queueLength: number }> {
+  options: CompactionRequest = {}
+): Promise<{ alreadyQueued: boolean; startedImmediately: boolean; runsInBackground?: boolean; backgroundUnavailable?: boolean; queueLength: number }> {
   const session = await getSession(sessionId);
 
-  if (session.queue.some(item => item.type === 'compact' || item.type === 'compact-commit') || sessionHistory.hasPendingCompactWork(sessionId)) {
+  if (session.queue.some(item => item.type === 'compact-commit') || sessionHistory.hasPendingCompactWork(sessionId)) {
     return {
       alreadyQueued: true,
       startedImmediately: false,
@@ -1985,11 +1986,22 @@ export async function requestSessionCompaction(
     };
   }
 
-  const startedImmediately = !getManagedSessionState(session) && !session.busy && session.queue.length === 0;
-  if (startedImmediately) {
-    // Idle sessions do not need a synthetic queue item just to enter the compact
-    // runner. Keep the `compact` item only for busy/managed sessions where it is
-    // still the ordering marker for "compact after the current turn/step".
+  if (sessionHistory.isAsyncCompactEnabled(session)) {
+    await processSessionCompactionRequest(sessionId, {
+      keepPercent: options.keepPercent,
+      compactGuidance: options.compactGuidance,
+      completionMarker: options.completionMarker,
+    }, 'background');
+    return {
+      alreadyQueued: false,
+      startedImmediately: true,
+      runsInBackground: true,
+      queueLength: session.queue.length,
+    };
+  }
+
+  const canRunAwaitedNow = !getManagedSessionState(session) && !session.busy && session.queue.length === 0;
+  if (canRunAwaitedNow) {
     await updateSessionBusyState(session, true);
 
     void (async () => {
@@ -1998,7 +2010,7 @@ export async function requestSessionCompaction(
           keepPercent: options.keepPercent,
           compactGuidance: options.compactGuidance,
           completionMarker: options.completionMarker,
-        }, 'auto');
+        }, 'await');
       } catch (error: any) {
         logger.error({ err: error, sessionId }, 'Immediate session compaction failed');
         if (session.broadcast) {
@@ -2015,29 +2027,22 @@ export async function requestSessionCompaction(
     return {
       alreadyQueued: false,
       startedImmediately: true,
+      runsInBackground: false,
       queueLength: session.queue.length,
     };
   }
 
-  await enqueueSessionItem(sessionId, {
-    type: 'compact',
-    keepPercent: options.keepPercent,
-    compactGuidance: options.compactGuidance,
-    completionMarker: options.completionMarker,
-    stopAfterCurrentTurn: options.stopAfterCurrentTurn,
-    requestedBy: options.requestedBy,
-  });
-
   return {
     alreadyQueued: false,
-    startedImmediately,
+    startedImmediately: false,
+    backgroundUnavailable: true,
     queueLength: session.queue.length,
   };
 }
 
 export async function processSessionCompactionRequest(
   sessionId: string,
-  item: Pick<QueueItem, 'keepPercent' | 'compactGuidance' | 'completionMarker'>,
+  item: CompactionRequest,
   executionMode: 'auto' | 'await' | 'background' = 'auto'
 ): Promise<void> {
   await sessionHistory.processSessionCompactionRequest(getSessionHistoryDeps(), sessionId, item, executionMode);
@@ -2419,9 +2424,13 @@ export async function retrySession(sessionId: string): Promise<void> {
     throw new Error('Session is already busy');
   }
 
-  // Trigger session processing without adding model-visible retry text.
+  if (!onSessionRetryRequested) {
+    throw new Error('Session retry processing is unavailable');
+  }
+
+  // Retry is an immediate execution request, not persisted queue work.
   logger.info({ sessionId }, 'Retrying session');
-  await enqueueSessionItem(sessionId, { type: 'retry' });
+  await Promise.resolve(onSessionRetryRequested(sessionId));
 }
 
 /**

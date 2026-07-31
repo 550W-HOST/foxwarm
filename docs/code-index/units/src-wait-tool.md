@@ -40,13 +40,13 @@ Tests the `wait` tool functionality, including timeout behavior, `waitAllSession
 - Validates `waitAllSessions` argument types, empty arrays, whitespace, duplicates, and de-duplication
 - Validates `waitExecIds` as optional non-empty string IDs and confirms they are stored as advisory runtime-state metadata.
 - Verifies that wait timeouts queue a system event and clear wait metadata
-- Confirms compact-commit and compact queue items are "wait-neutral" (don't cancel the wait)
+- Confirms the compact-commit queue item is wait-neutral (does not cancel the wait); compact planning itself is no longer queued
 - Tests that stop signals during tool execution prevent stale compaction triggers
 - Ensures `waitAllSessions` defers incoming child messages until all expected sessions report, then delivers them in a single batch
 - Tests timer persistence: timers survive across store reloads and fire correctly
 - Validates that stale timeout tokens (from cancelled waits) are ignored
 - Confirms that replacing a wait with deferred messages is rejected to prevent message loss
-- Tests interaction between compaction queue items and waitAll deferred queues
+- Tests interaction between compact-commit safe-point items and waitAll deferred queues
 - Covers router immediate-reply behavior around commands/authorization and confirms busy user messages are enqueued without a queued/busy acknowledgement.
 - Confirms generic `wait({})` remains supported and derives `idle` through the runtime-state builder while still storing a wait token for wake semantics.
 - Confirms session clear removes an armed generic wait, and executor coverage verifies that an explicit wait whose stop is suppressed by a sibling error clears only its own token. Flagged handoff integration is covered by `src-tools-session-agent` under [D-pipeline-handoff-wait](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait).

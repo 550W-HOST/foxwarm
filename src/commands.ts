@@ -224,14 +224,19 @@ export const COMMANDS: Record<string, CommandDef> = {
     }
   },
   '/stop': {
-    description: 'Stop current run without draining queued items',
+    description: 'Stop current run and commit queued inputs to history without running them',
     requiresSession: true,
     handler: async (ctx, _args, sessionId, session) => {
       if (!sessionId || !session) return
       if (!session.busy) { ctx.reply('⚠️ Session is not currently running.'); return }
       try {
         const { abortedInFlight } = await sessionManager.requestSessionStop(sessionId)
-        ctx.reply(abortedInFlight ? '🛑 Stop signal sent. The in-flight LLM request was aborted.' : '🛑 Stop signal sent. The session will stop after the current tool call completes.')
+        const queuedNote = session.queue.length > 0
+          ? ' Queued inputs will be added to history without being run.'
+          : ''
+        ctx.reply(abortedInFlight
+          ? `🛑 Stop signal sent. The in-flight LLM request was aborted.${queuedNote}`
+          : `🛑 Stop signal sent. The session will stop after the current tool call completes.${queuedNote}`)
       } catch (e: any) { ctx.reply(`❌ Stop failed: ${e.message}`) }
     }
   },

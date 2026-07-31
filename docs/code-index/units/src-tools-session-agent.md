@@ -164,6 +164,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - Path resolution expands `~` and resolves relative paths against the agent directory or session CWD.
 - All mutating tools check isolation status via `requireNotIsolated` before proceeding.
 - Goal setting normalizes text, resolves remind-every defaults, and persists to session state.
+- `tool_compact_session` starts async-capable snapshot planning immediately without a compact-planning queue item; for a busy `asyncCompact:false` target it reports that the target must become idle first. Only ready compact commits use the queue safe point.
 - Timer create/update delegates to the `timers` module and returns formatted summaries; list/delete remain scoped by current or explicit session ID.
 
 ## Integration

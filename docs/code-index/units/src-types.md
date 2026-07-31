@@ -13,7 +13,9 @@ Defines the core TypeScript interfaces and type aliases used throughout the syst
 - `MessageProviderMeta` — Message-level opaque provider metadata persisted on assistant messages; JSON-object `providerSpecificFields` carries the OpenAI Chat Completions `provider_specific_fields` (e.g. `reasoning_signature`), and `sourceModelId` scopes their round-trip to the producing concrete model
 - `Message` — Role-tagged message with parts and metadata
 - `Session` — Full session state including history, queue, stats, model config, and context frontier
-- `QueueItem` / `QueueSource` — Inbound work items and their origin metadata; `QueueSource.weworkStreamId` carries WeWork stream/card binding from channel intake into the turn loop
+- `QueueItem` / `QueueSource` — Current inbound content/event work plus the `compact-commit` safe-point item and origin metadata; retry and compact planning are not queue types
+- `CompactionRequest` — Planning request options kept separate from queue-item state
+- `isQueueItem(value)` — Runtime guard that accepts only current non-empty queue records so unrecognized persisted records can be discarded generically
 - `ChatResult` — LLM response envelope with text, provider-prefixed concrete model id, optional resolved virtual model key, usage, and tool calls
 - `ToolDefinition` / `ToolFunction` — Tool schema and handler signature
 - `SessionStreamEvent` — Real-time WebUI streaming/progress events
@@ -26,7 +28,9 @@ Defines the core TypeScript interfaces and type aliases used throughout the syst
 
 ## Function Index
 
-No functions or methods are defined in this file — it contains only interface and type declarations.
+| Function | Description |
+|----------|-------------|
+| `isQueueItem(value)` | Validates current queue discriminants and required content shape |
 
 ## Dependencies
 
@@ -34,7 +38,7 @@ None. This file has no imports from other project modules or external packages.
 
 ## Behavior
 
-Pure type declarations with no runtime logic, state changes, or side effects. The `Session` interface defines mutable state shape (busy flags, queue, history, stopping flag) that is managed elsewhere, plus metadata such as optional WebUI `sidebarOrder` sibling ordering and `pinned` presentation state. The `Message.modelVisible` field controls whether a message is included in LLM context. Assistant `providerMeta` may retain opaque Chat Completions fields together with their concrete source model. Model-message `__meta` may carry `usage`, concrete `modelId`, optional `virtualModelKey`, `contextBlock`, `contextFrontierItem`, and `preservedFromBlockId`; LLM request construction strips `__meta` before provider calls. `usage.reasoningTokens`, when present, is a provider-reported subset of `usage.outputTokens`; its cross-module accounting contract is [D-pipeline-provider-usage-components](../threads/message-processing-pipeline.md#d-pipeline-provider-usage-components). Canonical model-attribution semantics belong to [D-model-routing-concrete-attribution](../threads/model-routing.md#d-model-routing-concrete-attribution). `ContextFrontierItem` is a discriminated union supporting layered compaction.
+Mostly type declarations plus the side-effect-free `isQueueItem` runtime guard. The `Session` interface defines mutable state shape (busy flags, queue, history, stopping flag) that is managed elsewhere, plus metadata such as optional WebUI `sidebarOrder` sibling ordering and `pinned` presentation state. The `Message.modelVisible` field controls whether a message is included in LLM context. Assistant `providerMeta` may retain opaque Chat Completions fields together with their concrete source model. Model-message `__meta` may carry `usage`, concrete `modelId`, optional `virtualModelKey`, `contextBlock`, `contextFrontierItem`, and `preservedFromBlockId`; LLM request construction strips `__meta` before provider calls. `usage.reasoningTokens`, when present, is a provider-reported subset of `usage.outputTokens`; its cross-module accounting contract is [D-pipeline-provider-usage-components](../threads/message-processing-pipeline.md#d-pipeline-provider-usage-components). Canonical model-attribution semantics belong to [D-model-routing-concrete-attribution](../threads/model-routing.md#d-model-routing-concrete-attribution). `ContextFrontierItem` is a discriminated union supporting layered compaction.
 
 ## Integration
 

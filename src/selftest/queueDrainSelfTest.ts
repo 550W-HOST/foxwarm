@@ -81,7 +81,7 @@ async function main(): Promise<void> {
 
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
-  const originalProcessSessionCompactionRequest = sessionManager.processSessionCompactionRequest;
+  const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
   const originalArchiveIndex = (vector as any).scheduleSessionArchiveIndex;
   (vector as any).scheduleSessionArchiveIndex = async () => 0;
 
@@ -117,7 +117,10 @@ async function main(): Promise<void> {
             const firstUserText = userTexts[0] || '';
             assert.match(firstUserText, /<foxwarm-system\b[^\n]*kind="session"[^\n]*currentSessionId=/);
             assert.ok(firstUserText.endsWith('\nstart queue drain'));
-            assert.deepStrictEqual(userTexts.slice(1), [
+            assert.deepStrictEqual(userTexts.slice(1).map(text => {
+              const match = text.match(/^<foxwarm-message\b[^>]*>\n([\s\S]*)\n<\/foxwarm-message>$/);
+              return match?.[1] || text;
+            }), [
               'queued part before message',
               'queued message in the middle',
               'queued part after message',
@@ -185,8 +188,11 @@ async function main(): Promise<void> {
           .map(message => message.parts.map(part => part.system || part.text || '').join('\n'));
         const firstUserText = userTexts[0] || '';
         assert.match(firstUserText, /<foxwarm-system\b[^\n]*kind="session"[^\n]*currentSessionId=/);
-        assert.ok(firstUserText.endsWith('\nqueued part one'));
-        assert.deepStrictEqual(userTexts.slice(1), [
+        assert.match(firstUserText, /\nqueued part one\n<\/foxwarm-message>$/);
+        assert.deepStrictEqual(userTexts.slice(1).map(text => {
+          const match = text.match(/^<foxwarm-message\b[^>]*>\n([\s\S]*)\n<\/foxwarm-message>$/);
+          return match?.[1] || text;
+        }), [
           'queued message two',
           'queued part three',
         ]);
@@ -204,38 +210,39 @@ async function main(): Promise<void> {
       assertLastModelText(refreshedSession, 'all queued work handled');
     });
 
-    await test('queued compaction preempts already-held input and the same turn then continues with remaining ordinary work', async () => {
+    await test('queued compact commit preempts already-held input and the same turn then continues with remaining ordinary work', async () => {
       const sessionId = makeSessionId('selftest_queue_compact_boundary');
       createdSessionIds.push(sessionId);
       const session = await ensureSession(sessionId);
 
       let compactRequestCount = 0;
-      (sessionManager as any).processSessionCompactionRequest = async (targetSessionId: string, item: { completionMarker?: string }) => {
+      (sessionManager as any).applyCompletedCompactJob = async (targetSessionId: string) => {
         assert.strictEqual(targetSessionId, sessionId);
         compactRequestCount += 1;
         await sessionManager.appendSessionMessage(targetSessionId, {
           role: 'user',
-          parts: [{ system: formatCompactionCompletionMarker(targetSessionId, item.completionMarker || 'Compaction completed.') }],
+          parts: [{ system: formatCompactionCompletionMarker(targetSessionId, 'Compaction completed.') }],
         });
+        return true;
       };
 
-      session.queue.push({ type: 'compact', completionMarker: 'Compaction completed.' });
+      session.queue.push({ type: 'compact-commit' });
       session.queue.push({ type: 'background', parts: [{ text: 'after compact' }] });
       await sessionManager.saveSession(sessionId);
 
       let callIndex = 0;
       (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
         assert.strictEqual(activeSession.id, sessionId);
-        const renderedParts = (parts || []).map(part => part.system || part.text || '').join('\n');
+        assert.strictEqual(parts, null);
         await appendStubUserMessage(activeSession, parts);
         callIndex += 1;
 
         assert.strictEqual(callIndex, 1);
-        assert.match(renderedParts, /<foxwarm-system\b[^\n]*kind="session"[^\n]*currentSessionId=/);
-        assert.ok(renderedParts.endsWith('\nbefore compact\nafter compact'));
         const userTexts = activeSession.history
           .filter(message => message.role === 'user')
           .map(message => message.parts.map(part => part.system || part.text || '').join('\n'));
+        assert(userTexts.some(text => text.includes('before compact')));
+        assert(userTexts.some(text => text === 'after compact'));
         assert(userTexts.some(text => text === `<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="(none)" currentSessionId="${sessionId}" />`));
         await appendStubModelMessage(activeSession, 'handled after compact boundary');
         return { text: 'handled after compact boundary' };
@@ -259,7 +266,7 @@ async function main(): Promise<void> {
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
-    (sessionManager as any).processSessionCompactionRequest = originalProcessSessionCompactionRequest;
+    (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;
     await cleanupSessions(createdSessionIds);
   }

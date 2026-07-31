@@ -243,9 +243,10 @@ async function start() {
 
     // Set up session event callbacks (for background processes, child sessions, etc.)
     sessionManager.setSessionTriggerCallback(
-        (sessionId) => {
-            router.processSessionQueue(sessionId);
-        }
+        (sessionId) => router.processSessionQueue(sessionId)
+    );
+    sessionManager.setSessionRetryCallback(
+        (sessionId) => router.processSessionRetry(sessionId)
     );
 
     await initializeTimers();

@@ -23,7 +23,7 @@ Owns one mounted session's committed history, queued preview, runtime/model snap
   5. starts `POST /api/sessions/:id/message`; busy/queued sends instead schedule targeted history refresh for queue preview.
 - Manually typed slash commands use the same POST route but omit optimistic history and `clientMessageId`, matching command dispatch's non-persisted user-input boundary.
 - `sendSessionCommand(command)` posts `{ text: command }` to the same message route without optimistic user history.
-- `handleStop`, `handleRunQueued`, and `handleRetryLlmNotice` send `/stop`, `/dequeue`, and `/retry` respectively.
+- `handleStop`, `handleRunQueued`, and `handleRetryLlmNotice` send `/stop`, `/dequeue`, and `/retry` respectively. After Stop completes, the backend converts queued message/event previews into committed history rows without running them; normal SSE/history reconciliation removes the preview and inserts the canonical rows.
 - There are no current message-index edit/delete/retry handlers in this component.
 - ASR appends `/asr/transcribe` or `/asr/stream` to the deployment-relative `API_BASE_PATH`. `getAsrStreamUrl()` builds `${window.location.origin}${API_BASE_PATH}/asr/stream` and switches the HTTP(S) prefix to WS(S); it does not call `makeWebSocketUrl`.
 

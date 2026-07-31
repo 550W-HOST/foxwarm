@@ -32,7 +32,7 @@ import {
   selectCompactCandidateTargetLevels,
   validateCompactPlanArgs,
 } from './compactPlan';
-import { Message, MessagePart, QueueItem, Session, TokenUsage, ContextFrontierItem } from '../types';
+import { CompactionRequest, Message, MessagePart, QueueItem, Session, TokenUsage, ContextFrontierItem } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatMessagePreviewText } from '../utils/messageFormat';
 import { buildSystemMessageParts } from '../utils/systemMessageParts';
@@ -111,7 +111,7 @@ type CompactionRunOptions = {
 
 type CompactExecutionMode = 'auto' | 'await' | 'background';
 
-type CompactJobRequest = Pick<QueueItem, 'keepPercent' | 'compactGuidance' | 'completionMarker'>;
+type CompactJobRequest = CompactionRequest;
 
 type CompactJobSnapshot = {
   sessionId: string;
@@ -1665,7 +1665,7 @@ export async function checkAndCompactIfNeeded(deps: SessionHistoryDeps, sessionI
 export async function processSessionCompactionRequest(
   deps: SessionHistoryDeps,
   sessionId: string,
-  item: Pick<QueueItem, 'keepPercent' | 'compactGuidance' | 'completionMarker'>,
+  item: CompactionRequest,
   executionMode: CompactExecutionMode = 'auto',
 ): Promise<void> {
   if (item.compactGuidance?.trim()) {

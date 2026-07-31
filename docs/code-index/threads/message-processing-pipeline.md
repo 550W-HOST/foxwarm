@@ -35,9 +35,9 @@ The interactive turn flow from channel input through authorization, queueing, pr
 - Busy-time ordinary input is queued without an obsolete automatic queue acknowledgement.
 - Follow-ups can merge into an active tool loop only when the router's queue-item/source policy allows it.
 - Platform turn identifiers such as WeWork stream IDs are hard merge/final-delivery boundaries.
-- `/stop` cancels the current run and leaves queued work pending.
+- `/stop` cancels the current run, then commits all queued message/event inputs to canonical history without running another provider turn. A ready `compact-commit` is applied at the Stop safe point; unrecognized queue records are discarded generically.
 - `/dequeue` stops current work if needed and immediately resumes queued items.
-- `/retry` inserts an internal retry item using current model-visible history and `parts:null`; it does not regenerate a completed answer or add a model-facing retry marker. Once the control item is selected, the retry uses the ordinary turn loop, so compatible inputs queued behind it join at the normal pre-provider and post-tool safe points.
+- `/retry` atomically claims an idle session and enters the ordinary turn loop directly with `parts:null`; it does not persist queue state, regenerate a completed answer, or add a model-facing retry marker. Compatible input arriving after the claim joins at normal pre-provider and post-tool safe points.
 
 ## Retry/error behavior
 
@@ -69,7 +69,7 @@ Queued follow-up merge and progress/final delivery respect explicit platform tur
 
 ### D-pipeline-canonical-queue-item-boundaries
 
-Each logical queued input or event is appended as its own canonical `Message` in queue order, including `parts` items and structured `message` items. A compatible batch may still be consumed before one provider request so tool-loop follow-ups affect that request, but router storage never concatenates queue-item parts. Compaction/retry controls and platform stream/source boundaries remain queue boundaries. Provider-specific serializers, not persisted history, normalize adjacent same-role messages when a protocol requires it.
+Each logical queued input or event is appended as its own canonical `Message` in queue order, including `parts` items and structured `message` items. A compatible batch may still be consumed before one provider request so tool-loop follow-ups affect that request, but router storage never concatenates queue-item parts. Ready compact commits and platform stream/source boundaries remain queue boundaries. Provider-specific serializers, not persisted history, normalize adjacent same-role messages when a protocol requires it.
 
 ### D-pipeline-busy-queue-silence
 
@@ -85,7 +85,7 @@ Retries are observable but not model-visible. One updatable display-only notice 
 
 ### D-pipeline-control-commands
 
-[2026-07-29] `/retry` retries a failed/pending LLM turn from current history by enqueuing an internal control item and then running an ordinary session turn with `parts:null`. The retry adds no synthetic model-visible marker and has no special queued-input deferral: compatible ordinary and structured inputs queued behind the control are appended as separate canonical history messages before the first retried provider request, and inputs arriving during retry tool execution join at the normal safe points. `/stop` preserves queued work; `/dequeue` proceeds with it.
+[2026-07-29, updated 2026-08-01] `/retry` retries a failed/pending LLM turn from current history by directly and atomically claiming the idle session, then running the ordinary turn loop with `parts:null`. It adds no synthetic model-visible marker and never persists retry intent in `Session.queue`; compatible ordinary and structured inputs arriving after the claim join at normal safe points. A genuine `/stop` completion passively commits queued message/event inputs as separate canonical history rows without another provider request, making them visible and removable through ordinary history controls. The Stop boundary stays active through finalization so content queued while persistence is in flight is included in queue order; it closes atomically with the final queue scan, and later input is a new turn. A ready `compact-commit` encountered during Stop finalization is applied at that safe boundary. `QueueItem` exposes only current content/event kinds plus `compact-commit`; unrecognized persisted records are generically discarded without execution or migration. `/dequeue` retains its explicit stop-then-run override and bypasses the passive content-commit path.
 
 ### D-pipeline-dispatched-parts-ownership
 
