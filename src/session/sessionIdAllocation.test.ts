@@ -376,6 +376,42 @@ test('identity move optionally reparents after commit while omission preserves t
   }
 });
 
+test('identity move parent validation rejects cycles hidden behind historical aliases', async () => {
+  await sessionManager.loadSessions();
+  const sourceId = makeId('move_alias_cycle_source');
+  const sourceAlias = makeId('move_alias_cycle_old');
+  const requestedParentId = makeId('move_alias_cycle_parent');
+  const targetAgent = makeId('move_alias_cycle_agent').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const movedId = `${targetAgent}/moved`;
+
+  const source = await createParent(sourceId);
+  source.aliases = [sourceAlias];
+  await sessionManager.saveSession(sourceId);
+  const requestedParent = await createParent(requestedParentId);
+  requestedParent.parentSessionId = sourceAlias;
+  await sessionManager.saveSession(requestedParentId);
+  await sessionManager.createAgentWithMainSession({ agentName: targetAgent, createMainSession: false });
+
+  try {
+    await assert.rejects(
+      () => sessionManager.moveSessionToTarget({
+        sourceSessionId: sourceId,
+        newSessionId: 'moved',
+        newAgentName: targetAgent,
+        parentSessionId: requestedParentId,
+      }),
+      /parent cycle/,
+    );
+    assert.ok(await sessionManager.getExistingSession(sourceId));
+    assert.equal(await sessionManager.getExistingSession(movedId), null);
+  } finally {
+    for (const sessionId of [movedId, requestedParentId, sourceId]) {
+      if (sessionManager.getAllSessions().has(sessionId)) await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+    await fs.remove(getAgentDir(targetAgent));
+  }
+});
+
 test('restart hydration remains valid and archive bootstrap rebuild still reserves deleted ids', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-session-id-reservation-'));
   const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');

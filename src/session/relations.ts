@@ -13,6 +13,7 @@ type SessionRelationsDeps = {
   getSessionsMap: () => Map<string, Session>;
   getAgentMetadata: (agentName: string) => AgentMetadata;
   notifySessionListUpdated: () => void;
+  assertMutationAllowed: (sessionIds: Array<string | undefined>, operation: string) => void;
 };
 
 async function persistSessionMetadataUpdate(
@@ -126,13 +127,15 @@ async function assertNoParentCycle(
   let cursorParentId: string | undefined = parentSessionId;
 
   while (cursorParentId) {
-    if (seen.has(cursorParentId)) {
+    const cursorParent = await deps.getExistingSession(cursorParentId);
+    if (!cursorParent) break;
+    const canonicalCursorId = cursorParent.id;
+    if (seen.has(canonicalCursorId)) {
       throw new Error(`Session "${childSessionId}" cannot be moved under descendant "${parentSessionId}" because that would create a parent cycle.`);
     }
 
-    seen.add(cursorParentId);
-    const cursorParent = await deps.getExistingSession(cursorParentId);
-    cursorParentId = cursorParent?.parentSessionId || undefined;
+    seen.add(canonicalCursorId);
+    cursorParentId = cursorParent.parentSessionId || undefined;
   }
 }
 
@@ -153,7 +156,7 @@ export async function resolveSessionParentId(
 }
 
 export async function setSessionParent(
-  deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'saveSession' | 'saveSessionsMetadata' | 'notifySessionListUpdated'>,
+  deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'saveSession' | 'saveSessionsMetadata' | 'notifySessionListUpdated'> & Partial<Pick<SessionRelationsDeps, 'assertMutationAllowed'>>,
   childSessionId: string,
   parentSessionId?: string
 ): Promise<{
@@ -176,6 +179,7 @@ export async function setSessionParent(
     };
   }
 
+  deps.assertMutationAllowed?.([realChildId, realParentId], realParentId ? 'change parent relations' : 'detach from its parent');
   childSession.parentSessionId = realParentId;
   await persistSessionMetadataUpdate(deps, realChildId, { parentSessionId: realParentId });
   await deps.saveSessionsMetadata();

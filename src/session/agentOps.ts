@@ -19,6 +19,7 @@ interface SessionAgentOpsDeps {
   getAgentMetadata: (agentName: string) => { isolated?: boolean; [key: string]: any };
   getSessionsMap: () => Map<string, Session>;
   getAttachmentsMap: () => Map<string, { sessionId: string; mode?: any }>;
+  assertSessionMutationAllowed: (sessionIds: Array<string | undefined>, operation: string) => void;
 }
 
 type PendingSessionIdentityMove = {
@@ -296,6 +297,7 @@ async function renameSessionIdentity(options: {
   const oldRealId = sourceSession.id;
   const oldAgent = sourceSession.agent;
 
+  deps.assertSessionMutationAllowed([oldRealId], 'move or rename');
   if (!preparedPendingMove) await deps.assertSessionIdAvailableForNewLifetime(targetSessionId);
 
   const oldAliases = sourceSession.aliases || [];
@@ -308,6 +310,12 @@ async function renameSessionIdentity(options: {
     ownsTargetAgentDirectory,
   });
   if (!preparedPendingMove) await writePendingSessionIdentityMove(pendingMove);
+  try {
+    deps.assertSessionMutationAllowed([oldRealId], 'move or rename');
+  } catch (error) {
+    if (!preparedPendingMove) await clearPendingSessionIdentityMove();
+    throw error;
+  }
   const sessions = deps.getSessionsMap();
   const attachments = deps.getAttachmentsMap();
   const originalAttachments = new Map(
@@ -460,6 +468,7 @@ export async function createSessionInAgent(options: {
     : undefined;
 
   const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId, systemPromptFiles });
+  deps.assertSessionMutationAllowed([parentSessionId], 'receive a new child session');
   await deps.createSession(sessionId, {
     id: sessionId,
     agent: agentName,

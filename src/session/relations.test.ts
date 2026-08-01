@@ -42,6 +42,30 @@ test('setSessionParent rejects descendant parent cycles', async () => {
   assert.equal(parent.parentSessionId, undefined);
 });
 
+test('setSessionParent canonicalizes ancestor aliases before cycle checks', async () => {
+  const child = makeSession('alias_cycle_child');
+  child.aliases = ['alias_cycle_child_old'];
+  const requestedParent = makeSession('alias_cycle_parent', 'alias_cycle_child_old');
+  const sessions = new Map<string, Session>([
+    [child.id, child],
+    [requestedParent.id, requestedParent],
+  ]);
+
+  await assert.rejects(
+    setSessionParent({
+      getExistingSession: async (sessionId: string) => {
+        if (sessionId === 'alias_cycle_child_old') return child;
+        return sessions.get(sessionId) || null;
+      },
+      saveSession: async () => {},
+      saveSessionsMetadata: async () => {},
+      notifySessionListUpdated: () => {},
+    }, child.id, requestedParent.id),
+    /parent cycle/,
+  );
+  assert.equal(child.parentSessionId, undefined);
+});
+
 test('collectSessionDescendants follows canonical aliases and returns deepest-first deletion order', () => {
   const root = makeSession('root');
   root.aliases = ['old-root'];

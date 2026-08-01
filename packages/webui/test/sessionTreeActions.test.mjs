@@ -49,4 +49,7 @@ test('session lifecycle dialogs expose default-off descendant controls and retai
   assert.match(source, /useState\(false\).*deleteIncludeDescendants|deleteIncludeDescendants, setDeleteIncludeDescendants/s)
   assert.match(source, /setDeleteError\(error\.error[\s\S]*?role="alert"/)
   assert.match(source, /body: JSON\.stringify\(\{ includeDescendants \}\)/)
+  assert.match(source, /effectiveDeleteIncludeDescendants = deleteIncludeDescendants && deleteDescendantCount > 0/)
+  assert.match(source, /deleteSession\(deleteConfirm, effectiveDeleteIncludeDescendants\)/)
+  assert.match(source, /effectiveArchiveIncludeDescendants = archiveIncludeDescendants && archiveDescendantCount > 0/)
 })

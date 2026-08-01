@@ -1278,6 +1278,18 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
   const deleteDescendantCount = deleteConfirm ? getLifecycleDescendantIds(deleteConfirm).length : 0
   const archiveDescendantCount = archiveConfirm ? getLifecycleDescendantIds(archiveConfirm).length : 0
+  const effectiveDeleteIncludeDescendants = deleteIncludeDescendants && deleteDescendantCount > 0
+  const effectiveArchiveIncludeDescendants = archiveIncludeDescendants && archiveDescendantCount > 0
+  useEffect(() => {
+    if (deleteConfirm && deleteDescendantCount === 0 && deleteIncludeDescendants) {
+      setDeleteIncludeDescendants(false)
+    }
+  }, [deleteConfirm, deleteDescendantCount, deleteIncludeDescendants])
+  useEffect(() => {
+    if (archiveConfirm && archiveDescendantCount === 0 && archiveIncludeDescendants) {
+      setArchiveIncludeDescendants(false)
+    }
+  }, [archiveConfirm, archiveDescendantCount, archiveIncludeDescendants])
   const ViewModeIcon = SESSION_LIST_VIEW_MODE_ICONS[viewMode]
 
   return (
@@ -1461,13 +1473,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 Cancel
               </button>
               <button
-                onClick={() => deleteSession(deleteConfirm, deleteIncludeDescendants)}
+                onClick={() => deleteSession(deleteConfirm, effectiveDeleteIncludeDescendants)}
                 className="foxwarm-session-delete-confirm-button px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
                 disabled={deleteSubmitting}
               >
                 {deleteSubmitting
                   ? 'Deleting...'
-                  : deleteIncludeDescendants
+                  : effectiveDeleteIncludeDescendants
                     ? `Delete ${deleteDescendantCount + 1} sessions`
                     : 'Delete session'}
               </button>
@@ -1484,16 +1496,18 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
             <p className="mb-4 text-gray-600 dark:text-gray-400">
               Archive session <span className="font-mono text-sm">{archiveConfirm}</span>?
             </p>
-            <label className="mb-4 flex cursor-pointer items-start gap-2 rounded border border-gray-200 p-3 text-sm text-gray-700 dark:border-gray-700 dark:text-gray-300">
-              <input
-                type="checkbox"
-                className="mt-0.5"
-                checked={archiveIncludeDescendants}
-                onChange={(event) => setArchiveIncludeDescendants(event.currentTarget.checked)}
-                disabled={archiveSubmitting}
-              />
-              <span>Also archive {archiveDescendantCount} descendant session{archiveDescendantCount === 1 ? '' : 's'} (all levels)</span>
-            </label>
+            {archiveDescendantCount > 0 && (
+              <label className="mb-4 flex cursor-pointer items-start gap-2 rounded border border-gray-200 p-3 text-sm text-gray-700 dark:border-gray-700 dark:text-gray-300">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={effectiveArchiveIncludeDescendants}
+                  onChange={(event) => setArchiveIncludeDescendants(event.currentTarget.checked)}
+                  disabled={archiveSubmitting}
+                />
+                <span>Also archive {archiveDescendantCount} descendant session{archiveDescendantCount === 1 ? '' : 's'} (all levels)</span>
+              </label>
+            )}
             {archiveError && (
               <p role="alert" className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900/70 dark:bg-red-950/40 dark:text-red-200">
                 {archiveError}
@@ -1512,13 +1526,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 Cancel
               </button>
               <button
-                onClick={() => toggleArchive(archiveConfirm, true, archiveIncludeDescendants)}
+                onClick={() => toggleArchive(archiveConfirm, true, effectiveArchiveIncludeDescendants)}
                 className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-60"
                 disabled={archiveSubmitting}
               >
                 {archiveSubmitting
                   ? 'Archiving...'
-                  : archiveIncludeDescendants
+                  : effectiveArchiveIncludeDescendants
                     ? `Archive ${archiveDescendantCount + 1} sessions`
                     : 'Archive session'}
               </button>

@@ -42,6 +42,8 @@ Provides session archiving (persisting messages with canonical image references)
 | `isDirectSessionLink(a, b)` | ~100 | Checks if two sessions are the same or direct parent/child |
 | `checkIsolatedPermission(deps, sourceSession, targetSessionId)` | ~106 | Validates agent isolation constraints, allowing explicit direct parent/child links before cross-agent isolation rejection |
 | `resolvePermittedSessionTarget(deps, targetSessionId, fromSessionId)` | ~130 | Resolves special targets/aliases and target session with full isolation permission checks |
+
+Parent-cycle traversal canonicalizes every ancestor alias before seen/self checks. Parent commits may invoke the session-manager destructive-claim guard immediately before mutation; canonical ownership is [D-lifecycle-descendant-actions](../threads/session-lifecycle.md#d-lifecycle-descendant-actions).
 | `sendToSession(deps, targetSessionId, message, fromSessionId)` | ~152 | Sends an inter-session message as one source-timestamped `<foxwarm-message type="inter-agent" ...>body</foxwarm-message>` system part; rejects self-sends and returns requested/resolved IDs |
 | `cloneQueueItem(item)` | ~25 | Deep-clones a queue item |
 | `buildManagedSessionLeaseId()` | ~29 | Generates a unique managed session lease ID |

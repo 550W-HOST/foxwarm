@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { HttpServer, setHttpServer } from '../httpServer';
 import * as sessionManager from '../sessionManager';
-import { WebUIChannel } from './webuiChannel';
+import { setWebUiDeleteLifecycleTestHookForTests, WebUIChannel } from './webuiChannel';
 import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot } from '../session/metadataStore';
 import type { Session } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
@@ -882,6 +882,10 @@ test('WebUI delete detaches surviving children and recursively preflights before
   );
 
   let replacementRootId: string | undefined;
+  const retriggeredSessionIds: string[] = [];
+  sessionManager.setSessionTriggerCallback(sessionId => {
+    retriggeredSessionIds.push(sessionId);
+  });
   try {
     let response = await deleteSession(rootId);
     assert.equal(response.status, 200);
@@ -895,7 +899,7 @@ test('WebUI delete detaches surviving children and recursively preflights before
     const replacement = await sessionManager.getSession(replacementRootId);
     replacement.agent = 'main';
     replacement.busy = false;
-    replacement.queue = [];
+    replacement.queue = [{ type: 'background', parts: [{ text: 'work retained across a channel-blocked delete' }] }];
     await sessionManager.saveSession(replacementRootId);
     await sessionManager.setSessionParent(childId, replacementRootId);
 
@@ -907,6 +911,7 @@ test('WebUI delete detaches surviving children and recursively preflights before
     assert.deepEqual(payload.blockingSessionIds, [childId]);
     assert.ok(await sessionManager.getExistingSession(replacementRootId));
     assert.ok(await sessionManager.getExistingSession(childId));
+    assert.ok(retriggeredSessionIds.includes(replacementRootId));
     sessionManager.detachChannel('telegram', 'delete-tree-blocker');
 
     const grandchild = await sessionManager.getSession(grandchildId);
@@ -933,10 +938,104 @@ test('WebUI delete detaches surviving children and recursively preflights before
     assert.equal(await sessionManager.getExistingSession(childId), null);
     assert.equal(await sessionManager.getExistingSession(grandchildId), null);
   } finally {
+    sessionManager.setSessionTriggerCallback(() => {});
     sessionManager.detachChannel('telegram', 'delete-tree-blocker');
     await server.stop();
     setHttpServer(null);
     for (const sessionId of [grandchildId, childId, rootId, replacementRootId].filter((id): id is string => !!id)) {
+      const session = await sessionManager.getExistingSession(sessionId);
+      if (session) session.busy = false;
+      await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+  }
+});
+
+test('WebUI delete claim rejects late channel, relation, child-creation, and work mutations', async () => {
+  const rootId = makeSessionId('webui_delete_claim_root');
+  const childId = makeSessionId('webui_delete_claim_child');
+  const lateSessionId = makeSessionId('webui_delete_claim_late');
+  for (const sessionId of [rootId, childId, lateSessionId]) {
+    const session = await sessionManager.getSession(sessionId);
+    session.agent = 'main';
+    session.busy = false;
+    session.queue = [];
+    await sessionManager.saveSession(sessionId);
+  }
+  await sessionManager.setSessionParent(childId, rootId);
+
+  const assertClaimError = (error: unknown): boolean => {
+    assert.equal((error as any)?.code, 'SESSION_DELETE_IN_PROGRESS');
+    return true;
+  };
+  let hookCalls = 0;
+  setWebUiDeleteLifecycleTestHookForTests(async ({ rootSessionId, targetSessionIds }) => {
+    hookCalls += 1;
+    assert.equal(rootSessionId, rootId);
+    assert.deepEqual(targetSessionIds, [rootId, childId]);
+
+    await assert.rejects(() => sessionManager.setSessionParent(lateSessionId, rootId), assertClaimError);
+    await assert.rejects(() => sessionManager.createChildSession(rootId, 'claimed-late-child'), assertClaimError);
+    await assert.rejects(
+      () => sessionManager.moveSessionToTarget({ sourceSessionId: childId, newSessionId: `${childId}_moved` }),
+      assertClaimError,
+    );
+    assert.throws(
+      () => sessionManager.attachChannel('telegram', 'late-delete-attach', childId),
+      assertClaimError,
+    );
+    await assert.rejects(
+      () => sessionManager.enqueueSessionItem(childId, { type: 'background', parts: [{ text: 'late queued work' }] }),
+      assertClaimError,
+    );
+    await assert.rejects(async () => sessionManager.updateSessionBusyState(await sessionManager.getSession(childId), true), assertClaimError);
+    await assert.rejects(() => sessionManager.retrySession(childId), assertClaimError);
+
+    // Simulate an already-in-flight mutation that crossed its commit boundary
+    // before claim-aware code could reject it. The route must still revalidate.
+    (await sessionManager.getSession(childId)).busy = true;
+  });
+
+  const port = 36400 + Math.floor(Math.random() * 200);
+  const token = 'delete-claim-token';
+  const server = new HttpServer(port, token);
+  setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
+  await server.start();
+
+  try {
+    let response = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(rootId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ includeDescendants: true }),
+    });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json() as any).code, 'SESSION_DELETE_STATE_CHANGED');
+    assert.equal(hookCalls, 1);
+    assert.ok(await sessionManager.getExistingSession(rootId));
+    assert.ok(await sessionManager.getExistingSession(childId));
+    assert.equal((await sessionManager.getExistingSession(lateSessionId))?.parentSessionId, undefined);
+    assert.equal(sessionManager.getSessionByChannel('telegram', 'late-delete-attach'), undefined);
+
+    const child = await sessionManager.getSession(childId);
+    child.busy = false;
+    await sessionManager.saveSession(childId);
+    setWebUiDeleteLifecycleTestHookForTests(null);
+    response = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(rootId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ includeDescendants: true }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await sessionManager.getExistingSession(rootId), null);
+    assert.equal(await sessionManager.getExistingSession(childId), null);
+    assert.equal((await sessionManager.getExistingSession(lateSessionId))?.parentSessionId, undefined);
+    assert.equal(sessionManager.getSessionByChannel('telegram', 'late-delete-attach'), undefined);
+  } finally {
+    setWebUiDeleteLifecycleTestHookForTests(null);
+    sessionManager.detachChannel('telegram', 'late-delete-attach');
+    await server.stop();
+    setHttpServer(null);
+    for (const sessionId of [childId, rootId, lateSessionId]) {
       const session = await sessionManager.getExistingSession(sessionId);
       if (session) session.busy = false;
       await sessionManager.deleteSession(sessionId).catch(() => {});

@@ -580,16 +580,34 @@ async function assertNoSidebarParentCycle(childSessionId: string, targetParentSe
   const seen = new Set<string>([childSessionId]);
   let cursorParentId: string | null = targetParentSessionId;
   while (cursorParentId) {
-    if (seen.has(cursorParentId)) {
+    const cursorParent = await sessionManager.getExistingSession(cursorParentId);
+    if (!cursorParent) break;
+    const canonicalCursorId = cursorParent.id;
+    if (seen.has(canonicalCursorId)) {
       const error = new Error(`Session "${childSessionId}" cannot be moved under descendant "${targetParentSessionId}" because that would create a parent cycle.`);
       (error as any).statusCode = 400;
       (error as any).code = 'PARENT_CYCLE_NOT_ALLOWED';
       throw error;
     }
-    seen.add(cursorParentId);
-    const cursorParent = await sessionManager.getExistingSession(cursorParentId);
-    cursorParentId = cursorParent ? getSessionTreeParentId(cursorParent) : null;
+    seen.add(canonicalCursorId);
+    cursorParentId = getSessionTreeParentId(cursorParent);
   }
+}
+
+type WebUiDeleteLifecycleTestHook = (context: {
+  rootSessionId: string;
+  includeDescendants: boolean;
+  targetSessionIds: string[];
+}) => void | Promise<void>;
+
+let webUiDeleteLifecycleTestHook: WebUiDeleteLifecycleTestHook | null = null;
+
+export function setWebUiDeleteLifecycleTestHookForTests(hook: WebUiDeleteLifecycleTestHook | null): void {
+  webUiDeleteLifecycleTestHook = hook;
+}
+
+function haveSameSessionIds(actual: string[], expected: string[]): boolean {
+  return actual.length === expected.length && actual.every((sessionId, index) => sessionId === expected[index]);
 }
 
 export class WebUIChannel implements Channel {
@@ -1931,6 +1949,7 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           const requestedSessionId = req.params.sessionId as string;
           const includeDescendants = req.body?.includeDescendants === true;
+          let deleteClaimId: string | undefined;
           try {
             const rootSession = await sessionManager.getExistingSession(requestedSessionId);
             if (!rootSession) return res.status(404).json({ error: 'Session not found' });
@@ -1944,6 +1963,10 @@ export class WebUIChannel implements Channel {
               ? [rootSession.id, ...relationTree.descendantIds]
               : [rootSession.id];
             const postOrderSessionIds = relationTree?.postOrderIds || [rootSession.id];
+            const claimSessionIds = includeDescendants
+              ? targetSessionIds
+              : [rootSession.id, ...directChildSessionIds];
+            deleteClaimId = (await sessionManager.claimSessionsForDestructiveLifecycle(claimSessionIds)).claimId;
 
             const channelBlockers = targetSessionIds.flatMap(sessionId => sessionManager
               .getChannelsBySession(sessionId)
@@ -1986,10 +2009,84 @@ export class WebUIChannel implements Channel {
               });
             }
 
+            await webUiDeleteLifecycleTestHook?.({
+              rootSessionId: rootSession.id,
+              includeDescendants,
+              targetSessionIds: [...targetSessionIds],
+            });
+
+            const currentRootSession = await sessionManager.getExistingSession(rootSession.id);
+            if (!currentRootSession) {
+              return res.status(409).json({
+                error: 'The session tree changed while preparing deletion. Retry the delete request.',
+                code: 'SESSION_DELETE_TREE_CHANGED',
+                includeDescendants,
+              });
+            }
+            const currentRelationTree = includeDescendants
+              ? sessionManager.collectSessionDescendants(currentRootSession.id)
+              : undefined;
+            const currentDirectChildSessionIds = currentRelationTree?.directChildIds
+              || sessionManager.getCanonicalChildSessionIds(currentRootSession.id);
+            const currentTargetSessionIds = currentRelationTree
+              ? [currentRootSession.id, ...currentRelationTree.descendantIds]
+              : [currentRootSession.id];
+            const currentPostOrderSessionIds = currentRelationTree?.postOrderIds || [currentRootSession.id];
+            if (!haveSameSessionIds(currentTargetSessionIds, targetSessionIds)
+              || !haveSameSessionIds(currentPostOrderSessionIds, postOrderSessionIds)
+              || !haveSameSessionIds(currentDirectChildSessionIds, directChildSessionIds)) {
+              return res.status(409).json({
+                error: 'The canonical session tree changed while preparing deletion. Retry the delete request.',
+                code: 'SESSION_DELETE_TREE_CHANGED',
+                includeDescendants,
+                expectedSessionIds: targetSessionIds,
+                currentSessionIds: currentTargetSessionIds,
+              });
+            }
+
+            const revalidatedChannelBlockers = targetSessionIds.flatMap(sessionId => sessionManager
+              .getChannelsBySession(sessionId)
+              .filter(channel => channel.channelId !== 'webui')
+              .map(channel => ({ sessionId, ...channel })));
+            const revalidatedBusySessionIds = targetSessionIds.filter(sessionId => sessionManager.getAllSessions().get(sessionId)?.busy);
+            const revalidatedQueuedSessionIds = targetSessionIds.filter(sessionId => (sessionManager.getAllSessions().get(sessionId)?.queue?.length || 0) > 0);
+            if (revalidatedChannelBlockers.length > 0 || revalidatedBusySessionIds.length > 0 || revalidatedQueuedSessionIds.length > 0) {
+              return res.status(409).json({
+                error: 'The session tree became active or channel-blocked while preparing deletion. Retry the delete request.',
+                code: 'SESSION_DELETE_STATE_CHANGED',
+                includeDescendants,
+                blockingSessionIds: [...new Set(revalidatedChannelBlockers.map(blocker => blocker.sessionId))],
+                blockingChannels: revalidatedChannelBlockers,
+                busySessionIds: revalidatedBusySessionIds,
+                queuedSessionIds: revalidatedQueuedSessionIds,
+              });
+            }
+
+            const detachedChildSessionIds: string[] = [];
+            if (!includeDescendants) {
+              for (const childSessionId of directChildSessionIds) {
+                if (!sessionManager.getAllSessions().has(childSessionId)) continue;
+                try {
+                  await sessionManager.setSessionParent(childSessionId, undefined, deleteClaimId);
+                  detachedChildSessionIds.push(childSessionId);
+                } catch (error: any) {
+                  this.broadcastSessionListUpdate();
+                  return res.status(500).json({
+                    error: `Session "${rootSession.id}" was not deleted because surviving child "${childSessionId}" could not be detached: ${error?.message || error}`,
+                    code: 'SESSION_DELETE_DETACH_PARTIAL',
+                    includeDescendants,
+                    deletedSessionIds: [],
+                    failedDetachChildSessionId: childSessionId,
+                    detachedChildSessionIds,
+                  });
+                }
+              }
+            }
+
             const deletedSessionIds: string[] = [];
             for (const sessionId of postOrderSessionIds) {
               try {
-                const deleted = await sessionManager.deleteSession(sessionId);
+                const deleted = await sessionManager.deleteSession(sessionId, deleteClaimId);
                 if (!deleted) throw new Error(`Session "${sessionId}" disappeared before deletion.`);
                 deletedSessionIds.push(sessionId);
               } catch (error: any) {
@@ -2005,27 +2102,6 @@ export class WebUIChannel implements Channel {
               }
             }
 
-            const detachedChildSessionIds: string[] = [];
-            if (!includeDescendants) {
-              for (const childSessionId of directChildSessionIds) {
-                if (!sessionManager.getAllSessions().has(childSessionId)) continue;
-                try {
-                  await sessionManager.setSessionParent(childSessionId);
-                  detachedChildSessionIds.push(childSessionId);
-                } catch (error: any) {
-                  this.broadcastSessionListUpdate();
-                  return res.status(500).json({
-                    error: `Session "${rootSession.id}" was deleted, but surviving child "${childSessionId}" could not be detached: ${error?.message || error}`,
-                    code: 'SESSION_DELETE_PARTIAL',
-                    includeDescendants,
-                    deletedSessionIds,
-                    failedDetachChildSessionId: childSessionId,
-                    detachedChildSessionIds,
-                  });
-                }
-              }
-            }
-
             this.broadcastSessionListUpdate();
             res.json({
               success: true,
@@ -2037,7 +2113,12 @@ export class WebUIChannel implements Channel {
           } catch (e: any) {
             logger.error({ err: e, requestedSessionId, includeDescendants }, 'Failed to delete session');
             const code = typeof e?.code === 'string' ? e.code : 'DELETE_SESSION_FAILED';
-            res.status(code === 'SESSION_RELATION_CYCLE' ? 409 : 500).json({ error: e.message, code });
+            const status = typeof e?.statusCode === 'number'
+              ? e.statusCode
+              : code === 'SESSION_RELATION_CYCLE' ? 409 : 500;
+            res.status(status).json({ error: e.message, code });
+          } finally {
+            if (deleteClaimId) sessionManager.releaseSessionsForDestructiveLifecycle(deleteClaimId);
           }
         },
       });
