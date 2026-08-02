@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from '../sessionManager';
-import { tool_send_to_session, tool_set_goal, tool_wait } from '../toolsSessionAgent';
+import { tool_move_session, tool_send_to_session, tool_set_goal, tool_wait } from '../toolsSessionAgent';
 import type { Session } from '../types';
 
 function makeSessionId(prefix: string): string {
@@ -110,6 +110,35 @@ test('send_to_session <parent> errors clearly when current session has no parent
     );
   } finally {
     await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
+test('move_session intentionally reparents and reports identity and relation results', async () => {
+  await sessionManager.loadSessions();
+  const oldParentId = makeSessionId('tool_move_old_parent');
+  const newParentId = makeSessionId('tool_move_new_parent');
+  const sourceId = makeSessionId('tool_move_source');
+  const targetId = makeSessionId('tool_move_target');
+  const oldParent = await ensureSession(oldParentId);
+  const newParent = await ensureSession(newParentId);
+  await ensureSession(sourceId);
+  await sessionManager.setSessionParent(sourceId, oldParentId);
+
+  try {
+    const output = await tool_move_session({
+      sessionId: sourceId,
+      newSessionId: targetId,
+      parentSessionId: newParentId,
+    }, { sessionId: oldParentId, session: oldParent });
+
+    assert.match(String(output), new RegExp(`Session "${sourceId}" moved to "${targetId}"`));
+    assert.match(String(output), new RegExp(`Previous parent: ${oldParentId}`));
+    assert.match(String(output), new RegExp(`Resulting parent: ${newParentId}`));
+    assert.equal((await sessionManager.getExistingSession(targetId))?.parentSessionId, newParent.id);
+  } finally {
+    for (const sessionId of [targetId, sourceId, newParentId, oldParentId]) {
+      await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
   }
 });
 

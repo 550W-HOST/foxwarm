@@ -68,7 +68,7 @@ Routes incoming channel messages to the appropriate session, handles authorizati
 ## Behavior
 
 - Maintains a `processingSessions` set to prevent re-entrant queue processing for the same session.
-- Claims sessions atomically via `tryClaimSession` (sets `session.busy`).
+- Claims sessions atomically via `tryClaimSession` (sets `session.busy`). A session under the bounded WebUI destructive-lifecycle claim cannot be newly claimed for work; canonical ownership is [D-lifecycle-descendant-actions](../threads/session-lifecycle.md#d-lifecycle-descendant-actions).
 - The main loop (`continueWithQueuedWork`) repeatedly drains queued items, runs LLM turns, handles tool calls, manages child/guest session lifecycle, and applies ready compact commits until the queue is empty. A genuine Stop passively commits queued message/event inputs to history without another provider call; `/dequeue` keeps its explicit stop-then-run override.
 - Current retry requests enter through `processSessionRetry`, atomically claim an idle session, and call the ordinary `runSessionTurn(parts:null)` path without queue persistence. Current compact planning also stays outside the queue; only `compact-commit` is consumed at safe points. Generic queue validation drops unrecognized records.
 - Final response/error broadcasts include `turnFinal: true`; this is a generic channel option currently used by WeWork stream aggregation to finish the platform stream card, and ignored by channels that do not need it.

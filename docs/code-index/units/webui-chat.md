@@ -1,6 +1,6 @@
 # Unit: WebUI Chat
 
-Files: packages/webui/src/components/Chat.tsx, packages/webui/src/components/ContextScrollbar.tsx, packages/webui/src/components/contextScrollbarModel.ts, packages/webui/src/chatHistoryState.ts, packages/webui/src/chatViewportState.ts, packages/webui/src/sessionHeader.ts, packages/webui/src/modelOptionsLoader.ts, packages/webui/test/chatHistoryState.test.mjs, packages/webui/test/chatHistoryLoading.e2e.mjs, packages/webui/test/chatViewportState.test.mjs, packages/webui/test/contextScrollbarModel.test.mjs, packages/webui/test/contextScrollbar.e2e.mjs, packages/webui/test/sessionHeader.test.mjs, packages/webui/test/modelOptionsLoader.test.mjs, packages/webui/test/sessionHeader.e2e.mjs, packages/webui/test/scrollState.e2e.mjs, packages/webui/test/streamFollow.e2e.mjs
+Files: packages/webui/src/components/Chat.tsx, packages/webui/src/components/SessionDebugModal.tsx, packages/webui/src/components/ContextScrollbar.tsx, packages/webui/src/components/contextScrollbarModel.ts, packages/webui/src/chatHistoryState.ts, packages/webui/src/chatViewportState.ts, packages/webui/src/sessionHeader.ts, packages/webui/src/modelOptionsLoader.ts, packages/webui/test/debugSnapshot.e2e.mjs, packages/webui/test/chatHistoryState.test.mjs, packages/webui/test/chatHistoryLoading.e2e.mjs, packages/webui/test/chatViewportState.test.mjs, packages/webui/test/contextScrollbarModel.test.mjs, packages/webui/test/contextScrollbar.e2e.mjs, packages/webui/test/sessionHeader.test.mjs, packages/webui/test/modelOptionsLoader.test.mjs, packages/webui/test/sessionHeader.e2e.mjs, packages/webui/test/scrollState.e2e.mjs, packages/webui/test/streamFollow.e2e.mjs
 Secondary files: packages/webui/src/contextScrollbarSettings.ts
 
 ## Purpose
@@ -10,6 +10,7 @@ Owns one mounted session's committed history, queued preview, runtime/model snap
 ## Export
 
 - default memoized `Chat` component.
+- `SessionDebugModal` owns the explicitly mounted diagnostic snapshot lifecycle, including fetch invalidation, serialization, copy state, and release on close.
 - `chatHistoryState.ts`, `chatViewportState.ts`, and `sessionHeader.ts` export pure tested reconciliation, viewport, and state/format helpers.
 - `contextScrollbarModel.ts` exports pure committed-segment, estimate, context-usage, and row-boundary interpolation helpers used by the desktop overview and focused tests.
 
@@ -50,7 +51,7 @@ Owns one mounted session's committed history, queued preview, runtime/model snap
 ## Other behavior
 
 - Header state and cwd come from the per-session history/stream snapshot, including in Code leaf Chat.
-- Debug view fetches the session debug file payload on demand only after Debug is opened. Mount and ordinary history refresh never request the debug route; the history snapshot field feeds both the visible snapshot card and ContextScrollbar.
+- Chat itself owns only whether Debug is open and passes current source data to the separately mounted `SessionDebugModal`. Open and Refresh each capture one immutable diagnostic snapshot; ordinary Chat updates do not rebuild it, and close/session replacement/unmount aborts pending work and releases modal-owned payload/text. See [D-webui-history-bootstrap](../modules/webui.md#d-webui-history-bootstrap).
 - History/SSE/Debug/CTX image parts use authenticated deployment-relative blob API paths and contain no base64 or legacy filesystem path. Timeline rendering owns the safe-raster/download distinction; canonical persistence/provider/retention behavior is [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - Timeline defaults to a recent subset with explicit full expansion.
 - Horizontal containment remains on the chat/timeline boundaries while tables/output own intentional inner scrolling.

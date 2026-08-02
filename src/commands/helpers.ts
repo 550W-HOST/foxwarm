@@ -80,6 +80,28 @@ export function parseSessionMoveTarget(rawTarget: string): { newSessionId: strin
   return { newAgentName, newSessionId }
 }
 
+export function parseSessionMoveArgs(tokens: string[]): {
+  newSessionId: string;
+  newAgentName?: string;
+  parentSessionId?: string;
+} {
+  if (tokens.length === 0) throw new Error('Missing move target.')
+  const target = parseSessionMoveTarget(tokens[0])
+  let parentSessionId: string | undefined
+
+  for (let index = 1; index < tokens.length; index += 1) {
+    const token = tokens[index]
+    if (token !== '--parent') throw new Error(`Unknown /session move option: ${token}`)
+    if (parentSessionId !== undefined) throw new Error('--parent may be specified only once.')
+    const value = tokens[index + 1]?.trim()
+    if (!value) throw new Error('Missing parent session ID after --parent.')
+    parentSessionId = value
+    index += 1
+  }
+
+  return { ...target, ...(parentSessionId ? { parentSessionId } : {}) }
+}
+
 export function parseCompactThresholdInput(raw: string): number | null {
   const value = raw.trim().toLowerCase()
   if (!value) {

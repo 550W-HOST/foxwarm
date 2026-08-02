@@ -14,12 +14,12 @@ export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
     return buildSessionListOutput(args, ctx?.sessionId);
   }
 
-  if (action === 'rename') {
-    return renameSession(args, ctx);
+  if (action === 'update-display-name') {
+    return updateSessionDisplayName(args, ctx);
   }
 
   if (action !== 'status') {
-    throw new Error('session.action must be "status", "list", or "rename".');
+    throw new Error('session.action must be "status", "list", or "update-display-name".');
   }
 
   const targetSessionId = ctx?.sessionId;
@@ -59,7 +59,11 @@ export async function tool_delete_session(args: ToolArgs, ctx: ToolContext) {
   return `Session \`${sessionId}\` not found.`;
 }
 
-async function renameSession(args: ToolArgs, ctx?: ToolContext) {
+function formatDisplayName(name: string | undefined): string {
+  return typeof name === 'string' ? JSON.stringify(name) : 'unset';
+}
+
+async function updateSessionDisplayName(args: ToolArgs, ctx?: ToolContext) {
   const { sessionId, name } = args;
   const targetId = sessionId || ctx?.sessionId;
 
@@ -67,7 +71,7 @@ async function renameSession(args: ToolArgs, ctx?: ToolContext) {
     throw new Error('Session ID is required.');
   }
   if (typeof name !== 'string') {
-    throw new Error('session.name is required for action="rename".');
+    throw new Error('session.name is required for action="update-display-name".');
   }
 
   const session = await sessionManager.getExistingSession(targetId);
@@ -75,18 +79,17 @@ async function renameSession(args: ToolArgs, ctx?: ToolContext) {
     throw new Error(`Session \`${targetId}\` not found.`);
   }
 
-  if (name && name.trim()) {
-    session.displayName = name.trim();
-  } else {
-    session.displayName = undefined;
+  const previousName = session.displayName;
+  const nextName = name.trim() || undefined;
+
+  if (previousName === nextName) {
+    return `Session \`${session.id}\` display name unchanged (from ${formatDisplayName(previousName)} to ${formatDisplayName(nextName)}).`;
   }
 
+  session.displayName = nextName;
   await sessionManager.saveSession(session.id);
 
-  if (session.displayName) {
-    return `Session \`${session.id}\` renamed to "${session.displayName}".`;
-  }
-  return `Session \`${session.id}\` display name cleared.`;
+  return `Session \`${session.id}\` display name changed from ${formatDisplayName(previousName)} to ${formatDisplayName(nextName)}.`;
 }
 
 export async function tool_stop_session(args: ToolArgs) {

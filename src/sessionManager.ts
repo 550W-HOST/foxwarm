@@ -528,6 +528,79 @@ const sessions = new Map<string, Session>();
 // Alias resolution cache: alias -> real sessionId
 const aliasCache = new Map<string, string>();
 
+const destructiveLifecycleClaims = new Map<string, string>();
+let destructiveLifecycleClaimSequence = 0;
+
+export class SessionDestructiveLifecycleClaimError extends Error {
+  readonly code = 'SESSION_DELETE_IN_PROGRESS';
+  readonly statusCode = 409;
+
+  constructor(sessionId: string, operation: string) {
+    super(`Session "${sessionId}" is being prepared for deletion and cannot ${operation}. Retry after the delete request finishes.`);
+    this.name = 'SessionDestructiveLifecycleClaimError';
+  }
+}
+
+function resolveLiveSessionIdSync(sessionId: string): string {
+  if (sessions.has(sessionId)) return sessionId;
+  const cached = aliasCache.get(sessionId);
+  if (cached && sessions.has(cached)) return cached;
+  for (const [realId, session] of sessions) {
+    if (session.aliases?.includes(sessionId)) return realId;
+  }
+  return sessionId;
+}
+
+export function isSessionDestructiveLifecycleClaimed(sessionId: string): boolean {
+  return destructiveLifecycleClaims.has(resolveLiveSessionIdSync(sessionId));
+}
+
+export function assertSessionDestructiveMutationAllowed(
+  sessionIds: Array<string | undefined>,
+  operation: string,
+  owningClaimId?: string,
+): void {
+  for (const sessionId of sessionIds) {
+    if (!sessionId) continue;
+    const realId = resolveLiveSessionIdSync(sessionId);
+    const claimId = destructiveLifecycleClaims.get(realId);
+    if (claimId && claimId !== owningClaimId) {
+      throw new SessionDestructiveLifecycleClaimError(realId, operation);
+    }
+  }
+}
+
+export async function claimSessionsForDestructiveLifecycle(sessionIds: string[]): Promise<{ claimId: string; sessionIds: string[] }> {
+  return withSessionIdentityLock(async () => {
+    const canonicalIds = [...new Set(sessionIds.map(resolveLiveSessionIdSync))];
+    assertSessionDestructiveMutationAllowed(canonicalIds, 'start another destructive lifecycle action');
+    const claimId = `delete-${process.pid}-${Date.now()}-${++destructiveLifecycleClaimSequence}`;
+    for (const sessionId of canonicalIds) destructiveLifecycleClaims.set(sessionId, claimId);
+    return { claimId, sessionIds: canonicalIds };
+  });
+}
+
+export function releaseSessionsForDestructiveLifecycle(claimId: string): void {
+  const releasedSessionIds: string[] = [];
+  for (const [sessionId, ownerClaimId] of destructiveLifecycleClaims) {
+    if (ownerClaimId !== claimId) continue;
+    destructiveLifecycleClaims.delete(sessionId);
+    releasedSessionIds.push(sessionId);
+  }
+  for (const sessionId of releasedSessionIds) {
+    const session = sessions.get(sessionId);
+    if (session && !session.busy && session.queue.some(isQueueItem)) {
+      try {
+        void Promise.resolve(onSessionTriggered?.(sessionId)).catch(error => {
+          logger.error({ err: error, sessionId }, 'Failed to resume queued work after destructive lifecycle claim release');
+        });
+      } catch (error) {
+        logger.error({ err: error, sessionId }, 'Failed to resume queued work after destructive lifecycle claim release');
+      }
+    }
+  }
+}
+
 export function updateAliasCache(aliases: string[], realId: string) {
   for (const alias of aliases) {
     aliasCache.set(alias, realId);
@@ -924,6 +997,7 @@ async function createEmptySessionUnlocked(sessionId?: string): Promise<{ session
 }
 
 export async function updateSessionBusyState(session: Session, busy: boolean): Promise<void> {
+  if (busy) assertSessionDestructiveMutationAllowed([session.id], 'start new work');
   const changed = session.busy !== busy;
   const busyStartedChanged = busy
     ? typeof session.busyStartedAt !== 'number'
@@ -956,6 +1030,7 @@ export async function createSession(sessionId: string, sessionData: any): Promis
 
 async function createSessionUnlocked(sessionId: string, sessionData: any): Promise<void> {
   await assertSessionIdAvailableForNewLifetime(sessionId);
+  assertSessionDestructiveMutationAllowed([sessionData?.parentSessionId], 'receive a new child session');
   if (sessionData && typeof sessionData === 'object') {
     delete sessionData.isolated;
     llm.ensurePromptCacheKey(sessionData as Session);
@@ -1017,6 +1092,7 @@ function getSessionAgentOpsDeps(underIdentityLock: boolean = false) {
     getAgentMetadata,
     getSessionsMap: getAllSessions,
     getAttachmentsMap: getAllAttachments,
+    assertSessionMutationAllowed: assertSessionDestructiveMutationAllowed,
   };
 }
 
@@ -1180,6 +1256,7 @@ export async function moveSessionToTarget(options: {
   createAgent?: boolean;
   newAgentName?: string;
   createAgentInheritMemory?: boolean;
+  parentSessionId?: string;
 }): Promise<{
   oldSessionId: string;
   targetSessionId: string;
@@ -1187,8 +1264,48 @@ export async function moveSessionToTarget(options: {
   createdAgent: boolean;
   aliases: string[];
   updatedChildren: string[];
+  previousParentSessionId?: string;
+  parentSessionId?: string;
+  requestedParentSessionId?: string;
+  parentUpdateError?: string;
 }> {
-  return withSessionIdentityLock(() => sessionAgentOps.moveSessionToTarget(options, getSessionAgentOpsDeps(true)));
+  let previousParentSessionId: string | undefined;
+  let requestedParentSessionId: string | undefined;
+  const parentWasProvided = options.parentSessionId !== undefined;
+  const requestedParentInput = options.parentSessionId?.trim();
+  if (parentWasProvided && !requestedParentInput) {
+    throw new Error('parentSessionId must be a non-empty existing session ID when provided. Use the explicit unparent operation to detach.');
+  }
+  const result = await withSessionIdentityLock(async () => {
+    const sourceSession = await getExistingSessionUnlocked(options.sourceSessionId);
+    if (!sourceSession) throw new Error(`Session "${options.sourceSessionId}" not found.`);
+    previousParentSessionId = sourceSession.parentSessionId || undefined;
+    requestedParentSessionId = parentWasProvided
+      ? (await sessionRelations.resolveSessionParentId({ getExistingSession: getExistingSessionUnlocked }, sourceSession.id, requestedParentInput)).parentSessionId
+      : undefined;
+    assertSessionDestructiveMutationAllowed([sourceSession.id, requestedParentSessionId], 'move or rename');
+    return sessionAgentOps.moveSessionToTarget(options, getSessionAgentOpsDeps(true));
+  });
+
+  let parentSessionId = (await getExistingSession(result.targetSessionId))?.parentSessionId || undefined;
+  let parentUpdateError: string | undefined;
+  if (parentWasProvided && parentSessionId !== requestedParentSessionId) {
+    try {
+      const parentResult = await setSessionParent(result.targetSessionId, requestedParentSessionId);
+      parentSessionId = parentResult.parentSessionId;
+    } catch (error: any) {
+      parentSessionId = (await getExistingSession(result.targetSessionId))?.parentSessionId || undefined;
+      parentUpdateError = error?.message || String(error);
+    }
+  }
+
+  return {
+    ...result,
+    previousParentSessionId,
+    parentSessionId,
+    ...(parentWasProvided ? { requestedParentSessionId } : {}),
+    ...(parentUpdateError ? { parentUpdateError } : {}),
+  };
 }
 
 /**
@@ -1199,10 +1316,12 @@ export async function moveSessionToTarget(options: {
  * @returns The session ID
  */
 export function attachChannel(channelId: string, conversationId: string, sessionId: string, configUpdates?: Partial<sessionChannels.ChannelConfig>): string {
+  assertSessionDestructiveMutationAllowed([sessionId], 'accept a new channel attachment');
   return sessionChannels.attachChannel(channelId, conversationId, sessionId, configUpdates);
 }
 
 export async function attachChannelDurably(channelId: string, conversationId: string, sessionId: string, configUpdates?: Partial<sessionChannels.ChannelConfig>): Promise<string> {
+  assertSessionDestructiveMutationAllowed([sessionId], 'accept a new channel attachment');
   return sessionChannels.attachChannelDurably(channelId, conversationId, sessionId, configUpdates);
 }
 
@@ -1302,6 +1421,14 @@ export function getChannelsBySession(sessionId: string): Array<{ channelId: stri
 
 export function getChildSessionIds(parentSessionId: string): string[] {
   return sessionRelations.getChildSessionIds(sessions, parentSessionId);
+}
+
+export function collectSessionDescendants(sessionId: string): { descendantIds: string[]; directChildIds: string[]; postOrderIds: string[] } {
+  return sessionRelations.collectSessionDescendants(sessions, sessionId);
+}
+
+export function getCanonicalChildSessionIds(parentSessionId: string): string[] {
+  return sessionRelations.getCanonicalChildSessionIds(sessions, parentSessionId);
 }
 
 export function getChannelBySession(sessionId: string): { channelId: string; conversationId: string } | undefined {
@@ -1420,6 +1547,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
     });
   }
 
+  assertSessionDestructiveMutationAllowed([realSourceSessionId], 'receive a new fork session');
   sessions.set(newSessionId, forkedSession);
   try {
     await ensureSessionBranch(newSessionId, {
@@ -1522,6 +1650,7 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
       __meta: { timestamp: Date.now() }
     };
 
+    assertSessionDestructiveMutationAllowed([realParentSessionId], 'receive a new child session');
     sessions.set(childSessionId, newSession);
     try {
       await appendSessionMessages(newSession, [initialMessage], { strictPersistence: true });
@@ -1535,7 +1664,7 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
   }
 }
 
-export async function setSessionParent(childSessionId: string, parentSessionId?: string): Promise<{
+export async function setSessionParent(childSessionId: string, parentSessionId?: string, owningClaimId?: string): Promise<{
   childSessionId: string;
   parentSessionId?: string;
   previousParentSessionId?: string;
@@ -1545,6 +1674,7 @@ export async function setSessionParent(childSessionId: string, parentSessionId?:
     saveSession,
     saveSessionsMetadata,
     notifySessionListUpdated,
+    assertMutationAllowed: (sessionIds, operation) => assertSessionDestructiveMutationAllowed(sessionIds, operation, owningClaimId),
   }, childSessionId, parentSessionId);
 }
 
@@ -1791,6 +1921,7 @@ export function setSessionRetryCallback(onRetry: (sessionId: string) => void | P
 }
 
 export async function triggerSessionProcessing(sessionId: string): Promise<void> {
+  assertSessionDestructiveMutationAllowed([sessionId], 'start queued work');
   await Promise.resolve(onSessionTriggered?.(sessionId));
 }
 
@@ -1839,6 +1970,7 @@ async function reclaimManagedSessionIfStale(session: Session): Promise<boolean> 
     return false;
   }
 
+  assertSessionDestructiveMutationAllowed([session.id], 'accept queued work');
   const restoredPending = managed.pendingInbox.map(cloneQueueItem);
   setManagedSessionState(session, null);
   session.queue = [...restoredPending, ...(session.queue || [])];
@@ -1864,6 +1996,7 @@ async function maybeWakeManagedSessionOwner(session: Session, managed: ManagedSe
   const pendingCount = managed.pendingInbox.length;
   const wakeupMessage = buildManagedInboxWakeupMessage(session.id, pendingCount);
   if (hasTrailingQueuedManagedInboxWakeup(ownerSession.queue, session.id, pendingCount)) {
+    assertSessionDestructiveMutationAllowed([session.id], 'accept queued work');
     managed.lastOwnerWakeupAt = now;
     managed.leaseTouchedAt = now;
     setManagedSessionState(session, managed);
@@ -1871,6 +2004,7 @@ async function maybeWakeManagedSessionOwner(session: Session, managed: ManagedSe
     return;
   }
 
+  assertSessionDestructiveMutationAllowed([session.id], 'accept queued work');
   managed.lastOwnerWakeupAt = now;
   managed.leaseTouchedAt = now;
   setManagedSessionState(session, managed);
@@ -1911,7 +2045,9 @@ async function maybeResumeManagedSessionControllerRun(session: Session, managed:
 async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem): Promise<void> {
   const sessionId = session.id;
   item = (await externalizeQueueItemImages(item)).item;
+  assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
   await reclaimManagedSessionIfStale(session);
+  assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
   const managedBeforeEnqueue = !!getManagedSessionState(session);
 
   const waitTransition = applyQueuedItemToWaitState(session, item);
@@ -1945,6 +2081,7 @@ async function enqueueSessionItemForLoadedSession(session: Session, item: QueueI
       throw new Error(`Managed session metadata missing for session \`${sessionId}\`.`);
     }
 
+    assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
     managed.pendingInbox.push(...managedInboxItems.map(cloneQueueItem));
     managed.lastInboxAt = Date.now();
     managed.leaseTouchedAt = managed.lastInboxAt;
@@ -1958,10 +2095,12 @@ async function enqueueSessionItemForLoadedSession(session: Session, item: QueueI
   }
 
   if (directQueueItems.length > 0) {
+    assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
     session.queue.push(...directQueueItems);
     await saveSession(sessionId);
 
     if (!managedBeforeEnqueue && !session.busy) {
+      assertSessionDestructiveMutationAllowed([sessionId], 'start queued work');
       void onSessionTriggered?.(sessionId);
     }
   }
@@ -1977,6 +2116,7 @@ export async function requestSessionCompaction(
   options: CompactionRequest = {}
 ): Promise<{ alreadyQueued: boolean; startedImmediately: boolean; runsInBackground?: boolean; backgroundUnavailable?: boolean; queueLength: number }> {
   const session = await getSession(sessionId);
+  assertSessionDestructiveMutationAllowed([session.id], 'start compaction work');
 
   if (session.queue.some(item => item.type === 'compact-commit') || sessionHistory.hasPendingCompactWork(sessionId)) {
     return {
@@ -2355,7 +2495,8 @@ export async function setSessionCompactThreshold(sessionId: string, thresholdTok
 /**
  * Delete a session
  */
-export async function deleteSession(sessionId: string): Promise<boolean> {
+export async function deleteSession(sessionId: string, owningClaimId?: string): Promise<boolean> {
+  assertSessionDestructiveMutationAllowed([sessionId], 'be deleted', owningClaimId);
   clearActiveSessionRuntimeState(sessionId);
 
   if (!sessions.has(sessionId)) {
@@ -2410,6 +2551,30 @@ export async function archiveSession(sessionId: string, archived: boolean = true
   return true;
 }
 
+export async function archiveSessions(sessionIds: string[], archived: boolean = true): Promise<{
+  matchedSessionIds: string[];
+  changedSessionIds: string[];
+}> {
+  const matchedSessionIds: string[] = [];
+  const changedSessionIds: string[] = [];
+
+  for (const sessionId of sessionIds) {
+    const session = sessions.get(sessionId);
+    if (!session) continue;
+    matchedSessionIds.push(sessionId);
+    if (!!session.archived === archived) continue;
+    session.archived = archived;
+    changedSessionIds.push(sessionId);
+  }
+
+  if (changedSessionIds.length > 0) {
+    await saveSessionsMetadata();
+    for (const sessionId of changedSessionIds) notifySessionUpdated(sessionId);
+  }
+
+  return { matchedSessionIds, changedSessionIds };
+}
+
 /**
  * Retry session - reactivate without adding new message
  * Useful for retrying after LLM errors
@@ -2423,6 +2588,8 @@ export async function retrySession(sessionId: string): Promise<void> {
   if (session.busy) {
     throw new Error('Session is already busy');
   }
+
+  assertSessionDestructiveMutationAllowed([session.id], 'start retry work');
 
   if (!onSessionRetryRequested) {
     throw new Error('Session retry processing is unavailable');

@@ -24,6 +24,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 ### Queue, wait, and execution coordination
 
 - `enqueueSessionItem` — canonical queue insertion with wait-state and managed-inbox handling.
+- `claimSessionsForDestructiveLifecycle`, `releaseSessionsForDestructiveLifecycle`, `assertSessionDestructiveMutationAllowed` — bounded process-local WebUI delete coordination; mutation entry points reject late work/relation/channel changes while a claimed subtree is being deleted.
 - `queueSessionEvent`, `queueSessionStructuredEvent`, `queueSessionMessageEvent`, `queueSessionSystemEvent` — typed event wrappers.
 - `startSessionWait`, `clearSessionWaitById`, `queueSessionWaitTimeoutEvent`, `clearSessionWaitForDirectTurn` — persisted wait state, token-aware surgical cleanup, and race-safe timeout events.
 - `requestSessionStop`, `requestSessionDequeue`, `retrySession` — current run/queue controls; retry delegates directly to the router without queue persistence.
@@ -32,7 +33,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 
 ### Relations, agents, and inter-session delivery
 
-- `forkSession`, `createChildSession`, `setSessionParent`, `updateChildSessionParentIds`, `getChildSessionIds` — lineage and explicit parent links.
+- `forkSession`, `createChildSession`, `setSessionParent`, `updateChildSessionParentIds`, `getChildSessionIds`, `getCanonicalChildSessionIds`, `collectSessionDescendants` — lineage, explicit parent links, and canonical lifecycle traversal.
 - `sendToSession`, `notifyManualForkCreated` — inter-session and manual-fork events.
 - `createAgentWithMainSession`, `createSessionInAgent`, `moveSessionToTarget`, `setAgentInherit`, `setAgentIsolation`, `refreshSessionSnapshot` — façade over agent operations.
 - `getAgentMetadata`, `getAgentInheritanceChain`, `getAgentIsolationNode`, `isAgentIsolated`, `isSessionEffectivelyIsolated` — agent metadata access.
@@ -82,6 +83,8 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - Active `requesting-model` and `running-tool` phases are transient; persisted waits can survive restart.
 - Forks share parent prompt/cache/archive prefix lineage; non-fork children start a fresh prefix.
 - Session deletion clears runtime/pending compact state, the live map, attachments, session/legacy-frontier files, and shared metadata. Session history clear also removes any armed wait. Deletion currently leaves archive store/log and vector data intact; canonical scope is documented in [session lifecycle](../threads/session-lifecycle.md#archive-and-deletion).
+- `archiveSessions` applies one archived state to an exact canonical ID set with one metadata save; recursive selection/preflight remains owned by the WebUI route. Canonical descendant behavior: [D-lifecycle-descendant-actions](../threads/session-lifecycle.md#d-lifecycle-descendant-actions).
+- Destructive lifecycle claims are non-persisted and delete-only. They drain prior identity-lock work before acquisition, stabilize the selected canonical IDs across parent/child creation, identity move, channel attachment, queue/retry, and busy-start commit boundaries, and allow only the owning delete route to detach survivors/delete targets. Canonical contract: [D-lifecycle-descendant-actions](../threads/session-lifecycle.md#d-lifecycle-descendant-actions).
 - A retained archive reserves its exact internal session ID across creation surfaces; existing persisted live records are still hydrated. Concurrent in-process creators and movers cannot both commit the same target. Canonical ownership: [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 
 ## Compatibility

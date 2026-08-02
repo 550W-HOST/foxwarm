@@ -710,7 +710,7 @@ test('default model-facing tool names and serialized schema size stay consolidat
   ]);
 
   const serializedBytes = Buffer.byteLength(JSON.stringify(modelFacingDefinitions), 'utf8');
-  assert.equal(serializedBytes, 34_164);
+  assert.equal(serializedBytes, 34_242);
   assert.ok(serializedBytes < 38_069, 'serialized default schema should stay below the pre-consolidation baseline');
 });
 
@@ -724,10 +724,12 @@ test('consolidated resource tool schemas expose their approved actions', () => {
   const definition = definitions.find(def => def.name === 'session');
   assert.ok(definition);
   assert.equal(definition.defaultInject, true);
-  assert.deepEqual((definition.parameters?.properties as any)?.action?.enum, ['status', 'list', 'rename']);
+  assert.deepEqual((definition.parameters?.properties as any)?.action?.enum, ['status', 'list', 'update-display-name']);
   assert.equal((definition.parameters?.properties as any)?.start?.type, 'number');
   assert.equal((definition.parameters?.properties as any)?.count?.type, 'number');
+  assert.equal((definition.parameters?.properties as any)?.sessionId?.type, 'string');
   assert.equal((definition.parameters?.properties as any)?.name?.type, 'string');
+  assert.deepEqual(definition.parameters?.required, []);
 
   const skillDefinition = definitions.find(def => def.name === 'skill');
   assert.deepEqual((skillDefinition?.parameters?.properties as any)?.action?.enum, ['list', 'load']);

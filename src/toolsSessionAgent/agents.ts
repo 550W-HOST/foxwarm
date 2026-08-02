@@ -177,6 +177,7 @@ export async function tool_move_session(args: ToolArgs, ctx: ToolContext) {
     createAgent = false,
     newAgentName,
     createAgentInheritMemory,
+    parentSessionId,
   } = args;
 
   const sourceId = sessionId || ctx.sessionId;
@@ -192,6 +193,9 @@ export async function tool_move_session(args: ToolArgs, ctx: ToolContext) {
   if (sessionManager.isSessionEffectivelyIsolated(sourceSession)) {
     throw new Error('Isolated session cannot use move_session tool.');
   }
+  if (parentSessionId !== undefined && (typeof parentSessionId !== 'string' || !parentSessionId.trim())) {
+    throw new Error('parentSessionId must be a non-empty session ID when provided.');
+  }
 
   const result = await sessionManager.moveSessionToTarget({
     sourceSessionId: sourceId,
@@ -199,6 +203,7 @@ export async function tool_move_session(args: ToolArgs, ctx: ToolContext) {
     createAgent,
     newAgentName,
     createAgentInheritMemory,
+    ...(parentSessionId !== undefined ? { parentSessionId: parentSessionId.trim() } : {}),
   });
 
   let message = `Session "${sourceId}" moved to "${result.targetSessionId}".`;
@@ -210,6 +215,12 @@ export async function tool_move_session(args: ToolArgs, ctx: ToolContext) {
   }
   if (result.updatedChildren.length > 0) {
     message += `\nUpdated ${result.updatedChildren.length} child session parent reference(s).`;
+  }
+  message += `\nPrevious parent: ${result.previousParentSessionId || '(none)'}.`;
+  message += `\nResulting parent: ${result.parentSessionId || '(none)'}.`;
+  if (result.parentUpdateError) {
+    message += `\nWARNING: The identity move committed, but the requested parent update was not confirmed: ${result.parentUpdateError}`;
+    message += `\nRequested parent: ${result.requestedParentSessionId || '(none)'}.`;
   }
 
   return message;

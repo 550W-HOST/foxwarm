@@ -362,9 +362,17 @@ Agent-facing path:
 User-facing path:
 
 ```text
-/session move <new-session-id>
-/session move <existing-agent>/<new-session-id>
+/session move <new-session-id> [--parent <parent-session-id>]
+/session move <existing-agent>/<new-session-id> [--parent <parent-session-id>]
 ```
+
+Identity moves preserve the session's existing incoming parent relation by
+default and rewrite direct child references to the moved ID. A batch may move
+the sessions in an existing tree individually without reconstructing those
+relations. Use `parentSessionId` on the agent-facing `move_session` tool, or
+`--parent` on `/session move`, only when the moved session should intentionally
+receive a different existing parent. Keep `/session unparent` as the explicit
+detach operation; there is no recursive tree-move API.
 
 ### Agent migration
 

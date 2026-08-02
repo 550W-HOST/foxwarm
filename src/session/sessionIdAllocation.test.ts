@@ -11,6 +11,7 @@ import { hasArchivedSessionId } from './archiveStore';
 import { setArchiveWriteFaultInjectorForTests } from './archive';
 import * as sessionChannels from './channels';
 import { setAgentDirectoryFaultInjectorForTests } from './agentOps';
+import { getSessionHistoryFilePath } from './metadataStore';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -235,6 +236,179 @@ test('session identity moves reject journal-unsafe target ids before mutation', 
     assert.equal(await fs.pathExists(path.join(process.env.FOXWARM_DATA_DIR || '', 'state', 'session-id-move-pending.json')), false);
   } finally {
     if (sessionManager.getAllSessions().has(sourceId)) await sessionManager.deleteSession(sourceId).catch(() => {});
+  }
+});
+
+test('cross-agent identity moves preserve a multi-level tree in mixed order and persisted history', async () => {
+  await sessionManager.loadSessions();
+  const rootId = makeId('tree_move_root');
+  const childId = makeId('tree_move_child');
+  const grandchildId = makeId('tree_move_grandchild');
+  const targetAgent = makeId('tree_move_agent').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const targetRootId = `${targetAgent}/root`;
+  const targetChildId = `${targetAgent}/child`;
+  const targetGrandchildId = `${targetAgent}/grandchild`;
+
+  await createParent(rootId);
+  await createParent(childId);
+  await createParent(grandchildId);
+  await sessionManager.setSessionParent(childId, rootId);
+  await sessionManager.setSessionParent(grandchildId, childId);
+  await sessionManager.createAgentWithMainSession({ agentName: targetAgent, createMainSession: false });
+
+  try {
+    const grandchildMove = await sessionManager.moveSessionToTarget({
+      sourceSessionId: grandchildId,
+      newSessionId: 'grandchild',
+      newAgentName: targetAgent,
+    });
+    assert.equal(grandchildMove.previousParentSessionId, childId);
+    assert.equal(grandchildMove.parentSessionId, childId);
+
+    const rootMove = await sessionManager.moveSessionToTarget({
+      sourceSessionId: rootId,
+      newSessionId: 'root',
+      newAgentName: targetAgent,
+    });
+    assert.deepEqual(rootMove.updatedChildren, [childId]);
+    assert.equal((await sessionManager.getExistingSession(childId))?.parentSessionId, targetRootId);
+
+    const childMove = await sessionManager.moveSessionToTarget({
+      sourceSessionId: childId,
+      newSessionId: 'child',
+      newAgentName: targetAgent,
+    });
+    assert.deepEqual(childMove.updatedChildren, [targetGrandchildId]);
+    assert.equal(childMove.previousParentSessionId, targetRootId);
+    assert.equal(childMove.parentSessionId, targetRootId);
+
+    assert.equal((await sessionManager.getExistingSession(targetRootId))?.parentSessionId, undefined);
+    assert.equal((await sessionManager.getExistingSession(targetChildId))?.parentSessionId, targetRootId);
+    assert.equal((await sessionManager.getExistingSession(targetGrandchildId))?.parentSessionId, targetChildId);
+
+    const persistedChild = await fs.readJson(getSessionHistoryFilePath(targetChildId));
+    const persistedGrandchild = await fs.readJson(getSessionHistoryFilePath(targetGrandchildId));
+    assert.equal(persistedChild.parentSessionId, targetRootId);
+    assert.equal(persistedGrandchild.parentSessionId, targetChildId);
+  } finally {
+    for (const sessionId of [targetGrandchildId, targetChildId, targetRootId, grandchildId, childId, rootId]) {
+      if (sessionManager.getAllSessions().has(sessionId)) await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+    await fs.remove(getAgentDir(targetAgent));
+  }
+});
+
+test('concurrent cross-agent moves serialize without losing parent topology', async () => {
+  await sessionManager.loadSessions();
+  const rootId = makeId('concurrent_tree_root');
+  const childId = makeId('concurrent_tree_child');
+  const grandchildId = makeId('concurrent_tree_grandchild');
+  const targetAgent = makeId('concurrent_tree_agent').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const targetRootId = `${targetAgent}/root`;
+  const targetChildId = `${targetAgent}/child`;
+  const targetGrandchildId = `${targetAgent}/grandchild`;
+
+  await createParent(rootId);
+  await createParent(childId);
+  await createParent(grandchildId);
+  await sessionManager.setSessionParent(childId, rootId);
+  await sessionManager.setSessionParent(grandchildId, childId);
+  await sessionManager.createAgentWithMainSession({ agentName: targetAgent, createMainSession: false });
+
+  try {
+    await Promise.all([
+      sessionManager.moveSessionToTarget({ sourceSessionId: rootId, newSessionId: 'root', newAgentName: targetAgent }),
+      sessionManager.moveSessionToTarget({ sourceSessionId: childId, newSessionId: 'child', newAgentName: targetAgent }),
+      sessionManager.moveSessionToTarget({ sourceSessionId: grandchildId, newSessionId: 'grandchild', newAgentName: targetAgent }),
+    ]);
+    assert.equal((await sessionManager.getExistingSession(targetChildId))?.parentSessionId, targetRootId);
+    assert.equal((await sessionManager.getExistingSession(targetGrandchildId))?.parentSessionId, targetChildId);
+  } finally {
+    for (const sessionId of [targetGrandchildId, targetChildId, targetRootId, grandchildId, childId, rootId]) {
+      if (sessionManager.getAllSessions().has(sessionId)) await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+    await fs.remove(getAgentDir(targetAgent));
+  }
+});
+
+test('identity move optionally reparents after commit while omission preserves the incoming parent', async () => {
+  await sessionManager.loadSessions();
+  const oldParentId = makeId('move_parent_old');
+  const sourceId = makeId('move_parent_source');
+  const targetAgent = makeId('move_parent_agent').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const targetParentId = `${targetAgent}/root`;
+  const movedId = `${targetAgent}/moved`;
+
+  await createParent(oldParentId);
+  await createParent(sourceId);
+  await sessionManager.setSessionParent(sourceId, oldParentId);
+  await sessionManager.createAgentWithMainSession({ agentName: targetAgent, createMainSession: false });
+  await sessionManager.createSessionInAgent({ agentName: targetAgent, sessionName: 'root' });
+
+  try {
+    await assert.rejects(
+      () => sessionManager.moveSessionToTarget({
+        sourceSessionId: sourceId,
+        newSessionId: 'moved',
+        newAgentName: targetAgent,
+        parentSessionId: '   ',
+      }),
+      /non-empty existing session ID.*unparent/i,
+    );
+    assert.ok(await sessionManager.getExistingSession(sourceId));
+
+    const moved = await sessionManager.moveSessionToTarget({
+      sourceSessionId: sourceId,
+      newSessionId: 'moved',
+      newAgentName: targetAgent,
+      parentSessionId: targetParentId,
+    });
+    assert.equal(moved.previousParentSessionId, oldParentId);
+    assert.equal(moved.requestedParentSessionId, targetParentId);
+    assert.equal(moved.parentSessionId, targetParentId);
+    assert.equal(moved.parentUpdateError, undefined);
+    assert.equal((await fs.readJson(getSessionHistoryFilePath(movedId))).parentSessionId, targetParentId);
+  } finally {
+    for (const sessionId of [movedId, targetParentId, sourceId, oldParentId]) {
+      if (sessionManager.getAllSessions().has(sessionId)) await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+    await fs.remove(getAgentDir(targetAgent));
+  }
+});
+
+test('identity move parent validation rejects cycles hidden behind historical aliases', async () => {
+  await sessionManager.loadSessions();
+  const sourceId = makeId('move_alias_cycle_source');
+  const sourceAlias = makeId('move_alias_cycle_old');
+  const requestedParentId = makeId('move_alias_cycle_parent');
+  const targetAgent = makeId('move_alias_cycle_agent').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const movedId = `${targetAgent}/moved`;
+
+  const source = await createParent(sourceId);
+  source.aliases = [sourceAlias];
+  await sessionManager.saveSession(sourceId);
+  const requestedParent = await createParent(requestedParentId);
+  requestedParent.parentSessionId = sourceAlias;
+  await sessionManager.saveSession(requestedParentId);
+  await sessionManager.createAgentWithMainSession({ agentName: targetAgent, createMainSession: false });
+
+  try {
+    await assert.rejects(
+      () => sessionManager.moveSessionToTarget({
+        sourceSessionId: sourceId,
+        newSessionId: 'moved',
+        newAgentName: targetAgent,
+        parentSessionId: requestedParentId,
+      }),
+      /parent cycle/,
+    );
+    assert.ok(await sessionManager.getExistingSession(sourceId));
+    assert.equal(await sessionManager.getExistingSession(movedId), null);
+  } finally {
+    for (const sessionId of [movedId, requestedParentId, sourceId]) {
+      if (sessionManager.getAllSessions().has(sessionId)) await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+    await fs.remove(getAgentDir(targetAgent));
   }
 });
 

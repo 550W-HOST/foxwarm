@@ -320,15 +320,15 @@ Example:
         {
             name: 'session',
             defaultInject: true,
-            description: 'Get current session status, list sessions, or rename a session. With no args or action="status", returns current session agent id/name, agent dir, session id, parent session id, token estimate, last usage, auto-compact threshold, current node, current cwd, and recent child sessions. With action="list", returns the paginated session list. With action="rename", sets or clears a session display name.',
+            description: 'Get current session status, list sessions, or update a session display name. With no args or action="status", returns current session agent id/name, agent dir, session id, parent session id, token estimate, last usage, auto-compact threshold, current node, current cwd, and recent child sessions. With action="list", returns the paginated session list. With action="update-display-name", sets or clears a session display name.',
             parameters: {
                 type: 'object',
                 properties: {
-                    action: { type: 'string', enum: ['status', 'list', 'rename'], description: 'Optional action. Omit or use "status" for current session status; use "list" to list sessions; use "rename" to set or clear a display name.' },
+                    action: { type: 'string', enum: ['status', 'list', 'update-display-name'], description: 'Optional action. Omit or use "status" for current session status; use "list" to list sessions; use "update-display-name" to set or clear a display name.' },
                     start: { type: 'number', description: 'Start index in the session list sorted by last activity desc. Default: 0' },
                     count: { type: 'number', description: 'Number of sessions to return. Default: 20' },
-                    sessionId: { type: 'string', description: 'For action="rename": target session ID. Defaults to the current session.' },
-                    name: { type: 'string', description: 'For action="rename": new display name. Use an empty string to clear the name.' }
+                    sessionId: { type: 'string', description: 'For action="update-display-name": target session ID. Defaults to the current session.' },
+                    name: { type: 'string', description: 'For action="update-display-name": new display name. Use an empty string to clear the name.' }
                 },
                 required: [] as string[]
             }
@@ -954,7 +954,8 @@ Example:
                     newSessionId: { type: 'string', description: 'New session ID without agent prefix (cannot contain /). Default to "main" if createAgent=true.' },
                     createAgent: { type: 'boolean', description: 'Whether to create a new agent (default: false)' },
                     newAgentName: { type: 'string', description: 'Target agent name. Required if createAgent=true or moving to different agent. If omitted, renames within same agent.' },
-                    createAgentInheritMemory: { type: 'boolean', description: 'Whether to inherit memory when creating agent (only valid when createAgent=true)' }
+                    createAgentInheritMemory: { type: 'boolean', description: 'Whether to inherit memory when creating agent (only valid when createAgent=true)' },
+                    parentSessionId: { type: 'string', description: 'Optional existing parent session ID to assign after the identity move. Omit to preserve the current incoming parent relation.' }
                 }
             }
         }

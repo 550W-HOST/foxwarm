@@ -578,7 +578,7 @@ export class MessageRouter {
   }
 
   private tryClaimSession(session: Session): boolean {
-    if (session.busy) {
+    if (session.busy || sessionManager.isSessionDestructiveLifecycleClaimed(session.id)) {
       return false;
     }
 
@@ -1428,7 +1428,10 @@ export class MessageRouter {
       // stop boundary it is new work, so hand it to a fresh processor rather
       // than losing the enqueue trigger to this re-entrancy guard.
       const session = await sessionManager.getExistingSession(sessionId);
-      if (session && !session.busy && session.queue.some(isQueueItem)) {
+      if (session
+        && !session.busy
+        && !sessionManager.isSessionDestructiveLifecycleClaimed(session.id)
+        && session.queue.some(isQueueItem)) {
         void this.processSessionQueue(sessionId);
       }
     }

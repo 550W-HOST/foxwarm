@@ -580,16 +580,34 @@ async function assertNoSidebarParentCycle(childSessionId: string, targetParentSe
   const seen = new Set<string>([childSessionId]);
   let cursorParentId: string | null = targetParentSessionId;
   while (cursorParentId) {
-    if (seen.has(cursorParentId)) {
+    const cursorParent = await sessionManager.getExistingSession(cursorParentId);
+    if (!cursorParent) break;
+    const canonicalCursorId = cursorParent.id;
+    if (seen.has(canonicalCursorId)) {
       const error = new Error(`Session "${childSessionId}" cannot be moved under descendant "${targetParentSessionId}" because that would create a parent cycle.`);
       (error as any).statusCode = 400;
       (error as any).code = 'PARENT_CYCLE_NOT_ALLOWED';
       throw error;
     }
-    seen.add(cursorParentId);
-    const cursorParent = await sessionManager.getExistingSession(cursorParentId);
-    cursorParentId = cursorParent ? getSessionTreeParentId(cursorParent) : null;
+    seen.add(canonicalCursorId);
+    cursorParentId = getSessionTreeParentId(cursorParent);
   }
+}
+
+type WebUiDeleteLifecycleTestHook = (context: {
+  rootSessionId: string;
+  includeDescendants: boolean;
+  targetSessionIds: string[];
+}) => void | Promise<void>;
+
+let webUiDeleteLifecycleTestHook: WebUiDeleteLifecycleTestHook | null = null;
+
+export function setWebUiDeleteLifecycleTestHookForTests(hook: WebUiDeleteLifecycleTestHook | null): void {
+  webUiDeleteLifecycleTestHook = hook;
+}
+
+function haveSameSessionIds(actual: string[], expected: string[]): boolean {
+  return actual.length === expected.length && actual.every((sessionId, index) => sessionId === expected[index]);
 }
 
 export class WebUIChannel implements Channel {
@@ -1537,21 +1555,32 @@ export class WebUIChannel implements Channel {
         method: 'POST',
         handler: async (req: express.Request, res: express.Response) => {
           try {
-            const sessionId = req.params.sessionId as string;
-            const { archived } = req.body;
-            
-            const success = await sessionManager.archiveSession(sessionId, archived !== false);
-            
-            if (success) {
-              // Broadcast session list update
-              this.broadcastSessionListUpdate();
-              res.json({ success: true, archived: archived !== false });
-            } else {
-              res.status(404).json({ error: 'Session not found' });
+            const requestedSessionId = req.params.sessionId as string;
+            const session = await sessionManager.getExistingSession(requestedSessionId);
+            if (!session) return res.status(404).json({ error: 'Session not found' });
+
+            const archived = req.body?.archived !== false;
+            const includeDescendants = archived && req.body?.includeDescendants === true;
+            const targetSessionIds = [session.id];
+            if (includeDescendants) {
+              targetSessionIds.push(...sessionManager.collectSessionDescendants(session.id).descendantIds);
             }
+            const result = await sessionManager.archiveSessions(targetSessionIds, archived);
+
+            this.broadcastSessionListUpdate();
+            res.json({
+              success: true,
+              archived,
+              includeDescendants,
+              matchedCount: result.matchedSessionIds.length,
+              changedCount: result.changedSessionIds.length,
+              matchedSessionIds: result.matchedSessionIds,
+              changedSessionIds: result.changedSessionIds,
+            });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to archive session');
-            res.status(500).json({ error: e.message });
+            const code = typeof e?.code === 'string' ? e.code : 'ARCHIVE_SESSION_FAILED';
+            res.status(code === 'SESSION_RELATION_CYCLE' ? 409 : 500).json({ error: e.message, code });
           }
         },
       });
@@ -1918,45 +1947,179 @@ export class WebUIChannel implements Channel {
         path: '/api/sessions/:sessionId',
         method: 'DELETE',
         handler: async (req: express.Request, res: express.Response) => {
+          const requestedSessionId = req.params.sessionId as string;
+          const includeDescendants = req.body?.includeDescendants === true;
+          let deleteClaimId: string | undefined;
           try {
-            const sessionId = req.params.sessionId as string;
-            
-            const blockingChannels = sessionManager
+            const rootSession = await sessionManager.getExistingSession(requestedSessionId);
+            if (!rootSession) return res.status(404).json({ error: 'Session not found' });
+
+            const relationTree = includeDescendants
+              ? sessionManager.collectSessionDescendants(rootSession.id)
+              : undefined;
+            const directChildSessionIds = relationTree?.directChildIds
+              || sessionManager.getCanonicalChildSessionIds(rootSession.id);
+            const targetSessionIds = relationTree
+              ? [rootSession.id, ...relationTree.descendantIds]
+              : [rootSession.id];
+            const postOrderSessionIds = relationTree?.postOrderIds || [rootSession.id];
+            const claimSessionIds = includeDescendants
+              ? targetSessionIds
+              : [rootSession.id, ...directChildSessionIds];
+            deleteClaimId = (await sessionManager.claimSessionsForDestructiveLifecycle(claimSessionIds)).claimId;
+
+            const channelBlockers = targetSessionIds.flatMap(sessionId => sessionManager
               .getChannelsBySession(sessionId)
-              .filter(channel => channel.channelId !== 'webui');
+              .filter(channel => channel.channelId !== 'webui')
+              .map(channel => ({ sessionId, ...channel })));
 
-            if (blockingChannels.length > 0) {
-              return res.status(400).json({ error: 'Cannot delete active session. Detach channels first.' });
-            }
-
-            const prep = await sessionManager.prepareSessionForDestructiveAction(sessionId);
-            if (prep.requiresRetry) {
-              const queueNote = prep.droppedQueueItems > 0
-                ? ` Cleared ${prep.droppedQueueItems} queued item(s).`
-                : '';
-              const stopNote = prep.abortedInFlight
-                ? ' The in-flight LLM request was aborted.'
-                : ' It will stop after the current tool call completes.';
+            if (channelBlockers.length > 0) {
               return res.status(409).json({
-                error: `Session is busy. Stop signal sent.${stopNote}${queueNote} Retry delete after it becomes idle.`,
+                error: 'Cannot delete session tree while one or more sessions have non-WebUI channels attached. Detach those channels and retry.',
+                code: 'SESSION_DELETE_CHANNEL_BLOCKED',
+                includeDescendants,
+                blockingSessionIds: [...new Set(channelBlockers.map(blocker => blocker.sessionId))],
+                blockingChannels: channelBlockers,
               });
             }
-            
-            const deleted = await sessionManager.deleteSession(sessionId);
-            
-            if (deleted) {
-              // Broadcast session list update
-              this.broadcastSessionListUpdate();
-              res.json({ success: true });
-            } else {
-              res.status(404).json({ error: 'Session not found' });
+
+            const prepResults = [];
+            for (const sessionId of targetSessionIds) {
+              prepResults.push(await sessionManager.prepareSessionForDestructiveAction(sessionId));
             }
+            const busySessionIds = prepResults
+              .filter(result => result.requiresRetry)
+              .map(result => result.session.id);
+            if (busySessionIds.length > 0) {
+              const droppedQueueItems = prepResults.reduce((sum, result) => sum + result.droppedQueueItems, 0);
+              const abortedInFlightCount = prepResults.filter(result => result.abortedInFlight).length;
+              const queueNote = droppedQueueItems > 0
+                ? ` Cleared ${droppedQueueItems} queued item(s).`
+                : '';
+              const stopNote = abortedInFlightCount > 0
+                ? ` Aborted ${abortedInFlightCount} in-flight LLM request(s); other running tools will stop after their current call.`
+                : ' Running tools will stop after their current call.';
+              return res.status(409).json({
+                error: `Session tree contains busy sessions. Stop signals sent.${stopNote}${queueNote} Retry delete after every listed session becomes idle.`,
+                code: 'SESSION_DELETE_BUSY',
+                includeDescendants,
+                busySessionIds,
+                droppedQueueItems,
+                abortedInFlightCount,
+              });
+            }
+
+            await webUiDeleteLifecycleTestHook?.({
+              rootSessionId: rootSession.id,
+              includeDescendants,
+              targetSessionIds: [...targetSessionIds],
+            });
+
+            const currentRootSession = await sessionManager.getExistingSession(rootSession.id);
+            if (!currentRootSession) {
+              return res.status(409).json({
+                error: 'The session tree changed while preparing deletion. Retry the delete request.',
+                code: 'SESSION_DELETE_TREE_CHANGED',
+                includeDescendants,
+              });
+            }
+            const currentRelationTree = includeDescendants
+              ? sessionManager.collectSessionDescendants(currentRootSession.id)
+              : undefined;
+            const currentDirectChildSessionIds = currentRelationTree?.directChildIds
+              || sessionManager.getCanonicalChildSessionIds(currentRootSession.id);
+            const currentTargetSessionIds = currentRelationTree
+              ? [currentRootSession.id, ...currentRelationTree.descendantIds]
+              : [currentRootSession.id];
+            const currentPostOrderSessionIds = currentRelationTree?.postOrderIds || [currentRootSession.id];
+            if (!haveSameSessionIds(currentTargetSessionIds, targetSessionIds)
+              || !haveSameSessionIds(currentPostOrderSessionIds, postOrderSessionIds)
+              || !haveSameSessionIds(currentDirectChildSessionIds, directChildSessionIds)) {
+              return res.status(409).json({
+                error: 'The canonical session tree changed while preparing deletion. Retry the delete request.',
+                code: 'SESSION_DELETE_TREE_CHANGED',
+                includeDescendants,
+                expectedSessionIds: targetSessionIds,
+                currentSessionIds: currentTargetSessionIds,
+              });
+            }
+
+            const revalidatedChannelBlockers = targetSessionIds.flatMap(sessionId => sessionManager
+              .getChannelsBySession(sessionId)
+              .filter(channel => channel.channelId !== 'webui')
+              .map(channel => ({ sessionId, ...channel })));
+            const revalidatedBusySessionIds = targetSessionIds.filter(sessionId => sessionManager.getAllSessions().get(sessionId)?.busy);
+            const revalidatedQueuedSessionIds = targetSessionIds.filter(sessionId => (sessionManager.getAllSessions().get(sessionId)?.queue?.length || 0) > 0);
+            if (revalidatedChannelBlockers.length > 0 || revalidatedBusySessionIds.length > 0 || revalidatedQueuedSessionIds.length > 0) {
+              return res.status(409).json({
+                error: 'The session tree became active or channel-blocked while preparing deletion. Retry the delete request.',
+                code: 'SESSION_DELETE_STATE_CHANGED',
+                includeDescendants,
+                blockingSessionIds: [...new Set(revalidatedChannelBlockers.map(blocker => blocker.sessionId))],
+                blockingChannels: revalidatedChannelBlockers,
+                busySessionIds: revalidatedBusySessionIds,
+                queuedSessionIds: revalidatedQueuedSessionIds,
+              });
+            }
+
+            const detachedChildSessionIds: string[] = [];
+            if (!includeDescendants) {
+              for (const childSessionId of directChildSessionIds) {
+                if (!sessionManager.getAllSessions().has(childSessionId)) continue;
+                try {
+                  await sessionManager.setSessionParent(childSessionId, undefined, deleteClaimId);
+                  detachedChildSessionIds.push(childSessionId);
+                } catch (error: any) {
+                  this.broadcastSessionListUpdate();
+                  return res.status(500).json({
+                    error: `Session "${rootSession.id}" was not deleted because surviving child "${childSessionId}" could not be detached: ${error?.message || error}`,
+                    code: 'SESSION_DELETE_DETACH_PARTIAL',
+                    includeDescendants,
+                    deletedSessionIds: [],
+                    failedDetachChildSessionId: childSessionId,
+                    detachedChildSessionIds,
+                  });
+                }
+              }
+            }
+
+            const deletedSessionIds: string[] = [];
+            for (const sessionId of postOrderSessionIds) {
+              try {
+                const deleted = await sessionManager.deleteSession(sessionId, deleteClaimId);
+                if (!deleted) throw new Error(`Session "${sessionId}" disappeared before deletion.`);
+                deletedSessionIds.push(sessionId);
+              } catch (error: any) {
+                this.broadcastSessionListUpdate();
+                return res.status(500).json({
+                  error: `Session tree deletion stopped after an unexpected failure at "${sessionId}": ${error?.message || error}`,
+                  code: 'SESSION_TREE_DELETE_PARTIAL',
+                  includeDescendants,
+                  failedSessionId: sessionId,
+                  deletedSessionIds,
+                  remainingSessionIds: postOrderSessionIds.filter(id => sessionManager.getAllSessions().has(id)),
+                });
+              }
+            }
+
+            this.broadcastSessionListUpdate();
+            res.json({
+              success: true,
+              includeDescendants,
+              deletedCount: deletedSessionIds.length,
+              deletedSessionIds,
+              detachedChildSessionIds,
+            });
           } catch (e: any) {
-            logger.error({ err: e }, 'Failed to delete session');
-            res.status(500).json({ error: e.message });
+            logger.error({ err: e, requestedSessionId, includeDescendants }, 'Failed to delete session');
+            const code = typeof e?.code === 'string' ? e.code : 'DELETE_SESSION_FAILED';
+            const status = typeof e?.statusCode === 'number'
+              ? e.statusCode
+              : code === 'SESSION_RELATION_CYCLE' ? 409 : 500;
+            res.status(status).json({ error: e.message, code });
+          } finally {
+            if (deleteClaimId) sessionManager.releaseSessionsForDestructiveLifecycle(deleteClaimId);
           }
-          
-          res;
         },
       });
 

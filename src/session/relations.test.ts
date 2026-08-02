@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolvePermittedSessionTarget, setSessionParent } from './relations';
+import { collectSessionDescendants, getCanonicalChildSessionIds, resolvePermittedSessionTarget, SessionRelationCycleError, setSessionParent } from './relations';
 import type { AgentMetadata } from './agentMetadata';
 import type { Session } from '../types';
 
@@ -40,6 +40,62 @@ test('setSessionParent rejects descendant parent cycles', async () => {
   );
 
   assert.equal(parent.parentSessionId, undefined);
+});
+
+test('setSessionParent canonicalizes ancestor aliases before cycle checks', async () => {
+  const child = makeSession('alias_cycle_child');
+  child.aliases = ['alias_cycle_child_old'];
+  const requestedParent = makeSession('alias_cycle_parent', 'alias_cycle_child_old');
+  const sessions = new Map<string, Session>([
+    [child.id, child],
+    [requestedParent.id, requestedParent],
+  ]);
+
+  await assert.rejects(
+    setSessionParent({
+      getExistingSession: async (sessionId: string) => {
+        if (sessionId === 'alias_cycle_child_old') return child;
+        return sessions.get(sessionId) || null;
+      },
+      saveSession: async () => {},
+      saveSessionsMetadata: async () => {},
+      notifySessionListUpdated: () => {},
+    }, child.id, requestedParent.id),
+    /parent cycle/,
+  );
+  assert.equal(child.parentSessionId, undefined);
+});
+
+test('collectSessionDescendants follows canonical aliases and returns deepest-first deletion order', () => {
+  const root = makeSession('root');
+  root.aliases = ['old-root'];
+  const child = makeSession('child', 'old-root');
+  const grandchild = makeSession('grandchild', 'child');
+  const sibling = makeSession('sibling', 'root');
+  const unrelated = makeSession('unrelated');
+  const sessions = new Map([
+    [root.id, root],
+    [child.id, child],
+    [grandchild.id, grandchild],
+    [sibling.id, sibling],
+    [unrelated.id, unrelated],
+  ]);
+
+  const result = collectSessionDescendants(sessions, 'old-root');
+  assert.deepEqual(getCanonicalChildSessionIds(sessions, 'old-root'), ['child', 'sibling']);
+  assert.deepEqual(result.descendantIds, ['child', 'grandchild', 'sibling']);
+  assert.deepEqual(result.postOrderIds, ['grandchild', 'child', 'sibling', 'root']);
+});
+
+test('collectSessionDescendants rejects corrupt cycles', () => {
+  const root = makeSession('root', 'child');
+  const child = makeSession('child', 'root');
+  const sessions = new Map([[root.id, root], [child.id, child]]);
+
+  assert.throws(
+    () => collectSessionDescendants(sessions, root.id),
+    (error: unknown) => error instanceof SessionRelationCycleError && error.code === 'SESSION_RELATION_CYCLE',
+  );
 });
 
 test('isolated sessions can resolve direct cross-agent parent and child targets', async () => {

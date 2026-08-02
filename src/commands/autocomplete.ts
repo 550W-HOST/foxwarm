@@ -80,8 +80,12 @@ export const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
   }),
   literalNode('index', 'Force archive indexing for the current session'),
   literalNode('move', 'Rename the current session or move it to an existing agent', {
-    usage: '/session move <new-session-id>|<existing-agent>/<new-session-id>',
-    children: [placeholderNode('<new-session-id|agent/session>', 'Rename target or existing-agent/new-session-id')],
+    usage: '/session move <new-session-id>|<existing-agent>/<new-session-id> [--parent <parent-session-id>]',
+    children: [placeholderNode('<new-session-id|agent/session>', 'Rename target or existing-agent/new-session-id', {
+      children: [literalNode('--parent', 'Assign an existing parent after moving', {
+        children: [placeholderNode('<parent-session-id>', 'Existing parent session ID')],
+      })],
+    })],
   }),
   literalNode('parent', 'Set a parent session', {
     usage: '/session parent <parent-session-id> [child-session-id]',
