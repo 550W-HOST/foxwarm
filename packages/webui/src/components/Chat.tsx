@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Check, Code2, Copy, ExternalLink, Menu, MessageSquareText, SquareTerminal, X } from 'lucide-react'
+import { Code2, ExternalLink, Menu, MessageSquareText, SquareTerminal } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
@@ -8,8 +8,8 @@ import ContextScrollbar from './ContextScrollbar'
 import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
 import ProcessingStatus from './ProcessingStatus'
-import { copyTextToClipboard } from './chatShared'
 import type { Message, MessagePart, ModelStreamToolCall, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
+import SessionDebugModal from './SessionDebugModal'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
@@ -140,12 +140,6 @@ type SessionListRecord = {
   isolated?: boolean
 }
 
-type SessionFilePayload = {
-  history?: Message[]
-  persistentMemorySnapshot?: string
-  [key: string]: any
-}
-
 type StreamingAssistantDraft = {
   streamId: string
   iteration?: number
@@ -198,23 +192,6 @@ const buildStreamingAssistantMessage = (draft: StreamingAssistantDraft | null): 
   }
 }
 
-async function fetchSessionFilePayload(sessionId: string): Promise<{ resolvedPath: string | null; payload: SessionFilePayload | null }> {
-  try {
-    const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/debug-file`)
-    if (!res.ok) {
-      return { resolvedPath: null, payload: null }
-    }
-
-    const data = await res.json()
-    return {
-      resolvedPath: typeof data?.resolvedPath === 'string' ? data.resolvedPath : null,
-      payload: data?.payload && typeof data.payload === 'object' ? data.payload as SessionFilePayload : null,
-    }
-  } catch {
-    return { resolvedPath: null, payload: null }
-  }
-}
-
 const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
@@ -229,9 +206,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const [showScrollTopButton, setShowScrollTopButton] = useState(false)
   const [showMenu, setShowMenu] = useState(false)
   const [showDebugInfo, setShowDebugInfo] = useState(false)
-  const [debugInfoLoading, setDebugInfoLoading] = useState(false)
-  const [debugInfoError, setDebugInfoError] = useState<string | null>(null)
-  const [debugInfoCopied, setDebugInfoCopied] = useState(false)
   const [streamingAssistantDraft, setStreamingAssistantDraft] = useState<StreamingAssistantDraft | null>(null)
   const [toolScriptProgress, setToolScriptProgress] = useState<Record<string, ToolScriptSubCall[]>>({})
   const [asrAvailable, setAsrAvailable] = useState(false)
@@ -240,8 +214,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const [modelsRefreshing, setModelsRefreshing] = useState(false)
   const [modelError, setModelError] = useState<string | null>(null)
   const [sessionRecord, setSessionRecord] = useState<SessionListRecord | null>(null)
-  const [resolvedSessionFilePath, setResolvedSessionFilePath] = useState<string | null>(null)
-  const [sessionFilePayload, setSessionFilePayload] = useState<SessionFilePayload | null>(null)
   const [persistentMemorySnapshot, setPersistentMemorySnapshot] = useState('')
   const [showFullTimeline, setShowFullTimeline] = useState(false)
   const [historyLoaded, setHistoryLoaded] = useState(false)
@@ -267,7 +239,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const sessionQueueLengthRef = useRef(0)
   const queuedMessagesRef = useRef<Message[]>([])
   const sessionStateInitializedRef = useRef(false)
-  const debugInfoCopyResetTimeoutRef = useRef<number | null>(null)
   const composerHeightRef = useRef<number | null>(null)
   const initialViewportState = getStoredChatViewportState(viewportSessionId) || { kind: 'bottom' as const }
   const currentViewportStateRef = useRef<ChatViewportState>(initialViewportState)
@@ -315,8 +286,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     historyModelStreamEventVersionRef.current = 0
     historyEventsRef.current = []
     setPersistentMemorySnapshot('')
-    setResolvedSessionFilePath(null)
-    setSessionFilePayload(null)
     pendingContextScrollbarNavigationRef.current = null
     pendingScrollToTrueTopRef.current = false
   }, [sessionId])
@@ -335,8 +304,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
   useEffect(() => {
     setShowDebugInfo(false)
-    setDebugInfoError(null)
-    setDebugInfoCopied(false)
   }, [sessionId])
 
   useEffect(() => {
@@ -417,14 +384,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     }
     composerHeightRef.current = nextHeight
     chatRootRef.current?.style.setProperty('--chat-composer-offset', `${nextHeight}px`)
-  }, [])
-
-  useEffect(() => {
-    return () => {
-      if (debugInfoCopyResetTimeoutRef.current !== null) {
-        window.clearTimeout(debugInfoCopyResetTimeoutRef.current)
-      }
-    }
   }, [])
 
   const readCurrentViewportState = useCallback((bottomThresholdPx?: number): ChatViewportState | null => {
@@ -1042,27 +1001,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     eventSourceRef.current = es
   }, [applySessionState, fetchHistory, scheduleHistoryRefresh, sessionId])
 
-  const refreshSessionDebugData = useCallback(async () => {
-    setDebugInfoLoading(true)
-    setDebugInfoError(null)
-
-    try {
-      const fileData = await fetchSessionFilePayload(sessionId)
-
-      setResolvedSessionFilePath(fileData.resolvedPath)
-      setSessionFilePayload(fileData.payload)
-
-      if (!fileData.payload) {
-        setDebugInfoError('Session file JSON is not available from the current WebUI runtime paths.')
-      }
-    } catch (error) {
-      console.error('Failed to refresh session debug data:', error)
-      setDebugInfoError(error instanceof Error ? error.message : 'Failed to refresh debug info')
-    } finally {
-      setDebugInfoLoading(false)
-    }
-  }, [sessionId])
-
   const updateSessionModel = useCallback(async (model: string | null) => {
     setModelBusy(true)
     setModelError(null)
@@ -1267,78 +1205,14 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     captureCurrentViewportState()
   }, [captureCurrentViewportState])
 
-  const debugInfoObject = useMemo(() => ({
-    sessionId,
-    sessionDisplayName: sessionDisplayName || null,
-    sessionRecord,
-    resolvedSessionFilePath,
-    sessionPayload: sessionFilePayload
-      ? {
-          ...sessionFilePayload,
-          history: messages,
-        }
-      : {
-          history: messages,
-        },
-    clientState: {
-      connectionState,
-      reconnectCountdown,
-      sessionMissing,
-      sessionBusy,
-      sessionQueueLength,
-      queuedPreviewCount: queuedMessages.length,
-      groupTools,
-      showUsageBadge,
-      sendKeyBehavior: sendKeyMode === 'enter' ? 'Enter sends; Shift+Enter inserts a new line.' : 'Ctrl/Cmd+Enter sends; Enter inserts a new line.',
-      loading,
-      asrAvailable,
-      modelBusy,
-      streamingAssistantDraft,
-    },
-  }), [
-    asrAvailable,
-    connectionState,
-    loading,
-    messages,
-    modelBusy,
-    queuedMessages.length,
-    reconnectCountdown,
-    resolvedSessionFilePath,
-    sessionBusy,
-    sessionDisplayName,
-    sessionFilePayload,
-    sessionId,
-    sessionMissing,
-    sessionQueueLength,
-    sessionRecord,
-    streamingAssistantDraft,
-    groupTools,
-    showUsageBadge,
-  ])
-
-  const debugInfoText = useMemo(() => JSON.stringify(debugInfoObject, null, 2), [debugInfoObject])
-
-  const handleOpenDebugInfo = useCallback(async () => {
+  const handleOpenDebugInfo = useCallback(() => {
     setShowMenu(false)
     setShowDebugInfo(true)
-    await refreshSessionDebugData()
-  }, [refreshSessionDebugData])
+  }, [])
 
-  const handleCopyDebugInfo = useCallback(async () => {
-    try {
-      await copyTextToClipboard(debugInfoText)
-      setDebugInfoCopied(true)
-      if (debugInfoCopyResetTimeoutRef.current !== null) {
-        window.clearTimeout(debugInfoCopyResetTimeoutRef.current)
-      }
-      debugInfoCopyResetTimeoutRef.current = window.setTimeout(() => {
-        setDebugInfoCopied(false)
-        debugInfoCopyResetTimeoutRef.current = null
-      }, 1500)
-    } catch (error) {
-      console.error('Failed to copy debug info:', error)
-    }
-  }, [debugInfoText])
+  const handleCloseDebugInfo = useCallback(() => {
+    setShowDebugInfo(false)
+  }, [])
 
   const handleSend = useCallback(async ({ text, attachments }: { text: string; attachments: File[] }) => {
     if (sessionMissing || (!text.trim() && attachments.length === 0) || loading) return false
@@ -1825,59 +1699,28 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       />
 
       {showDebugInfo && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowDebugInfo(false)}>
-          <div
-            className="flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700">
-              <div>
-                <div className="text-sm font-semibold text-gray-900 dark:text-white">debug info</div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">Current session internal/debug JSON</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => void refreshSessionDebugData()}
-                  className="rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-                >
-                  refresh
-                </button>
-                <button
-                  onClick={() => void handleCopyDebugInfo()}
-                  className="inline-flex items-center gap-1 rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-                >
-                  {debugInfoCopied ? <Check size={13} /> : <Copy size={13} />}
-                  {debugInfoCopied ? 'copied' : 'copy'}
-                </button>
-                <button
-                  onClick={() => setShowDebugInfo(false)}
-                  className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-                  title="Close"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 overflow-auto bg-gray-50 dark:bg-gray-950">
-              <div className="border-b border-gray-200 px-4 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
-                {resolvedSessionFilePath
-                  ? `session file: ${resolvedSessionFilePath}`
-                  : 'session file: unavailable from current WebUI runtime paths'}
-              </div>
-              {debugInfoError && (
-                <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
-                  {debugInfoError}
-                </div>
-              )}
-              {debugInfoLoading && (
-                <div className="border-b border-blue-200 bg-blue-50 px-4 py-2 text-xs text-blue-700 dark:border-blue-900/50 dark:bg-blue-950/40 dark:text-blue-300">
-                  Refreshing debug info...
-                </div>
-              )}
-              <pre className="min-h-full whitespace-pre-wrap break-words p-4 font-mono text-xs leading-5 text-gray-900 dark:text-gray-100">{debugInfoText}</pre>
-            </div>
-          </div>
-        </div>
+        <SessionDebugModal
+          source={{
+            sessionId,
+            sessionDisplayName,
+            sessionRecord,
+            messages,
+            connectionState,
+            reconnectCountdown,
+            sessionMissing,
+            sessionBusy,
+            sessionQueueLength,
+            queuedPreviewCount: queuedMessages.length,
+            groupTools,
+            showUsageBadge,
+            sendKeyMode,
+            loading,
+            asrAvailable,
+            modelBusy,
+            streamingAssistantDraft,
+          }}
+          onClose={handleCloseDebugInfo}
+        />
       )}
     </div>
   )

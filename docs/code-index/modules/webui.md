@@ -76,7 +76,7 @@ Mounted Chat owns per-session state/stream. Global list streaming remains for li
 
 ### D-webui-history-bootstrap
 
-[2026-07-28] The normal Chat bootstrap uses only the authenticated history response plus the per-session stream. History returns the lightweight persistent system snapshot explicitly alongside committed history, queue preview, and canonical session state; Chat uses that snapshot for the visible snapshot card and context overview. The full debug-file payload is diagnostic data and must be fetched only after the user explicitly opens Debug, never as a mount or ordinary refresh dependency.
+[2026-08-02] The normal Chat bootstrap uses only the authenticated history response plus the per-session stream. History returns the lightweight persistent system snapshot explicitly alongside committed history, queue preview, and canonical session state; Chat uses that snapshot for the visible snapshot card and context overview. The full debug-file payload is diagnostic data and must be fetched only after the user explicitly opens Debug, never as a mount or ordinary refresh dependency. Debug is a separately mounted modal lifetime: Open and each explicit Refresh fetch and serialize one immutable snapshot, while ordinary history, stream, model, and render updates neither reconstruct nor stringify it. Parsed payload, serialized text, copy state, request controller, and callbacks over those values remain modal-owned; Close, session replacement, and unmount abort or invalidate pending work and release that ownership, and reopening captures fresh state. The large Chat component must not own the serialized diagnostic text.
 
 ### D-webui-history-image-boundary
 
