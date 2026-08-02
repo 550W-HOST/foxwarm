@@ -78,7 +78,7 @@ Default model-facing tool properties have concrete schema shapes accepted by str
 
 ### D-tools-resource-action-consolidation
 
-[2026-08-01] Keep the default model-facing namespace compact by grouping closely related operations under singular resource tools: `session` owns status/list/rename, `skill` owns list/load, and `node` owns list/select. Removed internal names are not retained as aliases. `start_toolscript_run` is the narrow exception: it remains hidden and callable only for documented user-ToolScript compatibility, while current guidance uses `run_script({ mode: "background" })`. MCP configuration/listing is discoverable through `search_tools`/`call_tool` rather than injected by default.
+[2026-08-01, updated 2026-08-03] Keep the default model-facing namespace compact by grouping closely related operations under singular resource tools: `session` owns status/list/update-display-name, `skill` owns list/load, and `node` owns list/select. The display-name action is exactly `update-display-name`; the earlier `rename` action and removed standalone tool name are not retained as aliases. Keep action-specific arguments flat in the shared schema. A successful display-name update reports both the previous and resulting values, using `unset` for no display name and an explicit unchanged result for no-op calls. `start_toolscript_run` is the narrow exception to removed-name handling: it remains hidden and callable only for documented user-ToolScript compatibility, while current guidance uses `run_script({ mode: "background" })`. MCP configuration/listing is discoverable through `search_tools`/`call_tool` rather than injected by default.
 
 ## Canonical ownership
 

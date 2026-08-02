@@ -14,7 +14,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `tool_create_agent`, `tool_list_agents`, `tool_set_agent_inherit`, `tool_set_agent_isolated`, `tool_move_session`, `tool_create_session` — agent/session management
 - `tool_skill` — skill list/load actions
 - `tool_set_goal`, `tool_set_session_compact_threshold`, `tool_set_session_child_model`, `tool_update_session_snapshot` — settings
-- `tool_session`, `tool_delete_session`, `tool_stop_session`, `tool_compact_session` — session status/list/rename and lifecycle
+- `tool_session`, `tool_delete_session`, `tool_stop_session`, `tool_compact_session` — session status/list/display-name update and lifecycle
 
 ## Function Index
 
@@ -110,7 +110,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 ### toolsSessionAgent/sessionCrud.ts — Session lifecycle
 | Function | Description |
 |----------|-------------|
-| `tool_session` | Model-facing session helper: status, paginated list, and display-name rename actions |
+| `tool_session` | Model-facing session helper: status, paginated list, and display-name update actions |
 | `tool_delete_session` | Deletes a session (with busy-session safety) |
 | `tool_stop_session` | Sends stop signal to a busy session |
 | `tool_compact_session` | Requests session compaction |
@@ -154,7 +154,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `tool_recall` rejects legacy parameter names (`startSeq`, `endSeq`, `includeMessages`, etc.) with guidance to use the new `target` selector syntax (`msg#N-M`, `B#N`, `blocks`).
 - `renderContextBlockExpansion` is not a model-facing tool. WebUI uses it with `sessionId + blockId` to render temporary one-layer archive previews as structured timeline messages; child block messages include `__meta.contextBlock` for recursive expansion, and raw archive messages keep their original message shape/seq metadata. Missing sessions/blocks are reported with structured errors.
 - `tool_wait` returns a `__toolLoopControl` signal that stops the agent's current turn. It accepts optional `waitExecIds?: string[]` as advisory metadata for runtime-state display; empty/omitted args remain a normal wait for any new message/event.
-- `tool_session` replaces the old `list_sessions` tool and owns display-name changes. With omitted args or `action:"status"`, it returns the same status fields as `/status` using `src/sessionStatus`: agent id/name, agent dir, session id, parent id, token/image estimate, last usage (with optional reasoning tokens displayed inside output rather than added to total), auto-compact threshold, current node, current cwd/default cwd, canonical runtime-state summary, and up to 10 recent child sessions. With `action:"list"`, it preserves old list pagination (`start`, `count`) and row formatting; with `action:"rename"`, it sets or clears a display name. Isolated sessions may use status but not list/rename.
+- `tool_session` replaces the old `list_sessions` tool and owns display-name changes. With omitted args or `action:"status"`, it returns the same status fields as `/status` using `src/sessionStatus`: agent id/name, agent dir, session id, parent id, token/image estimate, last usage (with optional reasoning tokens displayed inside output rather than added to total), auto-compact threshold, current node, current cwd/default cwd, canonical runtime-state summary, and up to 10 recent child sessions. With `action:"list"`, it preserves old list pagination (`start`, `count`) and row formatting; with `action:"update-display-name"`, it sets or clears a display name and reports the previous/resulting values or an explicit no-op. Isolated sessions may use status but not list/update-display-name.
 - `tool_submit_compact_plan` remains guarded outside dedicated compaction, but its model-facing schema now includes `preserveMessages` and `removePreservedMessages` for compact-time raw-message preservation/removal handled by `src/session/compactPlan` and `src/session/history`.
 - `tool_send_to_session` delegates to session relations, accepts `<main>` / `<parent>` special target ids, and cannot target the current/source session itself; self-send errors include current/requested/resolved IDs and remind agents that messages to the current session's direct user should be ordinary assistant text instead.
 - `send_to_session(waitAfterHandoff:true)` emits a hidden post-batch generic-wait request only after delivery succeeds. `create_child_session(waitAfterHandoff:true)` requires a non-empty initial message and awaits its delivery before emitting the same request; ordinary unflagged child creation retains its existing asynchronous initial-send behavior. The former option name is not compatibility-read. Canonical orchestration: [D-pipeline-handoff-wait](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait).

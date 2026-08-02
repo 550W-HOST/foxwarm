@@ -95,19 +95,34 @@ test('session list action preserves old list pagination behavior', async () => {
   }
 });
 
-test('session rename action sets and clears a display name', async () => {
+test('session update-display-name action reports set, change, clear, and no-op transitions', async () => {
   await sessionManager.loadSessions();
-  const sessionId = makeSessionId('session_rename_current');
+  const sessionId = makeSessionId('session_display_name_current');
 
   try {
     const session = await ensureSession(sessionId);
-    const renamed = String(await tool_session({ action: 'rename', name: 'Renamed Session' }, { sessionId, session }));
-    assert.match(renamed, /renamed to "Renamed Session"/);
+    const set = String(await tool_session({ action: 'update-display-name', name: '  Renamed Session  ' }, { sessionId, session }));
+    assert.ok(set.includes('display name changed from unset to "Renamed Session"'));
     assert.equal((await sessionManager.getExistingSession(sessionId))?.displayName, 'Renamed Session');
 
-    const cleared = String(await tool_session({ action: 'rename', name: '' }, { sessionId, session }));
-    assert.match(cleared, /display name cleared/);
+    const unchanged = String(await tool_session({ action: 'update-display-name', name: 'Renamed Session' }, { sessionId, session }));
+    assert.ok(unchanged.includes('display name unchanged (from "Renamed Session" to "Renamed Session")'));
+
+    const changed = String(await tool_session({ action: 'update-display-name', name: 'New Name' }, { sessionId, session }));
+    assert.ok(changed.includes('display name changed from "Renamed Session" to "New Name"'));
+    assert.equal((await sessionManager.getExistingSession(sessionId))?.displayName, 'New Name');
+
+    const cleared = String(await tool_session({ action: 'update-display-name', name: '' }, { sessionId, session }));
+    assert.ok(cleared.includes('display name changed from "New Name" to unset'));
     assert.equal((await sessionManager.getExistingSession(sessionId))?.displayName, undefined);
+
+    const clearNoOp = String(await tool_session({ action: 'update-display-name', name: '   ' }, { sessionId, session }));
+    assert.ok(clearNoOp.includes('display name unchanged (from unset to unset)'));
+
+    await assert.rejects(
+      tool_session({ action: 'rename', name: 'Legacy Alias' }, { sessionId, session }),
+      /session\.action must be "status", "list", or "update-display-name"/,
+    );
   } finally {
     await sessionManager.deleteSession(sessionId).catch(() => {});
   }
