@@ -17,8 +17,47 @@ Args:
 """
 
 import json
-import os
-import shlex
+
+
+def shell_quote(value):
+    """Quote one value for the POSIX shell commands dispatched through call_tool."""
+    return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
+
+def absolute_path(value):
+    """Expand ~/ and resolve a POSIX path without importing host filesystem modules."""
+    path = str(value)
+    if path == "~" or path.startswith("~/"):
+        home = call_tool("exec", {"command": "printf '%s\\n' \"$HOME\""}).strip()
+        if not home.startswith("/"):
+            raise ValueError("Could not resolve the ToolScript host home directory")
+        path = home + path[1:]
+    elif path.startswith("~"):
+        raise ValueError("Only ~/ home-relative paths are supported")
+
+    if not path.startswith("/"):
+        cwd = call_tool("exec", {"command": "pwd -P"}).strip()
+        if not cwd.startswith("/"):
+            raise ValueError("Could not resolve the ToolScript host working directory")
+        path = cwd.rstrip("/") + "/" + path
+
+    parts = []
+    for part in path.split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "/" + "/".join(parts)
+
+
+def path_basename(value):
+    path = str(value).rstrip("/")
+    if not path:
+        return ""
+    return path.rsplit("/", 1)[-1]
 
 
 INCLUDE_EXTENSIONS = [
@@ -59,7 +98,7 @@ def scan_files(source, files_filter, include_extensions):
         for f in files_filter:
             full_path = f if f.startswith("/") else source + "/" + f
             rel_path = f if not f.startswith("/") else f.replace(source + "/", "")
-            wc = call_tool("exec", {"command": f"wc -l < {shlex.quote(full_path)} 2>/dev/null || echo 0"})
+            wc = call_tool("exec", {"command": f"wc -l < {shell_quote(full_path)} 2>/dev/null || echo 0"})
             lines_str = wc.strip()
             lines = int(lines_str) if lines_str.isdigit() else 0
             result.append({"path": rel_path, "lines": lines})
@@ -67,7 +106,7 @@ def scan_files(source, files_filter, include_extensions):
 
     # Prefer git-tracked files; fall back to find for non-git projects.
     cmd = (
-        f"cd {shlex.quote(source)} && "
+        f"cd {shell_quote(source)} && "
         "(git ls-files 2>/dev/null || find . -type f | sed 's#^./##')"
     )
     raw = call_tool("exec", {"command": cmd})
@@ -97,7 +136,7 @@ def scan_files(source, files_filter, include_extensions):
         return []
 
     # Batch wc -l
-    files_arg = " ".join([shlex.quote(source + "/" + f) for f in filtered[:200]])
+    files_arg = " ".join([shell_quote(source + "/" + f) for f in filtered[:200]])
     wc_out = call_tool("exec", {"command": f"wc -l {files_arg} 2>/dev/null | grep -v ' total$'"})
 
     result = []
@@ -267,7 +306,7 @@ Write the markdown summary now (start with ## Purpose):"""
 
 def generate_modules(output_dir):
     """Generate module-level summaries from unit docs (two-step: plan then generate)."""
-    units_raw = call_tool("exec", {"command": f"ls '{output_dir}/units/' 2>/dev/null"})
+    units_raw = call_tool("exec", {"command": f"ls {shell_quote(output_dir + '/units/')} 2>/dev/null"})
     unit_files = [f.strip() for f in units_raw.strip().split("\n") if f.strip().endswith(".md")]
 
     if not unit_files:
@@ -399,7 +438,7 @@ Write the module document now (start with ## Responsibility):"""
 
 def generate_threads(output_dir):
     """Generate cross-module thread docs from module summaries."""
-    modules_raw = call_tool("exec", {"command": f"ls '{output_dir}/modules/' 2>/dev/null"})
+    modules_raw = call_tool("exec", {"command": f"ls {shell_quote(output_dir + '/modules/')} 2>/dev/null"})
     module_files = [f.strip() for f in modules_raw.strip().split("\n") if f.strip().endswith(".md")]
 
     if not module_files:
@@ -469,13 +508,13 @@ def generate_overview(output_dir, project):
     """Generate top-level overview from modules and threads."""
     all_content = ""
 
-    modules_raw = call_tool("exec", {"command": f"ls '{output_dir}/modules/' 2>/dev/null"})
+    modules_raw = call_tool("exec", {"command": f"ls {shell_quote(output_dir + '/modules/')} 2>/dev/null"})
     for mf in [f.strip() for f in modules_raw.strip().split("\n") if f.strip().endswith(".md")]:
         content = call_tool("read", {"filePath": output_dir + "/modules/" + mf})
         if isinstance(content, str):
             all_content += f"\n---\nModule: {mf}\n{content[:2000]}\n"
 
-    threads_raw = call_tool("exec", {"command": f"ls '{output_dir}/threads/' 2>/dev/null"})
+    threads_raw = call_tool("exec", {"command": f"ls {shell_quote(output_dir + '/threads/')} 2>/dev/null"})
     for tf in [f.strip() for f in threads_raw.strip().split("\n") if f.strip().endswith(".md")]:
         content = call_tool("read", {"filePath": output_dir + "/threads/" + tf})
         if isinstance(content, str):
@@ -512,13 +551,13 @@ def main(args):
     source = args.get("source")
     if not source:
         source = call_tool("exec", {"command": "pwd"}).strip()
-    source = os.path.abspath(os.path.expanduser(source))
+    source = absolute_path(source)
 
-    project = args.get("project") or os.path.basename(source.rstrip("/")) or "project"
+    project = args.get("project") or path_basename(source) or "project"
     phase = args.get("phase", None)
     files_filter = args.get("files", None)
     include_extensions = args.get("extensions", INCLUDE_EXTENSIONS)
-    output_dir = os.path.abspath(os.path.expanduser(args.get("output", "~/code-index/" + project)))
+    output_dir = absolute_path(args.get("output", "~/code-index/" + project))
 
     print(f"Code Index Generator")
     print(f"  project: {project}")
@@ -529,7 +568,7 @@ def main(args):
         print(f"  files filter: {files_filter}")
 
     # Ensure output directories exist
-    call_tool("exec", {"command": f"mkdir -p {shlex.quote(output_dir + '/units')} {shlex.quote(output_dir + '/modules')} {shlex.quote(output_dir + '/threads')}"})
+    call_tool("exec", {"command": f"mkdir -p {shell_quote(output_dir + '/units')} {shell_quote(output_dir + '/modules')} {shell_quote(output_dir + '/threads')}"})
 
     # Phase 1: Scan & Plan
     if phase is None or phase == "plan" or phase == "units":

@@ -127,4 +127,6 @@ First-time initialization is less common than targeted maintenance. Read `INITIA
 - `generate_code_index_standalone.py` — standalone Python batch generator;
 - `tests/test_generate_code_index.py` — generator safety and governance tests.
 
+The ToolScript generator runs in Monty's Python subset, not CPython. It stays self-contained, uses only Monty's bundled `json` module, and reaches host files or processes exclusively through `call_tool(...)`; use the standalone generator when ordinary Python libraries are required.
+
 Generators create a first draft only. Review generated content under this skill's public-safety, ownership, decision, and maintenance rules before treating it as an active index.
