@@ -1114,7 +1114,12 @@ async function executeScriptHostCall(
     return result;
   }
 
-  throw new Error(`Unsupported ToolScript host function: ${functionName}`);
+  throw new Error(
+    `Unknown ToolScript function \`${functionName}\`. `
+    + 'Available host functions are call_tool, request_model_without_context, ask_agent, '
+    + 'open_managed_session, session_step, release_managed_session, and wait_for_managed_event. '
+    + 'If this is a local helper, define it before main(args).',
+  );
 }
 
 async function advanceExecution(args: {

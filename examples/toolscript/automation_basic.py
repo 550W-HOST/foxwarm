@@ -1,28 +1,26 @@
 def main(args):
+    base_dir = args.get("baseDir", "examples/toolscript").rstrip("/")
+
     print("starting automation example")
 
-    files = call_tool({
-        "toolId": "builtin:list_files",
-        "args": {
-            "dirPath": "examples/toolscript",
-            "recursive": False,
-            "includeHidden": False,
-            "limit": 20,
-        },
+    listing = call_tool({
+        "toolId": "builtin:read",
+        "args": {"filePath": base_dir},
     })
-    count = files.get("count", 0) if isinstance(files, dict) else 0
-    print(f"example file count: {count}")
+    listing_preview = listing[:200].replace("\n", " ")
+    print(f"listing: {listing_preview}")
 
     doc = call_tool({
         "toolId": "builtin:read",
-        "args": {"filePath": "README.md"},
+        "args": {"filePath": base_dir + "/README.md"},
     })
-    excerpt = doc[:160].replace("\n", " ") if isinstance(doc, str) else str(doc)[:160]
-    print(f"excerpt: {excerpt}")
+    doc_excerpt = doc[:160].replace("\n", " ")
+    print(f"documentation: {doc_excerpt}")
 
     label = ask_agent("Reply with a short label")
 
     return {
         "label": label,
-        "exampleFileCount": count,
+        "listingPreview": listing_preview,
+        "documentationExcerpt": doc_excerpt,
     }

@@ -35,6 +35,14 @@ function asMain(body: string): string {
   ].join('\n');
 }
 
+function latestUserText(session: Session): string {
+  const message = [...(session.history || [])].reverse().find(entry => entry.role === 'user');
+  return (message?.parts || [])
+    .map(part => part.text || '')
+    .filter(Boolean)
+    .join(' | ');
+}
+
 const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnSUs8AAAAASUVORK5CYII=';
 
 test('run_script executes internal call_tool without surfacing nested tool history entries', async () => {
@@ -71,6 +79,44 @@ test('run_script executes internal call_tool without surfacing nested tool histo
   }
 });
 
+test('canonical ToolScript automation example runs and resumes end to end', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_canonical_example');
+  const session = await sessionManager.getSession(sessionId);
+  const examplePath = path.join(__dirname, '..', 'examples', 'toolscript', 'automation_basic.py');
+  const baseDir = path.dirname(examplePath);
+
+  try {
+    const waiting = await tool_run_script({
+      filePath: examplePath,
+      args: { baseDir },
+    }, { sessionId, session });
+
+    assert.equal(waiting.status, 'waiting');
+    assert.equal(waiting.waitingReason, 'agent');
+    assert.equal(waiting.question, 'Reply with a short label');
+    assert.ok(waiting.continuationId);
+    assert.deepEqual(waiting.executedTools, ['read', 'read']);
+    assert.match(waiting.stdout, /starting automation example/);
+    assert.match(waiting.stdout, /automation_basic\.py/);
+
+    const completed = await tool_continue_script({
+      runId: waiting.runId,
+      continuationId: waiting.continuationId,
+      input: 'EXAMPLE_OK',
+    }, { sessionId, session });
+
+    assert.equal(completed.status, 'completed');
+    assert.equal(completed.stdout, '');
+    assert.equal(completed.result?.label, 'EXAMPLE_OK');
+    assert.match(completed.result?.listingPreview || '', /automation_basic\.py/);
+    assert.match(completed.result?.documentationExcerpt || '', /ToolScript examples/);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
 test('run_script requires an explicit main(args) entrypoint', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_no_main');
@@ -87,6 +133,32 @@ test('run_script requires an explicit main(args) entrypoint', async () => {
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
     await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('run_script explains that local helpers must be defined before main', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_late_helper');
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    const result = await tool_run_script({
+      code: [
+        'def main(args):',
+        '    return helper(3)',
+        '',
+        'def helper(value):',
+        '    return value * 2',
+      ].join('\n'),
+    }, { sessionId, session });
+
+    assert.equal(result.status, 'failed');
+    assert.match(result.error || '', /Unknown ToolScript function `helper`/);
+    assert.match(result.error || '', /define it before main\(args\)/i);
+    assert.doesNotMatch(result.error || '', /Unsupported ToolScript host function: helper/);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
   }
 });
 
@@ -621,15 +693,13 @@ test('ToolScript session_step can optionally include full newMessages payload', 
   ].join('\n')));
 
   sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
-  (llm as any).chat = async (parts: any, activeSession: Session) => {
-    if (parts?.length) {
-      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
-    }
+  (llm as any).chat = async (_parts: any, activeSession: Session) => {
+    const userText = latestUserText(activeSession);
     await sessionManager.appendSessionMessage(activeSession, {
       role: 'model',
-      parts: [{ text: `child handled: ${parts?.map((part: any) => part.text || '').filter(Boolean).join(' | ') || ''}` }],
+      parts: [{ text: `child handled: ${userText}` }],
     });
-    return { text: `child handled: ${parts?.map((part: any) => part.text || '').filter(Boolean).join(' | ') || ''}` };
+    return { text: `child handled: ${userText}` };
   };
 
   const parent = await sessionManager.getSession(parentId);
@@ -670,13 +740,11 @@ test('background ToolScript controller run can wait for managed inbox events and
   ].join('\n')));
 
   sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
-  (llm as any).chat = async (parts: any, activeSession: Session) => {
-    if (parts?.length) {
-      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
-    }
+  (llm as any).chat = async (_parts: any, activeSession: Session) => {
+    const userText = latestUserText(activeSession);
     await sessionManager.appendSessionMessage(activeSession, {
       role: 'model',
-      parts: [{ text: `bg child handled: ${parts?.map((part: any) => part.text || '').filter(Boolean).join(' | ') || ''}` }],
+      parts: [{ text: `bg child handled: ${userText}` }],
     });
     return { text: 'ok' };
   };

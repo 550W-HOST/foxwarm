@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs-extra';
+import path from 'path';
 
 import { listSkills, loadSkillDocuments } from './skills';
+import { definitions } from './tools/definitions';
 
 test('global ToolScript skills are visible and loadable', async () => {
   const skills = await listSkills({ agentName: 'main' });
@@ -23,6 +26,24 @@ test('global ToolScript skills are visible and loadable', async () => {
   assert.match(automationText, /mode:\s*["']background["']/);
   assert.doesNotMatch(automationText, /start_toolscript_run/);
   assert.match(automationText, /call_tool\(/);
+  assert.match(automationText, /Every ToolScript defines `main\(args\)`/);
+  assert.doesNotMatch(automationText, /should now|\blegacy\b|\bformerly\b|\bstill\b/i);
+
+  const automationExample = await fs.readFile(
+    path.join(__dirname, '..', 'examples', 'toolscript', 'automation_basic.py'),
+    'utf8',
+  );
+  const builtinReferences = Array.from(
+    `${automationText}\n${automationExample}`.matchAll(/builtin:([A-Za-z0-9_-]+)/g),
+    match => match[1],
+  );
+  const knownBuiltins = new Set(definitions.map(definition => definition.name));
+  assert.deepEqual(
+    builtinReferences.filter(name => !knownBuiltins.has(name)),
+    [],
+    'ToolScript skill/examples must not reference removed builtin tools',
+  );
+  assert.doesNotMatch(automationExample, /builtin:list_files/);
 
   const managed = await loadSkillDocuments('toolscript-managed-controller', { agentName: 'main' });
   const managedText = managed.documents.map(doc => doc.content).join('\n\n');
