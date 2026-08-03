@@ -128,6 +128,8 @@ Durable compact facts belong only in the `memoryFacts` array of their matching `
 
 [2026-08-03] `archive-store.sqlite` is the sole runtime authority for raw messages, summary blocks, lineage, and vector checkpoints. Runtime commits use WAL with `synchronous=FULL` and do not dual-write JSONL. The startup migration must strictly import and verify all legacy active JSONL before moving sources to a path-preserving migration backup; unverifiable sources fail closed and remain retryable. Compatibility JSONL is explicit export output, not live storage.
 
+The sole malformed-line recovery exception is migration-only and evidence-bound: a physical message line may begin with a canonical legacy message header, contain a prefix torn inside a JSON string, and end with exactly one complete canonical message record whose `sessionId` and `seq` match that prefix. Ordinary legacy bootstrap skips the physical line; after structural validation, migration-only lineage inference may count a copied recovered parent record for a new fork cap, while only the dedicated migration transaction may insert the suffix, atomically with its durable recovery marker. Duplicate copied sources must agree byte-semantically after canonicalization, and the unchanged raw file plus recovery audit move to migration backup. Blocks, identity mismatches, multiple viable suffixes, complete-object concatenation, other invalid-prefix grammars, and all other malformed shapes remain fail-closed.
+
 ### D-context-recall-vocabulary
 
 Exact selection (`target`), semantic location (`vector_query`), and literal post-filtering (`contentFilter`) are separate inputs. The preview renderer owns output budgets, regex filters, tool folding, and exclusion notices.

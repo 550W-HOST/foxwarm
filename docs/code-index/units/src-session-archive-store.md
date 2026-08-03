@@ -32,6 +32,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 | Stable symbol/section | Responsibility |
 |---|---|
 | `streamJsonlLines` | Streaming line reader with explicit event-loop yields |
+| `parseLegacyMessageLine` | Strict canonical parser plus the single migration-only matching torn-prefix/suffix recovery shape |
 | reservation-ledger load/persist/canonical-resolution helpers | Validate committed alias graphs, rebuild exact moved-ID reservations, and map proven historical aliases |
 | message/block import functions | Batched parse/upsert and per-source import-state updates |
 | `bootstrapArchiveStoreFromLegacy` / `ensureBootstrapped` | Migration-only streaming import of legacy JSONL before strict verification and backup movement |
@@ -42,7 +43,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 ## Schema
 
 - `archive_branches` — session, optional parent, message/block fork points.
-- `archive_store_metadata` — durable SQLite-authority migration marker; a completed migration with a missing marker fails startup.
+- `archive_store_metadata` — durable SQLite-authority migration marker plus idempotent torn-message recovery audit markers; marker-backed retries require the stored row to still match, and a completed migration with a missing authority marker fails startup.
 - `archive_session_id_reservations` — exact committed historical ID to current canonical-ID mappings mirrored by the durable ledger.
 - `archive_messages` — session-local sequence records and serialized message JSON.
 - `archive_blocks` — block level/source/range/summary records plus optional serialized normalized memory facts.
@@ -51,7 +52,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 ## Behavior
 
 - `initArchiveStore()` opens the database and starts one bootstrap promise. Known sessions come from the metadata snapshot.
-- Migration-only import validates complete canonical message/block structures before bootstrap mutation, then reads JSONL line-by-line, writes bounded transactions, and yields between batches.
+- Ordinary legacy bootstrap accepts only whole-line canonical JSON and never inserts a torn-concatenated suffix. After structural validation, migration-only fork-cap inference may count the narrow recovered suffix as copied parent history without inserting it; the dedicated recovery transaction remains the sole row writer and atomically writes its durable audit marker. Raw files remain unchanged for backup audit.
 - Migration import-state rows avoid reparsing unchanged legacy sources while a failed migration is being repaired and retried.
 - Effective reads walk current session then ancestors, cap each ancestor at cumulative fork points, annotate `sourceSessionId`/`inherited`, and sort by source sequence or block ID.
 - Child branch creation seeds vector checkpoints at its fork boundaries.

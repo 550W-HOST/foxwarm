@@ -12,9 +12,20 @@ import { createMigrationVersionStore, MIGRATION_BACKUP_DIR, readMigrationVersion
 export const SQLITE_ONLY_ARCHIVES_MIGRATION_ID = 'sqlite-only-large-archives-v1';
 const LOCK_PATH = path.join(STATE_DIR, `${SQLITE_ONLY_ARCHIVES_MIGRATION_ID}.lock`);
 
-type Source = (LegacyArchiveMigrationSource | LegacyLlmJournalMigrationSource) & { kind?: 'messages' | 'blocks' };
+type Source = (LegacyArchiveMigrationSource | LegacyLlmJournalMigrationSource) & {
+  kind?: 'messages' | 'blocks';
+  recoveredRecords?: Array<{ sessionId: string; seq: number; payloadSha256: string; insertedIntoSqlite: boolean }>;
+  tornPrefixCount?: number;
+};
 type ManifestFile = Omit<Source, 'filePath'> & { moved: boolean };
-type Manifest = { v: 1; migrationId: string; createdAt: number; completedAt?: number; files: ManifestFile[] };
+type Manifest = {
+  v: 1;
+  migrationId: string;
+  createdAt: number;
+  completedAt?: number;
+  audit: { recoveredLogicalRecordCount: number; insertedRecoveredLogicalRecordCount: number; tornPrefixCount: number };
+  files: ManifestFile[];
+};
 
 export type SqliteOnlyArchivesMigrationResult = {
   migrationId: typeof SQLITE_ONLY_ARCHIVES_MIGRATION_ID;
@@ -148,7 +159,17 @@ export async function runSqliteOnlyArchivesMigration(): Promise<SqliteOnlyArchiv
       resolveContained(backupRoot, source.relativeStatePath);
       return { ...source, moved: false };
     });
-    const manifest: Manifest = { v: 1, migrationId: SQLITE_ONLY_ARCHIVES_MIGRATION_ID, createdAt: Date.now(), files };
+    const manifest: Manifest = {
+      v: 1,
+      migrationId: SQLITE_ONLY_ARCHIVES_MIGRATION_ID,
+      createdAt: Date.now(),
+      audit: {
+        recoveredLogicalRecordCount: new Set(files.flatMap(file => (file.recoveredRecords || []).map(record => `${record.sessionId}\0${record.seq}`))).size,
+        insertedRecoveredLogicalRecordCount: new Set(files.flatMap(file => (file.recoveredRecords || []).filter(record => record.insertedIntoSqlite).map(record => `${record.sessionId}\0${record.seq}`))).size,
+        tornPrefixCount: files.reduce((sum, file) => sum + Number(file.tornPrefixCount || 0), 0),
+      },
+      files,
+    };
     await writeManifest(manifestPath, manifest);
 
     for (const entry of manifest.files) {

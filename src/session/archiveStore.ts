@@ -571,12 +571,59 @@ function isCanonicalBlockRecord(value: unknown): value is ArchiveBlockRecord {
   return true;
 }
 
+type ParsedLegacyMessageLine = {
+  record: ArchiveMessageRecord;
+  recoveredTornPrefix: boolean;
+};
+
+const LEGACY_MESSAGE_SIGNATURE = '{"v":1,"kind":"message"';
+const LEGACY_MESSAGE_HEADER = /^\{"v":1,"kind":"message","sessionId":("(?:\\.|[^"\\])*"),"agent":("(?:\\.|[^"\\])*"),"seq":([1-9]\d*),/;
+
+function parseLegacyMessageLine(line: string): ParsedLegacyMessageLine | null {
+  try {
+    const record = JSON.parse(line);
+    return isCanonicalMessageRecord(record) ? { record, recoveredTornPrefix: false } : null;
+  } catch {}
+
+  // Narrow migration-only recovery for the historical append-after-torn
+  // physical line shape. The raw line remains untouched and is later moved
+  // verbatim to migration backup.
+  const header = LEGACY_MESSAGE_HEADER.exec(line);
+  if (!header) return null;
+  let prefixSessionId: string;
+  try { prefixSessionId = JSON.parse(header[1]); } catch { return null; }
+  const prefixSeq = Number(header[3]);
+  const candidates: Array<{ index: number; record: ArchiveMessageRecord }> = [];
+  let searchFrom = 1;
+  while (true) {
+    const index = line.indexOf(LEGACY_MESSAGE_SIGNATURE, searchFrom);
+    if (index < 0) break;
+    searchFrom = index + 1;
+    try {
+      const record = JSON.parse(line.slice(index));
+      if (isCanonicalMessageRecord(record)) candidates.push({ index, record });
+    } catch {}
+  }
+  if (candidates.length !== 1) return null;
+  const candidate = candidates[0];
+  try {
+    JSON.parse(line.slice(0, candidate.index));
+    return null; // Two complete concatenated objects are not the torn shape.
+  } catch (error) {
+    // All supported historical evidence is a prefix torn inside a JSON
+    // string. Other invalid-prefix grammars stay fail-closed.
+    if (!String((error as Error)?.message || error).includes('Unterminated string')) return null;
+  }
+  if (candidate.record.sessionId !== prefixSessionId || candidate.record.seq !== prefixSeq) return null;
+  return { record: candidate.record, recoveredTornPrefix: true };
+}
+
 function parseMessageRecord(line: string): ArchiveMessageRecord | null {
   try {
     const record = JSON.parse(line);
     if (isCanonicalMessageRecord(record)) return record;
-  } catch (e) {
-    logger.warn({ err: e }, 'Skipping malformed archive-store message import line');
+  } catch (error) {
+    logger.warn({ err: error }, 'Skipping malformed archive-store message import line');
   }
   return null;
 }
@@ -682,7 +729,7 @@ async function collectBootstrapSessionCandidates(): Promise<BootstrapSessionCand
   return [...candidates.values()].sort((a, b) => a.sessionId.localeCompare(b.sessionId));
 }
 
-async function inferLegacyForkMessageSeq(sessionId: string, parentSessionId: string): Promise<number> {
+async function inferLegacyForkMessageSeq(sessionId: string, parentSessionId: string, allowRecoveredMessageLineage = false): Promise<number> {
   const archivePath = getSessionArchiveLogPath(sessionId);
   const fileState = await getImportSourceState(archivePath);
   if (!fileState.exists) {
@@ -692,7 +739,7 @@ async function inferLegacyForkMessageSeq(sessionId: string, parentSessionId: str
   let maxSeq = 0;
   let minLocalSeq = Number.POSITIVE_INFINITY;
   await streamJsonlLines(archivePath, async (line) => {
-    const record = parseMessageRecord(line);
+    const record = allowRecoveredMessageLineage ? parseLegacyMessageLine(line)?.record : parseMessageRecord(line);
     if (!record) {
       return;
     }
@@ -763,7 +810,7 @@ async function findMismatchedHistoricalPayloadId(sessionId: string): Promise<str
     : undefined;
 }
 
-async function bootstrapArchiveStoreFromLegacy(): Promise<void> {
+async function bootstrapArchiveStoreFromLegacy(options: { allowRecoveredMessageLineage?: boolean } = {}): Promise<void> {
   await loadSessionIdReservationLedger();
 
   const candidates = await collectBootstrapSessionCandidates();
@@ -793,7 +840,7 @@ async function bootstrapArchiveStoreFromLegacy(): Promise<void> {
 
     if (candidate.parentSessionId) {
       const parentSessionId = await resolveArchivedRecordSessionId(candidate.parentSessionId);
-      const forkMessageSeq = await inferLegacyForkMessageSeq(candidate.sessionId, parentSessionId);
+      const forkMessageSeq = await inferLegacyForkMessageSeq(candidate.sessionId, parentSessionId, options.allowRecoveredMessageLineage === true);
       const forkBlockId = await inferLegacyForkBlockId(candidate.sessionId, parentSessionId);
       await ensureSessionBranch(candidate.sessionId, {
         parentSessionId,
@@ -815,9 +862,9 @@ async function bootstrapArchiveStoreFromLegacy(): Promise<void> {
   }
 }
 
-async function ensureBootstrapped(): Promise<void> {
+async function ensureBootstrapped(options: { allowRecoveredMessageLineage?: boolean } = {}): Promise<void> {
   if (!bootstrapPromise) {
-    bootstrapPromise = bootstrapArchiveStoreFromLegacy().catch((err) => {
+    bootstrapPromise = bootstrapArchiveStoreFromLegacy(options).catch((err) => {
       bootstrapPromise = null;
       throw err;
     });
@@ -1433,6 +1480,8 @@ export type LegacyArchiveMigrationSource = {
   kind: 'messages' | 'blocks';
   sha256: string;
   recordCount: number;
+  recoveredRecords: Array<{ sessionId: string; seq: number; payloadSha256: string; insertedIntoSqlite: boolean }>;
+  tornPrefixCount: number;
 };
 
 export function markArchiveStoreSqliteAuthority(migrationId: string): void {
@@ -1462,33 +1511,62 @@ async function hashFile(filePath: string): Promise<string> {
   return hash.digest('hex');
 }
 
-async function validateLegacyFileStructure(filePath: string, kind: 'messages' | 'blocks'): Promise<number> {
+async function validateLegacyFileStructure(
+  filePath: string,
+  kind: 'messages' | 'blocks',
+  recoveredPayloads: Map<string, string>,
+): Promise<{ recordCount: number; recoveredRecords: Array<{ sessionId: string; seq: number; payloadSha256: string; insertedIntoSqlite: boolean }>; tornPrefixCount: number }> {
   let count = 0;
+  const recoveredRecords: Array<{ sessionId: string; seq: number; payloadSha256: string; insertedIntoSqlite: boolean }> = [];
+  let tornPrefixCount = 0;
   await streamJsonlLines(filePath, async line => {
-    let parsed: unknown;
-    try { parsed = JSON.parse(line); } catch { throw new Error(`Malformed legacy ${kind === 'messages' ? 'session' : 'block'} archive line in ${filePath}`); }
-    const valid = kind === 'messages' ? isCanonicalMessageRecord(parsed) : isCanonicalBlockRecord(parsed);
-    if (!valid) throw new Error(`Invalid legacy session ${kind === 'messages' ? 'message' : 'block'} record in ${filePath}`);
+    if (kind === 'messages') {
+      const parsed = parseLegacyMessageLine(line);
+      if (!parsed) {
+        try { JSON.parse(line); } catch { throw new Error(`Malformed legacy session archive line in ${filePath}`); }
+        throw new Error(`Invalid legacy session message record in ${filePath}`);
+      }
+      if (parsed.recoveredTornPrefix) {
+        const identity = `${parsed.record.sessionId}\0${parsed.record.seq}`;
+        const payload = canonicalJson(parsed.record);
+        const priorPayload = recoveredPayloads.get(identity);
+        if (priorPayload !== undefined && priorPayload !== payload) throw new Error(`Divergent recovered legacy session message ${parsed.record.sessionId}#${parsed.record.seq}`);
+        recoveredPayloads.set(identity, payload);
+        recoveredRecords.push({
+          sessionId: parsed.record.sessionId,
+          seq: parsed.record.seq,
+          payloadSha256: crypto.createHash('sha256').update(payload).digest('hex'),
+          insertedIntoSqlite: false,
+        });
+        tornPrefixCount += 1;
+      }
+    } else {
+      let parsed: unknown;
+      try { parsed = JSON.parse(line); } catch { throw new Error(`Malformed legacy block archive line in ${filePath}`); }
+      if (!isCanonicalBlockRecord(parsed)) throw new Error(`Invalid legacy session block record in ${filePath}`);
+    }
     count += 1;
   });
-  return count;
+  return { recordCount: count, recoveredRecords, tornPrefixCount };
 }
 
 async function verifyLegacyMessageFile(filePath: string, preexistingKeys: Set<string>): Promise<number> {
   let count = 0;
   await streamJsonlLines(filePath, async line => {
-    let parsed: unknown;
-    try { parsed = JSON.parse(line); } catch { throw new Error(`Malformed legacy session archive line in ${filePath}`); }
-    const record = parseMessageRecord(line);
+    const record = parseLegacyMessageLine(line)?.record;
     if (!record) throw new Error(`Invalid legacy session message record in ${filePath}`);
     const sessionId = await resolveArchivedRecordSessionId(record.sessionId);
-    const row: any = getDb().prepare('SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=? AND seq=?').get(sessionId, record.seq);
+    let rowSessionId = sessionId;
+    let row: any = getDb().prepare('SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=? AND seq=?').get(rowSessionId, record.seq);
+    if (!row && rowSessionId !== record.sessionId) {
+      rowSessionId = record.sessionId;
+      row = getDb().prepare('SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=? AND seq=?').get(rowSessionId, record.seq);
+    }
     if (!row) throw new Error(`Legacy session message ${record.sessionId}#${record.seq} is missing from SQLite`);
     const expected = { agent: record.agent || 'main', seq: record.seq, timestamp: record.timestamp, role: record.role, message: record.message };
     const actual = { agent: row.agent || 'main', seq: Number(row.seq), timestamp: Number(row.timestamp), role: row.role, message: JSON.parse(row.message_json) };
-    if (!preexistingKeys.has(`${sessionId}\0${record.seq}`) && canonicalJson(expected) !== canonicalJson(actual)) throw new Error(`Conflicting legacy session message ${record.sessionId}#${record.seq}`);
+    if (!preexistingKeys.has(`${rowSessionId}\0${record.seq}`) && canonicalJson(expected) !== canonicalJson(actual)) throw new Error(`Conflicting legacy session message ${record.sessionId}#${record.seq}`);
     count += 1;
-    void parsed;
   });
   return count;
 }
@@ -1500,8 +1578,14 @@ async function verifyLegacyBlockFile(filePath: string, preexistingKeys: Set<stri
     const record = parseBlockRecord(line);
     if (!record) throw new Error(`Invalid legacy session block record in ${filePath}`);
     const sessionId = await resolveArchivedRecordSessionId(record.sessionId);
-    const row: any = getDb().prepare(`SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,
-      raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=? AND id=?`).get(sessionId, record.id);
+    const select = getDb().prepare(`SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,
+      raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=? AND id=?`);
+    let rowSessionId = sessionId;
+    let row: any = select.get(rowSessionId, record.id);
+    if (!row && rowSessionId !== record.sessionId) {
+      rowSessionId = record.sessionId;
+      row = select.get(rowSessionId, record.id);
+    }
     if (!row) throw new Error(`Legacy session block ${record.sessionId}#${record.id} is missing from SQLite`);
     const expected = {
       agent: record.agent || 'main', id: record.id, level: record.level, sourceKind: record.sourceKind, sourceStart: record.sourceStart,
@@ -1516,7 +1600,7 @@ async function verifyLegacyBlockFile(filePath: string, preexistingKeys: Set<stri
       rawEndTimestamp: row.raw_end_timestamp == null ? undefined : Number(row.raw_end_timestamp), summary: row.summary,
       memoryFacts: parseMemoryFactsJson(row.memory_facts_json), createdAt: Number(row.created_at),
     };
-    if (!preexistingKeys.has(`${sessionId}\0${record.id}`) && canonicalJson(expected) !== canonicalJson(actual)) throw new Error(`Conflicting legacy session block ${record.sessionId}#${record.id}`);
+    if (!preexistingKeys.has(`${rowSessionId}\0${record.id}`) && canonicalJson(expected) !== canonicalJson(actual)) throw new Error(`Conflicting legacy session block ${record.sessionId}#${record.id}`);
     count += 1;
   });
   return count;
@@ -1527,6 +1611,7 @@ export async function migrateLegacySessionArchivesToSqlite(): Promise<LegacyArch
   openArchiveStore();
   const candidates = await collectBootstrapSessionCandidates();
   const inventory: LegacyArchiveMigrationSource[] = [];
+  const recoveredPayloads = new Map<string, string>();
   // Validate complete canonical structures before bootstrap can create rows,
   // branches, or reservations. A repaired source therefore retries from the
   // same pre-migration authority state.
@@ -1536,12 +1621,53 @@ export async function migrateLegacySessionArchivesToSqlite(): Promise<LegacyArch
       ['blocks', getSessionBlockArchiveLogPath(sessionId)],
     ] as const) {
       if (!await fs.pathExists(filePath)) continue;
-      inventory.push({ filePath, relativeStatePath: path.relative(STATE_DIR, filePath), kind, sha256: await hashFile(filePath), recordCount: await validateLegacyFileStructure(filePath, kind) });
+      const validation = await validateLegacyFileStructure(filePath, kind, recoveredPayloads);
+      inventory.push({ filePath, relativeStatePath: path.relative(STATE_DIR, filePath), kind, sha256: await hashFile(filePath), ...validation });
     }
   }
   const preexistingMessageKeys = new Set((getDb().prepare('SELECT session_id,seq FROM archive_messages').all() as Array<{ session_id: string; seq: number }>).map(row => `${row.session_id}\0${row.seq}`));
   const preexistingBlockKeys = new Set((getDb().prepare('SELECT session_id,id FROM archive_blocks').all() as Array<{ session_id: string; id: number }>).map(row => `${row.session_id}\0${row.id}`));
-  await ensureBootstrapped();
+  await ensureBootstrapped({ allowRecoveredMessageLineage: true });
+  const insertedRecoveredIdentities = new Set<string>();
+  const recoveredInsert = getDb().prepare(`INSERT INTO archive_messages(session_id,agent,seq,timestamp,role,message_json) VALUES(?,?,?,?,?,?)`);
+  for (const [identity, payload] of recoveredPayloads) {
+    const record = JSON.parse(payload) as ArchiveMessageRecord;
+    const sessionId = await resolveArchivedRecordSessionId(record.sessionId);
+    await ensureSessionBranch(sessionId);
+    const targetPreexisted = preexistingMessageKeys.has(`${sessionId}\0${record.seq}`);
+    const markerKey = `migration_recovered_torn_message:${crypto.createHash('sha256').update(identity).digest('hex')}`;
+    const markerValue = canonicalJson({ sessionId: record.sessionId, seq: record.seq, payloadSha256: crypto.createHash('sha256').update(payload).digest('hex') });
+    runInTransaction(() => {
+      const marker: any = getDb().prepare('SELECT value FROM archive_store_metadata WHERE key=?').get(markerKey);
+      if (marker && marker.value !== markerValue) throw new Error(`Conflicting durable torn-message recovery marker for ${record.sessionId}#${record.seq}`);
+      const existing: any = getDb().prepare('SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=? AND seq=?').get(sessionId, record.seq);
+      const expected = { agent: record.agent, seq: record.seq, timestamp: record.timestamp, role: record.role, message: record.message };
+      const actual = existing ? { agent: existing.agent, seq: Number(existing.seq), timestamp: Number(existing.timestamp), role: existing.role, message: JSON.parse(existing.message_json) } : null;
+      const rowMatches = actual !== null && canonicalJson(expected) === canonicalJson(actual);
+      if (marker && !rowMatches) throw new Error(`Recovered torn-message row no longer matches its durable marker for ${record.sessionId}#${record.seq}`);
+      if (!existing && targetPreexisted) throw new Error(`Preexisting SQLite row disappeared during torn-message recovery for ${record.sessionId}#${record.seq}`);
+      if (!existing) {
+        recoveredInsert.run(sessionId, record.agent, record.seq, record.timestamp, record.role, JSON.stringify(record.message));
+        getDb().prepare('INSERT INTO archive_store_metadata(key,value) VALUES(?,?)').run(markerKey, markerValue);
+        insertedRecoveredIdentities.add(identity);
+      } else if (marker) {
+        insertedRecoveredIdentities.add(identity);
+      } else if (!targetPreexisted) {
+        if (!rowMatches) throw new Error(`Bootstrap recovered torn-message row does not match ${record.sessionId}#${record.seq}`);
+        getDb().prepare('INSERT INTO archive_store_metadata(key,value) VALUES(?,?)').run(markerKey, markerValue);
+        insertedRecoveredIdentities.add(identity);
+      }
+    });
+  }
+  // Mark one deterministic source occurrence for each inserted logical row;
+  // copied fork logs retain their own physical recovery audit without
+  // inflating the inserted logical-row count.
+  for (const source of inventory) {
+    for (const recovered of source.recoveredRecords) {
+      const identity = `${recovered.sessionId}\0${recovered.seq}`;
+      if (insertedRecoveredIdentities.delete(identity)) recovered.insertedIntoSqlite = true;
+    }
+  }
   const branches = getDb().prepare('SELECT session_id,parent_session_id,fork_message_seq,fork_block_id FROM archive_branches').all() as Array<{
     session_id: string; parent_session_id: string | null; fork_message_seq: number; fork_block_id: number;
   }>;
