@@ -21,12 +21,13 @@ Scripting owns ToolScript: a constrained Python-like automation runtime implemen
 ## Invariants
 
 - Source must define `main(args)`.
-- The Monty VM enforces allocation, memory, recursion, and duration limits.
+- The Monty worker VM enforces memory, recursion, and duration limits; the current runtime does not expose an allocation-count limit.
 - The slice timeout is checked at safe host-call boundaries and does not interrupt an in-progress tool or model call.
 - ToolScript has no separate file host API. Any file operation composed through `call_tool` passes the normal Foxwarm tool/path/isolation checks.
+- Monty OS-function and mount capabilities are rejected so they cannot bypass the normal tool boundary, as required by [D-toolscript-os-effects-through-tools](../units/src-toolscript.md#d-toolscript-os-effects-through-tools).
 - A persisted run belongs to one session; other sessions cannot inspect or resume it.
 - A background run cannot be resumed concurrently.
-- VM snapshots and run records are persisted so waiting runs can survive process restart.
+- VM snapshots and run records persist an exact runtime/format identity so compatible waiting runs survive process restart; incompatible waiting snapshots fail clearly without affecting completed history, as required by [D-toolscript-versioned-snapshot-runtime](../units/src-toolscript.md#d-toolscript-versioned-snapshot-runtime).
 - Nested tool calls execute through the normal tool layer but are represented as subcalls of the outer ToolScript run rather than appended as ordinary outer-session tool history.
 - Managed-session leases acquired by a run are released on cancellation or completion.
 - Only background managed-event waits auto-wake. Agent-input and timeout waits require `continue_script` in either mode.

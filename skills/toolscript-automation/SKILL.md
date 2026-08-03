@@ -42,14 +42,14 @@ Or run a small inline script with the `code` argument. The default mode is `fore
 
 1. Discover and test the required tools in the normal agent loop.
 2. Confirm their input arguments and return values.
-3. Write one self-contained script with helpers before `main(args)`.
+3. Write one self-contained script with an explicit `main(args)` entrypoint.
 4. Run it with `run_script(...)`.
 5. Inspect `status`, `result`, `error`, and any waiting fields.
 6. Resume agent-input or timeout waits with `continue_script(...)`.
 
 ## Script contract
 
-- Define every top-level helper before `main(args)`. Monty does not resolve a helper that is defined later in the file.
+- Top-level helpers may be defined before or after `main(args)`; Foxwarm invokes `main` only after the complete source has loaded.
 - Define a synchronous `main(args)`. Foxwarm calls it with one object and uses its explicit return value as `result`.
 - Keep the script self-contained. Imports of neighboring `.py` files are unavailable.
 - `print(...)` writes to the run's captured stdout; it does not emit a normal outer-session message.
@@ -71,17 +71,17 @@ def main(args):
 
 ## Python subset
 
-ToolScript uses Monty rather than CPython. Use ordinary expressions, functions, loops, branching, f-strings, comprehensions, generator expressions, lambdas, and `try`/`except`.
+ToolScript uses Monty rather than CPython. Use ordinary expressions, functions, loops, branching, f-strings, comprehensions, generator expressions, lambdas, `try`/`except`, simple classes, and synchronous `with` statements. Generator expressions currently materialize as lists rather than lazy generators.
 
 Module support is deliberately limited:
 
-- `json`, `re`, and `math` support common operations.
+- `json`, `re`, `math`, `datetime`, and `unicodedata` support common pure operations.
 - `pathlib` supports lexical path manipulation, but it does not grant host filesystem access.
 - Type annotations parse, but runtime `typing` objects are only partially supported.
-- `os` does not provide `os.path`, working-directory, environment, or process access.
-- `shlex`, `collections`, `subprocess`, and local modules are unavailable.
-- OS-backed functions such as `datetime.now()` are unavailable.
-- Class definitions, `with` statements, and `match` statements are unavailable.
+- `asyncio`, `os`, `pathlib`, and `sys` are partial; operations that ask the host for files, environment, working-directory, clock, or process state are rejected.
+- Common CPython modules including `shlex`, `collections`, `itertools`, `functools`, `random`, `time`, `subprocess`, and local or third-party modules are unavailable.
+- Simple classes work, but inheritance, metaclasses, function/method decorators, and most custom dunder protocols do not.
+- `match`, `yield`, `del`, async iteration, and async context managers are unavailable.
 
 Use `call_tool("read", ...)`, `call_tool("write", ...)`, or `call_tool("exec", ...)` for permitted host filesystem and process work. Normal session, node, and isolation permissions apply.
 
@@ -237,9 +237,11 @@ Statuses are `completed`, `waiting`, `failed`, and `cancelled`.
 Default VM limits include:
 
 - 64 MB memory
-- 200,000 allocations
 - recursion depth 200
-- 30-second safe-checkpoint budget per run/continue slice
+- a Monty execution-duration limit initialized from the run's timeout budget and retained in snapshots
+- a 30-second Foxwarm safe-checkpoint budget per run/continue slice unless `timeoutSecs` is provided
+
+Monty does not expose an allocation-count limit. Memory, recursion, and execution-duration limits remain enforced in its isolated worker process.
 
 ToolScript can repeat side effects quickly. Review paths, commands, write targets, node selection, and retry behavior before running a script. Prefer the normal tool loop when the flow is exploratory or only needs one or two calls.
 
