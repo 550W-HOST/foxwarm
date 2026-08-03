@@ -85,7 +85,7 @@ test('source build uses the official standalone web packaging task and verifies 
   assert.match(dockerWrapper, /process\.getuid/)
   assert.match(builderDockerfile, /^FROM node:24\.17\.0-bookworm/m)
   assert.match(builderDockerfile, /libxkbfile-dev/)
-  assert.equal((runtimeDockerfile.match(/^FROM node:24\.17\.0-bookworm(?:-slim)?/gm) || []).length, 2)
+  assert.equal((runtimeDockerfile.match(/^FROM node:24\.17\.0-trixie(?:-slim)?/gm) || []).length, 2)
   assert.match(runtimeDockerfile, /packages\/vscode-web\/foxwarm-fs/)
   assert.match(nodeDockerfile, /^FROM node:24\.17\.0-bookworm-slim/m)
   assert.match(nodeDockerfile, /packages\/cli-node-runtime ci --omit=dev/)

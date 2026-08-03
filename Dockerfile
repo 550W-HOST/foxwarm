@@ -1,4 +1,4 @@
-FROM node:24.17.0-bookworm AS build
+FROM node:24.17.0-trixie AS build
 
 WORKDIR /app
 
@@ -26,7 +26,7 @@ RUN rm -rf /app/packages/shared/node_modules /app/packages/cli-node/node_modules
 COPY packages/vscode-web ./packages/vscode-web
 RUN mkdir -p /app/packages/vscode-web/assets/vscode-web
 
-FROM node:24.17.0-bookworm-slim AS runtime
+FROM node:24.17.0-trixie-slim AS runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
