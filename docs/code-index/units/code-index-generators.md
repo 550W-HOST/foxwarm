@@ -13,7 +13,7 @@ Defines governed code-index maintenance and two first-draft initialization paths
 - `INITIALIZATION.md` — batch versus top-down initialization, generator invocation, safe points, and post-generation curation.
 - `WORKER.md` — fixed-scope bottom-up worker contract and report format.
 - `TOP_DOWN_CHILD.md` — context-carrying traversal, micro-batch persistence, rolling parent docs, and `_work` checkpoints.
-- `generate_code_index.py` — Foxwarm ToolScript-compatible batch runner.
+- `generate_code_index.py` — Foxwarm ToolScript-compatible batch runner that stays within Monty's bundled language/module subset and delegates host file/process work through `call_tool`.
 - `generate_code_index_standalone.py` — ordinary Python runner over the production `foxwarm model` CLI.
 - `tests/test_generate_code_index.py` — path, overwrite, resume, and generation safety tests.
 - `docs/code-index/scripts/audit_index.py` — repository-local publication, navigation, ownership, language, and decision-duplication audit.
@@ -45,6 +45,7 @@ Defines governed code-index maintenance and two first-draft initialization paths
 | `validate_groupings` / `validate_module_plan` / `parse_threads` | Reject unsafe names and incomplete/duplicate model plans |
 | `grouping_cache_inputs` / `cache_fingerprint` | Bind resume state to the selected inputs |
 | `write_generated_doc` | Preserve curated output unless explicit force is given |
+| `shell_quote` / `absolute_path` / `path_basename` | Provide the ToolScript runner's self-contained POSIX quoting and path handling without unavailable CPython modules |
 
 ## Behavior
 
@@ -56,13 +57,14 @@ Defines governed code-index maintenance and two first-draft initialization paths
 - Unit `Files:` entries declare one primary owner. Shared manifests and integration references belong under secondary files.
 - Worker prompts prefer stable symbols and sections over brittle line-number-heavy function indexes.
 - Generators create first drafts only and deliberately do not extract design decisions from a fixed source.
+- The ToolScript runner imports only Monty's bundled `json` module. Its path and shell helpers are pure script logic; filesystem and process effects remain normal `call_tool` host calls.
 - The standalone runner validates every model-selected source path against the scanned allowlist, rejects unsafe output names and symlink escapes, and never writes failed/empty model output.
 - Existing non-empty documents are preserved unless `--force` explicitly authorizes replacement.
 - The repository-level `quality:code-index` command runs the copied audit script with `--source-root . --fail-on-cjk`, so public index regressions fail before merge.
 
 ## Tests
 
-The generator tests cover absolute/parent/unscanned path rejection, malicious output names, exact grouping assignment, source filtering, empty/failed model output, cache invalidation, preserved documents, force behavior, phase preservation, atomic writes, and output symlink escapes.
+The generator tests cover absolute/parent/unscanned path rejection, malicious output names, exact grouping assignment, source filtering, empty/failed model output, cache invalidation, preserved documents, force behavior, phase preservation, atomic writes, and output symlink escapes. `src/toolscriptSkills.test.ts` additionally loads the bundled ToolScript source with the locked Monty runtime and drives mocked `call_tool` suspensions through relative-path resolution, home expansion, output-directory setup, and the first source scan.
 
 ## Integration
 
@@ -89,3 +91,7 @@ Each source file has at most one primary-owning unit. Shared manifests and integ
 ### D-code-index-stable-symbols
 
 Generated and manually curated function indexes prefer stable symbols and sections. Line numbers are optional evidence, not the primary navigation contract.
+
+### D-code-index-toolscript-host-boundary
+
+The ToolScript batch runner must remain executable in Monty's supported Python subset. Path manipulation and shell quoting may be self-contained script logic, but host filesystem and process operations continue to use Foxwarm's normal `call_tool` boundary rather than direct Python OS access.

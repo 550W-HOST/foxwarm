@@ -19,7 +19,7 @@ services:
       FOXWARM_DATA_DIR: /app/test
     volumes:
       - ..:/app
-      - /home/ldmbot/temp-worktrees/foxwarm-toolscript-phase1/node_modules:/app/node_modules
+      - ../node_modules:/app/node_modules
       - ./state:/app/state
       - ./agents:/app/agents
       - ./.env:/app/.env:ro

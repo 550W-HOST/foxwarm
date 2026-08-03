@@ -84,6 +84,7 @@ type ToolScriptRunRecord = {
   filePath: string;
   scriptPath: string;
   scriptName: string;
+  vmRuntime?: ToolScriptVmRuntimeIdentity;
   snapshotBase64?: string;
   stdout: string;
   executedTools: string[];
@@ -111,6 +112,7 @@ type ToolScriptResult = {
   ownerSessionId: string;
   scriptPath: string;
   filePath: string;
+  vmRuntime?: ToolScriptVmRuntimeIdentity;
   stdout: string;
   executedTools: string[];
   subCalls?: ToolScriptSubCall[];
@@ -139,22 +141,38 @@ type RuntimeState = {
 };
 
 type MontyModule = {
-  Monty: new (code: string, options?: Record<string, any>) => any;
-  MontySnapshot: { load(data: Buffer, options?: Record<string, any>): any };
+  Monty: { create(options?: Record<string, any>): Promise<any> };
   MontyComplete: new (...args: any[]) => any;
-  MontyNameLookup: new (...args: any[]) => any;
+  FunctionSnapshot: new (...args: any[]) => any;
+  NameLookupSnapshot: new (...args: any[]) => any;
+  FutureSnapshot: new (...args: any[]) => any;
+};
+
+type MontyRuntime = {
+  monty: MontyModule;
+  pool: any;
+};
+
+type ToolScriptVmRuntimeIdentity = {
+  engine: '@pydantic/monty';
+  version: '0.0.19';
+  snapshotFormat: 'monty-pool-snapshot-v0.0.19';
 };
 
 const TOOLSCRIPT_RUNS_DIR = path.join(STATE_DIR, 'toolscript-runs');
 const METADATA_KEYS = new Set(['toolId', 'source', 'name', 'server', 'nodeId', 'args']);
 const DEFAULT_TOOLSCRIPT_TIMEOUT_SECS = 30;
 const DEFAULT_SCRIPT_LIMITS = {
-  maxAllocations: 200000,
   maxMemory: 64 * 1024 * 1024,
   maxRecursionDepth: 200,
 };
+const CURRENT_VM_RUNTIME: ToolScriptVmRuntimeIdentity = {
+  engine: '@pydantic/monty',
+  version: '0.0.19',
+  snapshotFormat: 'monty-pool-snapshot-v0.0.19',
+};
 
-let montyModulePromise: Promise<MontyModule> | null = null;
+let montyRuntimePromise: Promise<MontyRuntime> | null = null;
 const activeBackgroundRuns = new Set<string>();
 
 function nativeImport<T = any>(specifier: string): Promise<T> {
@@ -208,7 +226,7 @@ function formatRuntimeContext(record: ToolScriptRunRecord, runtimeState: Runtime
     `- sliceElapsedMs: ${getElapsedSliceMs(record)}`,
     `- hostCallCount: ${runtimeState.hostCallCount}`,
     `- executedTools: ${runtimeState.executedTools.length ? runtimeState.executedTools.join(', ') : '(none)'}`,
-    `- limits: maxDurationSecs=${record.timeoutSecs ?? DEFAULT_TOOLSCRIPT_TIMEOUT_SECS}, maxAllocations=${DEFAULT_SCRIPT_LIMITS.maxAllocations}, maxMemory=${DEFAULT_SCRIPT_LIMITS.maxMemory}, maxRecursionDepth=${DEFAULT_SCRIPT_LIMITS.maxRecursionDepth}`,
+    `- limits: maxDurationSecs=${record.timeoutSecs ?? DEFAULT_TOOLSCRIPT_TIMEOUT_SECS}, maxMemory=${DEFAULT_SCRIPT_LIMITS.maxMemory}, maxRecursionDepth=${DEFAULT_SCRIPT_LIMITS.maxRecursionDepth}`,
   ];
 
   if (runtimeState.lastHostCall) {
@@ -230,11 +248,27 @@ function formatRuntimeContext(record: ToolScriptRunRecord, runtimeState: Runtime
   return lines.join('\n');
 }
 
-async function importMonty(): Promise<MontyModule> {
-  if (!montyModulePromise) {
-    montyModulePromise = nativeImport<MontyModule>('@pydantic/monty');
+async function getMontyRuntime(): Promise<MontyRuntime> {
+  if (!montyRuntimePromise) {
+    montyRuntimePromise = (async () => {
+      const monty = await nativeImport<MontyModule>('@pydantic/monty');
+      const pool = await monty.Monty.create();
+      return { monty, pool };
+    })();
   }
-  return await montyModulePromise;
+  return await montyRuntimePromise;
+}
+
+async function closeMontyRuntime(): Promise<void> {
+  const pending = montyRuntimePromise;
+  montyRuntimePromise = null;
+  if (!pending) {
+    return;
+  }
+  try {
+    const runtime = await pending;
+    await runtime.pool.close();
+  } catch {}
 }
 
 function runFilePath(runId: string): string {
@@ -571,6 +605,7 @@ function buildBaseResult(run: ToolScriptRunRecord): ToolScriptResult {
     ownerSessionId: run.ownerSessionId,
     scriptPath: run.scriptPath,
     filePath: run.filePath,
+    ...(run.vmRuntime ? { vmRuntime: structuredClone(run.vmRuntime) } : {}),
     stdout: run.stdout,
     executedTools: [...run.executedTools],
     ...(run.subCalls?.length ? { subCalls: run.subCalls.map(sc => ({ ...sc })) } : {}),
@@ -662,12 +697,36 @@ function removeManagedLeaseRef(record: ToolScriptRunRecord, sessionId: string, l
   record.relatedManagedSessions = record.relatedManagedSessions.filter(ref => !(ref.sessionId === sessionId && ref.leaseId === leaseId));
 }
 
+async function releaseRelatedManagedSessionLeases(record: ToolScriptRunRecord, logMessage: string): Promise<void> {
+  if (!record.relatedManagedSessions?.length) {
+    return;
+  }
+  const unreleased: ToolScriptManagedLeaseRef[] = [];
+  for (const ref of record.relatedManagedSessions) {
+    try {
+      await managedSessions.releaseManagedSession({
+        sessionId: ref.sessionId,
+        ownerSessionId: record.ownerSessionId,
+        leaseId: ref.leaseId,
+        ...(record.runId ? { controllerRunId: record.runId } : {}),
+      });
+    } catch (error: any) {
+      unreleased.push(ref);
+      logger.warn({ err: error, runId: record.runId, managedSessionId: ref.sessionId }, logMessage);
+    }
+  }
+  record.relatedManagedSessions = unreleased;
+}
+
 function normalizeErrorMessage(error: any, record?: ToolScriptRunRecord, runtimeState?: RuntimeState): string {
   const augmentWithContext = (message: string): string => {
+    const namedMessage = record
+      ? message.replace(/<python-input-\d+>/g, record.scriptName)
+      : message;
     if (!record || !runtimeState) {
-      return message;
+      return namedMessage;
     }
-    return `${message}\n\n${formatRuntimeContext(record, runtimeState)}`;
+    return `${namedMessage}\n\n${formatRuntimeContext(record, runtimeState)}`;
   };
 
   if (!error) {
@@ -1114,7 +1173,21 @@ async function executeScriptHostCall(
     return result;
   }
 
-  throw new Error(`Unsupported ToolScript host function: ${functionName}`);
+  throw new Error(
+    `Unknown ToolScript function \`${functionName}\`. `
+    + 'Available host functions are call_tool, request_model_without_context, ask_agent, '
+    + 'open_managed_session, session_step, release_managed_session, and wait_for_managed_event.',
+  );
+}
+
+function buildMontyResumeError(type: string, message: string): Error {
+  const error = new Error(message);
+  error.name = type;
+  return error;
+}
+
+async function dumpMontySnapshot(progress: any): Promise<string> {
+  return Buffer.from(await progress.dump()).toString('base64');
 }
 
 async function advanceExecution(args: {
@@ -1145,13 +1218,22 @@ async function advanceExecution(args: {
       return buildBaseResult(record);
     }
 
-    if (progress instanceof monty.MontyNameLookup) {
-      progress = progress.resume();
+    if (progress instanceof monty.NameLookupSnapshot) {
+      progress = await progress.resume();
       continue;
     }
 
-    if (!progress || typeof progress !== 'object' || typeof progress.resume !== 'function') {
+    if (progress instanceof monty.FutureSnapshot) {
+      throw new Error('ToolScript execution returned an unsupported Monty future suspension.');
+    }
+
+    if (!(progress instanceof monty.FunctionSnapshot)) {
       throw new Error('ToolScript execution returned an unexpected Monty state.');
+    }
+
+    if (progress.isOsFunction) {
+      progress = await progress.resumeNotHandled();
+      continue;
     }
 
     const functionName = String(progress.functionName || '');
@@ -1161,7 +1243,7 @@ async function advanceExecution(args: {
     if (functionName === 'ask_agent') {
       const questionValue = positionalArgs.length > 0 ? positionalArgs[0] : kwargs.question;
       const question = formatQuestion(questionValue);
-      record.snapshotBase64 = Buffer.from(progress.dump()).toString('base64');
+      record.snapshotBase64 = await dumpMontySnapshot(progress);
       markRunWaiting(record, {
         reason: 'agent',
         waitingSince: Date.now(),
@@ -1188,7 +1270,7 @@ async function advanceExecution(args: {
         }
       }
       if (result && typeof result === 'object' && (result as any).__toolscriptWaitForManagedEvent) {
-        record.snapshotBase64 = Buffer.from(progress.dump()).toString('base64');
+        record.snapshotBase64 = await dumpMontySnapshot(progress);
         markRunWaiting(record, {
           reason: 'managed_event',
           waitingSince: Date.now(),
@@ -1211,7 +1293,7 @@ async function advanceExecution(args: {
         return buildBaseResult(record);
       }
       if (shouldPauseForTimeout(record)) {
-        record.snapshotBase64 = Buffer.from(progress.dump()).toString('base64');
+        record.snapshotBase64 = await dumpMontySnapshot(progress);
         markRunWaiting(record, buildTimeoutWaitingState(record, runtimeState, {
           mode: 'return',
           value: normalizeMontyValue(result),
@@ -1219,10 +1301,10 @@ async function advanceExecution(args: {
         await saveRun(record);
         return buildBaseResult(record);
       }
-      progress = progress.resume({ returnValue: result });
+      progress = await progress.resume(result);
     } catch (error: any) {
       if (shouldPauseForTimeout(record)) {
-        record.snapshotBase64 = Buffer.from(progress.dump()).toString('base64');
+        record.snapshotBase64 = await dumpMontySnapshot(progress);
         markRunWaiting(record, buildTimeoutWaitingState(record, runtimeState, {
           mode: 'exception',
           exception: {
@@ -1233,12 +1315,7 @@ async function advanceExecution(args: {
         await saveRun(record);
         return buildBaseResult(record);
       }
-      progress = progress.resume({
-        exception: {
-          type: 'RuntimeError',
-          message: error?.message || String(error),
-        },
-      });
+      progress = await progress.resumeError(buildMontyResumeError('RuntimeError', error?.message || String(error)));
     }
   }
 }
@@ -1288,6 +1365,7 @@ function createRunRecord(args: {
     filePath: args.filePath,
     scriptPath: args.scriptPath,
     scriptName: args.scriptPath === '<inline>' ? 'inline.py' : (path.basename(args.scriptPath) || 'script.py'),
+    vmRuntime: structuredClone(CURRENT_VM_RUNTIME),
     stdout: '',
     executedTools: [],
     relatedManagedSessions: [],
@@ -1322,25 +1400,67 @@ async function failRun(record: ToolScriptRunRecord, runtimeState: RuntimeState, 
   return buildBaseResult(record);
 }
 
+function getSnapshotCompatibilityError(record: ToolScriptRunRecord): string | null {
+  const runtime = record.vmRuntime;
+  if (
+    runtime?.engine === CURRENT_VM_RUNTIME.engine
+    && runtime.version === CURRENT_VM_RUNTIME.version
+    && runtime.snapshotFormat === CURRENT_VM_RUNTIME.snapshotFormat
+  ) {
+    return null;
+  }
+  const found = runtime
+    ? `${runtime.engine} ${runtime.version} (${runtime.snapshotFormat})`
+    : 'an unknown legacy Monty snapshot format';
+  return `ToolScript run \`${record.runId}\` was suspended by ${found} and cannot be resumed by `
+    + `${CURRENT_VM_RUNTIME.engine} ${CURRENT_VM_RUNTIME.version}. Start a new run. `
+    + 'The historical run record and incompatible snapshot were retained.';
+}
+
+async function failIncompatibleSnapshot(record: ToolScriptRunRecord, runtimeState: RuntimeState, message: string): Promise<ToolScriptResult> {
+  await releaseRelatedManagedSessionLeases(record, 'Failed to release managed session after incompatible ToolScript snapshot');
+  record.status = 'failed';
+  record.waiting = undefined;
+  record.stdout = currentStdout(runtimeState);
+  record.executedTools = [...runtimeState.executedTools];
+  record.subCalls = runtimeState.subCalls.map(sc => ({ ...sc }));
+  record.hostCallCount = runtimeState.hostCallCount;
+  record.lastHostCall = runtimeState.lastHostCall ? structuredClone(runtimeState.lastHostCall) : undefined;
+  record.error = `${message}\n\n${formatRuntimeContext(record, runtimeState)}`;
+  record.updatedAt = Date.now();
+  await saveRun(record);
+  logger.warn({ runId: record.runId, vmRuntime: record.vmRuntime }, 'ToolScript snapshot runtime is incompatible');
+  return buildBaseResult(record);
+}
+
 async function startRun(record: ToolScriptRunRecord, code: string, scriptArgs: any, ctx: ToolContext): Promise<ToolScriptResult> {
-  const monty = await importMonty();
   const runtimeState = createRuntimeState(record.stdout, record.executedTools);
+  let montySession: any;
   try {
-    const runner = new monty.Monty(buildToolScriptSource(code), { scriptName: record.scriptName, inputs: ['args'] });
-    const progress = runner.start({
-      inputs: { args: normalizeMontyValue(scriptArgs || {}) },
+    const { monty, pool } = await getMontyRuntime();
+    montySession = await pool.checkout({
+      scriptName: record.scriptName,
       limits: buildMontyLimits(record.timeoutSecs ?? DEFAULT_TOOLSCRIPT_TIMEOUT_SECS),
+    });
+    const progress = await montySession.feedStart(buildToolScriptSource(code), {
+      inputs: { args: normalizeMontyValue(scriptArgs || {}) },
       printCallback: printCallbackFor(runtimeState),
     });
     return await advanceExecution({ progress, record, runtimeState, ctx: { ...ctx, toolScriptRunId: record.runId }, monty });
   } catch (error: any) {
     return await failRun(record, runtimeState, error, 'ToolScript run failed during startup');
+  } finally {
+    await montySession?.close().catch(() => {});
   }
 }
 
 async function resumeRun(record: ToolScriptRunRecord, resumeValue: any, ctx: ToolContext, logMessage: string): Promise<ToolScriptResult> {
-  const monty = await importMonty();
   const runtimeState = createRuntimeState(record.stdout, record.executedTools);
+  const compatibilityError = getSnapshotCompatibilityError(record);
+  if (compatibilityError) {
+    return await failIncompatibleSnapshot(record, runtimeState, compatibilityError);
+  }
+  let montySession: any;
   try {
     if (!record.snapshotBase64) {
       throw new Error(`ToolScript run \`${record.runId}\` has no resumable snapshot.`);
@@ -1349,15 +1469,25 @@ async function resumeRun(record: ToolScriptRunRecord, resumeValue: any, ctx: Too
     record.lastResumeAt = Date.now();
     record.updatedAt = record.lastResumeAt;
     await saveRun(record);
-    const snapshot = monty.MontySnapshot.load(Buffer.from(record.snapshotBase64, 'base64'), {
+    const { monty, pool } = await getMontyRuntime();
+    montySession = await pool.checkout();
+    const snapshot = await montySession.loadSnapshot(Buffer.from(record.snapshotBase64, 'base64'), {
       printCallback: printCallbackFor(runtimeState),
     });
+    if (!(snapshot instanceof monty.FunctionSnapshot) || snapshot.isOsFunction) {
+      throw new Error('ToolScript persisted snapshot is not a resumable Foxwarm host-call snapshot.');
+    }
     const resumed = resumeValue && typeof resumeValue === 'object' && (resumeValue as any).__toolscriptResumeException
-      ? snapshot.resume({ exception: normalizeMontyValue((resumeValue as any).__toolscriptResumeException) })
-      : snapshot.resume({ returnValue: normalizeMontyValue(resumeValue) });
+      ? await snapshot.resumeError(buildMontyResumeError(
+        String((resumeValue as any).__toolscriptResumeException?.type || 'RuntimeError'),
+        String((resumeValue as any).__toolscriptResumeException?.message || 'ToolScript host call failed'),
+      ))
+      : await snapshot.resume(normalizeMontyValue(resumeValue));
     return await advanceExecution({ progress: resumed, record, runtimeState, ctx: { ...ctx, toolScriptRunId: record.runId }, monty });
   } catch (error: any) {
     return await failRun(record, runtimeState, error, logMessage);
+  } finally {
+    await montySession?.close().catch(() => {});
   }
 }
 
@@ -1487,21 +1617,15 @@ export async function tool_cancel_toolscript_run(args: ToolArgs, ctx: ToolContex
   }
   ensureRunOwnedBySession(record, sessionId);
   if (record.status === 'completed' || record.status === 'failed' || record.status === 'cancelled') {
+    if (record.relatedManagedSessions?.length) {
+      await releaseRelatedManagedSessionLeases(record, 'Failed to retry managed-session cleanup for terminal ToolScript run');
+      record.updatedAt = Date.now();
+      await saveRun(record);
+    }
     return buildBaseResult(record);
   }
 
-  for (const ref of record.relatedManagedSessions || []) {
-    try {
-      await managedSessions.releaseManagedSession({
-        sessionId: ref.sessionId,
-        ownerSessionId: record.ownerSessionId,
-        leaseId: ref.leaseId,
-        ...(record.runId ? { controllerRunId: record.runId } : {}),
-      });
-    } catch (error: any) {
-      logger.warn({ err: error, runId: record.runId, managedSessionId: ref.sessionId }, 'Failed to release managed session during ToolScript cancel');
-    }
-  }
+  await releaseRelatedManagedSessionLeases(record, 'Failed to release managed session during ToolScript cancel');
 
   activeBackgroundRuns.delete(record.runId);
   record.status = 'cancelled';
@@ -1556,6 +1680,11 @@ export async function getToolScriptRunForTests(runId: string): Promise<ToolScrip
   return await loadRun(runId);
 }
 
+export async function resetToolScriptMontyRuntimeForTests(): Promise<void> {
+  await closeMontyRuntime();
+}
+
 export async function resetToolScriptRunsForTests(): Promise<void> {
+  await closeMontyRuntime();
   await fs.remove(TOOLSCRIPT_RUNS_DIR);
 }

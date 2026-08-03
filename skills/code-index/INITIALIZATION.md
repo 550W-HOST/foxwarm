@@ -149,6 +149,8 @@ run_script(filePath="skills/code-index/generate_code_index.py", args={"project":
 
 It uses ToolScript host APIs such as `call_tool(...)` and `request_model_without_context(...)`; do not run that compatibility entry with ordinary Python. Prefer the standalone runner when you need strict path/output validation, fingerprinted resume state, or a long-running shell/background job.
 
+The compatibility runner executes in Monty's Python subset. It deliberately avoids CPython-only path and shell modules: path normalization and shell quoting are self-contained, while every host file or process operation still crosses the normal `call_tool(...)` boundary. Keep new imports within Monty's supported module set and cover runner startup with the Monty-backed regression test; use the standalone runner instead when a change needs ordinary Python libraries.
+
 ### After Generation
 
 Review and clean up generated docs:

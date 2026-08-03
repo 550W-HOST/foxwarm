@@ -1,7 +1,7 @@
 # Unit: VS Code Web package and extensions
 
 Files: packages/vscode-web/README.md, packages/vscode-web/package.json, packages/vscode-web/code-oss-version.json, packages/vscode-web/yaml-extension-version.json, packages/vscode-web/Dockerfile.code-oss, packages/vscode-web/scripts/build-code-docker.mjs, packages/vscode-web/scripts/build-code-oss.mjs, packages/vscode-web/scripts/prepare-assets.mjs, packages/vscode-web/scripts/prepare-yaml-extension.mjs, packages/vscode-web/scripts/yaml-extension-assets.mjs, packages/vscode-web/test/assetCommands.test.mjs, packages/vscode-web/test/yamlSchema.e2e.mjs, packages/vscode-web/foxwarm-fs/, packages/vscode-web/foxwarm-terminal/, packages/vscode-web/foxwarm-scm/, packages/vscode-web/foxwarm-webui/, skills/webui-markers/SKILL.md
-Secondary files: package.json, .gitignore
+Secondary files: package.json, .gitignore, Dockerfile
 
 ## Purpose
 
@@ -14,6 +14,7 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 - `npm run build:code` builds the pinned MIT Code - OSS source in the dedicated Node 24 Docker builder and publishes required ignored assets.
 - `build:code:local` is the explicit host-native alternative for an environment with matching Node/native prerequisites.
 - `npm run download:code` fetches the pinned Microsoft `web-standalone` product build for licensed/internal use; its product license is distinct from Code - OSS MIT.
+- Asset regression coverage distinguishes the root server's pinned Node 24 trixie build/runtime stages, required by its native runtime dependencies, from the Code OSS builder, node runtime, and unrelated test images that remain on bookworm.
 - Package-local `prepare:assets` remains an alias of pinned download.
 - Workbench assets and source/dependency caches are intentionally absent from Git and ordinary `npm run build`.
 - Both workbench preparation paths also download, SHA-256 verify, license-check, and extract the pinned stable `redhat.vscode-yaml` Web extension from Open VSX. The reviewed MIT license and notices are tracked; the artifact remains in ignored optional assets. Preparation applies only a fail-closed exact bundle patch so the telemetry library recognizes the effective disabled default; all other vendor files remain byte-for-byte unchanged.

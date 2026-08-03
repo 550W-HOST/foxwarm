@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs-extra';
+import path from 'path';
+import { FunctionSnapshot, Monty } from '@pydantic/monty';
 
 import { listSkills, loadSkillDocuments } from './skills';
+import { definitions } from './tools/definitions';
 
 test('global ToolScript skills are visible and loadable', async () => {
   const skills = await listSkills({ agentName: 'main' });
@@ -23,6 +27,27 @@ test('global ToolScript skills are visible and loadable', async () => {
   assert.match(automationText, /mode:\s*["']background["']/);
   assert.doesNotMatch(automationText, /start_toolscript_run/);
   assert.match(automationText, /call_tool\(/);
+  assert.match(automationText, /Every ToolScript defines `main\(args\)`/);
+  assert.match(automationText, /helpers may be defined before or after `main\(args\)`/i);
+  assert.match(automationText, /operations that ask the host for files, environment, working-directory, clock, or process state are rejected/i);
+  assert.doesNotMatch(automationText, /200,000 allocations/i);
+  assert.doesNotMatch(automationText, /should now|\blegacy\b|\bformerly\b|\bstill\b/i);
+
+  const automationExample = await fs.readFile(
+    path.join(__dirname, '..', 'examples', 'toolscript', 'automation_basic.py'),
+    'utf8',
+  );
+  const builtinReferences = Array.from(
+    `${automationText}\n${automationExample}`.matchAll(/builtin:([A-Za-z0-9_-]+)/g),
+    match => match[1],
+  );
+  const knownBuiltins = new Set(definitions.map(definition => definition.name));
+  assert.deepEqual(
+    builtinReferences.filter(name => !knownBuiltins.has(name)),
+    [],
+    'ToolScript skill/examples must not reference removed builtin tools',
+  );
+  assert.doesNotMatch(automationExample, /builtin:list_files/);
 
   const managed = await loadSkillDocuments('toolscript-managed-controller', { agentName: 'main' });
   const managedText = managed.documents.map(doc => doc.content).join('\n\n');
@@ -56,4 +81,57 @@ test('global ToolScript skills are visible and loadable', async () => {
   assert.match(mcpText, /builtin:list_mcp_servers/);
   assert.match(mcpText, /streamable-http/);
   assert.match(mcpText, /Never print.*real tokens/i);
+});
+
+test('bundled code-index ToolScript starts under the locked Monty runtime', async () => {
+  const codeIndex = await loadSkillDocuments('code-index', { agentName: 'main' });
+  const scriptPath = path.join(codeIndex.info.dir, 'generate_code_index.py');
+  const source = await fs.readFile(scriptPath, 'utf8');
+  const pool = await Monty.create({ minProcesses: 1, maxProcesses: 1 });
+  const session = await pool.checkout({ scriptName: 'generate_code_index.py' });
+
+  try {
+    let progress: any = await session.feedStart(`${source.trimEnd()}\n\nmain(args)\n`, {
+      inputs: {
+        args: {
+          source: 'project',
+          phase: 'plan',
+          files: ['src/main.ts'],
+        },
+      },
+      printCallback: () => {},
+    });
+
+    assert.ok(progress instanceof FunctionSnapshot);
+    assert.equal(progress.functionName, 'call_tool');
+    assert.equal(progress.args[0], 'exec');
+    assert.equal((progress.args[1] as Map<string, unknown>)?.get('command'), 'pwd -P');
+
+    progress = await progress.resume('/workspace\n');
+    assert.ok(progress instanceof FunctionSnapshot);
+    assert.equal(progress.functionName, 'call_tool');
+    assert.equal(progress.args[0], 'exec');
+    assert.match(String((progress.args[1] as Map<string, unknown>)?.get('command')), /\$HOME/);
+
+    progress = await progress.resume('/home/toolscript\n');
+    assert.ok(progress instanceof FunctionSnapshot);
+    assert.equal(progress.functionName, 'call_tool');
+    assert.equal(progress.args[0], 'exec');
+    assert.equal(
+      (progress.args[1] as Map<string, unknown>)?.get('command'),
+      "mkdir -p '/home/toolscript/code-index/project/units' '/home/toolscript/code-index/project/modules' '/home/toolscript/code-index/project/threads'",
+    );
+
+    progress = await progress.resume('');
+    assert.ok(progress instanceof FunctionSnapshot);
+    assert.equal(progress.functionName, 'call_tool');
+    assert.equal(progress.args[0], 'exec');
+    assert.equal(
+      (progress.args[1] as Map<string, unknown>)?.get('command'),
+      "wc -l < '/workspace/project/src/main.ts' 2>/dev/null || echo 0",
+    );
+  } finally {
+    await session.close();
+    await pool.close();
+  }
 });

@@ -10,9 +10,9 @@ import * as sessionManager from './sessionManager';
 import * as managedSessions from './managedSessions';
 import * as tools from './tools';
 import * as mcpClient from './mcpClient';
-import { getAgentDir } from './config';
+import { getAgentDir, STATE_DIR } from './config';
 import { convertToOpenAIResponsesFormat } from './llmProviders/openai';
-import { tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, getToolScriptRunForTests, resetToolScriptRunsForTests } from './toolscript';
+import { tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, getToolScriptRunForTests, resetToolScriptMontyRuntimeForTests, resetToolScriptRunsForTests } from './toolscript';
 import type { Session } from './types';
 
 function makeId(prefix: string): string {
@@ -33,6 +33,14 @@ function asMain(body: string): string {
     ...body.split('\n').map(line => line ? `    ${line}` : ''),
     '',
   ].join('\n');
+}
+
+function latestUserText(session: Session): string {
+  const message = [...(session.history || [])].reverse().find(entry => entry.role === 'user');
+  return (message?.parts || [])
+    .map(part => part.text || '')
+    .filter(Boolean)
+    .join(' | ');
 }
 
 const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnSUs8AAAAASUVORK5CYII=';
@@ -71,6 +79,44 @@ test('run_script executes internal call_tool without surfacing nested tool histo
   }
 });
 
+test('canonical ToolScript automation example runs and resumes end to end', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_canonical_example');
+  const session = await sessionManager.getSession(sessionId);
+  const examplePath = path.join(__dirname, '..', 'examples', 'toolscript', 'automation_basic.py');
+  const baseDir = path.dirname(examplePath);
+
+  try {
+    const waiting = await tool_run_script({
+      filePath: examplePath,
+      args: { baseDir },
+    }, { sessionId, session });
+
+    assert.equal(waiting.status, 'waiting');
+    assert.equal(waiting.waitingReason, 'agent');
+    assert.equal(waiting.question, 'Reply with a short label');
+    assert.ok(waiting.continuationId);
+    assert.deepEqual(waiting.executedTools, ['read', 'read']);
+    assert.match(waiting.stdout, /starting automation example/);
+    assert.match(waiting.stdout, /automation_basic\.py/);
+
+    const completed = await tool_continue_script({
+      runId: waiting.runId,
+      continuationId: waiting.continuationId,
+      input: 'EXAMPLE_OK',
+    }, { sessionId, session });
+
+    assert.equal(completed.status, 'completed');
+    assert.equal(completed.stdout, '');
+    assert.equal(completed.result?.label, 'EXAMPLE_OK');
+    assert.match(completed.result?.listingPreview || '', /automation_basic\.py/);
+    assert.match(completed.result?.documentationExcerpt || '', /ToolScript examples/);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
 test('run_script requires an explicit main(args) entrypoint', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_no_main');
@@ -87,6 +133,56 @@ test('run_script requires an explicit main(args) entrypoint', async () => {
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
     await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('run_script resolves local helpers defined after main', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_late_helper');
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    const result = await tool_run_script({
+      code: [
+        'def main(args):',
+        '    return helper(3)',
+        '',
+        'def helper(value):',
+        '    return value * 2',
+      ].join('\n'),
+    }, { sessionId, session });
+
+    assert.equal(result.status, 'completed');
+    assert.equal(result.result, 6);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('run_script rejects Monty OS functions without bypassing call_tool', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_os_boundary');
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    const result = await tool_run_script({
+      code: asMain([
+        'try:',
+        '    open("/etc/passwd").read()',
+        'except PermissionError:',
+        '    return "blocked"',
+        'return "unexpected"',
+      ].join('\n')),
+    }, { sessionId, session });
+
+    assert.equal(result.status, 'completed');
+    assert.equal(result.result, 'blocked');
+    assert.deepEqual(result.executedTools, []);
+    assert.equal(result.hostCallCount, 0);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
   }
 });
 
@@ -419,6 +515,14 @@ test('run_script pauses at ask_agent and continue_script resumes from persisted 
     assert.equal(persisted?.waiting?.reason, 'agent');
     assert.equal(persisted?.waiting?.question, 'What now?');
     assert.ok(persisted?.snapshotBase64);
+    assert.deepEqual(persisted?.vmRuntime, {
+      engine: '@pydantic/monty',
+      version: '0.0.19',
+      snapshotFormat: 'monty-pool-snapshot-v0.0.19',
+    });
+
+    // A real restart loses the Monty worker pool but retains the persisted run and snapshot.
+    await resetToolScriptMontyRuntimeForTests();
 
     const completed = await tool_continue_script({
       runId: paused.runId,
@@ -443,6 +547,48 @@ test('run_script pauses at ask_agent and continue_script resumes from persisted 
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
     await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('legacy waiting snapshots fail clearly while historical completed records remain readable', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_legacy_snapshot');
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    const paused = await tool_run_script({
+      code: asMain('answer = ask_agent("Need input")\nreturn answer'),
+    }, { sessionId, session });
+    const waitingRecord: any = await getToolScriptRunForTests(paused.runId);
+    const legacySnapshot = waitingRecord.snapshotBase64;
+    delete waitingRecord.vmRuntime;
+    await fs.writeJson(path.join(STATE_DIR, 'toolscript-runs', `${paused.runId}.json`), waitingRecord, { spaces: 2 });
+
+    const incompatible = await tool_continue_script({
+      runId: paused.runId,
+      continuationId: paused.continuationId,
+      input: 'ignored',
+    }, { sessionId, session });
+    assert.equal(incompatible.status, 'failed');
+    assert.match(incompatible.error || '', /unknown legacy Monty snapshot format/i);
+    assert.match(incompatible.error || '', /cannot be resumed/i);
+    assert.match(incompatible.error || '', /historical run record and incompatible snapshot were retained/i);
+
+    const retained: any = await getToolScriptRunForTests(paused.runId);
+    assert.equal(retained.snapshotBase64, legacySnapshot);
+    assert.equal(retained.status, 'failed');
+
+    const completed = await tool_run_script({ code: asMain('return {"ok": True}') }, { sessionId, session });
+    const completedRecord: any = await getToolScriptRunForTests(completed.runId);
+    delete completedRecord.vmRuntime;
+    await fs.writeJson(path.join(STATE_DIR, 'toolscript-runs', `${completed.runId}.json`), completedRecord, { spaces: 2 });
+
+    const historical = await tool_get_toolscript_run({ runId: completed.runId }, { sessionId, session });
+    assert.equal(historical.status, 'completed');
+    assert.deepEqual(historical.result, { ok: true });
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
   }
 });
 
@@ -471,6 +617,8 @@ test('run_script pauses on timeout checkpoints and continue_script can resume ex
     assert.equal(paused.waitingFor?.pausedAtSummaryName, 'exec');
     assert.equal(paused.stdout, 'before timeout\n');
     assert.deepEqual(paused.executedTools, ['exec']);
+
+    await resetToolScriptMontyRuntimeForTests();
 
     const completed = await tool_continue_script({
       runId: paused.runId,
@@ -621,15 +769,13 @@ test('ToolScript session_step can optionally include full newMessages payload', 
   ].join('\n')));
 
   sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
-  (llm as any).chat = async (parts: any, activeSession: Session) => {
-    if (parts?.length) {
-      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
-    }
+  (llm as any).chat = async (_parts: any, activeSession: Session) => {
+    const userText = latestUserText(activeSession);
     await sessionManager.appendSessionMessage(activeSession, {
       role: 'model',
-      parts: [{ text: `child handled: ${parts?.map((part: any) => part.text || '').filter(Boolean).join(' | ') || ''}` }],
+      parts: [{ text: `child handled: ${userText}` }],
     });
-    return { text: `child handled: ${parts?.map((part: any) => part.text || '').filter(Boolean).join(' | ') || ''}` };
+    return { text: `child handled: ${userText}` };
   };
 
   const parent = await sessionManager.getSession(parentId);
@@ -670,13 +816,11 @@ test('background ToolScript controller run can wait for managed inbox events and
   ].join('\n')));
 
   sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
-  (llm as any).chat = async (parts: any, activeSession: Session) => {
-    if (parts?.length) {
-      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
-    }
+  (llm as any).chat = async (_parts: any, activeSession: Session) => {
+    const userText = latestUserText(activeSession);
     await sessionManager.appendSessionMessage(activeSession, {
       role: 'model',
-      parts: [{ text: `bg child handled: ${parts?.map((part: any) => part.text || '').filter(Boolean).join(' | ') || ''}` }],
+      parts: [{ text: `bg child handled: ${userText}` }],
     });
     return { text: 'ok' };
   };
@@ -694,6 +838,8 @@ test('background ToolScript controller run can wait for managed inbox events and
     const managedState = await managedSessions.getManagedSessionStateForTests(childId);
     assert.equal(managedState?.controllerRunId, started.runId);
 
+    await resetToolScriptMontyRuntimeForTests();
+
     await sessionManager.queueSessionStructuredEvent(childId, [{ text: 'outside event' }], 'background');
     await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -706,6 +852,74 @@ test('background ToolScript controller run can wait for managed inbox events and
     assert.match(child.history[child.history.length - 1]?.parts?.[0]?.text || '', /controller woke/);
     assert.equal(await managedSessions.getManagedSessionStateForTests(childId), undefined);
   } finally {
+    (llm as any).chat = originalChat;
+    sessionManager.setSessionTriggerCallback(() => {});
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(childId).catch(() => false);
+    await sessionManager.deleteSession(parentId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('incompatible managed-controller snapshot releases its lease and terminal cancel can retry cleanup', async () => {
+  await resetToolScriptRunsForTests();
+  const router = new MessageRouter();
+  const originalChat = llm.chat;
+  const parentId = makeId('toolscript_incompatible_controller_parent');
+  const childId = makeId('toolscript_incompatible_controller_child');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain([
+    `lease = open_managed_session("${childId}")`,
+    `return wait_for_managed_event("${childId}", lease["leaseId"], lease["revision"])`,
+  ].join('\n')));
+
+  sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
+  (llm as any).chat = async (_parts: any, activeSession: Session) => {
+    const userText = latestUserText(activeSession);
+    await sessionManager.appendSessionMessage(activeSession, {
+      role: 'model',
+      parts: [{ text: `normal child handled: ${userText}` }],
+    });
+    return { text: 'ok' };
+  };
+
+  const parent = await sessionManager.getSession(parentId);
+  const child = await sessionManager.getSession(childId);
+
+  try {
+    const started = await tool_start_toolscript_run({ filePath: scriptName }, { sessionId: parentId, session: parent });
+    assert.equal(started.status, 'waiting');
+    assert.equal(started.waitingReason, 'managed_event');
+
+    const persisted: any = await getToolScriptRunForTests(started.runId);
+    const incompatibleSnapshot = persisted.snapshotBase64;
+    persisted.vmRuntime.version = '0.0.18';
+    await fs.writeJson(path.join(STATE_DIR, 'toolscript-runs', `${started.runId}.json`), persisted, { spaces: 2 });
+
+    // Force the first best-effort release to fail so the terminal retry path is exercised.
+    child.busy = true;
+    await sessionManager.saveSession(child.id);
+    await sessionManager.queueSessionStructuredEvent(childId, [{ text: 'outside event' }], 'background');
+
+    const failed: any = await getToolScriptRunForTests(started.runId);
+    assert.equal(failed?.status, 'failed');
+    assert.match(failed?.error || '', /cannot be resumed/i);
+    assert.equal(failed?.snapshotBase64, incompatibleSnapshot);
+    assert.equal(failed?.relatedManagedSessions?.length, 1);
+    assert.ok(await managedSessions.getManagedSessionStateForTests(childId));
+
+    child.busy = false;
+    await sessionManager.saveSession(child.id);
+    const afterRetry = await tool_cancel_toolscript_run({ runId: started.runId }, { sessionId: parentId, session: parent });
+    assert.equal(afterRetry.status, 'failed');
+    assert.equal(afterRetry.relatedManagedSessions?.length || 0, 0);
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(await managedSessions.getManagedSessionStateForTests(childId), undefined);
+    const restoredChild = await sessionManager.getSession(childId);
+    assert.match(restoredChild.history[restoredChild.history.length - 1]?.parts?.[0]?.text || '', /normal child handled: outside event/);
+  } finally {
+    child.busy = false;
     (llm as any).chat = originalChat;
     sessionManager.setSessionTriggerCallback(() => {});
     await resetToolScriptRunsForTests();
@@ -917,6 +1131,8 @@ test('ToolScript session_step rejects non-user message injection shapes', async 
     const result = await tool_run_script({ filePath: scriptName }, { sessionId: parentId, session: parent });
     assert.equal(result.status, 'failed');
     assert.match(result.error || '', /message\.role must be `user`/i);
+    assert.match(result.error || '', new RegExp(scriptName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.doesNotMatch(result.error || '', /<python-input-\d+>/);
     assert.match(result.error || '', /ToolScript context:/);
     assert.equal(result.hostCallCount, 1);
     assert.equal(result.lastHostCall?.functionName, 'open_managed_session');
