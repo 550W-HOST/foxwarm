@@ -46,6 +46,7 @@
     "@lancedb/lancedb": "^0.26.2",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@pydantic/monty": "^0.0.19",
+    "@bjorn3/browser_wasi_shim": "^0.4.1",
     "@types/blessed": "^0.1.27",
     "@types/express": "^5.0.6",
     "@types/multer": "^2.0.0",

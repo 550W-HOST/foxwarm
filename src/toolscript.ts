@@ -251,7 +251,13 @@ function formatRuntimeContext(record: ToolScriptRunRecord, runtimeState: Runtime
 async function getMontyRuntime(): Promise<MontyRuntime> {
   if (!montyRuntimePromise) {
     montyRuntimePromise = (async () => {
-      const monty = await nativeImport<MontyModule>('@pydantic/monty');
+      let monty: MontyModule;
+      try {
+        monty = await nativeImport<MontyModule>('@pydantic/monty');
+      } catch (nativeError: any) {
+        logger.warn({ error: nativeError }, 'Monty native runtime unavailable; falling back to WASM runtime');
+        monty = await nativeImport<MontyModule>('@pydantic/monty/wasm');
+      }
       const pool = await monty.Monty.create();
       return { monty, pool };
     })();
