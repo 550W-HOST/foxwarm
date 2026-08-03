@@ -68,7 +68,7 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 ## Compatibility
 
 - `compactHistoryWithSummary` remains an exported manual façade over the current compact engine.
-- `getArchivedMessages` uses the current archive store while JSONL bootstrap/import compatibility remains owned by `archiveStore`.
+- `getArchivedMessages` uses the SQLite archive authority; legacy JSONL compatibility is owned only by the startup migration.
 - Compact completion follows [D-context-compact-completion](../threads/context-compaction-and-recall.md#d-context-compact-completion); this unit does not define a second wire contract.
 
 ## Design decisions

@@ -1,169 +1,71 @@
-# Archive Store / Lineage Migration
+# SQLite Archive Store and Legacy Migration
 
-Foxwarm 现在同时维护两层归档存储：
+Foxwarm uses two independent SQLite databases for its large durable archive domains:
 
-1. **legacy JSONL archives**
-   - `state/logs/sessions/<session>.jsonl`
-   - `state/logs/sessions/<session>.blocks.jsonl`
-2. **new SQLite archive store**
-   - `state/archive-store.sqlite`
+- `state/archive-store.sqlite` — session messages, layered blocks, lineage, vector checkpoints, and the SQLite mirror of moved-session-ID reservations.
+- `state/llm-request-journal.sqlite` — content-addressed provider-neutral LLM inputs, request manifests, and physical attempt provenance.
 
-## 新 archive store 的角色
+Both databases use WAL, `synchronous=FULL`, bounded busy waiting, and explicit writer transactions. They are separate so short-lived model CLI work cannot contend with normal session archive traffic.
 
-SQLite archive store 是新的**主读取层 / lineage 感知层**，负责：
+## Runtime authority
 
-- 归档消息读取
-- layered block 读取
-- fork lineage / parent-child 继承关系
-- archive-based vector checkpoint
-- inherited / local 区分
+Normal runtime is SQLite-only. It does not append or lazy-read:
 
-当前 schema 以务实可迁移为主，核心表包括：
+- `state/logs/sessions/<session>.jsonl`
+- `state/logs/sessions/<session>.blocks.jsonl`
+- `state/llm-request-journal.jsonl`
 
-- `archive_branches`
-- `archive_messages`
-- `archive_blocks`
-- `archive_checkpoints`
+Session archive commits precede active frontier/history replacement. LLM request manifests and attempt starts commit before the corresponding provider send. A failed post-response result write is reported but never causes a second provider generation.
 
-## legacy JSONL 的当前地位
+## One-time legacy migration
 
-legacy JSONL **没有立刻废弃**，目前仍然承担三种角色：
+Startup runs `sqlite-only-large-archives-v1` before session hydration. The same migration is run by the model CLI before a request when necessary.
 
-- 兼容旧数据
-- 双写回退层
-- bootstrap / migration 导入来源
+The migration:
 
-也就是说：
+1. Acquires a data-directory migration lock.
+2. Recursively discovers legacy session message/block JSONLs and the legacy LLM journal JSONL.
+3. Streams their records into the appropriate SQLite database.
+4. Strictly verifies record structure, identities, content/object hashes, primary-key equality, request delta chains, lineage graph invariants, and `PRAGMA integrity_check`.
+5. Writes a durable manifest containing each source's relative path, SHA-256, record count, and movement state.
+6. Moves every verified source to `state/migration-backup/sqlite-only-large-archives-v1/`, preserving its path relative to `state/`.
+7. Records migration completion only after every move and destination-hash verification succeeds.
 
-- 新写入会同时写 JSONL + SQLite
-- 新读路径优先走 SQLite
-- 启动/初始化时，如果 SQLite 缺数据，可以从 JSONL 补导
+Malformed/torn or structurally invalid canonical records, conflicting newly imported duplicate identities, ambiguous ownership, missing SQLite rows, or integrity failures abort the migration. Unverifiable active sources are not moved and completion is not recorded. Structural validation happens before bootstrap mutates archive identity/lineage, so a repaired fork can retry cleanly. Existing SQLite rows and branches remain authoritative when stale legacy duplicates or later metadata heuristics disagree. If a crash interrupts file movement, the durable manifest restores already moved sources to the active tree before repeating import and verification.
 
-## 初始化迁移 / bootstrap 行为
+Legacy fork logs may contain copied parent rows. Migration uses proven session aliases and parent metadata only when creating a missing branch; an established SQLite branch remains authoritative even when later metadata heuristics disagree. A path/payload mismatch alone never proves an identity move.
 
-系统现在采用：
+## Compatibility export
 
-- **startup bootstrap import + lazy fallback**
+Use:
 
-### startup bootstrap import
+```bash
+foxwarm archive export-jsonl --output <directory>
+```
 
-archive store 初始化时会：
+The command first ensures migration completion, then exports SQLite-backed compatibility files:
 
-1. 扫描 sessions metadata
-2. 扫描 legacy archive / block log 文件
-3. 为已知 session 建立 `archive_branches`
-4. 从 legacy JSONL / `.blocks.jsonl` 导入 raw messages / blocks 到 SQLite
+- `<directory>/sessions/<session>.jsonl`
+- `<directory>/sessions/<session>.blocks.jsonl`
+- `<directory>/llm-request-journal.jsonl`
 
-导入是 **幂等** 的：
+These files are export artifacts for training, inspection, or external tools. They are not runtime recovery sources.
+Each database is exported from a read snapshot with bounded buffering. Existing destination files/directories are replaced as one exact export result, so stale files are not retained.
 
-- SQLite 侧使用主键 + `INSERT OR IGNORE` / `INSERT OR REPLACE`
-- 重启后重复 bootstrap 不会无限重复灌入相同记录
+## Identity state that remains outside SQLite
 
-### lazy fallback
+`state/session-id-reservations.jsonl` remains the small authoritative ledger for committed old-to-current session-ID mappings. It can rebuild the SQLite mirror after archive database loss and prevents a retained archived lifetime from being reused. It is atomically rewritten and is not one of the removed large append-only archives.
 
-如果后续发现某个 session 在启动扫描里没覆盖到，读取时仍会触发按 session 的导入补齐。
+`state/session-id-move-pending.json` also remains. It is a temporary fail-closed journal for a move spanning session metadata, history paths, channels, archive rows, vector data, and agent directories.
 
-## fork lineage 语义
+## Backup and restore
 
-### 新语义
+Back up the complete data directory as one restore set. For live databases, use a SQLite-consistent online backup or a quiesced checkpoint/copy procedure; copying only the main `.sqlite` file while WAL writers are active is not sufficient. Include:
 
-fork child session 不再复制 parent 的 archive 文件；而是：
+- both authoritative SQLite databases and their consistent WAL state or snapshots;
+- live session JSON and metadata;
+- the session-ID reservation ledger and any pending move journal;
+- image blobs and LanceDB/vector data.
 
-- child branch 记录 `parent_session_id`
-- 记录 fork point：
-  - `fork_message_seq`
-  - `fork_block_id`
-- child 本地只保留自己的 local archive
-- inherited 历史通过 lineage 读取拼接出来
-
-### legacy fork 数据如何迁移
-
-旧版本 fork session 常常会把 parent archive **直接复制**到 child 的 archive 文件里。
-
-迁移时，系统会优先通过这类 legacy child archive 中“仍然带着 parent `sessionId` 的归档行”来推断 fork point：
-
-- raw message fork point：child legacy raw archive 中，`sessionId == parentSessionId` 的最大 `seq`
-- block fork point：child legacy block archive 中，`sessionId == parentSessionId` 的最大 `id`
-
-这类情况可以较可靠地恢复 inherited/local 边界。
-
-如果 child legacy archive 中已经没有 copied parent rows，但仍有 child 本地 rows，当前实现会做一个务实 fallback：
-
-- raw：`fork_message_seq ≈ min(child-local-seq) - 1`
-- block：`fork_block_id ≈ min(child-local-id) - 1`
-
-这适合“已切到新语义、child 只保留 local rows，但 DB 丢失后需要重建”的场景。
-
-## lineage 推断边界
-
-当前推断主要依赖：
-
-- sessions metadata 里的 `parentSessionId`
-- legacy child archive 中是否还保留 parent sessionId 的 copied rows
-
-因此有一个明确边界：
-
-- 如果某个 legacy child session 只有 parent relationship metadata，**但 child archive 文件里已经不再保留 copied parent rows**，系统只能恢复“它有 parent”这一事实，不能总是精确恢复旧 fork boundary
-
-这时会退化为：
-
-- lineage relationship 保留
-- 但 inherited/local 的历史边界可能只能部分推断
-
-对于典型旧 fork（直接复制 archive 文件）的数据，这个推断通常是可恢复的。
-
-## vector memory 的变化
-
-vector memory 现在不再只索引 raw archive segments。
-
-### mixed vector rows
-
-LanceDB `messages_v7` 同时存：
-
-- `memory_kind = 'raw'`
-- `memory_kind = 'block'`
-
-block rows 带有：
-
-- `block_id`
-- `block_level`
-- `raw_start_seq`
-- `raw_end_seq`
-- `source_kind/source_start/source_end`
-
-### 搜索语义
-
-`recall({ vector_query })` 现在可以混搜：
-
-- 原始 raw chunks
-- layered compact blocks
-
-vector 命中只用于定位；对外展示会按命中元数据回查原始 archived message/block 范围，然后交给 recall 统一 preview renderer。旧的 `search_vector` / `search_memory` 工具已删除。
-
-而 `get_memory_context` 仍保持 **raw-only**，避免时间附近上下文被摘要块污染。
-
-### checkpoint
-
-archive-based vector checkpoint 现在以 SQLite `archive_checkpoints` 为主。
-legacy `vector-index-checkpoints-v2.json` 仍可读，并会在初始化/访问时迁移到新 store。
-
-## 迁移后的运维含义
-
-当前建议把 SQLite archive store 看作：
-
-- **主读取层 / 主 lineage 层 / 主 checkpoint 层**
-
-把 JSONL 看作：
-
-- **兼容写层 / bootstrap 来源 / 回退与审计材料**
-
-后续如果再做第二阶段 object/blob 重构，可以继续在 SQLite 层往更规范的 object model 演进，而不需要再回到纯 JSONL 读取路径。
-
-## Session identity state for operators
-
-Session archive identity is not stored only in `archive-store.sqlite` and the per-session JSONL files:
-
-- `state/session-id-reservations.jsonl` is the authoritative durable ledger for committed session-ID move aliases. It must be included in backups and restores with the rest of the data directory.
-- `state/session-id-move-pending.json` is a temporary crash-recovery journal for one identity move. It records explicit `finishing` or `rolling-back` intent and semantically binds any owned target-agent directory to the target session ID. For create-agent moves it is written before directory creation or memory copying. Do not delete or edit it while Foxwarm is stopped after an interrupted move. Recovery runs before ordinary session loading; if validation or recovery fails, startup fails closed and the journal remains for retry instead of loading partial state.
-
-Valid conflicting ledger mappings or alias cycles fail closed rather than silently merging archives. A legacy JSONL path whose records name another session is not sufficient proof that a move occurred: legacy forks could contain copied parent rows. Foxwarm reserves uncertain identities independently and does not redirect reads without committed alias or live-metadata evidence.
+After the migration is marked complete, a missing authoritative database is a fatal restore error rather than a signal to rebuild from removed JSONL.
+Each database also stores its migration authority marker, so a newly recreated empty SQLite file is treated as missing authority rather than valid recovery.

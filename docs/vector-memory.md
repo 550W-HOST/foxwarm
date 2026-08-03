@@ -24,7 +24,7 @@ state/db/
 state/archive-store.sqlite
 ```
 
-legacy JSONL archives 仍保留，用于兼容、双写与 bootstrap 导入。
+legacy JSONL archives are migration-only inputs. Current archive writes and reads use SQLite; compatibility JSONL is generated only by explicit export.
 
 ## 基本流程
 
@@ -117,6 +117,6 @@ EMBEDDING_MAX_LENGTH=4000
 Vector memory 是长期检索层，不等同于 agent memory 文件：
 
 - `agents/<agent>/memory/`：人工维护的长期指令 / 背景知识
-- `state/archive-store.sqlite`：归档、lineage、checkpoint 主读取层
-- `state/logs/sessions/*.jsonl`：legacy 兼容 / 双写 / bootstrap 来源
+- `state/archive-store.sqlite`: authoritative archive, lineage, and checkpoint store
+- `foxwarm archive export-jsonl --output <directory>`: explicit compatibility export when JSONL is needed
 - `state/db/`：LanceDB 向量检索库

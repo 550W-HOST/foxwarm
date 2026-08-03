@@ -8,7 +8,6 @@ import {
   canonicalJournalJson,
   reconstructLlmRequest,
   listLlmRequestJournal,
-  resetLlmRequestJournalForTests,
   setLlmRequestJournalFaultInjectorForTests,
   getLlmRequestJournalStatsForTests,
   getLlmRequestManifestForTests,
@@ -21,6 +20,8 @@ import {
   replaceLlmJournalRequestIdentityForTests,
   replaceLlmJournalAttemptStartHashForTests,
   replaceLlmJournalAttemptResultOutcomeForTests,
+  exportLlmRequestJournalJsonl,
+  LLM_REQUEST_JOURNAL_JSONL_PATH,
 } from './llmRequestJournal';
 import { ARCHIVE_DB_PATH } from './config';
 import { appendMessagesToArchive } from './session/archive';
@@ -79,22 +80,19 @@ test('request journal reconstructs checkpoint and bounded delta inputs exactly',
   assert.deepEqual(listed.slice(0, 2).map(item => item.requestId), [second.requestId, first.requestId]);
 });
 
-test('JSONL remains a recovery source when SQLite insertion fails after append', async () => {
+test('a pre-SQLite journal failure blocks the provider-bound request manifest', async () => {
   const sessionId = unique('journal_recovery');
   let capturedRequestId = '';
   setLlmRequestJournalFaultInjectorForTests((phase, record: any) => {
-    if (phase === 'after-jsonl-append' && record.kind === 'request' && record.sessionId === sessionId) {
+    if (phase === 'before-sqlite-write' && record.kind === 'request' && record.sessionId === sessionId) {
       capturedRequestId = record.requestId;
-      throw new Error('injected post-JSONL failure');
+      throw new Error('injected pre-SQLite failure');
     }
   });
   await assert.rejects(beginLlmRequestJournal({ sessionId, purpose: 'low-level', systemPrompt: '', toolDefinitions: [], messages: [{ role: 'user', parts: [{ text: 'recover me' }] }] as any, requestedModelKey: 'fixture/model', promptCacheKey: 'cache-r' }), /injected/);
   setLlmRequestJournalFaultInjectorForTests(null);
   assert.ok(capturedRequestId);
-  resetLlmRequestJournalForTests();
-  const recovered = await reconstructLlmRequest(capturedRequestId);
-  assert.equal(recovered.completeness, 'complete');
-  if (recovered.completeness === 'complete') assert.equal(recovered.messages[0].parts[0].text, 'recover me');
+  assert.equal((await reconstructLlmRequest(capturedRequestId)).completeness, 'legacy-partial');
 });
 
 test('unknown legacy request is reported partial instead of guessed', async () => {
@@ -141,7 +139,7 @@ test('dedicated journal DB supports a second process while ordinary archive writ
   const session: any = { id: sessionId, agent: 'main', history: [], nextMessageSeq: 1, contextFrontier: [] };
   const modulePath = path.join(__dirname, 'llmRequestJournal.js');
   const childCode = `const j=require(${JSON.stringify(modulePath)}); j.beginLlmRequestJournal({sessionId:${JSON.stringify(sessionId)},systemPrompt:'child',toolDefinitions:[],messages:[{role:'user',parts:[{text:'child'}]}],requestedModelKey:'fixture/model',promptCacheKey:'child-cache'}).then(()=>process.exit(0),e=>{console.error(e);process.exit(1)})`;
-  const child = spawn(process.execPath, ['-e', childCode], { cwd: process.cwd(), stdio: ['ignore', 'ignore', 'pipe'] });
+  const child = spawn(process.execPath, ['-e', childCode], { cwd: process.cwd(), env: { ...process.env, FOXWARM_SYNC_FILE_LOG: '1' }, stdio: ['ignore', 'ignore', 'pipe'] });
   let childError = '';
   child.stderr.on('data', chunk => { childError += String(chunk); });
   const childDone = new Promise<void>((resolve, reject) => child.on('exit', code => code === 0 ? resolve() : reject(new Error(childError || `child exit ${code}`))));
@@ -152,56 +150,20 @@ test('dedicated journal DB supports a second process while ordinary archive writ
   ]);
 });
 
-test('streaming bootstrap imports more than one batch without whole-file buffering', async () => {
-  const isolatedRoot = path.join(process.cwd(), '.temp', unique('journal_stream_root'));
-  const modulePath = path.join(__dirname, 'llmRequestJournal.js');
-  const childCode = `
-    const fs=require('fs-extra');
-    const j=require(${JSON.stringify(modulePath)});
-    (async()=>{
-      let latest;
-      for(let index=0;index<225;index+=1) latest=await j.beginLlmRequestJournal({sessionId:'streaming',systemPrompt:'streaming',toolDefinitions:[],messages:[{role:'user',parts:[{text:String(index)}]}],requestedModelKey:'fixture/model',promptCacheKey:'stream-cache'});
-      j.resetLlmRequestJournalForTests();
-      await fs.remove(j.LLM_REQUEST_JOURNAL_DB_PATH); await fs.remove(j.LLM_REQUEST_JOURNAL_DB_PATH+'-wal'); await fs.remove(j.LLM_REQUEST_JOURNAL_DB_PATH+'-shm');
-      const rebuilt=await j.reconstructLlmRequest(latest.requestId);
-      if(j.getLastLlmRequestJournalImportCountForTests()<=200||rebuilt.completeness!=='complete'||rebuilt.messages[0].parts[0].text!=='224') throw new Error(JSON.stringify({count:j.getLastLlmRequestJournalImportCountForTests(),rebuilt}));
-    })().then(()=>console.log('__STREAM_BOOTSTRAP_OK__'),e=>{console.error(e);process.exit(1)});`;
-  const child = spawn(process.execPath, ['-e', childCode], { cwd: process.cwd(), env: { ...process.env, FOXWARM_DATA_DIR: isolatedRoot }, stdio: ['ignore', 'pipe', 'pipe'] });
-  let errorText = '';
-  const childDone = new Promise<void>((resolve, reject) => {
-    let succeeded = false;
-    child.stdout.on('data', chunk => { if (!succeeded && String(chunk).includes('__STREAM_BOOTSTRAP_OK__')) { succeeded = true; child.kill(); } });
-    child.on('exit', code => { if (succeeded) resolve(); else reject(new Error(errorText || `child exit ${code}`)); });
-  });
-  child.stderr.on('data', chunk => { errorText += String(chunk); });
-  await childDone;
-  await fs.remove(isolatedRoot);
-});
-
-test('successful live appends advance the shared import cursor', async () => {
-  const isolatedRoot = path.join(process.cwd(), '.temp', unique('journal_cursor_root'));
-  const modulePath = path.join(__dirname, 'llmRequestJournal.js');
-  const childCode = `
-    const j=require(${JSON.stringify(modulePath)});
-    (async()=>{
-      let latest;
-      for(let index=0;index<40;index+=1) latest=await j.beginLlmRequestJournal({sessionId:'cursor',systemPrompt:'live-cursor',toolDefinitions:[],messages:[{role:'user',parts:[{text:String(index)}]}],requestedModelKey:'fixture/model',promptCacheKey:'cursor-cache'});
-      j.resetLlmRequestJournalForTests();
-      const rebuilt=await j.reconstructLlmRequest(latest.requestId);
-      if(j.getLastLlmRequestJournalImportCountForTests()!==0||rebuilt.completeness!=='complete'||rebuilt.messages[0].parts[0].text!=='39') throw new Error(JSON.stringify({count:j.getLastLlmRequestJournalImportCountForTests(),rebuilt}));
-    })().then(()=>console.log('__LIVE_CURSOR_OK__'),e=>{console.error(e);process.exit(1)});`;
-  const child = spawn(process.execPath, ['-e', childCode], { cwd: process.cwd(), env: { ...process.env, FOXWARM_DATA_DIR: isolatedRoot }, stdio: ['ignore', 'pipe', 'pipe'] });
-  let errorText = '';
-  const childDone = new Promise<void>((resolve, reject) => {
-    let succeeded = false;
-    child.stdout.on('data', chunk => {
-      if (!succeeded && String(chunk).includes('__LIVE_CURSOR_OK__')) { succeeded = true; child.kill(); }
-    });
-    child.on('exit', code => { if (succeeded) resolve(); else reject(new Error(errorText || `child exit ${code}`)); });
-  });
-  child.stderr.on('data', chunk => { errorText += String(chunk); });
-  await childDone;
-  await fs.remove(isolatedRoot);
+test('normal runtime is SQLite-only and exports compatibility JSONL on demand', async () => {
+  await fs.remove(LLM_REQUEST_JOURNAL_JSONL_PATH);
+  const request = await beginLlmRequestJournal({ sessionId: unique('sqlite_only'), systemPrompt: 'export', toolDefinitions: [], messages: [{ role: 'user', parts: [{ text: 'export me' }] }] as any, requestedModelKey: 'fixture/model', promptCacheKey: 'cache' });
+  await appendLlmAttemptStart({ requestId: request.requestId, attempt: 1, concreteModelId: 'fixture/model', providerType: 'anthropic', semanticPayload: {} });
+  await appendLlmAttemptResult({ requestId: request.requestId, attempt: 1, outcome: 'success', result: { text: 'done' } });
+  assert.equal(await fs.pathExists(LLM_REQUEST_JOURNAL_JSONL_PATH), false);
+  const output = path.join(process.cwd(), '.temp', `${unique('journal_export')}.jsonl`);
+  await fs.outputFile(output, 'stale-output-must-be-replaced\n');
+  const exported = await exportLlmRequestJournalJsonl(output);
+  assert.ok(exported.records >= 4);
+  const exportedText = await fs.readFile(output, 'utf8');
+  assert.match(exportedText, new RegExp(request.requestId));
+  assert.doesNotMatch(exportedText, /stale-output/);
+  await fs.remove(output);
 });
 
 test('composite pagination is lossless when requests share a millisecond timestamp', async () => {
@@ -222,35 +184,4 @@ test('composite pagination is lossless when requests share a millisecond timesta
   } while (true);
   assert.equal(new Set(seen).size, requests.length);
   assert.deepEqual(new Set(seen), new Set(requests));
-});
-
-test('torn JSONL tail is truncated before append and remains recoverable after SQLite loss', async () => {
-  const isolatedRoot = path.join(process.cwd(), '.temp', unique('journal_torn_root'));
-  const modulePath = path.join(__dirname, 'llmRequestJournal.js');
-  const childCode = `
-    const fs=require('fs-extra');
-    const j=require(${JSON.stringify(modulePath)});
-    (async()=>{
-      await j.beginLlmRequestJournal({sessionId:'torn',systemPrompt:'one',toolDefinitions:[],messages:[{role:'user',parts:[{text:'one'}]}],requestedModelKey:'fixture/model',promptCacheKey:'cache'});
-      await fs.appendFile(j.LLM_REQUEST_JOURNAL_JSONL_PATH, '{"v":1,"kind":"object"}\\n{"v":1,"kind":"request"');
-      const second=await j.beginLlmRequestJournal({sessionId:'torn',systemPrompt:'two',toolDefinitions:[],messages:[{role:'user',parts:[{text:'two'}]}],requestedModelKey:'fixture/model',promptCacheKey:'cache'});
-      j.resetLlmRequestJournalForTests();
-      await fs.remove(j.LLM_REQUEST_JOURNAL_DB_PATH);
-      await fs.remove(j.LLM_REQUEST_JOURNAL_DB_PATH+'-wal');
-      await fs.remove(j.LLM_REQUEST_JOURNAL_DB_PATH+'-shm');
-      const rebuilt=await j.reconstructLlmRequest(second.requestId);
-      if(rebuilt.completeness!=='complete'||rebuilt.systemPrompt!=='two'||rebuilt.messages[0].parts[0].text!=='two') throw new Error(JSON.stringify(rebuilt));
-    })().then(()=>console.log('__TORN_JOURNAL_OK__'),e=>{console.error(e);process.exit(1)});`;
-  const child = spawn(process.execPath, ['-e', childCode], { cwd: process.cwd(), env: { ...process.env, FOXWARM_DATA_DIR: isolatedRoot }, stdio: ['ignore', 'pipe', 'pipe'] });
-  let errorText = '';
-  const childDone = new Promise<void>((resolve, reject) => {
-    let succeeded = false;
-    child.stdout.on('data', chunk => {
-      if (!succeeded && String(chunk).includes('__TORN_JOURNAL_OK__')) { succeeded = true; child.kill(); }
-    });
-    child.on('exit', code => { if (succeeded) resolve(); else reject(new Error(errorText || `child exit ${code}`)); });
-  });
-  child.stderr.on('data', chunk => { errorText += String(chunk); });
-  await childDone;
-  await fs.remove(isolatedRoot);
 });

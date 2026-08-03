@@ -9,7 +9,7 @@ Session context owns model-context budgeting, layered compaction, the active con
 - [src-session-history](../units/src-session-history.md) — threshold checks, snapshot jobs, planning rounds, compatible commit, completion, and manual history operations.
 - [src-session-compact-plan](../units/src-session-compact-plan.md) — plan schema, candidate prompt, quota calculations, and validation.
 - [src-session-layered-context](../units/src-session-layered-context.md) — embedded frontier, archive blocks, CTX-BLOCK rendering, and metadata annotation.
-- [src-session-archive-store](../units/src-session-archive-store.md) — SQLite/WAL archive, lineage, JSONL bootstrap/lazy import, and vector checkpoints.
+- [src-session-archive-store](../units/src-session-archive-store.md) — SQLite/WAL authority, lineage, legacy migration, export, and vector checkpoints.
 - [src-vector](../units/src-vector.md) — LanceDB indexing, startup backfill, semantic location, and compact facts.
 - [src-token-count](../units/src-token-count.md) — message/session token estimates with image-payload exclusion.
 - [src-migrations](../units/src-migrations.md) — one-shot persisted-data migrations, including standalone frontier import.
@@ -47,7 +47,7 @@ Session context owns model-context budgeting, layered compaction, the active con
 ## Compatibility
 
 - Active `contextFrontier` is stored in the per-session history snapshot. The startup migration is the only reader for legacy standalone frontier files.
-- JSONL message/block archives remain valid bootstrap/lazy-import sources and are still written alongside SQLite.
+- Legacy JSONL message/block archives are migration-only inputs; current runtime is SQLite-only and explicit export provides compatibility JSONL.
 - The compact-completion wire shape is owned by [D-context-compact-completion](../threads/context-compaction-and-recall.md#d-context-compact-completion).
 
 ## Design decisions

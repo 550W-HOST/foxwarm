@@ -20,7 +20,6 @@ let db: DatabaseSync | null = null;
 let initialized = false;
 let initPromise: Promise<void> | null = null;
 let writeFaultInjector: ((phase: string, record: JournalRecord) => void) | null = null;
-let lastImportRecordCount = 0;
 
 async function withJournalFileLock<T>(fn: () => Promise<T>): Promise<T> {
   await fs.ensureDir(path.dirname(JOURNAL_PATH));
@@ -48,31 +47,6 @@ async function withJournalFileLock<T>(fn: () => Promise<T>): Promise<T> {
   }
   try { return await fn(); }
   finally { await handle.close().catch((): void => {}); await nodeFs.unlink(JOURNAL_LOCK_PATH).catch((): void => {}); }
-}
-
-async function repairTornJournalTail(): Promise<void> {
-  const handle = await nodeFs.open(JOURNAL_PATH, 'r+').catch((error: any) => error?.code === 'ENOENT' ? null : Promise.reject(error));
-  if (!handle) return;
-  try {
-    const stat = await handle.stat();
-    if (stat.size === 0) return;
-    const lastByte = Buffer.allocUnsafe(1);
-    await handle.read(lastByte, 0, 1, stat.size - 1);
-    if (lastByte[0] === 0x0a) return;
-    let cursor = stat.size;
-    let truncateAt = 0;
-    while (cursor > 0) {
-      const length = Math.min(64 * 1024, cursor);
-      const start = cursor - length;
-      const buffer = Buffer.allocUnsafe(length);
-      await handle.read(buffer, 0, length, start);
-      const newline = buffer.lastIndexOf(0x0a);
-      if (newline >= 0) { truncateAt = start + newline + 1; break; }
-      cursor = start;
-    }
-    await handle.truncate(truncateAt);
-    logger.warn({ removedBytes: stat.size - truncateAt }, 'Truncated torn LLM request journal JSONL tail before append/import');
-  } finally { await handle.close(); }
 }
 
 export type LlmRequestPurpose = 'normal-turn' | 'compact-plan' | 'btw' | 'toolscript-one-shot' | 'cli' | 'setup-test' | 'low-level';
@@ -124,8 +98,11 @@ function openStore(): void {
   if (db) return;
   fs.ensureDirSync(path.dirname(LLM_REQUEST_JOURNAL_DB_PATH));
   db = new DatabaseSync(LLM_REQUEST_JOURNAL_DB_PATH);
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000');
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000');
   db.exec(`
+    CREATE TABLE IF NOT EXISTS llm_journal_metadata (
+      key TEXT PRIMARY KEY, value TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS llm_journal_objects (
       object_id TEXT PRIMARY KEY, object_kind TEXT NOT NULL, payload TEXT NOT NULL, created_at INTEGER NOT NULL
     );
@@ -269,7 +246,6 @@ function validateRequestManifestSync(requestId: string): void {
 }
 
 async function importJournalJsonl(): Promise<void> {
-  lastImportRecordCount = 0;
   const source = await fs.stat(JOURNAL_PATH).catch((error: any) => error?.code === 'ENOENT' ? null : Promise.reject(error));
   if (!source || source.size === 0) return;
   const state: any = getDb().prepare('SELECT imported_size FROM llm_journal_import_state WHERE source_path=?').get(JOURNAL_PATH);
@@ -299,7 +275,6 @@ async function importJournalJsonl(): Promise<void> {
     if (!line) continue;
     const record = parseRecord(line);
     if (!record) continue;
-    lastImportRecordCount += 1;
     batch.push(record);
     if (batch.length >= IMPORT_BATCH_SIZE) flush();
   }
@@ -313,10 +288,6 @@ export async function initLlmRequestJournal(): Promise<void> {
   if (initPromise) return initPromise;
   initPromise = (async () => {
     openStore();
-    await withJournalFileLock(async () => {
-      await repairTornJournalTail();
-      await importJournalJsonl();
-    });
     initialized = true;
   })();
   try { await initPromise; }
@@ -326,20 +297,8 @@ export async function initLlmRequestJournal(): Promise<void> {
 
 async function appendRecord(record: JournalRecord): Promise<void> {
   await initLlmRequestJournal();
-  await withJournalFileLock(async () => {
-    await repairTornJournalTail();
-    // Reconcile any JSONL-first crash suffix (or a source shrink) before this
-    // live append advances the shared import cursor beyond it.
-    await importJournalJsonl();
-    await fs.appendFile(JOURNAL_PATH, `${JSON.stringify(record)}\n`);
-    const postAppendSize = (await fs.stat(JOURNAL_PATH)).size;
-    writeFaultInjector?.('after-jsonl-append', record);
-    runInTransaction(() => {
-      insertRecord(record);
-      getDb().prepare(`INSERT INTO llm_journal_import_state(source_path,imported_size,updated_at) VALUES(?,?,?)
-        ON CONFLICT(source_path) DO UPDATE SET imported_size=excluded.imported_size,updated_at=excluded.updated_at`).run(JOURNAL_PATH, postAppendSize, Date.now());
-    });
-  });
+  writeFaultInjector?.('before-sqlite-write', record);
+  runInTransaction(() => insertRecord(record));
 }
 
 async function ensureObject(objectKind: ObjectKind, value: unknown): Promise<string> {
@@ -482,6 +441,122 @@ export async function listLlmRequestJournal(options: { sessionId?: string; purpo
     createdAt: row.created_at, requestedModelKey: row.requested_model_key, messageCount: row.message_count }));
 }
 
+export type LegacyLlmJournalMigrationSource = { filePath: string; relativeStatePath: string; sha256: string; recordCount: number };
+
+export function markLlmJournalSqliteAuthority(migrationId: string): void {
+  openStore();
+  getDb().prepare('INSERT OR REPLACE INTO llm_journal_metadata(key,value) VALUES(?,?)').run('sqlite_authority_migration', migrationId);
+}
+
+export function hasLlmJournalSqliteAuthority(migrationId: string): boolean {
+  openStore();
+  const row: any = getDb().prepare('SELECT value FROM llm_journal_metadata WHERE key=?').get('sqlite_authority_migration');
+  return row?.value === migrationId;
+}
+
+function journalRecordFromSqlite(record: JournalRecord): JournalRecord | null {
+  if (record.kind === 'object') {
+    const row: any = getDb().prepare('SELECT object_id,object_kind,payload,created_at FROM llm_journal_objects WHERE object_id=?').get(record.objectId);
+    return row ? { v: 1, kind: 'object', objectId: row.object_id, objectKind: row.object_kind, payload: row.payload, createdAt: row.created_at } : null;
+  }
+  if (record.kind === 'request') {
+    const row: any = getDb().prepare('SELECT * FROM llm_journal_requests WHERE request_id=?').get(record.requestId);
+    return row ? requestRecordFromRow(row) : null;
+  }
+  if (record.kind === 'attempt-start') {
+    const row: any = getDb().prepare('SELECT * FROM llm_journal_attempt_starts WHERE event_id=?').get(record.eventId);
+    return row ? attemptStartRecordFromRow(row) : null;
+  }
+  const row: any = getDb().prepare('SELECT * FROM llm_journal_attempt_results WHERE event_id=?').get(record.eventId);
+  return row ? attemptResultRecordFromRow(row) : null;
+}
+
+/** Migration-only: import and strictly verify the active legacy LLM journal JSONL. */
+export async function migrateLegacyLlmRequestJournalToSqlite(): Promise<LegacyLlmJournalMigrationSource[]> {
+  openStore();
+  if (!await fs.pathExists(JOURNAL_PATH)) return [];
+  return withJournalFileLock(async () => {
+    await importJournalJsonl();
+    let recordCount = 0;
+    const requestIds = new Set<string>();
+    await streamJournalLinesStrict(JOURNAL_PATH, line => {
+      let raw: any;
+      try { raw = JSON.parse(line); } catch { throw new Error('Malformed legacy LLM request journal JSONL'); }
+      if (raw?.v !== 1 || !['object','request','attempt-start','attempt-result'].includes(raw.kind)) throw new Error('Invalid legacy LLM request journal record kind');
+      if (raw.kind === 'object') assertObjectRecord(raw);
+      else if (raw.kind === 'request') assertRequestRecord(raw);
+      else if (raw.kind === 'attempt-start') assertAttemptStartRecord(raw);
+      else assertAttemptResultRecord(raw);
+      const stored = journalRecordFromSqlite(raw as JournalRecord);
+      if (!stored || canonicalJournalJson(stored) !== canonicalJournalJson(raw)) throw new Error(`Legacy LLM request journal conflict for ${raw.objectId || raw.requestId || raw.eventId}`);
+      if (raw.kind === 'request') validateRequestManifestSync(raw.requestId);
+      if (typeof raw.requestId === 'string') requestIds.add(raw.requestId);
+      recordCount += 1;
+    });
+    for (const requestId of requestIds) {
+      if (!getDb().prepare('SELECT 1 FROM llm_journal_requests WHERE request_id=?').get(requestId)) throw new Error(`Legacy LLM attempt references missing request ${requestId}`);
+      const reconstructed = await reconstructLlmRequest(requestId);
+      if (reconstructed.completeness !== 'complete') throw new Error(`Legacy LLM request ${requestId} failed reconstruction verification`);
+    }
+    const integrity: any = getDb().prepare('PRAGMA integrity_check').get();
+    if (!integrity || Object.values(integrity)[0] !== 'ok') throw new Error(`llm-request-journal.sqlite integrity_check failed: ${JSON.stringify(integrity)}`);
+    if ((getDb().prepare('PRAGMA foreign_key_check').all() as any[]).length) throw new Error('llm-request-journal.sqlite foreign_key_check failed');
+    const hash = crypto.createHash('sha256');
+    for await (const chunk of fs.createReadStream(JOURNAL_PATH)) hash.update(chunk as Buffer);
+    return [{ filePath: JOURNAL_PATH, relativeStatePath: path.relative(STATE_DIR, JOURNAL_PATH), sha256: hash.digest('hex'), recordCount }];
+  });
+}
+
+async function streamJournalLinesStrict(filePath: string, onLine: (line: string) => void): Promise<void> {
+  const stream = fs.createReadStream(filePath, { encoding: 'utf8' });
+  const reader = createInterface({ input: stream, crlfDelay: Infinity });
+  for await (const rawLine of reader) {
+    const line = rawLine.trim();
+    if (line) onLine(line);
+  }
+}
+
+/** Export the SQLite-authoritative canonical LLM journal in migration-compatible JSONL. */
+export async function exportLlmRequestJournalJsonl(outputPath: string): Promise<{ records: number }> {
+  await initLlmRequestJournal();
+  await fs.ensureDir(path.dirname(outputPath));
+  const temporaryPath = `${outputPath}.${process.pid}.${Date.now()}.tmp`;
+  const exportDb = new DatabaseSync(LLM_REQUEST_JOURNAL_DB_PATH, { readOnly: true });
+  const fileDescriptor = fs.openSync(temporaryPath, 'w', 0o600);
+  let records = 0;
+  let buffered = '';
+  const writeRecord = (record: JournalRecord): void => {
+    buffered += `${JSON.stringify(record)}\n`;
+    records += 1;
+    if (buffered.length >= 256 * 1024) {
+      fs.writeSync(fileDescriptor, buffered);
+      buffered = '';
+    }
+  };
+  try {
+    exportDb.exec('PRAGMA query_only = ON; BEGIN');
+    for (const row of exportDb.prepare('SELECT * FROM llm_journal_objects ORDER BY rowid').iterate() as Iterable<any>) writeRecord({ v: 1, kind: 'object', objectId: row.object_id, objectKind: row.object_kind, payload: row.payload, createdAt: row.created_at });
+    for (const row of exportDb.prepare('SELECT * FROM llm_journal_requests ORDER BY rowid').iterate() as Iterable<any>) writeRecord(requestRecordFromRow(row));
+    for (const row of exportDb.prepare('SELECT * FROM llm_journal_attempt_starts ORDER BY rowid').iterate() as Iterable<any>) writeRecord(attemptStartRecordFromRow(row));
+    for (const row of exportDb.prepare('SELECT * FROM llm_journal_attempt_results ORDER BY rowid').iterate() as Iterable<any>) writeRecord(attemptResultRecordFromRow(row));
+    exportDb.exec('COMMIT');
+    if (buffered) fs.writeSync(fileDescriptor, buffered);
+    fs.fsyncSync(fileDescriptor);
+    fs.closeSync(fileDescriptor);
+    exportDb.close();
+    await fs.move(temporaryPath, outputPath, { overwrite: true });
+    const directory = await nodeFs.open(path.dirname(outputPath), 'r');
+    try { await directory.sync(); } finally { await directory.close(); }
+    return { records };
+  } catch (error) {
+    try { exportDb.exec('ROLLBACK'); } catch {}
+    try { fs.closeSync(fileDescriptor); } catch {}
+    try { exportDb.close(); } catch {}
+    await fs.remove(temporaryPath).catch((): void => {});
+    throw error;
+  }
+}
+
 export function setLlmRequestJournalFaultInjectorForTests(injector: ((phase: string, record: JournalRecord) => void) | null): void { writeFaultInjector = injector; }
 export async function getLlmRequestJournalStatsForTests(): Promise<{ objects: number; requests: number }> {
   await initLlmRequestJournal();
@@ -489,7 +564,6 @@ export async function getLlmRequestJournalStatsForTests(): Promise<{ objects: nu
   const requests: any = getDb().prepare('SELECT COUNT(*) AS count FROM llm_journal_requests').get();
   return { objects: Number(objects?.count) || 0, requests: Number(requests?.count) || 0 };
 }
-export function getLastLlmRequestJournalImportCountForTests(): number { return lastImportRecordCount; }
 export async function getLlmRequestManifestForTests(requestId: string): Promise<{ deltaDepth: number; checkpoint: boolean; baseRequestId?: string } | null> {
   await initLlmRequestJournal();
   const row: any = getDb().prepare('SELECT delta_depth,checkpoint_message_ids_json,base_request_id FROM llm_journal_requests WHERE request_id=?').get(requestId);

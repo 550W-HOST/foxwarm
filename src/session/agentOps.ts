@@ -186,6 +186,8 @@ export async function recoverPendingSessionIdentityMove(
     await fs.move(newPath, oldPath, { overwrite: true });
   };
   await reversePath(path.join(SESSIONS_DIR, `${oldSessionId}.json`), path.join(SESSIONS_DIR, `${newSessionId}.json`));
+  // Compatibility only: pending identity recovery runs before the one-time
+  // SQLite migration, so active legacy archives may still need reversal.
   await reversePath(getSessionArchiveLogPath(oldSessionId), getSessionArchiveLogPath(newSessionId));
   await reversePath(getSessionArchiveImagesDir(oldSessionId), getSessionArchiveImagesDir(newSessionId));
   await reversePath(getSessionBlockArchiveLogPath(oldSessionId), getSessionBlockArchiveLogPath(newSessionId));
@@ -345,6 +347,8 @@ async function renameSessionIdentity(options: {
 
   try {
     await movePath(path.join(SESSIONS_DIR, `${oldRealId}.json`), path.join(SESSIONS_DIR, `${targetSessionId}.json`));
+    // Normally absent after startup migration; retained for pre-migration
+    // pending-move compatibility and harmless for SQLite-only runtime.
     await movePath(getSessionArchiveLogPath(oldRealId), getSessionArchiveLogPath(targetSessionId));
     await movePath(getSessionArchiveImagesDir(oldRealId), getSessionArchiveImagesDir(targetSessionId));
     await movePath(getSessionBlockArchiveLogPath(oldRealId), getSessionBlockArchiveLogPath(targetSessionId));

@@ -1,11 +1,7 @@
-import fs from 'fs-extra';
-import path from 'path';
 import { Message, Session } from '../types';
-import { getSessionArchiveLogPath } from '../config';
 import { externalizeMessageImages } from '../imageBlobs';
 import {
   ensureSessionBranch,
-  refreshSessionArchiveImportState,
   readEffectiveArchiveMessages,
   readLocalArchiveMessages as readLocalArchiveMessagesFromStore,
   writeArchiveMessages,
@@ -24,9 +20,10 @@ export interface ArchiveMessageRecord {
   inherited?: boolean;
 }
 
-let archiveWriteFaultInjector: ((phase: 'after-jsonl-append', sessionId: string) => void) | null = null;
+type ArchiveWritePhase = 'before-sqlite-write' | 'after-jsonl-append';
+let archiveWriteFaultInjector: ((phase: ArchiveWritePhase, sessionId: string) => void) | null = null;
 
-export function setArchiveWriteFaultInjectorForTests(injector: ((phase: 'after-jsonl-append', sessionId: string) => void) | null): void {
+export function setArchiveWriteFaultInjectorForTests(injector: ((phase: ArchiveWritePhase, sessionId: string) => void) | null): void {
   archiveWriteFaultInjector = injector;
 }
 
@@ -98,22 +95,16 @@ export async function appendMessagesToArchive(session: Session, messages: Messag
     return;
   }
 
-  const archiveLogPath = getSessionArchiveLogPath(session.id);
-  await fs.ensureDir(path.dirname(archiveLogPath));
   await ensureSessionBranch(session.id);
 
   const records: ArchiveMessageRecord[] = [];
-  const lines: string[] = [];
   for (const message of messages) {
     const record = await buildArchiveRecord(session, message);
     records.push(record as ArchiveMessageRecord);
-    lines.push(JSON.stringify(record));
   }
 
-  await fs.appendFile(archiveLogPath, `${lines.join('\n')}\n`);
-  archiveWriteFaultInjector?.('after-jsonl-append', session.id);
+  archiveWriteFaultInjector?.('before-sqlite-write', session.id);
   await writeArchiveMessages(records);
-  await refreshSessionArchiveImportState(session.id, 'messages');
 }
 
 export async function readArchiveMessages(sessionId: string): Promise<ArchiveMessageRecord[]> {

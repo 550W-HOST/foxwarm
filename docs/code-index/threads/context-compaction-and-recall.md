@@ -2,7 +2,7 @@
 
 ## Overview
 
-This thread owns the end-to-end contract that keeps long sessions within model limits without losing traceable history. It spans session history/frontier code, the compact-plan tool, prompt/provider calls, JSONL and SQLite archives, vector indexing, recall tools, and WebUI CTX-BLOCK expansion.
+This thread owns the end-to-end contract that keeps long sessions within model limits without losing traceable history. It spans session history/frontier code, the compact-plan tool, prompt/provider calls, the SQLite archive, vector indexing, recall tools, and WebUI CTX-BLOCK expansion.
 
 ## Flow
 
@@ -33,9 +33,9 @@ Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelFor
 
 ### 4. Durable archive and lineage
 
-- Raw messages and summary blocks are appended to JSONL logs and written to the SQLite archive store.
-- SQLite uses WAL, archive branches, lineage-bounded effective reads, vector checkpoints, and persisted JSONL import-state metadata.
-- Startup bootstrap imports known JSONL logs in streaming batches; per-session lazy import remains a fallback for sessions missed during bootstrap. Current JSONL logs therefore remain an active durable/import source, not merely deleted legacy data.
+- Raw messages and summary blocks commit to `archive-store.sqlite` before active frontier replacement.
+- SQLite uses durable WAL/FULL transactions, archive branches, lineage-bounded effective reads, and vector checkpoints.
+- A one-time startup migration strictly imports and verifies every legacy active JSONL before moving it under `state/migration-backup/sqlite-only-large-archives-v1/`. Runtime does not dual-write or lazy-import JSONL.
 - Fork branches inherit only parent messages/blocks at or before their fork points.
 
 ### 5. Vector location and source reload
@@ -81,7 +81,7 @@ The WebUI block endpoint expands exactly one layer into structured timeline mess
 ## Compatibility
 
 - Current active frontiers are embedded in per-session history JSON. Startup migration reads legacy `*.frontier.json` once, records migration state, and moves migrated files; runtime hydration does not fallback-read them.
-- Existing archive JSONL files are still imported and current archive appends continue writing JSONL plus SQLite.
+- Legacy archive JSONL remains supported only as a fail-closed startup migration input. Explicit CLI export recreates compatibility JSONL from SQLite.
 - Existing supported `recall` target selectors remain readable. Removed ambiguous legacy tool names/arguments are not documented as active aliases.
 
 ## Design decisions
@@ -116,7 +116,7 @@ Durable compact facts belong only in the `memoryFacts` array of their matching `
 
 - The planner does not submit a top-level fact payload or repeat facts in summary prose.
 - Normalized facts remain optional archive-block data. The framework appends a deterministic Markdown `Memory facts` section to the stored summary, so later layered compaction sees prior facts in source summaries.
-- Total fact caps and text deduplication apply across the whole plan, not once per block. JSONL/SQLite readers tolerate historical blocks without this field.
+- Total fact caps and text deduplication apply across the whole plan, not once per block. The SQLite reader tolerates migrated historical blocks without this field.
 - Best-effort vector rows retain each creating block's identity, level, and raw source range; failures never undo the durable compact commit.
 - Fork-lineage semantic search admits a fact-bearing inherited block only through its block cap. Legacy fact rows without block identity must end at or before the message fork cap; crossing facts are discarded, never range-clipped for recall.
 
@@ -124,9 +124,9 @@ Durable compact facts belong only in the `memoryFacts` array of their matching `
 
 `preserveMessages` keeps exact raw wording immediately after a new summary block. `removePreservedMessages` removes only those marked working-frontier entries; archive messages and blocks remain immutable.
 
-### D-context-dual-archive
+### D-context-sqlite-archive-authority
 
-Current appends write JSONL and SQLite. Persisted import state and streaming bootstrap/lazy import make pre-existing JSONL recoverable without reparsing unchanged files on every restart.
+[2026-08-03] `archive-store.sqlite` is the sole runtime authority for raw messages, summary blocks, lineage, and vector checkpoints. Runtime commits use WAL with `synchronous=FULL` and do not dual-write JSONL. The startup migration must strictly import and verify all legacy active JSONL before moving sources to a path-preserving migration backup; unverifiable sources fail closed and remain retryable. Compatibility JSONL is explicit export output, not live storage.
 
 ### D-context-recall-vocabulary
 

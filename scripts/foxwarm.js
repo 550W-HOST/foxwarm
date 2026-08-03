@@ -10,6 +10,7 @@ Usage: foxwarm <subcommand> [options]
 
 Subcommands:
   model    Send one prompt through Foxwarm's configured production model stack
+  archive  Export SQLite-authoritative archives as compatibility JSONL
 
 Options:
   -v, --version   Print version
@@ -31,18 +32,20 @@ async function run(argv, streams = {}) {
     stdout.write(`${pkg.version || 'unknown'}\n`);
     return 0;
   }
-  if (subcommand !== 'model') {
+  if (subcommand !== 'model' && subcommand !== 'archive') {
     stderr.write(`Usage error: Unknown subcommand: ${subcommand}\n`);
     return 2;
   }
 
-  const { runModelCli, CliUsageError } = require('./model.js');
+  const implementation = subcommand === 'model' ? require('./model.js') : require('./archive.js');
+  const runner = subcommand === 'model' ? implementation.runModelCli : implementation.runArchiveCli;
+  const UsageError = subcommand === 'model' ? implementation.CliUsageError : implementation.ArchiveCliUsageError;
   try {
-    return await runModelCli(argv.slice(1), streams);
+    return await runner(argv.slice(1), streams);
   } catch (error) {
-    const prefix = error instanceof CliUsageError ? 'Usage error' : 'Error';
+    const prefix = error instanceof UsageError ? 'Usage error' : 'Error';
     stderr.write(`${prefix}: ${error instanceof Error ? error.message : String(error)}\n`);
-    return error instanceof CliUsageError ? 2 : 1;
+    return error instanceof UsageError ? 2 : 1;
   }
 }
 

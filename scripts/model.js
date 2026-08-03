@@ -83,7 +83,8 @@ function loadProductionRuntime() {
   const rootDir = path.dirname(__dirname);
   const configPath = path.join(rootDir, 'lib', 'config.js');
   const llmPath = path.join(rootDir, 'lib', 'llm.js');
-  if (!fs.existsSync(configPath) || !fs.existsSync(llmPath)) {
+  const migrationsPath = path.join(rootDir, 'lib', 'migrations', 'index.js');
+  if (!fs.existsSync(configPath) || !fs.existsSync(llmPath) || !fs.existsSync(migrationsPath)) {
     throw new Error('Foxwarm build output is missing. Run `npm run build` in the Foxwarm checkout first.');
   }
 
@@ -97,7 +98,8 @@ function loadProductionRuntime() {
 
   const { loadModelsConfig } = require(configPath);
   const { requestLlmOnce } = require(llmPath);
-  return { loadModelsConfig, requestLlmOnce };
+  const { runSqliteOnlyArchivesMigration } = require(migrationsPath);
+  return { loadModelsConfig, requestLlmOnce, runSqliteOnlyArchivesMigration };
 }
 
 function readStdin(stream) {
@@ -149,6 +151,8 @@ async function runModelCli(argv, options = {}) {
   if (!prompt || !prompt.trim()) {
     throw new CliUsageError('No prompt provided. Use --prompt or pipe text through stdin.');
   }
+
+  await runtime.runSqliteOnlyArchivesMigration?.();
 
   const result = await runtime.requestLlmOnce({
     contents: [{ role: 'user', parts: [{ text: prompt }] }],

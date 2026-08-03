@@ -28,7 +28,7 @@
 
 `foxwarm` 当前已经具备一批很适合做“离线蒸馏插件”的基础能力：
 
-- 会话归档：每条消息已经被归档到 `state/logs/sessions/*.jsonl`
+- 会话归档：每条消息存储在 `state/archive-store.sqlite`；需要 JSONL 时通过 `foxwarm archive export-jsonl --output <directory>` 显式导出
 - 后台事件：支持把异步任务结果回投到 session 队列
 - 持久化定时器：适合夜间触发数据整理、训练和评测任务
 - 动态 HTTP 路由：可以给插件挂控制面板、状态接口、手动触发接口
@@ -126,7 +126,7 @@ foxwarm/
 
 首选直接读取会话归档：
 
-- `state/logs/sessions/*.jsonl`
+- `state/archive-store.sqlite`（或通过 `foxwarm archive export-jsonl` 生成的兼容导出）
 - 图片等附件仍然保留为归档引用，不作为首版训练重点
 
 优点：

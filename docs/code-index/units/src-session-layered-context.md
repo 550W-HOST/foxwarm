@@ -36,7 +36,7 @@ Manages the current layered context frontier for sessions: an ordered list of ra
 | `ensureContextFrontier(session)` | ~110 | Initializes frontier from session history if empty |
 | `appendMessagesToContextFrontier(session, messages)` | ~125 | Appends message seq entries to the frontier |
 | `buildArchiveBlockRecords(session, blocks)` | ~145 | Constructs full ArchiveBlockRecord objects with timestamps |
-| `appendBlocksToArchive(session, blocks)` | ~170 | Writes block records to JSONL and SQLite archive store |
+| `appendBlocksToArchive(session, blocks)` | ~170 | Commits block records to the SQLite archive store |
 | `readArchiveBlocksByIdRange(sessionId, startId, endId)` | ~190 | Filters lineage-aware blocks by ID range |
 | `readLocalArchiveBlocks(sessionId)` | ~195 | Reads all local block records from the archive store |
 | `readLocalArchiveBlocksByIdRange(sessionId, startId, endId)` | ~199 | Reads local block records by ID range |

@@ -8,7 +8,7 @@ The journal records canonical inputs and observed attempt metadata. It does not 
 
 ## Durable model
 
-The journal uses `state/llm-request-journal.jsonl` as its append-only recovery source and `state/llm-request-journal.sqlite` as its dedicated SQLite/WAL query index. It does not share the conversation archive database, so a short-lived model CLI cannot lock ordinary session archive writes.
+The journal uses `state/llm-request-journal.sqlite` as its sole runtime authority. Its dedicated SQLite/WAL database remains isolated from the conversation archive so a short-lived model CLI cannot lock ordinary session archive writes.
 
 - Prompt strings, complete tool-definition arrays, and individual canonical messages are content-addressed objects.
 - A request manifest references those objects and identifies its purpose, optional session, iteration, requested model key, and a hash of the prompt-cache key.
@@ -32,7 +32,9 @@ The journal uses `state/llm-request-journal.jsonl` as its append-only recovery s
 
 Existing session message/block archives remain readable and unchanged. They do not receive fabricated historical request manifests. `reconstructLlmRequest` reports an unknown/legacy request as `legacy-partial` with named missing facts rather than guessing from current history or prompt snapshots.
 
-At lazy initialization, only the JSONL suffix after the last committed import offset is streamed through bounded transactions, with primary-key conflict tolerance. Each successful live append advances that shared offset in the same SQLite transaction as its index row, so short-lived CLI startup cost does not grow with server uptime. A small cross-process file lock serializes tail repair and append; a non-newline torn suffix is truncated before any later record is written, so one crash cannot merge corruption with the next valid record. A crash after JSONL append but before SQLite insertion leaves the offset unchanged and is therefore recoverable without loading an unbounded journal into memory. SQLite uses a bounded busy timeout for concurrent server and short-lived CLI journal writers.
+`foxwarm archive export-jsonl --output <directory>` provides an explicit SQLite-backed compatibility export for training and inspection.
+
+The one-time SQLite-only startup migration streams and strictly verifies any legacy active JSONL before moving it under the migration backup tree. Normal runtime never reads or appends that JSONL. SQLite uses WAL, `synchronous=FULL`, immediate writer transactions, and a bounded busy timeout for concurrent server and short-lived CLI writers. A request manifest and every attempt start commit before the corresponding provider send.
 
 Full request/attempt row structure, object type/hash integrity, bounded delta ancestry, and reconstructed message count are checked during import and reconstruction. Corrupt records fail closed and are never labeled complete.
 
@@ -51,6 +53,8 @@ Provider-specific wire replay is explicitly outside this contract. Exact wire ca
 [2026-08-03] Foxwarm durably records each provider-neutral LLM request before the first provider send using content-addressed prompt, tool-schema, and canonical-message objects plus a bounded checkpoint/delta manifest. The same narrow journal covers normal turns and every current one-shot/side/compact caller. Physical attempts record concrete routing and semantic-payload hashes, while successful assistant rows link to the request identity.
 
 The normal journal never stores auth headers or provider-hydrated request payloads and does not claim exact HTTP wire replay. Existing archives remain legacy-partial rather than receiving inferred request records. A post-response journal-result failure is observable but must not re-enter provider retry logic and create a duplicate successful generation.
+
+[2026-08-03] The dedicated SQLite database is the sole runtime authority. Legacy JSONL is a migration-only input that is strictly imported, verified, and moved to migration backup before completion; runtime does not dual-write it. SQLite commits use durable WAL/FULL boundaries, and compatibility JSONL is generated only by explicit export.
 
 ## Modules and units
 
