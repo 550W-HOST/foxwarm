@@ -697,6 +697,27 @@ function removeManagedLeaseRef(record: ToolScriptRunRecord, sessionId: string, l
   record.relatedManagedSessions = record.relatedManagedSessions.filter(ref => !(ref.sessionId === sessionId && ref.leaseId === leaseId));
 }
 
+async function releaseRelatedManagedSessionLeases(record: ToolScriptRunRecord, logMessage: string): Promise<void> {
+  if (!record.relatedManagedSessions?.length) {
+    return;
+  }
+  const unreleased: ToolScriptManagedLeaseRef[] = [];
+  for (const ref of record.relatedManagedSessions) {
+    try {
+      await managedSessions.releaseManagedSession({
+        sessionId: ref.sessionId,
+        ownerSessionId: record.ownerSessionId,
+        leaseId: ref.leaseId,
+        ...(record.runId ? { controllerRunId: record.runId } : {}),
+      });
+    } catch (error: any) {
+      unreleased.push(ref);
+      logger.warn({ err: error, runId: record.runId, managedSessionId: ref.sessionId }, logMessage);
+    }
+  }
+  record.relatedManagedSessions = unreleased;
+}
+
 function normalizeErrorMessage(error: any, record?: ToolScriptRunRecord, runtimeState?: RuntimeState): string {
   const augmentWithContext = (message: string): string => {
     const namedMessage = record
@@ -1397,6 +1418,7 @@ function getSnapshotCompatibilityError(record: ToolScriptRunRecord): string | nu
 }
 
 async function failIncompatibleSnapshot(record: ToolScriptRunRecord, runtimeState: RuntimeState, message: string): Promise<ToolScriptResult> {
+  await releaseRelatedManagedSessionLeases(record, 'Failed to release managed session after incompatible ToolScript snapshot');
   record.status = 'failed';
   record.waiting = undefined;
   record.stdout = currentStdout(runtimeState);
@@ -1595,21 +1617,15 @@ export async function tool_cancel_toolscript_run(args: ToolArgs, ctx: ToolContex
   }
   ensureRunOwnedBySession(record, sessionId);
   if (record.status === 'completed' || record.status === 'failed' || record.status === 'cancelled') {
+    if (record.relatedManagedSessions?.length) {
+      await releaseRelatedManagedSessionLeases(record, 'Failed to retry managed-session cleanup for terminal ToolScript run');
+      record.updatedAt = Date.now();
+      await saveRun(record);
+    }
     return buildBaseResult(record);
   }
 
-  for (const ref of record.relatedManagedSessions || []) {
-    try {
-      await managedSessions.releaseManagedSession({
-        sessionId: ref.sessionId,
-        ownerSessionId: record.ownerSessionId,
-        leaseId: ref.leaseId,
-        ...(record.runId ? { controllerRunId: record.runId } : {}),
-      });
-    } catch (error: any) {
-      logger.warn({ err: error, runId: record.runId, managedSessionId: ref.sessionId }, 'Failed to release managed session during ToolScript cancel');
-    }
-  }
+  await releaseRelatedManagedSessionLeases(record, 'Failed to release managed session during ToolScript cancel');
 
   activeBackgroundRuns.delete(record.runId);
   record.status = 'cancelled';

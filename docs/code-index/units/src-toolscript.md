@@ -50,7 +50,7 @@ Unknown external function names are returned to Monty as runtime exceptions that
 - Monty OS functions and mounts are not exposed. Filesystem, environment, clock, and process effects remain behind normal `call_tool` permissions.
 - Run records live under the state data root and are accessible only from the owner session.
 - `activeBackgroundRuns` prevents concurrent execution/resume of one background run.
-- Managed leases acquired by a run are recorded and released on cancellation/completion cleanup.
+- Managed leases acquired by a run are recorded. Controllers normally release them explicitly; cancellation and incompatible-snapshot terminalization perform best-effort cleanup. Failed releases remain recorded so calling `cancel_toolscript_run` on the terminal record retries cleanup.
 - `call_tool` subcalls publish ToolScript progress and are kept in the outer run result/record. They do not append each nested call as ordinary outer-session tool history.
 - `continue_script` returns stdout produced in that continuation slice; persisted status retains cumulative stdout.
 - `executedTools` is cumulative, while `subCalls`, `hostCallCount`, and `lastHostCall` describe the latest execution slice.
@@ -84,7 +84,7 @@ Unknown external calls are not described as supported host APIs. The runtime lis
 
 ### D-toolscript-versioned-snapshot-runtime
 
-[2026-08-03] Every new run persists the Monty engine version and snapshot-format identity. Continuation accepts only an exact current-format match because Monty snapshots are version-specific. An incompatible waiting run becomes a clearly failed historical record without attempting conversion or deleting its snapshot; completed historical records remain readable.
+[2026-08-03] Every new run persists the Monty engine version and snapshot-format identity. Continuation accepts only an exact current-format match because Monty snapshots are version-specific. An incompatible waiting run becomes a clearly failed historical record without attempting conversion or deleting its snapshot; completed historical records remain readable. Before terminalizing an incompatible controller, Foxwarm best-effort releases its managed leases; failed release references are retained so a later terminal `cancel_toolscript_run` call can retry cleanup.
 
 ### D-toolscript-os-effects-through-tools
 

@@ -861,6 +861,74 @@ test('background ToolScript controller run can wait for managed inbox events and
   }
 });
 
+test('incompatible managed-controller snapshot releases its lease and terminal cancel can retry cleanup', async () => {
+  await resetToolScriptRunsForTests();
+  const router = new MessageRouter();
+  const originalChat = llm.chat;
+  const parentId = makeId('toolscript_incompatible_controller_parent');
+  const childId = makeId('toolscript_incompatible_controller_child');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain([
+    `lease = open_managed_session("${childId}")`,
+    `return wait_for_managed_event("${childId}", lease["leaseId"], lease["revision"])`,
+  ].join('\n')));
+
+  sessionManager.setSessionTriggerCallback((sessionId) => router.processSessionQueue(sessionId));
+  (llm as any).chat = async (_parts: any, activeSession: Session) => {
+    const userText = latestUserText(activeSession);
+    await sessionManager.appendSessionMessage(activeSession, {
+      role: 'model',
+      parts: [{ text: `normal child handled: ${userText}` }],
+    });
+    return { text: 'ok' };
+  };
+
+  const parent = await sessionManager.getSession(parentId);
+  const child = await sessionManager.getSession(childId);
+
+  try {
+    const started = await tool_start_toolscript_run({ filePath: scriptName }, { sessionId: parentId, session: parent });
+    assert.equal(started.status, 'waiting');
+    assert.equal(started.waitingReason, 'managed_event');
+
+    const persisted: any = await getToolScriptRunForTests(started.runId);
+    const incompatibleSnapshot = persisted.snapshotBase64;
+    persisted.vmRuntime.version = '0.0.18';
+    await fs.writeJson(path.join(STATE_DIR, 'toolscript-runs', `${started.runId}.json`), persisted, { spaces: 2 });
+
+    // Force the first best-effort release to fail so the terminal retry path is exercised.
+    child.busy = true;
+    await sessionManager.saveSession(child.id);
+    await sessionManager.queueSessionStructuredEvent(childId, [{ text: 'outside event' }], 'background');
+
+    const failed: any = await getToolScriptRunForTests(started.runId);
+    assert.equal(failed?.status, 'failed');
+    assert.match(failed?.error || '', /cannot be resumed/i);
+    assert.equal(failed?.snapshotBase64, incompatibleSnapshot);
+    assert.equal(failed?.relatedManagedSessions?.length, 1);
+    assert.ok(await managedSessions.getManagedSessionStateForTests(childId));
+
+    child.busy = false;
+    await sessionManager.saveSession(child.id);
+    const afterRetry = await tool_cancel_toolscript_run({ runId: started.runId }, { sessionId: parentId, session: parent });
+    assert.equal(afterRetry.status, 'failed');
+    assert.equal(afterRetry.relatedManagedSessions?.length || 0, 0);
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(await managedSessions.getManagedSessionStateForTests(childId), undefined);
+    const restoredChild = await sessionManager.getSession(childId);
+    assert.match(restoredChild.history[restoredChild.history.length - 1]?.parts?.[0]?.text || '', /normal child handled: outside event/);
+  } finally {
+    child.busy = false;
+    (llm as any).chat = originalChat;
+    sessionManager.setSessionTriggerCallback(() => {});
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(childId).catch(() => false);
+    await sessionManager.deleteSession(parentId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
 test('background ToolScript explicit step/release controller run survives a managed child tool loop', async () => {
   await resetToolScriptRunsForTests();
   const router = new MessageRouter();
