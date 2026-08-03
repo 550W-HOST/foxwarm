@@ -44,6 +44,8 @@ Provides a "BTW" (by-the-way) side-request feature that lets users ask a quick b
 
 ## Integration
 
+BTW provider calls use request-journal purpose `btw`, so the copied canonical prefix, side prompt, and model result remain reconstructable even though only the display-only BTW notice is appended to the real session.
+
 - Invoked by the `/btw` command handler registered in `./commands`.
 - Uses `llm.chat` for inference with a custom `appendMessage` callback that writes only to the temporary clone. Before cloning, legacy sessions are ensured to have a persisted promptCacheKey so the clone does not generate a one-off key.
 - Persists results via `sessionManager.appendSessionMessage` using the display-only message pattern, ensuring BTW output is excluded from model context, compaction, and tool-based session previews. A successful BTW result copies its concrete `modelId` and optional resolved `virtualModelKey` to the persisted display-only model message under the canonical [model-attribution contract](../threads/model-routing.md#d-model-routing-concrete-attribution).

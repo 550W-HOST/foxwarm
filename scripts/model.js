@@ -159,6 +159,7 @@ async function runModelCli(argv, options = {}) {
     toolDefinitions: [],
     notifySessionEvents: false,
     registerAbortController: false,
+    purpose: 'cli',
     timeoutMs: args.timeoutMs,
   });
 

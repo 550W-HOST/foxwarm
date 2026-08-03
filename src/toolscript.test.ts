@@ -648,7 +648,7 @@ test('request_model_without_context uses direct low-level llm request with no to
   const session = await sessionManager.getSession(sessionId);
   session.model = 'anthropic/claude-sonnet-4-5';
   const originalRequestLlmOnce = (llm as any).requestLlmOnce;
-  let captured: { model?: string; systemPrompt?: string; toolDefinitionsLength?: number; inputText?: string } = {};
+  let captured: { model?: string; systemPrompt?: string; toolDefinitionsLength?: number; inputText?: string; purpose?: string } = {};
 
   (llm as any).requestLlmOnce = async (options: any) => {
     captured = {
@@ -656,6 +656,7 @@ test('request_model_without_context uses direct low-level llm request with no to
       systemPrompt: options.systemPrompt,
       toolDefinitionsLength: Array.isArray(options?.toolDefinitions) ? options.toolDefinitions.length : -1,
       inputText: Array.isArray(options?.contents) ? options.contents.flatMap((msg: any) => msg.parts || []).map((part: any) => part.text || '').join('\n') : '',
+      purpose: options.purpose,
     };
     return { text: 'pong', toolCalls: [] as any[] };
   };
@@ -668,6 +669,7 @@ test('request_model_without_context uses direct low-level llm request with no to
     assert.equal(captured.systemPrompt, '');
     assert.equal(captured.toolDefinitionsLength, 0);
     assert.equal(captured.inputText, 'ping');
+    assert.equal(captured.purpose, 'toolscript-one-shot');
   } finally {
     (llm as any).requestLlmOnce = originalRequestLlmOnce;
     await resetToolScriptRunsForTests();

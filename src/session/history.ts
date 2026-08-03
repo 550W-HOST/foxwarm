@@ -1085,6 +1085,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       },
       notifySessionEvents: false,
       registerAbortController: false,
+      purpose: 'compact-plan',
     });
 
     const toolCalls = result.toolCalls || [];

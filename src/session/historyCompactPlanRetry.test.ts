@@ -99,6 +99,7 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
   const session = await makeCompactableSession(archive, makeSessionId('compact_retry_plain_text_success'));
   const saveCounter = { count: 0 };
   const prompts: string[] = [];
+  const purposes: Array<string | undefined> = [];
   const originalChat = llm.chat;
 
   try {
@@ -106,10 +107,11 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
       parts: MessagePart[] | null,
       activeSession: Session,
       _iteration: number,
-      options?: { appendMessage?: (message: Message) => Promise<void> | void },
+      options?: { appendMessage?: (message: Message) => Promise<void> | void; purpose?: string },
     ): Promise<ChatResult> => {
       assert.equal((activeSession as any).__compactJob, true);
       prompts.push(flattenPrompt(parts));
+      purposes.push(options?.purpose);
 
       if (prompts.length === 1) {
         const text = 'I can summarize this in plain text, but I forgot the tool call.';
@@ -142,6 +144,7 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
     );
 
     assert.equal(prompts.length, 2);
+    assert.deepEqual(purposes, ['compact-plan', 'compact-plan']);
     assert.match(prompts[0], /COMPACTION STARTED/);
     assert.match(prompts[1], /COMPACT TOOL CALL INVALID/);
     assert.match(prompts[1], /plain text\/no tool call cannot complete compaction/i);

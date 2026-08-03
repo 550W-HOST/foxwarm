@@ -7,6 +7,7 @@ LLM owns model/provider configuration consumption, prompt snapshots, provider se
 ## Units
 
 - [src-llm](../units/src-llm.md) — routing, Anthropic path, prompt snapshots, retries, logs, tool batches, and one-shot/session requests.
+- [src-llm-request-journal](../units/src-llm-request-journal.md) — content-addressed canonical request inputs, bounded manifests, attempts, and reconstruction.
 - [src-model-routing](../units/src-model-routing.md) — virtual target selection and process-local failover health.
 - [src-llm-openai](../units/src-llm-openai.md) — OpenAI Responses/Chat Completions conversion and stream collectors.
 - [src-mcp-client](../units/src-mcp-client.md) — MCP config, connection lifecycle, discovery, invocation, and result normalization.
@@ -39,6 +40,7 @@ Canonical image messages remain blob-reference-only until the provider request b
 - Prompt-cache keys follow model-facing prefix lineage.
 - MCP summaries do not expose secret values.
 - One-shot CLI/ToolScript model requests reuse production provider code.
+- Every production provider-request path enters the canonical request journal before send; exact wire capture remains outside that contract.
 - Empty, whitespace-only, and reasoning-only responses without tool calls are retryable failures; successful virtual results attribute the concrete leaf. Canonical contract: [model routing](../threads/model-routing.md).
 
 ## Prompt-cache lineage
@@ -74,3 +76,4 @@ Request failure is exception-driven at the provider boundary. Router, channel, s
 ## Canonical ownership
 
 Retry presentation is canonical in [D-pipeline-display-only-retries](../threads/message-processing-pipeline.md#d-pipeline-display-only-retries). MCP result cleanup is canonical in [D-mcp-source-normalization](../units/src-mcp-client.md#d-mcp-source-normalization).
+Canonical training-input durability is owned by [D-llm-request-journal-canonical-boundary](../threads/llm-request-journal.md#d-llm-request-journal-canonical-boundary).

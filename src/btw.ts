@@ -142,6 +142,7 @@ export async function runBtwRequest(sessionId: string, message: string): Promise
       appendMessage: appendToTempHistory,
       notifySessionEvents: false,
       registerAbortController: false,
+      purpose: 'btw',
     });
     modelId = result.modelId;
     virtualModelKey = result.virtualModelKey;

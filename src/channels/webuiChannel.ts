@@ -888,6 +888,7 @@ export class WebUIChannel implements Channel {
               registerAbortController: false,
               maxRetries: 1,
               timeoutMs: 30000,
+              purpose: 'setup-test',
             });
             res.json({ success: true, text: result.text, usage: result.usage || null });
           } catch (e: any) {

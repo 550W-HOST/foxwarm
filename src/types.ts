@@ -345,6 +345,10 @@ export interface ChatResult {
     completedAt: number;
     durationMs: number;
   };
+  /** Durable canonical request journal identity, when journaling succeeded before send. */
+  llmRequestId?: string;
+  /** Physical provider attempt which produced this successful result. */
+  llmAttempt?: number;
 }
 
 export interface AnthropicMessage {

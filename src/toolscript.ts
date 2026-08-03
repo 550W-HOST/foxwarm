@@ -771,6 +771,7 @@ async function requestModelWithoutContext(prompt: string, session: Session, mode
     toolDefinitions: [],
     notifySessionEvents: false,
     registerAbortController: false,
+    purpose: 'toolscript-one-shot',
   });
 
   return { text: result.text || '' };

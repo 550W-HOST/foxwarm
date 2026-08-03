@@ -44,6 +44,7 @@ Provides the installable `foxwarm` command and its `model` subcommand for one-sh
 - Installed or linked packages expose `foxwarm`; source checkouts can call `node scripts/foxwarm.js` directly.
 - Unknown flags, positional arguments, missing option values, invalid timeouts, unknown model keys, absent prompts, and empty model responses fail instead of silently falling back.
 - The selected model is validated using `loadModelsConfig`; requests go through `requestLlmOnce` with no tools and a fresh prompt-cache key.
+- CLI requests use request-journal purpose `cli`; they are reconstructable even though no session history exists.
 - Model listing and request forwarding accept virtual keys without reimplementing their routing; result JSON continues to report the concrete `modelId`. Canonical contract: [model routing](../threads/model-routing.md).
 - The CLI suppresses console logs and selects synchronous file logging before importing the production runtime. This keeps stdout machine-readable and avoids pino worker shutdown hangs.
 - The top-level dispatcher runs the model handler in-process, so child signal codes cannot be converted accidentally into success.

@@ -71,6 +71,7 @@ test('model CLI forwards the prompt and options to the production request API co
   assert.equal(captured.timeoutMs, 7000);
   assert.deepEqual(captured.contents, [{ role: 'user', parts: [{ text: 'hello' }] }]);
   assert.deepEqual(captured.toolDefinitions, []);
+  assert.equal(captured.purpose, 'cli');
   assert.equal(JSON.parse(output.value()).text, 'answer');
 });
 

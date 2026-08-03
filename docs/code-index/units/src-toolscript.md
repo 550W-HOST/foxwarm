@@ -52,6 +52,7 @@ Unknown external function names are returned to Monty as runtime exceptions that
 - `activeBackgroundRuns` prevents concurrent execution/resume of one background run.
 - Managed leases acquired by a run are recorded. Controllers normally release them explicitly; cancellation and incompatible-snapshot terminalization perform best-effort cleanup. Failed releases remain recorded so calling `cancel_toolscript_run` on the terminal record retries cleanup.
 - `call_tool` subcalls publish ToolScript progress and are kept in the outer run result/record. They do not append each nested call as ordinary outer-session tool history.
+- `request_model_without_context` uses request-journal purpose `toolscript-one-shot`; its canonical prompt and normalized provider result are durable independently of the outer ToolScript history boundary.
 - `continue_script` returns stdout produced in that continuation slice; persisted status retains cumulative stdout.
 - `executedTools` is cumulative, while `subCalls`, `hostCallCount`, and `lastHostCall` describe the latest execution slice.
 - Inline image payloads from a final result are promoted to the outer tool result and replaced with compact placeholders inside the textual result.

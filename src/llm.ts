@@ -40,6 +40,12 @@ import {
     VirtualRoutingRequest,
     VirtualTargetSelection,
 } from './modelRouting';
+import {
+    appendLlmAttemptResult,
+    appendLlmAttemptStart,
+    beginLlmRequestJournal,
+    LlmRequestPurpose,
+} from './llmRequestJournal';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
@@ -172,6 +178,7 @@ type RequestLlmOnceOptions = {
     maxRetries?: number;
     timeoutMs?: number;
     onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
+    purpose?: LlmRequestPurpose;
 };
 
 export type LlmRetryEvent = {
@@ -1574,6 +1581,7 @@ export async function chat(
         notifySessionEvents?: boolean;
         registerAbortController?: boolean;
         onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
+        purpose?: LlmRequestPurpose;
     },
 ): Promise<ChatResult> {
     const appendMessage = async (message: Message) => {
@@ -1621,6 +1629,7 @@ export async function chat(
         notifySessionEvents: options?.notifySessionEvents,
         registerAbortController: options?.registerAbortController,
         onRetry: options?.onRetry,
+        purpose: options?.purpose || 'normal-turn',
     });
 
     if (result.usage) {
@@ -1638,6 +1647,7 @@ export async function chat(
             ...(result.modelId ? { modelId: result.modelId } : {}),
             ...(result.virtualModelKey ? { virtualModelKey: result.virtualModelKey } : {}),
             ...(result.usage ? { usage: result.usage } : {}),
+            ...(result.llmRequestId ? { llmRequestId: result.llmRequestId, llmAttempt: result.llmAttempt } : {}),
         };
         const assistantMsg: Message = {
             role: 'model',
@@ -2091,7 +2101,11 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
 }
 
 export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<ChatResult> {
-    const fixedContents = fixToolCalls(await hydrateMessagesForProvider(options.contents || []));
+    // Repair the provider-neutral source form first. This exact canonical
+    // array is journaled before clone-only provider hydration, so durable
+    // session image references are never expanded into provider base64 here.
+    const canonicalContents = fixToolCalls(structuredClone(options.contents || []));
+    const fixedContents = await hydrateMessagesForProvider(canonicalContents);
     const resolvedModel = options.modelsConfigOverride
         ? (() => {
             const modelsConfig = options.modelsConfigOverride!;
@@ -2126,6 +2140,18 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     // Resolve once per outer request. Every retry attempt, including virtual
     // failover attempts, shares this prefix-lineage routing key.
     const promptCacheKey = await resolvePromptCacheKeyForRequest(options);
+    // Completeness boundary: all content-addressed canonical inputs and the
+    // request manifest are durable before any provider attempt can be sent.
+    const { requestId } = await beginLlmRequestJournal({
+        sessionId: options.sessionId,
+        purpose: options.purpose || 'low-level',
+        iteration: options.iteration || 0,
+        systemPrompt: options.systemPrompt || '',
+        toolDefinitions: options.toolDefinitions || [],
+        messages: canonicalContents,
+        requestedModelKey: routeKey,
+        promptCacheKey,
+    });
     const requestedMaxAttempts = options.maxRetries ?? DEFAULT_LLM_MAX_ATTEMPTS;
     const maxAttempts = Number.isFinite(requestedMaxAttempts)
         ? Math.max(1, Math.floor(requestedMaxAttempts))
@@ -2182,6 +2208,14 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                 modelKey,
                 promptCacheKey,
                 attempt,
+            });
+            await appendLlmAttemptStart({
+                requestId,
+                attempt,
+                concreteModelId: plan.modelId,
+                ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
+                providerType: plan.providerType,
+                semanticPayload: plan.data,
             });
             logger.info({
                 modelKey,
@@ -2268,9 +2302,19 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                     ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
                     ...(responseAttempts.length > 0 ? { attempts: responseAttempts } : {}),
                 }, logFiles);
+                // A post-response journal failure must never enter the provider
+                // retry path and generate a duplicate successful completion.
+                // Attempt-start remains durable and exposes the incomplete
+                // result; normal session delivery proceeds.
+                await appendLlmAttemptResult({
+                    requestId,
+                    attempt,
+                    outcome: 'success',
+                    result: { ...result, llmRequestId: requestId, llmAttempt: attempt },
+                }).catch(error => logger.error({ err: error, requestId, attempt }, 'Failed to append successful LLM attempt result after provider response'));
                 return virtualRoutingRequest
-                    ? { ...result, virtualModelKey: routeKey, previousLlmRequest: { completedAt, durationMs } }
-                    : { ...result, previousLlmRequest: { completedAt, durationMs } };
+                    ? { ...result, virtualModelKey: routeKey, previousLlmRequest: { completedAt, durationMs }, llmRequestId: requestId, llmAttempt: attempt }
+                    : { ...result, previousLlmRequest: { completedAt, durationMs }, llmRequestId: requestId, llmAttempt: attempt };
             } catch (error: any) {
                 if (isAbortError(error)) {
                     responseAttempts.push({
@@ -2284,6 +2328,8 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                         ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
                     });
                     await logResponse({ attempts: responseAttempts }, logFiles);
+                    await appendLlmAttemptResult({ requestId, attempt, outcome: 'abort', error: { message: error?.message || String(error), code: error?.code, name: error?.name } })
+                        .catch(journalError => logger.error({ err: journalError, requestId, attempt }, 'Failed to append aborted LLM attempt result'));
                     await moveInteractionLogsToErrorDir(logFiles);
                     throw error;
                 }
@@ -2317,6 +2363,12 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                     } : {})),
                 });
                 await logResponse({ attempts: responseAttempts }, logFiles);
+                await appendLlmAttemptResult({
+                    requestId,
+                    attempt,
+                    outcome: 'failure',
+                    error: { kind: failure.kind, status: failure.status, message: failure.message, retryable: failure.retryable, countable: failure.countable },
+                }).catch(journalError => logger.error({ err: journalError, requestId, attempt }, 'Failed to append failed LLM attempt result'));
                 logger.error({
                     modelId: plan.modelId,
                     virtualModelKey: isVirtualModelConfigEntry(routeEntry) ? routeKey : undefined,
