@@ -3,6 +3,7 @@ import {
     ToolContext,
 } from './helpers';
 import * as sessionManager from '../sessionManager';
+import * as sessionRuntime from '../sessionRuntime';
 import { resolveExecTimeoutSeconds } from '../../packages/shared/dist/persistentExec';
 import {
     buildBackgroundTimeoutResult,
@@ -30,17 +31,17 @@ async function maybeSyncSessionCwdFromExec(ctx: ToolContext, entry: { initialCwd
         return null;
     }
 
-    const syncResult = await sessionManager.setSessionCwd(ctx.sessionId, normalizedNext);
-    if (!syncResult.changed || !syncResult.current) {
+    const syncResult = await sessionRuntime.updateSettings(ctx.sessionId, { cwd: normalizedNext });
+    if (!syncResult.changed.includes('cwd') || !syncResult.current.cwd) {
         return null;
     }
 
     const defaultNote = 'This cwd will be used as the default cwd for subsequent exec/read/edit/write/apply_patch tool calls.';
-    if (syncResult.previous) {
-        return `SESSION CWD CHANGED: \`${syncResult.previous}\` → \`${syncResult.current}\`. ${defaultNote}`;
+    if (syncResult.previous.cwd) {
+        return `SESSION CWD CHANGED: \`${syncResult.previous.cwd}\` → \`${syncResult.current.cwd}\`. ${defaultNote}`;
     }
 
-    return `SESSION CWD CHANGED: \`${syncResult.current}\`. ${defaultNote}`;
+    return `SESSION CWD CHANGED: \`${syncResult.current.cwd}\`. ${defaultNote}`;
 }
 
 function appendCwdNotice(result: string, cwdNotice: string | null): string {
@@ -52,14 +53,14 @@ export async function applyDeferredExecCwdSync(
     result: any,
     cwdSync: DeferredExecCwdSync,
 ): Promise<any> {
-    const syncResult = await sessionManager.setSessionCwd(sessionId, cwdSync.nextCwd);
-    if (!syncResult.changed || !syncResult.current) {
+    const syncResult = await sessionRuntime.updateSettings(sessionId, { cwd: cwdSync.nextCwd });
+    if (!syncResult.changed.includes('cwd') || !syncResult.current.cwd) {
         return result;
     }
     const defaultNote = 'This cwd will be used as the default cwd for subsequent exec/read/edit/write/apply_patch tool calls.';
-    const notice = syncResult.previous
-        ? `SESSION CWD CHANGED: \`${syncResult.previous}\` → \`${syncResult.current}\`. ${defaultNote}`
-        : `SESSION CWD CHANGED: \`${syncResult.current}\`. ${defaultNote}`;
+    const notice = syncResult.previous.cwd
+        ? `SESSION CWD CHANGED: \`${syncResult.previous.cwd}\` → \`${syncResult.current.cwd}\`. ${defaultNote}`
+        : `SESSION CWD CHANGED: \`${syncResult.current.cwd}\`. ${defaultNote}`;
     if (typeof result === 'object' && result !== null && typeof result.output === 'string') {
         return { ...result, output: appendCwdNotice(result.output, notice) };
     }

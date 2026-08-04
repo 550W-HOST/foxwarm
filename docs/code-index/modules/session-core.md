@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Session core owns durable session/agent lifecycle, the queue and wait boundary, metadata/history persistence, parent-child relations, channel attachments, managed-session leases, goals, and canonical runtime state. `src/sessionManager.ts` remains the integration façade over smaller `src/session/*` domains.
+Session core owns durable session/agent lifecycle, the queue and wait boundary, metadata/history persistence, parent-child relations, channel attachments, managed-session leases, goals, and canonical runtime state. `src/sessionManager.ts` remains the live-object integration façade over smaller `src/session/*` domains. `SessionRuntime` is the asynchronous immutable-DTO boundary for external session queries, commands, and update events; local placement currently delegates to the manager through the shared RPC contract.
 
 The live LLM/tool turn loop belongs to `MessageRouter.processSessionQueue()`. Session core stores and triggers work; message routing claims it and executes the turn. Canonical flow: [message processing pipeline](../threads/message-processing-pipeline.md).
 
@@ -13,6 +13,7 @@ Canonical image references in live history, queues, archives, and forks are owne
 ## Units
 
 - [src-session-manager](../units/src-session-manager.md) — façade, in-memory map, lazy hydration, queue/wait coordination, callbacks, and restart recovery.
+- [src-session-runtime](../units/src-session-runtime.md) — local high-level DTO service/facade for external session queries, commands, settings, controls, and events.
 - [src-session-runtime-state](../units/src-session-runtime-state.md) — `requesting-model`, `running-tool`, `waiting`, and `idle` derivation.
 - [src-session-metadata-store](../units/src-session-metadata-store.md) — shared metadata index, per-session history snapshots, rebuild, and durable writes.
 - [src-session-channels](../units/src-session-channels.md) — persisted channel attachments, direct delivery, and session broadcasts.
@@ -34,6 +35,7 @@ Context frontier, compaction, archive-store, and vector retrieval are owned by [
 - Managed-session open/step/release operations.
 - Goal set/clear/reminder operations.
 - Runtime-state builders and independent history/event/list/state callbacks.
+- `SessionRuntime` list/state/history projections, enqueue/event/settings/control commands, and immutable update events for external consumers.
 
 ## Data ownership
 
@@ -55,6 +57,7 @@ The durable JSON implementation and backup semantics are canonical in [src-utils
 - Atomic in-process creation skips live/archived exact internal IDs, explicit creation rejects archive-only reuse, and per-channel first-message resolution converges on one attached lifetime while persisted live sessions still hydrate. Canonical contract: [archived ID reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 - Channel mutations are persisted after the in-memory map changes.
 - Goal reminders advance their sequence anchor when emitted so the same boundary is not repeated.
+- External callers on the SessionRuntime seam receive cloned DTOs; no returned projection, history item, queue item, or event payload is a remotely dereferenceable live `Session` object.
 
 ## Compatibility
 

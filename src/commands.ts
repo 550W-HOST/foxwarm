@@ -3,6 +3,7 @@ import { logger } from './common';
 import { nodesManager } from './nodes/manager';
 import { approvePendingPairing, isReservedNodeId, moveApprovedNode, rejectPendingPairing, removeApprovedNode } from './nodes/registry';
 import * as sessionManager from './sessionManager';
+import * as sessionRuntime from './sessionRuntime';
 import * as skills from './skills';
 import * as tools from './tools';
 import { APP_CONFIG_PATH, getDefaultChannelIdByType, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config';
@@ -230,7 +231,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       if (!sessionId || !session) return
       if (!session.busy) { ctx.reply('⚠️ Session is not currently running.'); return }
       try {
-        const { abortedInFlight } = await sessionManager.requestSessionStop(sessionId)
+        const { abortedInFlight } = await sessionRuntime.control(sessionId, 'stop')
         const queuedNote = session.queue.length > 0
           ? ' Queued inputs will be added to history without being run.'
           : ''
@@ -246,7 +247,7 @@ export const COMMANDS: Record<string, CommandDef> = {
     handler: async (ctx, _args, sessionId) => {
       if (!sessionId) return
       try {
-        const { queuedItems, stoppedCurrent, abortedInFlight } = await sessionManager.requestSessionDequeue(sessionId)
+        const { queuedItems = 0, stoppedCurrent, abortedInFlight } = await sessionRuntime.control(sessionId, 'dequeue')
         if (queuedItems === 0) { ctx.reply('⚠️ No queued items to run.'); return }
         if (stoppedCurrent) {
           ctx.reply(abortedInFlight
@@ -267,7 +268,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       if (session.history.length === 0) { ctx.reply('⚠️ No history to retry.'); return }
       try {
         ctx.reply('🔄 Retrying last request...')
-        await sessionManager.retrySession(sessionId)
+        await sessionRuntime.control(sessionId, 'retry')
       } catch (e: any) { ctx.reply(`❌ Retry failed: ${e.message}`) }
     }
   },
@@ -358,8 +359,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       }
       try {
         nodesManager.setCurrentNode(sessionId, nodeId)
-        session.currentNode = nodeId
-        await sessionManager.saveSession(sessionId)
+        await sessionRuntime.updateSettings(sessionId, { currentNode: nodeId })
         ctx.reply(`✅ Switched to node \`${nodeId}\`\n\nAll file/exec/browser tools will now execute on this node.`)
       } catch (e: any) { ctx.reply(`❌ Failed to switch node: ${e.message}`) }
     }
@@ -440,15 +440,13 @@ export const COMMANDS: Record<string, CommandDef> = {
       }
       const target = args[0]
       if (target === 'default') {
-        session.model = undefined
-        await sessionManager.saveSession(sessionId)
+        await sessionRuntime.updateSettings(sessionId, { model: null })
         ctx.reply('✅ Model reset to default.')
         return
       }
       const resolved = resolveCommandModelSelection(target, session.model)
       if (resolved.error) { ctx.reply(resolved.error); return }
-      session.model = resolved.key
-      await sessionManager.saveSession(sessionId)
+      await sessionRuntime.updateSettings(sessionId, { model: resolved.key })
       ctx.reply(`✅ Model switched to \`${resolved.key}\`.`)
     }
   },

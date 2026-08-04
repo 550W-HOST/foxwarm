@@ -1,0 +1,160 @@
+import { SESSION_WORKERS_ENABLED } from './config';
+import {
+  LocalRpcTransport,
+  RpcClient,
+  RpcError,
+  RpcEventListener,
+  RpcServiceRegistry,
+} from './rpc';
+import {
+  createSessionRuntimeServiceHandler,
+  SessionRuntimeControlAction,
+  SessionRuntimeControlResultDto,
+  SessionRuntimeEventPayloads,
+  SessionRuntimeHistoryDto,
+  SessionRuntimeSessionDto,
+  SessionRuntimeSettingsPatchDto,
+  SessionRuntimeSettingsResultDto,
+  sessionRuntimeServiceDescriptor,
+} from './sessionRuntimeService';
+import type { QueueItem } from './types';
+
+export type SessionRuntimeEventListener = RpcEventListener<typeof sessionRuntimeServiceDescriptor>;
+
+let transport: LocalRpcTransport | undefined;
+let client: RpcClient<typeof sessionRuntimeServiceDescriptor> | undefined;
+let initializing: Promise<void> | undefined;
+let eventsStarted = false;
+
+export function assertSessionWorkerPlacementSupported(enabled = SESSION_WORKERS_ENABLED): void {
+  if (!enabled) return;
+  throw new RpcError(
+    'SESSION_WORKERS_NOT_IMPLEMENTED',
+    'sessionWorkers is enabled, but child session placement is not implemented yet. Set sessionWorkers: false and restart.',
+  );
+}
+
+export async function initializeSessionRuntime(): Promise<void> {
+  if (client) return;
+  assertSessionWorkerPlacementSupported();
+  if (!initializing) {
+    initializing = Promise.resolve().then(() => {
+      const registry = new RpcServiceRegistry();
+      registry.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler());
+      transport = new LocalRpcTransport(registry, { maxPendingEvents: 4096 });
+      client = new RpcClient(sessionRuntimeServiceDescriptor, transport);
+    }).catch((error) => {
+      initializing = undefined;
+      throw error;
+    });
+  }
+  await initializing;
+}
+
+async function getClient(): Promise<RpcClient<typeof sessionRuntimeServiceDescriptor>> {
+  await initializeSessionRuntime();
+  if (!client) throw new RpcError('SESSION_RUNTIME_UNAVAILABLE', 'Session runtime is unavailable.', true);
+  return client;
+}
+
+export async function getSession(sessionId: string): Promise<SessionRuntimeSessionDto | null> {
+  return (await (await getClient()).call('getSession', { sessionId })).session;
+}
+
+export async function listSessions(): Promise<SessionRuntimeSessionDto[]> {
+  return (await (await getClient()).call('listSessions', {})).sessions;
+}
+
+export async function getHistory(sessionId: string): Promise<SessionRuntimeHistoryDto | null> {
+  return (await getClient()).call('getHistory', { sessionId });
+}
+
+export async function enqueue(sessionId: string, item: QueueItem): Promise<void> {
+  await (await getClient()).call('enqueue', { sessionId, item });
+}
+
+export async function queueEvent(
+  sessionId: string,
+  text: string,
+  type: 'background' | 'trigger' | 'onboot' = 'background',
+): Promise<void> {
+  await (await getClient()).call('queueEvent', { sessionId, text, type });
+}
+
+export async function updateSettings(
+  sessionId: string,
+  patch: SessionRuntimeSettingsPatchDto,
+): Promise<SessionRuntimeSettingsResultDto> {
+  return (await getClient()).call('updateSettings', { sessionId, patch });
+}
+
+export async function control(
+  sessionId: string,
+  action: SessionRuntimeControlAction,
+): Promise<SessionRuntimeControlResultDto> {
+  return (await getClient()).call('control', { sessionId, action });
+}
+
+export function subscribe(listener: SessionRuntimeEventListener): () => void {
+  if (!client) {
+    throw new RpcError('SESSION_RUNTIME_UNAVAILABLE', 'Initialize the session runtime before subscribing.', true);
+  }
+  return client.subscribe(listener);
+}
+
+export async function startEvents(): Promise<void> {
+  if (eventsStarted) return;
+  await (await getClient()).call('startEvents', {});
+  eventsStarted = true;
+}
+
+export function getSessionRuntimeStatus(): {
+  placement: 'local';
+  ready: boolean;
+  eventsStarted: boolean;
+  childPlacementImplemented: false;
+} {
+  return {
+    placement: 'local',
+    ready: !!client,
+    eventsStarted,
+    childPlacementImplemented: false,
+  };
+}
+
+export async function shutdownSessionRuntime(timeoutMs = 10_000): Promise<void> {
+  const currentClient = client;
+  const currentTransport = transport;
+  if (!currentTransport) return;
+  let shutdownError: unknown;
+  if (eventsStarted && currentClient) {
+    try {
+      await currentClient.call('stopEvents', {});
+    } catch (error) {
+      shutdownError = error;
+    } finally {
+      eventsStarted = false;
+    }
+  }
+  try {
+    await currentTransport.drain(timeoutMs);
+  } catch (error) {
+    shutdownError ||= error;
+  } finally {
+    currentTransport.close();
+    client = undefined;
+    transport = undefined;
+    initializing = undefined;
+  }
+  if (shutdownError) throw shutdownError;
+}
+
+export type {
+  SessionRuntimeControlAction,
+  SessionRuntimeControlResultDto,
+  SessionRuntimeEventPayloads,
+  SessionRuntimeHistoryDto,
+  SessionRuntimeSessionDto,
+  SessionRuntimeSettingsPatchDto,
+  SessionRuntimeSettingsResultDto,
+};

@@ -1,4 +1,5 @@
 import * as sessionManager from '../sessionManager';
+import * as sessionRuntime from '../sessionRuntime';
 import { resolveModelConfig } from '../config';
 import { clearSessionGoal, normalizeGoalText, resolveSessionGoalRemindEvery, setSessionGoal } from '../session/goal';
 import { ToolArgs, ToolContext, normalizeToolModelKey } from './helpers';
@@ -40,19 +41,26 @@ export async function tool_set_session_compact_threshold(args: ToolArgs, ctx: To
 
   const clear = args.clear === true;
   if (clear) {
-    const result = await sessionManager.setSessionCompactThreshold(targetId);
+    const result = await sessionRuntime.updateSettings(targetId, { compactThresholdTokens: null });
+    const effective = sessionManager.getEffectiveCompactThresholdTokens({
+      model: result.session.model || undefined,
+      compactThresholdTokens: undefined,
+    });
     return [
-      `Session \`${result.sessionId}\` compact threshold cleared.`,
-      `Now inheriting default auto-compact threshold: ${result.effectiveThresholdTokens} tokens.`,
+      `Session \`${result.session.id}\` compact threshold cleared.`,
+      `Now inheriting default auto-compact threshold: ${effective} tokens.`,
     ].join('\n');
   }
 
   if (typeof args.thresholdTokens !== 'number' || !Number.isFinite(args.thresholdTokens) || args.thresholdTokens <= 0) {
-    const session = await sessionManager.getExistingSession(targetId);
+    const session = await sessionRuntime.getSession(targetId);
     if (!session) {
       throw new Error(`Session \`${targetId}\` not found.`);
     }
-    const effective = sessionManager.getEffectiveCompactThresholdTokens(session);
+    const effective = sessionManager.getEffectiveCompactThresholdTokens({
+      model: session.model || undefined,
+      compactThresholdTokens: session.compactThresholdTokens || undefined,
+    });
     const override = typeof session.compactThresholdTokens === 'number'
       ? `${session.compactThresholdTokens} tokens`
       : 'inherit global default';
@@ -63,11 +71,15 @@ export async function tool_set_session_compact_threshold(args: ToolArgs, ctx: To
     ].join('\n');
   }
 
-  const result = await sessionManager.setSessionCompactThreshold(targetId, args.thresholdTokens);
+  const result = await sessionRuntime.updateSettings(targetId, { compactThresholdTokens: args.thresholdTokens });
+  const effective = sessionManager.getEffectiveCompactThresholdTokens({
+    model: result.session.model || undefined,
+    compactThresholdTokens: result.current.compactThresholdTokens || undefined,
+  });
   return [
-    `Session \`${result.sessionId}\` compact threshold updated.`,
-    `override: ${result.thresholdTokens} tokens`,
-    `effective: ${result.effectiveThresholdTokens} tokens`,
+    `Session \`${result.session.id}\` compact threshold updated.`,
+    `override: ${result.current.compactThresholdTokens} tokens`,
+    `effective: ${effective} tokens`,
   ].join('\n');
 }
 
@@ -79,17 +91,17 @@ export async function tool_set_session_child_model(args: ToolArgs, ctx: ToolCont
 
   const clear = args.clear === true;
   if (clear) {
-    const result = await sessionManager.setSessionChildModelDefault(targetId);
-    const { currentKey } = resolveModelConfig(result.effectiveModel);
+    const result = await sessionRuntime.updateSettings(targetId, { childModelDefault: null });
+    const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(result.session));
     return [
-      `Session \`${result.sessionId}\` child default model cleared.`,
+      `Session \`${result.session.id}\` child default model cleared.`,
       `Now inheriting the current session model path (effective spawn model: \`${currentKey}\`).`,
     ].join('\n');
   }
 
   const normalizedModel = normalizeToolModelKey(args.model);
   if (!normalizedModel) {
-    const session = await sessionManager.getExistingSession(targetId);
+    const session = await sessionRuntime.getSession(targetId);
     if (!session) {
       throw new Error(`Session \`${targetId}\` not found.`);
     }
@@ -107,10 +119,10 @@ export async function tool_set_session_child_model(args: ToolArgs, ctx: ToolCont
     ].join('\n');
   }
 
-  const result = await sessionManager.setSessionChildModelDefault(targetId, normalizedModel);
-  const { currentKey } = resolveModelConfig(result.effectiveModel);
+  const result = await sessionRuntime.updateSettings(targetId, { childModelDefault: normalizedModel });
+  const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(result.session));
   return [
-    `Session \`${result.sessionId}\` child default model updated.`,
+    `Session \`${result.session.id}\` child default model updated.`,
     `override: \`${normalizedModel}\``,
     `effective spawned-session model: \`${currentKey}\``,
   ].join('\n');

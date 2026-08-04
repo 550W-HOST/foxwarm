@@ -4,7 +4,7 @@
 
 Foxwarm uses one logical set of asynchronous service contracts with configurable process placement. A service may run in the caller's process through a local handler or in a supervised child through IPC. Placement must not create a second business API or expose mutable in-process objects to callers.
 
-The first production service on this boundary is the LanceDB/vector owner. Session workers remain disabled by default while the session runtime is prepared for a later high-level DTO boundary.
+The first child-process service on this boundary is the LanceDB/vector owner. SessionRuntime now has a production-used local DTO service for high-level session queries, enqueue/control, settings, and update events. Session child placement remains disabled until ownership transfer, fencing, snapshots, and inactive-session mailbox semantics are implemented.
 
 ## Configuration
 
@@ -20,7 +20,7 @@ The initial process transport uses Node's parent/child IPC channel. Its transpor
 
 Requests carry protocol/build identity, a process generation, request and trace IDs, and optional deadlines. Child shutdown first stops new requests, drains accepted work within a bound, and then exits. Replies from an obsolete process generation are rejected.
 
-Large history, images, and tool output do not move through a central payload broker. Service calls use bounded DTOs and stable file/blob/snapshot references where necessary.
+The hot turn loop does not move full history, images, or tool output through a central payload broker. Explicit external history/debug reads may return the requested immutable snapshot; high-frequency service calls otherwise use bounded DTOs and stable file/blob/snapshot references where necessary.
 
 ## Vector placement
 
@@ -32,7 +32,9 @@ The production bootstrap completes authoritative session/archive migrations befo
 
 ## Session direction
 
-A future session worker owns one session's hydrated hot state and turn loop. External callers use high-level commands, queries, and events rather than a remotely dereferenceable `Session` object. The in-process session runtime must adopt the same DTO contract before child placement is enabled broadly.
+`SessionRuntime` is the external command/query/event boundary for session list/state/history projections, canonical queue insertion, typed events, stop/dequeue/retry controls, and persisted model/cwd/node/name/compact-threshold settings. Its local handler delegates to `sessionManager`, but local RPC cloning and structured errors prevent callers from retaining handler-owned `Session`, history, queue, or event references. WebUI list/state/history/settings/SSE, channel message enqueue, commands, and migrated tools use this boundary; the router's claimed turn loop and destructive lifecycle operations still use live objects internally.
+
+`sessionWorkers:true` fails startup with `SESSION_WORKERS_NOT_IMPLEMENTED` rather than reporting a placement that does not exist. A future session worker owns one session's hydrated hot state and turn loop, but child placement still requires durable mailbox, snapshot-generation and process-generation fencing, wake/idle release, and worker supervision.
 
 ## Failure boundary
 
@@ -46,6 +48,7 @@ A future session worker owns one session's hydrated hot state and turn loop. Ext
 
 - [infrastructure](../modules/infrastructure.md) / [src-index](../units/src-index.md) / [src-config](../units/src-config.md)
 - [src-rpc](../units/src-rpc.md)
+- [src-session-runtime](../units/src-session-runtime.md)
 - [session context](../modules/session-context.md) / [src-vector](../units/src-vector.md)
 - [session core](../modules/session-core.md) / [message routing](../modules/message-routing.md)
 - [tool dispatch](./tool-dispatch.md) and [node communication](./node-communication.md) for future direct service endpoints
@@ -66,5 +69,5 @@ A future session worker owns one session's hydrated hot state and turn loop. Ext
 
 ## Open questions
 
-- The SessionRuntime DTO migration and durable inactive-session mailbox are later milestones; they are not implemented by the initial vector-worker foundation.
+- SessionRuntime child placement still needs durable inactive-session mailbox, ownership transfer/fencing, snapshot-generation publication, wake/idle release, and crash recovery. The local DTO service deliberately does not simulate those mechanisms.
 - Direct Unix-domain connections among future session, vector, and master-node services may replace the initial parent/child transport when avoiding a main-process payload hop becomes relevant.

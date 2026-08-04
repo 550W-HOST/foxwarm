@@ -77,7 +77,8 @@ Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /retry, /node, /s
 - `./channel` — `ChannelContext`, `getChannelId`, `getChannelType`, `getConversationId`
 - `./channelAuth` — `inspectChannelAuthorizationFromContext`, `formatAuthorizationInspection`
 - `./channelRuntime` — `getManagedChannelIds`, `getChannelRuntimeStatus`, `listChannelRuntimeStatuses`, `restartManagedChannel`, `startManagedChannel`, `stopManagedChannel`
-- `./sessionManager` — Session CRUD, channel-session binding, channel config
+- `./sessionRuntime` — stop/dequeue/retry controls and persisted model/node/compact-threshold setting commands
+- `./sessionManager` — live Session CRUD, channel-session binding, lifecycle, and channel config
 - `./config` — App config paths, model resolution, defaults, read/write config
 - `./sessionStatus` — Shared `/status` and `session({ action: "status" })` status builder/formatter
 - `./skills` / `./tools` — Skill and tool listing/toggling
@@ -92,7 +93,7 @@ Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /retry, /node, /s
 
 ## Behavior
 
-- Each command handler validates arguments, performs the action (often via `sessionManager` or other managers), and replies to the user via `ctx.reply`. `/retry` only sends an immediate channel acknowledgement; it does not create a model-visible retry prompt. `/dequeue` replies with the queued-item count and whether an active LLM request was aborted or a running tool must finish first.
+- Each command handler validates arguments, performs the action (often via SessionRuntime, `sessionManager`, or other managers), and replies to the user via `ctx.reply`. `/stop`, `/dequeue`, and `/retry` use the SessionRuntime control command while preserving their router/session-manager semantics. Model/node/compact-threshold mutations use its persisted settings command. `/retry` only sends an immediate channel acknowledgement; it does not create a model-visible retry prompt. `/dequeue` replies with the queued-item count and whether an active LLM request was aborted or a running tool must finish first.
 - Session-requiring commands automatically resolve the active session from the channel/conversation binding; if none exists, they short-circuit with an error message.
 - Timer commands enforce permission checks for isolated agents before creating timers.
 - `/config` can modify persistent app config (model settings, WeChat credentials) and triggers channel restarts when relevant config changes.

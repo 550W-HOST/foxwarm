@@ -1,6 +1,7 @@
 import { ChannelContext, getChannelId, getConversationId } from '../channel';
 import { Session } from '../types';
 import * as sessionManager from '../sessionManager';
+import * as sessionRuntime from '../sessionRuntime';
 import { resolveModelConfig } from '../config';
 import { parseSessionMoveArgs, parseCompactThresholdInput, resolveCommandModelSelection } from './helpers';
 
@@ -189,9 +190,8 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
 
       const target = subArgs[0].toLowerCase()
       if (target === 'default' || target === 'clear' || target === 'unset') {
-        await sessionManager.setSessionChildModelDefault(sessionId)
-        delete session.childModelDefault
-        const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session))
+        const result = await sessionRuntime.updateSettings(sessionId, { childModelDefault: null })
+        const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(result.session))
         ctx.reply(`✅ Child default model cleared. New child sessions will follow the current session model path (effective: \`${currentKey}\`).`)
         return
       }
@@ -202,8 +202,7 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
         return
       }
 
-      await sessionManager.setSessionChildModelDefault(sessionId, selection.key)
-      session.childModelDefault = selection.key
+      await sessionRuntime.updateSettings(sessionId, { childModelDefault: selection.key })
       ctx.reply(`✅ Child default model set to \`${selection.key}\`.`)
       return
     }
@@ -298,13 +297,11 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
 
       try {
         if (newName === '-') {
-          session.displayName = undefined
-          await sessionManager.saveSession(sessionId)
+          await sessionRuntime.updateSettings(sessionId, { displayName: null })
           ctx.reply('✅ Session display name cleared.')
         } else {
-          session.displayName = newName.trim()
-          await sessionManager.saveSession(sessionId)
-          ctx.reply(`✅ Session renamed to "${session.displayName}".`)
+          const result = await sessionRuntime.updateSettings(sessionId, { displayName: newName.trim() })
+          ctx.reply(`✅ Session renamed to "${result.session.displayName}".`)
         }
       } catch (e: any) {
         ctx.reply(`❌ Rename failed: ${e.message}`)
@@ -348,14 +345,22 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
       const rawValue = subArgs[0].trim().toLowerCase()
       try {
         if (rawValue === 'clear' || rawValue === 'unset') {
-          const result = await sessionManager.setSessionCompactThreshold(sessionId)
-          ctx.reply(`✅ Compact threshold override cleared.\nEffective auto-compact threshold: \`${result.effectiveThresholdTokens}\` tokens`)
+          const result = await sessionRuntime.updateSettings(sessionId, { compactThresholdTokens: null })
+          const effective = sessionManager.getEffectiveCompactThresholdTokens({
+            model: result.session.model || undefined,
+            compactThresholdTokens: undefined,
+          })
+          ctx.reply(`✅ Compact threshold override cleared.\nEffective auto-compact threshold: \`${effective}\` tokens`)
           return
         }
 
         const thresholdTokens = parseCompactThresholdInput(subArgs[0])
-        const result = await sessionManager.setSessionCompactThreshold(sessionId, thresholdTokens)
-        ctx.reply(`✅ Compact threshold updated to \`${result.thresholdTokens}\` tokens.\nEffective auto-compact threshold: \`${result.effectiveThresholdTokens}\` tokens`)
+        const result = await sessionRuntime.updateSettings(sessionId, { compactThresholdTokens: thresholdTokens })
+        const effective = sessionManager.getEffectiveCompactThresholdTokens({
+          model: result.session.model || undefined,
+          compactThresholdTokens: result.current.compactThresholdTokens || undefined,
+        })
+        ctx.reply(`✅ Compact threshold updated to \`${result.current.compactThresholdTokens}\` tokens.\nEffective auto-compact threshold: \`${effective}\` tokens`)
       } catch (e: any) {
         ctx.reply(`❌ Compact threshold update failed: ${e.message}`)
       }

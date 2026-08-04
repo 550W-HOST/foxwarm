@@ -15,6 +15,8 @@ import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOp
 import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
+import * as sessionRuntime from '../sessionRuntime';
+import type { SessionRuntimeSessionDto } from '../sessionRuntime';
 import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, getActiveModelsConfigPath, readAppConfigFile, resolveModelConfig } from '../config';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
@@ -399,9 +401,12 @@ function getWeixinSetupConfig(body: any = {}) {
   };
 }
 
-function buildWebUiModelStatus(session: { model?: string; childModelDefault?: string }) {
-  const { defaultKey, currentKey } = resolveModelConfig(session.model);
-  const { currentKey: effectiveChildModelKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session));
+function buildWebUiModelStatus(session: { model?: string | null; childModelDefault?: string | null }) {
+  const { defaultKey, currentKey } = resolveModelConfig(session.model || undefined);
+  const effectiveSpawnModel = typeof session.childModelDefault === 'string' && session.childModelDefault.trim()
+    ? session.childModelDefault.trim()
+    : (typeof session.model === 'string' && session.model.trim() ? session.model.trim() : undefined);
+  const { currentKey: effectiveChildModelKey } = resolveModelConfig(effectiveSpawnModel);
   return {
     model: typeof session.model === 'string' && session.model.trim() ? session.model.trim() : null,
     modelKey: currentKey,
@@ -418,14 +423,16 @@ function buildWebUiSessionState(session: any) {
     aliases: session.aliases || [],
     busy: session.busy || false,
     busyStartedAt: typeof session.busyStartedAt === 'number' ? session.busyStartedAt : null,
-    queueLength: session.queue?.length || 0,
-    runtimeState: sessionManager.buildSessionRuntimeState(session),
+    queueLength: typeof session.queueLength === 'number' ? session.queueLength : (session.queue?.length || 0),
+    runtimeState: session.runtimeState || sessionManager.buildSessionRuntimeState(session),
     displayName: session.displayName || null,
     archived: session.archived || false,
     currentNode: session.currentNode || 'master',
     cwd: session.cwd || null,
     ...buildWebUiModelStatus(session),
-    isolated: sessionManager.isSessionEffectivelyIsolated(session),
+    isolated: typeof session.isolated === 'boolean'
+      ? session.isolated
+      : sessionManager.isSessionEffectivelyIsolated(session),
   };
 }
 
@@ -691,7 +698,7 @@ export class WebUIChannel implements Channel {
 
             logger.info({ trigger: true, text, sessionId: finalSessionId }, 'External trigger received');
 
-            await sessionManager.queueSessionEvent(finalSessionId, text, 'trigger');
+            await sessionRuntime.queueEvent(finalSessionId, text, 'trigger');
             res.json({ success: true, message: 'Triggered' });
           } catch (e: any) {
             logger.error({ err: e }, 'Trigger error');
@@ -1082,7 +1089,8 @@ export class WebUIChannel implements Channel {
         method: 'GET',
         handler: async (_req: express.Request, res: express.Response) => {
           try {
-            const allSessions = sessionManager.getAllSessions();
+            const runtimeSessions = await sessionRuntime.listSessions();
+            const allSessions = new Map(runtimeSessions.map(session => [session.id, session]));
             
             // Build parent-to-children map
             const childrenMap = buildChildrenMap(allSessions);
@@ -1090,18 +1098,16 @@ export class WebUIChannel implements Channel {
             const sessions = Array.from(allSessions.entries())
               .map(([id, session]) => ({
                 ...buildWebUiSessionState(session),
-                messageCount: session.meta?.messageCount ?? session.history.length,
-                lastMessageTime: session.meta?.lastMessageTime ?? (session.history.length > 0 
-                  ? session.history[session.history.length - 1].__meta?.timestamp || 0
-                  : 0),
+                messageCount: session.messageCount,
+                lastMessageTime: session.lastMessageTime,
                 parentSessionId: session.parentSessionId || null,
                 childSessions: childrenMap.get(id) || [],
                 pinned: session.pinned || false,
                 sidebarOrder: getWebUiSidebarOrder(session) ?? null,
                 tokenUsage: {
-                  cachedTokens: session.stats?.totalCachedTokens || 0,
-                  inputTokens: session.stats?.totalInputTokens || 0,
-                  outputTokens: session.stats?.totalOutputTokens || 0,
+                  cachedTokens: session.tokenUsage.cachedTokens,
+                  inputTokens: session.tokenUsage.inputTokens,
+                  outputTokens: session.tokenUsage.outputTokens,
                 },
               }))
               .sort((a, b) => b.lastMessageTime - a.lastMessageTime); // Sort by lastMessageTime descending
@@ -1173,13 +1179,13 @@ export class WebUIChannel implements Channel {
           try {
             const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
             const cwd = typeof req.body?.cwd === 'string' ? req.body.cwd : undefined;
-            const result = await sessionManager.setSessionCwd(sessionId, cwd);
+            const result = await sessionRuntime.updateSettings(sessionId, { cwd: cwd || null });
             this.broadcastSessionListUpdate();
             res.json({
               success: true,
-              changed: result.changed,
-              previous: result.previous || null,
-              cwd: result.current || null,
+              changed: result.changed.includes('cwd'),
+              previous: result.previous.cwd,
+              cwd: result.current.cwd,
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session cwd');
@@ -1194,21 +1200,15 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
-            const session = await sessionManager.getExistingSession(sessionId);
+            const session = await sessionRuntime.getSession(sessionId);
             if (!session) {
               return res.status(404).json({ error: 'Session not found' });
             }
 
             const model = req.body?.clear === true ? undefined : normalizeWebUiModelSelection(req.body?.model);
-            if (model !== undefined) {
-              session.model = model;
-            } else {
-              delete session.model;
-            }
-
-            await sessionManager.saveSession(session.id);
+            const updated = await sessionRuntime.updateSettings(session.id, { model: model || null });
             this.broadcastSessionListUpdate();
-            res.json({ success: true, sessionId: session.id, ...buildWebUiModelStatus(session) });
+            res.json({ success: true, sessionId: session.id, ...buildWebUiModelStatus(updated.session) });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session model');
             res.status(400).json({ error: e.message });
@@ -1222,16 +1222,15 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
-            const session = await sessionManager.getExistingSession(sessionId);
+            const session = await sessionRuntime.getSession(sessionId);
             if (!session) {
               return res.status(404).json({ error: 'Session not found' });
             }
 
             const model = req.body?.clear === true ? undefined : normalizeWebUiModelSelection(req.body?.model);
-            await sessionManager.setSessionChildModelDefault(session.id, model);
-            const updated = await sessionManager.getExistingSession(session.id) || session;
+            const result = await sessionRuntime.updateSettings(session.id, { childModelDefault: model || null });
             this.broadcastSessionListUpdate();
-            res.json({ success: true, sessionId: updated.id, ...buildWebUiModelStatus(updated) });
+            res.json({ success: true, sessionId: result.session.id, ...buildWebUiModelStatus(result.session) });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session child model');
             res.status(400).json({ error: e.message });
@@ -1315,7 +1314,8 @@ export class WebUIChannel implements Channel {
         method: 'GET',
         handler: async (_req: express.Request, res: express.Response) => {
           try {
-            const allSessions = sessionManager.getAllSessions();
+            const runtimeSessions = await sessionRuntime.listSessions();
+            const allSessions = new Map(runtimeSessions.map(session => [session.id, session]));
 
             const childrenMap = buildChildrenMap(allSessions);
             
@@ -1324,11 +1324,11 @@ export class WebUIChannel implements Channel {
               id,
               displayName: session.displayName || id,
               busy: session.busy || false,
-              queueLength: session.queue?.length || 0,
+              queueLength: session.queueLength,
               parentSessionId: session.parentSessionId || null,
               childSessions: childrenMap.get(id) || [],
-              messageCount: session.meta?.messageCount ?? session.history.length,
-              lastMessageTime: session.meta?.lastMessageTime ?? 0,
+              messageCount: session.messageCount,
+              lastMessageTime: session.lastMessageTime,
               archived: session.archived || false
             }));
             
@@ -1405,7 +1405,7 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
-            const session = await sessionManager.getExistingSession(sessionId);
+            const session = await sessionRuntime.getSession(sessionId);
             if (!session) {
               return res.status(404).json({ error: 'Session not found' });
             }
@@ -1423,24 +1423,20 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
-            const session = await sessionManager.getExistingSession(sessionId);
-            if (!session) {
+            const snapshot = await sessionRuntime.getHistory(sessionId);
+            if (!snapshot) {
               return res.status(404).json({ error: 'Session not found' });
             }
-            const queuedMessages = buildQueuedPreviewMessages(session.queue);
-            const webUiHistory = await materializeWebUiMessages(session.history);
-            if (webUiHistory.changed) {
-              session.history = webUiHistory.canonicalMessages;
-              await sessionManager.saveSession(session.id);
-            }
+            const queuedMessages = buildQueuedPreviewMessages(snapshot.queue);
+            const webUiHistory = await materializeWebUiMessages(snapshot.messages);
             res.json({
-              session: buildWebUiSessionState(session),
+              session: buildWebUiSessionState(snapshot.session),
               messages: webUiHistory.messages,
-              persistentMemorySnapshot: session.persistentMemorySnapshot || '',
+              persistentMemorySnapshot: snapshot.persistentMemorySnapshot,
               queuedMessages,
-              queueLength: session.queue?.length || 0,
+              queueLength: snapshot.session.queueLength,
               queuedPreviewLimit: MAX_QUEUED_PREVIEW_ITEMS,
-              queuedPreviewOmittedCount: Math.max(0, (session.queue?.length || 0) - queuedMessages.length),
+              queuedPreviewOmittedCount: Math.max(0, snapshot.session.queueLength - queuedMessages.length),
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to get history');
@@ -1489,26 +1485,22 @@ export class WebUIChannel implements Channel {
           try {
             const sessionId = req.params.sessionId as string;
             const { name } = req.body;
-            const session = await sessionManager.getExistingSession(sessionId);
+            const session = await sessionRuntime.getSession(sessionId);
 
             if (!session) {
               return res.status(404).json({ error: 'Session not found' });
             }
 
-            if (typeof name === 'string' && name.trim()) {
-              session.displayName = name.trim();
-            } else {
-              session.displayName = undefined;
-            }
-
-            await sessionManager.saveSession(session.id);
+            const result = await sessionRuntime.updateSettings(session.id, {
+              displayName: typeof name === 'string' && name.trim() ? name.trim() : null,
+            });
 
             this.broadcastSessionListUpdate();
 
             res.json({
               success: true,
               sessionId: session.id,
-              displayName: session.displayName || null,
+              displayName: result.session.displayName,
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session display name');
@@ -2138,7 +2130,7 @@ export class WebUIChannel implements Channel {
             return;
           }
 
-          const session = await sessionManager.getExistingSession(requestedSessionId);
+          const session = await sessionRuntime.getSession(requestedSessionId);
           if (!session) {
             res.status(404).json({ error: 'Session not found' });
             return;
@@ -2750,13 +2742,18 @@ export class WebUIChannel implements Channel {
     }
   }
 
-  broadcastSessionStateUpdate(sessionId: string) {
+  broadcastSessionStateUpdate(sessionId: string, runtimeSession?: SessionRuntimeSessionDto | null) {
     const clients = this.sseClients.get(sessionId);
     if (!clients || clients.length === 0) {
       return;
     }
 
-    const session = sessionManager.getAllSessions().get(sessionId);
+    // The production event bridge supplies an immutable DTO. The live-map
+    // fallback remains only for direct compatibility callers and existing
+    // route tests that invoke this method without an event payload.
+    const session = runtimeSession === undefined
+      ? sessionManager.getAllSessions().get(sessionId)
+      : runtimeSession;
     const data = session
       ? JSON.stringify({ type: 'session-state', session: buildWebUiSessionState(session) })
       : JSON.stringify({ type: 'session-deleted', sessionId });

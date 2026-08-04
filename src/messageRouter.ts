@@ -13,6 +13,7 @@ import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
 import { maybeBuildGoalReminderMessage } from './session/goal';
 import * as sessionManager from './sessionManager';
+import * as sessionRuntime from './sessionRuntime';
 import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
 import { formatLocalTimestamp } from './utils/localTime';
@@ -1359,20 +1360,20 @@ export class MessageRouter {
     const queueItem = this.buildChannelUserQueueItem(ctx, message);
 
     if (isManagedSessionActive(session)) {
-      await sessionManager.enqueueSessionItem(sessionId, queueItem);
+      await sessionRuntime.enqueue(sessionId, queueItem);
       await this.sendSessionReply(session, ctx, '🧭 Session is under managed control; your message was queued for its manager.');
       return;
     }
 
     if (session.busy) {
       logger.info({ channelId: getChannelId(ctx), channelType: getChannelType(ctx), user: ctx.username }, 'Session busy, queueing message');
-      await sessionManager.enqueueSessionItem(sessionId, queueItem);
+      await sessionRuntime.enqueue(sessionId, queueItem);
       // Intentionally no user-facing busy/queued notice: the message remains
       // queued and will be processed when the current turn finishes.
       return;
     }
 
-    await sessionManager.enqueueSessionItem(sessionId, queueItem);
+    await sessionRuntime.enqueue(sessionId, queueItem);
     await this.processSessionQueue(sessionId);
   }
 

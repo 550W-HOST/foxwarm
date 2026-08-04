@@ -60,7 +60,8 @@ Routes incoming channel messages to the appropriate session, handles authorizati
 - `./session/managedState` — `getManagedSessionState`, `isManagedSessionActive`, `setManagedSessionState`
 - `./session/snapshotRefresh` — `maybeRefreshStaleSessionSnapshot`
 - `./session/goal` — `maybeBuildGoalReminderMessage`
-- `./sessionManager` — session CRUD, queue operations, message appending, channel config
+- `./sessionManager` — live turn-loop session CRUD, message appending, channel config, and internal queue claiming
+- `./sessionRuntime` — immutable external enqueue command used by inbound channel messages
 - `./llm` — LLM inference calls
 - `./types` — `ChannelTurnProgress`, `Message`, `MessagePart`, `QueueItem`, `QueueSource`, `Session`
 - `./utils/localTime` — `formatLocalTimestamp`
@@ -95,7 +96,7 @@ Routes incoming channel messages to the appropriate session, handles authorizati
 ## Integration
 
 - Sits between channel adapters (Discord, Slack, internal, etc.) and the session/LLM layer.
-- Delegates session persistence and queue storage to `sessionManager`.
+- Delegates live turn persistence/claims to `sessionManager`; inbound external queue insertion uses the SessionRuntime command boundary before the same canonical manager transition.
 - Calls `llm` module for inference; feeds tool call results back into the session loop.
 - Interacts with child session and managed state modules to support multi-agent orchestration.
 - Channel authorization logic gates access before routing; guest agent config allows controlled access for unauthorized users.

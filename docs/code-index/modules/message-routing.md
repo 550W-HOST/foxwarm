@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Message routing owns inbound channel-to-session routing, command dispatch, side requests, queue claiming, and the LLM/tool turn loop. It coordinates channels, sessions, LLM providers, tools, compaction, waits, retries, and guest-session provisioning without owning those subsystems' internal storage.
+Message routing owns inbound channel-to-session routing, command dispatch, side requests, queue claiming, and the LLM/tool turn loop. It coordinates channels, sessions, LLM providers, tools, compaction, waits, retries, and guest-session provisioning without owning those subsystems' internal storage. External channel input enters through the SessionRuntime enqueue DTO boundary; the claimed turn loop intentionally retains live `Session` access in local placement.
 
 ## Key units
 
@@ -28,6 +28,7 @@ Message routing owns inbound channel-to-session routing, command dispatch, side 
 - Queue items are consumed in insertion order, subject to ready compact-commit safe points; retry and compact planning do not enter the queue.
 - Each consumed queue item remains a separate canonical history message; only provider-facing serialization may normalize adjacent roles.
 - Direct user input, inter-session messages, timers, triggers, and internal events enter the same queue gate.
+- Migrated external producers use SessionRuntime commands/events to reach that gate; the router remains the only turn owner and does not RPC-wrap its internal hot loop.
 - Platform stream/card identifiers remain turn metadata and prevent incompatible queued items from being merged.
 - Side requests do not mutate real model-visible history or execute returned tool calls.
 - Runtime phase state is set around model/tool execution and cleared on every exit path.

@@ -8,6 +8,7 @@ import { initializeChannelRuntime, startManagedChannel } from './channelRuntime'
 import { MessageRouter } from './messageRouter';
 import { CommandHandler } from './commandHandler';
 import * as sessionManager from './sessionManager';
+import * as sessionRuntime from './sessionRuntime';
 import * as vector from './vector';
 import { registerChannel } from './channel';
 import fs from 'fs-extra';
@@ -187,6 +188,11 @@ async function start() {
     // allowed to open archive checkpoints or LanceDB.
     await sessionManager.loadSessions();
 
+    // Session consumers use the placement-neutral DTO service even while the
+    // only supported placement is local. Enabling the future child placement
+    // fails clearly here instead of silently running in-process.
+    await sessionRuntime.initializeSessionRuntime();
+
     // Initialize the vector owner locally or in its configured child process.
     // Startup readiness means the table is open; archive backfill continues in
     // the background in either placement.
@@ -197,6 +203,8 @@ async function start() {
     // Ensure "main" session exists
     await sessionManager.getSession('main');
     logger.info('Main session initialized');
+
+    await sessionRuntime.startEvents();
 
     // Create message router with authorized users
     const authorizedUsers: Array<{ platform: string; userId: string }> = [];
@@ -283,21 +291,17 @@ async function start() {
         await webuiChannel.start();
         registerChannel('webui', webuiChannel);
         
-        // Set up history update callback for SSE
-        sessionManager.setOnHistoryUpdated((sessionId, message) => {
-            webuiChannel!.broadcastMessage(sessionId, message);
-        });
-
-        sessionManager.setOnSessionEventUpdated((sessionId, event) => {
-            webuiChannel!.broadcastSessionEvent(sessionId, event);
-        });
-        
-        // Set up session list update callback for SSE
-        sessionManager.setOnSessionListUpdated(() => {
-            webuiChannel!.broadcastSessionListUpdate();
-        });
-        sessionManager.setOnSessionStateUpdated((sessionId) => {
-            webuiChannel!.broadcastSessionStateUpdate(sessionId);
+        // Bridge transport-neutral SessionRuntime events into WebUI SSE.
+        sessionRuntime.subscribe((eventName, payload: any) => {
+            if (eventName === 'history') {
+                webuiChannel!.broadcastMessage(payload.sessionId, payload.message);
+            } else if (eventName === 'stream') {
+                webuiChannel!.broadcastSessionEvent(payload.sessionId, payload.event);
+            } else if (eventName === 'listChanged') {
+                webuiChannel!.broadcastSessionListUpdate();
+            } else if (eventName === 'stateChanged') {
+                webuiChannel!.broadcastSessionStateUpdate(payload.sessionId, payload.session);
+            }
         });
     } else {
         logger.info('HTTP server disabled (both WebUI and Trigger are disabled)');
@@ -438,7 +442,9 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.once(signal, () => {
         if (shutdownStarted) return;
         shutdownStarted = true;
-        void vector.shutdown()
+        void sessionRuntime.shutdownSessionRuntime()
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down session runtime cleanly'))
+            .then(() => vector.shutdown())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down vector service cleanly'))
             .finally(() => process.exit(0));
     });

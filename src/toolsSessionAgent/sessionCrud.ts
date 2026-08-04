@@ -1,4 +1,5 @@
 import * as sessionManager from '../sessionManager';
+import * as sessionRuntime from '../sessionRuntime';
 import { COMPACT_PERCENT } from '../config';
 import { requireNotIsolated } from '../isolatedCheck';
 import { ToolArgs, ToolContext } from './helpers';
@@ -74,20 +75,19 @@ async function updateSessionDisplayName(args: ToolArgs, ctx?: ToolContext) {
     throw new Error('session.name is required for action="update-display-name".');
   }
 
-  const session = await sessionManager.getExistingSession(targetId);
+  const session = await sessionRuntime.getSession(targetId);
   if (!session) {
     throw new Error(`Session \`${targetId}\` not found.`);
   }
 
-  const previousName = session.displayName;
+  const previousName = session.displayName || undefined;
   const nextName = name.trim() || undefined;
 
   if (previousName === nextName) {
     return `Session \`${session.id}\` display name unchanged (from ${formatDisplayName(previousName)} to ${formatDisplayName(nextName)}).`;
   }
 
-  session.displayName = nextName;
-  await sessionManager.saveSession(session.id);
+  await sessionRuntime.updateSettings(session.id, { displayName: nextName || null });
 
   return `Session \`${session.id}\` display name changed from ${formatDisplayName(previousName)} to ${formatDisplayName(nextName)}.`;
 }
@@ -95,7 +95,7 @@ async function updateSessionDisplayName(args: ToolArgs, ctx?: ToolContext) {
 export async function tool_stop_session(args: ToolArgs) {
   const { sessionId } = args;
 
-  const session = await sessionManager.getSession(sessionId);
+  const session = await sessionRuntime.getSession(sessionId);
   if (!session) {
     throw new Error(`Session \`${sessionId}\` not found.`);
   }
@@ -104,7 +104,7 @@ export async function tool_stop_session(args: ToolArgs) {
     return `Session \`${sessionId}\` is not currently running.`;
   }
 
-  const { abortedInFlight } = await sessionManager.requestSessionStop(sessionId);
+  const { abortedInFlight } = await sessionRuntime.control(sessionId, 'stop');
 
   if (abortedInFlight) {
     return `Stop signal sent to session \`${sessionId}\`. The in-flight LLM request was aborted.`;

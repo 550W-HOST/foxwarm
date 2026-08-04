@@ -17,6 +17,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - [webui-terminal](../units/webui-terminal.md) — xterm browser client.
 - [webui-editor](../units/webui-editor.md), [small components](../units/webui-small-components.md).
 - [src-channels-webui](../units/src-channels-webui.md) — authenticated HTTP/SSE/upload/setup/terminal routes.
+- Session list/state/history/settings routes and session update streams consume immutable SessionRuntime DTOs; destructive lifecycle and channel-attachment routes retain their explicit manager-owned coordination boundary.
 - [VS Code Web routes](../units/src-vscode-web-routes.md) and [extensions](../units/vscode-web-extensions.md).
 
 ## URL and transport boundaries

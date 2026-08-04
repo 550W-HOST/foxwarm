@@ -6,6 +6,8 @@ Files: src/sessionManager.ts, src/session/sessionIdAllocation.test.ts
 
 `src/sessionManager.ts` is the compatibility façade and coordination boundary for session state. It owns the in-memory session map, lazy hydration, persistence orchestration, queue insertion, wait-state transitions, parent/child creation, channel delegation, managed-session wakeups, restart recovery, and callback registration. Domain implementations live under `src/session/*`.
 
+`src/sessionRuntimeService.ts` wraps the high-level externally consumed subset in immutable DTO commands, queries, and events. The manager remains the local handler's live-object authority and the router's internal integration API; callers migrated to SessionRuntime should not recover a `Session` reference through this façade.
+
 The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessionQueue()` claims queued work and runs turns; `setSessionTriggerCallback()` connects this façade to that router method during bootstrap.
 
 ## Export groups
@@ -49,6 +51,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - `setOnHistoryUpdated` and `setOnSessionEventUpdated` drive per-session streams.
 - `setOnSessionListUpdated` drives global list consumers.
 - `setOnSessionStateUpdated` drives targeted canonical session-state refreshes.
+  SessionRuntime subscribes to these callback boundaries and republishes cloned history/list/state events to external consumers.
 
 ## Internal sections
 

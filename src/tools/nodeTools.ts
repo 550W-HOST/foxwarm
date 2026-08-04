@@ -3,6 +3,7 @@ import {
     ToolContext,
 } from './helpers';
 import * as sessionManager from '../sessionManager';
+import * as sessionRuntime from '../sessionRuntime';
 import { checkToolPermission } from '../isolatedCheck';
 import { nodesManager } from '../nodes/manager';
 import { buildNodeBootstrapInfo, ensureNodePairingToken } from '../nodes/bootstrapInfo';
@@ -178,10 +179,7 @@ export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext)
     
     nodesManager.setCurrentNode(ctx.sessionId, nodeId);
     
-    // Also update session's currentNode
-    session.currentNode = nodeId;
-    delete session.cwd;
-    await sessionManager.saveSession(ctx.sessionId);
+    await sessionRuntime.updateSettings(ctx.sessionId, { currentNode: nodeId, cwd: null });
     const defaultCwd = await resolveDefaultCwdForNode(nodeId, ctx.sessionId, session.agent || 'main');
     
     return `Current node changed to \`${nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${defaultCwd}\`.`;

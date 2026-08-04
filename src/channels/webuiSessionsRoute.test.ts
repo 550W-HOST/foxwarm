@@ -345,6 +345,79 @@ test('WebUI history route returns queued preview messages separately from commit
   }
 });
 
+test('WebUI session projections and settings routes use the local SessionRuntime DTO seam', async () => {
+  const sessionId = makeSessionId('webui_session_runtime_routes');
+  const session = await sessionManager.getSession(sessionId);
+  session.model = 'legacy/model';
+  session.childModelDefault = 'legacy/child';
+  session.cwd = '/tmp/before-runtime-route';
+  session.displayName = 'Before Runtime Route';
+  await sessionManager.saveSession(sessionId);
+
+  const port = 35000 + Math.floor(Math.random() * 300);
+  const token = 'session-runtime-route-token';
+  const server = new HttpServer(port, token);
+  setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
+  await server.start();
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+  try {
+    const cwdRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/cwd`, {
+      method: 'POST', headers, body: JSON.stringify({ cwd: '/tmp/after-runtime-route' }),
+    });
+    assert.equal(cwdRes.status, 200);
+    assert.deepEqual(await cwdRes.json(), {
+      success: true,
+      changed: true,
+      previous: '/tmp/before-runtime-route',
+      cwd: '/tmp/after-runtime-route',
+    });
+
+    const modelRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/model`, {
+      method: 'POST', headers, body: JSON.stringify({ clear: true }),
+    });
+    assert.equal(modelRes.status, 200);
+    const modelPayload = await modelRes.json() as any;
+    assert.equal(modelPayload.model, null);
+
+    const childModelRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/child-model`, {
+      method: 'POST', headers, body: JSON.stringify({ clear: true }),
+    });
+    assert.equal(childModelRes.status, 200);
+    const childModelPayload = await childModelRes.json() as any;
+    assert.equal(childModelPayload.childModelDefault, null);
+
+    const nameRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/name`, {
+      method: 'POST', headers, body: JSON.stringify({ name: 'After Runtime Route' }),
+    });
+    assert.equal(nameRes.status, 200);
+    assert.equal((await nameRes.json() as any).displayName, 'After Runtime Route');
+
+    const stateRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/state`, { headers });
+    const statePayload = await stateRes.json() as any;
+    assert.equal(statePayload.session.cwd, '/tmp/after-runtime-route');
+    assert.equal(statePayload.session.model, null);
+    assert.equal(statePayload.session.childModelDefault, null);
+    assert.equal(statePayload.session.displayName, 'After Runtime Route');
+
+    const listPayload = await (await fetch(`http://127.0.0.1:${port}/api/sessions`, { headers })).json() as any;
+    assert.equal(listPayload.sessions.find((item: any) => item.id === sessionId)?.cwd, '/tmp/after-runtime-route');
+    const treePayload = await (await fetch(`http://127.0.0.1:${port}/api/agents/tree`, { headers })).json() as any;
+    assert.equal(treePayload.agents.find((item: any) => item.id === sessionId)?.displayName, 'After Runtime Route');
+
+    const persisted = await sessionManager.getExistingSession(sessionId);
+    assert.equal(persisted?.cwd, '/tmp/after-runtime-route');
+    assert.equal(persisted?.model, undefined);
+    assert.equal(persisted?.childModelDefault, undefined);
+    assert.equal(persisted?.displayName, 'After Runtime Route');
+  } finally {
+    await server.stop();
+    setHttpServer(null);
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
 test('WebUI message route forwards the bounded optimistic client identity to the router', async () => {
   const sessionId = makeSessionId('webui_client_message_id');
   const session = await sessionManager.getSession(sessionId);

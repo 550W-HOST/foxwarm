@@ -5,14 +5,14 @@ Secondary files: src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebR
 
 ## Purpose
 
-Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel, session, and browser-terminal routes. It translates browser actions into the same message router and session-manager operations used by other interfaces.
+Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel, session, and browser-terminal routes. It translates browser actions into the message router and immutable SessionRuntime DTO operations used by other external interfaces. Destructive lifecycle and channel-attachment flows intentionally retain direct session-manager coordination.
 
 `src/webuiSettings.ts` is primarily documented by [webui-settings](./webui-settings.md). `src/vscodeWebRoutes.ts` is documented by [VS Code Web routes](./src-vscode-web-routes.md).
 
 ## Key exports
 
 - `WebUIChannel` — channel implementation and WebUI route registrar.
-- `buildWebUiSessionState(session)` — canonical single-session runtime/model/node/cwd payload shared by list, history, and streams.
+- `buildWebUiSessionState(sessionDto)` — canonical single-session runtime/model/node/cwd payload shared by list, history, and streams.
 - `buildQueuedPreviewMessages(queue)` — bounded render-only queue previews.
 - `broadcastMessage`, `broadcastSessionStateUpdate`, and `broadcastSessionListUpdate` — per-session and global SSE delivery.
 - `getModelsSetupDiagnostics(modelsPath?)` — structured concrete/virtual setup diagnostics.
@@ -33,7 +33,8 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
 ## Dependencies
 
 - `messageRouter` for inbound browser messages and commands.
-- `sessionManager` for session state, persistence, relations, runtime state, and model/node/cwd updates.
+- `sessionRuntime` for cloned list/state/history projections, enqueue, settings, controls, and history/list/state events.
+- `sessionManager` for explicit destructive lifecycle claims, fork/move/create/delete coordination, relations, channel attachments, and compatibility-only live-object routes.
 - `setupConfig`, `config`, and model resolution for validated configuration APIs.
 - `channelFiles` for upload persistence and model-facing file descriptions.
 - `httpServer` for authenticated routes and WebSocket upgrades.
@@ -44,11 +45,12 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
 ## Behavior
 
 - `GET /api/sessions` returns canonical `runtimeState` while retaining documented legacy busy fields for compatibility.
+- Session list, agent-tree, state, history, model, child-model, cwd, and display-name routes use SessionRuntime DTO calls. History canonicalization rejects a concurrent history replacement retryably rather than overwriting newer live messages.
 - `GET /api/sessions/:id/history` returns committed messages, the lightweight `persistentMemorySnapshot`, a separate bounded `queuedMessages` preview, queue length, and a canonical session snapshot. Queue previews never become committed history; normal Chat bootstrap does not need the full debug-file route.
 - History, persisted-message SSE, one-layer CTX-BLOCK expansion, and explicit Debug payloads recursively replace canonical image refs with deployment-relative `/blobs/:blobId` API paths and never expose base64 or legacy image paths, including nested function responses and non-history Debug structures. Unmaterializable legacy images become explicit unavailable metadata without discarding surrounding business fields. `GET /api/blobs/:blobId` is authenticated, immutable-cacheable, traversal-safe, and inline-serves only safe raster formats; other formats are attachment-only with `nosniff`. Canonical contract: [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - `GET /api/sessions/:id/state` returns only `{ session: buildWebUiSessionState(session) }` (or 404). Chat uses this lightweight authenticated probe only when EventSource fails before opening, so reconnect existence checks never download history.
 - `POST /api/sessions/:id/message` accepts a bounded optional browser `clientMessageId` and forwards it as routing metadata without adding it to model-visible parts.
-- Each per-session SSE connection sends an immediate state snapshot, then message, stream, runtime, queue, and deletion updates for that session.
+- Each per-session SSE connection sends an immediate SessionRuntime state snapshot, then cloned history/state events plus router-owned transient stream and deletion updates for that session.
 - The global SSE stream is reserved for Sidebar, Architecture, and other list-wide consumers.
 - Session ordering and pinning update the shared session metadata index rather than rewriting history snapshots.
 - Archive accepts optional `includeDescendants` only for archive-to-true and returns matched/changed IDs and counts. Delete accepts optional `includeDescendants`, recomputes and claims the canonical subtree, preflights every selected session for channel/busy blockers, revalidates graph/channel/activity state, deletes recursively deepest-first, and reports partial progress on unexpected failures. Single-session deletion claims and detaches direct survivors before deleting the root. Canonical semantics: [D-lifecycle-descendant-actions](../threads/session-lifecycle.md#d-lifecycle-descendant-actions).
