@@ -18,10 +18,12 @@ async function waitFor(check: () => boolean, timeoutMs = 5_000): Promise<void> {
 async function createFixture(idleMs: number, options: {
   shouldRestart?: (sessionId: string) => boolean;
   faultInjector?: (operation: SessionWorkerStoreOperation, sessionId: string) => void;
+  readProcessIdentity?: (pid: number) => string | null;
 } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-session-worker-supervisor-'));
   const store = new SessionWorkerStore(path.join(root, 'runtime.sqlite'), { faultInjector: options.faultInjector }); store.open();
-  const supervisor = new SessionWorkerSupervisor({ store, idleMs, restartBaseDelayMs: 20, restartMaxDelayMs: 50, shouldRestart: options.shouldRestart });
+  const supervisor = new SessionWorkerSupervisor({ store, idleMs, restartBaseDelayMs: 20, restartMaxDelayMs: 50,
+    shouldRestart: options.shouldRestart, readProcessIdentity: options.readProcessIdentity });
   await supervisor.reconcileStartupOwnerships();
   return { root, store, supervisor, async close() { await supervisor.shutdown(2_000).catch(() => {}); store.close(); await fs.remove(root); } };
 }
@@ -141,4 +143,35 @@ test('startup reconciliation distinguishes PID reuse without signalling the reus
     assert.equal(ownership.state, 'inactive');
     assert.equal(ownership.lastExitReason, 'startup-pid-reused');
   } finally { store.close(); await fs.remove(root); }
+});
+
+test('post-fork identity throw/null both terminate the provisional child before clearing its candidate', async () => {
+  for (const mode of ['throw', 'null'] as const) {
+    let forkedPid: number | undefined;
+    let clearObservedAfterExit = false;
+    const fixture = await createFixture(5_000, {
+      faultInjector(operation) {
+        if (operation === 'clear') {
+          assert.ok(forkedPid);
+          assert.equal(readSessionWorkerProcessIdentity(forkedPid!) === null, true);
+          clearObservedAfterExit = true;
+        }
+      },
+      readProcessIdentity(pid) {
+        forkedPid = pid;
+        if (mode === 'throw') throw new RpcError('SESSION_WORKER_PROCESS_IDENTITY_UNAVAILABLE', 'injected identity read failure', true);
+        return null;
+      },
+    });
+    try {
+      await assert.rejects(() => fixture.supervisor.ensureWorker(`identity-${mode}`));
+      assert.ok(forkedPid);
+      await waitFor(() => readSessionWorkerProcessIdentity(forkedPid!) === null);
+      const ownership = fixture.store.getOwnership(`identity-${mode}`);
+      assert.equal(ownership.state, 'inactive');
+      assert.equal(ownership.incarnationId, undefined);
+      assert.match(ownership.lastExitReason || '', /post-fork-startup-failure/);
+      assert.equal(clearObservedAfterExit, true);
+    } finally { await fixture.close(); }
+  }
 });

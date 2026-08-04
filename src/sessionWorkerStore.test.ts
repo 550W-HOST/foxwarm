@@ -42,11 +42,20 @@ test('strict stable mailbox JSON round-trips across reopen and rejects invalid v
     const cyclic: any = {}; cyclic.self = cyclic;
     const sparse = new Array(2); sparse[1] = 'x';
     const extra: any[] = []; (extra as any).extra = true;
-    const getter = Object.defineProperty({}, 'x', { enumerable: true, get: () => 1 });
-    const values: unknown[] = [undefined, 1n, NaN, Infinity, -Infinity, sparse, extra, new Date(), cyclic, getter, Symbol('x')];
+    let recordGetterHits = 0;
+    const getter = Object.defineProperty({}, 'x', { enumerable: true, get: () => { recordGetterHits += 1; return 1; } });
+    let arrayGetterHits = 0;
+    const enumerableArrayAccessor: unknown[] = [];
+    Object.defineProperty(enumerableArrayAccessor, '0', { enumerable: true, get: () => { arrayGetterHits += 1; return 'x'; } });
+    const nonEnumerableArrayAccessor: unknown[] = [];
+    Object.defineProperty(nonEnumerableArrayAccessor, '0', { enumerable: false, get: () => { arrayGetterHits += 1; return 'x'; } });
+    const values: unknown[] = [undefined, 1n, NaN, Infinity, -Infinity, sparse, extra, new Date(), cyclic, getter,
+      enumerableArrayAccessor, nonEnumerableArrayAccessor, Symbol('x')];
     for (const [index, value] of values.entries()) {
       assert.throws(() => invalidStore.enqueueIntent('s', `bad-${index}`, 'enqueue', value), error => assertRpcCode(error, 'SESSION_WORKER_INVALID_INTENT'));
     }
+    assert.equal(arrayGetterHits, 0);
+    assert.equal(recordGetterHits, 0);
     assert.equal(invalidStore.countMailboxIntents(), 0);
     invalidStore.close();
   });
@@ -173,13 +182,58 @@ test('schema migration upgrades known v0 and rejects unknown newer versions', as
         kind TEXT NOT NULL,payload_json TEXT NOT NULL,created_at INTEGER NOT NULL,applied_generation INTEGER,applied_revision INTEGER);
       CREATE INDEX idx_session_worker_mailbox_pending ON session_worker_mailbox(session_id,id) WHERE applied_revision IS NULL;
       INSERT INTO session_worker_ownership(session_id,generation,state,worker_pid,updated_at) VALUES('old',3,'ready',999,1);
+      INSERT INTO session_worker_mailbox(session_id,intent_id,kind,payload_json,created_at) VALUES('old','legacy','enqueue','{"z":1,"a":2}',1);
     `); db.close();
     const migrated = new SessionWorkerStore(legacyPath); migrated.open();
     const old = migrated.getOwnership('old');
     assert.equal(old.generation, 3); assert.equal(old.state, 'draining');
-    assert.equal(old.incarnationId, 'legacy-unproven-3'); assert.equal(old.lastExitReason, 'schema-v0-unproven-fence'); migrated.close();
+    assert.equal(old.incarnationId, 'legacy-unproven-3'); assert.equal(old.lastExitReason, 'schema-v0-unproven-fence');
+    migrated.close();
+    const canonicalDb = new DatabaseSync(legacyPath, { readOnly: true });
+    assert.equal((canonicalDb.prepare("SELECT payload_json FROM session_worker_mailbox WHERE intent_id='legacy'").get() as any).payload_json, '{"a":2,"z":1}');
+    canonicalDb.close();
 
     const newerPath = path.join(root, 'newer.sqlite'); const newer = new DatabaseSync(newerPath); newer.exec('PRAGMA user_version=2'); newer.close();
     assert.throws(() => new SessionWorkerStore(newerPath).open(), error => assertRpcCode(error, 'SESSION_WORKER_SCHEMA_NEWER'));
+
+    const malformedCases = [
+      { name: 'missing-check', sessionNotNull: true, check: '', unique: 'session_id,intent_id', predicate: 'applied_revision IS NULL' },
+      { name: 'nullable-pk', sessionNotNull: false, check: "CHECK (state IN ('inactive','candidate','ready','draining'))", unique: 'session_id,intent_id', predicate: 'applied_revision IS NULL' },
+      { name: 'reversed-unique', sessionNotNull: true, check: "CHECK (state IN ('inactive','candidate','ready','draining'))", unique: 'intent_id,session_id', predicate: 'applied_revision IS NULL' },
+      { name: 'wrong-partial', sessionNotNull: true, check: "CHECK (state IN ('inactive','candidate','ready','draining'))", unique: 'session_id,intent_id', predicate: 'applied_revision IS NOT NULL' },
+    ];
+    for (const malformedCase of malformedCases) {
+      const malformedPath = path.join(root, `malformed-v1-${malformedCase.name}.sqlite`);
+      const malformed = new DatabaseSync(malformedPath);
+      malformed.exec(`
+        CREATE TABLE session_worker_ownership(session_id TEXT PRIMARY KEY ${malformedCase.sessionNotNull ? 'NOT NULL' : ''},generation INTEGER NOT NULL DEFAULT 0,
+          state TEXT NOT NULL DEFAULT 'inactive' ${malformedCase.check},incarnation_id TEXT,worker_pid INTEGER,process_identity TEXT,activated_at INTEGER,
+          head_revision INTEGER NOT NULL DEFAULT 0,head_path TEXT,head_sha256 TEXT,mailbox_cursor INTEGER NOT NULL DEFAULT 0,
+          last_activity_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,last_exit_reason TEXT);
+        CREATE TABLE session_worker_mailbox(id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,session_id TEXT NOT NULL,intent_id TEXT NOT NULL,
+          kind TEXT NOT NULL,payload_json TEXT NOT NULL,created_at INTEGER NOT NULL,applied_generation INTEGER,applied_revision INTEGER,
+          UNIQUE(${malformedCase.unique}));
+        CREATE INDEX idx_session_worker_mailbox_pending ON session_worker_mailbox(session_id,id) WHERE ${malformedCase.predicate};
+        PRAGMA user_version=1;
+      `); malformed.close();
+      assert.throws(() => new SessionWorkerStore(malformedPath).open(), error => assertRpcCode(error, 'SESSION_WORKER_SCHEMA_INVALID'));
+    }
+
+    const poisonedPath = path.join(root, 'poisoned-v0.sqlite'); const poisoned = new DatabaseSync(poisonedPath);
+    poisoned.exec(`
+      CREATE TABLE session_worker_ownership(session_id TEXT PRIMARY KEY,generation INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL DEFAULT 'inactive',
+        worker_pid INTEGER,head_revision INTEGER NOT NULL DEFAULT 0,head_path TEXT,head_sha256 TEXT,mailbox_cursor INTEGER NOT NULL DEFAULT 0,
+        last_activity_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,last_exit_reason TEXT);
+      CREATE TABLE session_worker_mailbox(id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL,intent_id TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL,payload_json TEXT NOT NULL,created_at INTEGER NOT NULL,applied_generation INTEGER,applied_revision INTEGER);
+      CREATE INDEX idx_session_worker_mailbox_pending ON session_worker_mailbox(session_id,id) WHERE applied_revision IS NULL;
+      INSERT INTO session_worker_mailbox(session_id,intent_id,kind,payload_json,created_at) VALUES('old','poison','enqueue','[, ]',1);
+    `); poisoned.close();
+    assert.throws(() => new SessionWorkerStore(poisonedPath).open(), error => assertRpcCode(error, 'SESSION_WORKER_SCHEMA_INVALID'));
+    const rolledBack = new DatabaseSync(poisonedPath, { readOnly: true });
+    assert.equal((rolledBack.prepare('PRAGMA user_version').get() as any).user_version, 0);
+    assert.equal((rolledBack.prepare("SELECT COUNT(*) AS count FROM session_worker_mailbox WHERE intent_id='poison'").get() as any).count, 1);
+    assert.equal((rolledBack.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='session_worker_mailbox_v0'").get() as any).count, 0);
+    rolledBack.close();
   });
 });

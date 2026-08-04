@@ -20,14 +20,26 @@ function encode(value: unknown, stack: Set<object>): string {
   try {
     if (Array.isArray(value)) {
       const keys = Reflect.ownKeys(value);
-      if (keys.some(key => typeof key === 'symbol')) invalid('Session mailbox arrays must not contain symbol properties.');
-      const stringKeys = keys.filter((key): key is string => typeof key === 'string' && key !== 'length');
-      if (stringKeys.length !== value.length
-        || stringKeys.some((key, index) => key !== String(index))
-        || value.some((_item, index) => !(index in value))) {
+      const stringKeys: string[] = [];
+      for (const key of keys) {
+        if (typeof key === 'symbol') invalid('Session mailbox arrays must not contain symbol properties.');
+        if (key !== 'length') stringKeys.push(key);
+      }
+      if (stringKeys.length !== value.length) {
         invalid('Session mailbox arrays must be dense and contain no extra properties.');
       }
-      return `[${value.map(item => encode(item, stack)).join(',')}]`;
+      const encoded: string[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        if (stringKeys[index] !== String(index)) {
+          invalid('Session mailbox arrays must be dense and contain no extra properties.');
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor?.enumerable || !('value' in descriptor)) {
+          invalid('Session mailbox arrays must contain only enumerable data properties.');
+        }
+        encoded.push(encode(descriptor.value, stack));
+      }
+      return `[${encoded.join(',')}]`;
     }
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
@@ -35,13 +47,15 @@ function encode(value: unknown, stack: Set<object>): string {
     }
     const keys = Reflect.ownKeys(value);
     if (keys.some(key => typeof key === 'symbol')) invalid('Session mailbox records must not contain symbol properties.');
+    const descriptors = new Map<string, PropertyDescriptor>();
     for (const key of keys as string[]) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor?.enumerable || !('value' in descriptor)) {
         invalid('Session mailbox records must contain only enumerable data properties.');
       }
+      descriptors.set(key, descriptor);
     }
-    return `{${(keys as string[]).sort().map(key => `${JSON.stringify(key)}:${encode((value as Record<string, unknown>)[key], stack)}`).join(',')}}`;
+    return `{${(keys as string[]).sort().map(key => `${JSON.stringify(key)}:${encode(descriptors.get(key)!.value, stack)}`).join(',')}}`;
   } finally {
     stack.delete(object);
   }

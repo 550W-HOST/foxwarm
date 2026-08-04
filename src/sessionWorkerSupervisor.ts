@@ -15,6 +15,14 @@ export type SessionWorkerSupervisorOptions = {
   restartBaseDelayMs?: number;
   restartMaxDelayMs?: number;
   shouldRestart?: (sessionId: string) => boolean | Promise<boolean>;
+  readProcessIdentity?: (pid: number) => string | null;
+};
+
+type ProvisionalChild = {
+  sessionId: string; generation: number; incarnationId: string; child: ChildProcess;
+  exitPromise: Promise<void>; resolveExit: () => void;
+  exitInfo?: { code: number | null; signal: NodeJS.Signals | null };
+  disconnected: boolean; error?: Error; entry?: WorkerEntry;
 };
 
 type WorkerEntry = {
@@ -39,6 +47,7 @@ export class SessionWorkerLifecycleError extends Error {
 export class SessionWorkerSupervisor {
   private readonly entries = new Map<string, WorkerEntry>();
   private readonly starts = new Map<string, Promise<SessionWorkerSupervisorStatus>>();
+  private readonly provisionalChildren = new Map<string, ProvisionalChild>();
   private readonly restartTimers = new Map<string, NodeJS.Timeout>();
   private readonly restartDelays = new Map<string, number>();
   private readonly lifecycleFailures = new Map<string, unknown>();
@@ -54,7 +63,9 @@ export class SessionWorkerSupervisor {
   }
 
   async reconcileStartupOwnerships(timeoutMs = 5_000): Promise<number> {
-    if (this.entries.size || this.starts.size) throw new RpcError('SESSION_WORKER_RECOVERY_ACTIVE', 'Cannot reconcile ownership after workers start.');
+    if (this.entries.size || this.starts.size || this.provisionalChildren.size) {
+      throw new RpcError('SESSION_WORKER_RECOVERY_ACTIVE', 'Cannot reconcile ownership after workers start.');
+    }
     this.reconciled = false;
     const records = this.options.store.listFencedOwnerships();
     const failures: unknown[] = [];
@@ -109,8 +120,13 @@ export class SessionWorkerSupervisor {
     if (pendingStart) { try { await pendingStart; } catch (error) { failures.push(error); } }
     const entry = this.entries.get(sessionId);
     if (!entry) {
+      const provisional = this.provisionalChildren.get(sessionId);
+      if (provisional) {
+        try { await this.cleanupProvisionalChild(provisional, timeoutMs, 'shutdown-provisional-child'); }
+        catch (error) { failures.push(error); }
+      }
       if (failures.length) throw new SessionWorkerLifecycleError(`Session worker ${sessionId} startup failed during stop.`, failures);
-      return false;
+      return !!provisional;
     }
     entry.intentionalStop = true; entry.ready = false; entry.client = undefined; this.clearIdleTimer(entry);
     try { this.options.store.markDraining(sessionId, entry.generation, entry.incarnationId); }
@@ -132,7 +148,9 @@ export class SessionWorkerSupervisor {
   async shutdown(timeoutMs = 10_000): Promise<void> {
     this.shuttingDown = true;
     for (const timer of this.restartTimers.values()) clearTimeout(timer); this.restartTimers.clear();
-    const sessionIds = [...new Set([...this.entries.keys(), ...this.starts.keys(), ...this.lifecycleFailures.keys()])];
+    const sessionIds = [...new Set([
+      ...this.entries.keys(), ...this.starts.keys(), ...this.provisionalChildren.keys(), ...this.lifecycleFailures.keys(),
+    ])];
     const results = await Promise.allSettled(sessionIds.map(id => this.stopWorker(id, timeoutMs)));
     const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map(result => result.reason);
     if (failures.length) throw new SessionWorkerLifecycleError('Session worker shutdown terminated all workers but lifecycle persistence failed.', failures);
@@ -156,21 +174,39 @@ export class SessionWorkerSupervisor {
       this.options.store.clearUnregisteredCandidate(sessionId, generation, incarnationId, `spawn-failed:${(error as any)?.message || error}`);
       throw error;
     }
-    const processIdentity = readSessionWorkerProcessIdentity(child.pid!);
-    if (!processIdentity) {
-      this.signalChild(child, 'SIGKILL');
-      this.options.store.clearUnregisteredCandidate(sessionId, generation, incarnationId, 'spawn-disappeared');
-      throw new RpcError('SESSION_WORKER_UNAVAILABLE', `Session worker ${sessionId} disappeared during spawn.`, true);
+    // From this point the exact ChildProcess is provisionally owned before any
+    // identity read or transport construction can throw.
+    const provisional = this.trackProvisionalChild(sessionId, generation, incarnationId, child);
+    let processIdentity: string;
+    let transport: ProcessRpcClientTransport;
+    try {
+      const identity = this.readProcessIdentity(child.pid!);
+      if (!identity) throw new RpcError('SESSION_WORKER_PROCESS_IDENTITY_UNAVAILABLE', `Session worker ${sessionId} has no process identity.`, true);
+      processIdentity = identity;
+      transport = new ProcessRpcClientTransport(child, { generation });
+    } catch (error) {
+      try { await this.cleanupProvisionalChild(provisional, 2_000, 'post-fork-startup-failure'); }
+      catch (cleanupError) {
+        throw new SessionWorkerLifecycleError(`Session worker ${sessionId} post-fork cleanup failed.`, [error, cleanupError]);
+      }
+      throw error;
     }
-    const transport = new ProcessRpcClientTransport(child, { generation });
     let resolveExit!: () => void;
     const exitPromise = new Promise<void>(resolve => { resolveExit = resolve; });
     const entry: WorkerEntry = { sessionId, generation, incarnationId, processIdentity, child, transport,
       ready: false, activeCalls: 0, intentionalStop: false, exitPromise, resolveExit };
     this.entries.set(sessionId, entry);
-    child.once('disconnect', () => this.handleDisconnect(entry));
-    child.once('exit', (code, signal) => { void this.handleExit(entry, code, signal); });
+    provisional.entry = entry;
+    this.provisionalChildren.delete(sessionId);
+    if (provisional.exitInfo) {
+      void this.handleExit(entry, provisional.exitInfo.code, provisional.exitInfo.signal);
+    } else if (provisional.disconnected) {
+      this.handleDisconnect(entry);
+    }
     try {
+      if (provisional.exitInfo) throw new RpcError('SESSION_WORKER_UNAVAILABLE', `Session worker ${sessionId} exited during spawn.`, true);
+      if (provisional.disconnected) throw new RpcError('SESSION_WORKER_UNAVAILABLE', `Session worker ${sessionId} disconnected during spawn.`, true);
+      if (provisional.error) throw provisional.error;
       await transport.waitUntilReady();
       const client = new RpcClient(sessionWorkerControlServiceDescriptor, transport);
       const candidate = await client.call('status', {});
@@ -219,6 +255,76 @@ export class SessionWorkerSupervisor {
     }
   }
 
+  private trackProvisionalChild(
+    sessionId: string,
+    generation: number,
+    incarnationId: string,
+    child: ChildProcess,
+  ): ProvisionalChild {
+    let resolveExit!: () => void;
+    const exitPromise = new Promise<void>(resolve => { resolveExit = resolve; });
+    const provisional: ProvisionalChild = {
+      sessionId, generation, incarnationId, child, disconnected: false,
+      exitPromise, resolveExit,
+    };
+    this.provisionalChildren.set(sessionId, provisional);
+    child.once('error', error => { provisional.error = error; });
+    child.once('disconnect', () => {
+      provisional.disconnected = true;
+      if (provisional.entry) this.handleDisconnect(provisional.entry);
+    });
+    child.once('exit', (code, signal) => {
+      provisional.exitInfo = { code, signal };
+      provisional.resolveExit();
+      if (provisional.entry) void this.handleExit(provisional.entry, code, signal);
+    });
+    return provisional;
+  }
+
+  private async cleanupProvisionalChild(provisional: ProvisionalChild, timeoutMs: number, reason: string): Promise<void> {
+    const phaseMs = Math.max(1, Math.floor(timeoutMs / 2));
+    this.signalChild(provisional.child, 'SIGTERM');
+    let exited = await this.waitForProvisionalExit(provisional, phaseMs);
+    if (!exited) {
+      this.signalChild(provisional.child, 'SIGKILL');
+      exited = await this.waitForProvisionalExit(provisional, phaseMs);
+    }
+    if (!exited) {
+      const error = new RpcError(
+        'SESSION_WORKER_EXIT_UNCONFIRMED',
+        `Provisional session worker ${provisional.child.pid ?? 'unknown'} did not confirm exit; candidate fence retained.`,
+      );
+      this.lifecycleFailures.set(provisional.sessionId, error);
+      throw error;
+    }
+    this.provisionalChildren.delete(provisional.sessionId);
+    try {
+      this.options.store.clearUnregisteredCandidate(
+        provisional.sessionId,
+        provisional.generation,
+        provisional.incarnationId,
+        reason,
+      );
+    } catch (error) {
+      this.lifecycleFailures.set(provisional.sessionId, error);
+      throw error;
+    }
+  }
+
+  private async waitForProvisionalExit(provisional: ProvisionalChild, timeoutMs: number): Promise<boolean> {
+    if (provisional.exitInfo) return true;
+    let timer: NodeJS.Timeout | undefined;
+    const exited = await Promise.race([
+      provisional.exitPromise.then(() => true),
+      new Promise<boolean>(resolve => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+    return exited;
+  }
+
   private async reconcileOwnership(record: SessionWorkerOwnershipRecord, timeoutMs: number): Promise<void> {
     if (record.state === 'candidate' && !record.workerPid && !record.processIdentity && !record.activatedAt && record.incarnationId) {
       this.options.store.clearUnregisteredCandidate(record.sessionId, record.generation, record.incarnationId, 'startup-abandoned-inert-candidate');
@@ -227,7 +333,7 @@ export class SessionWorkerSupervisor {
     if (!record.incarnationId || !record.workerPid || !record.processIdentity) {
       throw new RpcError('SESSION_WORKER_RECOVERY_IDENTITY_MISSING', `Cannot prove old worker identity for ${record.sessionId}; fence retained.`);
     }
-    const actual = readSessionWorkerProcessIdentity(record.workerPid);
+    const actual = this.readProcessIdentity(record.workerPid);
     if (actual === record.processIdentity) await this.terminateExactProcess(record.workerPid, record.processIdentity, timeoutMs);
     // null means exited; a different identity proves PID reuse and must not be signalled.
     this.options.store.markExitObserved(record.sessionId, record.generation, record.incarnationId,
@@ -244,13 +350,17 @@ export class SessionWorkerSupervisor {
     }
   }
   private signalExactPid(pid: number, identity: string, signal: NodeJS.Signals): void {
-    if (readSessionWorkerProcessIdentity(pid) !== identity) return;
+    if (this.readProcessIdentity(pid) !== identity) return;
     try { process.kill(pid, signal); } catch (error: any) { if (error?.code !== 'ESRCH') throw error; }
   }
   private async waitForIdentityGone(pid: number, identity: string, timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) { if (readSessionWorkerProcessIdentity(pid) !== identity) return true; await new Promise(resolve => setTimeout(resolve, 20)); }
-    return readSessionWorkerProcessIdentity(pid) !== identity;
+    while (Date.now() < deadline) { if (this.readProcessIdentity(pid) !== identity) return true; await new Promise(resolve => setTimeout(resolve, 20)); }
+    return this.readProcessIdentity(pid) !== identity;
+  }
+
+  private readProcessIdentity(pid: number): string | null {
+    return (this.options.readProcessIdentity || readSessionWorkerProcessIdentity)(pid);
   }
 
   private touchEntry(entry: WorkerEntry): void {

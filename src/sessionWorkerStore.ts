@@ -7,7 +7,7 @@ import { stableSessionWorkerJson } from './sessionWorkerStableJson';
 import { configureAndMigrateSessionWorkerDb } from './sessionWorkerStoreSchema';
 
 export type SessionWorkerOwnershipState = 'inactive' | 'candidate' | 'ready' | 'draining';
-export type SessionWorkerStoreOperation = 'register-candidate' | 'activate' | 'drain' | 'exit' | 'touch' | 'publish';
+export type SessionWorkerStoreOperation = 'register-candidate' | 'activate' | 'clear' | 'drain' | 'exit' | 'touch' | 'publish';
 
 export type SessionWorkerOwnershipRecord = {
   sessionId: string;
@@ -152,6 +152,7 @@ export class SessionWorkerStore {
   }
 
   clearUnregisteredCandidate(sessionId: string, generation: number, incarnationId: string, reason: string): SessionWorkerOwnershipRecord {
+    this.inject('clear', sessionId);
     const changed = this.getDb().prepare(`
       UPDATE session_worker_ownership
       SET state='inactive',incarnation_id=NULL,worker_pid=NULL,process_identity=NULL,activated_at=NULL,
