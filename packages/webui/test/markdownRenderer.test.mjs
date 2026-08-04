@@ -54,6 +54,14 @@ c_{\\text{self}}
   assert.doesNotMatch(html, /FOXWARM_MATH/)
 })
 
+test('standalone display math interrupts an adjacent ordinary paragraph', () => {
+  const html = renderMarkdownWithSanitizer('Before\n\\[\na\n=\nb\n\\]\nAfter', identitySanitizer)
+
+  assert.match(html, /^<p>Before<\/p>\n<span class="katex-display"/)
+  assert.match(html, /<\/span><p>After<\/p>\n$/)
+  assert.doesNotMatch(html, /<h1>/)
+})
+
 test('standalone display math keeps Markdown block interrupters opaque', () => {
   const cases = [
     ['minus', '\\[\na\n-\nb\n\\]'],
@@ -98,14 +106,14 @@ test('dollar delimiters are not rendered as math', () => {
 
 test('math delimiters inside code span and fenced code block are not rendered', () => {
   const inlineHtml = renderMarkdownWithSanitizer('`\\(x\\)`', identitySanitizer)
-  const displayInlineHtml = renderMarkdownWithSanitizer('`\\[\nx+y\n\\]`', identitySanitizer)
+  const displayInlineHtml = renderMarkdownWithSanitizer('`code\n\\[\nx+y\n\\]\n`', identitySanitizer)
   const blockHtml = renderMarkdownWithSanitizer('```\n\\(x\\)\n```', identitySanitizer)
   const displayBlockHtml = renderMarkdownWithSanitizer('```\n\\[\nx\n=\ny\n\\]\n```', identitySanitizer)
 
   assert.doesNotMatch(inlineHtml, /class="katex"/)
   assert.match(inlineHtml, /<code>\\\(x\\\)<\/code>/)
   assert.doesNotMatch(displayInlineHtml, /class="katex"/)
-  assert.match(displayInlineHtml, /<code>\\\[ x\+y \\\]<\/code>/)
+  assert.match(displayInlineHtml, /<code>code \\\[ x\+y \\\] <\/code>/)
   assert.doesNotMatch(blockHtml, /class="katex"/)
   assert.match(blockHtml, /<pre><code>\\\(x\\\)\n<\/code><\/pre>/)
   assert.doesNotMatch(displayBlockHtml, /class="katex"/)
@@ -133,6 +141,15 @@ test('non-block display forms preserve existing fallbacks', () => {
   assert.match(headingHtml, /<h1>Heading<\/h1>/)
   assert.match(headingHtml, /Escaped \[ bracket/)
   assert.doesNotMatch(headingHtml, /class="katex/)
+})
+
+test('incomplete display candidates do not split ordinary paragraphs', () => {
+  for (const source of ['Before\n\\[\nx\nAfter', 'Before\n\\[\n\\]\nAfter']) {
+    const html = renderMarkdownWithSanitizer(source, identitySanitizer)
+    assert.equal((html.match(/<p>/g) ?? []).length, 1)
+    assert.match(html, /^<p>Before<br>/)
+    assert.doesNotMatch(html, /class="katex/)
+  }
 })
 
 test('math HTML crosses the sanitizer boundary only through placeholders', () => {

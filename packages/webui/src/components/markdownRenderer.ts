@@ -18,6 +18,12 @@ type MathRenderContext = {
   placeholders: MathPlaceholder[]
 }
 
+type DisplayMathBlockMatch = {
+  index: number
+  raw: string
+  text: string
+}
+
 export type HtmlSanitizer = (html: string) => string
 
 let activeMathRenderContext: MathRenderContext | null = null
@@ -116,25 +122,96 @@ const displayMathExtension: TokenizerAndRendererExtension = {
   renderer: renderMathToken,
 }
 
+const isInsideMarkdownCode = (src: string, index: number): boolean => {
+  const prefix = src.slice(0, index)
+  // Let Marked reach any fenced region through its native block tokenizer.
+  if (/^ {0,3}(?:`{3,}|~{3,})/m.test(prefix)) return true
+
+  const backtickRuns = Array.from(src.matchAll(/`+/g))
+
+  for (let openingIndex = 0; openingIndex < backtickRuns.length; openingIndex += 1) {
+    const opening = backtickRuns[openingIndex]
+    if (opening.index >= index) break
+
+    const closingOffset = backtickRuns
+      .slice(openingIndex + 1)
+      .findIndex((candidate) => candidate[0].length === opening[0].length)
+    if (closingOffset < 0) continue
+
+    const closingIndex = openingIndex + closingOffset + 1
+    const closing = backtickRuns[closingIndex]
+    if (index < closing.index + closing[0].length) return true
+    openingIndex = closingIndex
+  }
+
+  return false
+}
+
+const matchDisplayMathBlock = (src: string, index: number): DisplayMathBlockMatch | undefined => {
+  const candidate = src.slice(index)
+  const opening = /^ {0,3}\\\[[\t ]*\r?\n/.exec(candidate)
+  if (!opening) return undefined
+
+  const closingPattern = /^ {0,3}\\\][\t ]*(?:\r?\n|$)/gm
+  closingPattern.lastIndex = opening[0].length
+  const closing = closingPattern.exec(candidate)
+  if (!closing) return undefined
+
+  const text = candidate.slice(opening[0].length, closing.index).trim()
+  if (!text) return undefined
+
+  return {
+    index,
+    raw: candidate.slice(0, closing.index + closing[0].length),
+    text,
+  }
+}
+
+const findDisplayMathBlock = (src: string): DisplayMathBlockMatch | undefined => {
+  const openingPattern = /^ {0,3}\\\[[\t ]*\r?\n/gm
+  let opening: RegExpExecArray | null
+
+  while ((opening = openingPattern.exec(src))) {
+    const match = matchDisplayMathBlock(src, opening.index)
+    if (match && !isInsideMarkdownCode(src, opening.index)) return match
+  }
+
+  return undefined
+}
+
+const displayMathPrefixExtension: TokenizerAndRendererExtension = {
+  name: 'displayMathPrefix',
+  level: 'block',
+  childTokens: ['tokens'],
+  tokenizer(src: string) {
+    const match = findDisplayMathBlock(src)
+    if (!match || match.index === 0) return undefined
+
+    // Marked checks Setext headings before paragraph start hints, so clip a
+    // preceding Markdown prefix as its own nested block token first.
+    const raw = src.slice(0, match.index)
+    return {
+      type: 'displayMathPrefix',
+      raw,
+      tokens: this.lexer.blockTokens(raw, []),
+    }
+  },
+  renderer(token: Tokens.Generic) {
+    return this.parser.parse(token.tokens ?? [])
+  },
+}
+
 const displayMathBlockExtension: TokenizerAndRendererExtension = {
   name: 'displayMathBlock',
   level: 'block',
   tokenizer(src: string) {
-    const opening = /^ {0,3}\\\[[\t ]*\r?\n/.exec(src)
-    if (!opening) return undefined
-
-    const closingPattern = /^ {0,3}\\\][\t ]*(?:\r?\n|$)/gm
-    closingPattern.lastIndex = opening[0].length
-    const closing = closingPattern.exec(src)
-    if (!closing) return undefined
-
-    const text = src.slice(opening[0].length, closing.index).trim()
-    if (!text) return undefined
+    const match = matchDisplayMathBlock(src, 0)
+    if (!match) return undefined
 
     return {
       type: 'displayMathBlock',
-      raw: src.slice(0, closing.index + closing[0].length),
-      text,
+      raw: match.raw,
+      text: match.text,
       displayMode: true,
     }
   },
@@ -144,7 +221,7 @@ const displayMathBlockExtension: TokenizerAndRendererExtension = {
 const markdown = new Marked({
   breaks: true,
   gfm: true,
-  extensions: [displayMathBlockExtension, displayMathExtension, inlineMathExtension],
+  extensions: [displayMathBlockExtension, displayMathPrefixExtension, displayMathExtension, inlineMathExtension],
 })
 
 const sanitizeHtml = (html: string): string => {
