@@ -116,10 +116,35 @@ const displayMathExtension: TokenizerAndRendererExtension = {
   renderer: renderMathToken,
 }
 
+const displayMathBlockExtension: TokenizerAndRendererExtension = {
+  name: 'displayMathBlock',
+  level: 'block',
+  tokenizer(src: string) {
+    const opening = /^ {0,3}\\\[[\t ]*\r?\n/.exec(src)
+    if (!opening) return undefined
+
+    const closingPattern = /^ {0,3}\\\][\t ]*(?:\r?\n|$)/gm
+    closingPattern.lastIndex = opening[0].length
+    const closing = closingPattern.exec(src)
+    if (!closing) return undefined
+
+    const text = src.slice(opening[0].length, closing.index).trim()
+    if (!text) return undefined
+
+    return {
+      type: 'displayMathBlock',
+      raw: src.slice(0, closing.index + closing[0].length),
+      text,
+      displayMode: true,
+    }
+  },
+  renderer: renderMathToken,
+}
+
 const markdown = new Marked({
   breaks: true,
   gfm: true,
-  extensions: [displayMathExtension, inlineMathExtension],
+  extensions: [displayMathBlockExtension, displayMathExtension, inlineMathExtension],
 })
 
 const sanitizeHtml = (html: string): string => {
