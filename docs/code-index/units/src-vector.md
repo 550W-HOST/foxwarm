@@ -1,6 +1,6 @@
 # Unit: src-vector
 
-Files: src/vector.ts, src/vectorRuntime.ts, src/vectorService.ts, src/vectorServiceManager.ts, src/vectorWorker.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.lineage.test.ts, src/vector.memoryFacts.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.segmentBuilder.test.ts, src/vectorService.smoke.test.ts
+Files: src/vector.ts, src/vectorRuntime.ts, src/vectorService.ts, src/vectorServiceManager.ts, src/vectorWorker.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.lineage.test.ts, src/vector.memoryFacts.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.segmentBuilder.test.ts, src/vectorService.smoke.test.ts, src/vectorServiceManager.test.ts
 
 ## Purpose
 
@@ -68,7 +68,7 @@ Model-facing `contentFilter` and final preview filtering are owned by the shared
 - `vectorRuntime.ts` owns LanceDB state and imports the native LanceDB module lazily, so the main process does not load it when `dbWorkers:true`.
 - `vectorService.ts` maps bounded request/response DTOs to the same runtime in either placement.
 - `vectorServiceManager.ts` starts the child, waits until LanceDB is open, reports retryable unavailability while it is down, and restarts an unexpected exit with bounded backoff. It never opens a local fallback owner after a child failure.
-- Graceful drain rejects new RPC requests, waits for accepted RPC and indexing/backfill work, closes LanceDB, and then disconnects the child.
+- Graceful drain rejects new RPC requests, waits for accepted RPC and indexing/backfill work, closes LanceDB, and then disconnects the child. Supervisor shutdown retains ownership until exit is observed, escalating through bounded wait, SIGTERM, and SIGKILL; an unconfirmed exit is reported without releasing the fence.
 - `vectorWorker.ts` is the child entry point. Archive and vector-checkpoint SQLite remain direct durable inputs; they are not moved behind the vector RPC service.
 
 ## Compatibility

@@ -12,22 +12,23 @@ Provides the minimal typed asynchronous service boundary shared by in-process ha
 - `defineRpcService`, `rpcMethod`, and `rpcEvent` — typed runtime service descriptors.
 - `RpcServiceRegistry` — exact service/version registration and handler dispatch.
 - `RpcClient` / `RpcTransport` — placement-neutral typed callers.
-- `LocalRpcTransport` — asynchronous structured-clone local dispatch with bounded events.
+- `LocalRpcTransport` — asynchronous structured-clone local dispatch with bounded requests/events and process-equivalent error DTOs.
 - `ProcessRpcClientTransport` / `ProcessRpcServer` — versioned parent/child IPC, readiness, cancellation, event acknowledgements, generation filtering, and drain.
 - `RpcError` — transport-safe code/message/retryability/details envelope.
 
 ## Behavior
 
-- Local calls clone both request and response DTOs and schedule handler invocation asynchronously. Callers cannot observe or mutate handler-owned references.
-- Child calls require matching protocol/build/service versions and process generation. Child exit rejects outstanding work as retryable unavailable; stale-generation messages are ignored.
+- Local calls clone both request and response DTOs and schedule handler invocation asynchronously. Handler failures cross the same serialized/cloned/deserialized error envelope as process calls, while a caller's own abort reason retains its identity.
+- Child calls require matching protocol/build/service versions and process generation. Child exit or IPC disconnect rejects outstanding work as retryable unavailable; stale-generation messages are ignored.
 - Abort and deadline signals are forwarded to handlers. Cancellation is cooperative: a handler or native dependency may finish after its caller has stopped waiting.
 - Request count and unacknowledged events are bounded. Server events carry sequence and trace metadata and receive client acknowledgements.
 - Drain rejects new calls, waits for accepted handlers, invokes service cleanup, then acknowledges. The process supervisor remains responsible for the final process exit/kill policy.
+- Parent IPC disconnect aborts active child requests, stops acceptance, runs service cleanup within a bound, and exits even if cleanup does not settle.
 - Large application payloads do not gain a special inline wire shape; services use bounded DTOs and file/blob/snapshot references.
 
 ## Tests
 
-One transport contract suite runs against local and real forked-child placements. It covers clone isolation, invalid DTO rejection, structured handler errors, events, cancellation, readiness, and drain.
+One transport contract suite runs against local and real forked-child placements. It covers clone isolation, handler-owned error isolation and ordinary-error parity, invalid-DTO capacity safety, request backpressure, events, caller-owned cancellation, readiness, drain, and bounded exit after parent disconnect.
 
 ## Canonical ownership
 

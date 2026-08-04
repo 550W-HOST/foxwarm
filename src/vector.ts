@@ -17,8 +17,11 @@ export async function init(options: VectorInitOptions = {}): Promise<void> {
 
 export async function shutdown(): Promise<void> {
   const current = manager;
-  manager = undefined;
-  await current?.shutdown();
+  if (!current) return;
+  await current.shutdown();
+  // Preserve the global ownership fence until shutdown has confirmed that the
+  // old child exited. A failed shutdown remains visible and blocks replacement.
+  if (manager === current) manager = undefined;
 }
 
 export function getVectorServiceStatus(): ReturnType<VectorServiceManager['getStatus']> {

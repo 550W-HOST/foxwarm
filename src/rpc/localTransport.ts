@@ -4,21 +4,25 @@ import {
   buildLinkedAbortController,
   buildRpcRequestId,
   cloneRpcDto,
+  deserializeRpcError,
   resolveRpcDeadline,
   RpcCallOptions,
   RpcError,
   RpcEventListener,
   RpcServiceDescriptor,
+  serializeRpcError,
 } from './types';
 
 export type LocalRpcTransportOptions = {
   processGeneration?: number;
   maxPendingEvents?: number;
+  maxPendingRequests?: number;
 };
 
 export class LocalRpcTransport implements RpcTransport {
   private readonly generation: number;
   private readonly maxPendingEvents: number;
+  private readonly maxPendingRequests: number;
   private readonly listeners = new Map<string, Set<RpcEventListener<any>>>();
   private activeRequests = 0;
   private pendingEvents = 0;
@@ -33,6 +37,7 @@ export class LocalRpcTransport implements RpcTransport {
   ) {
     this.generation = options.processGeneration ?? 1;
     this.maxPendingEvents = options.maxPendingEvents ?? 256;
+    this.maxPendingRequests = options.maxPendingRequests ?? 256;
   }
 
   async call(
@@ -43,6 +48,10 @@ export class LocalRpcTransport implements RpcTransport {
   ): Promise<unknown> {
     if (this.closed || this.draining) {
       throw new RpcError('RPC_DRAINING', `RPC service ${descriptor.name} is draining.`, true);
+    }
+    const clonedInput = cloneRpcDto(input);
+    if (this.activeRequests >= this.maxPendingRequests) {
+      throw new RpcError('RPC_BACKPRESSURE', 'Local RPC service has too many pending requests.', true);
     }
     const requestId = buildRpcRequestId();
     const traceId = options.traceId || requestId;
@@ -60,7 +69,7 @@ export class LocalRpcTransport implements RpcTransport {
       descriptor.name,
       descriptor.version,
       methodName,
-      cloneRpcDto(input),
+      clonedInput,
       {
         signal: linked.controller.signal,
         requestId,
@@ -69,7 +78,18 @@ export class LocalRpcTransport implements RpcTransport {
         processGeneration: this.generation,
         emit: (eventName: string, payload: unknown) => this.emit(descriptor, eventName, payload, traceId),
       },
-    ));
+    )).then(
+      result => cloneRpcDto(result),
+      error => {
+        // A caller-provided abort reason belongs to the caller and must retain
+        // object identity. Handler-owned failures cross the same serialized DTO
+        // boundary used by the child-process transport.
+        if (options.signal?.aborted && options.signal.reason instanceof Error) {
+          throw options.signal.reason;
+        }
+        throw deserializeRpcError(cloneRpcDto(serializeRpcError(error)));
+      },
+    );
     handlerPromise.finally(() => this.finishRequest()).catch(() => {});
 
     const abortPromise = new Promise<never>((_resolve, reject) => {
@@ -81,8 +101,7 @@ export class LocalRpcTransport implements RpcTransport {
     });
 
     try {
-      const result = await Promise.race([handlerPromise, abortPromise]);
-      return cloneRpcDto(result);
+      return await Promise.race([handlerPromise, abortPromise]);
     } finally {
       linked.dispose();
     }

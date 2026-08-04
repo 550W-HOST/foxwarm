@@ -42,7 +42,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 
 Worker placement is startup configuration:
 
-- `sessionWorkers` accepts a boolean or object. Omission/`false` keeps the default in-process session runtime. `true` enables default worker settings. An object enables workers unless `enabled:false`; `idleSeconds` defaults to 60 and accepts integers from 1 through 86,400.
+- `sessionWorkers` accepts a boolean or object. Omission/`false` keeps the default in-process session runtime. `true` enables default worker settings. An object enables workers unless `enabled:false`; `idleSeconds` defaults to 60 and accepts numeric YAML integers from 1 through 86,400 (boolean and string coercion is rejected).
 - `dbWorkers` is boolean, defaults to `true`, and currently moves only the LanceDB/vector owner into a child process.
 - Worker placement changes require a process restart. Managed channel hot reload does not change process topology.
 

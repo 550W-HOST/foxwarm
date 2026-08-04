@@ -38,6 +38,9 @@ export class VectorServiceManager {
   }
 
   async start(): Promise<void> {
+    if (this.stopping) {
+      throw new RpcError('VECTOR_SHUTTING_DOWN', 'Vector service shutdown is still in progress.', true);
+    }
     const requestedMode = this.options.useWorker ? 'worker' : 'local';
     if (this.mode && this.mode !== requestedMode) {
       throw new RpcError('VECTOR_PLACEMENT_CHANGE_REQUIRES_RESTART', 'Vector service placement cannot change after startup.');
@@ -77,22 +80,60 @@ export class VectorServiceManager {
     }
     const transport = this.transport;
     const child = this.child;
+    const wasReady = !!this.client;
     this.client = undefined;
-    this.transport = undefined;
-    this.child = undefined;
-    this.startPromise = undefined;
 
-    if (transport) {
+    if (this.mode === 'local') {
+      let drainError: unknown;
       try {
-        await transport.drain(timeoutMs);
+        if (transport && wasReady) await transport.drain(timeoutMs);
+      } catch (error) {
+        drainError = error;
       } finally {
-        await transport.close();
+        await transport?.close();
+        await runtime.shutdown();
+        this.transport = undefined;
+        this.startPromise = undefined;
+      }
+      if (drainError) throw drainError;
+      return;
+    }
+
+    const phaseMs = Math.max(1, Math.floor(timeoutMs / 4));
+    if (transport && wasReady) {
+      try {
+        await transport.drain(phaseMs);
+      } catch (error) {
+        logger.warn({ err: error, pid: child?.pid }, 'Vector worker RPC drain failed; continuing bounded termination');
       }
     }
-    if (this.mode === 'local') {
-      await runtime.shutdown();
-    } else if (child && child.exitCode === null && child.signalCode === null) {
-      await this.waitForExitOrKill(child, Math.min(timeoutMs, 2_000));
+    await transport?.close();
+
+    if (!child) {
+      this.transport = undefined;
+      this.startPromise = undefined;
+      return;
+    }
+
+    let exited = await this.waitForChildExit(child, phaseMs);
+    if (!exited) {
+      this.signalChild(child, 'SIGTERM');
+      exited = await this.waitForChildExit(child, phaseMs);
+    }
+    if (!exited) {
+      this.signalChild(child, 'SIGKILL');
+      exited = await this.waitForChildExit(child, phaseMs);
+    }
+    if (!exited) {
+      throw new RpcError(
+        'VECTOR_WORKER_EXIT_UNCONFIRMED',
+        `Vector worker ${child.pid ?? 'unknown'} did not confirm exit after drain, SIGTERM, and SIGKILL.`,
+      );
+    }
+    if (this.child === child) {
+      this.child = undefined;
+      this.transport = undefined;
+      this.startPromise = undefined;
     }
   }
 
@@ -118,22 +159,34 @@ export class VectorServiceManager {
     const transport = new ProcessRpcClientTransport(child, { generation });
     this.child = child;
     this.transport = transport;
+    child.once('disconnect', () => this.handleWorkerDisconnect(child, transport));
     child.once('exit', (code, signal) => this.handleWorkerExit(child, transport, code, signal));
     try {
       await transport.waitUntilReady();
     } catch (error) {
       await transport.close();
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+      await this.terminateChildAndConfirm(child, 2_000);
       throw toVectorUnavailable(error);
     }
     if (this.stopping || this.child !== child) {
       await transport.close();
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+      await this.terminateChildAndConfirm(child, 2_000);
       throw new RpcError('VECTOR_UNAVAILABLE', 'Vector worker startup was superseded.', true);
     }
     this.client = new RpcClient(vectorServiceDescriptor, transport);
     this.restartDelayMs = this.restartBaseDelayMs;
     logger.info({ pid: child.pid, generation }, 'Vector worker ready');
+  }
+
+  private handleWorkerDisconnect(child: ChildProcess, transport: ProcessRpcClientTransport): void {
+    if (this.child !== child) return;
+    transport.close();
+    this.client = undefined;
+    // Keep child/start ownership until an actual exit event confirms that a new
+    // generation cannot overlap the disconnected process.
+    if (!this.stopping) {
+      logger.warn({ pid: child.pid }, 'Vector worker IPC disconnected; waiting for process exit');
+    }
   }
 
   private handleWorkerExit(
@@ -168,19 +221,49 @@ export class VectorServiceManager {
     this.restartTimer.unref?.();
   }
 
-  private async waitForExitOrKill(child: ChildProcess, timeoutMs: number): Promise<void> {
-    if (child.exitCode !== null || child.signalCode !== null) return;
+  private async waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+    if (child.exitCode !== null || child.signalCode !== null) return true;
     let timer: NodeJS.Timeout | undefined;
-    await Promise.race([
-      new Promise<void>(resolve => child.once('exit', () => resolve())),
-      new Promise<void>(resolve => {
-        timer = setTimeout(() => {
-          child.kill('SIGTERM');
-          resolve();
-        }, timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
+    let onExit: (() => void) | undefined;
+    const exited = await new Promise<boolean>(resolve => {
+      onExit = () => {
+        if (timer) clearTimeout(timer);
+        resolve(true);
+      };
+      child.once('exit', onExit);
+      timer = setTimeout(() => {
+        if (onExit) child.off('exit', onExit);
+        resolve(false);
+      }, timeoutMs);
+    });
     if (timer) clearTimeout(timer);
+    return exited;
+  }
+
+  private async terminateChildAndConfirm(child: ChildProcess, timeoutMs: number): Promise<void> {
+    const phaseMs = Math.max(1, Math.floor(timeoutMs / 3));
+    let exited = await this.waitForChildExit(child, phaseMs);
+    if (!exited) {
+      this.signalChild(child, 'SIGTERM');
+      exited = await this.waitForChildExit(child, phaseMs);
+    }
+    if (!exited) {
+      this.signalChild(child, 'SIGKILL');
+      exited = await this.waitForChildExit(child, phaseMs);
+    }
+    if (!exited) {
+      throw new RpcError(
+        'VECTOR_WORKER_EXIT_UNCONFIRMED',
+        `Vector worker ${child.pid ?? 'unknown'} did not confirm exit after startup failure.`,
+      );
+    }
+  }
+
+  private signalChild(child: ChildProcess, signal: NodeJS.Signals): void {
+    try {
+      child.kill(signal);
+    } catch (error) {
+      logger.warn({ err: error, pid: child.pid, signal }, 'Failed to signal vector worker');
+    }
   }
 }

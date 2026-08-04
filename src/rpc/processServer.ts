@@ -14,6 +14,7 @@ export type ProcessRpcServerOptions = {
   maxPendingEvents?: number;
   onDrain?: () => Promise<void> | void;
   exitOnDrain?: boolean;
+  disconnectCleanupTimeoutMs?: number;
 };
 
 type RequestMessage = {
@@ -37,6 +38,9 @@ export class ProcessRpcServer {
   private drainRequest?: DrainMessage;
   private drainStarted = false;
   private started = false;
+  private cleanupPromise?: Promise<void>;
+  private intentionalDisconnect = false;
+  private disconnectCleanupStarted = false;
 
   constructor(
     private readonly registry: RpcServiceRegistry,
@@ -52,6 +56,7 @@ export class ProcessRpcServer {
     if (!process.send) throw new Error('Process RPC server requires a child-process IPC channel.');
     this.started = true;
     process.on('message', this.onMessage);
+    process.once('disconnect', this.onParentDisconnect);
     this.send({
       kind: 'rpc-ready',
       protocolVersion: RPC_PROTOCOL_VERSION,
@@ -161,7 +166,7 @@ export class ProcessRpcServer {
     const request = this.drainRequest;
     let error: unknown;
     try {
-      await this.options.onDrain?.();
+      await this.runCleanup();
     } catch (caught) {
       error = caught;
     }
@@ -174,10 +179,48 @@ export class ProcessRpcServer {
       ...(error ? { error: serializeRpcError(error) } : {}),
     }, () => {
       if (this.options.exitOnDrain) {
+        this.intentionalDisconnect = true;
         process.off('message', this.onMessage);
         process.disconnect?.();
       }
     });
+  }
+
+  private readonly onParentDisconnect = (): void => {
+    if (this.intentionalDisconnect) {
+      process.exit(0);
+      return;
+    }
+    if (this.disconnectCleanupStarted) return;
+    this.disconnectCleanupStarted = true;
+    this.draining = true;
+    process.off('message', this.onMessage);
+    const reason = new RpcError('RPC_PARENT_DISCONNECTED', 'Parent IPC disconnected.', true);
+    for (const controller of this.activeRequests.values()) controller.abort(reason);
+    void this.cleanupAfterParentDisconnect();
+  };
+
+  private async cleanupAfterParentDisconnect(): Promise<void> {
+    const timeoutMs = this.options.disconnectCleanupTimeoutMs ?? 2_000;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        this.runCleanup().catch(() => {}),
+        new Promise<void>(resolve => {
+          timer = setTimeout(resolve, Math.max(1, timeoutMs));
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+      process.exit(0);
+    }
+  }
+
+  private runCleanup(): Promise<void> {
+    if (!this.cleanupPromise) {
+      this.cleanupPromise = Promise.resolve().then(() => this.options.onDrain?.()).then(() => {});
+    }
+    return this.cleanupPromise;
   }
 
   private respondError(requestId: string, error: unknown): void {

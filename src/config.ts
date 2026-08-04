@@ -117,9 +117,14 @@ export function normalizeSessionWorkersConfig(value: unknown): NormalizedSession
   if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
     throw new Error('app config `sessionWorkers.enabled` must be a boolean.');
   }
-  const idleSeconds = raw.idleSeconds === undefined
-    ? DEFAULT_SESSION_WORKER_IDLE_SECONDS
-    : Number(raw.idleSeconds);
+  const rawIdleSeconds = raw.idleSeconds;
+  let idleSeconds = DEFAULT_SESSION_WORKER_IDLE_SECONDS;
+  if (rawIdleSeconds !== undefined) {
+    if (typeof rawIdleSeconds !== 'number') {
+      throw new Error('app config `sessionWorkers.idleSeconds` must be a number.');
+    }
+    idleSeconds = rawIdleSeconds;
+  }
   if (!Number.isInteger(idleSeconds)
     || idleSeconds < MIN_SESSION_WORKER_IDLE_SECONDS
     || idleSeconds > MAX_SESSION_WORKER_IDLE_SECONDS) {

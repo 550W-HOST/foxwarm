@@ -42,6 +42,8 @@ test('sessionWorkers idleSeconds accepts the documented inclusive range', () => 
   assert.throws(() => normalizeSessionWorkersConfig({ idleSeconds: 0 }), /integer between 1 and 86400/);
   assert.throws(() => normalizeSessionWorkersConfig({ idleSeconds: 1.5 }), /integer between 1 and 86400/);
   assert.throws(() => normalizeSessionWorkersConfig({ idleSeconds: 86_401 }), /integer between 1 and 86400/);
+  assert.throws(() => normalizeSessionWorkersConfig({ idleSeconds: true }), /idleSeconds.*number/);
+  assert.throws(() => normalizeSessionWorkersConfig({ idleSeconds: '60' }), /idleSeconds.*number/);
 });
 
 test('app YAML validation rejects invalid worker switch shapes', () => {
@@ -51,5 +53,7 @@ test('app YAML validation rejects invalid worker switch shapes', () => {
   });
   assert.throws(() => validateAppConfigYaml('sessionWorkers: yes\n'), /sessionWorkers.*boolean or object/);
   assert.throws(() => validateAppConfigYaml('sessionWorkers:\n  enabled: yes\n'), /sessionWorkers.enabled.*boolean/);
+  assert.throws(() => validateAppConfigYaml('sessionWorkers:\n  idleSeconds: true\n'), /idleSeconds.*number/);
+  assert.throws(() => validateAppConfigYaml('sessionWorkers:\n  idleSeconds: "60"\n'), /idleSeconds.*number/);
   assert.throws(() => validateAppConfigYaml('dbWorkers: child\n'), /dbWorkers.*boolean/);
 });

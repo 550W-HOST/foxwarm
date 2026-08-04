@@ -3,11 +3,14 @@ import { defineRpcService, rpcEvent, rpcMethod, RpcError, RpcServiceHandler } fr
 export const rpcTestService = defineRpcService('rpc-test', 1, {
   echo: rpcMethod<{ nested: { value: number } }, { nested: { value: number }; handlerSaw: number }>(),
   fail: rpcMethod<{ code: string }, never>(),
+  plainFail: rpcMethod<Record<string, never>, never>(),
   wait: rpcMethod<{ delayMs: number }, { completed: true }>(),
   publish: rpcMethod<{ value: string }, { accepted: boolean }>(),
 }, {
   progress: rpcEvent<{ value: string }>(),
 });
+
+const handlerOwnedDetails = { safe: { value: 1 } };
 
 export const rpcTestHandler: RpcServiceHandler<typeof rpcTestService> = {
   async echo(input) {
@@ -16,7 +19,10 @@ export const rpcTestHandler: RpcServiceHandler<typeof rpcTestService> = {
     return { nested: input.nested, handlerSaw };
   },
   async fail(input) {
-    throw new RpcError(input.code, 'expected failure', true, { safe: true });
+    throw new RpcError(input.code, 'expected failure', true, handlerOwnedDetails);
+  },
+  async plainFail() {
+    throw new Error('plain handler failure');
   },
   async wait(input, context) {
     await new Promise<void>((resolve, reject) => {

@@ -67,6 +67,7 @@ export class ProcessRpcClientTransport implements RpcTransport {
   private drainPending?: { requestId: string; resolve: () => void; reject: (error: unknown) => void; timer: NodeJS.Timeout };
   private draining = false;
   private closed = false;
+  private terminalError?: RpcError;
 
   constructor(private readonly child: ChildProcess, options: ProcessRpcClientOptions) {
     this.generation = options.generation;
@@ -79,10 +80,12 @@ export class ProcessRpcClientTransport implements RpcTransport {
     });
     child.on('message', this.onMessage);
     child.once('error', this.onChildError);
+    child.once('disconnect', this.onChildDisconnect);
     child.once('exit', this.onChildExit);
   }
 
   async waitUntilReady(): Promise<void> {
+    if (this.terminalError) throw this.terminalError;
     if (this.ready) return;
     let timer: NodeJS.Timeout | undefined;
     try {
@@ -104,11 +107,15 @@ export class ProcessRpcClientTransport implements RpcTransport {
     input: unknown,
     options: RpcCallOptions = {},
   ): Promise<unknown> {
+    if (this.terminalError) throw this.terminalError;
     if (this.closed || this.draining) {
       throw new RpcError('RPC_DRAINING', `RPC service ${descriptor.name} is draining.`, true);
     }
     await this.waitUntilReady();
     this.assertServiceAvailable(descriptor);
+    // Validate/clone before allocating a pending slot, abort listener, or
+    // deadline timer. Invalid DTO attempts therefore cannot consume capacity.
+    const clonedInput = cloneRpcDto(input);
     if (this.pending.size >= this.maxPendingRequests) {
       throw new RpcError('RPC_BACKPRESSURE', 'RPC child has too many pending requests.', true);
     }
@@ -146,21 +153,25 @@ export class ProcessRpcClientTransport implements RpcTransport {
           if (timer) clearTimeout(timer);
         },
       });
-      this.send({
-        kind: 'rpc-request',
-        protocolVersion: RPC_PROTOCOL_VERSION,
-        buildId: this.buildId,
-        generation: this.generation,
-        requestId,
-        traceId,
-        service: descriptor.name,
-        serviceVersion: descriptor.version,
-        method: methodName,
-        deadlineAt,
-        input: cloneRpcDto(input),
-      }, (error) => {
-        if (error) this.rejectPending(requestId, new RpcError('RPC_SEND_FAILED', error.message, true));
-      });
+      try {
+        this.send({
+          kind: 'rpc-request',
+          protocolVersion: RPC_PROTOCOL_VERSION,
+          buildId: this.buildId,
+          generation: this.generation,
+          requestId,
+          traceId,
+          service: descriptor.name,
+          serviceVersion: descriptor.version,
+          method: methodName,
+          deadlineAt,
+          input: clonedInput,
+        }, (error) => {
+          if (error) this.rejectPending(requestId, new RpcError('RPC_SEND_FAILED', error.message, true));
+        });
+      } catch (error: any) {
+        this.rejectPending(requestId, new RpcError('RPC_SEND_FAILED', error?.message || String(error), true));
+      }
     });
   }
 
@@ -176,6 +187,7 @@ export class ProcessRpcClientTransport implements RpcTransport {
   }
 
   async drain(timeoutMs = 10_000): Promise<void> {
+    if (this.terminalError) throw this.terminalError;
     if (this.closed) return;
     await this.waitUntilReady();
     if (this.drainPending) {
@@ -199,7 +211,17 @@ export class ProcessRpcClientTransport implements RpcTransport {
     this.closed = true;
     this.draining = true;
     this.child.off('message', this.onMessage);
-    this.rejectAll(new RpcError('RPC_CLOSED', 'RPC transport closed.', true));
+    this.child.off('error', this.onChildError);
+    this.child.off('disconnect', this.onChildDisconnect);
+    this.child.off('exit', this.onChildExit);
+    const error = new RpcError('RPC_CLOSED', 'RPC transport closed.', true);
+    this.rejectReady(error);
+    this.rejectAll(error);
+    if (this.drainPending) {
+      clearTimeout(this.drainPending.timer);
+      this.drainPending.reject(error);
+      this.drainPending = undefined;
+    }
     this.listeners.clear();
   }
 
@@ -246,12 +268,17 @@ export class ProcessRpcClientTransport implements RpcTransport {
   };
 
   private readonly onChildError = (error: Error): void => this.failChild(error);
+  private readonly onChildDisconnect = (): void => {
+    this.failChild(new Error('RPC child IPC disconnected.'));
+  };
   private readonly onChildExit = (code: number | null, signal: NodeJS.Signals | null): void => {
     this.failChild(new Error(`RPC child exited (${code ?? signal ?? 'unknown'}).`));
   };
 
   private failChild(error: Error): void {
     const rpcError = new RpcError('RPC_UNAVAILABLE', error.message, true);
+    this.terminalError = rpcError;
+    this.draining = true;
     this.rejectReady(rpcError);
     this.rejectAll(rpcError);
     if (this.drainPending) {
