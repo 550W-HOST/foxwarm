@@ -533,13 +533,13 @@ function isCanonicalMessage(value: unknown): boolean {
   if (!isRecord(value) || !['user', 'model', 'tool'].includes(value.role) || !Array.isArray(value.parts)) return false;
   if (value.modelVisible !== undefined && typeof value.modelVisible !== 'boolean') return false;
   if (value.__meta !== undefined && !isRecord(value.__meta)) return false;
-  if (value.providerMeta !== undefined && (!isRecord(value.providerMeta) || !isRecord(value.providerMeta.providerSpecificFields) || typeof value.providerMeta.sourceModelId !== 'string')) return false;
+  if (value.providerMeta !== undefined && (!isRecord(value.providerMeta) || !isRecord(value.providerMeta.providerSpecificFields) || (value.providerMeta.sourceModelId !== undefined && typeof value.providerMeta.sourceModelId !== 'string'))) return false;
   return value.parts.every((part: unknown) => {
     if (!isRecord(part)) return false;
     for (const key of ['text', 'system', 'thinking', 'toolUseId'] as const) if (part[key] !== undefined && typeof part[key] !== 'string') return false;
     if (part.systemPayload !== undefined && typeof part.systemPayload !== 'boolean') return false;
     if (part.functionCall !== undefined && (!isRecord(part.functionCall) || typeof part.functionCall.id !== 'string' || typeof part.functionCall.name !== 'string' || !isRecord(part.functionCall.args))) return false;
-    if (part.functionResponse !== undefined && (!isRecord(part.functionResponse) || typeof part.functionResponse.tool_use_id !== 'string' || typeof part.functionResponse.name !== 'string' || !isRecord(part.functionResponse.response))) return false;
+    if (part.functionResponse !== undefined && (!isRecord(part.functionResponse) || typeof part.functionResponse.tool_use_id !== 'string' || typeof part.functionResponse.name !== 'string' || part.functionResponse.response === undefined)) return false;
     if (part.inlineData !== undefined && (!isRecord(part.inlineData) || typeof part.inlineData.data !== 'string')) return false;
     if (part.inlineDataRef !== undefined && (!isRecord(part.inlineDataRef) || typeof part.inlineDataRef.imageId !== 'string' || typeof part.inlineDataRef.mimeType !== 'string'
       || !isFiniteNumber(part.inlineDataRef.byteLength) || typeof part.inlineDataRef.sha256 !== 'string')) return false;
