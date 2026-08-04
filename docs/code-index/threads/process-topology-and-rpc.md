@@ -16,6 +16,8 @@ The first production service on this boundary is the LanceDB/vector owner. Sessi
 
 Service descriptors define serializable request, response, error, and event DTOs. The registry binds each descriptor to either a local handler or a child-process transport. Both placements remain asynchronous and use the same validation and cloning boundary; local callers do not receive handler-owned object references.
 
+The initial process transport uses Node's parent/child IPC channel. Its transport/service separation leaves direct Unix-domain endpoints as a later topology change without changing service DTOs.
+
 Requests carry protocol/build identity, a process generation, request and trace IDs, and optional deadlines. Child shutdown first stops new requests, drains accepted work within a bound, and then exits. Replies from an obsolete process generation are rejected.
 
 Large history, images, and tool output do not move through a central payload broker. Service calls use bounded DTOs and stable file/blob/snapshot references where necessary.
@@ -40,6 +42,7 @@ A future session worker owns one session's hydrated hot state and turn loop. Ext
 ## Modules and units
 
 - [infrastructure](../modules/infrastructure.md) / [src-index](../units/src-index.md) / [src-config](../units/src-config.md)
+- [src-rpc](../units/src-rpc.md)
 - [session context](../modules/session-context.md) / [src-vector](../units/src-vector.md)
 - [session core](../modules/session-core.md) / [message routing](../modules/message-routing.md)
 - [tool dispatch](./tool-dispatch.md) and [node communication](./node-communication.md) for future direct service endpoints
