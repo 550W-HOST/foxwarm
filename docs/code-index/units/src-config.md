@@ -40,6 +40,12 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 - The archive moved-ID reservation ledger is explicit durable state at `<data-root>/state/session-id-reservations.jsonl`.
 - The temporary crash-recovery journal for one in-progress identity move is `<data-root>/state/session-id-move-pending.json`.
 
+Worker placement is startup configuration:
+
+- `sessionWorkers` accepts a boolean or object. Omission/`false` keeps the default in-process session runtime. `true` enables default worker settings. An object enables workers unless `enabled:false`; `idleSeconds` defaults to 60 and accepts integers from 1 through 86,400.
+- `dbWorkers` is boolean, defaults to `true`, and currently moves only the LanceDB/vector owner into a child process.
+- Worker placement changes require a process restart. Managed channel hot reload does not change process topology.
+
 These are selected runtime overrides, not an environment-to-YAML migration.
 
 ## Current defaults
@@ -56,6 +62,8 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 | raw required replacement fraction | `0.2` |
 | max output / thinking budget | `16384` / `10000` |
 | Ollama base URL | loopback port `11434` |
+| Session workers / idle release | disabled / `60` seconds |
+| Vector database worker | enabled |
 
 ## Model resolution
 
@@ -100,3 +108,7 @@ Persisted external configuration keeps narrow legacy readers while generated set
 ### D-config-models-data-path
 
 The mutable models configuration has one active location: `<data-root>/state/models.yaml`. Runtime reads, Setup diagnostics/OOBE, raw and structured Setup writes, and normal model resolution all use that path. The packaged example may be read only when the active file is missing; it is never the write target. The former `paths.modelsConfigPath` and generic `MODELS_CONFIG_PATH` override remain removed rather than becoming compatibility readers.
+
+## Canonical ownership
+
+Worker placement defaults and local/child parity are canonical in [process topology and RPC](../threads/process-topology-and-rpc.md#design-decisions).

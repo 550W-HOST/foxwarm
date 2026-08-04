@@ -207,6 +207,24 @@ export const APP_CONFIG_SCHEMA = {
   type: 'object',
   additionalProperties: true,
   properties: {
+    sessionWorkers: {
+      oneOf: [
+        { type: 'boolean' },
+        {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            enabled: { type: 'boolean' },
+            idleSeconds: { type: 'integer', minimum: 1, maximum: 86400 },
+          },
+        },
+      ],
+      description: 'Optional per-session process mode. Supplying an object enables it unless enabled is false. Requires restart.',
+    },
+    dbWorkers: {
+      type: 'boolean',
+      description: 'Run the LanceDB/vector owner in a child process. Defaults to true and requires restart.',
+    },
     bot: {
       type: 'object',
       additionalProperties: true,

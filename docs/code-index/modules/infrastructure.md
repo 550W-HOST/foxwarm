@@ -4,6 +4,8 @@
 
 Infrastructure owns process bootstrap, HTTP/WebSocket hosting, configuration, shared runtime types and utilities, skills, timers, terminal routing, packaging, and developer-facing command entry points. It provides stable services used by feature modules without owning their domain behavior.
 
+Optional local/child service placement and its shared RPC boundary are canonical in [process topology and RPC](../threads/process-topology-and-rpc.md).
+
 Speech recognition is integrated as an external service boundary: Foxwarm sends audio plus optional context and receives text. Service credentials and deployment topology are runtime configuration, never code-index content.
 
 ## Key units

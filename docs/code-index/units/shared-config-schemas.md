@@ -5,12 +5,12 @@ Secondary files: packages/shared/src/index.ts, packages/shared/package.json, pac
 
 ## Purpose
 
-Owns pure, public-safe Draft-07 schema objects for Foxwarm Models and App configuration so build-time browser consumers reuse one definition without exposing runtime configuration data.
+Owns pure, public-safe Draft-07 schema objects for Foxwarm Models and App configuration so build-time browser consumers reuse one definition without exposing runtime configuration data. The application schema includes startup-only session/vector worker placement and the bounded session-worker idle setting.
 
 ## Key exports
 
 - `MODELS_CONFIG_SCHEMA` — advisory models/provider/virtual-routing structure aligned with tolerant backend readers.
-- `APP_CONFIG_SCHEMA` — advisory bot, LLM, paths, channels, and ASR structure.
+- `APP_CONFIG_SCHEMA` — advisory worker placement, bot, LLM, paths, channels, and ASR structure.
 - `KNOWN_PROVIDER_TYPES` — known concrete protocol and virtual-routing values while custom provider types remain permitted.
 
 The package exports these through `@foxwarm/shared/configSchemas`; browser bundles may consume the same source directly at build time.

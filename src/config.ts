@@ -88,7 +88,66 @@ export type AsrServiceConfig = {
   key?: string;
 };
 
+export const DEFAULT_SESSION_WORKER_IDLE_SECONDS = 60;
+export const MIN_SESSION_WORKER_IDLE_SECONDS = 1;
+export const MAX_SESSION_WORKER_IDLE_SECONDS = 86_400;
+
+export type SessionWorkersConfig = boolean | {
+  enabled?: boolean;
+  idleSeconds?: number;
+};
+
+export type NormalizedSessionWorkersConfig = {
+  enabled: boolean;
+  idleSeconds: number;
+};
+
+export function normalizeSessionWorkersConfig(value: unknown): NormalizedSessionWorkersConfig {
+  if (value === undefined || value === false) {
+    return { enabled: false, idleSeconds: DEFAULT_SESSION_WORKER_IDLE_SECONDS };
+  }
+  if (value === true) {
+    return { enabled: true, idleSeconds: DEFAULT_SESSION_WORKER_IDLE_SECONDS };
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('app config `sessionWorkers` must be a boolean or object.');
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    throw new Error('app config `sessionWorkers.enabled` must be a boolean.');
+  }
+  const idleSeconds = raw.idleSeconds === undefined
+    ? DEFAULT_SESSION_WORKER_IDLE_SECONDS
+    : Number(raw.idleSeconds);
+  if (!Number.isInteger(idleSeconds)
+    || idleSeconds < MIN_SESSION_WORKER_IDLE_SECONDS
+    || idleSeconds > MAX_SESSION_WORKER_IDLE_SECONDS) {
+    throw new Error(
+      `app config \`sessionWorkers.idleSeconds\` must be an integer between ${MIN_SESSION_WORKER_IDLE_SECONDS} and ${MAX_SESSION_WORKER_IDLE_SECONDS}.`,
+    );
+  }
+
+  return {
+    // Supplying an object opts in unless it explicitly disables the worker.
+    enabled: raw.enabled !== false,
+    idleSeconds,
+  };
+}
+
+export function normalizeDbWorkersEnabled(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  if (typeof value !== 'boolean') {
+    throw new Error('app config `dbWorkers` must be a boolean.');
+  }
+  return value;
+}
+
 export type AppConfig = {
+  sessionWorkers?: SessionWorkersConfig;
+  dbWorkers?: boolean;
   bot?: {
     name?: string;
     enableWebUI?: boolean;
@@ -260,6 +319,11 @@ function resolvePathValue(value: string | undefined, fallback: string): string {
 }
 
 export const APP_CONFIG = loadAppConfig();
+
+export const SESSION_WORKERS_CONFIG = normalizeSessionWorkersConfig(APP_CONFIG.sessionWorkers);
+export const SESSION_WORKERS_ENABLED = SESSION_WORKERS_CONFIG.enabled;
+export const SESSION_WORKER_IDLE_SECONDS = SESSION_WORKERS_CONFIG.idleSeconds;
+export const DB_WORKERS_ENABLED = normalizeDbWorkersEnabled(APP_CONFIG.dbWorkers);
 export const BOT_NAME = APP_CONFIG.bot?.name || 'foxwarm';
 export const ENABLE_TUI = APP_CONFIG.bot?.enableTUI === true || process.argv.includes('--tui');
 export const TELEGRAM_CONFIG: TelegramConfig = (getDefaultChannelConfigByType<TelegramConfig>('telegram', APP_CONFIG)?.config || {}) as TelegramConfig;

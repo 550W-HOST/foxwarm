@@ -77,6 +77,7 @@ Remote Nodes and CLI Node runtime
 | [message processing pipeline](./threads/message-processing-pipeline.md) | Inbound message through LLM/tool loop to final broadcast |
 | [model routing](./threads/model-routing.md) | Concrete/virtual selection, prefix hashing, failover health, attempts, and attribution |
 | [node communication](./threads/node-communication.md) | Pairing, authentication, remote execution, services, and transfer |
+| [process topology and RPC](./threads/process-topology-and-rpc.md) | Configurable local/child service placement and transport-neutral async contracts |
 | [session lifecycle](./threads/session-lifecycle.md) | Creation, persistence, compaction, fork lineage, recovery, and deletion |
 | [streaming pipeline](./threads/streaming-pipeline.md) | Provider deltas through session streams to WebUI rendering |
 | [tool dispatch](./threads/tool-dispatch.md) | Builtin, MCP, and node tool resolution with isolation enforcement |

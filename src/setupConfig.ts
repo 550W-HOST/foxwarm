@@ -7,6 +7,8 @@ import {
   getActiveModelsConfigPath,
   ProviderConfigEntry,
   loadModelsConfigFromObject,
+  normalizeDbWorkersEnabled,
+  normalizeSessionWorkersConfig,
 } from './config';
 
 export type ProviderSetupDraft = {
@@ -81,6 +83,8 @@ export function validateAppConfigYaml(rawYaml: string): AppConfig {
   if (config.channels !== undefined && !isPlainObject(config.channels)) {
     throw new Error('app config `channels` must be a YAML object.');
   }
+  normalizeSessionWorkersConfig(config.sessionWorkers);
+  normalizeDbWorkersEnabled(config.dbWorkers);
   return config;
 }
 
