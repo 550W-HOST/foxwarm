@@ -1,14 +1,15 @@
 # Unit: src-vector
 
-Files: src/vector.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.lineage.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.segmentBuilder.test.ts
+Files: src/vector.ts, src/vectorRuntime.ts, src/vectorService.ts, src/vectorServiceManager.ts, src/vectorWorker.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.lineage.test.ts, src/vector.memoryFacts.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.segmentBuilder.test.ts, src/vectorService.smoke.test.ts
 
 ## Purpose
 
-Indexes archived raw-message segments, summary blocks, and compact-extracted facts in LanceDB and returns metadata-rich semantic locations. Model-facing `recall({ vector_query })` reloads authoritative archive sources from those locations before rendering them.
+Provides one asynchronous vector facade with local and supervised-child placement. The selected owner indexes archived raw-message segments, summary blocks, and compact-extracted facts in LanceDB and returns metadata-rich semantic locations. Model-facing `recall({ vector_query })` reloads authoritative archive sources from those locations before rendering them.
 
 ## Key exports
 
-- `init()` — open/create `messages_v7` and start non-blocking archive backfill.
+- `init({ useWorker })`, `shutdown()` — start or gracefully drain the local/child vector owner; production passes normalized `dbWorkers` placement at startup.
+- `getVectorServiceStatus()` — report local/worker readiness and worker generation/PID for diagnostics.
 - `search(query, limit=5, format=true, options?)` — vector query with session/agent/lineage scope, optional regex candidate filters, and block preference.
 - `getContextAround(timestamp, limit=10)` — raw rows overlapping a 30-minute window around a timestamp.
 - `indexSessionArchive(sessionId, latestSeqHint?, latestBlockIdHint?)` — index one archive.
@@ -43,11 +44,13 @@ Model-facing `contentFilter` and final preview filtering are owned by the shared
 ## Indexing behavior
 
 - Raw archive records become overlapping segment rows; block summaries become one row per block.
+- Block rows use deterministic IDs and delete-before-append replacement, so retrying after a Lance commit but before its SQLite checkpoint does not create duplicates.
 - Compact facts use deterministic normalized-text IDs scoped to their creating block and encode fact kind/attribution, block identity/level, and that block's raw source range in existing columns.
 - Inherited fact rows use the block fork cap. Legacy null-block facts require their entire raw range to precede the message fork cap and are discarded rather than clipped if they cross it.
 - Raw rebuild writes bounded batches and advances a safe checkpoint after each completed batch.
 - Startup backfill is asynchronous. Search can be temporarily incomplete while checkpoints show pending archive content.
 - Concurrent index requests for one session are coalesced/scheduled rather than running duplicate rebuilds.
+- The RPC scheduling method acknowledges accepted hints immediately rather than holding a transport request open until a future indexing threshold flushes.
 - Lone UTF-16 surrogates are replaced before embedding calls.
 - Display-only messages are not indexed.
 
@@ -57,6 +60,16 @@ Model-facing `contentFilter` and final preview filtering are owned by the shared
 - `src/session/archive.ts` and `layeredContext.ts` for local source records.
 - `src/session/messageVisibility.ts` for model-visible filtering.
 - `src/tokenCount.ts`, model formatting helpers, Ollama embeddings, and LanceDB.
+- `src/rpc/` for the placement-independent local/child service contract.
+
+## Process placement
+
+- `vector.ts` is the caller-facing asynchronous facade; compatibility indexing never sends the supplied full history over RPC.
+- `vectorRuntime.ts` owns LanceDB state and imports the native LanceDB module lazily, so the main process does not load it when `dbWorkers:true`.
+- `vectorService.ts` maps bounded request/response DTOs to the same runtime in either placement.
+- `vectorServiceManager.ts` starts the child, waits until LanceDB is open, reports retryable unavailability while it is down, and restarts an unexpected exit with bounded backoff. It never opens a local fallback owner after a child failure.
+- Graceful drain rejects new RPC requests, waits for accepted RPC and indexing/backfill work, closes LanceDB, and then disconnects the child.
+- `vectorWorker.ts` is the child entry point. Archive and vector-checkpoint SQLite remain direct durable inputs; they are not moved behind the vector RPC service.
 
 ## Compatibility
 
@@ -71,3 +84,4 @@ Compact facts share the current table and carry source ranges so ordinary lineag
 ## Canonical ownership
 
 Source-backed recall is canonical in [D-context-source-backed-recall](../threads/context-compaction-and-recall.md#d-context-source-backed-recall). Index lag/durability is canonical in [D-session-context-best-effort-index](../modules/session-context.md#d-session-context-best-effort-index).
+Process placement and failure behavior are canonical in [process topology and RPC](../threads/process-topology-and-rpc.md#vector-placement).

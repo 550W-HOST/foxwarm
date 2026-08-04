@@ -20,6 +20,7 @@ import {
     BOT_NAME,
     BASE_DIR,
     DATA_ROOT_DIR,
+    DB_WORKERS_ENABLED,
     ENABLE_TUI,
     ENABLE_TRIGGER,
     ENABLE_WEBUI,
@@ -182,11 +183,14 @@ async function start() {
         }) as any;
     }
 
-    // Initialize vector database
-    await vector.init();
-
-    // Load sessions
+    // Complete authoritative SQLite/data migrations before a vector child is
+    // allowed to open archive checkpoints or LanceDB.
     await sessionManager.loadSessions();
+
+    // Initialize the vector owner locally or in its configured child process.
+    // Startup readiness means the table is open; archive backfill continues in
+    // the background in either placement.
+    await vector.init({ useWorker: DB_WORKERS_ENABLED });
 
     await initializeExecManager();
 
@@ -427,6 +431,17 @@ async function handleOnboot(telegramChannelPromise: Promise<TelegramChannel | nu
     } catch (e) {
         logger.error(e, 'Error processing ONBOOT.md');
     }
+}
+
+let shutdownStarted = false;
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.once(signal, () => {
+        if (shutdownStarted) return;
+        shutdownStarted = true;
+        void vector.shutdown()
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down vector service cleanly'))
+            .finally(() => process.exit(0));
+    });
 }
 
 start().catch((err: Error) => {

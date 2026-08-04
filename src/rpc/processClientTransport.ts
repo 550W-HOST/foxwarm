@@ -1,8 +1,6 @@
 import type { ChildProcess } from 'node:child_process';
 import { RpcTransport } from './client';
-import { RpcServiceRegistry } from './registry';
 import {
-  buildLinkedAbortController,
   buildRpcRequestId,
   cloneRpcDto,
   DEFAULT_RPC_BUILD_ID,
@@ -13,7 +11,6 @@ import {
   RpcError,
   RpcEventListener,
   RpcServiceDescriptor,
-  serializeRpcError,
   SerializedRpcError,
 } from './types';
 

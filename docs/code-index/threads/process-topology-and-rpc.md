@@ -28,6 +28,8 @@ The vector service owns the LanceDB connection/table, per-session indexing chain
 
 With `dbWorkers:false`, the same vector service handler runs locally. With `dbWorkers:true`, a supervised child owns LanceDB and the main process never silently opens a second fallback owner after a worker failure.
 
+The production bootstrap completes authoritative session/archive migrations before starting the selected vector owner. Child readiness means LanceDB is open; startup backfill remains asynchronous. The native LanceDB module is loaded lazily only by the selected owner. Unexpected child exit makes semantic calls retryably unavailable until a bounded-backoff watchdog starts a new generation. Graceful shutdown drains accepted calls and active indexing/backfill work before closing LanceDB and disconnecting the child.
+
 ## Session direction
 
 A future session worker owns one session's hydrated hot state and turn loop. External callers use high-level commands, queries, and events rather than a remotely dereferenceable `Session` object. The in-process session runtime must adopt the same DTO contract before child placement is enabled broadly.
@@ -35,6 +37,7 @@ A future session worker owns one session's hydrated hot state and turn loop. Ext
 ## Failure boundary
 
 - Vector indexing is best-effort. A vector-worker failure does not roll back session, archive, or compact commits.
+- Deterministic block rows are replaced before append, making retry after a Lance-commit/checkpoint gap idempotent.
 - Exact archive recall remains available without LanceDB. Semantic search reports a retryable unavailable error while the vector owner restarts.
 - Process isolation is intended for fault containment and parallel throughput. It is not a security or sandbox boundary.
 - SQLite locking protects database integrity but does not replace session-generation fencing for semantic ownership.

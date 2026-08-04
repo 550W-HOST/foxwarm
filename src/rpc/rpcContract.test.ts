@@ -74,3 +74,25 @@ void runContract('child-process transport', async () => {
   await transport.waitUntilReady();
   return transport;
 });
+
+test('child-process transport rejects an incompatible build before readiness', async () => {
+  const generation = 77;
+  const child = fork(path.join(__dirname, 'rpcTestChild.js'), [], {
+    env: { ...process.env, FOXWARM_RPC_TEST_GENERATION: String(generation) },
+    serialization: 'advanced',
+  });
+  const transport = new ProcessRpcClientTransport(child, {
+    generation,
+    buildId: 'intentionally-incompatible-build',
+    readyTimeoutMs: 1_000,
+  });
+  try {
+    await assert.rejects(
+      transport.waitUntilReady(),
+      (error: any) => error?.code === 'RPC_PROTOCOL_MISMATCH',
+    );
+  } finally {
+    await transport.close();
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+  }
+});
