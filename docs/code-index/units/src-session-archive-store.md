@@ -53,6 +53,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 
 - `initArchiveStore()` opens the database and starts one bootstrap promise. Known sessions come from the metadata snapshot.
 - Ordinary legacy bootstrap accepts only whole-line canonical JSON and never inserts a torn-concatenated suffix. After structural validation, migration-only fork-cap inference may count the narrow recovered suffix as copied parent history without inserting it; the dedicated recovery transaction remains the sole row writer and atomically writes its durable audit marker. Raw files remain unchanged for backup audit.
+- Migration-only message validation recognizes two proven historical writer variants without changing current writer types: message-level `providerMeta` may carry a record-valued `providerSpecificFields` without the later `sourceModelId`, and `functionResponse.response` may be any defined JSON value rather than only an object. SQLite preserves those payload values as written, unscoped provider fields are not replayed to a guessed model, and all outer record identity, role, tool-call identity, duplicate, and lineage checks remain strict.
 - Migration import-state rows avoid reparsing unchanged legacy sources while a failed migration is being repaired and retried.
 - Effective reads walk current session then ancestors, cap each ancestor at cumulative fork points, annotate `sourceSessionId`/`inherited`, and sort by source sequence or block ID.
 - Child branch creation seeds vector checkpoints at its fork boundaries.

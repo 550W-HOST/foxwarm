@@ -16,7 +16,18 @@ function messageRecord(sessionId: string, text: string) {
   return { v: 1, kind: 'message', sessionId, agent: 'main', seq: 1, timestamp: 1, role: 'user', message: { role: 'user', parts: [{ text }], __meta: { seq: 1, timestamp: 1 } } };
 }
 
-function tornConcatenatedMessageLine(suffix: ReturnType<typeof messageRecord>, prefixText = 'unrecoverable-prefix'): string {
+function functionResponseRecord(sessionId: string, response: unknown, seq = 1) {
+  return {
+    v: 1, kind: 'message', sessionId, agent: 'main', seq, timestamp: seq, role: 'tool',
+    message: {
+      role: 'tool',
+      parts: [{ functionResponse: { tool_use_id: `call_${seq}`, name: 'legacy_tool', response } }],
+      __meta: { seq, timestamp: seq },
+    },
+  };
+}
+
+function tornConcatenatedMessageLine(suffix: Record<string, any>, prefixText = 'unrecoverable-prefix'): string {
   const prefix = JSON.stringify({ ...suffix, timestamp: 0, role: 'model', message: { role: 'model', parts: [{ text: prefixText }], __meta: { seq: suffix.seq, timestamp: 0 } } });
   return `${prefix.slice(0, -12)}${JSON.stringify(suffix)}\n`;
 }
@@ -90,6 +101,104 @@ test('structurally invalid session messages and blocks are never imported or mov
   }
 });
 
+test('migration preserves proven legacy message metadata and every defined JSON tool response shape', async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-legacy-message-shapes-'));
+  const source = path.join(dataRoot, 'state', 'logs', 'sessions', 'legacy.jsonl');
+  const resultPath = path.join(dataRoot, 'round-trip.json');
+  const providerMeta = { providerSpecificFields: { reasoning_signature: 'legacy-signature' } };
+  const responses = [null, 'legacy scalar', 42, false, ['a', 2], { output: 'legacy object' }, '', 0];
+  const records = [
+    {
+      v: 1, kind: 'message', sessionId: 'legacy', agent: 'main', seq: 1, timestamp: 1, role: 'model',
+      message: { role: 'model', providerMeta, parts: [{ text: 'unscoped provider metadata' }], __meta: { seq: 1, timestamp: 1 } },
+    },
+    ...responses.map((response, index) => functionResponseRecord('legacy', response, index + 2)),
+  ];
+  const raw = `${records.map(record => JSON.stringify(record)).join('\n')}\n`;
+  await fs.outputFile(source, raw);
+  await fs.outputJson(path.join(dataRoot, 'state', 'sessions.json'), { sessions: { legacy: { id: 'legacy' } } });
+
+  await run(`
+    const fs=require('fs-extra');const m=require(${JSON.stringify(migrationModule)});const s=require('./lib/session/archiveStore');
+    m.runSqliteOnlyArchivesMigration().then(async()=>{const rows=await s.readLocalArchiveMessages('legacy');await fs.outputJson(${JSON.stringify(resultPath)},{providerMeta:rows[0]?.message?.providerMeta,responses:rows.slice(1).map(row=>row.message.parts[0]?.functionResponse?.response)})},e=>{console.error(e.stack);process.exit(1)});
+  `, dataRoot);
+
+  assert.deepEqual(await fs.readJson(resultPath), { providerMeta, responses });
+  assert.equal(await fs.pathExists(source), false);
+  assert.equal(
+    await fs.readFile(path.join(dataRoot, 'state', 'migration-backup', 'sqlite-only-large-archives-v1', 'logs', 'sessions', 'legacy.jsonl'), 'utf8'),
+    raw,
+  );
+});
+
+test('legacy message compatibility does not relax required payload or record identity fields', async () => {
+  const validTool = functionResponseRecord('invalid', { output: 'valid' });
+  const validProvider = {
+    v: 1, kind: 'message', sessionId: 'invalid', agent: 'main', seq: 1, timestamp: 1, role: 'model',
+    message: {
+      role: 'model',
+      providerMeta: { providerSpecificFields: { reasoning_signature: 'valid' } },
+      parts: [{ text: 'valid' }],
+      __meta: { seq: 1, timestamp: 1 },
+    },
+  };
+  const fixtures: Array<{ name: string; record: Record<string, any> }> = [
+    {
+      name: 'missing function response payload',
+      record: {
+        ...validTool,
+        message: { ...validTool.message, parts: [{ functionResponse: { tool_use_id: 'call_1', name: 'legacy_tool' } }] },
+      },
+    },
+    {
+      name: 'missing provider-specific fields',
+      record: { ...validProvider, message: { ...validProvider.message, providerMeta: {} } },
+    },
+    {
+      name: 'null provider-specific fields',
+      record: { ...validProvider, message: { ...validProvider.message, providerMeta: { providerSpecificFields: null } } },
+    },
+    {
+      name: 'array provider-specific fields',
+      record: { ...validProvider, message: { ...validProvider.message, providerMeta: { providerSpecificFields: [] } } },
+    },
+    {
+      name: 'null source model id',
+      record: { ...validProvider, message: { ...validProvider.message, providerMeta: { providerSpecificFields: {}, sourceModelId: null } } },
+    },
+    {
+      name: 'numeric source model id',
+      record: { ...validProvider, message: { ...validProvider.message, providerMeta: { providerSpecificFields: {}, sourceModelId: 42 } } },
+    },
+    {
+      name: 'outer and message role mismatch',
+      record: { ...validTool, role: 'model' },
+    },
+    {
+      name: 'non-positive message identity',
+      record: { ...validTool, seq: 0 },
+    },
+  ];
+
+  for (const fixture of fixtures) {
+    const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-invalid-legacy-message-shape-'));
+    const source = path.join(dataRoot, 'state', 'logs', 'sessions', 'invalid.jsonl');
+    await fs.outputFile(source, `${JSON.stringify(fixture.record)}\n`);
+    await fs.outputJson(path.join(dataRoot, 'state', 'sessions.json'), { sessions: { invalid: { id: 'invalid' } } });
+    await assert.rejects(
+      run(`const m=require(${JSON.stringify(migrationModule)});m.runSqliteOnlyArchivesMigration().catch(e=>{console.error(e.message);process.exit(1)})`, dataRoot),
+      /Invalid legacy session message record/,
+      fixture.name,
+    );
+    assert.equal(await fs.pathExists(source), true, fixture.name);
+    assert.equal(
+      await fs.pathExists(path.join(dataRoot, 'state', 'migration-backup', 'sqlite-only-large-archives-v1', 'logs', 'sessions', 'invalid.jsonl')),
+      false,
+      fixture.name,
+    );
+  }
+});
+
 test('migration narrowly recovers one canonical message appended after a torn matching prefix', async () => {
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-torn-prefix-single-'));
   const source = path.join(dataRoot, 'state', 'logs', 'sessions', 'recover.jsonl');
@@ -105,6 +214,22 @@ test('migration narrowly recovers one canonical message appended after a torn ma
   const manifest = await fs.readJson(path.join(backupRoot, 'manifest.json'));
   assert.deepEqual(manifest.audit, { recoveredLogicalRecordCount: 1, insertedRecoveredLogicalRecordCount: 1, tornPrefixCount: 1 });
   assert.equal(manifest.files.find((file: any) => file.relativeStatePath.endsWith('recover.jsonl')).recoveredRecords[0].seq, 1);
+});
+
+test('torn-prefix recovery preserves a scalar legacy tool response without widening its audit boundary', async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-torn-prefix-scalar-'));
+  const source = path.join(dataRoot, 'state', 'logs', 'sessions', 'scalar.jsonl');
+  const suffix = functionResponseRecord('scalar', 'legacy scalar response');
+  const raw = tornConcatenatedMessageLine(suffix);
+  await fs.outputFile(source, raw);
+  await fs.outputJson(path.join(dataRoot, 'state', 'sessions.json'), { sessions: { scalar: { id: 'scalar' } } });
+
+  const result = await run(`const m=require(${JSON.stringify(migrationModule)});const s=require('./lib/session/archiveStore');m.runSqliteOnlyArchivesMigration().then(async()=>{const rows=await s.readLocalArchiveMessages('scalar');if(rows.length!==1||rows[0].message.parts[0]?.functionResponse?.response!=='legacy scalar response')throw new Error(JSON.stringify(rows));console.log('scalar-recovered')},e=>{console.error(e.stack);process.exit(1)})`, dataRoot);
+  assert.match(result.stdout, /scalar-recovered/);
+  const backupRoot = path.join(dataRoot, 'state', 'migration-backup', 'sqlite-only-large-archives-v1');
+  assert.equal(await fs.readFile(path.join(backupRoot, 'logs', 'sessions', 'scalar.jsonl'), 'utf8'), raw);
+  const manifest = await fs.readJson(path.join(backupRoot, 'manifest.json'));
+  assert.deepEqual(manifest.audit, { recoveredLogicalRecordCount: 1, insertedRecoveredLogicalRecordCount: 1, tornPrefixCount: 1 });
 });
 
 test('ordinary legacy bootstrap never inserts a torn-concatenated suffix', async () => {
