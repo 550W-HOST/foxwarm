@@ -229,6 +229,8 @@ function resolveDataRootDir(): string {
 export const DATA_ROOT_DIR = resolveDataRootDir();
 export const STATE_DIR = path.join(DATA_ROOT_DIR, 'state');
 export const ARCHIVE_DB_PATH = path.join(STATE_DIR, 'archive-store.sqlite');
+export const SESSION_RUNTIME_DB_PATH = path.join(STATE_DIR, 'session-runtime.sqlite');
+export const SESSION_RUNTIME_SNAPSHOTS_DIR = path.join(STATE_DIR, 'session-runtime-snapshots');
 export const SESSION_ID_RESERVATIONS_LOG_PATH = path.join(STATE_DIR, 'session-id-reservations.jsonl');
 export const SESSION_ID_MOVE_JOURNAL_PATH = path.join(STATE_DIR, 'session-id-move-pending.json');
 

@@ -4,7 +4,7 @@
 
 Foxwarm uses one logical set of asynchronous service contracts with configurable process placement. A service may run in the caller's process through a local handler or in a supervised child through IPC. Placement must not create a second business API or expose mutable in-process objects to callers.
 
-The first child-process service on this boundary is the LanceDB/vector owner. SessionRuntime now has a production-used local DTO service for high-level session queries, enqueue/control, settings, and update events. Session child placement remains disabled until ownership transfer, fencing, snapshots, and inactive-session mailbox semantics are implemented.
+The first child-process service on this boundary is the LanceDB/vector owner. SessionRuntime now has a production-used local DTO service for high-level session queries, enqueue/control, settings, and update events. Session child placement remains disabled while its supported vertical slice is implemented. The durable ownership/mailbox and supervised child-lifecycle foundation now exists, but worker-safe snapshot persistence, turn execution, reverse global services, and placement routing are not production-wired yet.
 
 ## Configuration
 
@@ -34,7 +34,9 @@ The production bootstrap completes authoritative session/archive migrations befo
 
 `SessionRuntime` is the external command/query/event boundary for session list/state/history projections, canonical queue insertion, typed events, stop/dequeue/retry controls, and persisted model/cwd/node/name/compact-threshold settings. Its local handler delegates to `sessionManager`, but local RPC cloning and structured errors prevent callers from retaining handler-owned `Session`, history, queue, or event references. WebUI list/state/history/settings/SSE, channel message enqueue, commands, and migrated tools use this boundary; the router's claimed turn loop and destructive lifecycle operations still use live objects internally.
 
-`sessionWorkers:true` fails startup with `SESSION_WORKERS_NOT_IMPLEMENTED` rather than reporting a placement that does not exist. A future session worker owns one session's hydrated hot state and turn loop, but child placement still requires durable mailbox, snapshot-generation and process-generation fencing, wake/idle release, and worker supervision.
+`sessionWorkers:true` fails startup with `SESSION_WORKERS_NOT_IMPLEMENTED` rather than reporting an incomplete placement. `SessionWorkerStore` now persists one generation owner, ordered mailbox intents, an authoritative head revision/path/hash, and an atomically acknowledged mailbox cursor in a dedicated SQLite database. `SessionWorkerSupervisor` verifies child identity/readiness, retains ownership across IPC disconnect, releases idle children through bounded drain/termination, and restarts only after exit observation. This foundation is not initialized by production bootstrap until worker-safe snapshots and the supported turn path are complete.
+
+A session worker will own hydrated state and the turn loop. Main-owned inputs first commit as immutable mailbox intents and only then wake or spawn the owner. A worker head publication advances one generation-fenced revision and acknowledges only an ordered pending mailbox prefix in the same transaction. Immutable snapshot artifacts, catalog projection, archive generation guards, and production hydration remain the next integration layer.
 
 ## Failure boundary
 
@@ -49,6 +51,7 @@ The production bootstrap completes authoritative session/archive migrations befo
 - [infrastructure](../modules/infrastructure.md) / [src-index](../units/src-index.md) / [src-config](../units/src-config.md)
 - [src-rpc](../units/src-rpc.md)
 - [src-session-runtime](../units/src-session-runtime.md)
+- [src-session-worker-runtime](../units/src-session-worker-runtime.md)
 - [session context](../modules/session-context.md) / [src-vector](../units/src-vector.md)
 - [session core](../modules/session-core.md) / [message routing](../modules/message-routing.md)
 - [tool dispatch](./tool-dispatch.md) and [node communication](./node-communication.md) for future direct service endpoints
@@ -67,7 +70,19 @@ The production bootstrap completes authoritative session/archive migrations befo
 
 [2026-08-04] A future session worker owns its session's hydrated state and high-frequency turn work instead of routing full history serialization through the main process. Persisted waits and ToolScript snapshots count as idle. The initial release has no fixed maximum worker count, while leaving room for a later spawn-time resource check.
 
+### D-process-topology-session-generation
+
+[2026-08-04] Main durably records an input before waking or spawning a session worker. One supervised process generation owns one hot session and is the only generation allowed to publish its semantic state. Snapshot-head revision and ordered mailbox-prefix acknowledgement commit together; stale generations and out-of-order acknowledgements fail closed. IPC disconnect alone does not release ownership, and replacement cannot start until the old PID's exit is confirmed. Main-owned lifecycle mutations quiesce the owner and reload its authoritative head before mutation.
+
+### D-process-topology-session-events
+
+[2026-08-04] Worker-to-main committed session events carry the owner generation plus a monotonic session revision or an equivalent explicit gap/resync signal. Event backpressure may discard transient display progress, but it cannot silently lose committed history; main resynchronizes from the authoritative head after a committed-event gap.
+
+### D-process-topology-session-tool-placement
+
+[2026-08-04] Provider requests, prompt serialization, the canonical turn loop, ToolScript, and ordinary safe session-local tools run in the owning worker. Operations that depend on main-owned topology, channels, timers, node connections, or other global singleton state use a bounded reverse main-service call with a stable operation identity. Vector placement remains independent; an initial bounded query proxy may pass through main so long as it does not carry full history or prompt payloads.
+
 ## Open questions
 
-- SessionRuntime child placement still needs durable inactive-session mailbox, ownership transfer/fencing, snapshot-generation publication, wake/idle release, and crash recovery. The local DTO service deliberately does not simulate those mechanisms.
+- SessionRuntime child placement still needs immutable snapshot artifacts and hydration, worker-safe archive/session persistence, catalog projection, turn-executor rehosting, reverse global services, committed-event resync, and production placement routing. The durable store/supervisor foundation deliberately remains disconnected from production until that vertical slice is complete.
 - Direct Unix-domain connections among future session, vector, and master-node services may replace the initial parent/child transport when avoiding a main-process payload hop becomes relevant.

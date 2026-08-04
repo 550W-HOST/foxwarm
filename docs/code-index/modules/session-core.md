@@ -14,6 +14,7 @@ Canonical image references in live history, queues, archives, and forks are owne
 
 - [src-session-manager](../units/src-session-manager.md) — façade, in-memory map, lazy hydration, queue/wait coordination, callbacks, and restart recovery.
 - [src-session-runtime](../units/src-session-runtime.md) — local high-level DTO service/facade for external session queries, commands, settings, controls, and events.
+- [src-session-worker-runtime](../units/src-session-worker-runtime.md) — durable process-generation/mailbox/head fencing and supervised per-session child lifecycle foundation; production placement is not enabled yet.
 - [src-session-runtime-state](../units/src-session-runtime-state.md) — `requesting-model`, `running-tool`, `waiting`, and `idle` derivation.
 - [src-session-metadata-store](../units/src-session-metadata-store.md) — shared metadata index, per-session history snapshots, rebuild, and durable writes.
 - [src-session-channels](../units/src-session-channels.md) — persisted channel attachments, direct delivery, and session broadcasts.
@@ -42,6 +43,7 @@ Context frontier, compaction, archive-store, and vector retrieval are owned by [
 - `state/sessions.json` is the shared metadata/presentation index and uses five numbered backups.
 - `state/sessions/<id>.json` owns durable history, prompt snapshot/cache key, and embedded `contextFrontier`; per-session files use durable serialized replacement without numbered rotation.
 - `state/channels.json` owns channel attachments.
+- `state/session-runtime.sqlite` owns future session-worker generations, mailbox intent acknowledgements, and authoritative snapshot-head revisions; it is currently exercised only by the disconnected worker foundation.
 - Agent metadata is separate from session history.
 - Active model/tool phases are in memory; wait metadata is persisted on the session.
 
