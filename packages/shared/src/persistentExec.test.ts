@@ -254,6 +254,74 @@ test('persistent exec keeps ordinary and truncated-small text behavior', async (
   }
 });
 
+test('persistent exec preserves foreground output boundary whitespace and reports a missing trailing LF', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-whitespace-'));
+  const manager = await createManager(root);
+  const logPath = path.join(root, 'command.log');
+  const status = { exitCode: 0, finishedAt: new Date().toISOString() };
+
+  try {
+    const indented = '    alpha\n  beta\n\tcharlie\n';
+    await fs.writeFile(logPath, indented);
+    assert.equal(
+      await manager.buildForegroundExecResult(buildExecEntry(logPath), status),
+      `${indented}---\nExit code: 0`,
+    );
+
+    const whitespaceOnly = '  \t \n\n';
+    await fs.writeFile(logPath, whitespaceOnly);
+    assert.equal(
+      await manager.buildForegroundExecResult(buildExecEntry(logPath), status),
+      `${whitespaceOnly}---\nExit code: 0`,
+    );
+
+    const trailingSpacesAndBlankLines = 'alpha\n   \n\n';
+    await fs.writeFile(logPath, trailingSpacesAndBlankLines);
+    assert.equal(
+      await manager.buildForegroundExecResult(buildExecEntry(logPath), status),
+      `${trailingSpacesAndBlankLines}---\nExit code: 0`,
+    );
+
+    const noTrailingLf = 'alpha  ';
+    await fs.writeFile(logPath, noTrailingLf);
+    assert.equal(
+      await manager.buildForegroundExecResult(buildExecEntry(logPath), status),
+      `${noTrailingLf}\n---\nExit code: 0\nOriginal command output had no trailing newline.`,
+    );
+
+    await fs.writeFile(logPath, '');
+    assert.equal(
+      await manager.buildForegroundExecResult(buildExecEntry(logPath), status),
+      '(No output)\n---\nExit code: 0',
+    );
+  } finally {
+    await fs.remove(root);
+  }
+});
+
+test('persistent exec preserves timeout partial-output boundary whitespace and reports the current missing trailing LF', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-partial-whitespace-'));
+  const manager = await createManager(root);
+  const logPath = path.join(root, 'command.log');
+  const entry = buildExecEntry(logPath);
+
+  try {
+    const withTrailingLf = '    alpha\n  beta\n   \n\n';
+    await fs.writeFile(logPath, withTrailingLf);
+    const lfResult = await manager.buildBackgroundTimeoutResult(entry, 7);
+    assert.ok(lfResult.startsWith(`Partial Output:\n${withTrailingLf}---\n`));
+    assert.doesNotMatch(lfResult, /Partial output captured so far had no trailing newline\./);
+
+    const noTrailingLf = '  \t  ';
+    await fs.writeFile(logPath, noTrailingLf);
+    const noLfResult = await manager.buildBackgroundTimeoutResult(entry, 7);
+    assert.ok(noLfResult.startsWith(`Partial Output:\n${noTrailingLf}\n---\n`));
+    assert.match(noLfResult, /Partial output captured so far had no trailing newline\.\nPID: 4321/);
+  } finally {
+    await fs.remove(root);
+  }
+});
+
 test('persistent exec uses bounded head and tail samples for oversized text logs', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-large-text-'));
   const manager = await createManager(root);

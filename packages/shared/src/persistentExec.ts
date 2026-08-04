@@ -115,6 +115,8 @@ interface ResolvedExecPaths {
 interface LogExcerpt {
   text: string;
   truncated: boolean;
+  capturedOutputWasEmpty: boolean;
+  capturedOutputEndedWithLf: boolean;
   truncation?: OutputTruncationResult;
   oversized?: boolean;
   originalByteLength?: number;
@@ -675,10 +677,18 @@ export class PersistentExecManager {
 
   private async readLogExcerpt(filePath: string, maxChars: number): Promise<LogExcerpt> {
     const stat = await fs.stat(filePath);
-    if (stat.size <= 0) return { text: '', truncated: false };
+    if (stat.size <= 0) {
+      return {
+        text: '',
+        truncated: false,
+        capturedOutputWasEmpty: true,
+        capturedOutputEndedWithLf: false,
+      };
+    }
 
     if (stat.size > MAX_FULL_LOG_READ_BYTES) {
       const { head, tail } = await readBoundedFileSamples(filePath, stat.size);
+      const capturedOutputEndedWithLf = tail.length > 0 && tail[tail.length - 1] === 0x0a;
       const excerpt = buildBoundedTextExcerpt(head, tail, {
         headMayEndMidCodePoint: true,
         tailMayStartMidCodePoint: true,
@@ -687,6 +697,8 @@ export class PersistentExecManager {
         return {
           text: formatBoundedBinaryHexPreview(head, tail, stat.size, 'oversized binary log'),
           truncated: true,
+          capturedOutputWasEmpty: false,
+          capturedOutputEndedWithLf,
           oversized: true,
           originalByteLength: stat.size,
         };
@@ -708,6 +720,8 @@ export class PersistentExecManager {
       return {
         text: truncation.text,
         truncated: true,
+        capturedOutputWasEmpty: false,
+        capturedOutputEndedWithLf,
         truncation: truncation.truncated ? truncation : undefined,
         oversized: true,
         originalByteLength: stat.size,
@@ -724,6 +738,8 @@ export class PersistentExecManager {
     return {
       text: truncation.text,
       truncated: truncation.truncated,
+      capturedOutputWasEmpty: text.length === 0,
+      capturedOutputEndedWithLf: text.endsWith('\n'),
       truncation: truncation.truncated ? truncation : undefined,
     };
   }
@@ -731,11 +747,21 @@ export class PersistentExecManager {
   private async readPartialLog(logPath: string): Promise<LogExcerpt> {
     try {
       const excerpt = await this.readLogExcerpt(logPath, PARTIAL_LOG_BYTES);
-      const text = excerpt.text.trim();
-      if (!text) return { text: '(Command started, no output yet)', truncated: false };
-      return { ...excerpt, text: excerpt.truncated ? `${text}\n...(truncated)` : text };
+      if (excerpt.capturedOutputWasEmpty) {
+        return { ...excerpt, text: '(Command started, no output yet)', truncated: false };
+      }
+      if (!excerpt.truncated) return excerpt;
+      const markerSeparator = excerpt.text.endsWith('\n') ? '' : '\n';
+      return { ...excerpt, text: `${excerpt.text}${markerSeparator}...(truncated)` };
     } catch (err: any) {
-      if (err?.code === 'ENOENT') return { text: '(Command started, no output yet)', truncated: false };
+      if (err?.code === 'ENOENT') {
+        return {
+          text: '(Command started, no output yet)',
+          truncated: false,
+          capturedOutputWasEmpty: true,
+          capturedOutputEndedWithLf: false,
+        };
+      }
       throw err;
     }
   }
@@ -743,7 +769,7 @@ export class PersistentExecManager {
   private async readDisplayOutput(logPath: string): Promise<LogExcerpt> {
     try {
       const excerpt = await this.readLogExcerpt(logPath, INLINE_LOG_LIMIT_BYTES);
-      if (!excerpt.text.trim()) return { text: '(No output)', truncated: false };
+      if (excerpt.capturedOutputWasEmpty) return { ...excerpt, text: '(No output)', truncated: false };
       if (!excerpt.truncated && estimateTokenCount(excerpt.text) <= 10000) return excerpt;
       if (excerpt.truncated) return excerpt;
       const truncation = truncateOutputForDisplay(excerpt.text, {
@@ -752,12 +778,20 @@ export class PersistentExecManager {
         lineOmissionReason: 'this file is too long',
       });
       return {
+        ...excerpt,
         text: truncation.text,
         truncated: true,
         truncation,
       };
     } catch (err: any) {
-      if (err?.code === 'ENOENT') return { text: '(No output)', truncated: false };
+      if (err?.code === 'ENOENT') {
+        return {
+          text: '(No output)',
+          truncated: false,
+          capturedOutputWasEmpty: true,
+          capturedOutputEndedWithLf: false,
+        };
+      }
       throw err;
     }
   }
@@ -774,6 +808,9 @@ export class PersistentExecManager {
       lines.push(`Original log size: ${output.originalByteLength} bytes.`);
     } else if (output.truncation?.footerNotes?.length) {
       lines.push(...output.truncation.footerNotes);
+    }
+    if (!output.capturedOutputWasEmpty && !output.capturedOutputEndedWithLf) {
+      lines.push('Original command output had no trailing newline.');
     }
     if (output.hasDisplayByteConversions) lines.push(formatDisplayByteConversionDisclaimer('command output'));
     return lines.join('\n');
@@ -838,8 +875,8 @@ export class PersistentExecManager {
 
   async buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus, warning?: string): Promise<string> {
     const output = await this.readDisplayOutput(entry.logPath);
-    const body = output.text.trim() || '(No output)';
-    return `${body}\n${this.buildForegroundFooter(entry, status, output, warning)}`;
+    const footerSeparator = output.text.endsWith('\n') ? '' : '\n';
+    return `${output.text}${footerSeparator}${this.buildForegroundFooter(entry, status, output, warning)}`;
   }
 
   async buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS, warning?: string): Promise<string> {
@@ -854,7 +891,11 @@ export class PersistentExecManager {
     const conversionNote = partialOutput.hasDisplayByteConversions
       ? `\n${formatDisplayByteConversionDisclaimer('command output')}`
       : '';
-    return `Partial Output:\n${partialOutput.text}\n---\n${fullNotice}\n${warningLine}${nodeLine}PID: ${entry.pid}\n${processTree}\nLog file: ${entry.logPath}${sizeLine}${conversionNote}`;
+    const footerSeparator = partialOutput.text.endsWith('\n') ? '' : '\n';
+    const trailingNewlineLine = !partialOutput.capturedOutputWasEmpty && !partialOutput.capturedOutputEndedWithLf
+      ? 'Partial output captured so far had no trailing newline.\n'
+      : '';
+    return `Partial Output:\n${partialOutput.text}${footerSeparator}---\n${fullNotice}\n${trailingNewlineLine}${warningLine}${nodeLine}PID: ${entry.pid}\n${processTree}\nLog file: ${entry.logPath}${sizeLine}${conversionNote}`;
   }
 
   buildCompletionMessage(entry: RunningExecEntry, status: ExecStatus): string {

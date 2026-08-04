@@ -91,7 +91,7 @@ test('node exec clamps oversized timeout and puts the warning in the foreground 
       { command: 'printf remote-clamp-ok', timeout: 120 },
       { sessionId: 'shared-node-test-timeout-clamp', session: { agent: agentName, currentNode: 'test-node' }, runtimeNodeId: 'test-node' },
     ));
-    assert.match(result, /^remote-clamp-ok\n---\nExit code: 0\nWARNING: Requested timeout 120s exceeds the 60s maximum; using 60s\.$/);
+    assert.match(result, /^remote-clamp-ok\n---\nExit code: 0\nWARNING: Requested timeout 120s exceeds the 60s maximum; using 60s\.\nOriginal command output had no trailing newline\.$/);
   } finally {
     await cleanupAgent(agentName);
   }
