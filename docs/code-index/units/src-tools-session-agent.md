@@ -15,7 +15,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `tool_skill` — skill list/load actions
 - `tool_set_goal`, `tool_set_session_compact_threshold`, `tool_set_session_child_model`, `tool_update_session_snapshot` — settings
 
-`tool_set_goal` mutates the passed current Session with the existing pure goal functions. Normal turn execution persists through the local-only `persistCurrentSession` tool-context hook; legacy/direct callers without the hook retain the authoritative SessionManager save fallback. Other settings tools remain on their existing SessionRuntime/SessionManager paths.
+`tool_set_goal`, compact-threshold settings, child-model settings, and snapshot refresh can mutate the exact passed current Session when `session`, `sessionId`, target identity, and the local-only `persistCurrentSession` hook agree. Status reads use the same owner. Explicit other-session targets, identity mismatch, and legacy/direct callers without that hook retain their existing SessionRuntime/SessionManager paths. Snapshot refresh delegates to the shared passed-Session prompt builder rather than looking the owner up again.
 - `tool_session`, `tool_delete_session`, `tool_stop_session`, `tool_compact_session` — session status/list/display-name update and lifecycle
 
 ## Function Index
@@ -105,9 +105,9 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 | Function | Description |
 |----------|-------------|
 | `tool_set_goal` | Sets or clears the session goal |
-| `tool_set_session_compact_threshold` | Sets token threshold for session compaction |
-| `tool_set_session_child_model` | Sets default model for child sessions |
-| `tool_update_session_snapshot` | Refreshes session system prompt snapshot |
+| `tool_set_session_compact_threshold` | Reads or updates the trusted passed owner's compaction threshold, with the existing SessionRuntime path for other/legacy targets |
+| `tool_set_session_child_model` | Reads or updates the trusted passed owner's child-model default, with the existing SessionRuntime path for other/legacy targets |
+| `tool_update_session_snapshot` | Refreshes a trusted passed owner's prompt snapshot directly, or uses the existing ID-based path for other/legacy targets |
 
 ### toolsSessionAgent/sessionCrud.ts — Session lifecycle
 | Function | Description |

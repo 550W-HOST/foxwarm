@@ -132,9 +132,16 @@ export async function refreshSessionSnapshot(deps: AgentMetadataDeps, sessionId:
     throw new Error(`Session "${sessionId}" not found.`);
   }
 
+  return refreshSessionSnapshotForSession(session, () => deps.saveSession(session.id));
+}
+
+export async function refreshSessionSnapshotForSession(
+  session: Session,
+  persistSession: () => Promise<void>,
+): Promise<{ sessionId: string; agentName: string }> {
   const agentName = session.agent || 'main';
   session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot(getSessionSystemPromptOptions(session));
-  await deps.saveSession(session.id);
+  await persistSession();
 
   return { sessionId: session.id, agentName };
 }
