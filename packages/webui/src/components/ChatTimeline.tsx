@@ -11,7 +11,7 @@ import {
   isHeavySystemTextLine,
   isLightweightStructuredSystem,
   isSystemLikeText,
-  renderMarkdown,
+  renderAssistantMarkdownSegments,
   handleMarkdownLinkClick,
   renderSystemTextWithSessionLinks,
   SessionHashLink,
@@ -37,6 +37,7 @@ import {
 } from './ToolTimelineItems'
 import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
 import ThreadLineButton from './ThreadLineButton'
+import SpecialBlock, { MermaidDiagram } from './SpecialBlock'
 
 interface ChatTimelineProps {
   sessionId: string
@@ -287,8 +288,31 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
 })
 
 const MarkdownContent = memo(function MarkdownContent({ text, className }: { text: string; className: string }) {
-  const html = useMemo(() => renderMarkdown(text), [text])
-  return <div className={`min-w-0 max-w-full ${className}`} dangerouslySetInnerHTML={{ __html: html }} onClick={handleMarkdownLinkClick} />
+  const segments = useMemo(() => renderAssistantMarkdownSegments(text), [text])
+  if (segments.length === 1 && segments[0].kind === 'html') {
+    return <div className={`min-w-0 max-w-full ${className}`} dangerouslySetInnerHTML={{ __html: segments[0].html }} onClick={handleMarkdownLinkClick} />
+  }
+  return (
+    <div className={`min-w-0 max-w-full ${className}`} onClick={handleMarkdownLinkClick}>
+      {segments.map((segment, index) => {
+        if (segment.kind === 'html') {
+          return <div key={`html-${index}`} dangerouslySetInnerHTML={{ __html: segment.html }} />
+        }
+        if (segment.kind === 'latex') {
+          return (
+            <SpecialBlock key={`latex-${index}`} kind="latex" label="LaTeX" raw={segment.raw}>
+              <div className="foxwarm-special-block-latex min-w-0 max-w-full overflow-x-auto" dangerouslySetInnerHTML={{ __html: segment.html }} />
+            </SpecialBlock>
+          )
+        }
+        return (
+          <SpecialBlock key={`mermaid-${index}`} kind="mermaid" label="Mermaid" raw={segment.raw}>
+            <MermaidDiagram source={segment.source} />
+          </SpecialBlock>
+        )
+      })}
+    </div>
+  )
 })
 
 const isHeavySystemLikeMessage = (message: Message): boolean => {
