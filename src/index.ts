@@ -9,6 +9,7 @@ import { MessageRouter } from './messageRouter';
 import { CommandHandler } from './commandHandler';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
+import * as mainManagementTools from './mainManagementTools';
 import * as vector from './vector';
 import { registerChannel } from './channel';
 import fs from 'fs-extra';
@@ -192,6 +193,7 @@ async function start() {
     // only supported placement is local. Enabling the future child placement
     // fails clearly here instead of silently running in-process.
     await sessionRuntime.initializeSessionRuntime();
+    await mainManagementTools.initializeMainManagementTools();
 
     // Initialize the vector owner locally or in its configured child process.
     // Startup readiness means the table is open; archive backfill continues in
@@ -442,7 +444,9 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.once(signal, () => {
         if (shutdownStarted) return;
         shutdownStarted = true;
-        void sessionRuntime.shutdownSessionRuntime()
+        void mainManagementTools.shutdownMainManagementTools()
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down main management tools cleanly'))
+            .then(() => sessionRuntime.shutdownSessionRuntime())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down session runtime cleanly'))
             .then(() => vector.shutdown())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down vector service cleanly'))

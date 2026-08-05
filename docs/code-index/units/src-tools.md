@@ -12,6 +12,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - `definitions` — Array of all tool definition objects (from `tools/definitions.ts`)
 - `modelFacingDefinitions` — Subset of definitions directly exposed to the model
 - `callTool(toolName, args, context)` — Main dispatcher that routes tool calls to implementations
+- The closed Main Management wrappers for `send_to_session`, `send_to_channel`, `list_agents`, and timer CRUD delegate through `src/mainManagementTools.ts` rather than calling raw handlers directly.
 - `BUILTIN_TOOL_PLACEMENTS` — Exhaustive ownership metadata for every registered builtin, independent of schemas and permission rules.
 - `NODE_ENVIRONMENT_BUILTIN_NAMES` — Intentional current-node environment primitive names.
 - `resolveBuiltinToolPlacement(name, args, currentNode)` — Resolves action-aware ownership and the current execution node.
@@ -140,6 +141,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - `./jsonObjectArgs` — Argument parsing helpers
 - `./toolscript` — Toolscript run/continue/list/cancel tools
 - `./toolsSessionAgent` — Session, agent, timer, and channel management tools
+- `./mainManagementTools` — local versioned RPC caller for the first closed main-owned tool set
 
 ## Behavior
 

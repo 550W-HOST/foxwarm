@@ -10,13 +10,10 @@ import {
 } from './toolscript';
 import {
     tool_create_child_session,
-    tool_send_to_session,
     tool_wait,
     tool_submit_compact_plan,
-    tool_send_to_channel,
     tool_send_file,
     tool_session,
-    tool_list_agents,
     tool_skill,
     tool_get_session_messages,
     tool_get_archived_messages,
@@ -29,16 +26,21 @@ import {
     tool_update_session_snapshot,
     tool_stop_session,
     tool_compact_session,
-    tool_create_timer,
-    tool_list_timers,
-    tool_update_timer,
-    tool_delete_timer,
     tool_create_agent,
     tool_create_session,
     tool_set_agent_inherit,
     tool_set_agent_isolated,
     tool_move_session,
 } from './toolsSessionAgent';
+import {
+    tool_send_to_session,
+    tool_send_to_channel,
+    tool_list_agents,
+    tool_create_timer,
+    tool_list_timers,
+    tool_update_timer,
+    tool_delete_timer,
+} from './mainManagementTools';
 
 // Re-export types from helpers
 export type { ToolContext, ToolArgs, UnifiedToolSource } from './tools/helpers';

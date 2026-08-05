@@ -394,6 +394,32 @@ test('run_script nested builtin calls use unified placement for session-owner to
   }
 });
 
+test('run_script nested builtin calls use the local main-management service', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_management');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain(
+    'return call_tool({"toolId": "builtin:list_agents", "args": {}})',
+  ));
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    const toolMessage = await executeTools(
+      [{ id: 'run-script-management', name: 'run_script', args: { filePath: scriptName } }],
+      { sessionId, session },
+      session,
+    );
+    const response = toolMessage.parts[0].functionResponse?.response;
+    assert.equal(response?.status, 'completed');
+    assert.deepEqual(response?.executedTools, ['list_agents']);
+    assert.match(String(response?.result), /agent/i);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
 test('run_script passes unified MCP and node call_tool descriptors through to tools.call_tool', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_exec_external');

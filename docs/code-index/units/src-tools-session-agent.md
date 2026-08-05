@@ -168,7 +168,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 
 ## Integration
 
-- These tool functions are invoked by the LLM tool-calling loop as function-call handlers; the return values become tool responses in the conversation.
+- These tool functions are authoritative raw handlers. Most are invoked directly by the builtin dispatcher; `send_to_session`, `send_to_channel`, `list_agents`, and timer CRUD are invoked through the closed local Main Management RPC service so direct, unified, and ToolScript callers share one boundary.
 - Relies on `sessionManager` as the central persistence and session lifecycle layer.
 - Archive guard logic protects the context window from oversized retrievals, forcing the agent to narrow queries iteratively.
 - Isolation checks integrate with the node system to enforce sandboxing for agents running on specific nodes.

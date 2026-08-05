@@ -7,6 +7,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 ## Key units
 
 - [src-tools](../units/src-tools.md) — registry, schemas, builtin implementations, and unified discovery/dispatch.
+- [src-main-management-tools](../units/src-main-management-tools.md) — closed versioned local RPC service for inter-session text/channel delivery, agent listing, and timer CRUD.
 - [src-tools-session-agent](../units/src-tools-session-agent.md) — session, agent, timer, skill, recall, goal, channel, and wait tools.
 - [src-tool-utils](../units/src-tool-utils.md) — argument serialization, output guards, and image normalization.
 - [src-permissions](../units/src-permissions.md) — first-match permission evaluator and isolated-session rule construction.
@@ -19,6 +20,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 
 - `definitions` and `modelFacingDefinitions` — builtin tool registry and default model schema.
 - `BUILTIN_TOOL_PLACEMENTS` and `resolveBuiltinToolPlacement` — exhaustive process-ownership metadata and current-node routing, independent of permission policy.
+- `mainManagementToolServiceDescriptor` and `executeMainManagementTool` — current local-only RPC boundary for the first closed main-management allowlist.
 - `callTool(toolName, args, context)` — builtin dispatch entry.
 - `search_tools` and `call_tool` — unified discovery and invocation across builtin, MCP, and node sources.
 - `checkToolPermission` and `checkPathAccess` — current isolation checks.

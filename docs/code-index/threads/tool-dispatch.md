@@ -10,13 +10,14 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 2. The message-processing loop schedules the batch in model order. Adjacent direct `exec` calls form a bounded parallel segment; every other direct or unified tool is a serial barrier.
 3. Direct builtins resolve exhaustive ownership metadata independently from permission policy. Only node-environment builtins select the session's current node; all other ownership classes remain in the main process in the current local-only runtime.
 4. Isolation checks evaluate the resolved concrete execution target before the selected handler runs.
-5. `search_tools` discovers non-default builtins, MCP tools, and tools advertised by the selected node.
-6. `call_tool` parses a `toolId` or explicit source descriptor and resolves one concrete builtin, MCP, or node target.
-7. MCP calls run through `mcpClient.callTool`; safe text cleanup and MCP image-content promotion occur at that client boundary while non-image content remains structured.
-8. Node calls are sent through `nodesManager` over the authenticated node connection. A node-side approval interceptor may still reject the call. Old node image-result shapes are adapted only at this remote ingress under [D-node-thread-tool-result-compatibility](./node-communication.md#d-node-thread-tool-result-compatibility).
-9. Master and node file wrappers use the shared file-tool core after their own path, context, and isolation handling.
-10. Recognized image payloads are promoted to image parts and receive stable IDs before the remaining text/structured response passes through the oversized-output guard. Successful master/node patch results already carry shared per-file change-count summaries from [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
-11. ToolScript nested calls use the same registered tool surfaces and appear as subcalls of the outer run.
+5. The closed v1 main-management set (`send_to_session`, `send_to_channel`, `list_agents`, and timer CRUD) enters one versioned local RPC service. Its handler reconstructs only source session identity before invoking the existing authoritative raw handler.
+6. `search_tools` discovers non-default builtins, MCP tools, and tools advertised by the selected node.
+7. `call_tool` parses a `toolId` or explicit source descriptor and resolves one concrete builtin, MCP, or node target.
+8. MCP calls run through `mcpClient.callTool`; safe text cleanup and MCP image-content promotion occur at that client boundary while non-image content remains structured.
+9. Node calls are sent through `nodesManager` over the authenticated node connection. A node-side approval interceptor may still reject the call. Old node image-result shapes are adapted only at this remote ingress under [D-node-thread-tool-result-compatibility](./node-communication.md#d-node-thread-tool-result-compatibility).
+10. Master and node file wrappers use the shared file-tool core after their own path, context, and isolation handling.
+11. Recognized image payloads are promoted to image parts and receive stable IDs before the remaining text/structured response passes through the oversized-output guard. Successful master/node patch results already carry shared per-file change-count summaries from [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
+12. ToolScript nested calls use the same registered tool surfaces and appear as subcalls of the outer run.
 
 ## Modules involved
 
@@ -49,6 +50,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 - MCP and node credentials remain transport/runtime state and are not exposed to the model through tool summaries.
 - Tool batches emit one result for every call and append one tool message only after the batch settles. Image/result parts and function responses remain in original model-call order rather than completion order.
 - Direct builtins and unified builtin calls share `resolveBuiltinToolPlacement`; ToolScript nested calls inherit it through the existing `call_tool` wrapper.
+- The first main-management service is local-only. It has a fixed seven-operation allowlist and carries no live Session, history, queue, patch, or callback; no child reverse wiring exists yet.
 
 ## Compatibility
 
