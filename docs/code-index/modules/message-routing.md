@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Message routing owns inbound channel-to-session routing, command dispatch, side requests, and the canonical queue/LLM/tool turn loop. `MessageRouter` owns ingress while `SessionTurnRunner` owns queue claim through finalization. External channel input enters through the SessionRuntime enqueue DTO boundary; the local turn runner intentionally retains live `Session` access.
+Message routing owns inbound channel-to-session routing, command dispatch, side requests, and the canonical queue/LLM/tool turn loop. `MessageRouter` owns ingress while `SessionTurnRunner` owns queue claim through finalization and uses one `LocalSessionTurnHost` for current in-process effects. External channel input enters through the SessionRuntime enqueue DTO boundary; the local turn runner intentionally retains live `Session` access.
 
 ## Key units
 

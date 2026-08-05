@@ -8,7 +8,7 @@ import { getAgentDir, getChannelConfigById, readAppConfigFile } from './config';
 import { isManagedSessionActive } from './session/managedState';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
-import { SessionTurnRunner } from './sessionTurnRunner';
+import { LocalSessionTurnHost, SessionTurnRunner } from './sessionTurnRunner';
 import { MessagePart, QueueItem, QueueSource, Session } from './types';
 import { formatLocalTimestamp } from './utils/localTime';
 import { formatFoxwarmMessage, formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemTag } from './utils/promptWrappers';
@@ -77,7 +77,7 @@ async function generateGuestAgentName(baseAgentId: string): Promise<string> {
 export class MessageRouter {
   private authorizedUsers: Map<string, boolean> = new Map();
   private commandHandler?: (ctx: ChannelContext, command: string, args: string[], rawArgs?: string) => Promise<boolean>;
-  private readonly turnRunner = new SessionTurnRunner();
+  private readonly turnRunner = new SessionTurnRunner(new LocalSessionTurnHost());
 
   constructor(authorizedUsers?: Array<{ platform: string; userId: string }>) {
     if (authorizedUsers) {

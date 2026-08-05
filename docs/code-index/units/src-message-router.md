@@ -34,7 +34,7 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 - `./channel`, `./channelAuth`, and `./config` provide normalized channel identity, authorization inspection, and guest configuration.
 - `./sessionRuntime` owns immutable external queue insertion.
 - `./sessionManager` provides session/channel/guest lifecycle operations used before turn ownership.
-- `./sessionTurnRunner` owns all local queue claim, turn, tool, compact, error, and finalization behavior.
+- `./sessionTurnRunner` owns all local queue claim, turn, tool, compact, error, and finalization behavior; the router constructs it with `LocalSessionTurnHost`.
 
 ## Behavior and invariants
 
@@ -44,7 +44,7 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 - Active managed sessions route input through the existing SessionRuntime enqueue path and receive the existing manager-facing acknowledgement.
 - Busy input is enqueued silently. Idle input is enqueued and then invokes the same local turn runner.
 - Guest provisioning and concurrent first-message resolution retain the existing keyed session/channel creation contract.
-- `MessageRouter` owns one `SessionTurnRunner` instance; public queue/retry methods are thin real-path delegates rather than a second state machine.
+- `MessageRouter` owns one `SessionTurnRunner(new LocalSessionTurnHost())`; public queue/retry methods are thin real-path delegates rather than a second state machine.
 
 ## Integration
 

@@ -7,11 +7,13 @@ Secondary files: src/messageRouter.test.ts, src/toolsSessionAgent/handoffWait.te
 
 Owns the one canonical local per-session queue and turn state machine. `MessageRouter` delegates real queue and retry execution here. The runner claims one session, preserves queue/source boundaries, persists input, executes provider/tool iterations, applies compact and goal safe points, presents terminal outcomes, finalizes busy/stop state, and continues trailing queued work.
 
-This extraction is behavior-preserving and local-only. It does not implement Session-worker placement, process RPC, serialized host capabilities, or a second queue loop.
+This extraction is behavior-preserving and local-only. One turn-specific `SessionTurnHost` exposes only effects already called by the moved runner, and `LocalSessionTurnHost` delegates them to the existing in-process modules and channel callbacks. It does not implement Session-worker placement, process RPC, serialized host capabilities, or a second queue loop.
 
 ## Key exports
 
 - `SessionTurnRunner` — stateful local runner with one per-session reentrancy set.
+- `SessionTurnHost` — non-RPC interface for the runner's current persistence, compact, provider/tool, runtime-event, and channel-delivery effects.
+- `LocalSessionTurnHost` — current in-process implementation; dynamic getters preserve existing test/runtime replacement of module functions.
 - `SessionTurnRunner.processSessionQueue(sessionId, options)` — canonical queue claim through final trailing-work recheck.
 - `SessionTurnRunner.processSessionRetry(sessionId)` — direct retry entry into the ordinary turn loop without queue control state.
 - `shouldBroadcastChannelText(text)` — shared final-response visibility predicate.
@@ -27,8 +29,8 @@ This extraction is behavior-preserving and local-only. It does not implement Ses
 
 ## Main collaborators
 
-- `sessionManager` — live session load, queue/busy persistence, canonical history append, wait, runtime-state, compact, child reminder, and trigger operations.
-- `llm` — provider request/retry/stream behavior and tool-batch execution.
+- `LocalSessionTurnHost` delegates live session load, queue/busy persistence, canonical history append, wait, runtime-state, compact, child reminder, provider/tool execution, and channel delivery to their existing owners.
+- Pure session-local policy helpers such as goal/managed-state checks, usage thresholds, and provider error predicates remain direct runner dependencies rather than host capabilities.
 - `session/goal`, `session/managedState`, and `session/snapshotRefresh` — existing safe-point and lifecycle rules.
 - Channel context/session broadcast functions — typing, retry/progress, tool progress, final reply, and `turnFinal` effects.
 
@@ -42,6 +44,7 @@ This extraction is behavior-preserving and local-only. It does not implement Ses
 - Only `LlmRequestError` uses terminal provider presentation; other runtime errors retain the existing terminal runtime path.
 - The `finally` path owns Stop handling, managed yield, queued continuation, runtime-state clearing, busy clearing, and final persistence.
 - Local mode remains the only caller at this checkpoint.
+- The host is an in-process implementation boundary only: no method is an RPC descriptor, serialized DTO, capability negotiation, or future-only worker operation.
 
 ## Tests
 

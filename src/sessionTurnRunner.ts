@@ -54,8 +54,74 @@ function mergeExcludePlatforms(options: any, platforms: string[]): any {
   return { ...(options || {}), excludePlatforms };
 }
 
+/** Placement effects currently required by the canonical turn runner. */
+export interface SessionTurnHost {
+  getSession: typeof sessionManager.getSession;
+  getExistingSession: typeof sessionManager.getExistingSession;
+  isSessionDestructiveLifecycleClaimed: typeof sessionManager.isSessionDestructiveLifecycleClaimed;
+  updateSessionBusyState: typeof sessionManager.updateSessionBusyState;
+  saveSession: typeof sessionManager.saveSession;
+  appendSessionMessage: typeof sessionManager.appendSessionMessage;
+  appendSessionMessages: typeof sessionManager.appendSessionMessages;
+  notifyHistoryUpdate: typeof sessionManager.notifyHistoryUpdate;
+  applyCompletedCompactJob: typeof sessionManager.applyCompletedCompactJob;
+  processSessionCompactionRequest: typeof sessionManager.processSessionCompactionRequest;
+  checkAndCompactIfNeeded: typeof sessionManager.checkAndCompactIfNeeded;
+  startSessionWait: typeof sessionManager.startSessionWait;
+  queueSessionSystemEvent: typeof sessionManager.queueSessionSystemEvent;
+  setActiveSessionRuntimeState: typeof sessionManager.setActiveSessionRuntimeState;
+  clearActiveSessionRuntimeState: typeof sessionManager.clearActiveSessionRuntimeState;
+  refreshSessionSnapshot: typeof sessionManager.refreshSessionSnapshot;
+  chat: typeof llm.chat;
+  executeTools: typeof llm.executeTools;
+  sendTyping(sourceCtx: ChannelContext): Promise<void>;
+  hasBroadcast(session: Session): boolean;
+  broadcast(session: Session, text: string, options?: any): void;
+  sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any): Promise<void>;
+}
+
+/** Existing in-process effects, exposed without changing their behavior. */
+export class LocalSessionTurnHost implements SessionTurnHost {
+  get getSession(): typeof sessionManager.getSession { return sessionManager.getSession; }
+  get getExistingSession(): typeof sessionManager.getExistingSession { return sessionManager.getExistingSession; }
+  get isSessionDestructiveLifecycleClaimed(): typeof sessionManager.isSessionDestructiveLifecycleClaimed { return sessionManager.isSessionDestructiveLifecycleClaimed; }
+  get updateSessionBusyState(): typeof sessionManager.updateSessionBusyState { return sessionManager.updateSessionBusyState; }
+  get saveSession(): typeof sessionManager.saveSession { return sessionManager.saveSession; }
+  get appendSessionMessage(): typeof sessionManager.appendSessionMessage { return sessionManager.appendSessionMessage; }
+  get appendSessionMessages(): typeof sessionManager.appendSessionMessages { return sessionManager.appendSessionMessages; }
+  get notifyHistoryUpdate(): typeof sessionManager.notifyHistoryUpdate { return sessionManager.notifyHistoryUpdate; }
+  get applyCompletedCompactJob(): typeof sessionManager.applyCompletedCompactJob { return sessionManager.applyCompletedCompactJob; }
+  get processSessionCompactionRequest(): typeof sessionManager.processSessionCompactionRequest { return sessionManager.processSessionCompactionRequest; }
+  get checkAndCompactIfNeeded(): typeof sessionManager.checkAndCompactIfNeeded { return sessionManager.checkAndCompactIfNeeded; }
+  get startSessionWait(): typeof sessionManager.startSessionWait { return sessionManager.startSessionWait; }
+  get queueSessionSystemEvent(): typeof sessionManager.queueSessionSystemEvent { return sessionManager.queueSessionSystemEvent; }
+  get setActiveSessionRuntimeState(): typeof sessionManager.setActiveSessionRuntimeState { return sessionManager.setActiveSessionRuntimeState; }
+  get clearActiveSessionRuntimeState(): typeof sessionManager.clearActiveSessionRuntimeState { return sessionManager.clearActiveSessionRuntimeState; }
+  get refreshSessionSnapshot(): typeof sessionManager.refreshSessionSnapshot { return sessionManager.refreshSessionSnapshot; }
+  get chat(): typeof llm.chat { return llm.chat; }
+  get executeTools(): typeof llm.executeTools { return llm.executeTools; }
+
+  async sendTyping(sourceCtx: ChannelContext): Promise<void> { await sourceCtx.sendTyping(); }
+  hasBroadcast(session: Session): boolean { return !!session.broadcast; }
+  broadcast(session: Session, text: string, options?: any): void { session.broadcast?.(text, options); }
+
+  async sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any): Promise<void> {
+    if (sourceCtx?.preferDirectReply && sourceCtx.reply) {
+      await sourceCtx.reply(text, options);
+      return;
+    }
+    if (session.broadcast) {
+      session.broadcast(text, options);
+      return;
+    }
+    if (sourceCtx?.reply) await sourceCtx.reply(text, options);
+  }
+}
+
 export class SessionTurnRunner {
   private processingSessions: Set<string> = new Set();
+
+  constructor(private readonly host: SessionTurnHost) {}
 
   snapshotSource(ctx: ChannelContext): QueueSource {
     return {
@@ -171,7 +237,7 @@ export class SessionTurnRunner {
             status: event.status,
           },
         });
-        await sessionManager.appendSessionMessage(session, retryMessage);
+        await this.host.appendSessionMessage(session, retryMessage);
       } else {
         const existingText = retryMessage.parts[0]?.text || '';
         retryMessage.parts[0] = {
@@ -193,8 +259,8 @@ export class SessionTurnRunner {
             status: event.status,
           },
         };
-        await sessionManager.saveSession(session.id);
-        sessionManager.notifyHistoryUpdate(session.id, retryMessage);
+        await this.host.saveSession(session.id);
+        this.host.notifyHistoryUpdate(session.id, retryMessage);
       }
 
       if (broadcast) {
@@ -204,19 +270,7 @@ export class SessionTurnRunner {
   }
 
   async sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any): Promise<void> {
-    if (sourceCtx?.preferDirectReply && sourceCtx.reply) {
-      await sourceCtx.reply(text, options);
-      return;
-    }
-
-    if (session.broadcast) {
-      session.broadcast(text, options);
-      return;
-    }
-
-    if (sourceCtx?.reply) {
-      await sourceCtx.reply(text, options);
-    }
+    await this.host.sendSessionReply(session, sourceCtx, text, options);
   }
 
   private prepareTurnParts(session: Session, sessionId: string, parts: MessagePart[]): MessagePart[] {
@@ -308,7 +362,7 @@ export class SessionTurnRunner {
 
       if (item.message) {
         consumedInput = true;
-        await sessionManager.appendSessionMessage(session, item.message);
+        await this.host.appendSessionMessage(session, item.message);
         continue;
       }
 
@@ -330,7 +384,7 @@ export class SessionTurnRunner {
     let firstInputItem = true;
     for (const item of items) {
       if (item.message) {
-        await sessionManager.appendSessionMessage(session, item.message);
+        await this.host.appendSessionMessage(session, item.message);
         firstInputItem = false;
         continue;
       }
@@ -394,27 +448,27 @@ export class SessionTurnRunner {
         // section. Queue insertions before this point are passive stop inputs;
         // insertions after it see an idle session and start a new turn.
         session.stopping = false;
-        sessionManager.clearActiveSessionRuntimeState(session.id);
+        this.host.clearActiveSessionRuntimeState(session.id);
         session.busy = false;
         session.busyStartedAt = undefined;
-        await sessionManager.saveSession(session.id);
+        await this.host.saveSession(session.id);
         return committedMessages;
       }
 
       session.queue = [];
       if (messages.length > 0) {
-        await sessionManager.appendSessionMessages(session, messages);
+        await this.host.appendSessionMessages(session, messages);
         committedMessages += messages.length;
       } else {
-        await sessionManager.saveSession(session.id);
+        await this.host.saveSession(session.id);
       }
       if (applyCompactCommit) {
         try {
-          await sessionManager.applyCompletedCompactJob(session.id);
+          await this.host.applyCompletedCompactJob(session.id);
         } catch (error: any) {
           logger.error({ err: error, sessionId: session.id }, 'Stop finalization failed to apply completed compact job');
-          if (session.broadcast) {
-            session.broadcast(`Error: ${error?.message || 'Compaction commit failed'}`);
+          if (this.host.hasBroadcast(session)) {
+            this.host.broadcast(session, `Error: ${error?.message || 'Compaction commit failed'}`);
           }
         }
       }
@@ -422,11 +476,11 @@ export class SessionTurnRunner {
   }
 
   private tryClaimSession(session: Session): boolean {
-    if (session.busy || sessionManager.isSessionDestructiveLifecycleClaimed(session.id)) {
+    if (session.busy || this.host.isSessionDestructiveLifecycleClaimed(session.id)) {
       return false;
     }
 
-    void sessionManager.updateSessionBusyState(session, true);
+    void this.host.updateSessionBusyState(session, true);
     return true;
   }
 
@@ -438,7 +492,7 @@ export class SessionTurnRunner {
       return false;
     }
 
-    await sessionManager.saveSession(session.id);
+    await this.host.saveSession(session.id);
 
     if (session.queue[0]?.type === 'compact-commit') {
       const nextItem = session.queue.shift();
@@ -477,12 +531,12 @@ export class SessionTurnRunner {
     session.queue.shift();
 
     try {
-      sessionManager.setActiveSessionRuntimeState(sessionId, {
+      this.host.setActiveSessionRuntimeState(sessionId, {
         state: 'requesting-model',
         since: Date.now(),
         active: { phase: 'compaction' },
       });
-      await sessionManager.applyCompletedCompactJob(sessionId);
+      await this.host.applyCompletedCompactJob(sessionId);
     } catch (e: any) {
       logger.error({ err: e, sessionId }, 'In-turn queued compaction failed');
       await this.sendSessionError(session, undefined, e);
@@ -493,12 +547,12 @@ export class SessionTurnRunner {
 
   private async runQueuedCompaction(sessionId: string, session: Session): Promise<void> {
     try {
-      sessionManager.setActiveSessionRuntimeState(sessionId, {
+      this.host.setActiveSessionRuntimeState(sessionId, {
         state: 'requesting-model',
         since: Date.now(),
         active: { phase: 'compaction' },
       });
-      await sessionManager.applyCompletedCompactJob(sessionId);
+      await this.host.applyCompletedCompactJob(sessionId);
     } catch (e: any) {
       logger.error({ err: e, sessionId }, 'Queued compaction failed');
       await this.sendSessionError(session, undefined, e);
@@ -507,10 +561,10 @@ export class SessionTurnRunner {
         return;
       }
 
-      sessionManager.clearActiveSessionRuntimeState(session.id);
+      this.host.clearActiveSessionRuntimeState(session.id);
       session.busy = false;
       session.busyStartedAt = undefined;
-      await sessionManager.saveSession(session.id);
+      await this.host.saveSession(session.id);
     }
   }
 
@@ -530,7 +584,7 @@ export class SessionTurnRunner {
   }
 
   private async appendUserMessage(session: Session, parts: MessagePart[], clientMessageId?: string): Promise<void> {
-    await sessionManager.appendSessionMessage(session, {
+    await this.host.appendSessionMessage(session, {
       role: 'user',
       parts,
       ...(clientMessageId ? { __meta: { clientMessageId } } : {}),
@@ -538,7 +592,7 @@ export class SessionTurnRunner {
   }
 
   private async appendToolMessage(session: Session, parts: MessagePart[]): Promise<void> {
-    await sessionManager.appendSessionMessage(session, {
+    await this.host.appendSessionMessage(session, {
       role: 'tool',
       parts,
     });
@@ -593,7 +647,7 @@ export class SessionTurnRunner {
   }
 
   private async appendTerminalModelMessage(session: Session, text: string): Promise<void> {
-    await sessionManager.appendSessionMessage(session, {
+    await this.host.appendSessionMessage(session, {
       role: 'model',
       parts: [{ text }],
     });
@@ -621,7 +675,7 @@ export class SessionTurnRunner {
 
     if (foundUser && !hasNoAction && !hasSendToSession && !hasUserFromPrefix && session.queue.length === 0) {
       const reminder = buildChildReminder(session.parentSessionId);
-      await sessionManager.queueSessionSystemEvent(session.id, reminder, 'background');
+      await this.host.queueSessionSystemEvent(session.id, reminder, 'background');
     }
   }
 
@@ -634,7 +688,7 @@ export class SessionTurnRunner {
     // Interval reminders are canonical history context for the request about to
     // be sent. They are not session work: queueing one would defer visibility
     // until after the current turn and create a synthetic reminder-only turn.
-    await sessionManager.appendSessionMessage(session, reminder);
+    await this.host.appendSessionMessage(session, reminder);
   }
 
   private async sendFinalResponse(session: Session, sourceCtx: ChannelContext | undefined, response: string, alreadyBroadcasted: boolean, turnOptions?: Record<string, any>): Promise<boolean> {
@@ -677,20 +731,20 @@ export class SessionTurnRunner {
       preclaimed?: boolean;
     }
   ): Promise<void> {
-    const session = options.session ?? await sessionManager.getSession(sessionId);
+    const session = options.session ?? await this.host.getSession(sessionId);
     if (options.parts?.length || options.message || options.queuedItems?.length) {
       sessionManager.clearSessionWaitForDirectTurn(session, options.message || options.queuedItems?.some(item => item.message) ? 'direct-message-turn' : 'direct-parts-turn');
     }
     if (!options.preclaimed) {
-      await sessionManager.updateSessionBusyState(session, true);
+      await this.host.updateSessionBusyState(session, true);
     }
 
-    await maybeRefreshStaleSessionSnapshot(session, sessionManager.refreshSessionSnapshot);
+    await maybeRefreshStaleSessionSnapshot(session, this.host.refreshSessionSnapshot);
 
     const turnChannelOptions = this.getTurnChannelOptions(options.sourceCtx, options.source);
     const turnStreamKey = this.getSourceStreamKey(options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined));
-    const broadcast = session.broadcast
-      ? (text: string, broadcastOptions?: any) => session.broadcast!(text, this.mergeTurnOptions(turnChannelOptions, broadcastOptions))
+    const broadcast = this.host.hasBroadcast(session)
+      ? (text: string, broadcastOptions?: any) => this.host.broadcast(session, text, this.mergeTurnOptions(turnChannelOptions, broadcastOptions))
       : undefined;
 
     const queuedItemPartCount = options.queuedItems?.reduce(
@@ -702,7 +756,7 @@ export class SessionTurnRunner {
     let stoppedByUser = false;
     try {
       if (options.sendTyping && options.sourceCtx) {
-        await options.sourceCtx.sendTyping();
+        await this.host.sendTyping(options.sourceCtx);
       }
       let managedStepYieldReason: 'tool' | null = null;
       let parts = options.message
@@ -715,7 +769,7 @@ export class SessionTurnRunner {
             options.parts || []
           );
       if (options.message) {
-        await sessionManager.appendSessionMessage(session, options.message);
+        await this.host.appendSessionMessage(session, options.message);
       }
       let queuedItems = options.queuedItems;
       let iteration = 0;
@@ -743,7 +797,7 @@ export class SessionTurnRunner {
         if (session.stopping) {
           logger.info({ sessionId: session.id }, 'Session stopping flag detected, halting tool call loop');
           stoppedByUser = true;
-          await sessionManager.saveSession(session.id);
+          await this.host.saveSession(session.id);
 
           finalResponse = finalResponse
             ? finalResponse + '\n\n_[Execution stopped by user]_'
@@ -757,7 +811,7 @@ export class SessionTurnRunner {
         await this.maybeAppendGoalIntervalReminder(session);
 
         this.emitTurnProgress(broadcast, turnChannelOptions, { type: 'llm-start' });
-        sessionManager.setActiveSessionRuntimeState(session.id, {
+        this.host.setActiveSessionRuntimeState(session.id, {
           state: 'requesting-model',
           since: Date.now(),
           active: {
@@ -768,17 +822,17 @@ export class SessionTurnRunner {
 
         let result;
         try {
-          result = await llm.chat(parts, session, iteration, {
+          result = await this.host.chat(parts, session, iteration, {
             onRetry: this.createLlmRetryNotifier(session, broadcast),
           });
         } catch (e: any) {
           if (session.stopping && llm.isAbortError(e)) {
             logger.info({ sessionId: session.id }, 'In-flight LLM request aborted by stop signal');
             stoppedByUser = true;
-            await sessionManager.saveSession(session.id);
+            await this.host.saveSession(session.id);
 
             finalResponse = finalResponse
-              ? finalResponse + '\n\n_[Execution stopped by user]_' 
+              ? finalResponse + '\n\n_[Execution stopped by user]_'
               : '_[Execution stopped by user]_';
             break;
           }
@@ -820,7 +874,7 @@ export class SessionTurnRunner {
           ...(hasBroadcastableToolText ? { text: result.text } : {}),
         });
 
-        sessionManager.setActiveSessionRuntimeState(session.id, {
+        this.host.setActiveSessionRuntimeState(session.id, {
           state: 'running-tool',
           since: Date.now(),
           active: {
@@ -842,7 +896,7 @@ export class SessionTurnRunner {
           previousLlmRequest: result.previousLlmRequest,
           broadcast: this.buildToolBroadcast(broadcast, turnChannelOptions),
           onToolStart: (tool: { id?: string; name: string; index?: number; total?: number; executionNode?: string; argsPreview?: string; startedAt?: number }) => {
-            sessionManager.setActiveSessionRuntimeState(session.id, {
+            this.host.setActiveSessionRuntimeState(session.id, {
               state: 'running-tool',
               since: tool.startedAt || Date.now(),
               active: {
@@ -861,7 +915,7 @@ export class SessionTurnRunner {
             });
           },
         };
-        const toolResultMsg = await llm.executeTools(turnToolCalls, toolContext, session);
+        const toolResultMsg = await this.host.executeTools(turnToolCalls, toolContext, session);
 
         await this.appendToolMessage(session, toolResultMsg.parts);
         this.emitTurnProgress(broadcast, turnChannelOptions, {
@@ -871,7 +925,7 @@ export class SessionTurnRunner {
 
         const waitForReply = (toolResultMsg as any).__toolPostAction?.waitForReply === true;
         if (waitForReply && !session.stopping && !session.meta?.wait) {
-          await sessionManager.startSessionWait(session.id);
+          await this.host.startSessionWait(session.id);
         }
 
         const managedStateAfterTools = getManagedSessionState(session);
@@ -889,7 +943,7 @@ export class SessionTurnRunner {
         if (session.stopping) {
           logger.info({ sessionId: session.id, iteration }, 'Session stopping flag detected after tool execution, halting tool call loop');
           stoppedByUser = true;
-          await sessionManager.saveSession(session.id);
+          await this.host.saveSession(session.id);
 
           finalResponse = finalResponse
             ? finalResponse + '\n\n_[Execution stopped by user]_'
@@ -921,7 +975,7 @@ export class SessionTurnRunner {
           const compactThreshold = sessionManager.getEffectiveCompactThresholdTokens(session);
           if (currentSize > compactThreshold) {
             logger.info({ currentSize, compactThreshold, sessionThresholdOverride: session.compactThresholdTokens, iteration }, 'Context size exceeded threshold during tool calls, triggering compact');
-            await sessionManager.processSessionCompactionRequest(session.id, {
+            await this.host.processSessionCompactionRequest(session.id, {
               completionMarker: 'Compaction completed. You can continue working now.',
             }, 'auto');
             logger.info('Compact requested, continuing with current history');
@@ -958,7 +1012,7 @@ export class SessionTurnRunner {
         this.sendEmptyTurnFinal(broadcast, turnChannelOptions);
       }
       if (!stoppedByUser) {
-        await sessionManager.checkAndCompactIfNeeded(sessionId, usage);
+        await this.host.checkAndCompactIfNeeded(sessionId, usage);
       }
     } catch (e: any) {
       logger.error(e, 'Error handling message');
@@ -968,7 +1022,7 @@ export class SessionTurnRunner {
       }
       if (llm.isLlmRequestError(e)) {
         await this.maybeQueueChildReminder(session);
-        if (session.broadcast) {
+        if (this.host.hasBroadcast(session)) {
           this.sendEmptyTurnFinal(broadcast, turnChannelOptions);
         } else {
           await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions);
@@ -996,10 +1050,10 @@ export class SessionTurnRunner {
         return;
       }
 
-      sessionManager.clearActiveSessionRuntimeState(session.id);
+      this.host.clearActiveSessionRuntimeState(session.id);
       session.busy = false;
       session.busyStartedAt = undefined;
-      await sessionManager.saveSession(session.id);
+      await this.host.saveSession(session.id);
     }
   }
 
@@ -1017,7 +1071,7 @@ export class SessionTurnRunner {
 
     this.processingSessions.add(sessionId);
     try {
-      const session = await sessionManager.getExistingSession(sessionId);
+      const session = await this.host.getExistingSession(sessionId);
       if (!session) {
         return;
       }
@@ -1041,20 +1095,20 @@ export class SessionTurnRunner {
         return;
       }
 
-      sessionManager.clearActiveSessionRuntimeState(session.id);
+      this.host.clearActiveSessionRuntimeState(session.id);
       session.busy = false;
       session.busyStartedAt = undefined;
-      await sessionManager.saveSession(session.id);
+      await this.host.saveSession(session.id);
     } finally {
       this.processingSessions.delete(sessionId);
       // An item can become visible after the previous loop's final queue scan
       // but before this processor releases ownership. If it arrived after the
       // stop boundary it is new work, so hand it to a fresh processor rather
       // than losing the enqueue trigger to this re-entrancy guard.
-      const session = await sessionManager.getExistingSession(sessionId);
+      const session = await this.host.getExistingSession(sessionId);
       if (session
         && !session.busy
-        && !sessionManager.isSessionDestructiveLifecycleClaimed(session.id)
+        && !this.host.isSessionDestructiveLifecycleClaimed(session.id)
         && session.queue.some(isQueueItem)) {
         void this.processSessionQueue(sessionId);
       }
