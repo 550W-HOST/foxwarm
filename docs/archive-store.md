@@ -73,3 +73,7 @@ Back up the complete data directory as one restore set. For live databases, use 
 
 After the migration is marked complete, a missing authoritative database is a fatal restore error rather than a signal to rebuild from removed JSONL.
 Each database also stores its migration authority marker, so a newly recreated empty SQLite file is treated as missing authority rather than valid recovery.
+
+For the bundled operational checklist and the fixed-size SQLite chunk
+create/verify/restore helper, see
+`skills/foxwarm-maintenance/references/BACKUP-RESTORE.md`.
