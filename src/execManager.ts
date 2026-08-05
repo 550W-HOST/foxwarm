@@ -87,6 +87,10 @@ const defaultRuntime = createExecRuntime({
   completionDispatcher: defaultCompletionDispatcher,
 });
 
+export function getDefaultExecRuntime(): ExecRuntime {
+  return defaultRuntime;
+}
+
 export async function initializeExecManager(options?: InitializeExecManagerOptions): Promise<void> {
   await defaultRuntime.initialize(options);
 }

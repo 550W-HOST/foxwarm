@@ -8,6 +8,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 
 1. The LLM returns one or more tool calls in a `ChatResult`.
 2. The message-processing loop schedules the batch in model order. Adjacent direct `exec` calls form a bounded parallel segment; every other direct or unified tool is a serial barrier.
+   The segment carries one process-local ExecRuntime plus the exact current Session persistence hook. Each call keeps all exec lifecycle methods on that runtime; deferred cwd changes replay against the same passed owner in model order.
 3. Direct builtins resolve exhaustive ownership metadata independently from permission policy. Only node-environment builtins select the session's current node; all other ownership classes remain in the main process in the current local-only runtime.
 4. Isolation checks evaluate the resolved concrete execution target before the selected handler runs.
 5. The closed v1 main-management set (`send_to_session`, `send_to_channel`, `list_agents`, and timer CRUD) enters one versioned local RPC service. Its handler reconstructs only source session identity before invoking the existing authoritative raw handler.

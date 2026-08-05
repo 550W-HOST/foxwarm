@@ -15,6 +15,7 @@ import {
     writeFileToolPath,
     type WriteParentIssue,
 } from '../../packages/shared/dist/fileToolCore';
+import type { ExecRuntime } from '../execManager';
 
 export { expandHomePath, resolveAgentPath };
 export { findWriteParentIssue, formatWriteContentRefRetryHint, formatWriteParentIssueMessage, type WriteParentIssue };
@@ -29,6 +30,8 @@ export interface ToolContext {
     deferSessionCwdSync?: boolean;
     /** In-process owner hook for persisting ctx.session; never serialized as a tool/RPC DTO. */
     persistCurrentSession?: () => Promise<void>;
+    /** Process-local exec owner; never serialized as a tool/RPC DTO. */
+    execRuntime?: ExecRuntime;
     /** Captured owner routing/cwd for one local parallel tool segment. */
     toolExecutionSnapshot?: { currentNode: string; cwd?: string };
 }

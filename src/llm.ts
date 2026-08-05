@@ -190,6 +190,7 @@ export interface CurrentSessionEffects {
     registerAbortController(sessionId: string, controller: AbortController): void;
     clearAbortController(sessionId: string, controller: AbortController): void;
     clearWaitById(sessionId: string | undefined, waitId: string): Promise<boolean>;
+    execRuntime?: import('./execManager').ExecRuntime;
 }
 
 export function createDefaultCurrentSessionEffects(): CurrentSessionEffects {
@@ -204,6 +205,7 @@ export function createDefaultCurrentSessionEffects(): CurrentSessionEffects {
         registerAbortController: (sessionId, controller) => sessionManager.registerSessionAbortController(sessionId, controller),
         clearAbortController: (sessionId, controller) => sessionManager.clearSessionAbortController(sessionId, controller),
         clearWaitById: (sessionId, waitId) => sessionManager.clearSessionWaitById(sessionId, waitId),
+        execRuntime: require('./execManager').getDefaultExecRuntime(),
     };
 }
 
@@ -1476,13 +1478,13 @@ function buildSkippedToolCall(prepared: PreparedToolCall): ExecutedToolCall {
     };
 }
 
-async function replayDeferredExecCwd(execution: ExecutedToolCall): Promise<ExecutedToolCall> {
+async function replayDeferredExecCwd(execution: ExecutedToolCall, toolContext: any): Promise<ExecutedToolCall> {
     if (!execution.deferredExecCwdSync) return execution;
     try {
         const { applyDeferredExecCwdSync } = await import('./tools/execTools');
         return {
             ...execution,
-            result: await applyDeferredExecCwdSync(execution.sessionId, execution.result, execution.deferredExecCwdSync),
+            result: await applyDeferredExecCwdSync(toolContext, execution.result, execution.deferredExecCwdSync),
             deferredExecCwdSync: undefined,
         };
     } catch (error: any) {
@@ -1535,6 +1537,7 @@ export async function executeTools(
         persistCurrentSession: options?.currentSessionEffects
             ? () => options.currentSessionEffects!.persistSession(sourceSession)
             : undefined,
+        ...(options?.currentSessionEffects?.execRuntime ? { execRuntime: options.currentSessionEffects.execRuntime } : {}),
     };
     const executions: ExecutedToolCall[] = [];
     let cursor = 0;
@@ -1574,7 +1577,7 @@ export async function executeTools(
         }
         const settled = await runBoundedToolCalls(preparedSegment, toolContext);
         for (let index = 0; index < preparedSegment.length; index++) {
-            executions.push(await replayDeferredExecCwd(settled[index] || buildSkippedToolCall(preparedSegment[index])));
+            executions.push(await replayDeferredExecCwd(settled[index] || buildSkippedToolCall(preparedSegment[index]), toolContext));
         }
     }
 

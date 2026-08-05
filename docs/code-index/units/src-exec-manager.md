@@ -10,6 +10,7 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 
 - `createExecRuntime(options)` — constructs one isolated application exec runtime around exactly one `PersistentExecManager`
 - `ExecRuntime` / `ExecRuntimeOptions` — closed runtime lifecycle and configurable registry/default-cwd/temp-root providers
+- `getDefaultExecRuntime()` — read-only access to the factory-built process-default runtime; callers cannot replace or stop it
 - `initializeExecManager(options?)` — bootstraps the persistent exec manager
 - `startPersistentExec(options)` — launches a new tracked shell execution
 - `waitForExecCompletion(execId, timeoutMs)` — blocks until exec finishes or times out
@@ -56,7 +57,8 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 - All public functions are thin async delegates to the underlying manager instance, adding only the default `nodeId: 'master'`.
 - The exec handler uses shared timeout resolution: finite requests above 60 seconds wait for only 60 seconds, while forwarding the requested/effective warning into either foreground or background-switch result formatting. Oversized persistent logs use the shared bounded excerpt contract rather than full reads; see [D-persistent-exec-bounded-log-excerpts](./shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts). Background-switch footer and live-tree behavior is canonical in [D-persistent-exec-background-timeout-footer-tree](./shared-persistent-exec.md#d-persistent-exec-background-timeout-footer-tree).
 - The registry file persists running exec state to disk for crash recovery.
-- Parallel direct-exec batches still use the same persistent manager. Segment-level cwd synchronization is deferred by the tool wrapper and replayed in model order before later tool barriers; process lifecycle tracking remains per exec ID.
+- Normal `CurrentSessionEffects` carry the process-default runtime into internal ToolContext, while detached owners may supply another process-local factory runtime. One exec call chooses one runtime for start/wait/cwd/format/mark/finalize and never mixes instances. Legacy/direct handler calls retain the existing wrapper-built default fallback.
+- Exact trusted owners use their persistence hook for the unconditional pre-exec save and normalized cwd updates; legacy/no-hook callers retain SessionManager/SessionRuntime. Parallel direct-exec segments replay cwd against that same passed owner in model order before later barriers, so the last model call owns cwd without a global lookup.
 
 ## Integration
 
