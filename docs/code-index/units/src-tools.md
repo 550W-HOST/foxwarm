@@ -18,7 +18,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - `resolveBuiltinToolPlacement(name, args, currentNode)` — Resolves action-aware ownership and the current execution node.
 - `isToolDirectlyExposedToModel(toolName)` — Check if a tool has `defaultInject: true`
 - `getToolPermissionNode(toolName, executionNode, targetNode)` — Determine which node governs permission for a tool call
-- `resolveMemorySearchOptions` — Scope/lineage helper used by `recall({ vector_query })` to constrain semantic retrieval before archive back-resolution.
+- `resolveMemorySearchOptions` — Scope/lineage helper used by `recall({ vector_query })` to constrain semantic retrieval before archive back-resolution; an exact trusted current owner supplies source identity/aliases directly.
 
 ## Function Index
 
@@ -99,7 +99,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | Function | Description |
 |----------|-------------|
 | `tool_get_memory_context` | Retrieves messages around a specific timestamp |
-| `resolveMemorySearchOptions` | Resolves scope/session/agent for vector search |
+| `resolveMemorySearchOptions` | Resolves scope/session/agent for vector search from a trusted passed current owner when available, retaining global lookup for explicit other targets |
 
 ### tools/unifiedSearch.ts — Unified tool search/call
 | Function | Description |

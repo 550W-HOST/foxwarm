@@ -15,6 +15,7 @@ Enforces the current isolation boundary for tool execution, master-side paths, c
 - `requireNotIsolated(sessionIdOrCtx, operation)` — reject operations that are unavailable to isolated sessions.
 - `requireNotIsolatedForSession(session, operation)` — apply the identical denial to an already-authoritative passed Session without an ID lookup.
 - `checkArchivedReadPermission(...)` — restrict archive inspection to sessions under the same agent.
+- `checkArchivedReadPermissionForSession(...)` — apply the same archive-read policy to an exact passed current Session or persisted alias without loading the source-session map.
 - `checkChannelPermission(...)` — restrict direct channel sends to attached channel targets.
 - `checkSendFilePermission(...)` — restrict file delivery to the current isolated session or its attached channel.
 - `checkTimerPermission(...)` — restrict timer targets and new-session creation.
@@ -32,6 +33,7 @@ Enforces the current isolation boundary for tool execution, master-side paths, c
 | `requireNotIsolated` | Shared hard guard for unsupported isolated operations |
 | `requireNotIsolatedForSession` | Same hard guard for a passed current Session; the ID/context entry loads when needed and delegates |
 | `checkArchivedReadPermission` | Same-agent archive-read guard |
+| `checkArchivedReadPermissionForSession` | Passed-owner/archive-alias form of the same guard; other targets stay on the ID-based path |
 | `checkChannelPermission` | Attached-channel guard |
 | `checkSendFilePermission` | File target guard |
 | `checkTimerPermission` | Timer and new-session guard |

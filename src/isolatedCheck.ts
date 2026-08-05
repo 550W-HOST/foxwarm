@@ -200,6 +200,22 @@ export async function checkArchivedReadPermission(
   }
 }
 
+/** Check an exact current Session (or one of its persisted aliases) without loading the global session map. */
+export function checkArchivedReadPermissionForSession(
+  session: Session,
+  targetSessionId: string | undefined,
+  operation: 'get_archived_messages' | 'get_archived_blocks' | 'recall',
+): void {
+  if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
+  const requested = targetSessionId || session.id;
+  if (requested === session.id || (session.aliases || []).includes(requested)) return;
+  const callerAgent = session.agent || 'main';
+  const targetAgent = requested.split('/')[0] || callerAgent;
+  if (targetAgent !== callerAgent) {
+    throw new Error(`Isolated session can only use ${operation} for sessions under its own agent (${callerAgent}).`);
+  }
+}
+
 /**
  * Check if isolated session can send to a specific channel
  * @param sessionIdOrCtx Session ID or ToolContext

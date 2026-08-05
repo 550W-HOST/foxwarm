@@ -15,7 +15,7 @@ import {
 } from '../contextPreviewRenderer';
 import { truncateUnicodeSafe } from '../utils/unicode';
 import { formatLocalTimestamp } from '../utils/localTime';
-import { requireNotIsolated, requireNotIsolatedForSession, checkArchivedReadPermission } from '../isolatedCheck';
+import { requireNotIsolated, requireNotIsolatedForSession, checkArchivedReadPermission, checkArchivedReadPermissionForSession } from '../isolatedCheck';
 import { resolveMemorySearchOptions } from '../tools/vectorTools';
 import {
   ToolArgs,
@@ -1203,7 +1203,14 @@ export async function tool_recall(args: ToolArgs = {}, ctx?: ToolContext) {
     throw new Error('sessionId is required when there is no current session context.');
   }
 
-  await checkArchivedReadPermission(ctx || {}, targetSessionId, 'recall');
+  const trustedSession = ctx?.persistCurrentSession
+    && ctx.session
+    && ctx.sessionId === ctx.session.id
+    && (targetSessionId === ctx.session.id || (ctx.session.aliases || []).includes(targetSessionId))
+    ? ctx.session
+    : undefined;
+  if (trustedSession) checkArchivedReadPermissionForSession(trustedSession, targetSessionId, 'recall');
+  else await checkArchivedReadPermission(ctx || {}, targetSessionId, 'recall');
 
   const { budget: previewLength } = normalizeContextPreviewBudget(args.previewLength, RECALL_DEFAULT_PREVIEW_LENGTH);
   const renderOptions: ContextPreviewRenderOptions = {
