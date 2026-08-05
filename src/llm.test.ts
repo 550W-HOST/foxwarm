@@ -566,31 +566,103 @@ test('LocalSessionTurnHost executes detached read and set_goal without global so
   }
 });
 
-test('executeTools without a passed Session retains ID-based routing and permission fallback', async () => {
+test('executeTools without effects resolves and uses the exact global source Session', async () => {
   const sessionId = makeId('legacy_tool_context');
-  await sessionManager.getSession(sessionId);
-  const dirPath = await fs.mkdtemp('/tmp/foxwarm-legacy-tools-');
-  const filePath = `${dirPath}/probe.txt`;
-  await fs.writeFile(filePath, 'legacy fallback ok');
+  const session = await sessionManager.getSession(sessionId);
+  const ownerDir = await fs.mkdtemp('/tmp/foxwarm-legacy-owner-');
+  const cloneDir = await fs.mkdtemp('/tmp/foxwarm-legacy-clone-');
+  session.cwd = ownerDir;
+  session.currentNode = 'master';
+  await sessionManager.saveSession(sessionId);
+  await fs.writeFile(`${ownerDir}/probe.txt`, 'authoritative owner read');
+  await fs.writeFile(`${cloneDir}/probe.txt`, 'untrusted clone read');
+  const clone = { ...session, cwd: cloneDir };
   const originalGetCurrentNode = nodesManager.getCurrentNode;
-  let nodeLookups = 0;
-  (nodesManager as any).getCurrentNode = async (targetId: string) => {
-    assert.equal(targetId, sessionId);
-    nodeLookups += 1;
-    return 'master';
+  const originalImageWrite = (tools as any).image_write_to_file;
+  (nodesManager as any).getCurrentNode = () => { throw new Error('legacy owner routing re-read current node'); };
+  (tools as any).image_write_to_file = async (_args: any, ctx: any) => {
+    assert.equal(ctx.session, session);
+    assert.equal(ctx.session.cwd, ownerDir);
+    assert.equal(ctx.runtimeNodeId, 'remote-explicit');
+    return 'explicit owner route';
   };
 
   try {
     const message = await llmModule.executeTools([
-      { id: 'legacy-read', name: 'read', args: { filePath } },
-    ], { sessionId }, undefined as any);
-    assert.equal(nodeLookups, 1);
-    assert.match(String((message.parts[0].functionResponse?.response as any)?.output), /legacy fallback ok/);
+      { id: 'legacy-read', name: 'read', args: { filePath: 'probe.txt' } },
+      { id: 'legacy-explicit', name: 'image_write_to_file', args: { id: 'image-id', filePath: '/tmp/image.png', node: 'remote-explicit' } },
+    ], { sessionId, session: clone }, clone as any);
+    assert.match(String((message.parts[0].functionResponse?.response as any)?.output), /authoritative owner read/);
+    assert.doesNotMatch(String((message.parts[0].functionResponse?.response as any)?.output), /untrusted clone read/);
+    assert.deepEqual(message.parts[1].functionResponse?.response, { output: 'explicit owner route' });
   } finally {
     (nodesManager as any).getCurrentNode = originalGetCurrentNode;
-    await fs.remove(dirPath);
+    (tools as any).image_write_to_file = originalImageWrite;
+    await fs.remove(ownerDir);
+    await fs.remove(cloneDir);
     await sessionManager.deleteSession(sessionId).catch(() => false);
   }
+});
+
+test('executeTools without effects cannot bypass authoritative isolation with a same-ID clone', async () => {
+  const sessionId = makeId('legacy_isolated_owner');
+  const agentName = makeId('legacy_isolated_agent');
+  const session = await sessionManager.getSession(sessionId);
+  session.agent = agentName;
+  session.currentNode = 'master';
+  await sessionManager.saveSession(sessionId);
+  await sessionManager.setAgentMetadata(agentName, { isolated: true, isolatedNode: 'bound-node' });
+  const clone = { ...session, agent: 'main', currentNode: 'master' };
+
+  try {
+    const message = await llmModule.executeTools([
+      { id: 'isolated-clone-read', name: 'read', args: { filePath: '/tmp/outside-owner.txt' } },
+    ], { sessionId, session: clone }, clone as any);
+    assert.match(String((message.parts[0].functionResponse?.response as any)?.error), /[Ii]solated/);
+  } finally {
+    await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('executeTools rejects effects/source owner mismatch before lookup or effects', async () => {
+  const owner = createOpenAITestSession(makeId('effects_owner_a'));
+  owner.cwd = '/owner-a-cwd';
+  const sourceId = makeId('effects_source_b');
+  const originalGetExistingSession = sessionManager.getExistingSession;
+  const originalGetCurrentNode = nodesManager.getCurrentNode;
+  (sessionManager as any).getExistingSession = () => { throw new Error('mismatch performed source lookup'); };
+  (nodesManager as any).getCurrentNode = () => { throw new Error('mismatch performed node lookup'); };
+  let effectCalls = 0;
+  const effects = createDefaultCurrentSessionEffects();
+  effects.persistSession = async () => { effectCalls += 1; };
+  effects.clearWaitById = async () => { effectCalls += 1; return false; };
+
+  try {
+    await assert.rejects(
+      () => new LocalSessionTurnHost(effects).executeTools([
+        { id: 'mismatch-read', name: 'read', args: { filePath: 'probe.txt' } },
+      ], { sessionId: sourceId, session: owner }, owner),
+      new RegExp(`source session .*${sourceId}.* does not match authoritative Session .*${owner.id}`),
+    );
+    assert.equal(effectCalls, 0);
+  } finally {
+    (sessionManager as any).getExistingSession = originalGetExistingSession;
+    (nodesManager as any).getCurrentNode = originalGetCurrentNode;
+  }
+});
+
+test('executeTools without effects rejects a missing source without creating it', async () => {
+  const missingId = makeId('missing_tool_owner');
+  const clone = createOpenAITestSession(missingId);
+  assert.equal(sessionManager.getAllSessions().has(missingId), false);
+  await assert.rejects(
+    () => llmModule.executeTools([
+      { id: 'missing-read', name: 'read', args: { filePath: '/tmp/missing-owner.txt' } },
+    ], { sessionId: missingId, session: clone }, clone),
+    new RegExp(`source session .*${missingId}.* was not found`),
+  );
+  assert.equal(sessionManager.getAllSessions().has(missingId), false);
 });
 
 test('chat persists streamed provider-specific fields and only the same concrete model receives them later', async () => {

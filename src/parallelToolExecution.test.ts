@@ -168,6 +168,7 @@ test('parallel remote exec calls may resolve in reverse order while responses ke
   const sessionId = makeSessionId('parallel_remote');
   const session = await createSession(sessionId, '/snapshot/cwd');
   session.currentNode = 'remote-test';
+  await sessionManager.saveSession(sessionId);
   const originalGetCurrentNode = nodesManager.getCurrentNode.bind(nodesManager);
   const originalGetNode = nodesManager.getNode.bind(nodesManager);
   const originalExecuteTool = nodesManager.executeTool.bind(nodesManager);
@@ -197,10 +198,45 @@ test('parallel remote exec calls may resolve in reverse order while responses ke
   }
 });
 
+test('legacy parallel routing snapshots only the authoritative global owner, not same-ID clones', async () => {
+  const sessionId = makeSessionId('parallel_owner');
+  const session = await createSession(sessionId, '/authoritative/cwd');
+  session.currentNode = 'remote-owner';
+  await sessionManager.saveSession(sessionId);
+  const clone = { ...session, currentNode: 'remote-clone', cwd: '/clone/cwd' };
+  const originalGetCurrentNode = nodesManager.getCurrentNode.bind(nodesManager);
+  const originalGetNode = nodesManager.getNode.bind(nodesManager);
+  const originalExecuteTool = nodesManager.executeTool.bind(nodesManager);
+  const snapshots: any[] = [];
+  (nodesManager as any).getCurrentNode = () => { throw new Error('parallel routing re-read current node'); };
+  (nodesManager as any).getNode = (nodeId: string) => ({ id: nodeId, ws: {}, tools: new Set(['exec']) });
+  (nodesManager as any).executeTool = async (nodeId: string, _name: string, args: any, sourceSessionId: string, snapshot: any) => {
+    snapshots.push({ nodeId, command: args.command, sourceSessionId, snapshot });
+    return args.command || nodeId;
+  };
+
+  try {
+    const result = await executeTools([
+      { id: 'owner-a', name: 'exec', args: { command: 'a' } },
+      { id: 'owner-b', name: 'exec', args: { command: 'b' } },
+    ], { sessionId, session: clone }, clone as any);
+    assert.deepEqual(functionResponses(result).map(item => item.response.output), ['a', 'b']);
+    assert.deepEqual(snapshots.map(item => item.nodeId), ['remote-owner', 'remote-owner']);
+    assert(snapshots.every(item => item.sourceSessionId === sessionId));
+    assert(snapshots.every(item => item.snapshot.currentNode === 'remote-owner' && item.snapshot.cwd === '/authoritative/cwd'));
+  } finally {
+    (nodesManager as any).getCurrentNode = originalGetCurrentNode;
+    (nodesManager as any).getNode = originalGetNode;
+    (nodesManager as any).executeTool = originalExecuteTool;
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
 test('adjacent exec segment enforces the internal concurrency limit of four', async () => {
   const sessionId = makeSessionId('parallel_limit');
   const session = await createSession(sessionId, '/snapshot/cwd');
   session.currentNode = 'remote-limit';
+  await sessionManager.saveSession(sessionId);
   const originalGetCurrentNode = nodesManager.getCurrentNode.bind(nodesManager);
   const originalGetNode = nodesManager.getNode.bind(nodesManager);
   const originalExecuteTool = nodesManager.executeTool.bind(nodesManager);

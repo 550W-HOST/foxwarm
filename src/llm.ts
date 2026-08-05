@@ -9,12 +9,11 @@ import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry } from './config';
-import { nodesManager } from './nodes/manager';
 import * as nodeExecution from './nodeExecution';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
-import { checkToolPermission, checkToolPermissionForSession, checkPathAccess } from './isolatedCheck';
+import { checkToolPermissionForSession, checkPathAccess } from './isolatedCheck';
 import { expandHomePath } from './utils/pathResolve';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
@@ -1247,6 +1246,7 @@ type PreparedToolCall = {
     toolFn: any;
     toolArgs: Record<string, any>;
     sessionId: string;
+    sourceSession: Session;
     targetNode: string;
     executionNode: string;
     permissionNode: string;
@@ -1306,7 +1306,7 @@ async function prepareToolCall(
     index: number,
     total: number,
     toolContext: any,
-    session: any,
+    session: Session,
     snapshot?: ToolExecutionSnapshot,
     notifyStart = true,
 ): Promise<PreparedToolCall> {
@@ -1323,12 +1323,8 @@ async function prepareToolCall(
     const toolDefinition = tools.definitions.find((def: any) => def.name === call.name);
     const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition?.parameters?.properties || {}, 'node');
     const nodeParam = supportsExplicitNode ? call.args?.node : undefined;
-    const sessionId = toolContext.sessionId || 'main';
-    const passedSession = session && typeof session.id === 'string' && session.id === sessionId
-        ? session as Session
-        : undefined;
-    const currentNode = snapshot?.currentNode
-        || (passedSession ? passedSession.currentNode || 'master' : await nodesManager.getCurrentNode(sessionId) || 'master');
+    const sessionId = session.id;
+    const currentNode = snapshot?.currentNode || session.currentNode || 'master';
     const targetNode = normalizeRequestedNode(nodeParam, currentNode);
     const toolArgs = { ...call.args };
     if (supportsExplicitNode) delete toolArgs.node;
@@ -1354,6 +1350,7 @@ async function prepareToolCall(
         toolFn,
         toolArgs,
         sessionId,
+        sourceSession: session,
         targetNode,
         executionNode,
         permissionNode,
@@ -1372,14 +1369,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
 
     try {
         if (!result?.error) {
-            const passedSession = toolContext.session && typeof toolContext.session.id === 'string' && toolContext.session.id === prepared.sessionId
-                ? toolContext.session as Session
-                : undefined;
-            if (passedSession) {
-                await checkToolPermissionForSession(passedSession, prepared.call.name, prepared.permissionNode, prepared.toolArgs);
-            } else {
-                await checkToolPermission(prepared.call.name, prepared.sessionId, prepared.permissionNode, prepared.toolArgs);
-            }
+            await checkToolPermissionForSession(prepared.sourceSession, prepared.call.name, prepared.permissionNode, prepared.toolArgs);
         }
         if (!result?.error && prepared.executionNode !== 'master') {
             result = normalizeExecutedToolResult(await nodeExecution.executeRemoteNodeTool(
@@ -1396,7 +1386,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
             const localToolContext = prepared.sessionSnapshot
                 ? {
                     ...runtimeContext,
-                    session: { ...toolContext.session, currentNode: prepared.sessionSnapshot.currentNode, cwd: prepared.sessionSnapshot.cwd },
+                    toolExecutionSnapshot: prepared.sessionSnapshot,
                     deferSessionCwdSync: prepared.call.name === 'exec',
                 }
                 : runtimeContext;
@@ -1515,16 +1505,37 @@ export async function executeTools(
     session: any,
     options?: { currentSessionEffects?: CurrentSessionEffects },
 ): Promise<Message> {
-    if (options?.currentSessionEffects
-        && session && typeof session.id === 'string' && session.id
-        && (!toolContext.sessionId || toolContext.sessionId === session.id)) {
-        toolContext = {
-            ...toolContext,
-            sessionId: toolContext.sessionId || session.id,
-            session,
-            persistCurrentSession: () => options.currentSessionEffects!.persistSession(session),
-        };
+    const requestedSourceId = typeof toolContext?.sessionId === 'string' && toolContext.sessionId.trim()
+        ? toolContext.sessionId.trim()
+        : undefined;
+    let sourceSession: Session;
+    if (options?.currentSessionEffects) {
+        if (!session || typeof session.id !== 'string' || !session.id.trim()) {
+            throw new Error('Tool execution with current-session effects requires an authoritative Session.');
+        }
+        if (requestedSourceId && requestedSourceId !== session.id) {
+            throw new Error(`Tool execution source session \`${requestedSourceId}\` does not match authoritative Session \`${session.id}\`.`);
+        }
+        sourceSession = session;
+    } else {
+        if (!requestedSourceId) {
+            throw new Error('Tool execution requires a source session ID when current-session effects are absent.');
+        }
+        const existing = await sessionManager.getExistingSession(requestedSourceId);
+        if (!existing) {
+            throw new Error(`Tool execution source session \`${requestedSourceId}\` was not found.`);
+        }
+        sourceSession = existing;
     }
+    session = sourceSession;
+    toolContext = {
+        ...toolContext,
+        sessionId: sourceSession.id,
+        session: sourceSession,
+        persistCurrentSession: options?.currentSessionEffects
+            ? () => options.currentSessionEffects!.persistSession(sourceSession)
+            : undefined,
+    };
     const executions: ExecutedToolCall[] = [];
     let cursor = 0;
 
@@ -1547,10 +1558,8 @@ export async function executeTools(
         const segmentStart = cursor;
         while (cursor < functionCalls.length && functionCalls[cursor].name === 'exec') cursor++;
         const snapshot: ToolExecutionSnapshot = {
-            currentNode: session && typeof session.id === 'string' && session.id === (toolContext.sessionId || 'main')
-                ? session.currentNode || 'master'
-                : await nodesManager.getCurrentNode(toolContext.sessionId || 'main') || 'master',
-            cwd: typeof session?.cwd === 'string' ? session.cwd : undefined,
+            currentNode: sourceSession.currentNode || 'master',
+            cwd: typeof sourceSession.cwd === 'string' ? sourceSession.cwd : undefined,
         };
         const preparedSegment: PreparedToolCall[] = [];
         for (let index = segmentStart; index < cursor; index++) {

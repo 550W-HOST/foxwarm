@@ -85,7 +85,7 @@ export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
         agentName,
         nodeId,
         cwd,
-        sessionCwd: ctx.session?.cwd,
+        sessionCwd: ctx.toolExecutionSnapshot?.cwd ?? ctx.session?.cwd,
     });
 
     const status = await waitForExecCompletion(execEntry.id, timeoutSeconds * 1000);

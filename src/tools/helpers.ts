@@ -29,6 +29,8 @@ export interface ToolContext {
     deferSessionCwdSync?: boolean;
     /** In-process owner hook for persisting ctx.session; never serialized as a tool/RPC DTO. */
     persistCurrentSession?: () => Promise<void>;
+    /** Captured owner routing/cwd for one local parallel tool segment. */
+    toolExecutionSnapshot?: { currentNode: string; cwd?: string };
 }
 
 // Tool function type
