@@ -54,13 +54,35 @@ function requireExactRecord(value: unknown, field: string, allowedFields: readon
   return record;
 }
 
+function requireDenseArray(value: unknown, field: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', `${field} must be an array.`);
+  }
+  const keys = Object.keys(value);
+  if (keys.length !== value.length) {
+    throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', `${field} must be a dense array without extra fields.`);
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) {
+      throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', `${field} must be a dense array.`);
+    }
+  }
+  for (const key of keys) {
+    if (!/^(0|[1-9][0-9]*)$/.test(key) || !Number.isSafeInteger(Number(key)) || Number(key) >= value.length) {
+      throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', `${field} contains a non-index field.`);
+    }
+  }
+  return value;
+}
+
 function requireJsonValue(value: unknown, field: string, seen = new WeakSet<object>()): void {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
   if (typeof value === 'number' && Number.isFinite(value)) return;
   if (Array.isArray(value)) {
+    const items = requireDenseArray(value, field);
     if (seen.has(value)) throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', `${field} must not be cyclic.`);
     seen.add(value);
-    value.forEach((item, index) => requireJsonValue(item, `${field}[${index}]`, seen));
+    items.forEach((item, index) => requireJsonValue(item, `${field}[${index}]`, seen));
     seen.delete(value);
     return;
   }
@@ -95,8 +117,11 @@ function requireServerConfig(value: unknown): mcpClient.McpServerConfig {
   if (config.stderr !== undefined && !['inherit', 'pipe', 'ignore'].includes(String(config.stderr))) {
     throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', 'config.stderr must be inherit, pipe, or ignore.');
   }
-  if (config.args !== undefined && (!Array.isArray(config.args) || config.args.some(value => typeof value !== 'string'))) {
-    throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', 'config.args must be an array of strings.');
+  if (config.args !== undefined) {
+    const args = requireDenseArray(config.args, 'config.args');
+    if (args.some(value => typeof value !== 'string')) {
+      throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', 'config.args must be an array of strings.');
+    }
   }
   for (const field of ['env', 'headers'] as const) {
     if (config[field] !== undefined && Object.values(requirePlainRecord(config[field], `config.${field}`)).some(value => typeof value !== 'string')) {

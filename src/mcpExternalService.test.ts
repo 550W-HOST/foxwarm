@@ -48,6 +48,13 @@ test('MCP external service clones secret-bearing config and returns only redacte
       () => configureMcpServer({ sourceSessionId: sourceId, name: 'invalid', action: 'upsert', config: { command: 'node', args: [7] } as any }),
       (error: any) => error?.code === 'MCP_EXTERNAL_INVALID_REQUEST',
     );
+    const sparseConfigArgs: string[] = [];
+    sparseConfigArgs.length = 1;
+    await assert.rejects(
+      () => configureMcpServer({ sourceSessionId: sourceId, name: 'sparse', action: 'upsert', config: { command: 'node', transport: 'stdio', args: sparseConfigArgs } }),
+      (error: any) => error?.code === 'MCP_EXTERNAL_INVALID_REQUEST',
+    );
+    assert.deepEqual(await listMcpServers(sourceId), []);
     const sensitiveValue = ['test', 'credential', Date.now()].join('-');
     const config = {
       command: 'node',
@@ -141,7 +148,20 @@ test('MCP service list/call clone image results and structured handler errors', 
     listed.tools[0].name = 'mutated';
     assert.equal(sharedList.tools[0].name, 'image_tool');
 
-    const result: any = await callMcpTool(sourceId, 'demo', 'image_tool', {});
+    const sparseNested: unknown[] = [];
+    sparseNested.length = 1;
+    await assert.rejects(
+      () => callMcpTool(sourceId, 'demo', 'image_tool', { nested: sparseNested }),
+      (error: any) => error?.code === 'MCP_EXTERNAL_INVALID_REQUEST',
+    );
+    const extraKeyArray: any[] = [1];
+    (extraKeyArray as any).extra = true;
+    await assert.rejects(
+      () => callMcpTool(sourceId, 'demo', 'image_tool', { nested: extraKeyArray }),
+      (error: any) => error?.code === 'MCP_EXTERNAL_INVALID_REQUEST',
+    );
+
+    const result: any = await callMcpTool(sourceId, 'demo', 'image_tool', { nested: [1, { values: ['dense'] }] });
     result.meta.value = 9;
     assert.equal(sharedResult.meta.value, 1);
 
