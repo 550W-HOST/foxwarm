@@ -101,11 +101,14 @@ export class LocalSessionTurnHost implements SessionTurnHost {
   get clearActiveSessionRuntimeState(): typeof sessionManager.clearActiveSessionRuntimeState { return sessionManager.clearActiveSessionRuntimeState; }
   get refreshSessionSnapshot(): typeof sessionManager.refreshSessionSnapshot { return sessionManager.refreshSessionSnapshot; }
   get chat(): typeof llm.chat {
-    return (parts, session, iteration, options) => llm.chat(parts, session, iteration, {
-      ...options,
-      appendMessage: options?.appendMessage || (message => this.currentSessionEffects.appendMessage(session, message)),
-      currentSessionEffects: options?.currentSessionEffects || this.currentSessionEffects,
-    });
+    return (parts, session, iteration, options) => {
+      const effectiveEffects = options?.currentSessionEffects || this.currentSessionEffects;
+      return llm.chat(parts, session, iteration, {
+        ...options,
+        appendMessage: options?.appendMessage || (message => effectiveEffects.appendMessage(session, message)),
+        currentSessionEffects: effectiveEffects,
+      });
+    };
   }
   get executeTools(): typeof llm.executeTools {
     return (functionCalls, toolContext, session, options) => llm.executeTools(functionCalls, toolContext, session, {

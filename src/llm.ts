@@ -398,13 +398,18 @@ function createModelStreamEventEmitter(args: {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let hasPendingUpdate = false;
     let lastSentAt = 0;
+    const notifySessionEvent = (event: import('./types').SessionStreamEvent) => {
+        if (!args.sessionId) return;
+        if (args.currentSessionEffects) args.currentSessionEffects.notifySessionEvent(args.sessionId, event);
+        else sessionManager.notifySessionEvent(args.sessionId, event);
+    };
 
     const notify = () => {
         if (!args.enabled || !args.sessionId) {
             return;
         }
 
-        (args.currentSessionEffects?.notifySessionEvent || sessionManager.notifySessionEvent)(args.sessionId, {
+        notifySessionEvent({
             type: 'model-stream-update',
             streamId,
             iteration: args.iteration,
@@ -447,7 +452,7 @@ function createModelStreamEventEmitter(args: {
                 clearTimeout(timer);
                 timer = null;
             }
-            (args.currentSessionEffects?.notifySessionEvent || sessionManager.notifySessionEvent)(args.sessionId, {
+            notifySessionEvent({
                 type: 'model-stream-reset',
                 streamId,
                 iteration: args.iteration,
@@ -1581,8 +1586,11 @@ export async function executeTools(
 
     if (stopCurrentTurn && batchHasError) {
         for (const waitId of explicitWaitIds) {
-            const clearWaitById = options?.currentSessionEffects?.clearWaitById || sessionManager.clearSessionWaitById;
-            await clearWaitById(toolContext.sessionId || session?.id, waitId);
+            if (options?.currentSessionEffects) {
+                await options.currentSessionEffects.clearWaitById(toolContext.sessionId || session?.id, waitId);
+            } else {
+                await sessionManager.clearSessionWaitById(toolContext.sessionId || session?.id, waitId);
+            }
         }
     }
 
@@ -2218,7 +2226,8 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     };
 
     if (shouldRegisterAbortController) {
-        (options.currentSessionEffects?.registerAbortController || sessionManager.registerSessionAbortController)(options.sessionId!, abortController);
+        if (options.currentSessionEffects) options.currentSessionEffects.registerAbortController(options.sessionId!, abortController);
+        else sessionManager.registerSessionAbortController(options.sessionId!, abortController);
     }
     if (shouldNotifySessionEvents) modelStreamEmitter.reset();
 
@@ -2453,7 +2462,8 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     } finally {
         modelStreamEmitter.flush();
         if (shouldRegisterAbortController) {
-            (options.currentSessionEffects?.clearAbortController || sessionManager.clearSessionAbortController)(options.sessionId!, abortController);
+            if (options.currentSessionEffects) options.currentSessionEffects.clearAbortController(options.sessionId!, abortController);
+            else sessionManager.clearSessionAbortController(options.sessionId!, abortController);
         }
     }
 

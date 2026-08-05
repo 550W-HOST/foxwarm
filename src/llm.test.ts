@@ -15,6 +15,7 @@ import fs from 'fs-extra';
 import { reconstructLlmRequest, setLlmRequestJournalFaultInjectorForTests } from './llmRequestJournal';
 import { LocalSessionTurnHost } from './sessionTurnRunner';
 import * as tools from './tools';
+import * as llmModule from './llm';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -379,30 +380,36 @@ test('LocalSessionTurnHost runs detached normal chat through explicit current-se
     clearSessionAbortController: sessionManager.clearSessionAbortController,
   };
   const unexpectedGlobalEffect = () => { throw new Error('detached chat touched global current-session hot state'); };
-  const effects: CurrentSessionEffects = {
-    appendMessage: async (target, message) => {
+  class StatefulEffects implements CurrentSessionEffects {
+    async appendMessage(target: Session, message: Message) {
+      assert.equal(this, effects);
       assert.equal(target, session);
       appended.push(message);
       target.history.push(message);
-    },
-    persistSession: async target => {
+    }
+    async persistSession(target: Session) {
+      assert.equal(this, effects);
       assert.equal(target, session);
       persistCount += 1;
-    },
-    notifySessionEvent: (sessionId, event) => {
+    }
+    notifySessionEvent(sessionId: string, event: any) {
+      assert.equal(this, effects);
       assert.equal(sessionId, session.id);
       events.push(event);
-    },
-    registerAbortController: (sessionId, controller) => {
+    }
+    registerAbortController(sessionId: string, controller: AbortController) {
+      assert.equal(this, effects);
       assert.equal(sessionId, session.id);
       registered.push(controller);
-    },
-    clearAbortController: (sessionId, controller) => {
+    }
+    clearAbortController(sessionId: string, controller: AbortController) {
+      assert.equal(this, effects);
       assert.equal(sessionId, session.id);
       cleared.push(controller);
-    },
-    clearWaitById: async () => false,
-  };
+    }
+    async clearWaitById() { return false; }
+  }
+  const effects = new StatefulEffects();
 
   (axios as any).post = async () => ({
     status: 200,
@@ -436,15 +443,57 @@ test('LocalSessionTurnHost runs detached normal chat through explicit current-se
   }
 });
 
+test('LocalSessionTurnHost uses one caller effects owner while explicit append remains highest priority', async () => {
+  const session = createOpenAITestSession(makeId('turn_effects_precedence'));
+  const originalChat = (llmModule as any).chat;
+  const hostAppends: Message[] = [];
+  const callerAppends: Message[] = [];
+  const explicitAppends: Message[] = [];
+  const makeEffects = (target: Message[]): CurrentSessionEffects => ({
+    appendMessage: async (_session, message) => { target.push(message); },
+    persistSession: async () => {},
+    notifySessionEvent: () => {},
+    registerAbortController: () => {},
+    clearAbortController: () => {},
+    clearWaitById: async () => false,
+  });
+  const hostEffects = makeEffects(hostAppends);
+  const callerEffects = makeEffects(callerAppends);
+  (llmModule as any).chat = async (_parts: any, _session: Session, _iteration: number, options: any) => {
+    assert.equal(options.currentSessionEffects, callerEffects);
+    await options.appendMessage({ role: 'user', parts: [{ text: 'probe' }] });
+    return { text: 'ok' };
+  };
+
+  try {
+    const host = new LocalSessionTurnHost(hostEffects);
+    await host.chat(null, session, 0, { currentSessionEffects: callerEffects });
+    assert.equal(hostAppends.length, 0);
+    assert.equal(callerAppends.length, 1);
+
+    await host.chat(null, session, 0, {
+      currentSessionEffects: callerEffects,
+      appendMessage: async message => { explicitAppends.push(message); },
+    });
+    assert.equal(callerAppends.length, 1);
+    assert.equal(explicitAppends.length, 1);
+  } finally {
+    (llmModule as any).chat = originalChat;
+  }
+});
+
 test('LocalSessionTurnHost clears explicit wait through injected effects when a sibling tool fails', async () => {
   const sessionId = makeId('turn_effects_wait_clear');
   const session = await sessionManager.getSession(sessionId);
   const originalWait = (tools as any).wait;
   const cleared: Array<{ sessionId: string | undefined; waitId: string }> = [];
-  const effects = createDefaultCurrentSessionEffects();
-  effects.clearWaitById = async (targetId, waitId) => {
-    cleared.push({ sessionId: targetId, waitId });
-    return true;
+  const effects = {
+    ...createDefaultCurrentSessionEffects(),
+    cleared,
+    async clearWaitById(targetId: string | undefined, waitId: string) {
+      this.cleared.push({ sessionId: targetId, waitId });
+      return true;
+    },
   };
   (tools as any).wait = async () => ({
     output: 'ok',
