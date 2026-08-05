@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import axios from 'axios';
 import { PassThrough } from 'node:stream';
 
-import { DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
+import { createDefaultCurrentSessionEffects, CurrentSessionEffects, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
 import { LOGS_DIR } from './config';
 import { formatDate } from './logRotation';
 import type { Message, Session } from './types';
@@ -13,6 +13,8 @@ import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot } from './sess
 import { putImageBlob, resolveImageBlobPath } from './imageBlobs';
 import fs from 'fs-extra';
 import { reconstructLlmRequest, setLlmRequestJournalFaultInjectorForTests } from './llmRequestJournal';
+import { LocalSessionTurnHost } from './sessionTurnRunner';
+import * as tools from './tools';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -357,6 +359,109 @@ test('chat persists a provider-reported reasoning component on model message usa
     });
   } finally {
     (axios as any).post = originalPost;
+  }
+});
+
+test('LocalSessionTurnHost runs detached normal chat through explicit current-session effects', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('detached_turn_effects'));
+  const appended: Message[] = [];
+  const events: any[] = [];
+  const registered: AbortController[] = [];
+  const cleared: AbortController[] = [];
+  let persistCount = 0;
+  const originalHotEffects = {
+    appendSessionMessage: sessionManager.appendSessionMessage,
+    getAllSessions: sessionManager.getAllSessions,
+    saveSession: sessionManager.saveSession,
+    notifySessionEvent: sessionManager.notifySessionEvent,
+    registerSessionAbortController: sessionManager.registerSessionAbortController,
+    clearSessionAbortController: sessionManager.clearSessionAbortController,
+  };
+  const unexpectedGlobalEffect = () => { throw new Error('detached chat touched global current-session hot state'); };
+  const effects: CurrentSessionEffects = {
+    appendMessage: async (target, message) => {
+      assert.equal(target, session);
+      appended.push(message);
+      target.history.push(message);
+    },
+    persistSession: async target => {
+      assert.equal(target, session);
+      persistCount += 1;
+    },
+    notifySessionEvent: (sessionId, event) => {
+      assert.equal(sessionId, session.id);
+      events.push(event);
+    },
+    registerAbortController: (sessionId, controller) => {
+      assert.equal(sessionId, session.id);
+      registered.push(controller);
+    },
+    clearAbortController: (sessionId, controller) => {
+      assert.equal(sessionId, session.id);
+      cleared.push(controller);
+    },
+    clearWaitById: async () => false,
+  };
+
+  (axios as any).post = async () => ({
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    data: makeChatCompletionStream('detached answer'),
+  });
+  (sessionManager as any).appendSessionMessage = unexpectedGlobalEffect;
+  (sessionManager as any).getAllSessions = unexpectedGlobalEffect;
+  (sessionManager as any).saveSession = unexpectedGlobalEffect;
+  (sessionManager as any).notifySessionEvent = unexpectedGlobalEffect;
+  (sessionManager as any).registerSessionAbortController = unexpectedGlobalEffect;
+  (sessionManager as any).clearSessionAbortController = unexpectedGlobalEffect;
+
+  try {
+    assert.equal(await sessionManager.getExistingSession(session.id), null);
+    const result = await new LocalSessionTurnHost(effects).chat([{ text: 'detached hello' }], session, 0, {
+      toolDefinitions: [],
+    });
+    assert.equal(result.text, 'detached answer');
+    assert.deepEqual(appended.map(message => message.role), ['user', 'model']);
+    assert.equal(persistCount, 1);
+    assert.equal(events.some(event => event.type === 'model-stream-reset'), true);
+    assert.equal(events.some(event => event.type === 'model-stream-update'), true);
+    assert.equal(registered.length, 1);
+    assert.deepEqual(cleared, registered);
+    assert.equal(await sessionManager.getExistingSession(session.id), null);
+  } finally {
+    (axios as any).post = originalPost;
+    Object.assign(sessionManager, originalHotEffects);
+  }
+});
+
+test('LocalSessionTurnHost clears explicit wait through injected effects when a sibling tool fails', async () => {
+  const sessionId = makeId('turn_effects_wait_clear');
+  const session = await sessionManager.getSession(sessionId);
+  const originalWait = (tools as any).wait;
+  const cleared: Array<{ sessionId: string | undefined; waitId: string }> = [];
+  const effects = createDefaultCurrentSessionEffects();
+  effects.clearWaitById = async (targetId, waitId) => {
+    cleared.push({ sessionId: targetId, waitId });
+    return true;
+  };
+  (tools as any).wait = async () => ({
+    output: 'ok',
+    __toolLoopControl: { stopCurrentTurn: true },
+    __toolPostAction: { explicitWaitId: 'detached-wait-token' },
+  });
+
+  try {
+    const message = await new LocalSessionTurnHost(effects).executeTools([
+      { id: 'explicit-wait', name: 'wait', args: {} },
+      { id: 'sibling-error', name: 'read', args: { filePath: `/missing-effects-${Date.now()}` } },
+    ], { sessionId, session }, session);
+    assert.deepEqual(cleared, [{ sessionId, waitId: 'detached-wait-token' }]);
+    assert.equal((message as any).__toolLoopControl, undefined);
+  } finally {
+    (tools as any).wait = originalWait;
+    await sessionManager.deleteSession(sessionId).catch(() => false);
   }
 });
 

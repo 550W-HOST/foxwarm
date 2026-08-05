@@ -82,6 +82,8 @@ export interface SessionTurnHost {
 
 /** Existing in-process effects, exposed without changing their behavior. */
 export class LocalSessionTurnHost implements SessionTurnHost {
+  constructor(private readonly currentSessionEffects: llm.CurrentSessionEffects = llm.createDefaultCurrentSessionEffects()) {}
+
   get getSession(): typeof sessionManager.getSession { return sessionManager.getSession; }
   get getExistingSession(): typeof sessionManager.getExistingSession { return sessionManager.getExistingSession; }
   get isSessionDestructiveLifecycleClaimed(): typeof sessionManager.isSessionDestructiveLifecycleClaimed { return sessionManager.isSessionDestructiveLifecycleClaimed; }
@@ -98,8 +100,19 @@ export class LocalSessionTurnHost implements SessionTurnHost {
   get setActiveSessionRuntimeState(): typeof sessionManager.setActiveSessionRuntimeState { return sessionManager.setActiveSessionRuntimeState; }
   get clearActiveSessionRuntimeState(): typeof sessionManager.clearActiveSessionRuntimeState { return sessionManager.clearActiveSessionRuntimeState; }
   get refreshSessionSnapshot(): typeof sessionManager.refreshSessionSnapshot { return sessionManager.refreshSessionSnapshot; }
-  get chat(): typeof llm.chat { return llm.chat; }
-  get executeTools(): typeof llm.executeTools { return llm.executeTools; }
+  get chat(): typeof llm.chat {
+    return (parts, session, iteration, options) => llm.chat(parts, session, iteration, {
+      ...options,
+      appendMessage: options?.appendMessage || (message => this.currentSessionEffects.appendMessage(session, message)),
+      currentSessionEffects: options?.currentSessionEffects || this.currentSessionEffects,
+    });
+  }
+  get executeTools(): typeof llm.executeTools {
+    return (functionCalls, toolContext, session, options) => llm.executeTools(functionCalls, toolContext, session, {
+      ...options,
+      currentSessionEffects: options?.currentSessionEffects || this.currentSessionEffects,
+    });
+  }
 
   async sendTyping(sourceCtx: ChannelContext): Promise<void> { await sourceCtx.sendTyping(); }
   hasBroadcast(session: Session): boolean { return !!session.broadcast; }

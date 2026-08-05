@@ -12,6 +12,7 @@ Owns provider request routing, Anthropic conversion/parsing, session prompt snap
 - `chat(parts, session, iteration?, options?)` — optionally append user parts, request one provider turn from current model-visible history, update stats, and append the model result.
 - `requestLlmOnce(options)` — provider request without automatic session-history orchestration.
 - `executeTools(functionCalls, toolContext, session)` — model-ordered tool batch execution with serial barriers, bounded adjacent direct-exec segments, progress/control folding, and one final tool message.
+- `CurrentSessionEffects` / `createDefaultCurrentSessionEffects()` — local-only normal-turn hooks for current-session append/persist, stream events, abort registration, and explicit-wait rollback; they are not DTOs or RPC contracts.
 - `buildSessionSystemPromptSnapshot(options)` — framework prompt, memory, skill catalog, and dynamic hints.
 - `generatePromptCacheKey`, `ensurePromptCacheKey`.
 - `sanitizeProviderRequestPayload`, `isAbortError`.
@@ -63,6 +64,7 @@ Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolRe
 - Tool execution keeps per-call result/image/control state local. Direct and unified builtin paths share exhaustive placement resolution, so only node-environment tools follow `currentNode`; placement metadata remains separate from permission checks. A remote execution node enters the fixed Node execution service, while `master` still invokes the local named handler with no RPC. Adjacent direct `exec` calls use a bounded parallel segment and pass one captured node/cwd snapshot; all other tools are barriers, and final parts are flattened in original call order. Canonical scheduling and placement contracts: [D-dispatch-exec-parallel-segments](../threads/tool-dispatch.md#d-dispatch-exec-parallel-segments) and [D-dispatch-node-environment-placement](../threads/tool-dispatch.md#d-dispatch-node-environment-placement).
 - The first persisted response in a tool batch may carry the successful preceding LLM request timing for serializer-owned model input; canonical contract: [D-pipeline-input-time](../threads/message-processing-pipeline.md#d-pipeline-input-time).
 - Tool-result internals fold explicit wait-token cleanup and successful handoff post-actions without exposing hidden sentinels to providers. The router owns post-append wait arming under [D-pipeline-handoff-wait](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait).
+- The current real `LocalSessionTurnHost` injects one explicit `CurrentSessionEffects` object into normal `chat` and `executeTools` calls. Provider streaming/reset, abort registration/cleanup, prompt-cache persistence, message append, and failed-batch explicit-wait rollback therefore do not require an implicit lookup of the current hot Session. Low-level/one-shot requests without injected effects retain their existing behavior and are outside this seam.
 
 ## Compatibility
 

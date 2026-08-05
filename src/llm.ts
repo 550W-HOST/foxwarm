@@ -180,7 +180,33 @@ type RequestLlmOnceOptions = {
     timeoutMs?: number;
     onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
     purpose?: LlmRequestPurpose;
+    currentSessionEffects?: CurrentSessionEffects;
 };
+
+/** In-process current-session effects used by the normal turn path. Not an RPC contract. */
+export interface CurrentSessionEffects {
+    appendMessage(session: Session, message: Message): Promise<void>;
+    persistSession(session: Session): Promise<void>;
+    notifySessionEvent(sessionId: string, event: import('./types').SessionStreamEvent): void;
+    registerAbortController(sessionId: string, controller: AbortController): void;
+    clearAbortController(sessionId: string, controller: AbortController): void;
+    clearWaitById(sessionId: string | undefined, waitId: string): Promise<boolean>;
+}
+
+export function createDefaultCurrentSessionEffects(): CurrentSessionEffects {
+    return {
+        appendMessage: (session, message) => sessionManager.appendSessionMessage(session, message),
+        persistSession: async (session) => {
+            if (session.id && sessionManager.getAllSessions().get(session.id) === session) {
+                await sessionManager.saveSession(session.id);
+            }
+        },
+        notifySessionEvent: (sessionId, event) => sessionManager.notifySessionEvent(sessionId, event),
+        registerAbortController: (sessionId, controller) => sessionManager.registerSessionAbortController(sessionId, controller),
+        clearAbortController: (sessionId, controller) => sessionManager.clearSessionAbortController(sessionId, controller),
+        clearWaitById: (sessionId, waitId) => sessionManager.clearSessionWaitById(sessionId, waitId),
+    };
+}
 
 export type LlmRetryEvent = {
     attempt: number;
@@ -365,6 +391,7 @@ function createModelStreamEventEmitter(args: {
     enabled: boolean;
     sessionId?: string;
     iteration: number;
+    currentSessionEffects?: CurrentSessionEffects;
 }) {
     const streamId = newModelStreamId(args.iteration);
     let latestSnapshot: ModelStreamProgressSnapshot = { reasoning: '', text: '', toolCalls: [] };
@@ -377,7 +404,7 @@ function createModelStreamEventEmitter(args: {
             return;
         }
 
-        sessionManager.notifySessionEvent(args.sessionId, {
+        (args.currentSessionEffects?.notifySessionEvent || sessionManager.notifySessionEvent)(args.sessionId, {
             type: 'model-stream-update',
             streamId,
             iteration: args.iteration,
@@ -420,7 +447,7 @@ function createModelStreamEventEmitter(args: {
                 clearTimeout(timer);
                 timer = null;
             }
-            sessionManager.notifySessionEvent(args.sessionId, {
+            (args.currentSessionEffects?.notifySessionEvent || sessionManager.notifySessionEvent)(args.sessionId, {
                 type: 'model-stream-reset',
                 streamId,
                 iteration: args.iteration,
@@ -1466,7 +1493,12 @@ async function replayDeferredExecCwd(execution: ExecutedToolCall): Promise<Execu
  * Adjacent direct exec calls share a node/cwd snapshot and run concurrently;
  * every other tool is a serial ordering barrier.
  */
-export async function executeTools(functionCalls: FunctionCall[], toolContext: any, session: any): Promise<Message> {
+export async function executeTools(
+    functionCalls: FunctionCall[],
+    toolContext: any,
+    session: any,
+    options?: { currentSessionEffects?: CurrentSessionEffects },
+): Promise<Message> {
     const executions: ExecutedToolCall[] = [];
     let cursor = 0;
 
@@ -1549,7 +1581,8 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
 
     if (stopCurrentTurn && batchHasError) {
         for (const waitId of explicitWaitIds) {
-            await sessionManager.clearSessionWaitById(toolContext.sessionId || session?.id, waitId);
+            const clearWaitById = options?.currentSessionEffects?.clearWaitById || sessionManager.clearSessionWaitById;
+            await clearWaitById(toolContext.sessionId || session?.id, waitId);
         }
     }
 
@@ -1583,14 +1616,16 @@ export async function chat(
         registerAbortController?: boolean;
         onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
         purpose?: LlmRequestPurpose;
+        currentSessionEffects?: CurrentSessionEffects;
     },
 ): Promise<ChatResult> {
+    const currentSessionEffects = options?.currentSessionEffects || createDefaultCurrentSessionEffects();
     const appendMessage = async (message: Message) => {
         if (options?.appendMessage) {
             await options.appendMessage(message);
             return;
         }
-        await sessionManager.appendSessionMessage(session, message);
+        await currentSessionEffects.appendMessage(session, message);
     };
 
     // Get persistent context
@@ -1616,8 +1651,8 @@ export async function chat(
         ?? tools.modelFacingDefinitions;
     const previousPromptCacheKey = session.promptCacheKey;
     const promptCacheKey = ensurePromptCacheKey(session);
-    if (session.id && session.promptCacheKey !== previousPromptCacheKey && sessionManager.getAllSessions().get(session.id) === session) {
-        await sessionManager.saveSession(session.id);
+    if (session.id && session.promptCacheKey !== previousPromptCacheKey) {
+        await currentSessionEffects.persistSession(session);
     }
     const result = await requestLlmOnce({
         contents: contentsForLlm,
@@ -1631,6 +1666,7 @@ export async function chat(
         registerAbortController: options?.registerAbortController,
         onRetry: options?.onRetry,
         purpose: options?.purpose || 'normal-turn',
+        currentSessionEffects: options?.currentSessionEffects,
     });
 
     if (result.usage) {
@@ -2166,6 +2202,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         enabled: shouldNotifySessionEvents,
         sessionId: options.sessionId,
         iteration,
+        currentSessionEffects: options.currentSessionEffects,
     });
     let logFiles: LlmInteractionLogFiles | null = null;
     const virtualRequestSelections: Array<{ attempt: number; modelId: string }> = [];
@@ -2181,7 +2218,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     };
 
     if (shouldRegisterAbortController) {
-        sessionManager.registerSessionAbortController(options.sessionId!, abortController);
+        (options.currentSessionEffects?.registerAbortController || sessionManager.registerSessionAbortController)(options.sessionId!, abortController);
     }
     if (shouldNotifySessionEvents) modelStreamEmitter.reset();
 
@@ -2416,7 +2453,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     } finally {
         modelStreamEmitter.flush();
         if (shouldRegisterAbortController) {
-            sessionManager.clearSessionAbortController(options.sessionId!, abortController);
+            (options.currentSessionEffects?.clearAbortController || sessionManager.clearSessionAbortController)(options.sessionId!, abortController);
         }
     }
 
