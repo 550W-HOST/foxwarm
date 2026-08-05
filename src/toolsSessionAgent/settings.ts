@@ -54,8 +54,9 @@ export async function tool_set_session_compact_threshold(args: ToolArgs, ctx: To
   const clear = args.clear === true;
   if (currentSession) {
     if (clear) {
+      const prior = typeof currentSession.compactThresholdTokens === 'number' ? currentSession.compactThresholdTokens : null;
       delete currentSession.compactThresholdTokens;
-      await ctx.persistCurrentSession!();
+      if (prior !== null) await ctx.persistCurrentSession!();
       const effective = sessionManager.getEffectiveCompactThresholdTokens(currentSession);
       return `Session \`${currentSession.id}\` compact threshold cleared.\nNow inheriting default auto-compact threshold: ${effective} tokens.`;
     }
@@ -66,8 +67,10 @@ export async function tool_set_session_compact_threshold(args: ToolArgs, ctx: To
         : 'inherit global default';
       return `Session \`${currentSession.id}\` compact threshold status:\noverride: ${override}\neffective: ${effective} tokens`;
     }
-    currentSession.compactThresholdTokens = Math.floor(args.thresholdTokens);
-    await ctx.persistCurrentSession!();
+    const prior = typeof currentSession.compactThresholdTokens === 'number' ? currentSession.compactThresholdTokens : null;
+    const next = Math.floor(args.thresholdTokens);
+    currentSession.compactThresholdTokens = next;
+    if (prior !== next) await ctx.persistCurrentSession!();
     const effective = sessionManager.getEffectiveCompactThresholdTokens(currentSession);
     return `Session \`${currentSession.id}\` compact threshold updated.\noverride: ${currentSession.compactThresholdTokens} tokens\neffective: ${effective} tokens`;
   }
@@ -124,8 +127,11 @@ export async function tool_set_session_child_model(args: ToolArgs, ctx: ToolCont
   const clear = args.clear === true;
   if (currentSession) {
     if (clear) {
+      const prior = typeof currentSession.childModelDefault === 'string' && currentSession.childModelDefault.trim()
+        ? currentSession.childModelDefault.trim()
+        : null;
       delete currentSession.childModelDefault;
-      await ctx.persistCurrentSession!();
+      if (prior !== null) await ctx.persistCurrentSession!();
       const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(currentSession));
       return `Session \`${currentSession.id}\` child default model cleared.\nNow inheriting the current session model path (effective spawn model: \`${currentKey}\`).`;
     }
@@ -138,8 +144,11 @@ export async function tool_set_session_child_model(args: ToolArgs, ctx: ToolCont
       const { currentKey: effectiveSpawnModel } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(currentSession));
       return `Session \`${currentSession.id}\` child default model status:\noverride: ${override}\ncurrent session model: \`${currentSessionModel}\`\neffective spawned-session model: \`${effectiveSpawnModel}\``;
     }
+    const prior = typeof currentSession.childModelDefault === 'string' && currentSession.childModelDefault.trim()
+      ? currentSession.childModelDefault.trim()
+      : null;
     currentSession.childModelDefault = normalizedModel;
-    await ctx.persistCurrentSession!();
+    if (prior !== normalizedModel) await ctx.persistCurrentSession!();
     const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(currentSession));
     return `Session \`${currentSession.id}\` child default model updated.\noverride: \`${normalizedModel}\`\neffective spawned-session model: \`${currentKey}\``;
   }

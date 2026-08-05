@@ -62,6 +62,8 @@ test('own-session settings and snapshot use the detached owner and one persist h
       `Session \`${session.id}\` compact threshold updated.\noverride: 12345 tokens\neffective: 12345 tokens`);
     assert.equal(session.compactThresholdTokens, 12345);
     assert.equal(persistCount, 1);
+    await tool_set_session_compact_threshold({ thresholdTokens: 12345.9 }, ctx);
+    assert.equal(persistCount, 1);
     assert.equal(await tool_set_session_compact_threshold({}, ctx),
       `Session \`${session.id}\` compact threshold status:\noverride: 12345 tokens\neffective: 12345 tokens`);
     assert.equal(persistCount, 1);
@@ -69,27 +71,44 @@ test('own-session settings and snapshot use the detached owner and one persist h
       `Session \`${session.id}\` compact threshold cleared.\nNow inheriting default auto-compact threshold: ${initialEffective} tokens.`);
     assert.equal(session.compactThresholdTokens, undefined);
     assert.equal(persistCount, 2);
+    await tool_set_session_compact_threshold({ clear: true }, ctx);
+    assert.equal(persistCount, 2);
+    assert.match(await tool_set_session_compact_threshold({ thresholdTokens: 0.9 }, ctx), /override: 0 tokens/);
+    assert.equal(session.compactThresholdTokens, 0);
+    assert.equal(persistCount, 3);
+    await tool_set_session_compact_threshold({ thresholdTokens: 0.9 }, ctx);
+    assert.equal(persistCount, 3);
+    await tool_set_session_compact_threshold({ clear: true }, ctx);
+    assert.equal(persistCount, 4);
 
     const { currentKey } = resolveModelConfig(session.model);
     assert.equal(await tool_set_session_child_model({}, ctx),
       `Session \`${session.id}\` child default model status:\noverride: inherit current session model\ncurrent session model: \`${currentKey}\`\neffective spawned-session model: \`${currentKey}\``);
-    assert.equal(persistCount, 2);
+    assert.equal(persistCount, 4);
     assert.equal(await tool_set_session_child_model({ model: currentKey }, ctx),
       `Session \`${session.id}\` child default model updated.\noverride: \`${currentKey}\`\neffective spawned-session model: \`${currentKey}\``);
     assert.equal(session.childModelDefault, currentKey);
-    assert.equal(persistCount, 3);
+    assert.equal(persistCount, 5);
+    await tool_set_session_child_model({ model: currentKey }, ctx);
+    assert.equal(persistCount, 5);
     assert.equal(await tool_set_session_child_model({}, ctx),
       `Session \`${session.id}\` child default model status:\noverride: \`${currentKey}\`\ncurrent session model: \`${currentKey}\`\neffective spawned-session model: \`${currentKey}\``);
-    assert.equal(persistCount, 3);
+    assert.equal(persistCount, 5);
     assert.equal(await tool_set_session_child_model({ clear: true }, ctx),
       `Session \`${session.id}\` child default model cleared.\nNow inheriting the current session model path (effective spawn model: \`${currentKey}\`).`);
     assert.equal(session.childModelDefault, undefined);
-    assert.equal(persistCount, 4);
+    assert.equal(persistCount, 6);
+    await tool_set_session_child_model({ clear: true }, ctx);
+    assert.equal(persistCount, 6);
+    session.childModelDefault = '   ';
+    await tool_set_session_child_model({ clear: true }, ctx);
+    assert.equal(session.childModelDefault, undefined);
+    assert.equal(persistCount, 6);
 
     assert.equal(await tool_update_session_snapshot({}, ctx),
       `Session \`${session.id}\` snapshot updated.\nAgent: \`main\``);
     assert.notEqual(session.persistentMemorySnapshot, 'stale snapshot');
-    assert.equal(persistCount, 5);
+    assert.equal(persistCount, 7);
   } finally {
     sessionRuntimeModule.getSession = originals.runtimeGet;
     sessionRuntimeModule.updateSettings = originals.runtimeUpdate;
@@ -98,6 +117,34 @@ test('own-session settings and snapshot use the detached owner and one persist h
     sessionManagerModule.saveSession = originals.managerSave;
     sessionManagerModule.refreshSessionSnapshot = originals.managerRefresh;
   }
+});
+
+test('detached settings skip a failing persist hook for no-ops and call it once for changes', async () => {
+  const session = createDetachedSession(`detached_settings_noop_${Date.now()}`);
+  const { currentKey } = resolveModelConfig(session.model);
+  session.compactThresholdTokens = 40000;
+  session.childModelDefault = currentKey;
+  let attempts = 0;
+  const ctx: any = {
+    sessionId: session.id,
+    session,
+    persistCurrentSession: async () => {
+      attempts += 1;
+      throw new Error('persist failed');
+    },
+  };
+
+  assert.match(await tool_set_session_compact_threshold({ thresholdTokens: 40000.8 }, ctx), /updated/);
+  assert.match(await tool_set_session_child_model({ model: currentKey }, ctx), /updated/);
+  assert.equal(attempts, 0);
+  await assert.rejects(() => tool_set_session_child_model({ model: 'missing-provider/missing-model' }, ctx), /not configured|unknown/i);
+  assert.equal(session.childModelDefault, currentKey);
+  assert.equal(attempts, 0);
+
+  await assert.rejects(() => tool_set_session_compact_threshold({ thresholdTokens: 40001 }, ctx), /persist failed/);
+  assert.equal(attempts, 1);
+  await assert.rejects(() => tool_set_session_child_model({ clear: true }, ctx), /persist failed/);
+  assert.equal(attempts, 2);
 });
 
 test('other, no-hook, and mismatched settings targets retain legacy service routing', async () => {
