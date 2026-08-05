@@ -48,7 +48,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 - Unified wrappers do not bypass the concrete target's existing guards.
 - Tool output is bounded before it enters model context.
 - MCP configuration reads use one authoritative live snapshot after first load; managed updates persist before replacing that snapshot.
-- MCP list/discovery/call/config operations share one versioned local service with source/isolation checks, cloned DTO results/errors, redacted summaries, stored-secret error scrubbing, and terminal drain fencing. No Session-worker reverse transport is connected yet.
+- MCP list/discovery/call/config operations share one versioned local service with source/isolation checks, exact plain-record/JSON DTO validation, cloned results/errors, full call-argument permission parity, redacted summaries, all-server stored-secret error fencing, and terminal drain fencing. Managed transport semantics are validated once by the authoritative client before persistence/publication. No Session-worker reverse transport is connected yet.
 - Recognized image bytes stay in structured image parts rather than entering text excerpts; non-image text, JSON, audio, resource, and blob content remain subject to the normal output budget.
 - MCP and node credentials remain transport/runtime state and are not exposed to the model through tool summaries.
 - Tool batches emit one result for every call and append one tool message only after the batch settles. Image/result parts and function responses remain in original model-call order rather than completion order.

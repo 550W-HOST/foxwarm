@@ -9,11 +9,14 @@ import * as sessionManager from './sessionManager';
 import {
   callMcpTool,
   configureMcpServer,
+  createMcpExternalServiceHandler,
   listMcpServers,
   listMcpTools,
   resetMcpExternalServiceForTests,
   shutdownMcpExternalService,
 } from './mcpExternalService';
+import { RpcError } from './rpc';
+import * as isolatedCheck from './isolatedCheck';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -69,8 +72,24 @@ test('MCP external service clones secret-bearing config and returns only redacte
     (mcpClient as any).callTool = async () => { throw new Error(`connection rejected ${sensitiveValue}`); };
     try {
       await assert.rejects(
+        () => callMcpTool(sourceId, 'explicitly-missing', 'probe', {}),
+        (error: any) => error?.message === 'MCP operation failed because the underlying error contained configured secret data.',
+      );
+
+      await configureMcpServer({ sourceSessionId: sourceId, name: 'short', action: 'upsert', config: { url: 'https://example.invalid/short', env: { KEY: 'x' } } });
+      (mcpClient as any).callTool = async () => { throw new Error('external x failure'); };
+      await assert.rejects(
+        () => callMcpTool(sourceId, 'short', 'probe', {}),
+        (error: any) => error?.message === 'MCP operation failed because the underlying error contained configured secret data.',
+      );
+
+      (mcpClient as any).callTool = async () => { throw new RpcError('MCP_RETRY', `retry ${sensitiveValue}`, true, { unsafe: sensitiveValue }); };
+      await assert.rejects(
         () => callMcpTool(sourceId, 'private', 'probe', {}),
-        (error: any) => !error?.message.includes(sensitiveValue) && /\[redacted\]/.test(error?.message),
+        (error: any) => error?.code === 'MCP_RETRY'
+          && error?.retryable === true
+          && error?.details === undefined
+          && error?.message === 'MCP operation failed because the underlying error contained configured secret data.',
       );
     } finally {
       (mcpClient as any).callTool = originalCallTool;
@@ -84,6 +103,18 @@ test('failed MCP service config persistence leaves the previous live snapshot pu
   await sessionManager.getSession(sourceId);
   await withTempStore(async store => {
     await configureMcpServer({ sourceSessionId: sourceId, name: 'alpha', action: 'upsert', config: { url: 'https://example.invalid/alpha' } });
+    await configureMcpServer({ sourceSessionId: sourceId, name: 'alpha', action: 'upsert', config: { description: 'merged update' } });
+    for (const config of [
+      { transport: 'stdio' },
+      { transport: 'auto' },
+      { transport: 'unsupported' },
+    ]) {
+      await assert.rejects(
+        () => configureMcpServer({ sourceSessionId: sourceId, name: 'invalid', action: 'upsert', config: config as any }),
+        /requires command|requires url|unsupported MCP transport/i,
+      );
+    }
+    assert.deepEqual((await listMcpServers(sourceId)).map(server => [server.name, server.description]), [['alpha', 'merged update']]);
     const originalWrite = store.write.bind(store);
     (store as any).write = async () => { throw new Error('simulated MCP persistence failure'); };
     await assert.rejects(
@@ -141,6 +172,48 @@ test('MCP external service rejects stale and isolated source sessions', async ()
     await assert.rejects(() => listMcpServers(sourceId), /restricted to agent-level allowed tools/i);
   } finally {
     await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
+    await cleanup(sourceId);
+  }
+});
+
+test('MCP service rejects non-record DTOs, extra tag fields, and non-JSON args', async () => {
+  const sourceId = makeId('mcp_service_exact_dto');
+  await sessionManager.getSession(sourceId);
+  const handler: any = createMcpExternalServiceHandler();
+  try {
+    for (const invoke of [
+      () => handler.listServers({ sourceSessionId: sourceId, extra: true }, {}),
+      () => handler.listTools({ sourceSessionId: sourceId, server: 'demo', extra: true }, {}),
+      () => handler.callTool({ sourceSessionId: sourceId, server: 'demo', name: 'probe', args: {}, extra: true }, {}),
+      () => handler.configure({ sourceSessionId: sourceId, name: 'demo', action: 'set-enabled', enabled: true, config: {} }, {}),
+      () => handler.configure({ sourceSessionId: sourceId, name: 'demo', action: 'upsert', config: { url: 'https://example.invalid' }, enabled: true }, {}),
+      () => handler.callTool({ sourceSessionId: sourceId, name: 'probe', args: new Date() }, {}),
+      () => handler.callTool({ sourceSessionId: sourceId, name: 'probe', args: new Map() }, {}),
+    ]) {
+      await assert.rejects(invoke, (error: any) => error?.code === 'MCP_EXTERNAL_INVALID_REQUEST');
+    }
+  } finally {
+    await cleanup(sourceId);
+  }
+});
+
+test('MCP call authorization receives the complete nested args object', async () => {
+  const sourceId = makeId('mcp_service_permission_args');
+  await sessionManager.getSession(sourceId);
+  const originalPermission = isolatedCheck.checkToolPermission;
+  const originalCallTool = mcpClient.callTool;
+  const captured: any[] = [];
+  (isolatedCheck as any).checkToolPermission = async (...args: any[]) => { captured.push(structuredClone(args)); };
+  (mcpClient as any).callTool = async () => ({ ok: true });
+  try {
+    await callMcpTool(sourceId, 'demo', 'probe', { nested: { value: 7 }, items: [1, 2] });
+    assert.deepEqual(captured, [[
+      'call_mcp', sourceId, 'master',
+      { server: 'demo', tool: 'probe', args: { nested: { value: 7 }, items: [1, 2] } },
+    ]]);
+  } finally {
+    (isolatedCheck as any).checkToolPermission = originalPermission;
+    (mcpClient as any).callTool = originalCallTool;
     await cleanup(sourceId);
   }
 });

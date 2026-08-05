@@ -34,15 +34,51 @@ function optionalString(value: unknown, field: string): string | undefined {
   return requireString(value, field);
 }
 
-function requireObject(value: unknown, field: string): Record<string, unknown> {
+function requirePlainRecord(value: unknown, field: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', `${field} must be an object.`);
+    throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', `${field} must be a plain object.`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', `${field} must be a plain object.`);
   }
   return value as Record<string, unknown>;
 }
 
+function requireExactRecord(value: unknown, field: string, allowedFields: readonly string[]): Record<string, unknown> {
+  const record = requirePlainRecord(value, field);
+  const allowed = new Set(allowedFields);
+  if (Object.keys(record).some(key => !allowed.has(key))) {
+    throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', `${field} contains an unsupported field.`);
+  }
+  return record;
+}
+
+function requireJsonValue(value: unknown, field: string, seen = new WeakSet<object>()): void {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
+  if (typeof value === 'number' && Number.isFinite(value)) return;
+  if (Array.isArray(value)) {
+    if (seen.has(value)) throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', `${field} must not be cyclic.`);
+    seen.add(value);
+    value.forEach((item, index) => requireJsonValue(item, `${field}[${index}]`, seen));
+    seen.delete(value);
+    return;
+  }
+  const record = requirePlainRecord(value, field);
+  if (seen.has(record)) throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', `${field} must not be cyclic.`);
+  seen.add(record);
+  for (const [key, item] of Object.entries(record)) requireJsonValue(item, `${field}.${key}`, seen);
+  seen.delete(record);
+}
+
+function requireJsonArgs(value: unknown): Record<string, unknown> {
+  const args = requirePlainRecord(value, 'args');
+  requireJsonValue(args, 'args');
+  return args;
+}
+
 function requireServerConfig(value: unknown): mcpClient.McpServerConfig {
-  const config = requireObject(value, 'config');
+  const config = requirePlainRecord(value, 'config');
   const stringFields = ['url', 'command', 'cwd', 'token', 'description', 'transport', 'type'] as const;
   const allowedFields = new Set([...stringFields, 'args', 'env', 'headers', 'stderr', 'enable']);
   if (Object.keys(config).some(field => !allowedFields.has(field))) {
@@ -63,32 +99,39 @@ function requireServerConfig(value: unknown): mcpClient.McpServerConfig {
     throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', 'config.args must be an array of strings.');
   }
   for (const field of ['env', 'headers'] as const) {
-    if (config[field] !== undefined && Object.values(requireObject(config[field], `config.${field}`)).some(value => typeof value !== 'string')) {
+    if (config[field] !== undefined && Object.values(requirePlainRecord(config[field], `config.${field}`)).some(value => typeof value !== 'string')) {
       throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', `config.${field} values must be strings.`);
     }
   }
   return config as mcpClient.McpServerConfig;
 }
 
-function redactConfiguredSecrets(error: unknown, config: mcpClient.McpServerConfig | undefined): Error {
-  let message = error instanceof Error ? error.message : String(error);
-  const values = [
-    config?.token,
-    ...(Array.isArray(config?.args) ? config.args : []),
-    ...Object.values(config?.env || {}),
-    ...Object.values(config?.headers || {}),
-  ].filter((value): value is string => typeof value === 'string' && value.length > 0);
-  for (const value of values) message = message.split(value).join('[redacted]');
+function redactConfiguredSecrets(error: unknown, configs: mcpClient.McpServerConfig[]): Error {
+  const originalMessage = error instanceof Error ? error.message : String(error);
+  const values = configs.flatMap(config => [
+    config.token,
+    ...(Array.isArray(config.args) ? config.args : []),
+    ...Object.values(config.env || {}),
+    ...Object.values(config.headers || {}),
+  ]).filter((value): value is string => typeof value === 'string' && value.length > 0);
+  const message = values.some(value => originalMessage.includes(value))
+    ? 'MCP operation failed because the underlying error contained configured secret data.'
+    : originalMessage;
+  if (error instanceof RpcError) return new RpcError(error.code, message, error.retryable);
+  if (error instanceof Error && message === originalMessage) return error;
   return new Error(message);
 }
 
-async function runWithServerSecretsRedacted<T>(server: string | undefined, run: () => Promise<T>): Promise<T> {
+async function rethrowWithAllSecretsRedacted(error: unknown, incoming: mcpClient.McpServerConfig[] = []): Promise<never> {
+  const servers: Record<string, mcpClient.McpServerConfig> = await mcpClient.getServers().catch(() => ({}));
+  throw redactConfiguredSecrets(error, [...Object.values(servers), ...incoming]);
+}
+
+async function runWithAllSecretsRedacted<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (error) {
-    const servers: Record<string, mcpClient.McpServerConfig> = await mcpClient.getServers().catch(() => ({}));
-    const selected = server || (servers.default ? 'default' : Object.keys(servers)[0]);
-    throw redactConfiguredSecrets(error, selected ? servers[selected] : undefined);
+    return await rethrowWithAllSecretsRedacted(error);
   }
 }
 
@@ -104,39 +147,48 @@ async function authorize(sourceSessionId: unknown, toolName: string, args: Recor
 export function createMcpExternalServiceHandler(): RpcServiceHandler<typeof mcpExternalServiceDescriptor> {
   return {
     async listServers(input) {
-      await authorize(input?.sourceSessionId, 'list_mcp_servers');
+      const request = requireExactRecord(input, 'listServers request', ['sourceSessionId']);
+      await authorize(request.sourceSessionId, 'list_mcp_servers');
       return { servers: await mcpClient.listServers() };
     },
     async listTools(input) {
-      await authorize(input?.sourceSessionId, 'search_mcp_tools', { server: input?.server });
-      const server = optionalString(input?.server, 'server');
-      return { result: await runWithServerSecretsRedacted(server, () => mcpClient.listTools(server)) };
+      const request = requireExactRecord(input, 'listTools request', ['sourceSessionId', 'server']);
+      const server = optionalString(request.server, 'server');
+      await authorize(request.sourceSessionId, 'search_mcp_tools', { server });
+      return { result: await runWithAllSecretsRedacted(() => mcpClient.listTools(server)) };
     },
     async callTool(input) {
-      await authorize(input?.sourceSessionId, 'call_mcp', { server: input?.server, tool: input?.name });
-      const server = optionalString(input?.server, 'server');
-      const name = requireString(input?.name, 'name');
-      const args = requireObject(input?.args, 'args');
-      return { result: await runWithServerSecretsRedacted(server, () => mcpClient.callTool(server, name, args)) };
+      const request = requireExactRecord(input, 'callTool request', ['sourceSessionId', 'server', 'name', 'args']);
+      const server = optionalString(request.server, 'server');
+      const name = requireString(request.name, 'name');
+      const args = requireJsonArgs(request.args);
+      await authorize(request.sourceSessionId, 'call_mcp', { server, tool: name, args });
+      return { result: await runWithAllSecretsRedacted(() => mcpClient.callTool(server, name, args)) };
     },
     async configure(input) {
-      await authorize(input?.sourceSessionId, 'mcp_config', { name: input?.name, action: input?.action });
-      const name = requireString(input?.name, 'name');
-      if (input?.action === 'set-enabled') {
-        if (typeof input.enabled !== 'boolean') {
+      const request = requirePlainRecord(input, 'configure request');
+      const action = request.action;
+      if (action === 'set-enabled') {
+        requireExactRecord(request, 'configure set-enabled request', ['sourceSessionId', 'name', 'action', 'enabled']);
+        const name = requireString(request.name, 'name');
+        if (typeof request.enabled !== 'boolean') {
           throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', 'enabled must be a boolean.');
         }
+        await authorize(request.sourceSessionId, 'mcp_config', { name, action });
         try {
-          await mcpClient.setServerEnabled(name, input.enabled);
+          await mcpClient.setServerEnabled(name, request.enabled);
         } catch (error) {
-          throw redactConfiguredSecrets(error, undefined);
+          await rethrowWithAllSecretsRedacted(error);
         }
-      } else if (input?.action === 'upsert') {
-        const config = requireServerConfig(input.config);
+      } else if (action === 'upsert') {
+        requireExactRecord(request, 'configure upsert request', ['sourceSessionId', 'name', 'action', 'config']);
+        const name = requireString(request.name, 'name');
+        const config = requireServerConfig(request.config);
+        await authorize(request.sourceSessionId, 'mcp_config', { name, action });
         try {
           await mcpClient.upsertServer(name, config);
         } catch (error) {
-          throw redactConfiguredSecrets(error, config);
+          await rethrowWithAllSecretsRedacted(error, [config]);
         }
       } else {
         throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', 'action must be set-enabled or upsert.');

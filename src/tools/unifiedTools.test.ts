@@ -244,6 +244,7 @@ test('mcp_config parses envJson and headersJson string-map fallbacks', async () 
     assert.equal(captured.length, 1);
     assert.deepEqual(captured[0].config.env, { API_KEY: 'secret' });
     assert.deepEqual(captured[0].config.headers, { 'X-Test': 'ok' });
+    assert.equal(Object.prototype.hasOwnProperty.call(captured[0].config, 'url'), false);
   } finally {
     (mcpClient as any).upsertServer = originalUpsertServer;
   }

@@ -17,8 +17,8 @@ Provides the single versioned local RPC owner through which current direct, unif
 ## Runtime behavior
 
 - Every request carries one source session ID. The handler rejects stale sources and applies the existing concrete MCP tool permission/isolation check before invoking `mcpClient`.
-- Requests and results pass through local RPC structured cloning. The fixed methods validate required strings, tagged config actions, booleans, and cloneable object arguments; no arbitrary builtin registry or live Session object crosses the boundary.
-- Server-list responses contain only `McpServerSummary`. Raw configuration is never returned. Connection/config errors replace exact configured token, argument, environment, and header values before crossing the service boundary.
+- Requests and results pass through local RPC structured cloning. Every envelope/tag has an exact key set; envelopes, config, args, env, and headers must be plain records, while nested call args must be finite JSON values. No arbitrary builtin registry, Date/Map/Set value, or live Session object crosses the boundary. Call permission checks receive the complete nested tool args.
+- Server-list responses contain only `McpServerSummary`. Raw configuration is never returned. Connection/config error handling scans secret-bearing values from every current server plus the incoming upsert. Any match yields one stable generic message rather than substring replacement; wrapped `RpcError` code/retryability survive while unsafe details are omitted.
 - Managed upsert and enabled-toggle calls retain `mcpClient`'s mutation queue and persist-before-publish live snapshot semantics. Existing hidden tool formatting and config argument parsing stay in `tools/mcpTools.ts` rather than being duplicated here.
 - Production shutdown is one-way: initialization and new calls are fenced, accepted local calls drain, and later callers cannot lazily reopen the service. Stdio pool lifetime remains owned by the existing MCP client.
 

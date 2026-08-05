@@ -18,7 +18,6 @@ export async function tool_mcp_config(args: ToolArgs, ctx?: ToolContext) {
         resolveObjectArgWithJsonFallback(args, 'headers', 'headersJson', { label: 'mcp_config headers' }),
         'mcp_config headersJson',
     );
-    const resolvedTransport = transport || type || 'auto';
     if (!name) {
         throw new Error('mcp_config requires name');
     }
@@ -39,14 +38,10 @@ export async function tool_mcp_config(args: ToolArgs, ctx?: ToolContext) {
         await mcpExternal.configureMcpServer({ sourceSessionId: requireSourceSessionId(ctx), name, action: 'set-enabled', enabled: enable });
         return `MCP server "${name}" ${enable ? 'enabled' : 'disabled'}.`;
     }
-    if (resolvedTransport === 'stdio') {
-        if (!command) {
-            throw new Error('mcp_config with stdio transport requires command');
-        }
-    } else if (!url) {
-        throw new Error('mcp_config requires url for streamable-http, sse, or auto transport');
-    }
-    await mcpExternal.configureMcpServer({ sourceSessionId: requireSourceSessionId(ctx), name, action: 'upsert', config: { url, command, args: commandArgs, env, cwd, stderr, token, headers, description, enable, transport, type } });
+    const config = Object.fromEntries(Object.entries({
+        url, command, args: commandArgs, env, cwd, stderr, token, headers, description, enable, transport, type,
+    }).filter(([, value]) => value !== undefined));
+    await mcpExternal.configureMcpServer({ sourceSessionId: requireSourceSessionId(ctx), name, action: 'upsert', config });
     return `MCP server \"${name}\" saved${enable === false ? ' (disabled)' : ''}.`;
 }
 
