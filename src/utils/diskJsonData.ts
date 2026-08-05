@@ -29,6 +29,7 @@ type QueuedWrite<T> = {
   requestId: number;
   data: T;
   serialized: string;
+  beforeCommit?: () => void;
 };
 
 type WriteWaiter = {
@@ -156,7 +157,7 @@ export class DiskJsonData<T> {
     return null;
   }
 
-  write(data: T): Promise<void> {
+  write(data: T, options: { beforeCommit?: () => void } = {}): Promise<void> {
     const requestId = ++this.nextRequestId;
     const serialized = JSON.stringify(data, null, this.spaces);
 
@@ -164,6 +165,7 @@ export class DiskJsonData<T> {
       requestId,
       data,
       serialized,
+      beforeCommit: options.beforeCommit,
     };
 
     const writePromise = new Promise<void>((resolve, reject) => {
@@ -267,6 +269,7 @@ export class DiskJsonData<T> {
       await this.hooks?.beforeWriteTemp?.({ filePath: this.filePath, tempPath, data: queuedWrite.data, requestId: queuedWrite.requestId });
       await writeFileDurably(tempPath, queuedWrite.serialized);
       await this.hooks?.beforeRename?.({ filePath: this.filePath, tempPath, data: queuedWrite.data, requestId: queuedWrite.requestId });
+      queuedWrite.beforeCommit?.();
       await fsPromises.rename(tempPath, this.filePath);
       await syncDirectory(path.dirname(this.filePath));
       await this.hooks?.afterRename?.({ filePath: this.filePath, tempPath, data: queuedWrite.data, requestId: queuedWrite.requestId });

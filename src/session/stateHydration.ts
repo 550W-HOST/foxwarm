@@ -1,26 +1,36 @@
 import { RpcError } from '../rpc';
 import type { Session } from '../types';
 import { annotateHistoryWithContextFrontierMetadata, renderHistoryFromFrontier } from './layeredContext';
-import { applySessionHistoryState } from './metadataStore';
+import { prepareSessionSemanticStateForHydration, replaceSessionSemanticState } from './metadataStore';
 import { externalizeAuthoritativeSessionImages } from './stateFile';
 
-/** Apply the one authoritative per-session JSON payload to a catalog/session stub. */
+/** Replace all semantic fields from one authoritative payload, upgrading only unversioned legacy files. */
+export function replaceAuthoritativeSessionState(
+  target: Session,
+  raw: Record<string, any>,
+): { session: Session; upgradedLegacy: boolean } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new RpcError('SESSION_WORKER_STATE_INVALID', `Authoritative state for ${target.id} is not a session payload.`);
+  }
+  try {
+    const prepared = prepareSessionSemanticStateForHydration(target, raw);
+    replaceSessionSemanticState(target, prepared.snapshot);
+    return { session: target, upgradedLegacy: prepared.upgradedLegacy };
+  } catch (error: any) {
+    if (error instanceof RpcError) throw error;
+    const message = String(error?.message || error);
+    throw new RpcError(
+      message.startsWith('Unsupported per-session state format version') ? 'SESSION_WORKER_STATE_VERSION' : 'SESSION_WORKER_STATE_INVALID',
+      `Cannot hydrate ${target.id}: ${message}`,
+    );
+  }
+}
+
 export async function hydrateAuthoritativeSessionState(
   target: Session,
   raw: Record<string, any>,
-): Promise<{ session: Session; imagesCanonicalized: boolean }> {
-  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.history)) {
-    throw new RpcError('SESSION_WORKER_STATE_INVALID', `Authoritative state for ${target.id} is not a session payload.`);
-  }
-  target.history = structuredClone(raw.history);
-  target.persistentMemorySnapshot = typeof raw.persistentMemorySnapshot === 'string'
-    ? raw.persistentMemorySnapshot
-    : '';
-  applySessionHistoryState(target, structuredClone(raw));
-  if (!target.stats || typeof target.stats !== 'object') {
-    target.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
-  }
-  if (!target.meta || typeof target.meta !== 'object') target.meta = { lastMessageTime: Date.now() };
+): Promise<{ session: Session; imagesCanonicalized: boolean; upgradedLegacy: boolean }> {
+  const replaced = replaceAuthoritativeSessionState(target, raw);
   if (target.contextFrontier?.length) {
     if (target.history.length !== target.contextFrontier.length) {
       target.history = await renderHistoryFromFrontier(target);
@@ -28,6 +38,7 @@ export async function hydrateAuthoritativeSessionState(
       target.history = (await annotateHistoryWithContextFrontierMetadata(target.id, target.history, target.contextFrontier)).history;
     }
   }
+  // This is legacy inline-image materialization, not mailbox/JSON cursor reconciliation.
   const imagesCanonicalized = await externalizeAuthoritativeSessionImages(target);
-  return { session: target, imagesCanonicalized };
+  return { session: target, imagesCanonicalized, upgradedLegacy: replaced.upgradedLegacy };
 }

@@ -67,6 +67,50 @@ test('main mutation claim keeps the worker quiesced until the mutation callback 
     });
     const replacement = await fixture.supervisor.ensureWorker('main-mutation');
     assert.equal(replacement.generation, first.generation + 1);
+    await assert.rejects(() => fixture.supervisor.withWorkerQuiesced('main-mutation', async () => {
+      throw new Error('mutation failed');
+    }), /mutation failed/);
+    const afterFailure = await fixture.supervisor.ensureWorker('main-mutation');
+    assert.equal(afterFailure.generation, replacement.generation + 1);
+  } finally { await fixture.close(); }
+});
+
+test('shutdown cooperatively aborts a main mutation claim and releases without timeout', async () => {
+  const fixture = await createFixture(5_000);
+  let entered!: () => void;
+  const enteredPromise = new Promise<void>(resolve => { entered = resolve; });
+  try {
+    await fixture.supervisor.ensureWorker('cooperative-claim');
+    const mutation = fixture.supervisor.withWorkerQuiesced('cooperative-claim', async claim => {
+      entered();
+      await new Promise<void>((_resolve, reject) => claim.signal.addEventListener('abort', () => reject(claim.signal.reason), { once: true }));
+    });
+    mutation.catch(() => {});
+    await enteredPromise;
+    await fixture.supervisor.shutdown(500);
+    await assert.rejects(() => mutation, (error: any) => error?.code === 'SESSION_WORKER_SHUTTING_DOWN');
+  } finally { await fixture.close(); }
+});
+
+test('shutdown bounds a noncooperative main mutation claim and stale callback cannot complete', async () => {
+  const fixture = await createFixture(5_000);
+  let entered!: () => void; let release!: () => void;
+  const enteredPromise = new Promise<void>(resolve => { entered = resolve; });
+  const blocker = new Promise<void>(resolve => { release = resolve; });
+  try {
+    await fixture.supervisor.ensureWorker('hanging-claim');
+    const mutation = fixture.supervisor.withWorkerQuiesced('hanging-claim', async () => {
+      entered(); await blocker; return 'late';
+    });
+    mutation.catch(() => {});
+    await enteredPromise;
+    const startedAt = Date.now();
+    await assert.rejects(() => fixture.supervisor.shutdown(60), (error: any) =>
+      error instanceof SessionWorkerLifecycleError
+      && error.errors.some((item: any) => item?.code === 'SESSION_WORKER_MAIN_MUTATION_TIMEOUT'));
+    assert.ok(Date.now() - startedAt < 500);
+    release();
+    await assert.rejects(() => mutation, (error: any) => error?.code === 'SESSION_WORKER_STALE_MAIN_MUTATION');
   } finally { await fixture.close(); }
 });
 

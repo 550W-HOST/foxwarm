@@ -5,7 +5,9 @@ import { logger } from '../common';
 import { SESSIONS_DIR, SESSIONS_FILE } from '../config';
 import { DiskJsonData } from '../utils/diskJsonData';
 
-const SESSION_HISTORY_STATE_FIELDS = [
+export const SESSION_STATE_FORMAT_VERSION = 1;
+
+export const SESSION_HISTORY_STATE_FIELDS = [
   'queue',
   'parentSessionId',
   'promptCacheKey',
@@ -25,6 +27,7 @@ const SESSION_HISTORY_STATE_FIELDS = [
   'aliases',
   'busy',
   'busyStartedAt',
+  'stopping',
   'nextMessageSeq',
   'nextBlockId',
   'contextFrontier',
@@ -32,6 +35,11 @@ const SESSION_HISTORY_STATE_FIELDS = [
   'compactThresholdTokens',
   'lastAppliedMailboxId',
 ] as const;
+
+const LEGACY_CATALOG_SEEDED_STATE_FIELDS = ['stats', 'meta', 'vectorIndexPosition'] as const;
+const SESSION_SEMANTIC_FIELDS = ['history', 'persistentMemorySnapshot', ...SESSION_HISTORY_STATE_FIELDS] as const;
+
+export type SessionSemanticSnapshot = Partial<Record<(typeof SESSION_SEMANTIC_FIELDS)[number], unknown>>;
 
 const SESSION_METADATA_FIELDS = [
   'id',
@@ -95,28 +103,111 @@ function serializeSessionStateFields(session: Session, fields: readonly string[]
 }
 
 export function serializeSessionHistoryPayload(session: Session): Record<string, any> {
+  const state = serializeSessionStateFields(session, SESSION_HISTORY_STATE_FIELDS);
+  if (state.meta && typeof state.meta === 'object') {
+    const { lastChannel: _catalogOnly, ...semanticMeta } = state.meta;
+    state.meta = semanticMeta;
+  }
   return {
+    sessionStateVersion: SESSION_STATE_FORMAT_VERSION,
     history: session.history,
     persistentMemorySnapshot: session.persistentMemorySnapshot,
-    ...serializeSessionStateFields(session, SESSION_HISTORY_STATE_FIELDS),
+    ...state,
   };
 }
 
-export function applySessionHistoryState(target: Session, historyData: Record<string, any>): void {
-  Object.assign(target, pickDefinedFields(historyData, SESSION_HISTORY_STATE_FIELDS));
+export function captureSessionSemanticState(session: Session): SessionSemanticSnapshot {
+  const snapshot: SessionSemanticSnapshot = {};
+  for (const field of SESSION_SEMANTIC_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(session, field)) {
+      (snapshot as any)[field] = structuredClone((session as any)[field]);
+    }
+  }
+  return snapshot;
+}
 
-  if (target.currentNode === undefined) {
-    target.currentNode = 'master';
+/** Exact semantic restore; top-level catalog/UI fields and runtime callbacks are not enumerated or deleted. */
+export function restoreSessionSemanticState(session: Session, snapshot: SessionSemanticSnapshot): void {
+  for (const field of SESSION_SEMANTIC_FIELDS) delete (session as any)[field];
+  for (const field of SESSION_SEMANTIC_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(snapshot, field)) {
+      (session as any)[field] = structuredClone((snapshot as any)[field]);
+    }
   }
+}
 
-  if (!Array.isArray(target.queue)) {
-    target.queue = [];
-  } else {
-    target.queue = target.queue.filter(isQueueItem);
+/** Exact semantic replace followed by current-format defaults. */
+export function replaceSessionSemanticState(session: Session, snapshot: SessionSemanticSnapshot): void {
+  const catalogLastChannel = session.meta?.lastChannel === undefined ? undefined : structuredClone(session.meta.lastChannel);
+  restoreSessionSemanticState(session, snapshot);
+  if (!Array.isArray(session.history)) session.history = [];
+  if (typeof session.persistentMemorySnapshot !== 'string') session.persistentMemorySnapshot = '';
+  if (!session.stats || typeof session.stats !== 'object') {
+    session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
   }
-  if (!Number.isSafeInteger(target.lastAppliedMailboxId) || (target.lastAppliedMailboxId || 0) < 0) {
-    target.lastAppliedMailboxId = 0;
+  if (!Array.isArray(session.queue)) session.queue = [];
+  session.queue = session.queue.filter(isQueueItem);
+  if (!session.meta || typeof session.meta !== 'object') session.meta = { lastMessageTime: 0 };
+  delete session.meta.lastChannel;
+  if (catalogLastChannel !== undefined) session.meta.lastChannel = catalogLastChannel;
+  if (typeof session.meta.lastMessageTime !== 'number') session.meta.lastMessageTime = 0;
+  if (typeof session.busy !== 'boolean') session.busy = false;
+  if (!session.currentNode) session.currentNode = 'master';
+  if (!Number.isSafeInteger(session.lastAppliedMailboxId) || (session.lastAppliedMailboxId || 0) < 0) {
+    session.lastAppliedMailboxId = 0;
   }
+}
+
+export function prepareSessionSemanticStateForHydration(
+  catalogStub: Session,
+  raw: Record<string, any>,
+): { snapshot: SessionSemanticSnapshot; upgradedLegacy: boolean } {
+  const version = raw.sessionStateVersion;
+  if (version !== undefined && version !== SESSION_STATE_FORMAT_VERSION) {
+    throw new Error(`Unsupported per-session state format version ${String(version)}.`);
+  }
+  const upgradedLegacy = version === undefined;
+  const source: Record<string, any> = structuredClone(raw);
+  if (Object.prototype.hasOwnProperty.call(source, 'history') && !Array.isArray(source.history)) {
+    throw new Error('Per-session state history must be an array.');
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'persistentMemorySnapshot')
+    && typeof source.persistentMemorySnapshot !== 'string') {
+    throw new Error('Per-session persistent memory snapshot must be a string.');
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'queue') && !Array.isArray(source.queue)) {
+    throw new Error('Per-session state queue must be an array.');
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'stats')
+    && (!source.stats || typeof source.stats !== 'object' || Array.isArray(source.stats))) {
+    throw new Error('Per-session state stats must be an object.');
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'meta')
+    && (!source.meta || typeof source.meta !== 'object' || Array.isArray(source.meta))) {
+    throw new Error('Per-session state meta must be an object.');
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'lastAppliedMailboxId')
+    && (!Number.isSafeInteger(source.lastAppliedMailboxId) || source.lastAppliedMailboxId < 0)) {
+    throw new Error('Per-session mailbox cursor must be a non-negative safe integer.');
+  }
+  if (source.meta && typeof source.meta === 'object') delete source.meta.lastChannel;
+  if (upgradedLegacy) {
+    for (const field of LEGACY_CATALOG_SEEDED_STATE_FIELDS) {
+      const catalogValue = (catalogStub as any)[field];
+      if (!Object.prototype.hasOwnProperty.call(source, field) && catalogValue !== undefined) {
+        source[field] = structuredClone(catalogValue);
+      } else if ((field === 'meta' || field === 'stats') && source[field] && typeof source[field] === 'object'
+        && catalogValue && typeof catalogValue === 'object') {
+        source[field] = { ...structuredClone(catalogValue), ...source[field] };
+      }
+      if (field === 'meta' && source.meta && typeof source.meta === 'object') delete source.meta.lastChannel;
+    }
+  }
+  const snapshot: SessionSemanticSnapshot = {};
+  for (const field of SESSION_SEMANTIC_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(source, field)) (snapshot as any)[field] = source[field];
+  }
+  return { snapshot, upgradedLegacy };
 }
 
 export function stripSessionMetadataForSave(session: Session): Omit<Session, 'history' | 'persistentMemorySnapshot' | 'broadcast'> {
@@ -167,8 +258,12 @@ export async function readSessionHistorySnapshot(sessionId: string): Promise<Rec
   return getSessionHistoryStore(sessionId).readFromPath();
 }
 
-export async function writeSessionHistoryAtomically(sessionId: string, data: Record<string, any>): Promise<void> {
-  await getSessionHistoryStore(sessionId).write(data);
+export async function writeSessionHistoryAtomically(
+  sessionId: string,
+  data: Record<string, any>,
+  beforeCommit?: () => void,
+): Promise<void> {
+  await getSessionHistoryStore(sessionId).write(data, { beforeCommit });
 }
 
 function normalizeSessionsMetadataSnapshot(raw: any, filePath: string): any {
@@ -313,6 +408,6 @@ export async function loadSessionsMetadataSnapshot(): Promise<{ data: any; sourc
   return { data: rebuilt, source: 'rebuild' };
 }
 
-export async function writeSessionsMetadataAtomically(data: any): Promise<void> {
-  await sessionsMetadataStore.write(data);
+export async function writeSessionsMetadataAtomically(data: any, beforeCommit?: () => void): Promise<void> {
+  await sessionsMetadataStore.write(data, { beforeCommit });
 }

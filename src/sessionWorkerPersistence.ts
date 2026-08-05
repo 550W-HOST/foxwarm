@@ -1,9 +1,11 @@
 import { RpcError } from './rpc';
-import { applySessionHistoryState, readSessionHistorySnapshot, serializeSessionHistoryPayload } from './session/metadataStore';
+import { captureSessionSemanticState, readSessionHistorySnapshot, restoreSessionSemanticState } from './session/metadataStore';
 import { hydrateAuthoritativeSessionState } from './session/stateHydration';
 import { writeAuthoritativeSessionState } from './session/stateFile';
 import { buildSessionRuntimeState, type SessionRuntimeState } from './sessionRuntimeState';
 import { SessionWorkerMailboxIntent, SessionWorkerStore } from './sessionWorkerStore';
+import type { SessionWorkerMainMutationClaim } from './sessionWorkerSupervisor';
+import type { SessionWorkerCatalogCoordinator } from './sessionWorkerCatalog';
 import type { Session, SessionStats } from './types';
 
 export type SessionWorkerCatalogProjection = {
@@ -21,12 +23,24 @@ export type SessionWorkerCatalogProjection = {
   model: string | null;
   childModelDefault: string | null;
   compactThresholdTokens: number | null;
+  mainOwned: {
+    agent: string | null;
+    aliases: string[] | null;
+    parentSessionId: string | null;
+    displayName: string | null;
+    archived: boolean;
+    pinned: boolean;
+    sidebarOrder: number | null;
+    lastChannel: Record<string, any> | null;
+  };
 };
 
 export type SessionWorkerPersistenceDependencies = {
   readState?: (sessionId: string) => Promise<Record<string, any> | null>;
-  writeState?: (session: Session) => Promise<void>;
-  writeCatalogProjection?: (projection: SessionWorkerCatalogProjection) => Promise<void>;
+  writeState?: (session: Session, claim?: SessionWorkerMainMutationClaim) => Promise<void>;
+  writeCatalogProjection?: (projection: SessionWorkerCatalogProjection, claim?: SessionWorkerMainMutationClaim) => Promise<void>;
+  catalogCoordinator?: SessionWorkerCatalogCoordinator;
+  catalogOwnerId?: string;
 };
 
 export function buildSessionWorkerCatalogProjection(session: Session): SessionWorkerCatalogProjection {
@@ -47,6 +61,16 @@ export function buildSessionWorkerCatalogProjection(session: Session): SessionWo
     model: session.model || null,
     childModelDefault: session.childModelDefault || null,
     compactThresholdTokens: typeof session.compactThresholdTokens === 'number' ? session.compactThresholdTokens : null,
+    mainOwned: {
+      agent: session.agent || null,
+      aliases: session.aliases || null,
+      parentSessionId: session.parentSessionId || null,
+      displayName: session.displayName || null,
+      archived: !!session.archived,
+      pinned: !!session.pinned,
+      sidebarOrder: typeof session.sidebarOrder === 'number' ? session.sidebarOrder : null,
+      lastChannel: session.meta?.lastChannel ? structuredClone(session.meta.lastChannel) : null,
+    },
   });
 }
 
@@ -57,7 +81,7 @@ export function buildSessionWorkerCatalogProjection(session: Session): SessionWo
  */
 export class SessionWorkerPersistence {
   private readonly readState: (sessionId: string) => Promise<Record<string, any> | null>;
-  private readonly writeState: (session: Session) => Promise<void>;
+  private readonly writeState: (session: Session, claim?: SessionWorkerMainMutationClaim) => Promise<void>;
 
   constructor(
     private readonly store: SessionWorkerStore,
@@ -72,13 +96,21 @@ export class SessionWorkerPersistence {
     generation: number,
     incarnationId: string,
   ): Promise<Session> {
+    const target = this.detachCatalogStub(baseSession);
     const raw = await this.requireState(baseSession.id);
     const stateCursor = this.stateCursor(raw);
     this.store.reconcileActivatedMailboxCursor(baseSession.id, generation, incarnationId, stateCursor);
-    const { session, imagesCanonicalized } = await hydrateAuthoritativeSessionState(baseSession, raw);
-    // A lazy image rewrite is itself authoritative state and must complete
-    // before any lagging SQLite acknowledgement is advanced.
-    if (imagesCanonicalized) await this.writeState(session);
+    const { session, imagesCanonicalized, upgradedLegacy } = await hydrateAuthoritativeSessionState(target, raw);
+    // Legacy image/version canonicalization is a same-cursor rewrite. Cursor
+    // recovery above is justified by the already-durable raw JSON payload.
+    if (imagesCanonicalized || upgradedLegacy) await this.writeState(session);
+    if (this.dependencies.catalogCoordinator && this.dependencies.catalogOwnerId) {
+      this.dependencies.catalogCoordinator.registerWorker(
+        session.id,
+        this.dependencies.catalogOwnerId,
+        buildSessionWorkerCatalogProjection(session),
+      );
+    }
     return session;
   }
 
@@ -99,20 +131,16 @@ export class SessionWorkerPersistence {
       throw new RpcError('SESSION_WORKER_MAILBOX_CONFLICT', `Mailbox inputs for ${session.id} are not the exact ordered pending prefix.`);
     }
 
-    const beforeApply = structuredClone(serializeSessionHistoryPayload(session));
-    const previousCursor = session.lastAppliedMailboxId || 0;
+    const beforeApply = captureSessionSemanticState(session);
     const nextCursor = intents[intents.length - 1].id;
     try {
-      await apply(session, intents);
+      await apply(session, expected);
       session.lastAppliedMailboxId = nextCursor;
       // DiskJsonData resolves only after temp write, file fsync, rename, and
       // parent-directory fsync. SQLite acknowledgement is intentionally later.
       await this.writeState(session);
     } catch (error) {
-      session.history = beforeApply.history;
-      session.persistentMemorySnapshot = beforeApply.persistentMemorySnapshot || '';
-      applySessionHistoryState(session, beforeApply);
-      session.lastAppliedMailboxId = previousCursor;
+      restoreSessionSemanticState(session, beforeApply);
       throw error;
     }
     try {
@@ -142,46 +170,63 @@ export class SessionWorkerPersistence {
     }
   }
 
-  async quiesceAndReload(
-    baseSession: Session,
-    stopWorker: (sessionId: string) => Promise<unknown>,
-  ): Promise<Session> {
-    await stopWorker(baseSession.id);
-    return this.reloadInactive(baseSession);
-  }
-
   async runMainMutation<T>(
     baseSession: Session,
-    withWorkerQuiesced: <R>(sessionId: string, operation: () => Promise<R>) => Promise<R>,
-    mutate: (session: Session) => Promise<T>,
+    withWorkerQuiesced: <R>(sessionId: string, operation: (claim: SessionWorkerMainMutationClaim) => Promise<R>) => Promise<R>,
+    mutate: (session: Session, signal: AbortSignal) => Promise<T>,
   ): Promise<{ result: T; session: Session; projection: SessionWorkerCatalogProjection }> {
-    return withWorkerQuiesced(baseSession.id, async () => {
-      const session = await this.reloadInactive(baseSession);
-      const result = await mutate(session);
-      const projection = await this.saveMainMutation(session);
-      return { result, session, projection };
+    return withWorkerQuiesced(baseSession.id, async claim => {
+      if (claim.sessionId !== baseSession.id) {
+        throw new RpcError('SESSION_WORKER_STALE_MAIN_MUTATION', `Main mutation claim does not own ${baseSession.id}.`, true);
+      }
+      const coordinator = this.dependencies.catalogCoordinator;
+      const ownerId = this.dependencies.catalogOwnerId;
+      if (coordinator && ownerId) coordinator.beginMainMutation(baseSession.id, ownerId, claim.id);
+      try {
+        claim.assertActive('before authoritative reload');
+        const session = await this.reloadInactive(baseSession, claim);
+        claim.assertActive('after authoritative reload');
+        const result = await mutate(session, claim.signal);
+        claim.assertActive('after main mutation');
+        const projection = await this.saveMainMutation(session, claim);
+        if (coordinator && ownerId) coordinator.finishMainMutation(baseSession.id, ownerId, claim.id, projection);
+        return { result, session, projection };
+      } catch (error) {
+        if (coordinator && ownerId && coordinator.getOwnership(baseSession.id)?.mainClaimId === claim.id) {
+          coordinator.cancelMainMutation(baseSession.id, ownerId, claim.id);
+        }
+        throw error;
+      }
     });
   }
 
-  private async reloadInactive(baseSession: Session): Promise<Session> {
+  private async reloadInactive(baseSession: Session, claim: SessionWorkerMainMutationClaim): Promise<Session> {
     const ownership = this.store.getOwnership(baseSession.id);
     if (ownership.state !== 'inactive' || ownership.incarnationId !== undefined || ownership.workerPid !== undefined) {
       throw new RpcError('SESSION_WORKER_OWNED', `Session ${baseSession.id} did not quiesce before main reload.`, true);
     }
+    const target = this.detachCatalogStub(baseSession);
     const raw = await this.requireState(baseSession.id);
     this.store.reconcileInactiveMailboxCursor(baseSession.id, this.stateCursor(raw));
-    const { session, imagesCanonicalized } = await hydrateAuthoritativeSessionState(baseSession, raw);
-    if (imagesCanonicalized) await this.writeState(session);
+    const { session, imagesCanonicalized, upgradedLegacy } = await hydrateAuthoritativeSessionState(target, raw);
+    claim.assertActive('after reload hydration');
+    if (imagesCanonicalized || upgradedLegacy) {
+      claim.assertActive('before upgraded state write');
+      await this.writeState(session, claim);
+    }
     return session;
   }
 
-  async saveMainMutation(session: Session): Promise<SessionWorkerCatalogProjection> {
+  private async saveMainMutation(session: Session, claim: SessionWorkerMainMutationClaim): Promise<SessionWorkerCatalogProjection> {
+    claim.assertActive('before ownership validation');
     const ownership = this.store.getOwnership(session.id);
     if (ownership.state !== 'inactive' || ownership.incarnationId !== undefined || ownership.workerPid !== undefined) {
       throw new RpcError('SESSION_WORKER_OWNED', `Main cannot persist ${session.id} while a worker owns it.`, true);
     }
-    await this.writeState(session);
-    try { return await this.publishProjection(session); }
+    claim.assertActive('before authoritative state write');
+    await this.writeState(session, claim);
+    claim.assertActive('before authoritative catalog write');
+    try { return await this.publishProjection(session, claim); }
     catch (error: any) {
       throw new RpcError(
         'SESSION_WORKER_CATALOG_AFTER_STATE_FAILED',
@@ -192,10 +237,31 @@ export class SessionWorkerPersistence {
     }
   }
 
-  private async publishProjection(session: Session): Promise<SessionWorkerCatalogProjection> {
+  private async publishProjection(session: Session, claim?: SessionWorkerMainMutationClaim): Promise<SessionWorkerCatalogProjection> {
     const projection = buildSessionWorkerCatalogProjection(session);
-    await this.dependencies.writeCatalogProjection?.(structuredClone(projection));
+    claim?.assertActive('before catalog projection callback');
+    await this.dependencies.writeCatalogProjection?.(structuredClone(projection), claim);
+    if (!claim && this.dependencies.catalogCoordinator && this.dependencies.catalogOwnerId) {
+      this.dependencies.catalogCoordinator.updateWorker(session.id, this.dependencies.catalogOwnerId, projection);
+    }
     return projection;
+  }
+
+  private detachCatalogStub(baseSession: Session): Session {
+    return {
+      id: baseSession.id,
+      history: [],
+      persistentMemorySnapshot: '',
+      stats: structuredClone(baseSession.stats),
+      busy: false,
+      queue: [],
+      meta: structuredClone(baseSession.meta),
+      ...(baseSession.vectorIndexPosition === undefined ? {} : { vectorIndexPosition: baseSession.vectorIndexPosition }),
+      ...(baseSession.archived === undefined ? {} : { archived: baseSession.archived }),
+      ...(baseSession.pinned === undefined ? {} : { pinned: baseSession.pinned }),
+      ...(baseSession.sidebarOrder === undefined ? {} : { sidebarOrder: baseSession.sidebarOrder }),
+      ...(baseSession.broadcast === undefined ? {} : { broadcast: baseSession.broadcast }),
+    };
   }
 
   private async requireState(sessionId: string): Promise<Record<string, any>> {

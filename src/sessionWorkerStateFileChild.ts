@@ -29,6 +29,7 @@ async function run(): Promise<void> {
     managedRef: !!raw.meta.managedSession.pendingInbox[0].parts[0].inlineDataRef?.blobId
       && !raw.meta.managedSession.pendingInbox[0].parts[0].inlineData,
     cursor: raw.lastAppliedMailboxId,
+    stateVersion: raw.sessionStateVersion,
     frontier: raw.contextFrontier,
     promptCacheKey: raw.promptCacheKey,
     catalogExists: await fs.pathExists(SESSIONS_FILE),

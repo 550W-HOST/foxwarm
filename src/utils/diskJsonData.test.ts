@@ -71,6 +71,22 @@ test('DiskJsonData can write and read JSON through durable replace flow', async 
   });
 });
 
+test('DiskJsonData rechecks a per-write fence immediately before rename', async () => {
+  await withTempDir(async dirPath => {
+    const filePath = path.join(dirPath, 'state.json');
+    let reached!: () => void; let release!: () => void; let active = true;
+    const reachedPromise = new Promise<void>(resolve => { reached = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const store = new DiskJsonData<{ value: number }>(filePath, { hooks: { beforeRename: async () => { reached(); await gate; } } });
+    const write = store.write({ value: 1 }, { beforeCommit: () => {
+      if (!active) throw new Error('stale write fence');
+    } });
+    await reachedPromise; active = false; release();
+    await assert.rejects(() => write, /stale write fence/);
+    assert.equal(await fs.pathExists(filePath), false);
+  });
+});
+
 test('DiskJsonData exposes backup candidates and falls back to backup data when primary is corrupt', async () => {
   await withTempDir(async (dirPath) => {
     const filePath = path.join(dirPath, 'state.json');

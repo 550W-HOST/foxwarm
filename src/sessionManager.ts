@@ -20,8 +20,10 @@ import { appendMessagesToArchive, ensureMessageSeq, getNextSessionMessageSeq } f
 import { externalizeMessages, externalizeQueueItemImages } from './imageBlobs';
 import { annotateHistoryWithContextFrontierMetadata, appendMessagesToContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier } from './session/layeredContext';
 import { ensureSessionBranch, hasArchivedSessionId, rollbackUncommittedSessionArchive } from './session/archiveStore';
-import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, stripSessionMetadataForSave, withSessionsMetadataWriteLock, writeSessionsMetadataAtomically } from './session/metadataStore';
+import { getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, stripSessionMetadataForSave, withSessionsMetadataWriteLock, writeSessionsMetadataAtomically } from './session/metadataStore';
 import { externalizeAuthoritativeSessionImages, externalizeAuthoritativeSessionQueueImages, writeAuthoritativeSessionState } from './session/stateFile';
+import { replaceAuthoritativeSessionState } from './session/stateHydration';
+import { sessionWorkerCatalogCoordinator } from './sessionWorkerCatalog';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
 import * as sessionRelations from './session/relations';
@@ -48,6 +50,7 @@ const MANAGED_OWNER_WAKEUP_COOLDOWN_MS = 30 * 1000;
 
 let sessionIdentityLockTail: Promise<void> = Promise.resolve();
 const channelSessionCreationTails = new Map<string, Promise<void>>();
+const pendingAuthoritativeStateUpgrades = new Set<string>();
 
 async function withSessionIdentityLock<T>(operation: () => Promise<T>): Promise<T> {
   const previous = sessionIdentityLockTail;
@@ -805,6 +808,7 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
   
   let session = sessions.get(realId);
   let isNew = false;
+  let needsAuthoritativeStateUpgrade = pendingAuthoritativeStateUpgrades.has(realId);
   if (!session) {
     const reservation = await getSessionIdReservation(realId);
     if (reservation === 'archived') {
@@ -828,7 +832,7 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
   }
 
   // Session exists in memory, check if history needs to be loaded
-  if (!isNew && session.history.length === 0) {
+  if (!isNew && (session.history.length === 0 || needsAuthoritativeStateUpgrade)) {
     // Try to load history and persistentMemorySnapshot from file
     const historyFile = path.join(SESSIONS_DIR, `${realId}.json`);
     if (await fs.pathExists(historyFile)) {
@@ -837,11 +841,9 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
         if (!historyData) {
           throw new Error('Session history file disappeared during read');
         }
-        session.history = historyData.history || [];
-        if (historyData.persistentMemorySnapshot) {
-          session.persistentMemorySnapshot = historyData.persistentMemorySnapshot;
-        }
-        applySessionHistoryState(session, historyData);
+        const retryPendingUpgrade = needsAuthoritativeStateUpgrade;
+        needsAuthoritativeStateUpgrade = replaceAuthoritativeSessionState(session, historyData).upgradedLegacy || retryPendingUpgrade;
+        if (needsAuthoritativeStateUpgrade) pendingAuthoritativeStateUpgrades.add(realId);
         if (historyData.indexingState) {
           // Check if indexing was interrupted
           await resumeIndexingIfNeeded(sessionId, session);
@@ -849,6 +851,7 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
         logger.debug({ sessionId: realId, messageCount: session.history.length }, 'Session history loaded from file');
       } catch (e) {
         logger.error({ err: e, sessionId }, 'Failed to load session history');
+        throw e;
       }
     }
   }
@@ -894,10 +897,12 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
   }
 
   try {
-    if (await externalizeAuthoritativeSessionImages(session)) {
+    if (await externalizeAuthoritativeSessionImages(session) || needsAuthoritativeStateUpgrade) {
       await saveSessionCritical(session.id);
+      pendingAuthoritativeStateUpgrades.delete(realId);
     }
   } catch (error) {
+    if (needsAuthoritativeStateUpgrade) throw error;
     // Legacy bytes remain intact in memory/on disk when blob materialization
     // fails. Transport/provider boundaries retain their own tolerant readers.
     logger.warn({ err: error, sessionId: session.id }, 'Failed to externalize legacy session images during lazy hydration');
@@ -1732,8 +1737,14 @@ async function saveSessionsMetadataCriticalUnlocked(): Promise<void> {
     }
 
     for (const [sessionId, session] of sessions.entries()) {
-      await externalizeAuthoritativeSessionQueueImages(session);
-      data.sessions[sessionId] = stripSessionMetadataForSave(session);
+      if (!sessionWorkerCatalogCoordinator.isWorkerOwned(sessionId)) {
+        await externalizeAuthoritativeSessionQueueImages(session);
+      }
+      data.sessions[sessionId] = sessionWorkerCatalogCoordinator.mergeFullSave(
+        sessionId,
+        existingSessions[sessionId] as Record<string, any> | undefined,
+        stripSessionMetadataForSave(session) as Record<string, any>,
+      );
     }
 
     if (source !== SESSIONS_FILE) {

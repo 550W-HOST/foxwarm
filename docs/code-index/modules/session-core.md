@@ -14,7 +14,7 @@ Canonical image references in live history, queues, archives, and forks are owne
 
 - [src-session-manager](../units/src-session-manager.md) — façade, in-memory map, lazy hydration, queue/wait coordination, callbacks, and restart recovery.
 - [src-session-runtime](../units/src-session-runtime.md) — local high-level DTO service/facade for external session queries, commands, settings, controls, and events.
-- [src-session-worker-runtime](../units/src-session-worker-runtime.md) — durable process-generation/mailbox/head fencing and supervised per-session child lifecycle foundation; production placement is not enabled yet.
+- [src-session-worker-runtime](../units/src-session-worker-runtime.md) — durable process-generation/mailbox fencing, authoritative state coordination, and supervised per-session child lifecycle foundation; production placement is not enabled yet.
 - [src-session-runtime-state](../units/src-session-runtime-state.md) — `requesting-model`, `running-tool`, `waiting`, and `idle` derivation.
 - [src-session-metadata-store](../units/src-session-metadata-store.md) — shared metadata index, per-session history snapshots, rebuild, and durable writes.
 - [src-session-channels](../units/src-session-channels.md) — persisted channel attachments, direct delivery, and session broadcasts.
@@ -41,7 +41,7 @@ Context frontier, compaction, archive-store, and vector retrieval are owned by [
 ## Data ownership
 
 - `state/sessions.json` is the shared metadata/presentation index and uses five numbered backups.
-- `state/sessions/<id>.json` owns authoritative full semantic session state: durable history, queue, wait/managed metadata, prompt snapshot/cache key, embedded `contextFrontier`, settings, and worker mailbox cursor. Per-session files use durable serialized replacement without numbered rotation.
+- `state/sessions/<id>.json` owns versioned authoritative full semantic session state: durable history, queue, wait/managed metadata, prompt snapshot/cache key, embedded `contextFrontier`, settings, and worker mailbox cursor. Unversioned legacy files receive a one-time tolerant upgrade; current-version hydration replaces semantic fields rather than merging stale catalog values. Per-session files use durable serialized replacement without numbered rotation.
 - `state/channels.json` owns channel attachments.
 - `state/session-runtime.sqlite` owns future session-worker generations, incarnations, mailbox intents, and acknowledged mailbox cursors; it does not own semantic Session state and is currently exercised only by the disconnected worker foundation.
 - `state/sessions/<id>.json` additionally persists `lastAppliedMailboxId`; worker placement must durably replace this authoritative file before SQLite acknowledges the corresponding ordered session-local mailbox prefix.

@@ -34,7 +34,7 @@ Core utility functions for durable JSON file persistence with write coalescing a
 | `DiskJsonData.listCandidatePaths()` | ~114 | Primary path + all backup paths |
 | `DiskJsonData.readFromPath(filePath)` | ~118 | Reads and normalizes JSON from a path |
 | `DiskJsonData.loadFirstAvailable()` | ~129 | Tries primary then backups, returns first valid |
-| `DiskJsonData.write(data)` | ~143 | Queues a write, triggers flush loop |
+| `DiskJsonData.write(data, options?)` | ~143 | Queues a write with an optional pre-rename commit fence, triggers flush loop |
 | `DiskJsonData.flushLoop()` | ~162 | Drains pending writes sequentially |
 | `DiskJsonData.resolveWaitersUpTo(requestId)` | ~176 | Resolves promises for completed writes |
 | `DiskJsonData.rejectWaitersUpTo(requestId, error)` | ~186 | Rejects promises for failed writes |
@@ -99,6 +99,7 @@ Foxwarm prompt wrappers are XML-like metadata envelopes, not full XML serializat
 ## Behavior
 
 - `DiskJsonData.write()` coalesces rapid writes: only the latest pending data is flushed, earlier intermediate values are skipped but their promises still resolve.
+- A per-write `beforeCommit` fence runs after temp-file fsync and hooks but immediately before rename, allowing an aborted ownership claim to reject and remove the temp file without a late authoritative replace.
 - Writes use an atomic temp-file + fsync + rename + directory-sync pattern to prevent corruption on crash.
 - Backup rotation shifts numbered backups (N → N+1) before each write; errors are swallowed in `bestEffort` mode.
 - `loadFirstAvailable` iterates primary then backups, returning the first parseable file — provides automatic recovery from corruption.

@@ -5,12 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { RpcError } from './rpc';
-import { serializeSessionHistoryPayload } from './session/metadataStore';
+import { captureSessionSemanticState, serializeSessionHistoryPayload, SESSION_STATE_FORMAT_VERSION, withSessionsMetadataWriteLock } from './session/metadataStore';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
-import { mergeSessionWorkerCatalogProjection, writeSessionWorkerCatalogProjection } from './sessionWorkerCatalog';
+import { mergeSessionWorkerCatalogProjection, SessionWorkerCatalogCoordinator, writeSessionWorkerCatalogProjection } from './sessionWorkerCatalog';
 import { buildSessionWorkerCatalogProjection, SessionWorkerPersistence } from './sessionWorkerPersistence';
-import { SessionWorkerStore } from './sessionWorkerStore';
+import { SessionWorkerStore, type SessionWorkerMailboxIntent } from './sessionWorkerStore';
 import type { Session } from './types';
+import type { SessionWorkerMainMutationClaim } from './sessionWorkerSupervisor';
 
 function session(id: string): Session {
   return {
@@ -49,6 +50,11 @@ function appendIntentMessages(target: Session, intents: Array<{ id: number; payl
   target.meta.lastMessageTime = intents[intents.length - 1].id;
 }
 
+function activeClaim(sessionId: string): SessionWorkerMainMutationClaim {
+  const controller = new AbortController();
+  return { id: `claim-${sessionId}`, sessionId, signal: controller.signal, assertActive: () => assert.equal(controller.signal.aborted, false) };
+}
+
 test('save-before-ack accepts a session-local prefix across global ID gaps and leaves concurrent enqueue pending', async () => {
   await withStore(async store => {
     const owner = activate(store, 's');
@@ -73,7 +79,16 @@ test('save-before-ack accepts a session-local prefix across global ID gaps and l
     const current = session('s');
     const prefix = store.listPendingIntents('s');
     assert.deepEqual(prefix.map(item => item.id), [first.id, second.id]);
-    const projection = await persistence.applyAndPersistPrefix(current, owner.generation, owner.incarnationId, prefix, appendIntentMessages);
+    const tamperedSelection = prefix.map(item => ({ ...item, intentId: 'tampered', kind: 'tampered', payload: { text: 'tampered' } }));
+    let callbackIntents: SessionWorkerMailboxIntent[] = [];
+    const projection = await persistence.applyAndPersistPrefix(current, owner.generation, owner.incarnationId, tamperedSelection, (target, intents) => {
+      callbackIntents = structuredClone(intents);
+      appendIntentMessages(target, intents);
+    });
+    assert.deepEqual(callbackIntents.map(item => ({ intentId: item.intentId, kind: item.kind, payload: item.payload })), [
+      { intentId: 'a', kind: 'enqueue', payload: { text: 'a' } },
+      { intentId: 'b', kind: 'enqueue', payload: { text: 'b' } },
+    ]);
     assert.equal(durable?.lastAppliedMailboxId, second.id);
     assert.equal(durable?.history.length, 2);
     assert.equal(store.getOwnership('s').mailboxCursor, second.id);
@@ -100,6 +115,24 @@ test('authoritative JSON write failure leaves mailbox unacknowledged', async () 
     assert.equal(current.history.length, 0);
     assert.equal(store.getOwnership('s').mailboxCursor, 0);
     assert.deepEqual(store.listPendingIntents('s').map(item => item.id), [intent.id]);
+  });
+});
+
+test('mailbox selection rejects ID, session, and order mismatches before callback or state write', async () => {
+  await withStore(async store => {
+    const owner = activate(store, 's');
+    const first = store.enqueueIntent('s', 'a', 'enqueue', { text: 'a' });
+    const second = store.enqueueIntent('s', 'b', 'enqueue', { text: 'b' });
+    let callbacks = 0; let writes = 0;
+    const persistence = new SessionWorkerPersistence(store, { writeState: async () => { writes += 1; } });
+    const apply = () => { callbacks += 1; };
+    await assert.rejects(() => persistence.applyAndPersistPrefix(session('s'), owner.generation, owner.incarnationId,
+      [second, first], apply), (error: any) => error?.code === 'SESSION_WORKER_MAILBOX_CONFLICT');
+    await assert.rejects(() => persistence.applyAndPersistPrefix(session('s'), owner.generation, owner.incarnationId,
+      [{ ...first, sessionId: 'other' }], apply), (error: any) => error?.code === 'SESSION_WORKER_MAILBOX_CONFLICT');
+    await assert.rejects(() => persistence.applyAndPersistPrefix(session('s'), owner.generation, owner.incarnationId,
+      [{ ...first, id: first.id + 100 }], apply), (error: any) => error?.code === 'SESSION_WORKER_MAILBOX_CONFLICT');
+    assert.equal(callbacks, 0); assert.equal(writes, 0);
   });
 });
 
@@ -167,6 +200,127 @@ test('DB cursor ahead of JSON and stale generations fail closed before state wri
   });
 });
 
+test('unversioned state upgrades once by seeding historically catalog-only fields while file fields win', async () => {
+  await withStore(async store => {
+    const owner = activate(store, 'legacy');
+    const base = session('legacy');
+    base.stats.totalInputTokens = 77;
+    base.vectorIndexPosition = 12;
+    base.meta = {
+      lastMessageTime: 90,
+      lastChannel: { channelId: 'web', channelUserId: 'u' },
+      wait: { id: 'catalog-wait' },
+      managedSession: { ownerSessionId: 'owner', leaseId: 'lease', revision: 1, pendingInbox: [] },
+    };
+    base.model = 'catalog-stale';
+    const legacyRaw: any = {
+      history: [{ role: 'user', parts: [{ text: 'legacy' }] }],
+      persistentMemorySnapshot: 'legacy-prompt',
+      model: 'file-wins',
+      queue: [{ type: 'background', parts: [{ text: 'queued' }] }],
+    };
+    let durable: any;
+    const persistence = new SessionWorkerPersistence(store, {
+      readState: async () => structuredClone(legacyRaw),
+      writeState: async current => { durable = structuredClone(serializeSessionHistoryPayload(current)); },
+    });
+    const loaded = await persistence.loadActivated(base, owner.generation, owner.incarnationId);
+    assert.equal(loaded.model, 'file-wins');
+    assert.equal(loaded.stats.totalInputTokens, 77);
+    assert.equal(loaded.vectorIndexPosition, 12);
+    assert.equal(loaded.meta.wait.id, 'catalog-wait');
+    assert.equal(loaded.meta.lastChannel.channelId, 'web');
+    assert.equal(durable.sessionStateVersion, SESSION_STATE_FORMAT_VERSION);
+    assert.equal(durable.stats.totalInputTokens, 77);
+    assert.equal(durable.meta.wait.id, 'catalog-wait');
+    assert.equal(durable.meta.lastChannel, undefined);
+  });
+});
+
+test('current state exactly replaces stale catalog semantics while preserving explicit catalog-only fields', async () => {
+  await withStore(async store => {
+    const owner = activate(store, 'current');
+    const base = session('current');
+    base.queue = [{ type: 'trigger', parts: [{ text: 'stale' }] }];
+    base.model = 'stale-model';
+    base.childModelDefault = 'stale-child';
+    base.vectorIndexPosition = 99;
+    base.contextFrontier = [{ kind: 'message', seq: 99 }];
+    base.meta = { lastMessageTime: 99, wait: { id: 'stale' }, managedSession: { pendingInbox: ['stale'] },
+      lastChannel: { channelId: 'telegram', channelUserId: 'u' } };
+    base.pinned = true; base.sidebarOrder = 3; base.archived = true;
+    const broadcast = (() => {}) as any; base.broadcast = broadcast;
+    let writes = 0;
+    const persistence = new SessionWorkerPersistence(store, {
+      readState: async () => ({ sessionStateVersion: SESSION_STATE_FORMAT_VERSION, history: [], persistentMemorySnapshot: '' }),
+      writeState: async () => { writes += 1; },
+    });
+    const loaded = await persistence.loadActivated(base, owner.generation, owner.incarnationId);
+    assert.deepEqual(loaded.queue, []);
+    assert.equal(loaded.model, undefined);
+    assert.equal(loaded.childModelDefault, undefined);
+    assert.equal(loaded.vectorIndexPosition, undefined);
+    assert.equal(loaded.contextFrontier, undefined);
+    assert.equal(loaded.meta.wait, undefined);
+    assert.equal(loaded.meta.managedSession, undefined);
+    assert.equal(loaded.meta.lastChannel.channelId, 'telegram');
+    assert.equal(loaded.pinned, true); assert.equal(loaded.sidebarOrder, 3); assert.equal(loaded.archived, true);
+    assert.equal(loaded.broadcast, broadcast);
+    assert.equal(writes, 0);
+  });
+});
+
+test('unknown or malformed current state fails closed before rewrite', async () => {
+  await withStore(async store => {
+    const owner = activate(store, 'invalid-state');
+    let writes = 0;
+    const invalidPayloads: Array<Record<string, any>> = [
+      { sessionStateVersion: SESSION_STATE_FORMAT_VERSION + 1, history: [] },
+      { sessionStateVersion: SESSION_STATE_FORMAT_VERSION, history: 'not-an-array' },
+      { sessionStateVersion: SESSION_STATE_FORMAT_VERSION, history: [], lastAppliedMailboxId: -1 },
+    ];
+    for (const [index, raw] of invalidPayloads.entries()) {
+      const persistence = new SessionWorkerPersistence(store, {
+        readState: async () => structuredClone(raw), writeState: async () => { writes += 1; },
+      });
+      await assert.rejects(() => persistence.loadActivated(session('invalid-state'), owner.generation, owner.incarnationId),
+        (error: any) => error?.code === (index === 0 ? 'SESSION_WORKER_STATE_VERSION' : 'SESSION_WORKER_STATE_INVALID'));
+    }
+    assert.equal(writes, 0);
+  });
+});
+
+test('failed state replacement restores exact semantic property presence across optional and nested state', async () => {
+  await withStore(async store => {
+    const owner = activate(store, 'rollback');
+    const intent = store.enqueueIntent('rollback', 'intent', 'enqueue', { text: 'canonical' });
+    const current = session('rollback');
+    current.model = 'before'; current.cwd = '/before'; current.stopping = true;
+    current.history = [{ role: 'user', parts: [{ inlineData: { data: 'before-image', mimeType: 'image/png' } }] }];
+    current.queue = [{ type: 'background', parts: [{ inlineData: { data: 'before-queue', mimeType: 'image/png' } }] }];
+    current.meta.wait = { id: 'before-wait' };
+    current.meta.lastChannel = { channelId: 'before-channel', channelUserId: 'u' };
+    current.meta.managedSession = { ownerSessionId: 'owner', leaseId: 'before-lease', revision: 1,
+      pendingInbox: [{ type: 'background', parts: [{ text: 'before-managed' }] }] };
+    current.contextFrontier = [{ kind: 'message', seq: 1 }];
+    const before = captureSessionSemanticState(current);
+    const persistence = new SessionWorkerPersistence(store, { writeState: async () => { throw new Error('replace failed'); } });
+    await assert.rejects(() => persistence.applyAndPersistPrefix(current, owner.generation, owner.incarnationId, [intent], target => {
+      delete target.model; delete target.stopping;
+      target.cwd = '/after'; target.childModelDefault = 'added';
+      target.history = [{ role: 'model', parts: [{ inlineData: { data: 'after-image', mimeType: 'image/png' } }] }];
+      target.queue = [];
+      target.meta.wait = { id: 'after-wait' };
+      target.meta.lastChannel = { channelId: 'after-channel', channelUserId: 'u' };
+      target.meta.managedSession = { ownerSessionId: 'owner', leaseId: 'after-lease', revision: 2, pendingInbox: [] };
+      target.contextFrontier = [{ kind: 'block', id: 2, level: 1, rawStartSeq: 1, rawEndSeq: 2 }];
+    }), /replace failed/);
+    assert.deepEqual(captureSessionSemanticState(current), before);
+    assert.equal(Object.prototype.hasOwnProperty.call(current, 'childModelDefault'), false);
+    assert.equal(store.getOwnership('rollback').mailboxCursor, 0);
+  });
+});
+
 test('quiesce/reload reconciles lagging ack and main mutation writes state plus bounded catalog projection', async () => {
   await withStore(async store => {
     const owner = activate(store, 's');
@@ -181,26 +335,35 @@ test('quiesce/reload reconciles lagging ack and main mutation writes state plus 
     durableSession.contextFrontier = [{ kind: 'message', seq: intent.id }];
     let durable = structuredClone(serializeSessionHistoryPayload(durableSession));
     const projections: unknown[] = [];
+    const coordinator = new SessionWorkerCatalogCoordinator();
+    coordinator.registerWorker('s', 'owner-1', buildSessionWorkerCatalogProjection(durableSession));
     const persistence = new SessionWorkerPersistence(store, {
       readState: async () => structuredClone(durable),
       writeState: async current => { durable = structuredClone(serializeSessionHistoryPayload(current)); },
       writeCatalogProjection: async projection => { projections.push(structuredClone(projection)); },
+      catalogCoordinator: coordinator,
+      catalogOwnerId: 'owner-1',
     });
-    const reloaded = await persistence.quiesceAndReload(session('s'), async () => {
+    const mutation = await persistence.runMainMutation(session('s'), async (_sessionId, operation) => {
       store.markDraining('s', owner.generation, owner.incarnationId);
       store.markExitObserved('s', owner.generation, owner.incarnationId, 'quiesced');
+      return operation(activeClaim('s'));
+    }, async reloaded => {
+      assert.equal(reloaded.queue.length, 1);
+      assert.equal(reloaded.meta.wait.id, 'wait-1');
+      assert.equal(reloaded.meta.managedSession.pendingInbox.length, 1);
+      assert.deepEqual(reloaded.contextFrontier, [{ kind: 'message', seq: intent.id }]);
+      reloaded.history.push({ role: 'model', parts: [{ text: 'main mutation' }], __meta: { seq: intent.id + 1, timestamp: 20 } });
+      return 'mutated';
     });
     assert.equal(store.getOwnership('s').mailboxCursor, intent.id);
-    assert.equal(reloaded.queue.length, 1);
-    assert.equal(reloaded.meta.wait.id, 'wait-1');
-    assert.equal(reloaded.meta.managedSession.pendingInbox.length, 1);
-    assert.deepEqual(reloaded.contextFrontier, [{ kind: 'message', seq: intent.id }]);
-    reloaded.history.push({ role: 'model', parts: [{ text: 'main mutation' }], __meta: { seq: intent.id + 1, timestamp: 20 } });
-    const projection = await persistence.saveMainMutation(reloaded);
+    const projection = mutation.projection;
     assert.equal(durable.history.length, 2);
     assert.equal(projections.length, 1);
     assert.equal((projections[0] as any).queue, undefined);
     assert.equal(projection.queueLength, 1);
+    assert.equal(coordinator.getOwnership('s')?.mainClaimId, undefined);
+    assert.equal(coordinator.getOwnership('s')?.projection.messageCount, 2);
   });
 });
 
@@ -225,12 +388,43 @@ test('main catalog failure reports that authoritative state already committed', 
       writeState: async current => { durable = structuredClone(current); },
       writeCatalogProjection: async () => { throw new Error('injected catalog failure'); },
     });
-    const current = session('s');
-    current.history.push({ role: 'user', parts: [{ text: 'committed' }] });
-    await assert.rejects(() => persistence.saveMainMutation(current), (error: any) =>
+    await assert.rejects(() => persistence.runMainMutation(session('s'), async (_sessionId, operation) =>
+      operation(activeClaim('s')), async current => {
+        current.history.push({ role: 'user', parts: [{ text: 'committed' }] });
+      }), (error: any) =>
       error?.code === 'SESSION_WORKER_CATALOG_AFTER_STATE_FAILED'
       && error?.details?.stateCommitted === true);
     assert.equal(durable.history[0].parts[0].text, 'committed');
+  });
+});
+
+test('aborted noncooperative main mutation cannot write late or mutate the catalog stub', async () => {
+  await withStore(async store => {
+    const base = session('late'); base.model = 'catalog-stub';
+    const durable = serializeSessionHistoryPayload(session('late'));
+    let stateWrites = 0; let catalogWrites = 0;
+    const persistence = new SessionWorkerPersistence(store, {
+      readState: async () => structuredClone(durable),
+      writeState: async () => { stateWrites += 1; },
+      writeCatalogProjection: async () => { catalogWrites += 1; },
+    });
+    let entered!: () => void; let release!: () => void; let active = true;
+    const enteredPromise = new Promise<void>(resolve => { entered = resolve; });
+    const blocker = new Promise<void>(resolve => { release = resolve; });
+    const controller = new AbortController();
+    const claim: SessionWorkerMainMutationClaim = {
+      id: 'late-claim', sessionId: 'late', signal: controller.signal,
+      assertActive: () => { if (!active || controller.signal.aborted) throw new RpcError('SESSION_WORKER_STALE_MAIN_MUTATION', 'stale'); },
+    };
+    const mutation = persistence.runMainMutation(base, async (_sessionId, operation) => operation(claim), async working => {
+      working.model = 'late-write'; entered(); await blocker;
+    });
+    mutation.catch(() => {});
+    await enteredPromise;
+    active = false; controller.abort(); release();
+    await assert.rejects(() => mutation, (error: any) => error?.code === 'SESSION_WORKER_STALE_MAIN_MUTATION');
+    assert.equal(stateWrites, 0); assert.equal(catalogWrites, 0);
+    assert.equal(base.model, 'catalog-stub');
   });
 });
 
@@ -260,6 +454,15 @@ test('main catalog projection preserves topology/UI fields and removes stale ful
   assert.equal(written.sessions.catalog.displayName, 'Display');
   assert.equal('queue' in written.sessions.catalog, false);
 
+  const mainMutationProjection = structuredClone(projection);
+  mainMutationProjection.mainOwned.displayName = 'Claimed Rename';
+  await writeSessionWorkerCatalogProjection(mainMutationProjection, {
+    load: async () => ({ data: structuredClone(written), source: 'test' }),
+    write: async data => { written = data; },
+    claim: activeClaim('catalog'),
+  });
+  assert.equal(written.sessions.catalog.displayName, 'Claimed Rename');
+
   let concurrentData: any = { sessions: { catalog: existing, other: { id: 'other', displayName: 'Keep', meta: {} } } };
   const otherProjection = { ...projection, sessionId: 'other', lastMessageTime: 99 };
   const dependencies = {
@@ -273,6 +476,54 @@ test('main catalog projection preserves topology/UI fields and removes stale ful
   assert.equal(concurrentData.sessions.catalog.displayName, 'Display');
   assert.equal(concurrentData.sessions.other.displayName, 'Keep');
   assert.equal(concurrentData.sessions.other.meta.lastMessageTime, 99);
+});
+
+test('catalog ownership preserves worker projections and main-only updates in both save orderings and concurrency', async () => {
+  const coordinator = new SessionWorkerCatalogCoordinator();
+  const worker = session('owned');
+  worker.busy = true; worker.stats.totalInputTokens = 12;
+  const firstProjection = buildSessionWorkerCatalogProjection(worker);
+  coordinator.registerWorker('owned', 'generation-1', firstProjection);
+  const latest = mergeSessionWorkerCatalogProjection({ id: 'owned', displayName: 'Old', pinned: true,
+    meta: { lastChannel: { channelId: 'old', channelUserId: 'u' } } }, firstProjection);
+  const staleFullSave = { id: 'owned', displayName: 'New', pinned: false, busy: false,
+    stats: { totalCachedTokens: 0, totalInputTokens: 999, totalOutputTokens: 0, lastUsage: null as any },
+    queue: [{ type: 'trigger', parts: [{ text: 'stale' }] }],
+    meta: { lastChannel: { channelId: 'new', channelUserId: 'u' }, wait: { id: 'stale' } } };
+  const projectionThenFull = coordinator.mergeFullSave('owned', latest, staleFullSave);
+  assert.equal(projectionThenFull.displayName, 'New'); assert.equal(projectionThenFull.pinned, false);
+  assert.equal(projectionThenFull.meta.lastChannel.channelId, 'new');
+  assert.equal(projectionThenFull.busy, true); assert.equal(projectionThenFull.stats.totalInputTokens, 12);
+  assert.equal('queue' in projectionThenFull, false); assert.equal('wait' in projectionThenFull.meta, false);
+
+  const secondWorker = session('owned'); secondWorker.stats.totalInputTokens = 22;
+  const secondProjection = buildSessionWorkerCatalogProjection(secondWorker);
+  coordinator.updateWorker('owned', 'generation-1', secondProjection);
+  const localThenProjection = mergeSessionWorkerCatalogProjection(staleFullSave, secondProjection);
+  assert.equal(localThenProjection.displayName, 'New'); assert.equal(localThenProjection.stats.totalInputTokens, 22);
+  assert.equal('queue' in localThenProjection, false);
+
+  let data: any = { sessions: { owned: projectionThenFull, unrelated: { id: 'unrelated', displayName: 'Keep' } } };
+  const thirdWorker = session('owned'); thirdWorker.stats.totalInputTokens = 33;
+  const thirdProjection = buildSessionWorkerCatalogProjection(thirdWorker);
+  const io = {
+    load: async () => ({ data: structuredClone(data), source: 'test' }),
+    write: async (next: any) => { data = structuredClone(next); },
+  };
+  await Promise.all([
+    withSessionsMetadataWriteLock(async () => {
+      const incoming = { ...staleFullSave, displayName: 'Concurrent Main' };
+      data.sessions.owned = coordinator.mergeFullSave('owned', data.sessions.owned, incoming);
+    }),
+    writeSessionWorkerCatalogProjection(thirdProjection, {
+      ...io, coordinator, ownerId: 'generation-1',
+    }),
+  ]);
+  assert.equal(data.sessions.owned.displayName, 'Concurrent Main');
+  assert.equal(data.sessions.owned.stats.totalInputTokens, 33);
+  assert.equal(data.sessions.unrelated.displayName, 'Keep');
+  coordinator.releaseWorker('owned', 'generation-1');
+  assert.equal(coordinator.getOwnership('owned'), undefined);
 });
 
 test('real state-file writer atomically canonicalizes history/queue/managed images without touching shared catalog', async () => {
@@ -290,6 +541,7 @@ test('real state-file writer atomically canonicalizes history/queue/managed imag
     assert.equal(result.queueRef, true);
     assert.equal(result.managedRef, true);
     assert.equal(result.cursor, 9);
+    assert.equal(result.stateVersion, SESSION_STATE_FORMAT_VERSION);
     assert.deepEqual(result.frontier, [{ kind: 'message', seq: 1 }]);
     assert.equal(result.promptCacheKey, 'cache');
     assert.equal(result.catalogExists, false);

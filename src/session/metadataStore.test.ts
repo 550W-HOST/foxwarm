@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { applySessionHistoryState, collectSessionHistoryFiles, createSessionHistoryStore, createSessionsMetadataStore, serializeSessionHistoryPayload, stripSessionMetadataForSave } from './metadataStore';
+import { collectSessionHistoryFiles, createSessionHistoryStore, createSessionsMetadataStore, prepareSessionSemanticStateForHydration, replaceSessionSemanticState, serializeSessionHistoryPayload, stripSessionMetadataForSave } from './metadataStore';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-session-metadata-store-'));
@@ -127,12 +127,13 @@ test('session history payload embeds context frontier and recovery ignores legac
       lastAppliedMailboxId: 7,
     };
     const payload = serializeSessionHistoryPayload(session);
+    assert.equal(payload.sessionStateVersion, 1);
     assert.deepEqual(payload.contextFrontier, [{ kind: 'message', seq: 1 }]);
     assert.equal(payload.lastAppliedMailboxId, 7);
     assert.equal(payload.meta.wait.id, 'wait-1');
 
     const target: any = { history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 } };
-    applySessionHistoryState(target, payload);
+    replaceSessionSemanticState(target, prepareSessionSemanticStateForHydration(target, payload).snapshot);
     assert.deepEqual(target.contextFrontier, [{ kind: 'message', seq: 1 }]);
     assert.equal(target.lastAppliedMailboxId, 7);
     assert.equal(target.meta.managedSession.leaseId, 'lease');
@@ -141,7 +142,7 @@ test('session history payload embeds context frontier and recovery ignores legac
 
 test('legacy goal end-turn setting loads but is omitted from current writes', () => {
   const target: any = { history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 } };
-  applySessionHistoryState(target, {
+  const legacy = {
     goalState: {
       goal: 'Preserve the long-running task',
       remindEvery: 5,
@@ -149,7 +150,8 @@ test('legacy goal end-turn setting loads but is omitted from current writes', ()
       anchorSeq: 3,
       updatedAt: 1,
     },
-  });
+  };
+  replaceSessionSemanticState(target, prepareSessionSemanticStateForHydration(target, legacy).snapshot);
 
   assert.equal(target.goalState.goal, 'Preserve the long-running task');
   assert.equal(target.goalState.remindOnTurnEnd, false);
