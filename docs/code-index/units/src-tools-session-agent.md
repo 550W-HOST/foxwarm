@@ -14,6 +14,8 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `tool_create_agent`, `tool_list_agents`, `tool_set_agent_inherit`, `tool_set_agent_isolated`, `tool_move_session`, `tool_create_session` — agent/session management
 - `tool_skill` — skill list/load actions
 - `tool_set_goal`, `tool_set_session_compact_threshold`, `tool_set_session_child_model`, `tool_update_session_snapshot` — settings
+
+`tool_set_goal` mutates the passed current Session with the existing pure goal functions. Normal turn execution persists through the local-only `persistCurrentSession` tool-context hook; legacy/direct callers without the hook retain the authoritative SessionManager save fallback. Other settings tools remain on their existing SessionRuntime/SessionManager paths.
 - `tool_session`, `tool_delete_session`, `tool_stop_session`, `tool_compact_session` — session status/list/display-name update and lifecycle
 
 ## Function Index

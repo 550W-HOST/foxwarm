@@ -27,6 +27,8 @@ export interface ToolContext {
     queueSystemEvent?: (message: string, type?: 'background' | 'trigger' | 'onboot') => Promise<void>;
     runtimeNodeId?: string;
     deferSessionCwdSync?: boolean;
+    /** In-process owner hook for persisting ctx.session; never serialized as a tool/RPC DTO. */
+    persistCurrentSession?: () => Promise<void>;
 }
 
 // Tool function type

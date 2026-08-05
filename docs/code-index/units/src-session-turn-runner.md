@@ -29,7 +29,7 @@ This extraction is behavior-preserving and local-only. One turn-specific `Sessio
 
 ## Main collaborators
 
-- `LocalSessionTurnHost` delegates live session load, queue/busy persistence, canonical history append, wait, runtime-state, compact, child reminder, provider/tool execution, and channel delivery to their existing owners. Its provider/tool delegates inject one local-only `CurrentSessionEffects` object for append/persist, stream events, abort registration, and explicit-wait rollback; detached tests may provide alternate effects without changing the runner or provider schema.
+- `LocalSessionTurnHost` delegates live session load, queue/busy persistence, canonical history append, wait, runtime-state, compact, child reminder, provider/tool execution, and channel delivery to their existing owners. Its provider/tool delegates inject one local-only `CurrentSessionEffects` object for append/persist, stream events, abort registration, and explicit-wait rollback; detached tests may provide alternate effects without changing the runner or provider schema. Tool execution derives a local-only current-session persist callback from that same owner.
 - Pure session-local policy helpers such as goal/managed-state checks, usage thresholds, and provider error predicates remain direct runner dependencies rather than host capabilities.
 - `session/goal`, `session/managedState`, and `session/snapshotRefresh` — existing safe-point and lifecycle rules.
 - Channel context/session broadcast functions — typing, retry/progress, tool progress, final reply, and `turnFinal` effects.

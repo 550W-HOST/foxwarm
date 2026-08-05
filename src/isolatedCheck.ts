@@ -8,6 +8,8 @@ import { AGENTS_DIR, getAgentDir } from './config';
 import * as path from 'path';
 import { buildIsolatedToolRules, evaluatePermission } from './permissions';
 import { expandHomePath } from './utils/pathResolve';
+import * as agentMetadata from './session/agentMetadata';
+import type { Session } from './types';
 
 /**
  * Check if isolated session can use a specific tool
@@ -24,9 +26,20 @@ export async function checkToolPermission(
   toolArgs?: Record<string, any>
 ): Promise<void> {
   const session = await sessionManager.getExistingSession(sessionId);
-  if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
+  if (!session) return;
+  await checkToolPermissionForSession(session, toolName, executionNode, toolArgs);
+}
+
+/** Check a tool against an already-authoritative current Session without loading the global session map. */
+export async function checkToolPermissionForSession(
+  session: Session,
+  toolName: string,
+  executionNode?: string,
+  toolArgs?: Record<string, any>,
+): Promise<void> {
+  if (!agentMetadata.isSessionEffectivelyIsolated(session)) return;
   const agentName = session?.agent || 'main';
-  const boundNode = sessionManager.getAgentIsolationNode(agentName) || session?.currentNode || 'master';
+  const boundNode = agentMetadata.getAgentIsolationNode(agentName) || session?.currentNode || 'master';
   const extraRuntimeNodes = session?.currentNode && session.currentNode !== boundNode
     ? [session.currentNode]
     : [];
@@ -38,7 +51,7 @@ export async function checkToolPermission(
 
   const timerTools = ['create_timer', 'list_timers', 'update_timer', 'delete_timer'];
   if (timerTools.includes(toolName)) {
-    await checkTimerPermission(sessionId, {
+    checkTimerPermissionForSession(session, {
       targetSessionId: toolArgs?.sessionId,
       newSession: toolArgs?.newSession,
       agentName: toolArgs?.agentName,
@@ -247,11 +260,24 @@ export async function checkTimerPermission(
   if (!sessionId) return;
 
   const session = await sessionManager.getExistingSession(sessionId);
-  if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
+  if (!session) return;
+  checkTimerPermissionForSession(session, options);
+}
+
+export function checkTimerPermissionForSession(
+  session: Session,
+  options: {
+    targetSessionId?: string;
+    newSession?: unknown;
+    agentName?: unknown;
+    sessionPrefix?: unknown;
+  } = {},
+): void {
+  if (!agentMetadata.isSessionEffectivelyIsolated(session)) return;
 
   const callerAgent = session?.agent || 'main';
-  const targetSessionId = options.targetSessionId || sessionId;
-  if (targetSessionId !== sessionId) {
+  const targetSessionId = options.targetSessionId || session.id;
+  if (targetSessionId !== session.id) {
     throw new Error('Isolated session can only manage timers for its own current session.');
   }
 

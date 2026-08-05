@@ -14,7 +14,7 @@ import * as nodeExecution from './nodeExecution';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
-import { checkToolPermission, checkPathAccess } from './isolatedCheck';
+import { checkToolPermission, checkToolPermissionForSession, checkPathAccess } from './isolatedCheck';
 import { expandHomePath } from './utils/pathResolve';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
@@ -1324,7 +1324,11 @@ async function prepareToolCall(
     const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition?.parameters?.properties || {}, 'node');
     const nodeParam = supportsExplicitNode ? call.args?.node : undefined;
     const sessionId = toolContext.sessionId || 'main';
-    const currentNode = snapshot?.currentNode || await nodesManager.getCurrentNode(sessionId) || 'master';
+    const passedSession = session && typeof session.id === 'string' && session.id === sessionId
+        ? session as Session
+        : undefined;
+    const currentNode = snapshot?.currentNode
+        || (passedSession ? passedSession.currentNode || 'master' : await nodesManager.getCurrentNode(sessionId) || 'master');
     const targetNode = normalizeRequestedNode(nodeParam, currentNode);
     const toolArgs = { ...call.args };
     if (supportsExplicitNode) delete toolArgs.node;
@@ -1368,7 +1372,14 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
 
     try {
         if (!result?.error) {
-            await checkToolPermission(prepared.call.name, prepared.sessionId, prepared.permissionNode, prepared.toolArgs);
+            const passedSession = toolContext.session && typeof toolContext.session.id === 'string' && toolContext.session.id === prepared.sessionId
+                ? toolContext.session as Session
+                : undefined;
+            if (passedSession) {
+                await checkToolPermissionForSession(passedSession, prepared.call.name, prepared.permissionNode, prepared.toolArgs);
+            } else {
+                await checkToolPermission(prepared.call.name, prepared.sessionId, prepared.permissionNode, prepared.toolArgs);
+            }
         }
         if (!result?.error && prepared.executionNode !== 'master') {
             result = normalizeExecutedToolResult(await nodeExecution.executeRemoteNodeTool(
@@ -1504,6 +1515,16 @@ export async function executeTools(
     session: any,
     options?: { currentSessionEffects?: CurrentSessionEffects },
 ): Promise<Message> {
+    if (options?.currentSessionEffects
+        && session && typeof session.id === 'string' && session.id
+        && (!toolContext.sessionId || toolContext.sessionId === session.id)) {
+        toolContext = {
+            ...toolContext,
+            sessionId: toolContext.sessionId || session.id,
+            session,
+            persistCurrentSession: () => options.currentSessionEffects!.persistSession(session),
+        };
+    }
     const executions: ExecutedToolCall[] = [];
     let cursor = 0;
 
@@ -1526,7 +1547,9 @@ export async function executeTools(
         const segmentStart = cursor;
         while (cursor < functionCalls.length && functionCalls[cursor].name === 'exec') cursor++;
         const snapshot: ToolExecutionSnapshot = {
-            currentNode: await nodesManager.getCurrentNode(toolContext.sessionId || 'main') || 'master',
+            currentNode: session && typeof session.id === 'string' && session.id === (toolContext.sessionId || 'main')
+                ? session.currentNode || 'master'
+                : await nodesManager.getCurrentNode(toolContext.sessionId || 'main') || 'master',
             cwd: typeof session?.cwd === 'string' ? session.cwd : undefined,
         };
         const preparedSegment: PreparedToolCall[] = [];

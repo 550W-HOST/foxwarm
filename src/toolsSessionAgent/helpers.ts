@@ -14,6 +14,8 @@ export interface ToolContext {
   session?: any;
   broadcast?: (text: string, options?: any) => Promise<void>;
   runtimeNodeId?: string;
+  /** In-process owner hook for persisting ctx.session; never serialized as a tool/RPC DTO. */
+  persistCurrentSession?: () => Promise<void>;
 }
 
 export type ToolArgs = Record<string, any>;

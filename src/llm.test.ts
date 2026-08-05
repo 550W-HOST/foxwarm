@@ -16,6 +16,7 @@ import { reconstructLlmRequest, setLlmRequestJournalFaultInjectorForTests } from
 import { LocalSessionTurnHost } from './sessionTurnRunner';
 import * as tools from './tools';
 import * as llmModule from './llm';
+import { nodesManager } from './nodes/manager';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -510,6 +511,84 @@ test('LocalSessionTurnHost clears explicit wait through injected effects when a 
     assert.equal((message as any).__toolLoopControl, undefined);
   } finally {
     (tools as any).wait = originalWait;
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('LocalSessionTurnHost executes detached read and set_goal without global source-session lookup', async () => {
+  const session = createOpenAITestSession(makeId('detached_tool_owner'));
+  session.agent = 'main';
+  const dirPath = await fs.mkdtemp('/tmp/foxwarm-detached-tools-');
+  const filePath = `${dirPath}/probe.txt`;
+  await fs.writeFile(filePath, 'detached read ok');
+  assert.equal(sessionManager.getAllSessions().has(session.id), false);
+
+  const originals = {
+    getSession: sessionManager.getSession,
+    getExistingSession: sessionManager.getExistingSession,
+    saveSession: sessionManager.saveSession,
+    getCurrentNode: nodesManager.getCurrentNode,
+  };
+  const unexpectedLookup = () => { throw new Error('detached tool execution touched the global source-session map'); };
+  (sessionManager as any).getSession = unexpectedLookup;
+  (sessionManager as any).getExistingSession = unexpectedLookup;
+  (sessionManager as any).saveSession = unexpectedLookup;
+  (nodesManager as any).getCurrentNode = unexpectedLookup;
+  let persisted = 0;
+  const effects = createDefaultCurrentSessionEffects();
+  effects.persistSession = async target => {
+    assert.equal(target, session);
+    persisted += 1;
+  };
+
+  try {
+    const message = await new LocalSessionTurnHost(effects).executeTools([
+      { id: 'detached-goal', name: 'set_goal', args: { goal: 'Keep detached ownership', remindEvery: 7 } },
+      { id: 'detached-read', name: 'read', args: { filePath } },
+    ], { sessionId: session.id, session }, session);
+    assert.deepEqual(session.goalState && {
+      goal: session.goalState.goal,
+      remindEvery: session.goalState.remindEvery,
+      anchorSeq: session.goalState.anchorSeq,
+    }, { goal: 'Keep detached ownership', remindEvery: 7, anchorSeq: 0 });
+    assert.equal(persisted, 1);
+    assert.deepEqual(message.parts[0].functionResponse?.response, { output: 'ok' });
+    assert.match(String((message.parts[1].functionResponse?.response as any)?.output), /detached read ok/);
+    assert.equal(sessionManager.getAllSessions().has(session.id), false);
+  } finally {
+    Object.assign(sessionManager, {
+      getSession: originals.getSession,
+      getExistingSession: originals.getExistingSession,
+      saveSession: originals.saveSession,
+    });
+    (nodesManager as any).getCurrentNode = originals.getCurrentNode;
+    await fs.remove(dirPath);
+  }
+});
+
+test('executeTools without a passed Session retains ID-based routing and permission fallback', async () => {
+  const sessionId = makeId('legacy_tool_context');
+  await sessionManager.getSession(sessionId);
+  const dirPath = await fs.mkdtemp('/tmp/foxwarm-legacy-tools-');
+  const filePath = `${dirPath}/probe.txt`;
+  await fs.writeFile(filePath, 'legacy fallback ok');
+  const originalGetCurrentNode = nodesManager.getCurrentNode;
+  let nodeLookups = 0;
+  (nodesManager as any).getCurrentNode = async (targetId: string) => {
+    assert.equal(targetId, sessionId);
+    nodeLookups += 1;
+    return 'master';
+  };
+
+  try {
+    const message = await llmModule.executeTools([
+      { id: 'legacy-read', name: 'read', args: { filePath } },
+    ], { sessionId }, undefined as any);
+    assert.equal(nodeLookups, 1);
+    assert.match(String((message.parts[0].functionResponse?.response as any)?.output), /legacy fallback ok/);
+  } finally {
+    (nodesManager as any).getCurrentNode = originalGetCurrentNode;
+    await fs.remove(dirPath);
     await sessionManager.deleteSession(sessionId).catch(() => false);
   }
 });

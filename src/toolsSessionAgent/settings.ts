@@ -15,20 +15,23 @@ export async function tool_set_goal(args: ToolArgs, ctx: ToolContext) {
 
   if (clear) {
     clearSessionGoal(session);
-    await sessionManager.saveSession(session.id);
+    if (ctx.persistCurrentSession) await ctx.persistCurrentSession();
+    else await sessionManager.saveSession(session.id);
     return 'ok';
   }
 
   const goal = normalizeGoalText(args.goal);
   if (!goal) {
     clearSessionGoal(session);
-    await sessionManager.saveSession(session.id);
+    if (ctx.persistCurrentSession) await ctx.persistCurrentSession();
+    else await sessionManager.saveSession(session.id);
     return 'ok';
   }
 
   const remindEvery = resolveSessionGoalRemindEvery(session, args.remindEvery);
   setSessionGoal(session, goal, remindEvery);
-  await sessionManager.saveSession(session.id);
+  if (ctx.persistCurrentSession) await ctx.persistCurrentSession();
+  else await sessionManager.saveSession(session.id);
 
   return 'ok';
 }
