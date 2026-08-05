@@ -65,14 +65,14 @@ export interface SessionTurnHost {
   getExistingSession: typeof sessionManager.getExistingSession;
   isSessionDestructiveLifecycleClaimed: typeof sessionManager.isSessionDestructiveLifecycleClaimed;
   updateSessionBusyState: typeof sessionManager.updateSessionBusyState;
-  saveSession: typeof sessionManager.saveSession;
+  saveSession(session: Session): Promise<void>;
   appendSessionMessage: typeof sessionManager.appendSessionMessage;
   appendSessionMessages: typeof sessionManager.appendSessionMessages;
   notifyHistoryUpdate: typeof sessionManager.notifyHistoryUpdate;
   applyCompletedCompactJob: typeof sessionManager.applyCompletedCompactJob;
   processSessionCompactionRequest: typeof sessionManager.processSessionCompactionRequest;
   checkAndCompactIfNeeded: typeof sessionManager.checkAndCompactIfNeeded;
-  startSessionWait: typeof sessionManager.startSessionWait;
+  startSessionWait(session: Session, options?: Parameters<typeof sessionManager.startSessionWaitForSession>[1]): Promise<sessionManager.SessionWaitState>;
   queueSessionSystemEvent: typeof sessionManager.queueSessionSystemEvent;
   setActiveSessionRuntimeState: typeof sessionManager.setActiveSessionRuntimeState;
   clearActiveSessionRuntimeState: typeof sessionManager.clearActiveSessionRuntimeState;
@@ -87,23 +87,57 @@ export interface SessionTurnHost {
 
 /** Existing in-process effects, exposed without changing their behavior. */
 export class LocalSessionTurnHost implements SessionTurnHost {
-  constructor(private readonly currentSessionEffects: llm.CurrentSessionEffects = llm.createDefaultCurrentSessionEffects()) {}
+  private readonly currentSessionEffects: llm.CurrentSessionTurnEffects;
 
-  get getSession(): typeof sessionManager.getSession { return sessionManager.getSession; }
-  get getExistingSession(): typeof sessionManager.getExistingSession { return sessionManager.getExistingSession; }
+  constructor(effects?: llm.CurrentSessionEffects, private readonly ownerSession?: Session) {
+    const defaults = llm.createDefaultCurrentSessionEffects();
+    effects ||= defaults;
+    const turnEffects = effects as Partial<llm.CurrentSessionTurnEffects>;
+    const bind = <T extends (...args: any[]) => any>(method: T): T => method.bind(effects) as T;
+    const notifyHistoryUpdate = turnEffects.notifyHistoryUpdate ? bind(turnEffects.notifyHistoryUpdate) : defaults.notifyHistoryUpdate;
+    this.currentSessionEffects = {
+      ...defaults,
+      appendMessage: bind(effects.appendMessage),
+      persistSession: bind(effects.persistSession),
+      notifySessionEvent: bind(effects.notifySessionEvent),
+      registerAbortController: bind(effects.registerAbortController),
+      clearAbortController: bind(effects.clearAbortController),
+      clearWaitById: bind(effects.clearWaitById),
+      ...(effects.execRuntime ? { execRuntime: effects.execRuntime } : {}),
+      appendMessages: turnEffects.appendMessages
+        ? bind(turnEffects.appendMessages)
+        : ((session, messages) => sessionManager.appendSessionMessagesForSession(
+          session, messages, () => effects.persistSession(session), notifyHistoryUpdate,
+        )),
+      updateBusy: turnEffects.updateBusy ? bind(turnEffects.updateBusy) : defaults.updateBusy,
+      startWait: turnEffects.startWait
+        ? bind(turnEffects.startWait)
+        : ((session, options) => sessionManager.startSessionWaitForSession(session, options, () => effects.persistSession(session))),
+      notifyHistoryUpdate,
+      setRuntimeState: turnEffects.setRuntimeState ? bind(turnEffects.setRuntimeState) : defaults.setRuntimeState,
+      clearRuntimeState: turnEffects.clearRuntimeState ? bind(turnEffects.clearRuntimeState) : defaults.clearRuntimeState,
+    };
+  }
+
+  getSession(sessionId: string): Promise<Session> {
+    return this.ownerSession?.id === sessionId ? Promise.resolve(this.ownerSession) : sessionManager.getSession(sessionId);
+  }
+  getExistingSession(sessionId: string): Promise<Session | null> {
+    return this.ownerSession?.id === sessionId ? Promise.resolve(this.ownerSession) : sessionManager.getExistingSession(sessionId);
+  }
   get isSessionDestructiveLifecycleClaimed(): typeof sessionManager.isSessionDestructiveLifecycleClaimed { return sessionManager.isSessionDestructiveLifecycleClaimed; }
-  get updateSessionBusyState(): typeof sessionManager.updateSessionBusyState { return sessionManager.updateSessionBusyState; }
-  get saveSession(): typeof sessionManager.saveSession { return sessionManager.saveSession; }
-  get appendSessionMessage(): typeof sessionManager.appendSessionMessage { return sessionManager.appendSessionMessage; }
-  get appendSessionMessages(): typeof sessionManager.appendSessionMessages { return sessionManager.appendSessionMessages; }
-  get notifyHistoryUpdate(): typeof sessionManager.notifyHistoryUpdate { return sessionManager.notifyHistoryUpdate; }
+  updateSessionBusyState(session: Session, busy: boolean): Promise<void> { return this.currentSessionEffects.updateBusy(session, busy); }
+  saveSession(session: Session): Promise<void> { return this.currentSessionEffects.persistSession(session); }
+  appendSessionMessage(session: Session, message: Message): Promise<void> { return this.currentSessionEffects.appendMessage(session, message); }
+  appendSessionMessages(session: Session, messages: Message[]): Promise<void> { return this.currentSessionEffects.appendMessages(session, messages); }
+  notifyHistoryUpdate(sessionId: string, message: Message): void { this.currentSessionEffects.notifyHistoryUpdate(sessionId, message); }
   get applyCompletedCompactJob(): typeof sessionManager.applyCompletedCompactJob { return sessionManager.applyCompletedCompactJob; }
   get processSessionCompactionRequest(): typeof sessionManager.processSessionCompactionRequest { return sessionManager.processSessionCompactionRequest; }
   get checkAndCompactIfNeeded(): typeof sessionManager.checkAndCompactIfNeeded { return sessionManager.checkAndCompactIfNeeded; }
-  get startSessionWait(): typeof sessionManager.startSessionWait { return sessionManager.startSessionWait; }
+  startSessionWait(session: Session, options?: Parameters<typeof sessionManager.startSessionWaitForSession>[1]): Promise<sessionManager.SessionWaitState> { return this.currentSessionEffects.startWait(session, options); }
   get queueSessionSystemEvent(): typeof sessionManager.queueSessionSystemEvent { return sessionManager.queueSessionSystemEvent; }
-  get setActiveSessionRuntimeState(): typeof sessionManager.setActiveSessionRuntimeState { return sessionManager.setActiveSessionRuntimeState; }
-  get clearActiveSessionRuntimeState(): typeof sessionManager.clearActiveSessionRuntimeState { return sessionManager.clearActiveSessionRuntimeState; }
+  setActiveSessionRuntimeState(sessionId: string, state: Parameters<typeof sessionManager.setActiveSessionRuntimeState>[1]): void { this.currentSessionEffects.setRuntimeState(sessionId, state); }
+  clearActiveSessionRuntimeState(sessionId: string): void { this.currentSessionEffects.clearRuntimeState(sessionId); }
   get refreshSessionSnapshot(): typeof sessionManager.refreshSessionSnapshot { return sessionManager.refreshSessionSnapshot; }
   get chat(): typeof llm.chat {
     return (parts, session, iteration, options) => {
@@ -288,7 +322,7 @@ export class SessionTurnRunner {
             status: event.status,
           },
         };
-        await this.host.saveSession(session.id);
+        await this.host.saveSession(session);
         this.host.notifyHistoryUpdate(session.id, retryMessage);
       }
 
@@ -483,7 +517,7 @@ export class SessionTurnRunner {
         this.host.clearActiveSessionRuntimeState(session.id);
         session.busy = false;
         session.busyStartedAt = undefined;
-        await this.host.saveSession(session.id);
+        await this.host.saveSession(session);
         return committedMessages;
       }
 
@@ -492,7 +526,7 @@ export class SessionTurnRunner {
         await this.host.appendSessionMessages(session, messages);
         committedMessages += messages.length;
       } else {
-        await this.host.saveSession(session.id);
+        await this.host.saveSession(session);
       }
       if (applyCompactCommit) {
         try {
@@ -524,7 +558,7 @@ export class SessionTurnRunner {
       return false;
     }
 
-    await this.host.saveSession(session.id);
+    await this.host.saveSession(session);
 
     if (session.queue[0]?.type === 'compact-commit') {
       const nextItem = session.queue.shift();
@@ -596,7 +630,7 @@ export class SessionTurnRunner {
       this.host.clearActiveSessionRuntimeState(session.id);
       session.busy = false;
       session.busyStartedAt = undefined;
-      await this.host.saveSession(session.id);
+      await this.host.saveSession(session);
     }
   }
 
@@ -830,7 +864,7 @@ export class SessionTurnRunner {
         if (session.stopping) {
           logger.info({ sessionId: session.id }, 'Session stopping flag detected, halting tool call loop');
           stoppedByUser = true;
-          await this.host.saveSession(session.id);
+          await this.host.saveSession(session);
 
           finalResponse = finalResponse
             ? finalResponse + '\n\n_[Execution stopped by user]_'
@@ -862,7 +896,7 @@ export class SessionTurnRunner {
           if (session.stopping && llm.isAbortError(e)) {
             logger.info({ sessionId: session.id }, 'In-flight LLM request aborted by stop signal');
             stoppedByUser = true;
-            await this.host.saveSession(session.id);
+            await this.host.saveSession(session);
 
             finalResponse = finalResponse
               ? finalResponse + '\n\n_[Execution stopped by user]_'
@@ -958,7 +992,7 @@ export class SessionTurnRunner {
 
         const waitForReply = (toolResultMsg as any).__toolPostAction?.waitForReply === true;
         if (waitForReply && !session.stopping && !session.meta?.wait) {
-          await this.host.startSessionWait(session.id);
+          await this.host.startSessionWait(session);
         }
 
         const managedStateAfterTools = getManagedSessionState(session);
@@ -976,7 +1010,7 @@ export class SessionTurnRunner {
         if (session.stopping) {
           logger.info({ sessionId: session.id, iteration }, 'Session stopping flag detected after tool execution, halting tool call loop');
           stoppedByUser = true;
-          await this.host.saveSession(session.id);
+          await this.host.saveSession(session);
 
           finalResponse = finalResponse
             ? finalResponse + '\n\n_[Execution stopped by user]_'
@@ -1086,7 +1120,7 @@ export class SessionTurnRunner {
       this.host.clearActiveSessionRuntimeState(session.id);
       session.busy = false;
       session.busyStartedAt = undefined;
-      await this.host.saveSession(session.id);
+      await this.host.saveSession(session);
     }
   }
 
@@ -1131,7 +1165,7 @@ export class SessionTurnRunner {
       this.host.clearActiveSessionRuntimeState(session.id);
       session.busy = false;
       session.busyStartedAt = undefined;
-      await this.host.saveSession(session.id);
+      await this.host.saveSession(session);
     } finally {
       this.processingSessions.delete(sessionId);
       // An item can become visible after the previous loop's final queue scan

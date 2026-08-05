@@ -19,15 +19,16 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - `createSessionInAgentWithAutomaticName` — runs a caller-supplied automatic name generator inside the identity commit lock and retries reserved candidates.
 - `getOrCreateSessionForChannel` — per-channel serialized first-session creation and attachment, with an optional guest/session factory and attachment config.
 - `getExistingSession`, `getSession`, `createEmptySession`, `createSession`, `deleteSession`, `archiveSession` — lifecycle operations.
-- `saveSession`, `saveSessionsMetadata`, `loadSessions`, `listSessions`, `getAllSessions` — persistence and enumeration.
+- `saveSession`, `saveSessionsMetadata`, `loadSessions`, `listSessions`, `getAllSessions` — persistence and enumeration. `saveSession` accepts either an ID-backed local lookup or an exact supplied Session owner; both share the same state/metadata/index/event composition.
 - `setSessionCwd`, `setSessionChildModelDefault`, `setSessionCompactThreshold` — persisted session settings.
-- `appendSessionMessage`, `appendSessionMessages`, `getSessionMessages` — durable history access.
+- `appendSessionMessage`, `appendSessionMessages`, `getSessionMessages` — durable history access. `appendSessionMessagesForSession` exposes the same sequence/image/archive/frontier/persist/notify composition for an exact supplied owner and persistence hook.
 
 ### Queue, wait, and execution coordination
 
 - `enqueueSessionItem` — canonical queue insertion with wait-state and managed-inbox handling.
 - `claimSessionsForDestructiveLifecycle`, `releaseSessionsForDestructiveLifecycle`, `assertSessionDestructiveMutationAllowed` — bounded process-local WebUI delete coordination; mutation entry points reject late work/relation/channel changes while a claimed subtree is being deleted.
 - `queueSessionEvent`, `queueSessionStructuredEvent`, `queueSessionMessageEvent`, `queueSessionSystemEvent` — typed event wrappers.
+- `updateSessionBusyStateForSession`, `updateSessionBusyState` — exact-owner and current local metadata-backed forms of the same busy/busy-start/runtime-clear/persist/notify transition.
 - `startSessionWaitForSession`, `startSessionWait`, `clearSessionWaitById`, `queueSessionWaitTimeoutEvent`, `clearSessionWaitForDirectTurn` — passed-owner and ID-loading forms of the same persisted wait mutation, token-aware surgical cleanup, and race-safe timeout events.
 - `requestSessionStop`, `requestSessionDequeue`, `retrySession` — current run/queue controls; retry delegates directly to the router without queue persistence.
 - `setSessionTriggerCallback`, `setSessionRetryCallback`, `triggerSessionProcessing`, `resumeBusySessions` — router/scheduler integration and restart recovery.

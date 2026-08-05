@@ -193,15 +193,31 @@ export interface CurrentSessionEffects {
     execRuntime?: import('./execManager').ExecRuntime;
 }
 
-export function createDefaultCurrentSessionEffects(): CurrentSessionEffects {
+export interface CurrentSessionTurnEffects extends CurrentSessionEffects {
+    appendMessages(session: Session, messages: Message[]): Promise<void>;
+    updateBusy(session: Session, busy: boolean): Promise<void>;
+    startWait(session: Session, options?: Parameters<typeof sessionManager.startSessionWaitForSession>[1]): Promise<sessionManager.SessionWaitState>;
+    notifyHistoryUpdate(sessionId: string, message: Message): void;
+    setRuntimeState: typeof sessionManager.setActiveSessionRuntimeState;
+    clearRuntimeState: typeof sessionManager.clearActiveSessionRuntimeState;
+}
+
+export function createDefaultCurrentSessionEffects(): CurrentSessionTurnEffects {
+    const persistSession = async (session: Session) => {
+        if (session.id && sessionManager.getAllSessions().get(session.id) === session) {
+            await sessionManager.saveSession(session);
+        }
+    };
     return {
         appendMessage: (session, message) => sessionManager.appendSessionMessage(session, message),
-        persistSession: async (session) => {
-            if (session.id && sessionManager.getAllSessions().get(session.id) === session) {
-                await sessionManager.saveSession(session.id);
-            }
-        },
+        appendMessages: (session, messages) => sessionManager.appendSessionMessages(session, messages),
+        persistSession,
+        updateBusy: (session, busy) => sessionManager.updateSessionBusyState(session, busy),
+        startWait: (session, options) => sessionManager.startSessionWaitForSession(session, options, () => persistSession(session)),
+        notifyHistoryUpdate: (sessionId, message) => sessionManager.notifyHistoryUpdate(sessionId, message),
         notifySessionEvent: (sessionId, event) => sessionManager.notifySessionEvent(sessionId, event),
+        setRuntimeState: (sessionId, state) => sessionManager.setActiveSessionRuntimeState(sessionId, state),
+        clearRuntimeState: sessionId => sessionManager.clearActiveSessionRuntimeState(sessionId),
         registerAbortController: (sessionId, controller) => sessionManager.registerSessionAbortController(sessionId, controller),
         clearAbortController: (sessionId, controller) => sessionManager.clearSessionAbortController(sessionId, controller),
         clearWaitById: (sessionId, waitId) => sessionManager.clearSessionWaitById(sessionId, waitId),

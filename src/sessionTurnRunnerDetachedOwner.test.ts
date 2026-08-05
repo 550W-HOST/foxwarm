@@ -1,0 +1,200 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import * as llm from './llm';
+import * as sessionManager from './sessionManager';
+import { initArchiveStore } from './session/archiveStore';
+import { readArchiveMessages } from './session/archive';
+import { writeAuthoritativeSessionState } from './session/stateFile';
+import { readSessionHistorySnapshot } from './session/metadataStore';
+import { LocalSessionTurnHost, SessionTurnRunner } from './sessionTurnRunner';
+import type { Message, Session } from './types';
+
+function createSession(id: string, text: string): Session {
+  return {
+    id,
+    agent: 'main',
+    history: [],
+    contextFrontier: [],
+    persistentMemorySnapshot: 'detached system prompt',
+    systemPromptFiles: [],
+    snapshotUpdatedAt: Date.now(),
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false,
+    queue: [{ type: 'background', parts: [{ text }] }],
+    meta: { lastMessageTime: Date.now() },
+  } as Session;
+}
+
+function createEffects(session: Session, events: string[]): llm.CurrentSessionTurnEffects {
+  const persistSession = async (owner: Session) => {
+    assert.strictEqual(owner, session);
+    events.push(`persist:${owner.busy ? 'busy' : 'idle'}:${owner.history.length}`);
+    await writeAuthoritativeSessionState(owner);
+  };
+  const notifyHistoryUpdate = (sessionId: string, message: Message) => {
+    assert.equal(sessionId, session.id);
+    events.push(`history:${message.role}`);
+  };
+  const appendMessages = (owner: Session, messages: Message[]) => sessionManager.appendSessionMessagesForSession(
+    owner,
+    messages,
+    () => persistSession(owner),
+    notifyHistoryUpdate,
+  );
+  return {
+    appendMessage: (owner, message) => appendMessages(owner, [message]),
+    appendMessages,
+    persistSession,
+    updateBusy: (owner, busy) => sessionManager.updateSessionBusyStateForSession(
+      owner,
+      busy,
+      () => persistSession(owner),
+      id => { events.push(`runtime-clear:${id}`); },
+      id => { events.push(`state:${id}`); },
+    ),
+    startWait: (owner, options) => sessionManager.startSessionWaitForSession(owner, options, () => persistSession(owner)),
+    notifyHistoryUpdate,
+    notifySessionEvent: (_id, event) => { events.push(`stream:${event.type}`); },
+    setRuntimeState: (_id, state) => { events.push(`runtime:${state.state}`); },
+    clearRuntimeState: id => { events.push(`runtime-clear:${id}`); },
+    registerAbortController: () => {},
+    clearAbortController: () => {},
+    clearWaitById: async (_id, waitId) => {
+      if (session.meta.wait?.id !== waitId) return false;
+      delete session.meta.wait;
+      await persistSession(session);
+      return true;
+    },
+  };
+}
+
+async function withGlobalOwnerLookupsForbidden(run: () => Promise<void>): Promise<void> {
+  const originals = {
+    get: sessionManager.getSession,
+    existing: sessionManager.getExistingSession,
+    save: sessionManager.saveSession,
+  };
+  (sessionManager as any).getSession = async () => { throw new Error('global current-session get forbidden'); };
+  (sessionManager as any).getExistingSession = async () => { throw new Error('global current-session existing lookup forbidden'); };
+  (sessionManager as any).saveSession = async () => { throw new Error('global current-session save forbidden'); };
+  try {
+    await run();
+  } finally {
+    (sessionManager as any).getSession = originals.get;
+    (sessionManager as any).getExistingSession = originals.existing;
+    (sessionManager as any).saveSession = originals.save;
+  }
+}
+
+test('detached exact owner completes canonical foreground provider turn', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_runner_provider_${Date.now()}`, 'provider input');
+  const events: string[] = [];
+  const effects = createEffects(session, events);
+  const host = new LocalSessionTurnHost(effects, session);
+  const runner = new SessionTurnRunner(host);
+  const originalChat = llm.chat;
+  (llm as any).chat = async (parts: any, owner: Session, _iteration: number, options: any) => {
+    assert.strictEqual(owner, session);
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    await options.appendMessage({ role: 'model', parts: [{ text: 'provider answer' }] });
+    return { text: 'provider answer' };
+  };
+
+  try {
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'model']);
+    assert.equal(session.contextFrontier?.length, 2);
+    assert.equal(session.busy, false);
+    assert.equal(session.queue.length, 0);
+    const archived = await readArchiveMessages(session.id);
+    assert.deepEqual(archived.map(record => record.message.role), ['user', 'model']);
+    const persisted = await readSessionHistorySnapshot(session.id);
+    assert.deepEqual((persisted?.history || []).map((message: Message) => message.role), ['user', 'model']);
+    assert.equal(persisted?.busy, false);
+    assert.deepEqual(events.filter(event => event.startsWith('history:')), ['history:user', 'history:model']);
+    const modelNotify = events.indexOf('history:model');
+    const modelPersist = events.findIndex((event, index) => index < modelNotify && event === 'persist:busy:2');
+    assert.ok(modelPersist >= 0, 'archive/history mutation must persist before its history notification');
+    assert.match(events[0], /^persist:busy:0$/);
+    assert.match(events[events.length - 1], /^persist:idle:2$/);
+  } finally {
+    (llm as any).chat = originalChat;
+  }
+});
+
+test('detached exact owner completes one real local-tool iteration', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_runner_tool_${Date.now()}`, 'set a goal');
+  const events: string[] = [];
+  const effects = createEffects(session, events);
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
+  const originalChat = llm.chat;
+  let iteration = 0;
+  (llm as any).chat = async (parts: any, owner: Session, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    if (iteration++ === 0) {
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: { id: 'goal-call', name: 'set_goal', args: { goal: 'detached goal' } } }] });
+      return { text: '', toolCalls: [{ id: 'goal-call', name: 'set_goal', args: { goal: 'detached goal' } }] };
+    }
+    await options.appendMessage({ role: 'model', parts: [{ text: 'tool complete' }] });
+    return { text: 'tool complete' };
+  };
+
+  try {
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+    assert.equal(session.goalState?.goal, 'detached goal');
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'model', 'tool', 'model']);
+    assert.equal(session.contextFrontier?.length, 4);
+    assert.equal(session.busy, false);
+    assert.equal(session.queue.length, 0);
+    assert.deepEqual((await readArchiveMessages(session.id)).map(record => record.message.role), ['user', 'model', 'tool', 'model']);
+  } finally {
+    (llm as any).chat = originalChat;
+  }
+});
+
+test('exact host preserves append-many, wait, identity mismatch, and persistence failure behavior', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_runner_effects_${Date.now()}`, 'unused');
+  session.queue = [];
+  const events: string[] = [];
+  const effects = createEffects(session, events);
+  const host = new LocalSessionTurnHost(effects, session);
+  const batch: Message[] = [
+    { role: 'user', parts: [{ text: 'one' }] },
+    { role: 'model', parts: [{ text: 'two' }] },
+  ];
+  await host.appendSessionMessages(session, batch);
+  assert.deepEqual(session.history.map(message => message.role), ['user', 'model']);
+  assert.deepEqual(events.slice(-3), ['persist:idle:2', 'history:user', 'history:model']);
+
+  const wait = await host.startSessionWait(session, { reason: '  fallback  ', waitExecIds: ['exec-a'] });
+  assert.equal(wait.reason, 'fallback');
+  assert.equal(session.meta.wait?.id, wait.id);
+  assert.deepEqual(wait.waitExecIds, ['exec-a']);
+  assert.equal(await effects.clearWaitById(session.id, wait.id), true);
+  assert.equal(session.meta.wait, undefined);
+
+  const mismatch = createSession(`${session.id}_other`, 'other');
+  await withGlobalOwnerLookupsForbidden(() => assert.rejects(
+    () => host.getExistingSession(mismatch.id),
+    /global current-session existing lookup forbidden/,
+  ));
+
+  const failedEffects = createEffects(session, events);
+  const failPersist = async () => { throw new Error('detached persist failed'); };
+  failedEffects.persistSession = failPersist;
+  failedEffects.appendMessages = (owner, messages) => sessionManager.appendSessionMessagesForSession(
+    owner, messages, failPersist, failedEffects.notifyHistoryUpdate,
+  );
+  failedEffects.appendMessage = (owner, message) => failedEffects.appendMessages(owner, [message]);
+  const failedHost = new LocalSessionTurnHost(failedEffects, session);
+  await assert.rejects(() => failedHost.saveSession(session), /detached persist failed/);
+  const notificationCount = events.filter(event => event.startsWith('history:')).length;
+  await assert.rejects(
+    () => failedHost.appendSessionMessage(session, { role: 'user', parts: [{ text: 'persist failure' }] }),
+    /detached persist failed/,
+  );
+  assert.equal(events.filter(event => event.startsWith('history:')).length, notificationCount);
+});

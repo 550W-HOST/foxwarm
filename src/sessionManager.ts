@@ -958,6 +958,22 @@ async function createEmptySessionUnlocked(sessionId?: string): Promise<{ session
 
 export async function updateSessionBusyState(session: Session, busy: boolean): Promise<void> {
   if (busy) assertSessionDestructiveMutationAllowed([session.id], 'start new work');
+  await updateSessionBusyStateForSession(
+    session,
+    busy,
+    saveSessionsMetadata,
+    clearActiveSessionRuntimeState,
+    notifySessionUpdated,
+  );
+}
+
+export async function updateSessionBusyStateForSession(
+  session: Session,
+  busy: boolean,
+  persistSession: () => Promise<void>,
+  clearRuntimeState: (sessionId: string) => void = clearActiveSessionRuntimeState,
+  notifySession: (sessionId: string) => void = notifySessionUpdated,
+): Promise<void> {
   const changed = session.busy !== busy;
   const busyStartedChanged = busy
     ? typeof session.busyStartedAt !== 'number'
@@ -969,7 +985,7 @@ export async function updateSessionBusyState(session: Session, busy: boolean): P
       session.busyStartedAt = Date.now();
     }
   } else {
-    clearActiveSessionRuntimeState(session.id);
+    clearRuntimeState(session.id);
     session.busyStartedAt = undefined;
   }
 
@@ -977,8 +993,8 @@ export async function updateSessionBusyState(session: Session, busy: boolean): P
     return;
   }
 
-  await saveSessionsMetadata();
-  notifySessionUpdated(session.id);
+  await persistSession();
+  notifySession(session.id);
 }
 
 /**
@@ -1674,9 +1690,11 @@ export async function sendToSession(targetSessionId: string, message: string, fr
 /**
  * Save a single session's history to its file
  */
-export async function saveSession(sessionId: string): Promise<void> {
+export async function saveSession(sessionOrId: Session | string): Promise<void> {
+  const sessionId = typeof sessionOrId === 'string' ? sessionOrId : sessionOrId.id;
   try {
-    await saveSessionCritical(sessionId);
+    if (typeof sessionOrId === 'string') await saveSessionCritical(sessionId);
+    else await saveSessionForSessionCritical(sessionOrId);
   } catch (e) {
     logger.error({ err: e, sessionId }, 'Failed to save session');
   }
@@ -1688,6 +1706,11 @@ async function saveSessionCritical(sessionId: string): Promise<void> {
     throw new Error(`Session "${sessionId}" not found for saving.`);
   }
 
+  await saveSessionForSessionCritical(session);
+}
+
+async function saveSessionForSessionCritical(session: Session): Promise<void> {
+  const sessionId = session.id;
   await saveSessionStateOnlyCritical(session);
 
   // Save metadata (lightweight operation)
@@ -2220,6 +2243,19 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
     ? await getSession(sessionOrId)
     : sessionOrId;
 
+  await appendSessionMessagesForSession(session, messages, async () => {
+    if (options.strictPersistence) await saveSessionForSessionCritical(session);
+    else await saveSession(session);
+  });
+}
+
+export async function appendSessionMessagesForSession(
+  session: Session,
+  messages: Message[],
+  persistSession: () => Promise<void>,
+  notifyMessage: (sessionId: string, message: Message) => void = notifyHistoryUpdate,
+): Promise<void> {
+
   if (messages.length === 0) {
     return;
   }
@@ -2235,11 +2271,10 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
 
   const messagesToNotify = [...canonicalMessages];
 
-  if (options.strictPersistence) await saveSessionCritical(session.id);
-  else await saveSession(session.id);
+  await persistSession();
 
   for (const message of messagesToNotify) {
-    notifyHistoryUpdate(session.id, message);
+    notifyMessage(session.id, message);
   }
 }
 

@@ -1,7 +1,7 @@
 # Unit: src-session-turn-runner
 
 Files: src/sessionTurnRunner.ts
-Secondary files: src/messageRouter.test.ts, src/toolsSessionAgent/handoffWait.test.ts, src/toolsSessionAgent/waitTool.test.ts, src/selftest/queueDrainSelfTest.ts, src/selftest/goalReminderSelfTest.ts, src/selftest/toolLoopStallSelfTest.ts
+Secondary files: src/sessionTurnRunnerDetachedOwner.test.ts, src/messageRouter.test.ts, src/toolsSessionAgent/handoffWait.test.ts, src/toolsSessionAgent/waitTool.test.ts, src/selftest/queueDrainSelfTest.ts, src/selftest/goalReminderSelfTest.ts, src/selftest/toolLoopStallSelfTest.ts
 
 ## Purpose
 
@@ -13,7 +13,7 @@ This extraction is behavior-preserving and local-only. One turn-specific `Sessio
 
 - `SessionTurnRunner` — stateful local runner with one per-session reentrancy set.
 - `SessionTurnHost` — non-RPC interface for the runner's current persistence, compact, provider/tool, runtime-event, and channel-delivery effects.
-- `LocalSessionTurnHost` — current in-process implementation; dynamic getters preserve existing test/runtime replacement of module functions.
+- `LocalSessionTurnHost` — current in-process implementation; it binds one effects owner and can use one explicit exact Session owner while preserving legacy module-backed behavior when no owner is supplied.
 - `SessionTurnRunner.processSessionQueue(sessionId, options)` — canonical queue claim through final trailing-work recheck.
 - `SessionTurnRunner.processSessionRetry(sessionId)` — direct retry entry into the ordinary turn loop without queue control state.
 - `shouldBroadcastChannelText(text)` — shared final-response visibility predicate.
@@ -29,7 +29,7 @@ This extraction is behavior-preserving and local-only. One turn-specific `Sessio
 
 ## Main collaborators
 
-- `LocalSessionTurnHost` delegates live session load, queue/busy persistence, canonical history append, wait, runtime-state, compact, child reminder, provider/tool execution, and channel delivery to their existing owners. Its provider/tool delegates inject one local-only `CurrentSessionEffects` object for append/persist, stream events, abort registration, explicit-wait rollback, and the process-local default ExecRuntime; detached tests may provide alternate effects without changing the runner or provider schema. Tool execution validates the passed owner identity before deriving the local-only persistence/runtime context; owner mismatch fails before any effect is used.
+- `LocalSessionTurnHost` delegates compact, child reminder, provider/tool execution, and channel delivery to their existing owners. Its bound local `CurrentSessionTurnEffects` carries exact-owner save, canonical one/many append, busy, wait, history/runtime events, provider stream/abort effects, and the process-local default ExecRuntime. The default effects reuse the existing SessionManager/archive/event behavior; detached tests may provide one alternate exact owner without changing the runner or provider schema. Tool execution validates the passed owner identity before deriving the local-only persistence/runtime context; owner mismatch fails before any effect is used.
 - Pure session-local policy helpers such as goal/managed-state checks, usage thresholds, and provider error predicates remain direct runner dependencies rather than host capabilities.
 - `session/goal`, `session/managedState`, and `session/snapshotRefresh` — existing safe-point and lifecycle rules.
 - Channel context/session broadcast functions — typing, retry/progress, tool progress, final reply, and `turnFinal` effects. Final routing reads the immutable QueueSource snapshot's direct-reply intent while retaining the live callback only as the local delivery mechanism.
@@ -49,7 +49,7 @@ This extraction is behavior-preserving and local-only. One turn-specific `Sessio
 
 ## Tests
 
-`src/messageRouter.test.ts` continues to exercise the runner through public `MessageRouter` delegates and focused internal seam probes: queue/source boundaries, retry notices, provider failure, compact safe points, Stop/dequeue/retry, in-tool follow-ups, goal ordering, runtime state, and trailing queue handoff.
+`src/messageRouter.test.ts` continues to exercise the runner through public `MessageRouter` delegates and focused internal seam probes: queue/source boundaries, retry notices, provider failure, compact safe points, Stop/dequeue/retry, in-tool follow-ups, goal ordering, runtime state, and trailing queue handoff. `src/sessionTurnRunnerDetachedOwner.test.ts` runs provider and real local-tool turns for an exact owner absent from the global map and checks archive/frontier/state-file ordering plus busy, wait, event, append-many, mismatch, and persistence-failure behavior.
 
 ## Canonical ownership
 
