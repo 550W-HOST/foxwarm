@@ -972,7 +972,7 @@ export async function updateSessionBusyStateForSession(
   busy: boolean,
   persistSession: () => Promise<void>,
   clearRuntimeState: (sessionId: string) => void = clearActiveSessionRuntimeState,
-  notifySession: (sessionId: string) => void = notifySessionUpdated,
+  notifySession?: (sessionId: string) => void,
 ): Promise<void> {
   const changed = session.busy !== busy;
   const busyStartedChanged = busy
@@ -994,7 +994,11 @@ export async function updateSessionBusyStateForSession(
   }
 
   await persistSession();
-  notifySession(session.id);
+  notifySession?.(session.id);
+}
+
+export function notifySessionStateUpdated(sessionId: string): void {
+  notifySessionUpdated(sessionId);
 }
 
 /**

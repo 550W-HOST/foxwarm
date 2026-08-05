@@ -13,18 +13,18 @@ This extraction is behavior-preserving and local-only. One turn-specific `Sessio
 
 - `SessionTurnRunner` — stateful local runner with one per-session reentrancy set.
 - `SessionTurnHost` — non-RPC interface for the runner's current persistence, compact, provider/tool, runtime-event, and channel-delivery effects.
-- `LocalSessionTurnHost` — current in-process implementation; it binds one effects owner and can use one explicit exact Session owner while preserving legacy module-backed behavior when no owner is supplied.
+- `LocalSessionTurnHost` — current in-process implementation; it binds one effects owner and can use one explicit exact Session owner while preserving legacy module-backed behavior when no owner is supplied. A bound host rejects every other ID and every different same-ID Session object before invoking effects.
 - `SessionTurnRunner.processSessionQueue(sessionId, options)` — canonical queue claim through final trailing-work recheck.
 - `SessionTurnRunner.processSessionRetry(sessionId)` — direct retry entry into the ordinary turn loop without queue control state.
 - `shouldBroadcastChannelText(text)` — shared final-response visibility predicate.
 
 ## Canonical flow
 
-1. `processSessionQueue` prevents reentry, loads and claims the live session, then enters retry or queued work.
+1. `processSessionQueue` prevents reentry, loads the live session, and awaits the complete busy-owner persistence claim before entering retry or queued work. A rejected claim cannot start turn work or schedule a trailing recursive processor.
 2. `continueWithQueuedWork` validates leading queue records, respects ready compact commits, drains one compatible source batch, and calls `runSessionTurn`. Serialized direct-reply intent participates in the compatibility key alongside platform stream identity.
 3. `runSessionTurn` clears direct-turn waits, refreshes stale snapshots, persists queued input as separate canonical messages, and applies pre-provider compact/goal safe points.
 4. `llm.chat` performs provider retries/journaling and appends its assistant result. Tool calls enter the existing `llm.executeTools` path; the complete tool result is appended before wait/compact/follow-up decisions.
-5. Final delivery, child reminders, automatic compaction, terminal provider/runtime error presentation, Stop finalization, busy clearing, and queued continuation all stay in the same `try/catch/finally` owner.
+5. Final delivery, child reminders, automatic compaction, terminal provider/runtime error presentation, Stop finalization, busy clearing, and queued continuation all stay in the same `try/catch/finally` owner. Every terminal busy release uses the same awaited effects transition, so simultaneous Stop/queue mutations share its full persistence commit.
 6. After releasing the in-process reentrancy set, the runner checks for newly visible queued work and starts a fresh processor so a finish-window enqueue is not stranded.
 
 ## Main collaborators
@@ -36,7 +36,7 @@ This extraction is behavior-preserving and local-only. One turn-specific `Sessio
 
 ## Invariants
 
-- One runner owns a session turn at a time.
+- One runner owns a session turn at a time; claim persistence completes before any provider/history/tool work begins.
 - Queue items retain individual canonical history boundaries even when a compatible batch shares one provider request.
 - Platform stream identifiers, differing direct-reply intents, ready compact commits, and Stop are hard turn/safe-point boundaries.
 - Goal reminders are appended only at the pre-provider safe point after complete input/tool persistence.

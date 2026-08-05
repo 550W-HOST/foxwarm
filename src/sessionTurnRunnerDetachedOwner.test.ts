@@ -117,7 +117,7 @@ test('detached exact owner completes canonical foreground provider turn', async 
     const modelPersist = events.findIndex((event, index) => index < modelNotify && event === 'persist:busy:2');
     assert.ok(modelPersist >= 0, 'archive/history mutation must persist before its history notification');
     assert.match(events[0], /^persist:busy:0$/);
-    assert.match(events[events.length - 1], /^persist:idle:2$/);
+    assert.equal(events.filter(event => event.startsWith('persist:')).at(-1), 'persist:idle:2');
   } finally {
     (llm as any).chat = originalChat;
   }
@@ -132,6 +132,7 @@ test('detached exact owner completes one real local-tool iteration', async () =>
   const originalChat = llm.chat;
   let iteration = 0;
   (llm as any).chat = async (parts: any, owner: Session, _iteration: number, options: any) => {
+    assert.strictEqual(owner, session);
     if (parts) await options.appendMessage({ role: 'user', parts });
     if (iteration++ === 0) {
       await options.appendMessage({ role: 'model', parts: [{ functionCall: { id: 'goal-call', name: 'set_goal', args: { goal: 'detached goal' } } }] });
@@ -179,8 +180,19 @@ test('exact host preserves append-many, wait, identity mismatch, and persistence
   const mismatch = createSession(`${session.id}_other`, 'other');
   await withGlobalOwnerLookupsForbidden(() => assert.rejects(
     () => host.getExistingSession(mismatch.id),
-    /global current-session existing lookup forbidden/,
+    /bound to session/,
   ));
+  const effectCountBeforeClone = events.length;
+  assert.throws(
+    () => host.appendSessionMessage(mismatch, { role: 'user', parts: [{ text: 'wrong owner' }] }),
+    /bound to session/,
+  );
+  const sameIdClone = { ...session } as Session;
+  assert.throws(() => host.saveSession(sameIdClone), /different Session object/);
+  assert.throws(() => host.chat(null, sameIdClone, 0), /different Session object/);
+  assert.throws(() => host.executeTools([], { sessionId: session.id }, sameIdClone), /different Session object/);
+  assert.throws(() => host.clearActiveSessionRuntimeState(mismatch.id), /bound to session/);
+  assert.equal(events.length, effectCountBeforeClone);
 
   const failedEffects = createEffects(session, events);
   const failPersist = async () => { throw new Error('detached persist failed'); };
@@ -197,4 +209,102 @@ test('exact host preserves append-many, wait, identity mismatch, and persistence
     /detached persist failed/,
   );
   assert.equal(events.filter(event => event.startsWith('history:')).length, notificationCount);
+});
+
+test('claim persistence failure blocks the turn without later append or unhandled rejection', async () => {
+  const session = createSession(`detached_runner_claim_failure_${Date.now()}`, 'must not run');
+  const events: string[] = [];
+  const effects = createEffects(session, events);
+  let appendCount = 0;
+  effects.appendMessage = async () => { appendCount += 1; };
+  effects.appendMessages = async () => { appendCount += 1; };
+  effects.updateBusy = async () => { throw new Error('claim persist rejected'); };
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
+  const unhandled: unknown[] = [];
+  const onUnhandled = (error: unknown) => { unhandled.push(error); };
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    await assert.rejects(() => runner.processSessionQueue(session.id), /claim persist rejected/);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(appendCount, 0);
+    assert.equal(session.queue.length, 1);
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+});
+
+test('claim persistence completes before any turn append begins', async () => {
+  const session = createSession(`detached_runner_claim_order_${Date.now()}`, 'ordered input');
+  const events: string[] = [];
+  const effects = createEffects(session, events);
+  const originalUpdateBusy = effects.updateBusy;
+  let releaseClaim!: () => void;
+  const claimGate = new Promise<void>(resolve => { releaseClaim = resolve; });
+  let claimStarted!: () => void;
+  const started = new Promise<void>(resolve => { claimStarted = resolve; });
+  effects.updateBusy = async (owner, busy) => {
+    if (busy) {
+      claimStarted();
+      await claimGate;
+    }
+    await originalUpdateBusy(owner, busy);
+  };
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
+  const originalChat = llm.chat;
+  (llm as any).chat = async (parts: any, _owner: Session, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    await options.appendMessage({ role: 'model', parts: [{ text: 'ordered' }] });
+    return { text: 'ordered' };
+  };
+  try {
+    const running = runner.processSessionQueue(session.id);
+    await started;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(session.history.length, 0);
+    assert.equal(events.some(event => event.startsWith('persist:')), false);
+    releaseClaim();
+    await running;
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'model']);
+    assert.equal(events[0], 'persist:busy:0');
+  } finally {
+    (llm as any).chat = originalChat;
+  }
+});
+
+test('base effects fallback persists both busy transitions with one notification each', async () => {
+  const session = createSession(`detached_runner_base_busy_${Date.now()}`, 'unused');
+  session.queue = [];
+  const persistedBusy: boolean[] = [];
+  const notified: string[] = [];
+  const originalNotify = sessionManager.notifySessionStateUpdated;
+  (sessionManager as any).notifySessionStateUpdated = (sessionId: string) => { notified.push(sessionId); };
+  const effects: llm.CurrentSessionEffects = {
+    appendMessage: async () => {},
+    persistSession: async owner => { persistedBusy.push(owner.busy); },
+    notifySessionEvent: () => {},
+    registerAbortController: () => {},
+    clearAbortController: () => {},
+    clearWaitById: async () => false,
+  };
+  try {
+    const host = new LocalSessionTurnHost(effects, session);
+    await host.updateSessionBusyState(session, true);
+    await host.updateSessionBusyState(session, false);
+    assert.deepEqual(persistedBusy, [true, false]);
+    assert.deepEqual(notified, [session.id, session.id]);
+  } finally {
+    (sessionManager as any).notifySessionStateUpdated = originalNotify;
+  }
+});
+
+test('full turn effects own both busy persistence and notification exactly once', async () => {
+  const session = createSession(`detached_runner_full_busy_${Date.now()}`, 'unused');
+  session.queue = [];
+  const events: string[] = [];
+  const host = new LocalSessionTurnHost(createEffects(session, events), session);
+  await host.updateSessionBusyState(session, true);
+  await host.updateSessionBusyState(session, false);
+  assert.deepEqual(events.filter(event => event.startsWith('persist:')), ['persist:busy:0', 'persist:idle:0']);
+  assert.deepEqual(events.filter(event => event.startsWith('state:')), [`state:${session.id}`, `state:${session.id}`]);
 });

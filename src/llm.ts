@@ -203,6 +203,7 @@ export interface CurrentSessionTurnEffects extends CurrentSessionEffects {
 }
 
 export function createDefaultCurrentSessionEffects(): CurrentSessionTurnEffects {
+    const clearRuntimeState = (sessionId: string) => sessionManager.clearActiveSessionRuntimeState(sessionId);
     const persistSession = async (session: Session) => {
         if (session.id && sessionManager.getAllSessions().get(session.id) === session) {
             await sessionManager.saveSession(session);
@@ -212,12 +213,14 @@ export function createDefaultCurrentSessionEffects(): CurrentSessionTurnEffects 
         appendMessage: (session, message) => sessionManager.appendSessionMessage(session, message),
         appendMessages: (session, messages) => sessionManager.appendSessionMessages(session, messages),
         persistSession,
-        updateBusy: (session, busy) => sessionManager.updateSessionBusyState(session, busy),
+        updateBusy: (session, busy) => sessionManager.updateSessionBusyStateForSession(
+            session, busy, () => persistSession(session), clearRuntimeState,
+        ),
         startWait: (session, options) => sessionManager.startSessionWaitForSession(session, options, () => persistSession(session)),
         notifyHistoryUpdate: (sessionId, message) => sessionManager.notifyHistoryUpdate(sessionId, message),
         notifySessionEvent: (sessionId, event) => sessionManager.notifySessionEvent(sessionId, event),
         setRuntimeState: (sessionId, state) => sessionManager.setActiveSessionRuntimeState(sessionId, state),
-        clearRuntimeState: sessionId => sessionManager.clearActiveSessionRuntimeState(sessionId),
+        clearRuntimeState,
         registerAbortController: (sessionId, controller) => sessionManager.registerSessionAbortController(sessionId, controller),
         clearAbortController: (sessionId, controller) => sessionManager.clearSessionAbortController(sessionId, controller),
         clearWaitById: (sessionId, waitId) => sessionManager.clearSessionWaitById(sessionId, waitId),

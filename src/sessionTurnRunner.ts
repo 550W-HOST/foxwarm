@@ -109,7 +109,15 @@ export class LocalSessionTurnHost implements SessionTurnHost {
         : ((session, messages) => sessionManager.appendSessionMessagesForSession(
           session, messages, () => effects.persistSession(session), notifyHistoryUpdate,
         )),
-      updateBusy: turnEffects.updateBusy ? bind(turnEffects.updateBusy) : defaults.updateBusy,
+      updateBusy: turnEffects.updateBusy
+        ? bind(turnEffects.updateBusy)
+        : ((session, busy) => sessionManager.updateSessionBusyStateForSession(
+          session,
+          busy,
+          () => effects.persistSession(session),
+          defaults.clearRuntimeState,
+          sessionManager.notifySessionStateUpdated,
+        )),
       startWait: turnEffects.startWait
         ? bind(turnEffects.startWait)
         : ((session, options) => sessionManager.startSessionWaitForSession(session, options, () => effects.persistSession(session))),
@@ -119,28 +127,44 @@ export class LocalSessionTurnHost implements SessionTurnHost {
     };
   }
 
-  getSession(sessionId: string): Promise<Session> {
-    return this.ownerSession?.id === sessionId ? Promise.resolve(this.ownerSession) : sessionManager.getSession(sessionId);
+  private assertOwnerId(sessionId: string): void {
+    if (this.ownerSession && this.ownerSession.id !== sessionId) {
+      throw new Error(`Local turn host is bound to session \`${this.ownerSession.id}\`, not \`${sessionId}\`.`);
+    }
   }
-  getExistingSession(sessionId: string): Promise<Session | null> {
-    return this.ownerSession?.id === sessionId ? Promise.resolve(this.ownerSession) : sessionManager.getExistingSession(sessionId);
+
+  private assertOwnerSession(session: Session): void {
+    this.assertOwnerId(session.id);
+    if (this.ownerSession && this.ownerSession !== session) {
+      throw new Error(`Local turn host rejected a different Session object for \`${session.id}\`.`);
+    }
+  }
+
+  async getSession(sessionId: string): Promise<Session> {
+    this.assertOwnerId(sessionId);
+    return this.ownerSession || sessionManager.getSession(sessionId);
+  }
+  async getExistingSession(sessionId: string): Promise<Session | null> {
+    this.assertOwnerId(sessionId);
+    return this.ownerSession || sessionManager.getExistingSession(sessionId);
   }
   get isSessionDestructiveLifecycleClaimed(): typeof sessionManager.isSessionDestructiveLifecycleClaimed { return sessionManager.isSessionDestructiveLifecycleClaimed; }
-  updateSessionBusyState(session: Session, busy: boolean): Promise<void> { return this.currentSessionEffects.updateBusy(session, busy); }
-  saveSession(session: Session): Promise<void> { return this.currentSessionEffects.persistSession(session); }
-  appendSessionMessage(session: Session, message: Message): Promise<void> { return this.currentSessionEffects.appendMessage(session, message); }
-  appendSessionMessages(session: Session, messages: Message[]): Promise<void> { return this.currentSessionEffects.appendMessages(session, messages); }
-  notifyHistoryUpdate(sessionId: string, message: Message): void { this.currentSessionEffects.notifyHistoryUpdate(sessionId, message); }
+  updateSessionBusyState(session: Session, busy: boolean): Promise<void> { this.assertOwnerSession(session); return this.currentSessionEffects.updateBusy(session, busy); }
+  saveSession(session: Session): Promise<void> { this.assertOwnerSession(session); return this.currentSessionEffects.persistSession(session); }
+  appendSessionMessage(session: Session, message: Message): Promise<void> { this.assertOwnerSession(session); return this.currentSessionEffects.appendMessage(session, message); }
+  appendSessionMessages(session: Session, messages: Message[]): Promise<void> { this.assertOwnerSession(session); return this.currentSessionEffects.appendMessages(session, messages); }
+  notifyHistoryUpdate(sessionId: string, message: Message): void { this.assertOwnerId(sessionId); this.currentSessionEffects.notifyHistoryUpdate(sessionId, message); }
   get applyCompletedCompactJob(): typeof sessionManager.applyCompletedCompactJob { return sessionManager.applyCompletedCompactJob; }
   get processSessionCompactionRequest(): typeof sessionManager.processSessionCompactionRequest { return sessionManager.processSessionCompactionRequest; }
   get checkAndCompactIfNeeded(): typeof sessionManager.checkAndCompactIfNeeded { return sessionManager.checkAndCompactIfNeeded; }
-  startSessionWait(session: Session, options?: Parameters<typeof sessionManager.startSessionWaitForSession>[1]): Promise<sessionManager.SessionWaitState> { return this.currentSessionEffects.startWait(session, options); }
+  startSessionWait(session: Session, options?: Parameters<typeof sessionManager.startSessionWaitForSession>[1]): Promise<sessionManager.SessionWaitState> { this.assertOwnerSession(session); return this.currentSessionEffects.startWait(session, options); }
   get queueSessionSystemEvent(): typeof sessionManager.queueSessionSystemEvent { return sessionManager.queueSessionSystemEvent; }
-  setActiveSessionRuntimeState(sessionId: string, state: Parameters<typeof sessionManager.setActiveSessionRuntimeState>[1]): void { this.currentSessionEffects.setRuntimeState(sessionId, state); }
-  clearActiveSessionRuntimeState(sessionId: string): void { this.currentSessionEffects.clearRuntimeState(sessionId); }
+  setActiveSessionRuntimeState(sessionId: string, state: Parameters<typeof sessionManager.setActiveSessionRuntimeState>[1]): void { this.assertOwnerId(sessionId); this.currentSessionEffects.setRuntimeState(sessionId, state); }
+  clearActiveSessionRuntimeState(sessionId: string): void { this.assertOwnerId(sessionId); this.currentSessionEffects.clearRuntimeState(sessionId); }
   get refreshSessionSnapshot(): typeof sessionManager.refreshSessionSnapshot { return sessionManager.refreshSessionSnapshot; }
   get chat(): typeof llm.chat {
     return (parts, session, iteration, options) => {
+      this.assertOwnerSession(session);
       const effectiveEffects = options?.currentSessionEffects || this.currentSessionEffects;
       return llm.chat(parts, session, iteration, {
         ...options,
@@ -150,17 +174,21 @@ export class LocalSessionTurnHost implements SessionTurnHost {
     };
   }
   get executeTools(): typeof llm.executeTools {
-    return (functionCalls, toolContext, session, options) => llm.executeTools(functionCalls, toolContext, session, {
-      ...options,
-      currentSessionEffects: options?.currentSessionEffects || this.currentSessionEffects,
-    });
+    return (functionCalls, toolContext, session, options) => {
+      this.assertOwnerSession(session);
+      return llm.executeTools(functionCalls, toolContext, session, {
+        ...options,
+        currentSessionEffects: options?.currentSessionEffects || this.currentSessionEffects,
+      });
+    };
   }
 
   async sendTyping(sourceCtx: ChannelContext): Promise<void> { await sourceCtx.sendTyping(); }
-  hasBroadcast(session: Session): boolean { return !!session.broadcast; }
-  broadcast(session: Session, text: string, options?: any): void { session.broadcast?.(text, options); }
+  hasBroadcast(session: Session): boolean { this.assertOwnerSession(session); return !!session.broadcast; }
+  broadcast(session: Session, text: string, options?: any): void { this.assertOwnerSession(session); session.broadcast?.(text, options); }
 
   async sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any, preferDirectReply = false): Promise<void> {
+    this.assertOwnerSession(session);
     if (preferDirectReply && sourceCtx?.reply) {
       await sourceCtx.reply(text, options);
       return;
@@ -514,10 +542,7 @@ export class SessionTurnRunner {
         // section. Queue insertions before this point are passive stop inputs;
         // insertions after it see an idle session and start a new turn.
         session.stopping = false;
-        this.host.clearActiveSessionRuntimeState(session.id);
-        session.busy = false;
-        session.busyStartedAt = undefined;
-        await this.host.saveSession(session);
+        await this.host.updateSessionBusyState(session, false);
         return committedMessages;
       }
 
@@ -541,12 +566,12 @@ export class SessionTurnRunner {
     }
   }
 
-  private tryClaimSession(session: Session): boolean {
+  private async tryClaimSession(session: Session): Promise<boolean> {
     if (session.busy || this.host.isSessionDestructiveLifecycleClaimed(session.id)) {
       return false;
     }
 
-    void this.host.updateSessionBusyState(session, true);
+    await this.host.updateSessionBusyState(session, true);
     return true;
   }
 
@@ -627,10 +652,7 @@ export class SessionTurnRunner {
         return;
       }
 
-      this.host.clearActiveSessionRuntimeState(session.id);
-      session.busy = false;
-      session.busyStartedAt = undefined;
-      await this.host.saveSession(session);
+      await this.host.updateSessionBusyState(session, false);
     }
   }
 
@@ -1117,10 +1139,7 @@ export class SessionTurnRunner {
         return;
       }
 
-      this.host.clearActiveSessionRuntimeState(session.id);
-      session.busy = false;
-      session.busyStartedAt = undefined;
-      await this.host.saveSession(session);
+      await this.host.updateSessionBusyState(session, false);
     }
   }
 
@@ -1137,17 +1156,19 @@ export class SessionTurnRunner {
     }
 
     this.processingSessions.add(sessionId);
+    let claimed = false;
     try {
       const session = await this.host.getExistingSession(sessionId);
       if (!session) {
         return;
       }
-      if (!this.tryClaimSession(session)) {
+      if (!await this.tryClaimSession(session)) {
         if (options.retry) {
           throw new Error('Session is already busy');
         }
         return;
       }
+      claimed = true;
 
       if (options.retry) {
         await this.runSessionTurn(sessionId, {
@@ -1162,10 +1183,7 @@ export class SessionTurnRunner {
         return;
       }
 
-      this.host.clearActiveSessionRuntimeState(session.id);
-      session.busy = false;
-      session.busyStartedAt = undefined;
-      await this.host.saveSession(session);
+      await this.host.updateSessionBusyState(session, false);
     } finally {
       this.processingSessions.delete(sessionId);
       // An item can become visible after the previous loop's final queue scan
@@ -1173,7 +1191,8 @@ export class SessionTurnRunner {
       // stop boundary it is new work, so hand it to a fresh processor rather
       // than losing the enqueue trigger to this re-entrancy guard.
       const session = await this.host.getExistingSession(sessionId);
-      if (session
+      if (claimed
+        && session
         && !session.busy
         && !this.host.isSessionDestructiveLifecycleClaimed(session.id)
         && session.queue.some(isQueueItem)) {
