@@ -7,6 +7,7 @@ Master-side node lifecycle: pairing and approved credentials, the `/node_ws` pro
 ## Units
 
 - [src-nodes-manager](../units/src-nodes-manager.md) — connected-node map, model-tool dispatch, backend-service request/command/event routing, and session access checks.
+- [src-node-execution](../units/src-node-execution.md) — fixed versioned local RPC boundary for authenticated remote node model-tool execution.
 - [src-nodes-misc](../units/src-nodes-misc.md) — WebSocket handler, heartbeat, bootstrap HTTP routes/info, and local node session events.
 - [src-nodes-registry](../units/src-nodes-registry.md) — pending/approved registry, pairing lifecycle, credential hashes, rename/removal, and durable storage.
 
@@ -20,6 +21,7 @@ Client implementations are separate modules: [CLI node](./cli-node.md) and [brow
 - Pending pairing create/list/approve/reject/claim operations.
 - Approved-node list/authenticate/remove/move operations.
 - `nodesManager` — registration, model-tool dispatch, backend-service dispatch, runtime disconnect, and access checks.
+- `executeRemoteNodeTool()` — current local service caller for direct and dynamic remote node-domain tool execution.
 
 ## Bootstrap surface
 

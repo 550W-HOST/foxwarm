@@ -142,6 +142,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - `./toolscript` — Toolscript run/continue/list/cancel tools
 - `./toolsSessionAgent` — Session, agent, timer, and channel management tools
 - `./mainManagementTools` — local versioned RPC caller for the first closed main-owned tool set
+- `./nodeExecution` — local versioned RPC caller used by `remote_node(action=call)` and unified dynamic Node calls
 
 ## Behavior
 

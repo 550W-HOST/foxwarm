@@ -9,6 +9,7 @@ import { nodesManager } from '../nodes/manager';
 import { buildNodeBootstrapInfo, ensureNodePairingToken } from '../nodes/bootstrapInfo';
 import { logger } from '../common';
 import { getAgentDir } from '../config';
+import { executeRemoteNodeTool } from '../nodeExecution';
 
 export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
     const { sourceNode, sourcePath, targetNode, targetPath, overwrite = false } = args;
@@ -58,12 +59,6 @@ export async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
         ].filter((value): value is string => typeof value === 'string' && value.length > 0)))
         : [];
 
-    if (sessionManager.isSessionEffectivelyIsolated(session) && action === 'call') {
-        if (!isolatedAllowedRemoteNodes.includes(String(nodeId || ''))) {
-            throw new Error(`Isolated session can only call tools on its bound/current node (${isolatedAllowedRemoteNodes.join(', ')}).`);
-        }
-    }
-    
     if (action === 'list') {
         // List visible nodes and their tools, with optional node filter
         const nodes = nodesManager.listNodesWithTools();
@@ -92,12 +87,10 @@ export async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
             throw new Error('nodeId and tool are required for call action');
         }
         
-        const result = await nodesManager.executeNodeTool(
-            nodeId,
-            tool,
-            toolArgs || {},
-            ctx.sessionId
-        );
+        if (!ctx.sessionId) {
+            throw new Error('Remote node calls require an active source session.');
+        }
+        const result = await executeRemoteNodeTool(ctx.sessionId, nodeId, tool, toolArgs || {});
         
         return result;
     }

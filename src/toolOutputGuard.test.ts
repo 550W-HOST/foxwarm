@@ -8,6 +8,7 @@ import { executeTools } from './llm';
 import { getAgentDir } from './config';
 import * as mcpClient from './mcpClient';
 import { nodesManager } from './nodes/manager';
+import * as sessionManager from './sessionManager';
 import { read } from './tools';
 import { guardToolOutputForModel, TOOL_OUTPUT_GUARD_CHAR_LIMIT } from './toolOutputGuard';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
@@ -255,8 +256,10 @@ test('builtin and MCP magic-looking text stays ordinary text outside remote-node
 test('canonical remote CLI screenshots below and above the text limit become image parts before guarding', async () => {
   const largePngBase64 = await makeLargePngBase64();
   const originalGetCurrentNode = nodesManager.getCurrentNode;
+  const originalGetNode = nodesManager.getNode;
   const originalExecuteTool = nodesManager.executeTool;
   (nodesManager as any).getCurrentNode = async () => 'cli-fixture';
+  (nodesManager as any).getNode = () => ({ id: 'cli-fixture', ws: {}, tools: new Set(['browse_get']) });
   (nodesManager as any).executeTool = async (_nodeId: string, _toolName: string, args: Record<string, any>) => {
     const data = args.tabId === 'large' ? largePngBase64 : TINY_PNG_BASE64;
     return {
@@ -270,22 +273,20 @@ test('canonical remote CLI screenshots below and above the text limit become ima
     };
   };
 
+  const sessionId = makeSessionId('cli_screenshot_guard');
+  const session = await sessionManager.getSession(sessionId);
+  session.currentNode = 'cli-fixture';
+  await sessionManager.saveSession(sessionId);
   try {
     assert.ok(TINY_PNG_BASE64.length < TOOL_OUTPUT_GUARD_CHAR_LIMIT);
     assert.ok(largePngBase64.length > TOOL_OUTPUT_GUARD_CHAR_LIMIT);
-    const sessionId = makeSessionId('cli_screenshot_guard');
     const toolMessage = await executeTools([
       { id: 'cli-small', name: 'browse_get', args: { tabId: 'small', screenshot: true } },
       { id: 'cli-large', name: 'browse_get', args: { tabId: 'large', screenshot: true } },
     ], {
       sessionId,
-      session: { id: sessionId, agent: 'main', currentNode: 'cli-fixture' },
-    }, {
-      id: sessionId,
-      agent: 'main',
-      currentNode: 'cli-fixture',
-      verbose: false,
-    });
+      session,
+    }, session);
 
     const imageParts = toolMessage.parts.filter(part => part.inlineData);
     assert.equal(imageParts.length, 2);
@@ -306,7 +307,9 @@ test('canonical remote CLI screenshots below and above the text limit become ima
     }
   } finally {
     (nodesManager as any).getCurrentNode = originalGetCurrentNode;
+    (nodesManager as any).getNode = originalGetNode;
     (nodesManager as any).executeTool = originalExecuteTool;
+    await sessionManager.deleteSession(sessionId).catch(() => false);
   }
 });
 

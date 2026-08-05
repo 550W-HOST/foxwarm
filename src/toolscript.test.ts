@@ -10,6 +10,7 @@ import * as sessionManager from './sessionManager';
 import * as managedSessions from './managedSessions';
 import * as tools from './tools';
 import * as mcpClient from './mcpClient';
+import { nodesManager } from './nodes/manager';
 import { getAgentDir, STATE_DIR } from './config';
 import { convertToOpenAIResponsesFormat } from './llmProviders/openai';
 import { tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, forceToolScriptNativeImportFailureForTests, getToolScriptRunForTests, resetToolScriptMontyRuntimeForTests, resetToolScriptRunsForTests } from './toolscript';
@@ -464,6 +465,43 @@ test('run_script passes unified MCP and node call_tool descriptors through to to
     });
   } finally {
     (tools as any).call_tool = originalCallTool;
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('run_script nested dynamic node call uses the Node execution service', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_node_execution');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain(
+    'return call_tool({"source": "node", "nodeId": "remote-script", "name": "dynamic_probe", "args": {"value": 7}})',
+  ));
+  const session = await sessionManager.getSession(sessionId);
+  const originalGetNode = nodesManager.getNode;
+  const originalExecuteTool = nodesManager.executeTool;
+
+  try {
+    (nodesManager as any).getNode = () => ({ id: 'remote-script', ws: {}, tools: new Set(['dynamic_probe']) });
+    (nodesManager as any).executeTool = async (nodeId: string, toolName: string, args: any, sourceId: string) => ({
+      nodeId,
+      toolName,
+      args,
+      sourceId,
+    });
+    const toolMessage = await executeTools(
+      [{ id: 'run-script-node-execution', name: 'run_script', args: { filePath: scriptName } }],
+      { sessionId, session },
+      session,
+    );
+    const response = toolMessage.parts[0].functionResponse?.response;
+    assert.equal(response?.status, 'completed');
+    assert.deepEqual(response?.executedTools, ['dynamic_probe']);
+    assert.equal(response?.result?.sourceId, sessionId);
+  } finally {
+    (nodesManager as any).getNode = originalGetNode;
+    (nodesManager as any).executeTool = originalExecuteTool;
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
     await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);

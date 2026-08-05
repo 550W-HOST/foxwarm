@@ -169,9 +169,11 @@ test('parallel remote exec calls may resolve in reverse order while responses ke
   const session = await createSession(sessionId, '/snapshot/cwd');
   session.currentNode = 'remote-test';
   const originalGetCurrentNode = nodesManager.getCurrentNode.bind(nodesManager);
+  const originalGetNode = nodesManager.getNode.bind(nodesManager);
   const originalExecuteTool = nodesManager.executeTool.bind(nodesManager);
   const pending: Array<{ id: string; snapshot: any; resolve: (value: any) => void }> = [];
   (nodesManager as any).getCurrentNode = async () => 'remote-test';
+  (nodesManager as any).getNode = () => ({ id: 'remote-test', ws: {}, tools: new Set(['exec']) });
   (nodesManager as any).executeTool = async (_nodeId: string, _name: string, args: any, _sessionId: string, snapshot: any) => {
     return await new Promise(resolve => pending.push({ id: args.command, snapshot, resolve }));
   };
@@ -189,6 +191,7 @@ test('parallel remote exec calls may resolve in reverse order while responses ke
     assert(pending.every(item => item.snapshot.currentNode === 'remote-test' && item.snapshot.cwd === '/snapshot/cwd'));
   } finally {
     (nodesManager as any).getCurrentNode = originalGetCurrentNode;
+    (nodesManager as any).getNode = originalGetNode;
     (nodesManager as any).executeTool = originalExecuteTool;
     await sessionManager.deleteSession(sessionId).catch(() => false);
   }
@@ -199,12 +202,14 @@ test('adjacent exec segment enforces the internal concurrency limit of four', as
   const session = await createSession(sessionId, '/snapshot/cwd');
   session.currentNode = 'remote-limit';
   const originalGetCurrentNode = nodesManager.getCurrentNode.bind(nodesManager);
+  const originalGetNode = nodesManager.getNode.bind(nodesManager);
   const originalExecuteTool = nodesManager.executeTool.bind(nodesManager);
   const releases: Array<() => void> = [];
   let active = 0;
   let maxActive = 0;
   let started = 0;
   (nodesManager as any).getCurrentNode = async () => 'remote-limit';
+  (nodesManager as any).getNode = () => ({ id: 'remote-limit', ws: {}, tools: new Set(['exec']) });
   (nodesManager as any).executeTool = async () => {
     started++;
     active++;
@@ -233,6 +238,7 @@ test('adjacent exec segment enforces the internal concurrency limit of four', as
     assert.equal(maxActive, 4);
   } finally {
     (nodesManager as any).getCurrentNode = originalGetCurrentNode;
+    (nodesManager as any).getNode = originalGetNode;
     (nodesManager as any).executeTool = originalExecuteTool;
     await sessionManager.deleteSession(sessionId).catch(() => false);
   }

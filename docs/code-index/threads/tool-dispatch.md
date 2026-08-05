@@ -14,7 +14,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 6. `search_tools` discovers non-default builtins, MCP tools, and tools advertised by the selected node.
 7. `call_tool` parses a `toolId` or explicit source descriptor and resolves one concrete builtin, MCP, or node target.
 8. MCP calls run through `mcpClient.callTool`; safe text cleanup and MCP image-content promotion occur at that client boundary while non-image content remains structured.
-9. Node calls are sent through `nodesManager` over the authenticated node connection. A node-side approval interceptor may still reject the call. Old node image-result shapes are adapted only at this remote ingress under [D-node-thread-tool-result-compatibility](./node-communication.md#d-node-thread-tool-result-compatibility).
+9. Direct node-environment calls resolved to a remote node and dynamic Node-domain calls enter the fixed v1 Node execution service, then use `nodesManager` over the authenticated node connection. The service rejects `master`, stale sources, disconnected nodes, isolation-binding violations, and names not currently advertised by that node. A node-side approval interceptor may still reject the call. Old node image-result shapes are adapted only at this remote ingress under [D-node-thread-tool-result-compatibility](./node-communication.md#d-node-thread-tool-result-compatibility).
 10. Master and node file wrappers use the shared file-tool core after their own path, context, and isolation handling.
 11. Recognized image payloads are promoted to image parts and receive stable IDs before the remaining text/structured response passes through the oversized-output guard. Successful master/node patch results already carry shared per-file change-count summaries from [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
 12. ToolScript nested calls use the same registered tool surfaces and appear as subcalls of the outer run.
@@ -36,6 +36,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 - [src-permissions](../units/src-permissions.md)
 - [src-mcp-client](../units/src-mcp-client.md)
 - [src-nodes-manager](../units/src-nodes-manager.md)
+- [src-node-execution](../units/src-node-execution.md)
 - [shared-node-tools](../units/shared-node-tools.md)
 - [src-toolscript](../units/src-toolscript.md)
 
@@ -51,6 +52,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 - Tool batches emit one result for every call and append one tool message only after the batch settles. Image/result parts and function responses remain in original model-call order rather than completion order.
 - Direct builtins and unified builtin calls share `resolveBuiltinToolPlacement`; ToolScript nested calls inherit it through the existing `call_tool` wrapper.
 - The first main-management service is local-only. It has a fixed seven-operation allowlist and carries no live Session, history, queue, patch, or callback; no child reverse wiring exists yet.
+- The first Node execution service is local-only and accepts dynamic names only inside one authenticated remote node's currently advertised tool set. The colocated `master` execution environment bypasses it and runs the local named handler directly.
 
 ## Compatibility
 

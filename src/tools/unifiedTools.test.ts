@@ -452,10 +452,12 @@ test('legacy call_mcp wrapper returns normalized MCP values without re-stringify
 
 test('search_tools and call_tool cover remote node tools', async () => {
   const originalListNodesWithTools = nodesManager.listNodesWithTools;
-  const originalExecuteNodeTool = nodesManager.executeNodeTool;
+  const originalExecuteTool = nodesManager.executeTool;
   const originalGetCurrentNode = nodesManager.getCurrentNode;
+  const originalGetNode = nodesManager.getNode;
 
   try {
+    await sessionManager.getSession('main');
     (nodesManager as any).listNodesWithTools = () => ([
       {
         id: 'android-node',
@@ -490,7 +492,10 @@ test('search_tools and call_tool cover remote node tools', async () => {
         ],
       },
     ]);
-    (nodesManager as any).executeNodeTool = async (nodeId: string, tool: string, args: Record<string, any>, sessionId: string) => ({
+    (nodesManager as any).getNode = (nodeId: string) => nodeId === 'android-node'
+      ? { id: nodeId, ws: {}, tools: new Set(['android_screenshot']) }
+      : undefined;
+    (nodesManager as any).executeTool = async (nodeId: string, tool: string, args: Record<string, any>, sessionId: string) => ({
       ok: true,
       nodeId,
       tool,
@@ -547,8 +552,9 @@ test('search_tools and call_tool cover remote node tools', async () => {
     assert.equal(defaultNodeSearchResult.tools.some((tool: any) => tool.nodeId === 'other-node'), false);
   } finally {
     (nodesManager as any).listNodesWithTools = originalListNodesWithTools;
-    (nodesManager as any).executeNodeTool = originalExecuteNodeTool;
+    (nodesManager as any).executeTool = originalExecuteTool;
     (nodesManager as any).getCurrentNode = originalGetCurrentNode;
+    (nodesManager as any).getNode = originalGetNode;
   }
 });
 

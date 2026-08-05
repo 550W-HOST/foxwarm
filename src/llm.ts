@@ -10,6 +10,7 @@ import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry } from './config';
 import { nodesManager } from './nodes/manager';
+import * as nodeExecution from './nodeExecution';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
@@ -1338,11 +1339,11 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
             await checkToolPermission(prepared.call.name, prepared.sessionId, prepared.permissionNode, prepared.toolArgs);
         }
         if (!result?.error && prepared.executionNode !== 'master') {
-            result = normalizeExecutedToolResult(await nodesManager.executeTool(
+            result = normalizeExecutedToolResult(await nodeExecution.executeRemoteNodeTool(
+                prepared.sessionId,
                 prepared.executionNode,
                 prepared.call.name,
                 prepared.toolArgs,
-                prepared.sessionId,
                 prepared.sessionSnapshot,
             ));
         } else if (!result?.error && prepared.toolFn) {

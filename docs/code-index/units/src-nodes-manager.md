@@ -65,7 +65,7 @@ Maintains the in-memory view of connected nodes and routes tool/file/session req
 
 - `src/nodes/websocket.ts` registers authenticated node sockets with `registerNodeWithTools`, forwards responses/events into this manager, and unregisters sockets on close/error.
 - `src/commands.ts` uses `nodesManager` for `/node` list/switch/remove/move runtime behavior.
-- `src/tools/nodeTools.ts`, `src/tools/unifiedSearch.ts`, `src/llm.ts`, and channel/file helpers query the singleton for node availability and remote execution.
+- `src/nodeExecutionService.ts` validates the closed model-tool forwarding request before calling `executeTool`; `src/llm.ts`, dynamic node tools, and ToolScript use that service for remote execution. Node management/listing and channel/file helpers continue to query the singleton directly.
 
 ## Design Decisions
 
