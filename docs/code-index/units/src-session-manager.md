@@ -8,7 +8,7 @@ Files: src/sessionManager.ts, src/session/sessionIdAllocation.test.ts
 
 `src/sessionRuntimeService.ts` wraps the high-level externally consumed subset in immutable DTO commands, queries, and events. The manager remains the local handler's live-object authority and the router's internal integration API; callers migrated to SessionRuntime should not recover a `Session` reference through this façade.
 
-The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessionQueue()` claims queued work and runs turns; `setSessionTriggerCallback()` connects this façade to that router method during bootstrap.
+The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessionQueue()` delegates queued work to its `SessionTurnRunner`; `setSessionTriggerCallback()` connects this façade to that ingress method during bootstrap.
 
 ## Export groups
 
@@ -78,7 +78,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 
 ## Invariants
 
-- One `MessageRouter.processSessionQueue()` invocation may claim a session at a time; this façade persists and exposes the `busy` compatibility/concurrency flag.
+- One `SessionTurnRunner.processSessionQueue()` invocation may claim a session at a time through the MessageRouter delegate; this façade persists and exposes the `busy` compatibility/concurrency flag.
 - Per-session JSON files are authoritative for full semantic Session state, including conversation content, queue, wait/managed metadata, prompt/cache state, embedded `contextFrontier`, and the worker mailbox cursor. The shared metadata file is a main-owned index/presentation store.
 - Lazy load upgrades only unversioned per-session files by seeding historically catalog-only fields, while current-format files exactly replace semantic stub state. Current local mode keeps the existing single main-owned `sessions.json` writer; worker projection delivery is deferred.
 - Queue insertion passes through wait-state and managed-inbox transitions before work is persisted or triggered.

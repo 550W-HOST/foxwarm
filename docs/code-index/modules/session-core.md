@@ -4,7 +4,7 @@
 
 Session core owns durable session/agent lifecycle, the queue and wait boundary, metadata/history persistence, parent-child relations, channel attachments, managed-session leases, goals, and canonical runtime state. `src/sessionManager.ts` remains the live-object integration façade over smaller `src/session/*` domains. `SessionRuntime` is the asynchronous immutable-DTO boundary for external session queries, commands, and update events; local placement currently delegates to the manager through the shared RPC contract.
 
-The live LLM/tool turn loop belongs to `MessageRouter.processSessionQueue()`. Session core stores and triggers work; message routing claims it and executes the turn. Canonical flow: [message processing pipeline](../threads/message-processing-pipeline.md).
+The live LLM/tool turn loop belongs to the `SessionTurnRunner` reached through `MessageRouter.processSessionQueue()`. Session core stores and triggers work; message routing claims it and executes the turn. Canonical flow: [message processing pipeline](../threads/message-processing-pipeline.md).
 
 Cross-module creation, hydration, fork/cache lineage, restart, archive, and deletion: [session lifecycle](../threads/session-lifecycle.md).
 
@@ -73,7 +73,7 @@ The durable JSON implementation and backup semantics are canonical in [src-utils
 
 ### D-session-core-facade
 
-`src/sessionManager.ts` is a stable façade, not the owner of every session implementation. Domain logic belongs in `src/session/*`, and live turn execution belongs in `MessageRouter`.
+`src/sessionManager.ts` is a stable façade, not the owner of every session implementation. Domain logic belongs in `src/session/*`, and live turn execution belongs in `SessionTurnRunner` behind `MessageRouter` ingress.
 
 ### D-session-core-authoritative-history
 

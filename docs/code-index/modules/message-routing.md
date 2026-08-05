@@ -2,11 +2,12 @@
 
 ## Responsibility
 
-Message routing owns inbound channel-to-session routing, command dispatch, side requests, queue claiming, and the LLM/tool turn loop. It coordinates channels, sessions, LLM providers, tools, compaction, waits, retries, and guest-session provisioning without owning those subsystems' internal storage. External channel input enters through the SessionRuntime enqueue DTO boundary; the claimed turn loop intentionally retains live `Session` access in local placement.
+Message routing owns inbound channel-to-session routing, command dispatch, side requests, and the canonical queue/LLM/tool turn loop. `MessageRouter` owns ingress while `SessionTurnRunner` owns queue claim through finalization. External channel input enters through the SessionRuntime enqueue DTO boundary; the local turn runner intentionally retains live `Session` access.
 
 ## Key units
 
-- [src-message-router](../units/src-message-router.md) — authorization gate, session resolution, queue processing, and turn loop.
+- [src-message-router](../units/src-message-router.md) — authorization gate, session resolution, prompt-ready QueueItem construction, and runner delegation.
+- [src-session-turn-runner](../units/src-session-turn-runner.md) — the single canonical local queue/turn/tool/compact/error/finalization state machine.
 - [src-commands](../units/src-commands.md) — command registry and handlers.
 - [src-btw](../units/src-btw.md) — display-only side request against a cloned session prefix.
 - [src-selftest-misc](../units/src-selftest-misc.md) — queue and tool-loop self-tests.
@@ -15,7 +16,7 @@ Message routing owns inbound channel-to-session routing, command dispatch, side 
 ## Public interfaces
 
 - `MessageRouter.handleIncomingMessage(ctx, message)` — top-level channel entry.
-- `MessageRouter.processSessionQueue(sessionId)` — request queue processing.
+- `MessageRouter.processSessionQueue(sessionId)` — delegates request queue processing to its `SessionTurnRunner`.
 - `CommandHandler.handleCommand(ctx, command, args)` — user command dispatch.
 - `COMMANDS` — autocomplete/help registry.
 - `runBtwRequest(sessionId, message)` — side request that does not mutate model-visible history.
@@ -28,7 +29,7 @@ Message routing owns inbound channel-to-session routing, command dispatch, side 
 - Queue items are consumed in insertion order, subject to ready compact-commit safe points; retry and compact planning do not enter the queue.
 - Each consumed queue item remains a separate canonical history message; only provider-facing serialization may normalize adjacent roles.
 - Direct user input, inter-session messages, timers, triggers, and internal events enter the same queue gate.
-- Migrated external producers use SessionRuntime commands/events to reach that gate; the router remains the only turn owner and does not RPC-wrap its internal hot loop.
+- Migrated external producers use SessionRuntime commands/events to reach that gate; `SessionTurnRunner` remains the only local turn owner and does not RPC-wrap its hot loop.
 - Platform stream/card identifiers remain turn metadata and prevent incompatible queued items from being merged.
 - Side requests do not mutate real model-visible history or execute returned tool calls.
 - Runtime phase state is set around model/tool execution and cleared on every exit path.

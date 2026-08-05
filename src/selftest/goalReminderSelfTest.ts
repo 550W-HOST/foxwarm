@@ -122,7 +122,7 @@ async function main(): Promise<void> {
         return toolResult;
       };
 
-      await (router as any).runSessionTurn(sessionId, {
+      await (router as any).turnRunner.runSessionTurn(sessionId, {
         parts: null,
         queuedItems: [session.queue.shift()],
         session,
@@ -187,7 +187,7 @@ async function main(): Promise<void> {
         return { text: 'Normal reply' };
       };
 
-      await (router as any).runSessionTurn(sessionId, {
+      await (router as any).turnRunner.runSessionTurn(sessionId, {
         parts: [{ text: 'normal turn' }],
         session,
         preclaimed: true,
@@ -231,7 +231,7 @@ async function main(): Promise<void> {
         parts: [{ functionResponse: { tool_use_id: 'read-1', name: 'read', response: { output: 'ok' } } }],
       });
 
-      await (router as any).runSessionTurn(sessionId, {
+      await (router as any).turnRunner.runSessionTurn(sessionId, {
         parts: null,
         queuedItems: [session.queue.shift()],
         session,

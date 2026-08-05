@@ -90,7 +90,7 @@ test('MessageRouter top-level queue drain persists user and intersession inputs 
   };
 
   try {
-    await router.continueWithQueuedWork(session);
+    await router.turnRunner.continueWithQueuedWork(session);
 
     assert.equal(seenRequests.length, 1);
     assert.equal(countHistoryPartText(seenRequests[0], 'queued channel user'), 1);
@@ -133,7 +133,7 @@ test('MessageRouter keeps a drained queued batch unsent across a pre-LLM compact
   };
 
   try {
-    await router.continueWithQueuedWork(session);
+    await router.turnRunner.continueWithQueuedWork(session);
 
     assert.equal(userTextOccurrences(session, 'queued before compact commit'), 1);
     assert.equal(session.queue.length, 0);
@@ -157,10 +157,10 @@ test('MessageRouter keeps the first queued item as the turn source when later co
       parts: [{ text: 'later web input' }],
     },
   );
-  router.runSessionTurn = async (_sessionId: string, options: any) => captured.push(options);
+  router.turnRunner.runSessionTurn = async (_sessionId: string, options: any) => captured.push(options);
 
   try {
-    await router.continueWithQueuedWork(session);
+    await router.turnRunner.continueWithQueuedWork(session);
 
     assert.equal(captured.length, 1);
     assert.equal(captured[0].source, undefined);
@@ -218,7 +218,7 @@ test('MessageRouter queued turn start keeps WeWork stream-bound and unbound inpu
     ],
   };
 
-  const drained = router.drainLeadingQueuedTurnInputs(session);
+  const drained = router.turnRunner.drainLeadingQueuedTurnInputs(session);
   assert.equal(drained.items[0].parts?.some((part: any) => part.text === 'stream input'), true);
   assert.equal(drained.items.some((item: any) => item.parts?.some((part: any) => part.text === 'web input')), false);
   assert.equal(session.queue.length, 1);
@@ -246,7 +246,7 @@ test('MessageRouter in-turn queue consumption drains same-stream WeWork inputs b
   const originalAppend = sessionManager.appendSessionMessage;
   (sessionManager as any).appendSessionMessage = async (target: any, message: Message) => target.history.push(message);
   try {
-    const consumed = await router.consumeLeadingQueuedTurnInputs(
+    const consumed = await router.turnRunner.consumeLeadingQueuedTurnInputs(
       session,
       [{ text: 'pending' }],
       'wework-a:chat-a:stream-a',
@@ -276,7 +276,7 @@ test('MessageRouter in-turn queue consumption leaves different WeWork stream car
     ],
   };
 
-  const consumed = await router.consumeLeadingQueuedTurnInputs(
+  const consumed = await router.turnRunner.consumeLeadingQueuedTurnInputs(
     session,
     [{ text: 'pending' }],
     'wework-a:chat-a:stream-a',
@@ -312,8 +312,8 @@ test('MessageRouter does not inject source prefix twice for drained queued parts
     queue: [queueItem],
   };
 
-  const drained = router.drainLeadingQueuedTurnInputs(session);
-  const parts = router.prepareTurnParts(session, 'session-1', drained.items[0].parts);
+  const drained = router.turnRunner.drainLeadingQueuedTurnInputs(session);
+  const parts = router.turnRunner.prepareTurnParts(session, 'session-1', drained.items[0].parts);
 
   const sourcePrefixCount = parts.filter((part: any) => typeof part.system === 'string'
     && part.system.startsWith('<foxwarm-message ')
@@ -330,7 +330,7 @@ test('MessageRouter persists each queued WebUI client message identity on its us
   const session = await createRouterQueueTestSession('client_message_identity');
 
   try {
-    await router.appendQueuedTurnInputs(session, session.id, [
+    await router.turnRunner.appendQueuedTurnInputs(session, session.id, [
       { type: 'user', parts: [{ text: 'same' }], clientMessageId: 'same-a' },
       { type: 'user', parts: [{ text: 'same' }], clientMessageId: 'same-b' },
     ]);
@@ -353,7 +353,7 @@ test('MessageRouter turn metadata no longer injects an idle-gap time marker', ()
     queue: [],
   };
 
-  const parts = router.prepareTurnParts(session, 'session-xml-1', [{ text: 'hello' }]);
+  const parts = router.turnRunner.prepareTurnParts(session, 'session-xml-1', [{ text: 'hello' }]);
   const sessionPart = parts.find((part: any) => typeof part.system === 'string' && part.system.includes('kind="session"'));
 
   assert.equal(sessionPart?.system, '<foxwarm-system kind="session" currentSessionId="session-xml-1" />');
@@ -378,7 +378,7 @@ test('MessageRouter queue draining keeps different WeWork stream ids separate', 
     ],
   };
 
-  const drained = router.drainLeadingQueuedTurnInputs(session);
+  const drained = router.turnRunner.drainLeadingQueuedTurnInputs(session);
   assert.equal(drained.items[0].parts?.some((part: any) => part.text === 'first stream'), true);
   assert.equal(drained.items.some((item: any) => item.parts?.some((part: any) => part.text === 'second stream')), false);
   assert.equal(session.queue.length, 1);
@@ -388,7 +388,7 @@ test('MessageRouter emits turn progress as an empty targeted channel broadcast',
   const router = new MessageRouter() as any;
   const events: Array<{ text: string; options: any }> = [];
 
-  router.emitTurnProgress((text: string, options?: any) => events.push({ text, options }), {
+  router.turnRunner.emitTurnProgress((text: string, options?: any) => events.push({ text, options }), {
     weworkStreamId: 'stream-1',
     weworkStreamChannelId: 'wework-a',
     weworkStreamConversationId: 'chat-a',
@@ -430,7 +430,7 @@ test('MessageRouter LLM retry notifier appends one display-only message then upd
   };
 
   try {
-    const notify = router.createLlmRetryNotifier(
+    const notify = router.turnRunner.createLlmRetryNotifier(
       session,
       (text: string, options?: any) => broadcasts.push({ text, options }),
     );
@@ -485,7 +485,7 @@ test('MessageRouter LLM retry notifier appends one display-only message then upd
 
 test('MessageRouter LLM final failure keeps retry notice display-only without appending Error model text', async () => {
   const router = new MessageRouter() as any;
-  router.continueWithQueuedWork = async () => false;
+  router.turnRunner.continueWithQueuedWork = async () => false;
   const broadcasts: Array<{ text: string; options: any }> = [];
   const session: Session = {
     id: 'retry_final_failure_session',
@@ -524,7 +524,7 @@ test('MessageRouter LLM final failure keeps retry notice display-only without ap
   };
 
   try {
-    await router.runSessionTurn(session.id, {
+    await router.turnRunner.runSessionTurn(session.id, {
       parts: [{ text: 'trigger final failure' }],
       session,
       preclaimed: true,
@@ -744,7 +744,7 @@ test('stop signal commits queued work to history without running it', async () =
   };
 
   try {
-    await router.runSessionTurn(sessionId, { parts: [{ text: 'start current turn' }], session });
+    await router.turnRunner.runSessionTurn(sessionId, { parts: [{ text: 'start current turn' }], session });
 
     assert.equal(seenParts.length, 1);
     assert.equal(session.queue.length, 0);
@@ -813,7 +813,7 @@ test('stop commits content and applies a ready compact commit', async () => {
   };
 
   try {
-    await router.runSessionTurn(sessionId, { parts: [{ text: 'start mixed turn' }], session });
+    await router.turnRunner.runSessionTurn(sessionId, { parts: [{ text: 'start mixed turn' }], session });
 
     assert.equal(chatCallCount, 1);
     assert.equal(session.queue.length, 0);
@@ -879,7 +879,7 @@ test('stop commits content that arrives while stop history is being finalized', 
   };
 
   try {
-    await router.runSessionTurn(sessionId, { parts: [{ text: 'start finalizing turn' }], session });
+    await router.turnRunner.runSessionTurn(sessionId, { parts: [{ text: 'start finalizing turn' }], session });
 
     assert.equal(chatCallCount, 1);
     assert.equal(session.queue.length, 0);
@@ -911,7 +911,7 @@ test('input after the stop boundary is handed to a fresh processor instead of lo
 
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
-  const originalFinalizeStoppedSession = router.finalizeStoppedSession.bind(router);
+  const originalFinalizeStoppedSession = router.turnRunner.finalizeStoppedSession.bind(router.turnRunner);
   const processedAfterBoundary = new Promise<void>((resolve) => {
     (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
       const call = session.history.some(message => message.parts.some(part => part.text === 'after stop boundary')) ? 2 : 1;
@@ -929,7 +929,7 @@ test('input after the stop boundary is handed to a fresh processor instead of lo
     await sessionManager.requestSessionStop(sessionId);
     return { parts: [{ functionResponse: { tool_use_id: 'stop-boundary-tool', name: 'read', response: { output: 'stopped' } } }] };
   };
-  router.finalizeStoppedSession = async (...args: any[]) => {
+  router.turnRunner.finalizeStoppedSession = async (...args: any[]) => {
     const committed = await originalFinalizeStoppedSession(...args);
     session.queue.push({ type: 'user', parts: [{ text: 'after stop boundary' }] });
     return committed;
@@ -984,7 +984,7 @@ test('dequeue signal drains queued work once after a compact-commit boundary', a
   };
 
   try {
-    await router.runSessionTurn(sessionId, { parts: [{ text: 'start current turn' }], session });
+    await router.turnRunner.runSessionTurn(sessionId, { parts: [{ text: 'start current turn' }], session });
 
     assert.equal(seenParts.length, 2);
     assert.equal(seenParts[1], null);
@@ -1027,7 +1027,7 @@ test('MessageRouter does not replay dispatched parts after an async compact comm
   };
 
   try {
-    await router.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
+    await router.turnRunner.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
 
     assert.equal(hasPartText(seenParts[0], 'A'), true);
     assert.equal(seenParts[1], null);
@@ -1072,7 +1072,7 @@ test('MessageRouter keeps a queued user item behind compact commit separate from
   };
 
   try {
-    await router.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
+    await router.turnRunner.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
 
     assert.equal(hasPartText(seenParts[0], 'A'), true);
     assert.equal(seenParts[1], null);
@@ -1119,7 +1119,7 @@ test('MessageRouter in-tool queue consumption preserves each queued input as sep
   };
 
   try {
-    await router.runSessionTurn(session.id, { parts: [{ text: 'initial request' }], session });
+    await router.turnRunner.runSessionTurn(session.id, { parts: [{ text: 'initial request' }], session });
 
     assert.equal(seenRequests.length, 2);
     assert.equal(countHistoryPartText(seenRequests[1], 'queued user follow-up'), 1);
@@ -1170,7 +1170,7 @@ test('MessageRouter preserves an already-consumed follow-up once when compact co
   };
 
   try {
-    await router.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
+    await router.turnRunner.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
 
     assert.equal(hasPartText(seenParts[0], 'A'), true);
     assert.equal(seenParts[1], null);
@@ -1207,7 +1207,7 @@ test('MessageRouter retains unsent parts across a pre-LLM compact boundary', asy
   };
 
   try {
-    await router.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
+    await router.turnRunner.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
 
     assert.equal(hasPartText(seenParts[0], 'A'), true);
     assert.equal(userTextOccurrences(session, 'A'), 1);
@@ -1222,7 +1222,7 @@ test('MessageRouter retains unsent parts across a pre-LLM compact boundary', asy
 
 test('MessageRouter exposes requesting-model runtime state while LLM request is in flight', async () => {
   const router = new MessageRouter() as any;
-  router.continueWithQueuedWork = async () => false;
+  router.turnRunner.continueWithQueuedWork = async () => false;
   const sessionId = `runtime_requesting_session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const session = await sessionManager.getSession(sessionId) as Session;
   session.history = [];
@@ -1243,7 +1243,7 @@ test('MessageRouter exposes requesting-model runtime state while LLM request is 
   };
 
   try {
-    const running = router.runSessionTurn(session.id, {
+    const running = router.turnRunner.runSessionTurn(session.id, {
       parts: [{ text: 'hello' }],
       session,
       preclaimed: true,
@@ -1269,7 +1269,7 @@ test('MessageRouter exposes requesting-model runtime state while LLM request is 
 
 test('MessageRouter exposes running-tool runtime state while tool batch is executing', async () => {
   const router = new MessageRouter() as any;
-  router.continueWithQueuedWork = async () => false;
+  router.turnRunner.continueWithQueuedWork = async () => false;
   const sessionId = `runtime_tool_session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const session = await sessionManager.getSession(sessionId) as Session;
   session.history = [];
@@ -1302,7 +1302,7 @@ test('MessageRouter exposes running-tool runtime state while tool batch is execu
   };
 
   try {
-    const running = router.runSessionTurn(session.id, {
+    const running = router.turnRunner.runSessionTurn(session.id, {
       parts: [{ text: 'use tool' }],
       session,
       preclaimed: true,

@@ -9,7 +9,7 @@ The interactive turn flow from channel input through authorization, queueing, pr
 1. A platform adapter converts native input to `ChannelContext` plus `ChannelMessage` and calls `MessageRouter.handleIncomingMessage`.
 2. Router performs channel authorization, normalizes source metadata/mentions, handles slash commands where applicable, and resolves the attached session.
 3. Ordinary input enters the session queue through the session-manager façade.
-4. The registered trigger invokes `MessageRouter.processSessionQueue`. `tryClaimSession` provides per-session exclusion and `continueWithQueuedWork` selects/merges a legal turn source.
+4. The registered trigger invokes `MessageRouter.processSessionQueue`, which directly delegates to its `SessionTurnRunner`. The runner's `tryClaimSession` provides per-session exclusion and `continueWithQueuedWork` selects/merges a legal turn source.
 5. `llm.chat(parts, session, iteration, options)` builds the current model-visible history/prompt/tool schema, resolves concrete or virtual routing, streams progress, records the actual concrete provider-qualified model ID, and appends the model result. Virtual attempt semantics are canonical in [model routing](./model-routing.md).
 6. Retry callbacks create/update display-only notices and broadcast concise progress; terminal request exhaustion throws `LlmRequestError`.
 7. Model stream deltas become `model-stream-update` events for WebUI/channel progress.
@@ -17,9 +17,9 @@ The interactive turn flow from channel input through authorization, queueing, pr
 9. Tool results append to history and the loop returns to the provider. Mergeable queued follow-ups may join before the next call only when turn/source boundaries permit.
    A successful `waitAfterHandoff` handoff instead appends the complete tool result, arms the existing generic wait once, and stops recursion before another provider request.
 10. A result with no further tool calls is sent through direct source reply/session broadcast with `turnFinal:true`.
-11. Router releases active state, may continue queued work, and calls `checkAndCompactIfNeeded` with final usage.
+11. The same runner releases active state, may continue queued work, and calls `checkAndCompactIfNeeded` with final usage.
 
-`src/sessionManager.ts` stores/queues/triggers work but does not implement this loop.
+`src/sessionManager.ts` stores/queues/triggers work but does not implement this loop. The implementation owner is `src/sessionTurnRunner.ts`; `MessageRouter` owns channel ingress and delegates the real local execution path.
 
 ## Modules and units
 

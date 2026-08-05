@@ -154,7 +154,7 @@ test('router appends every result, arms flagged generic wait despite a sibling e
   const target = await resetSession(targetId);
   target.busy = true;
   const router = new MessageRouter() as any;
-  router.continueWithQueuedWork = async () => false;
+  router.turnRunner.continueWithQueuedWork = async () => false;
   const originalChat = llm.chat;
   let calls = 0;
   (llm as any).chat = async (parts: MessagePart[] | null, active: Session) => {
@@ -166,7 +166,7 @@ test('router appends every result, arms flagged generic wait despite a sibling e
     return { text: '', toolCalls: [sendCall, errorCall] };
   };
   try {
-    await router.runSessionTurn(sourceId, { parts: [{ text: 'handoff' }], session: source });
+    await router.turnRunner.runSessionTurn(sourceId, { parts: [{ text: 'handoff' }], session: source });
     assert.equal(calls, 1);
     assert.equal(typeof source.meta.wait?.id, 'string');
     assert.equal(source.history[source.history.length - 1].role, 'tool');
@@ -211,7 +211,7 @@ test('fast reply queued before wait arm wakes immediately after the flagged hand
   };
 
   try {
-    await router.runSessionTurn(sourceId, { parts: [{ text: 'handoff' }], session: source });
+    await router.turnRunner.runSessionTurn(sourceId, { parts: [{ text: 'handoff' }], session: source });
     assert.equal(calls, 2);
     assert.equal(source.meta.wait, undefined);
     const toolIndex = source.history.findIndex(message => message.role === 'tool');

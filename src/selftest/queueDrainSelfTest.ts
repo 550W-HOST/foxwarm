@@ -148,7 +148,7 @@ async function main(): Promise<void> {
           } as Message;
         };
 
-        await (router as any).runSessionTurn(sessionId, {
+        await (router as any).turnRunner.runSessionTurn(sessionId, {
           parts: [{ text: 'start queue drain' }],
           session,
           preclaimed: true,
@@ -248,7 +248,7 @@ async function main(): Promise<void> {
         return { text: 'handled after compact boundary' };
       };
 
-      await (router as any).runSessionTurn(sessionId, {
+      await (router as any).turnRunner.runSessionTurn(sessionId, {
         parts: [{ text: 'before compact' }],
         session,
         preclaimed: true,
