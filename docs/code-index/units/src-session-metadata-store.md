@@ -21,7 +21,7 @@ Manages persistence of session metadata and history as separate JSON files on di
 - `sessionsMetadataStore` — singleton `DiskJsonData` instance for the sessions index
 - `loadSessionsMetadataSnapshot()` — loads metadata from primary/backups or rebuilds from history files
 - `writeSessionsMetadataAtomically(data)` — atomically writes the sessions metadata index
-- `withSessionsMetadataWriteLock(operation)` — process-local main-writer serialization shared by ordinary local saves and bounded worker catalog projection merges
+- `withSessionsMetadataWriteLock(operation)` — process-local serialization for the existing main-owned metadata writer
 - `rebuildSessionsMetadataFromHistoryFiles()` — reconstructs the metadata index by scanning history files
 - `buildRecoveredSessionMetadata(sessionId, historyData, history)` — derives metadata for a single session from its history
 - `collectSessionHistoryFiles(dir)` — recursively finds all `.json` history files, excluding legacy `*.frontier.json`
@@ -66,7 +66,7 @@ Manages persistence of session metadata and history as separate JSON files on di
 
 ## Behavior
 
-- Separates session data into two tiers: a main-owned shared metadata index (`sessions.json`) with backup rotation (5 numbered + legacy `.bak`), and authoritative full semantic per-session state files (no backups). Local save writes state then catalog; a future worker writes state only and main consumes a bounded projection.
+- Separates session data into two tiers: a main-owned shared metadata index (`sessions.json`) with backup rotation (5 numbered + legacy `.bak`), and authoritative full semantic per-session state files (no backups). Current local save writes state then catalog; future worker catalog delivery is deferred to the concrete placement slice.
 - `sidebarOrder` and `pinned` are WebUI/session-list metadata fields saved in the shared metadata index only. They are excluded from per-session history serialization/application so reorder/pin operations do not touch or risk stale rewrites of history JSON files.
 - Uses an in-memory `Map` cache for history store instances to avoid recreating them.
 - The real per-session file reader applies tolerant history/frontier shape normalization only to unversioned legacy payloads. Versioned payload shapes pass through unchanged to strict hydration, so malformed v1 history/frontier data and unknown versions fail closed without an empty-history rewrite.

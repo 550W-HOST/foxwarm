@@ -5,7 +5,6 @@ import { externalizeMessages, externalizeQueueItems } from '../imageBlobs';
 import type { QueueItem, Session } from '../types';
 import { getManagedSessionState, setManagedSessionState } from './managedState';
 import { serializeSessionHistoryPayload, writeSessionHistoryAtomically } from './metadataStore';
-import type { SessionWorkerMainMutationClaim } from '../sessionWorkerSupervisor';
 
 /** Materialize queue/inbox images only when the observed arrays are still unchanged; otherwise fail for retry. */
 export async function externalizeAuthoritativeSessionQueueImages(session: Session): Promise<boolean> {
@@ -65,10 +64,9 @@ export async function prepareAuthoritativeSessionState(session: Session): Promis
 }
 
 /** Worker-safe writer: writes only the authoritative per-session JSON, never sessions.json. */
-export async function writeAuthoritativeSessionState(session: Session, claim?: SessionWorkerMainMutationClaim): Promise<void> {
+export async function writeAuthoritativeSessionState(session: Session): Promise<void> {
   const payload = await prepareAuthoritativeSessionState(session);
   const historyFile = path.join(SESSIONS_DIR, `${session.id}.json`);
   await fs.ensureDir(path.dirname(historyFile));
-  claim?.assertActive('before atomic state replacement');
-  await writeSessionHistoryAtomically(session.id, payload, claim ? () => claim.assertActive('before state-file rename') : undefined);
+  await writeSessionHistoryAtomically(session.id, payload);
 }

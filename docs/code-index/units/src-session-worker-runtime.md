@@ -1,18 +1,18 @@
 # Unit: src-session-worker-runtime
 
-Files: src/sessionWorkerStore.ts, src/sessionWorkerStoreSchema.ts, src/sessionWorkerStableJson.ts, src/sessionWorkerSupervisor.ts, src/sessionWorkerPersistence.ts, src/sessionWorkerCatalog.ts, src/sessionWorkerControlService.ts, src/sessionWorkerProcessIdentity.ts, src/sessionWorker.ts
+Files: src/sessionWorkerStore.ts, src/sessionWorkerStoreSchema.ts, src/sessionWorkerStableJson.ts, src/sessionWorkerSupervisor.ts, src/sessionWorkerPersistence.ts, src/sessionWorkerControlService.ts, src/sessionWorkerProcessIdentity.ts, src/sessionWorker.ts
 Secondary files: src/sessionWorkerStore.test.ts, src/sessionWorkerSupervisor.test.ts, src/sessionWorkerPersistence.test.ts, src/sessionWorkerStoreConcurrencyChild.ts, src/sessionWorkerCrashParent.ts, src/sessionWorkerHangingChild.ts, src/sessionWorkerStateFileChild.ts
 
 ## Purpose
 
-Provides durable ownership/mailbox coordination, save-before-ack authoritative state persistence, bounded catalog projection, main lifecycle quiescing, and supervised process lifecycle for future per-session workers. The seams are intentionally not wired into production SessionRuntime placement yet: `sessionWorkers:true` continues to fail startup until the complete supported turn path exists.
+Provides durable ownership/mailbox coordination, save-before-ack authoritative state persistence, a pure bounded projection DTO, and supervised process lifecycle for future per-session workers. The seams are intentionally not wired into production SessionRuntime placement yet: `sessionWorkers:true` continues to fail startup until the complete supported turn path exists.
 
 ## Key exports
 
 - `SessionWorkerStore` — SQLite-backed generation/incarnation ownership, durable mailbox intents, acknowledgement cursor, activity, exit, cleanup, and fail-closed cursor reconciliation.
 - `SessionWorkerSupervisor` — one-child-per-session candidate activation, exact-process startup reconciliation, idle release, bounded drain/TERM/KILL, exit confirmation, and optional post-exit restart.
-- `SessionWorkerPersistence` — versioned authoritative JSON replace/legacy upgrade, canonical-intent apply/save-before-ack recovery, bounded catalog projection, and token-fenced main mutation seam.
-- `SessionWorkerCatalogCoordinator` / `writeSessionWorkerCatalogProjection()` — explicit main-owned projection registration/update/reconciled-release plus atomic catalog merge; full/global saves preserve worker-owned fields while accepting topology/UI/channel changes, and stale full queue/wait/managed state is removed.
+- `SessionWorkerPersistence` — versioned authoritative JSON replace/legacy upgrade plus canonical pending-prefix apply/save-before-ack recovery; callers choose only a bounded count and cannot supply intent payload rows.
+- `buildSessionWorkerProjection()` — pure cloned bounded DTO builder with no catalog writer or ownership protocol.
 - `sessionWorkerControlServiceDescriptor` — minimal versioned candidate identity/activation/status control service used while the real session service is still being implemented.
 - `readSessionWorkerProcessIdentity()` — Linux boot-ID plus proc start-tick identity used to distinguish an exact old process from PID reuse.
 - `sessionWorker.ts` — child bootstrap for the control service.
@@ -43,10 +43,8 @@ Schema open sets the busy timeout before lock-taking pragmas, migrates known ver
 
 - At most one activated generation/incarnation is recorded for one session.
 - Candidates cannot hydrate, process, touch activity, or acknowledge mailbox inputs before durable activation. Stale generations/incarnations cannot advance the mailbox cursor or replace a current owner.
-- SQLite acknowledgement can never advance before the authoritative JSON cursor; a tokenized main lifecycle claim blocks respawn across quiesce, reload, mutation, and save. Claim assertions fence every supported state/catalog write and are rechecked immediately before atomic rename.
-- Shutdown aborts main claims and waits only within its deadline. Cooperative callbacks stop normally; noncooperative callbacks become stale, shutdown aggregates a timeout, and no late state/catalog rename can commit.
-- Full/global catalog saves serialize through the main writer lock and consult registered projection ownership, so stale in-memory Session records cannot restore worker-owned queue/wait/managed/stat/runtime fields.
-- After a successful main mutation, the bounded committed main-owned patch is installed into the real live catalog stub before the claim is released. Worker ownership release is rejected during an active claim and otherwise requires an explicit reconciled authoritative Session handoff matching the latest registered projection before coordinator protection is removed.
+- SQLite acknowledgement can never advance before the authoritative JSON cursor.
+- There is no session-worker catalog writer/coordinator, generic main-mutation claim, or release/handoff API in this foundation. Catalog delivery and lifecycle handoff are deferred to one closed supervisor-owned flow in the future real MessageRouter/SessionRuntime placement slice.
 - Invalid/reused mailbox intent identities fail closed; exact idempotent repeats return the original record.
 - Draining generations may publish one final revision before confirmed exit.
 - The supervisor never treats IPC disconnect alone as permission to replace a worker.
@@ -54,7 +52,7 @@ Schema open sets the busy timeout before lock-taking pragmas, migrates known ver
 
 ## Integration status
 
-The store, persistence coordinator, and supervisor have isolated real-child/crash-boundary tests but are not initialized by `src/index.ts`. Router execution, archive append fencing, event/reverse-service bridges, and SessionRuntime routing must land before `sessionWorkers:true` becomes functional.
+The store, state persistence coordinator, and supervisor have isolated real-child/crash-boundary tests but are not initialized by `src/index.ts`. Router execution, archive append fencing, event/reverse-service bridges, catalog projection delivery, closed lifecycle handoff, and SessionRuntime routing must land before `sessionWorkers:true` becomes functional.
 
 ## Canonical ownership
 

@@ -23,7 +23,6 @@ import { ensureSessionBranch, hasArchivedSessionId, rollbackUncommittedSessionAr
 import { getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, stripSessionMetadataForSave, withSessionsMetadataWriteLock, writeSessionsMetadataAtomically } from './session/metadataStore';
 import { externalizeAuthoritativeSessionImages, externalizeAuthoritativeSessionQueueImages, writeAuthoritativeSessionState } from './session/stateFile';
 import { replaceAuthoritativeSessionState } from './session/stateHydration';
-import { sessionWorkerCatalogCoordinator } from './sessionWorkerCatalog';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
 import * as sessionRelations from './session/relations';
@@ -1737,14 +1736,8 @@ async function saveSessionsMetadataCriticalUnlocked(): Promise<void> {
     }
 
     for (const [sessionId, session] of sessions.entries()) {
-      if (!sessionWorkerCatalogCoordinator.isWorkerOwned(sessionId)) {
-        await externalizeAuthoritativeSessionQueueImages(session);
-      }
-      data.sessions[sessionId] = sessionWorkerCatalogCoordinator.mergeFullSave(
-        sessionId,
-        existingSessions[sessionId] as Record<string, any> | undefined,
-        stripSessionMetadataForSave(session) as Record<string, any>,
-      );
+      await externalizeAuthoritativeSessionQueueImages(session);
+      data.sessions[sessionId] = stripSessionMetadataForSave(session);
     }
 
     if (source !== SESSIONS_FILE) {

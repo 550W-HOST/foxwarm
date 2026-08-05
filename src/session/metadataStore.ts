@@ -269,9 +269,8 @@ export async function readSessionHistorySnapshot(sessionId: string): Promise<Rec
 export async function writeSessionHistoryAtomically(
   sessionId: string,
   data: Record<string, any>,
-  beforeCommit?: () => void,
 ): Promise<void> {
-  await getSessionHistoryStore(sessionId).write(data, { beforeCommit });
+  await getSessionHistoryStore(sessionId).write(data);
 }
 
 function normalizeSessionsMetadataSnapshot(raw: any, filePath: string): any {
@@ -416,6 +415,6 @@ export async function loadSessionsMetadataSnapshot(): Promise<{ data: any; sourc
   return { data: rebuilt, source: 'rebuild' };
 }
 
-export async function writeSessionsMetadataAtomically(data: any, beforeCommit?: () => void): Promise<void> {
-  await sessionsMetadataStore.write(data, { beforeCommit });
+export async function writeSessionsMetadataAtomically(data: any): Promise<void> {
+  await sessionsMetadataStore.write(data);
 }
