@@ -16,7 +16,8 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 - `buildToolImageId` — constructs a deterministic image identifier from tool use ID and index
 - `getImageMetaFromPart` — extracts image metadata from a message part
 - `buildImageGuidanceText` / `appendImageGuidanceText` — generates model-facing image usage hints
-- `cropImageById` — resolves an image by ID from session history and crops it
+- `resolveImageForSession` / `cropImageForSession` — resolve or crop from an already-established Session owner plus its canonical archive
+- `resolveImageById` / `cropImageById` — compatible ID-based entries that load an existing Session when available and delegate to the same readers
 - `resolveArchiveInlineDataPath` — compatibility resolver for archived path references
 - `NormalizedToolResultImage`, `NormalizedToolResultImages` — TypeScript interfaces for normalized image results
 
@@ -57,7 +58,9 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 | `buildResolvedImageFromPart(part)` | ~200 | Resolves a message part into buffer + metadata |
 | `findImagePartInMessage(message, imageId)` | ~215 | Searches message parts for matching image ID |
 | `resolveImageById(sessionId, imageId)` | ~225 | Searches session history and archives for an image |
+| `resolveImageForSession(session, imageId)` | ~225 | Searches a passed Session newest-first, then reads its canonical archive directly |
 | `cropImageById(sessionId, imageId, crop)` | ~250 | Resolves image and performs sharp crop extraction |
+| `cropImageForSession(session, imageId, crop)` | ~250 | Performs the same crop for a passed Session owner without a global session lookup |
 
 ## Dependencies
 
@@ -81,7 +84,7 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 - `guardToolOutputForModel` applies a two-stage truncation to the non-image response that remains after image promotion: Stage A targets the `output` field specifically; Stage B catches any remaining oversized payload. Both stages save the complete text to disk and return a line-aware excerpt with location metadata, Foxwarm placeholder notes, and original line/character counts. A fallback path handles save failures. Canonical ordering is [D-dispatch-output-boundary](../threads/tool-dispatch.md#d-dispatch-output-boundary).
 - The guard preserves a curated set of shallow metadata keys (paths, IDs, status, error) in truncated summaries so the model retains actionable context.
 - `normalizeToolResultImages` accepts only current structured `inlineData` / `inlineDataItems` fields with `mimeType` and turns them into consistent `MessagePart[]` values with probed metadata. Source-specific old node shapes are outside this generic unit and are owned by [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
-- `cropImageById` resolves inline, canonical blob, or legacy archive-path images by walking session history backwards (including archives), then uses sharp to extract a sub-region. `image_write_to_file` uses the same reference reader.
+- Passed-Session and ID-based image resolution share inline, canonical blob, and legacy archive-path readers. The passed path walks the exact owner's live history newest-first and then reads that session's canonical archive directly; the ID path loads an existing Session when available and delegates. Cropping shares one sharp validation/extraction implementation. Trusted current-owner `image_crop` and master-local `image_write_to_file` use the passed path; legacy/no-hook/mismatched calls retain the ID path.
 - The `wait` tool's stop-current-turn behavior is suppressed when any other tool in the batch returns an error.
 
 ## Design Decisions

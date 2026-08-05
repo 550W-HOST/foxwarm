@@ -7,8 +7,13 @@ import {
     shouldEnforceIsolatedMasterPathAccess,
 } from './helpers';
 import { checkPathAccess } from '../isolatedCheck';
-import { cropImageById, resolveImageById } from '../toolImages';
+import { cropImageById, cropImageForSession, resolveImageById, resolveImageForSession } from '../toolImages';
 import { nodesManager } from '../nodes/manager';
+
+function getTrustedCurrentSession(ctx: ToolContext) {
+    if (!ctx.persistCurrentSession || !ctx.session || !ctx.sessionId) return undefined;
+    return ctx.session.id === ctx.sessionId ? ctx.session : undefined;
+}
 
 export async function tool_image_crop(args: ToolArgs, ctx: ToolContext) {
     const { id, x, y, width, height } = args;
@@ -20,12 +25,16 @@ export async function tool_image_crop(args: ToolArgs, ctx: ToolContext) {
         throw new Error('image_crop requires id.');
     }
 
-    const cropped = await cropImageById(ctx.sessionId, id, {
+    const trustedSession = getTrustedCurrentSession(ctx);
+    const crop = {
         x: Number(x),
         y: Number(y),
         width: Number(width),
         height: Number(height),
-    });
+    };
+    const cropped = trustedSession
+        ? await cropImageForSession(trustedSession, id, crop)
+        : await cropImageById(ctx.sessionId, id, crop);
 
     return {
         output: `[Cropped image from ${id}]`,
@@ -56,12 +65,15 @@ export async function tool_image_write_to_file(args: ToolArgs, ctx: ToolContext)
     }
 
     const sessionId = ctx.sessionId;
+    const trustedSession = getTrustedCurrentSession(ctx);
     const currentNode = ctx.runtimeNodeId
         || ctx.session?.currentNode
-        || await nodesManager.getCurrentNode(sessionId)
+        || (trustedSession ? 'master' : await nodesManager.getCurrentNode(sessionId))
         || 'master';
     const targetNode = currentNode;
-    const resolved = await resolveImageById(sessionId, id);
+    const resolved = trustedSession
+        ? await resolveImageForSession(trustedSession, id)
+        : await resolveImageById(sessionId, id);
 
     if (targetNode === 'master') {
         const agentName = ctx.session?.agent || 'main';
