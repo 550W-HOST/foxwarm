@@ -1,6 +1,6 @@
 import { ToolArgs, ToolContext, UnifiedToolSource } from './helpers';
 import { checkToolPermission } from '../isolatedCheck';
-import * as mcpClient from '../mcpClient';
+import * as mcpExternal from '../mcpExternalService';
 import { nodesManager } from '../nodes/manager';
 import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
 import { tool_remote_node } from './nodeTools';
@@ -243,13 +243,11 @@ async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: 
 }
 
 async function collectMcpUnifiedSearchResults(query: string, includeSchema: boolean, serverFilter: string | undefined, ctx?: ToolContext, warnings?: string[]) {
-    if (ctx?.sessionId) {
-        await checkToolPermission('search_mcp_tools', ctx.sessionId, 'master', { server: serverFilter, query });
-    }
+    if (!ctx?.sessionId) throw new Error('MCP discovery requires session context.');
 
     const servers = serverFilter
         ? [serverFilter]
-        : (await mcpClient.listServers())
+        : (await mcpExternal.listMcpServers(ctx.sessionId))
             .filter(server => server.enabled)
             .map(server => server.name);
 
@@ -257,7 +255,7 @@ async function collectMcpUnifiedSearchResults(query: string, includeSchema: bool
     for (const serverName of servers) {
         let tools: any;
         try {
-            tools = await mcpClient.listTools(serverName);
+            tools = await mcpExternal.listMcpTools(ctx.sessionId, serverName);
         } catch (e: any) {
             warnings?.push(`MCP server ${serverName}: ${e?.message || String(e)}`);
             continue;
@@ -412,12 +410,7 @@ export async function tool_call_tool(args: ToolArgs, ctx: ToolContext) {
         if (!ctx?.sessionId) {
             throw new Error('call_tool for MCP requires session context.');
         }
-        await checkToolPermission('call_mcp', ctx.sessionId, 'master', {
-            server: ref.server,
-            tool: ref.name,
-            args: toolArgs,
-        });
-        return await mcpClient.callTool(ref.server, ref.name, toolArgs);
+        return await mcpExternal.callMcpTool(ctx.sessionId, ref.server, ref.name, toolArgs);
     }
 
     if (!ref.nodeId) {

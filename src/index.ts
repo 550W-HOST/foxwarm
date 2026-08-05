@@ -11,6 +11,7 @@ import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
 import * as mainManagementTools from './mainManagementTools';
 import * as nodeExecution from './nodeExecution';
+import * as mcpExternal from './mcpExternalService';
 import * as vector from './vector';
 import { registerChannel } from './channel';
 import fs from 'fs-extra';
@@ -196,6 +197,7 @@ async function start() {
     await sessionRuntime.initializeSessionRuntime();
     await mainManagementTools.initializeMainManagementTools();
     await nodeExecution.initializeNodeExecution();
+    await mcpExternal.initializeMcpExternalService();
 
     // Initialize the vector owner locally or in its configured child process.
     // Startup readiness means the table is open; archive backfill continues in
@@ -448,6 +450,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         shutdownStarted = true;
         void nodeExecution.shutdownNodeExecution()
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down node execution cleanly'))
+            .then(() => mcpExternal.shutdownMcpExternalService())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down MCP external service cleanly'))
             .then(() => mainManagementTools.shutdownMainManagementTools())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down main management tools cleanly'))
             .then(() => sessionRuntime.shutdownSessionRuntime())

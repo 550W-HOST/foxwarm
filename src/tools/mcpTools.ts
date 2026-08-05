@@ -1,8 +1,14 @@
-import { ToolArgs } from './helpers';
-import * as mcpClient from '../mcpClient';
+import { ToolArgs, ToolContext } from './helpers';
+import * as mcpExternal from '../mcpExternalService';
+import type { McpServerSummary } from '../mcpClient';
 import { resolveObjectArgWithJsonFallback, requireStringMapObject } from '../jsonObjectArgs';
 
-export async function tool_mcp_config(args: ToolArgs) {
+function requireSourceSessionId(ctx?: ToolContext): string {
+    if (!ctx?.sessionId) throw new Error('MCP tools require an active source session.');
+    return ctx.sessionId;
+}
+
+export async function tool_mcp_config(args: ToolArgs, ctx?: ToolContext) {
     const { name, url, command, args: commandArgs, cwd, stderr, token, description, enable, transport, type } = args;
     const env = requireStringMapObject(
         resolveObjectArgWithJsonFallback(args, 'env', 'envJson', { label: 'mcp_config env' }),
@@ -30,7 +36,7 @@ export async function tool_mcp_config(args: ToolArgs) {
         || description !== undefined
     );
     if (typeof enable === 'boolean' && !hasConnectionUpdate) {
-        await mcpClient.setServerEnabled(name, enable);
+        await mcpExternal.configureMcpServer({ sourceSessionId: requireSourceSessionId(ctx), name, action: 'set-enabled', enabled: enable });
         return `MCP server "${name}" ${enable ? 'enabled' : 'disabled'}.`;
     }
     if (resolvedTransport === 'stdio') {
@@ -40,11 +46,11 @@ export async function tool_mcp_config(args: ToolArgs) {
     } else if (!url) {
         throw new Error('mcp_config requires url for streamable-http, sse, or auto transport');
     }
-    await mcpClient.upsertServer(name, { url, command, args: commandArgs, env, cwd, stderr, token, headers, description, enable, transport, type });
+    await mcpExternal.configureMcpServer({ sourceSessionId: requireSourceSessionId(ctx), name, action: 'upsert', config: { url, command, args: commandArgs, env, cwd, stderr, token, headers, description, enable, transport, type } });
     return `MCP server \"${name}\" saved${enable === false ? ' (disabled)' : ''}.`;
 }
 
-export async function tool_call_mcp(args: ToolArgs) {
+export async function tool_call_mcp(args: ToolArgs, ctx?: ToolContext) {
     let { server, tool, args: toolArgs } = args;
     if (!tool) {
         throw new Error('call_mcp requires tool');
@@ -58,12 +64,12 @@ export async function tool_call_mcp(args: ToolArgs) {
         }
     }
 
-    return await mcpClient.callTool(server, tool, toolArgs || {});
+    return await mcpExternal.callMcpTool(requireSourceSessionId(ctx), server, tool, toolArgs || {});
 }
 
-export async function tool_search_mcp_tools(args: ToolArgs) {
+export async function tool_search_mcp_tools(args: ToolArgs, ctx?: ToolContext) {
     const { server, query } = args;
-    const tools = await mcpClient.listTools(server);
+    const tools = await mcpExternal.listMcpTools(requireSourceSessionId(ctx), server);
     const list = Array.isArray(tools?.tools) ? tools.tools : tools;
     const items = Array.isArray(list) ? list : [];
 
@@ -94,13 +100,13 @@ export async function tool_search_mcp_tools(args: ToolArgs) {
     return `MCP tools (${limited.length}${filtered.length > limited.length ? ` of ${filtered.length}` : ''}):\n` + limited.join('\n');
 }
 
-export async function tool_list_mcp_servers(_args: ToolArgs) {
-    const servers = await mcpClient.listServers();
+export async function tool_list_mcp_servers(_args: ToolArgs, ctx?: ToolContext) {
+    const servers = await mcpExternal.listMcpServers(requireSourceSessionId(ctx));
 
     if (!servers.length) {
         return {
             count: 0,
-            servers: [] as mcpClient.McpServerSummary[],
+            servers: [] as McpServerSummary[],
             message: 'No MCP servers configured.',
         };
     }

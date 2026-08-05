@@ -224,6 +224,7 @@ test('mcp_config schema exposes envJson and headersJson fallbacks', () => {
 });
 
 test('mcp_config parses envJson and headersJson string-map fallbacks', async () => {
+  await sessionManager.getSession('main');
   const originalUpsertServer = mcpClient.upsertServer;
   const captured: any[] = [];
   (mcpClient as any).upsertServer = async (name: string, config: any) => {
@@ -237,7 +238,7 @@ test('mcp_config parses envJson and headersJson string-map fallbacks', async () 
       transport: 'stdio',
       envJson: JSON.stringify({ API_KEY: 'secret' }),
       headersJson: JSON.stringify({ 'X-Test': 'ok' }),
-    });
+    }, { sessionId: 'main' });
 
     assert.match(String(result), /json-fallback-test/);
     assert.equal(captured.length, 1);
@@ -261,6 +262,7 @@ test('mcp_config rejects non-string values from envJson', async () => {
 });
 
 test('mcp_config can disable an existing server without repeating its connection config', async () => {
+  await sessionManager.getSession('main');
   const originalSetServerEnabled = mcpClient.setServerEnabled;
   const captured: Array<{ name: string; enable: boolean }> = [];
   (mcpClient as any).setServerEnabled = async (name: string, enable: boolean) => {
@@ -268,7 +270,7 @@ test('mcp_config can disable an existing server without repeating its connection
   };
 
   try {
-    const result = await mcp_config({ name: 'existing-server', enable: false });
+    const result = await mcp_config({ name: 'existing-server', enable: false }, { sessionId: 'main' });
     assert.equal(String(result), 'MCP server "existing-server" disabled.');
     assert.deepEqual(captured, [{ name: 'existing-server', enable: false }]);
   } finally {
@@ -433,6 +435,7 @@ test('call_tool passes parsed MCP JSON text results through as structured values
 });
 
 test('legacy call_mcp wrapper returns normalized MCP values without re-stringifying', async () => {
+  await sessionManager.getSession('main');
   const originalCallTool = mcpClient.callTool;
 
   try {
@@ -444,7 +447,7 @@ test('legacy call_mcp wrapper returns normalized MCP values without re-stringify
       server: 'github',
       tool: 'search_repos',
       args: { query: 'foxwarm' },
-    });
+    }, { sessionId: 'main' });
 
     assert.deepEqual(result, [{ name: 'foxwarm' }]);
   } finally {

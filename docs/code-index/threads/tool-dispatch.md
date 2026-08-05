@@ -13,7 +13,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 5. The closed v1 main-management set (`send_to_session`, `send_to_channel`, `list_agents`, and timer CRUD) enters one versioned local RPC service. Its handler reconstructs only source session identity before invoking the existing authoritative raw handler.
 6. `search_tools` discovers non-default builtins, MCP tools, and tools advertised by the selected node.
 7. `call_tool` parses a `toolId` or explicit source descriptor and resolves one concrete builtin, MCP, or node target.
-8. MCP calls run through `mcpClient.callTool`; safe text cleanup and MCP image-content promotion occur at that client boundary while non-image content remains structured.
+8. Direct compatibility tools, unified discovery/calls, and ToolScript nested MCP calls enter the fixed local `mcp-external@1` service. Its authoritative handler alone calls `mcpClient`; safe text cleanup and MCP image-content promotion still occur at the client boundary while non-image content remains structured.
 9. Direct or unified node-environment builtins resolved to a remote node and dynamic remote Node-domain calls enter the fixed v1 Node execution service, then use `nodesManager` over the authenticated node connection. Dynamic `node:master/<tool>` calls bypass RPC only for the canonical node-environment set and use the local named handler. The service itself rejects `master`, stale sources, disconnected nodes, isolation-binding violations, and names not currently advertised by a remote node. A node-side approval interceptor may still reject the call. Old node image-result shapes are adapted only at this remote ingress under [D-node-thread-tool-result-compatibility](./node-communication.md#d-node-thread-tool-result-compatibility).
 10. Master and node file wrappers use the shared file-tool core after their own path, context, and isolation handling.
 11. Recognized image payloads are promoted to image parts and receive stable IDs before the remaining text/structured response passes through the oversized-output guard. Successful master/node patch results already carry shared per-file change-count summaries from [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
@@ -35,6 +35,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 - [src-isolated-check](../units/src-isolated-check.md)
 - [src-permissions](../units/src-permissions.md)
 - [src-mcp-client](../units/src-mcp-client.md)
+- [src-mcp-external-service](../units/src-mcp-external-service.md)
 - [src-nodes-manager](../units/src-nodes-manager.md)
 - [src-node-execution](../units/src-node-execution.md)
 - [shared-node-tools](../units/shared-node-tools.md)
@@ -47,6 +48,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 - Unified wrappers do not bypass the concrete target's existing guards.
 - Tool output is bounded before it enters model context.
 - MCP configuration reads use one authoritative live snapshot after first load; managed updates persist before replacing that snapshot.
+- MCP list/discovery/call/config operations share one versioned local service with source/isolation checks, cloned DTO results/errors, redacted summaries, stored-secret error scrubbing, and terminal drain fencing. No Session-worker reverse transport is connected yet.
 - Recognized image bytes stay in structured image parts rather than entering text excerpts; non-image text, JSON, audio, resource, and blob content remain subject to the normal output budget.
 - MCP and node credentials remain transport/runtime state and are not exposed to the model through tool summaries.
 - Tool batches emit one result for every call and append one tool message only after the batch settles. Image/result parts and function responses remain in original model-call order rather than completion order.

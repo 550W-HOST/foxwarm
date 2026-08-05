@@ -55,13 +55,13 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 ## Compatibility
 
 - Config accepts legacy `type` as a reader and writes current `transport`.
-- The hidden runtime `call_mcp`/`search_mcp_tools` tools still exist for compatibility. They are not default model recommendations; agents should discover through `search_tools` and invoke through `call_tool`. Both paths call this same client.
+- The hidden runtime `call_mcp`/`search_mcp_tools` tools still exist for compatibility. They are not default model recommendations; agents should discover through `search_tools` and invoke through `call_tool`. Both paths enter the same MCP external service and authoritative client.
 
 ## Integration
 
-- `src/tools/mcpTools.ts` implements the hidden compatibility tools and MCP configuration/list tools.
-- `src/tools/unifiedSearch.ts` implements recommended unified discovery/invocation.
-- ToolScript calls the unified `call_tool` wrapper and receives this client's normalized result.
+- `src/mcpExternalService.ts` is the sole production caller of raw list/discovery/call/config mutation exports. It owns the versioned local service boundary while this unit remains authoritative for the live snapshot, persistence, transports, pooling, and normalization.
+- `src/tools/mcpTools.ts` and `src/tools/unifiedSearch.ts` call the MCP external service for hidden compatibility tools and recommended unified discovery/invocation.
+- ToolScript calls the unified `call_tool` wrapper and receives this client's normalized result through the same service.
 - `MCP_CONFIG_PATH` and durable JSON behavior come from config/utilities.
 
 ## Design decisions
