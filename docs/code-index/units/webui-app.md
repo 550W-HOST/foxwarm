@@ -1,6 +1,6 @@
 # Unit: WebUI app
 
-Files: packages/webui/src/App.tsx, packages/webui/src/main.tsx, packages/webui/src/config.ts, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/embeddedWebUi.ts, packages/webui/src/sessionListRefresh.ts, packages/webui/src/vscodeWeb.ts, packages/webui/src/commitMarker.ts, packages/webui/src/components/CommitMarkerCard.tsx, packages/webui/src/components/VscodeWebFrameHost.tsx, packages/webui/vite.config.ts, packages/webui/test/vscodeWebBridge.test.mjs, packages/webui/test/embeddedWebUi.test.mjs, packages/webui/test/commitMarker.test.mjs, packages/webui/test/codeFrame550aOverlay.e2e.mjs
+Files: packages/webui/src/App.tsx, packages/webui/src/main.tsx, packages/webui/src/config.ts, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/embeddedWebUi.ts, packages/webui/src/sessionListRefresh.ts, packages/webui/src/nodeTargets.ts, packages/webui/src/vscodeWeb.ts, packages/webui/src/commitMarker.ts, packages/webui/src/components/CommitMarkerCard.tsx, packages/webui/src/components/VscodeWebFrameHost.tsx, packages/webui/vite.config.ts, packages/webui/test/vscodeWebBridge.test.mjs, packages/webui/test/embeddedWebUi.test.mjs, packages/webui/test/commitMarker.test.mjs, packages/webui/test/codeFrame550aOverlay.e2e.mjs
 Secondary files: packages/webui/src/sessionIdleNotifications.ts, packages/webui/src/components/Chat.tsx, packages/webui/src/components/ChatTimeline.tsx
 
 ## Purpose
@@ -33,6 +33,7 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 - Chat per-session runtime/history remains inside Chat.
 - Desktop expanded/collapsed sidebar and mobile shell share the same current tab records.
 - Browser-only theme, UI style, sidebar, send-key, last-tab/session, and Code preferences use local storage. Instance branding comes from server settings.
+- Main launcher options consume the authenticated node summary. Code persists its standalone node/path target in browser storage; terminal defaults follow the focused session. Session-header terminal placement reuses a lower pane only for the exact normalized node/cwd target and otherwise adds the requested target there.
 - Idle-notification settings are browser-local too. App and the embedded sidebar each observe their accepted list snapshots once; the notification transition contract belongs to [webui-session-list](./webui-session-list.md#design-decisions).
 
 ## Embedded leaf roots
@@ -54,6 +55,7 @@ These are independent roots, not CSS-hidden full App instances. Active-target me
 - File-tool paths become typed open-file requests only after node/path/cwd normalization; `read` ranges become selections.
 - Strict standalone model-authored commit markers outside code fences render inert cards. Click dispatches typed `openCommit`; malformed/user markers remain text.
 - New-tab URLs carry one-shot targets. Running iframe transfer/pop-out is not implemented.
+- Changing a main Code launcher node adds that node/path resource to the same persistent multi-root workspace; it never creates a per-node Code tab or iframe.
 
 ## Dependencies
 

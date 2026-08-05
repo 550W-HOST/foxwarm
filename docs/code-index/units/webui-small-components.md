@@ -1,6 +1,6 @@
 # Unit: webui-small-components
 
-Files: packages/webui/src/components/ContentHeader.tsx, packages/webui/src/components/ContextMenu.tsx, packages/webui/src/components/AgentCreationMenu.tsx, packages/webui/src/agentCreation.ts, packages/webui/src/components/CreateTabButton.tsx, packages/webui/src/components/CodeLaunchButton.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/components/ReasoningCard.tsx, packages/webui/src/components/ReloadAppButton.tsx, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/SpecialBlock.tsx, packages/webui/src/components/SyntaxHighlightedText.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/utils/languages.ts, packages/webui/test/imageParts.e2e.mjs, packages/webui/test/specialBlocks.e2e.mjs
+Files: packages/webui/src/components/ContentHeader.tsx, packages/webui/src/components/ContextMenu.tsx, packages/webui/src/components/AgentCreationMenu.tsx, packages/webui/src/agentCreation.ts, packages/webui/src/components/CreateTabButton.tsx, packages/webui/src/components/CodeLaunchButton.tsx, packages/webui/src/components/NodeTargetSelect.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/components/ReasoningCard.tsx, packages/webui/src/components/ReloadAppButton.tsx, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/SpecialBlock.tsx, packages/webui/src/components/SyntaxHighlightedText.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/utils/languages.ts, packages/webui/test/imageParts.e2e.mjs, packages/webui/test/specialBlocks.e2e.mjs
 Secondary files: packages/webui/src/components/CollapsedSidebar.tsx
 
 ## Purpose
@@ -15,7 +15,8 @@ A collection of small, reusable React UI components and utility functions for th
 - `AgentCreationMenu` — Shared Agents `+` dropdown and simple new-agent/new-session modals, including inline validation/loading/error states
 - `agentCreation` helpers — Client validation and request-body helpers that omit an empty session ID so the backend generates the existing random name
 - `CreateTabButton` — Split button for creating terminal tabs with custom node/path options
-- `CodeLaunchButton` — Sidebar split button for opening Code at a remembered master path and controlling the global new-browser-tab default
+- `CodeLaunchButton` — Sidebar split button for opening Code at a remembered node/path and controlling the global new-browser-tab default
+- `NodeTargetSelect` — Shared capability-aware Code/terminal node selector
 - `ImageParts` — Renders safe image attachments from legacy inline data or current authenticated blob URLs
 - `ProcessingStatus` — Animated status indicators for busy/queued/loading states
 - `ReasoningCard` — Collapsible card displaying AI reasoning/thinking content with markdown rendering
@@ -82,7 +83,8 @@ A collection of small, reusable React UI components and utility functions for th
 - `SpecialBlock` owns only per-block disclosure and copy state, while its rendered child owns the format-specific work. `MermaidDiagram` dynamically imports Mermaid on demand and keeps malformed model output recoverable through the parent block's exact Raw view. The canonical parser and security contract is [D-webui-assistant-special-blocks](./webui-chat-shared.md#d-webui-assistant-special-blocks).
 - `CreateTabButton` manages local dropdown state with click-outside detection and syncs terminal defaults from props via effects; it no longer displays a session/default-context hint because terminal creation is cwd/node-based.
 - Its fixed 20rem dropdown also has a viewport-relative maximum width so the same split button remains usable inside the narrow Code-embedded sidebar.
-- `CodeLaunchButton` validates absolute POSIX paths before opening, shows inline errors for invalid input, fixes node selection to `master`, and exposes controlled path/open-mode callbacks so `App` owns global persistence.
+- Main `CreateTabButton` and `CodeLaunchButton` selectors show approved offline/incompatible nodes disabled, preserve a stale selected node as unavailable, and apply service-specific requirements through `NodeTargetSelect`. The Code-embedded leaf does not receive the selectable node list because its fixed host message has no target fields.
+- `CodeLaunchButton` validates absolute POSIX paths before opening, shows inline errors for invalid input, and exposes controlled node/path/open-mode callbacks so `App` owns global persistence.
 
 ## Integration
 

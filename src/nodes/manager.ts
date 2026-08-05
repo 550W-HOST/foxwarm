@@ -350,6 +350,15 @@ export class NodesManager {
       }));
   }
 
+  listNodeServiceSummaries(): Array<{ id: string; type: string; services: Record<string, number>; lastActivity: number }> {
+    return Array.from(this.nodes.values()).map((node) => ({
+      id: node.id,
+      type: node.type,
+      services: { ...(node.capabilities?.services || {}) },
+      lastActivity: node.lastActivity,
+    }));
+  }
+
   listNodeIdsWithService(service: string): string[] {
     return [...this.nodes.values()]
       .filter((node) => node.id !== 'master' && !!node.ws && Number(node.capabilities?.services?.[service] || 0) >= 1)

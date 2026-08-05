@@ -15,8 +15,10 @@ import { applyLatestSessionListRequest, createLatestSessionListRequestGate, crea
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
-import { makeVscodeWebUrl, normalizeCodePath, planCodeOpen, readCodeOpenInNewWindowPreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, selectCodeFrameStarted, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspacePathPreference, type CodeCommitTarget, type CodeFileTarget, type CodeTarget } from './vscodeWeb'
+import { makeVscodeWebUrl, normalizeCodePath, planCodeOpen, readCodeOpenInNewWindowPreference, readCodeWorkspaceNodePreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, selectCodeFrameStarted, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspaceNodePreference, writeCodeWorkspacePathPreference, type CodeCommitTarget, type CodeFileTarget, type CodeTarget } from './vscodeWeb'
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
+import { MASTER_NODE_TARGET, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
+import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
 type UiThemeStyle = 'default' | '550a'
@@ -314,6 +316,10 @@ function loadStoredCodePath(): string {
   return readCodeWorkspacePathPreference(localStorage)
 }
 
+function loadStoredCodeNodeId(): string {
+  return readCodeWorkspaceNodePreference(localStorage)
+}
+
 function loadStoredCodeOpenInNewWindow(): boolean {
   return readCodeOpenInNewWindowPreference(localStorage)
 }
@@ -481,8 +487,11 @@ function App() {
   const [vscodeFrameSlot, setVscodeFrameSlot] = useState<HTMLElement | null>(null)
   const vscodeFrameRef = useRef<VscodeWebFrameHostHandle | null>(null)
   const [codePath, setCodePath] = useState(loadStoredCodePath)
+  const [codeNodeId, setCodeNodeId] = useState(loadStoredCodeNodeId)
   const [codeOpenInNewWindow, setCodeOpenInNewWindow] = useState(loadStoredCodeOpenInNewWindow)
-  const [codeFrameUrl, setCodeFrameUrl] = useState(() => makeVscodeWebUrl(API_BASE_PATH, window.location.origin, { nodeId: 'master', path: loadStoredCodePath() }, { embedded: true }).toString())
+  const [codeFrameUrl, setCodeFrameUrl] = useState(() => makeVscodeWebUrl(API_BASE_PATH, window.location.origin, { nodeId: loadStoredCodeNodeId(), path: loadStoredCodePath() }, { embedded: true }).toString())
+  const [nodeTargets, setNodeTargets] = useState<WebUiNodeTarget[]>([MASTER_NODE_TARGET])
+  const [nodeTargetsError, setNodeTargetsError] = useState('')
 
 
   const tabsById = useWorkbenchStore((state) => state.tabsById)
@@ -714,6 +723,19 @@ function App() {
     }
   }
 
+  const fetchNodeTargets = async () => {
+    try {
+      const res = await fetch(`${API_BASE_PATH}/nodes`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Failed to fetch nodes')
+      setNodeTargets(parseWebUiNodeTargets(data))
+      setNodeTargetsError('')
+    } catch (error) {
+      console.error('Failed to fetch nodes:', error)
+      setNodeTargetsError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
   const connectGlobalSSE = () => {
     if (globalSSERef.current) {
       globalSSERef.current.close()
@@ -762,6 +784,7 @@ function App() {
     void fetchSetupStatus()
     void fetchWebUiSettings()
     void fetchActiveTerminals()
+    void fetchNodeTargets()
     connectGlobalSSE()
     return () => {
       sessionListRefreshScheduler.dispose()
@@ -938,6 +961,11 @@ function App() {
     setCodePath(normalized)
   }
 
+  const updateCodeNodeId = (nodeId: string) => {
+    const normalized = writeCodeWorkspaceNodePreference(localStorage, nodeId)
+    setCodeNodeId(normalized)
+  }
+
   const updateCodeOpenInNewWindow = (enabled: boolean) => {
     setCodeOpenInNewWindow(enabled)
     writeCodeOpenInNewWindowPreference(localStorage, enabled)
@@ -1080,14 +1108,13 @@ function App() {
 
     if (paneTabs.length === 0) return null
 
+    if (options?.path) {
+      return findTerminalForTarget(paneTabs, { nodeId: options.nodeId, cwd: options.path }) || null
+    }
+
     const activeTab = pane.activeTabId ? tabsById[pane.activeTabId] : null
     if (activeTab?.type === 'terminal') {
       return activeTab
-    }
-
-    if (options?.path) {
-      const matching = paneTabs.find((tab) => tab.cwd === options.path && (!options.nodeId || tab.nodeId === options.nodeId))
-      if (matching) return matching
     }
 
     return paneTabs[0]
@@ -1105,8 +1132,9 @@ function App() {
       return
     }
 
-    const nodeId = options?.nodeId || 'master'
-    const path = options?.path || '/'
+    const target = normalizeTerminalTarget({ nodeId: options?.nodeId, cwd: options?.path })
+    const nodeId = target.nodeId
+    const path = target.cwd
 
     const sourcePaneId = options?.sourcePaneId || focusedPaneId || null
 
@@ -1118,6 +1146,10 @@ function App() {
           navigateToTab(existingBottomTerminal.id)
           return
         }
+        const draftTab = makeTerminalDraftTab(nodeId, path)
+        upsertTab(draftTab, { paneId: paneBelow.id, activate: true })
+        navigateToTab(draftTab.id)
+        return
       }
 
       if (getPaneHeight(sourcePaneId) > 700) {
@@ -1511,6 +1543,7 @@ function App() {
         <TerminalView
           key={tab.id}
           initialCwd={tab.cwd}
+          initialNodeId={tab.nodeId}
           initialTerminalId={tab.terminalId}
           createMode={tab.createMode || 'reuse'}
           onBack={onBack}
@@ -1827,9 +1860,14 @@ function App() {
           onSelectArchitecture={openAgentsView}
           onSelectSetup={openSetupView}
           codePath={codePath}
+          codeNodeId={codeNodeId}
           codeOpenInNewWindow={codeOpenInNewWindow}
           codeActive={focusedActiveTab?.type === 'vscode'}
-          onOpenCode={(path) => openCode({ nodeId: 'master', path: normalizeCodePath(path) || '/' })}
+          nodeTargets={nodeTargets}
+          nodeTargetsError={nodeTargetsError}
+          onRefreshNodeTargets={() => { void fetchNodeTargets() }}
+          onOpenCode={(nodeId, path) => openCode({ nodeId, path: normalizeCodePath(path) || '/' })}
+          onCodeNodeChange={updateCodeNodeId}
           onCodePathChange={updateCodePath}
           onCodeOpenInNewWindowChange={updateCodeOpenInNewWindow}
           onCreateTerminalTab={(options) => openTerminalTab({ nodeId: options?.nodeId || currentContextSessionRecord?.currentNode || 'master', path: options?.path || currentContextSessionRecord?.cwd || '/' })}
@@ -1881,9 +1919,14 @@ function App() {
             onSelectArchitecture={openAgentsView}
             onSelectSetup={openSetupView}
             codePath={codePath}
+            codeNodeId={codeNodeId}
             codeOpenInNewWindow={codeOpenInNewWindow}
             codeActive={focusedActiveTab?.type === 'vscode'}
-            onOpenCode={(path) => openCode({ nodeId: 'master', path: normalizeCodePath(path) || '/' })}
+            nodeTargets={nodeTargets}
+            nodeTargetsError={nodeTargetsError}
+            onRefreshNodeTargets={() => { void fetchNodeTargets() }}
+            onOpenCode={(nodeId, path) => openCode({ nodeId, path: normalizeCodePath(path) || '/' })}
+            onCodeNodeChange={updateCodeNodeId}
             onCodePathChange={updateCodePath}
             onCodeOpenInNewWindowChange={updateCodeOpenInNewWindow}
             onCreateTerminalTab={(options) => openTerminalTab({ nodeId: options?.nodeId || currentContextSessionRecord?.currentNode || 'master', path: options?.path || currentContextSessionRecord?.cwd || '/' })}
