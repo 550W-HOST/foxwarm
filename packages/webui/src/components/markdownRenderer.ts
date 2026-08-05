@@ -13,9 +13,20 @@ type MathPlaceholder = {
   html: string
 }
 
+export type MarkdownRenderSegment =
+  | { kind: 'html'; html: string }
+  | { kind: 'latex'; raw: string; source: string; html: string }
+  | { kind: 'mermaid'; raw: string; source: string }
+
+type SpecialBlockPlaceholder = Exclude<MarkdownRenderSegment, { kind: 'html' }> & {
+  marker: string
+}
+
 type MathRenderContext = {
   markerPrefix: string
   placeholders: MathPlaceholder[]
+  specialBlocks: SpecialBlockPlaceholder[]
+  extractSpecialBlocks: boolean
 }
 
 type DisplayMathBlockMatch = {
@@ -68,6 +79,18 @@ const renderMathToken = (token: Tokens.Generic): string => {
 
   if (!context) {
     return html
+  }
+
+  if (context.extractSpecialBlocks && token.type === 'displayMathBlock') {
+    const marker = `${context.markerPrefix}SPECIAL_${context.specialBlocks.length}\uE001`
+    context.specialBlocks.push({
+      kind: 'latex',
+      marker,
+      raw: token.raw,
+      source: mathToken.text,
+      html,
+    })
+    return marker
   }
 
   const marker = `${context.markerPrefix}${context.placeholders.length}\uE001`
@@ -149,6 +172,17 @@ const isInsideMarkdownCode = (src: string, index: number): boolean => {
 
 const matchDisplayMathBlock = (src: string, index: number): DisplayMathBlockMatch | undefined => {
   const candidate = src.slice(index)
+  const singleLine = /^ {0,3}\\\[([^\r\n]*?)\\\][\t ]*(?:\r?\n|$)/.exec(candidate)
+  if (singleLine) {
+    const text = singleLine[1].trim()
+    if (!text) return undefined
+    return {
+      index,
+      raw: singleLine[0],
+      text,
+    }
+  }
+
   const opening = /^ {0,3}\\\[[\t ]*\r?\n/.exec(candidate)
   if (!opening) return undefined
 
@@ -168,7 +202,7 @@ const matchDisplayMathBlock = (src: string, index: number): DisplayMathBlockMatc
 }
 
 const findDisplayMathBlock = (src: string): DisplayMathBlockMatch | undefined => {
-  const openingPattern = /^ {0,3}\\\[[\t ]*\r?\n/gm
+  const openingPattern = /^ {0,3}\\\[/gm
   let opening: RegExpExecArray | null
 
   while ((opening = openingPattern.exec(src))) {
@@ -218,10 +252,29 @@ const displayMathBlockExtension: TokenizerAndRendererExtension = {
   renderer: renderMathToken,
 }
 
+const mermaidCodeExtension: TokenizerAndRendererExtension = {
+  name: 'code',
+  renderer(token: Tokens.Generic) {
+    const codeToken = token as Tokens.Code
+    const language = codeToken.lang?.trim().toLowerCase()
+    const context = activeMathRenderContext
+    if (!context?.extractSpecialBlocks || language !== 'mermaid') return false
+
+    const marker = `${context.markerPrefix}SPECIAL_${context.specialBlocks.length}\uE001`
+    context.specialBlocks.push({
+      kind: 'mermaid',
+      marker,
+      raw: codeToken.raw,
+      source: codeToken.text,
+    })
+    return marker
+  },
+}
+
 const markdown = new Marked({
   breaks: true,
   gfm: true,
-  extensions: [displayMathBlockExtension, displayMathPrefixExtension, displayMathExtension, inlineMathExtension],
+  extensions: [mermaidCodeExtension, displayMathBlockExtension, displayMathPrefixExtension, displayMathExtension, inlineMathExtension],
 })
 
 const sanitizeHtml = (html: string): string => {
@@ -244,11 +297,16 @@ const replaceMathPlaceholders = (html: string, placeholders: MathPlaceholder[]):
   return placeholders.reduce((current, placeholder) => current.split(placeholder.marker).join(placeholder.html), html)
 }
 
-export const renderMarkdownWithSanitizer = (text: string, sanitizer: HtmlSanitizer = sanitizeHtml): string => {
+const parseMarkdown = (text: string, sanitizer: HtmlSanitizer, extractSpecialBlocks: boolean): {
+  html: string
+  specialBlocks: SpecialBlockPlaceholder[]
+} => {
   const previousContext = activeMathRenderContext
   const context: MathRenderContext = {
     markerPrefix: createMathMarkerPrefix(),
     placeholders: [],
+    specialBlocks: [],
+    extractSpecialBlocks,
   }
 
   activeMathRenderContext = context
@@ -260,7 +318,39 @@ export const renderMarkdownWithSanitizer = (text: string, sanitizer: HtmlSanitiz
   }
 
   const sanitized = addLinkTargetAttrs(sanitizer(html))
-  return replaceMathPlaceholders(sanitized, context.placeholders)
+  return {
+    html: replaceMathPlaceholders(sanitized, context.placeholders),
+    specialBlocks: context.specialBlocks,
+  }
+}
+
+export const renderMarkdownWithSanitizer = (text: string, sanitizer: HtmlSanitizer = sanitizeHtml): string => {
+  return parseMarkdown(text, sanitizer, false).html
 }
 
 export const renderMarkdown = (text: string): string => renderMarkdownWithSanitizer(text)
+
+export const renderAssistantMarkdownSegmentsWithSanitizer = (
+  text: string,
+  sanitizer: HtmlSanitizer = sanitizeHtml,
+): MarkdownRenderSegment[] => {
+  const { html, specialBlocks } = parseMarkdown(text, sanitizer, true)
+  if (specialBlocks.length === 0) return html ? [{ kind: 'html', html }] : []
+
+  const segments: MarkdownRenderSegment[] = []
+  let cursor = 0
+  for (const specialBlock of specialBlocks) {
+    const markerIndex = html.indexOf(specialBlock.marker, cursor)
+    if (markerIndex < 0) continue
+    if (markerIndex > cursor) segments.push({ kind: 'html', html: html.slice(cursor, markerIndex) })
+    const { marker: _marker, ...segment } = specialBlock
+    segments.push(segment)
+    cursor = markerIndex + specialBlock.marker.length
+  }
+  if (cursor < html.length) segments.push({ kind: 'html', html: html.slice(cursor) })
+  return segments
+}
+
+export const renderAssistantMarkdownSegments = (text: string): MarkdownRenderSegment[] => (
+  renderAssistantMarkdownSegmentsWithSanitizer(text)
+)

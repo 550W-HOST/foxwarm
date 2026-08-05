@@ -22,7 +22,10 @@ await esbuild.build({
   logLevel: 'silent',
 })
 
-const { renderMarkdownWithSanitizer } = await import(pathToFileURL(bundledRendererPath).href)
+const {
+  renderAssistantMarkdownSegmentsWithSanitizer,
+  renderMarkdownWithSanitizer,
+} = await import(pathToFileURL(bundledRendererPath).href)
 const identitySanitizer = (html) => html
 
 test('inline \\(...\\) math renders KaTeX HTML', () => {
@@ -181,4 +184,79 @@ test('GFM tables retain semantic table markup for the scrollable Markdown style'
   assert.match(html, /<tbody>/)
   assert.match(html, /<th>left<\/th>/)
   assert.match(html, /<td>b<\/td>/)
+})
+
+test('assistant Mermaid fences become special blocks with exact raw source', () => {
+  const source = 'Before\n\n```mermaid\ngraph TD\n  A --> B\n```\n\nAfter'
+  const segments = renderAssistantMarkdownSegmentsWithSanitizer(source, identitySanitizer)
+
+  assert.deepEqual(segments.map(segment => segment.kind), ['html', 'mermaid', 'html'])
+  assert.match(segments[0].html, /<p>Before<\/p>/)
+  assert.equal(segments[1].source, 'graph TD\n  A --> B')
+  assert.equal(segments[1].raw, '```mermaid\ngraph TD\n  A --> B\n```')
+  assert.match(segments[2].html, /<p>After<\/p>/)
+})
+
+test('non-Mermaid fences and near-match languages retain ordinary code rendering', () => {
+  for (const language of ['', 'js', 'mermaid-js', 'diagram']) {
+    const source = `\`\`\`${language}\nmermaid\n\\[x\\]\n\`\`\``
+    const segments = renderAssistantMarkdownSegmentsWithSanitizer(source, identitySanitizer)
+
+    assert.deepEqual(segments.map(segment => segment.kind), ['html'])
+    assert.match(segments[0].html, /<pre><code/)
+    assert.doesNotMatch(segments[0].html, /class="katex/)
+  }
+})
+
+test('multiple Mermaid and display-math blocks preserve mixed source order', () => {
+  const source = [
+    'Inline \\(x\\) stays inline.',
+    '```mermaid',
+    'flowchart LR',
+    '  A --> B',
+    '```',
+    '\\[',
+    'y = x^2',
+    '\\]',
+    '```mermaid',
+    'sequenceDiagram',
+    '  A->>B: Hi',
+    '```',
+  ].join('\n')
+  const segments = renderAssistantMarkdownSegmentsWithSanitizer(source, identitySanitizer)
+
+  assert.deepEqual(segments.map(segment => segment.kind), ['html', 'mermaid', 'latex', 'mermaid'])
+  assert.match(segments[0].html, /class="katex"/)
+  assert.doesNotMatch(segments[0].html, /katex-display/)
+  assert.equal(segments[1].source, 'flowchart LR\n  A --> B')
+  assert.equal(segments[2].source, 'y = x^2')
+  assert.match(segments[2].raw, /^\\\[\ny = x\^2\n\\\]\n$/)
+  assert.equal(segments[3].source, 'sequenceDiagram\n  A->>B: Hi')
+})
+
+test('only standalone display math becomes a special block', () => {
+  const source = 'Embedded \\[a=b\\] compatibility and inline \\(c=d\\).\n\n\\[E=mc^2\\]'
+  const segments = renderAssistantMarkdownSegmentsWithSanitizer(source, identitySanitizer)
+
+  assert.deepEqual(segments.map(segment => segment.kind), ['html', 'latex'])
+  assert.match(segments[0].html, /katex-display/)
+  assert.match(segments[0].html, /class="katex"/)
+  assert.equal(segments[1].raw, '\\[E=mc^2\\]')
+})
+
+test('special-block extraction stays behind the ordinary Markdown sanitizer', () => {
+  let sanitizerInput = ''
+  const source = '<script>alert(1)</script>\n\n```mermaid\ngraph TD\nA-->B\n```\n\n[bad](javascript:alert(2))'
+  const segments = renderAssistantMarkdownSegmentsWithSanitizer(source, (html) => {
+    sanitizerInput = html
+    return html
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/href="javascript:[^"]*"/gi, '')
+  })
+
+  assert.match(sanitizerInput, /FOXWARM_MATH/)
+  assert.deepEqual(segments.map(segment => segment.kind), ['html', 'mermaid', 'html'])
+  const ordinaryHtml = segments.filter(segment => segment.kind === 'html').map(segment => segment.html).join('')
+  assert.doesNotMatch(ordinaryHtml, /<script|javascript:/i)
+  assert.equal(segments[1].source, 'graph TD\nA-->B')
 })

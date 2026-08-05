@@ -1,6 +1,7 @@
 # Unit: webui-chat-shared
 
 Files: packages/webui/src/components/chatShared.tsx, packages/webui/src/components/markdownRenderer.ts, packages/webui/test/markdownRenderer.test.mjs
+Secondary files: packages/webui/src/components/SpecialBlock.tsx, packages/webui/test/specialBlocks.e2e.mjs
 
 ## Purpose
 
@@ -11,6 +12,8 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - `formatToolLabel` — generates human-readable labels for tool calls based on name and args, including current unified `call_tool` and hidden direct `call_mcp` compatibility history
 - `renderMarkdown` — converts markdown text to sanitized HTML, with KaTeX math support for `\(...\)` and `\[...\]` only
 - `renderMarkdownWithSanitizer` — testable markdown renderer variant that accepts an injected sanitizer
+- `renderAssistantMarkdownSegments` / `renderAssistantMarkdownSegmentsWithSanitizer` — render assistant Markdown into sanitized HTML, interactive display-LaTeX, and Mermaid segments without introducing a second parser
+- `SpecialBlock` / `MermaidDiagram` — reusable per-block rendered/raw/copy surface and lazy strict Mermaid renderer
 - `handleMarkdownLinkClick` — click handler that intercepts links with a confirmation dialog
 - `IconToggleButton`, `MiniToggleButton` — small toggle button components
 - `copyTextToClipboard` — clipboard utility with fallback
@@ -33,6 +36,9 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 | `formatToolLabel(name, args)` | ~80 | Builds display label for tool calls by name pattern |
 | `sanitizeHtml(html)` | `markdownRenderer.ts` | DOMPurify wrapper with strict allow-lists for ordinary Markdown |
 | `renderMarkdownWithSanitizer(text, sanitizer)` | `markdownRenderer.ts` | Parses Markdown, emits KaTeX placeholders, sanitizes ordinary HTML, then replaces placeholders with trusted KaTeX output |
+| `renderAssistantMarkdownSegments(text)` | `markdownRenderer.ts` | Uses the same Marked/KaTeX placeholder pass while extracting standalone display math and Mermaid fences as typed React-renderable segments |
+| `SpecialBlock({ kind, label, raw, children })` | `SpecialBlock.tsx` | Owns one special block's Rendered/Raw state and deterministic raw-copy feedback controls |
+| `MermaidDiagram({ source })` | `SpecialBlock.tsx` | Lazy-loads Mermaid, serializes strict themed renders, and exposes bounded loading/error states |
 | `renderMarkdown(text)` | `markdownRenderer.ts` | Production Markdown renderer using DOMPurify sanitization |
 | `handleMarkdownLinkClick(e)` | ~180 | Intercepts anchor clicks with confirm dialog |
 | `IconToggleButton(props)` | ~193 | Small icon toggle button component |
@@ -64,6 +70,8 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - Markdown rendering uses `marked` with GFM/breaks, then sanitizes ordinary HTML via DOMPurify with a strict allowlist (no images, scripts, iframes). Links get `target="_blank"` injected.
 - GFM table markup stays semantic through rendering/sanitization; the shared `.foxwarm-markdown` CSS, rather than renderer-side HTML rewriting, makes the table itself horizontally scrollable. The renderer unit test guards the retained `<table>/<thead>/<tbody>` structure.
 - LaTeX math rendering is implemented in `markdownRenderer.ts` using local `marked` inline/block extensions and KaTeX. Supported delimiters are only `\(...\)` for inline math and `\[...\]` for display math; `$...$` / `$$...$$` are intentionally not parsed. Standalone multiline `\[` / `\]` lines (up to three leading spaces and optional trailing horizontal whitespace) are claimed as one block before Markdown can interpret TeX lines as headings, lists, blockquotes, or other block constructs, including when the block directly follows ordinary paragraph text without a blank line; the existing inline display extension retains one-line and embedded compatibility. Unclosed, empty, trailing-text, and four-space-indented delimiter lines are not claimed as display blocks and do not split preceding paragraphs. The renderer inserts private-use placeholders for math, sanitizes ordinary Markdown output, then replaces placeholders with KaTeX output (`trust:false`, `throwOnError:false`) so normal Markdown does not need global `style`/SVG/MathML allowlist relaxation. Delimiter-like content enclosed by Markdown code spans or fenced code blocks stays inside code tokens and is never rendered as math.
+- Assistant/model Markdown can request typed segments from that same parser pass. A fenced code token whose complete normalized info language is `mermaid` becomes a Mermaid special block; other languages and all ordinary `renderMarkdown` consumers retain native fenced-code output. Standalone multiline display math and standalone one-line `\[...\]` blocks become LaTeX special blocks, while `\(...\)` and embedded same-line display compatibility remain ordinary KaTeX inside sanitized HTML. Each special block preserves the Marked token's raw source for its Raw view and copy action.
+- `SpecialBlock` provides one shared rendered/raw/copy interaction for Mermaid and standalone display LaTeX without replacing assistant-message-wide Rendered/Raw/JSON controls. Mermaid is loaded only after a Mermaid component mounts and renders through a serialized queue with `securityLevel:'strict'`, HTML labels disabled, secure configuration keys, and size/edge limits. Generated SVG is not added to the ordinary DOMPurify allowlist. Syntax/render failures show bounded readable errors while the raw source remains available.
 - `getSlashCommandCompletions` tokenizes user input by spaces, walks an autocomplete tree, and returns matching suggestions plus contextual hints. Handles trailing-space logic for advancing to next token.
 - `formatToolResponseSummary` has special-case formatting for many tool names (read_file, search, list_directory, bash, etc.), truncating or summarizing output.
 - Tool response body rendering itself lives in `ToolTimelineItems`; its default path uses the shared WebUI response formatter on the full `functionResponse.response` payload, so single-key `{ output }` and `{ error }` both display their value while multi-key objects remain structured.
@@ -86,5 +94,9 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - `toolMeta` drives icon/color rendering in tool call bubbles across the chat interface.
 
 ## Design Decisions
+
+### D-webui-assistant-special-blocks
+
+[2026-08-05] Interactive rich blocks in assistant/model Markdown must remain part of the existing Marked tokenization, KaTeX placeholder, and strict ordinary-HTML sanitization pipeline rather than introducing a second Markdown parser, rewriting sanitized HTML, or mounting nested unmanaged roots. Mermaid applies only to fenced code tokens whose normalized info language is exactly `mermaid`; render it through a lazy-loaded strict Mermaid configuration without expanding the global DOMPurify SVG/HTML permissions. Standalone display LaTeX and Mermaid share one React-owned per-block Rendered/Raw/copy surface whose raw value is the exact parser token source. Inline math and embedded same-line display compatibility remain ordinary KaTeX without block controls. Special blocks must preserve model-message width/overflow containment, provide bounded non-crashing Mermaid errors, and coexist with the whole-message Rendered/Raw/JSON controls.
 
 - [2026-07-06/2026-07-07] New Foxwarm XML-ish metadata tag lines are display metadata, not Markdown/HTML. `chatShared` should recognize `<foxwarm-system>`, `<foxwarm-metadata>`, `<foxwarm-message>`, closing message tags, and full multi-line wrappers by their first line while preserving old `[SYSTEM:]`/`[FROM:]` rendering compatibility. Do not classify all foxwarm-system tags as lightweight: snapshot/system-prompt tags and event tags such as wait timeouts must trigger left-side system-card rendering. Similarly, only `<foxwarm-message type="channel">` is a lightweight/direct-user wrapper; non-channel foxwarm-message wrappers represent system-delivered/non-direct content and should render left/system-like.
