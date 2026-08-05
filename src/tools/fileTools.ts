@@ -5,7 +5,6 @@ import {
     readResolvedPath,
     writeResolvedPath,
     editResolvedPath,
-    deleteResolvedPath,
     applyPatchOperations,
     enforceIsolatedPathAccess,
     shouldEnforceIsolatedMasterPathAccess,
@@ -105,17 +104,4 @@ export async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
             displayPath: filePath,
         };
     });
-}
-
-export async function tool_delete_file(args: ToolArgs, ctx: ToolContext) {
-    const { filePath } = args;
-    if (!filePath || typeof filePath !== 'string') {
-        throw new Error('filePath is required');
-    }
-
-    const agentName = ctx.session?.agent || 'main';
-    const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
-    enforceIsolatedPathAccess(ctx, fullPath, agentName);
-    await deleteResolvedPath(fullPath, filePath);
-    return `Deleted file \`${filePath}\``;
 }

@@ -364,6 +364,36 @@ test('run_script supports unified call_tool descriptor shape for builtin tools',
   }
 });
 
+test('run_script nested builtin calls use unified placement for session-owner tools', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_placement');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain(
+    'return call_tool({"toolId": "builtin:set_session_compact_threshold", "args": {"thresholdTokens": 3456}})',
+  ));
+
+  const session = await sessionManager.getSession(sessionId);
+  session.currentNode = 'unreachable-placement-test-node';
+  await sessionManager.saveSession(sessionId);
+
+  try {
+    const toolMessage = await executeTools(
+      [{ id: 'run-script-placement', name: 'run_script', args: { filePath: scriptName } }],
+      { sessionId, session },
+      session,
+    );
+
+    const response = toolMessage.parts[0].functionResponse?.response;
+    assert.equal(response?.status, 'completed');
+    assert.deepEqual(response?.executedTools, ['set_session_compact_threshold']);
+    assert.equal((await sessionManager.getSession(sessionId)).compactThresholdTokens, 3456);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
 test('run_script passes unified MCP and node call_tool descriptors through to tools.call_tool', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_exec_external');

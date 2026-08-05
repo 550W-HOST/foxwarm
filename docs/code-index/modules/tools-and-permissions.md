@@ -18,6 +18,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 ## Public interfaces
 
 - `definitions` and `modelFacingDefinitions` — builtin tool registry and default model schema.
+- `BUILTIN_TOOL_PLACEMENTS` and `resolveBuiltinToolPlacement` — exhaustive process-ownership metadata and current-node routing, independent of permission policy.
 - `callTool(toolName, args, context)` — builtin dispatch entry.
 - `search_tools` and `call_tool` — unified discovery and invocation across builtin, MCP, and node sources.
 - `checkToolPermission` and `checkPathAccess` — current isolation checks.
@@ -30,6 +31,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 - On the master, an isolated agent may access only its own agent directory. On its bound/current node, it may use the node capabilities permitted by the isolated rule set.
 - Non-isolated file operations may use absolute, home-relative, or session-cwd-relative paths.
 - Master and node read/write wrappers share `packages/shared/src/fileToolCore.ts` after their own context and permission handling.
+- Only `read`, `write`, `edit`, `apply_patch`, `exec`, and `browse_*` are registered node-environment builtins. The removed `delete_file` surface has no compatibility alias; use structured `apply_patch` delete operations or an explicit shell command when appropriate.
 - `write` does not create missing parent directories unless `createDirs=true` is explicit.
 - Exact edit requires exactly one match; ambiguous edits fail.
 - Pending write references are scoped, bounded, and expire.
@@ -79,6 +81,8 @@ Default model-facing tool properties have concrete schema shapes accepted by str
 ### D-tools-resource-action-consolidation
 
 [2026-08-01, updated 2026-08-03] Keep the default model-facing namespace compact by grouping closely related operations under singular resource tools: `session` owns status/list/update-display-name, `skill` owns list/load, and `node` owns list/select. The display-name action is exactly `update-display-name`; the earlier `rename` action and removed standalone tool name are not retained as aliases. Keep action-specific arguments flat in the shared schema. A successful display-name update reports both the previous and resulting values, using `unset` for no display name and an explicit unchanged result for no-op calls. `start_toolscript_run` is the narrow exception to removed-name handling: it remains hidden and callable only for documented user-ToolScript compatibility, while current guidance uses `run_script({ mode: "background" })`. MCP configuration/listing is discoverable through `search_tools`/`call_tool` rather than injected by default.
+
+Node-environment ownership and the removed deletion surface are canonical in [D-dispatch-node-environment-placement](../threads/tool-dispatch.md#d-dispatch-node-environment-placement).
 
 ## Canonical ownership
 

@@ -95,7 +95,6 @@ export class NodesManager {
       'delete_memory',
       'apply_patch_memory',
       'apply_patch',
-      'delete_file',
       'exec',
       'get_memory_context',
       'create_child_session',

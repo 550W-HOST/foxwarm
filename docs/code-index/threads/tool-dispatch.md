@@ -8,8 +8,8 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 
 1. The LLM returns one or more tool calls in a `ChatResult`.
 2. The message-processing loop schedules the batch in model order. Adjacent direct `exec` calls form a bounded parallel segment; every other direct or unified tool is a serial barrier.
-3. Direct builtins resolve their effective execution node and run the current isolated-session permission checks.
-4. Master-only builtins execute on the master after their tool-local and isolation guards pass.
+3. Direct builtins resolve exhaustive ownership metadata independently from permission policy. Only node-environment builtins select the session's current node; all other ownership classes remain in the main process in the current local-only runtime.
+4. Isolation checks evaluate the resolved concrete execution target before the selected handler runs.
 5. `search_tools` discovers non-default builtins, MCP tools, and tools advertised by the selected node.
 6. `call_tool` parses a `toolId` or explicit source descriptor and resolves one concrete builtin, MCP, or node target.
 7. MCP calls run through `mcpClient.callTool`; safe text cleanup and MCP image-content promotion occur at that client boundary while non-image content remains structured.
@@ -48,6 +48,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 - Recognized image bytes stay in structured image parts rather than entering text excerpts; non-image text, JSON, audio, resource, and blob content remain subject to the normal output budget.
 - MCP and node credentials remain transport/runtime state and are not exposed to the model through tool summaries.
 - Tool batches emit one result for every call and append one tool message only after the batch settles. Image/result parts and function responses remain in original model-call order rather than completion order.
+- Direct builtins and unified builtin calls share `resolveBuiltinToolPlacement`; ToolScript nested calls inherit it through the existing `call_tool` wrapper.
 
 ## Compatibility
 
@@ -76,6 +77,10 @@ Phase-one batch concurrency is intentionally narrow: only adjacent direct calls 
 ### D-dispatch-mcp-live-configuration
 
 [2026-08-01] The first managed/runtime MCP configuration read establishes one authoritative in-memory snapshot. Subsequent MCP listing, discovery, and calls read that snapshot rather than rereading the backing file. `mcp_config` mutations must persist successfully before replacing the live snapshot, become visible to subsequent MCP operations immediately, and require no Foxwarm restart. Manual backing-file edits do not alter the live snapshot; do not add file watching or an agent-facing manual reload path.
+
+### D-dispatch-node-environment-placement
+
+[2026-08-05] Keep process-placement ownership separate from permission policy and model schemas. The registered node-environment builtins are exactly `read`, `write`, `edit`, `apply_patch`, `exec`, and `browse_*`: they execute directly in the selected local environment when `currentNode=master` and use the authenticated node connection when a remote current node is selected. `delete_file` is removed from definitions, runtime exports, permissions, and advertised master capabilities without an alias; structured `apply_patch` deletion and explicit `exec` remain available. Compound file/channel/image operations and agent-memory tools are not node-environment primitives merely because they may touch files.
 
 ## Canonical ownership
 

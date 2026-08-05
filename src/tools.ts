@@ -44,7 +44,7 @@ import {
 export type { ToolContext, ToolArgs, UnifiedToolSource } from './tools/helpers';
 
 // Import sub-modules
-import { tool_read, tool_write, tool_edit, tool_apply_patch, tool_delete_file } from './tools/fileTools';
+import { tool_read, tool_write, tool_edit, tool_apply_patch } from './tools/fileTools';
 import { tool_read_memory, tool_write_memory, tool_edit_memory, tool_delete_memory, tool_apply_patch_memory } from './tools/memoryTools';
 import { tool_exec } from './tools/execTools';
 import { tool_image_crop, tool_image_write_to_file } from './tools/imageTools';
@@ -55,30 +55,15 @@ import { tool_get_memory_context, resolveMemorySearchOptions } from './tools/vec
 import { tool_search_tools, tool_call_tool, setDefinitionsRef } from './tools/unifiedSearch';
 import { definitions } from './tools/definitions';
 
+export {
+    BUILTIN_TOOL_PLACEMENTS,
+    NODE_ENVIRONMENT_BUILTIN_NAMES,
+    resolveBuiltinToolPlacement,
+} from './tools/placement';
+export type { RegisteredBuiltinToolName, ResolvedBuiltinToolPlacement, ToolPlacementMetadata, ToolPlacementOwner } from './tools/placement';
+
 // Ensure agent dir exists
 fs.ensureDirSync(getAgentDir('main'));
-
-// --- Master-only tool names ---
-export const MASTER_ONLY_TOOL_NAMES = [
-    'remote_node', 'node', 'node_tools',
-    'get_memory_context',
-    'read_memory', 'write_memory', 'edit_memory', 'delete_memory', 'apply_patch_memory',
-    'copy_between_nodes',
-    'image_crop', 'image_write_to_file',
-    'create_child_session', 'send_to_session', 'wait', 'submit_compact_plan', 'send_to_channel', 'send_file',
-    'session', 'list_agents', 'skill',
-    'get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'recall', 'delete_session',
-    'set_goal', 'set_session_child_model', 'update_session_snapshot', 'stop_session',
-    'compact_session',
-    'create_timer', 'list_timers', 'update_timer', 'delete_timer',
-    'mcp_config', 'call_mcp', 'search_mcp_tools', 'list_mcp_servers',
-    'search_tools', 'call_tool',
-    'run_script', 'start_toolscript_run', 'continue_script', 'list_toolscript_runs', 'get_toolscript_run', 'cancel_toolscript_run',
-    'node_bootstrap_info', 'node_pair_approve', 'node_pair_list',
-    'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
-];
-
-const MASTER_ONLY_TOOL_NAME_SET = new Set(MASTER_ONLY_TOOL_NAMES);
 
 const TARGET_NODE_PERMISSION_TOOL_NAMES = new Set([
     'send_file',
@@ -89,10 +74,6 @@ export function isToolDirectlyExposedToModel(toolName: string): boolean {
     return definitions.find(def => def.name === toolName)?.defaultInject === true;
 }
 
-export function isMasterOnlyToolName(toolName: string): boolean {
-    return MASTER_ONLY_TOOL_NAME_SET.has(toolName);
-}
-
 export function getToolPermissionNode(toolName: string, executionNode: string, targetNode: string): string {
     return TARGET_NODE_PERMISSION_TOOL_NAMES.has(toolName)
         ? targetNode
@@ -100,7 +81,7 @@ export function getToolPermissionNode(toolName: string, executionNode: string, t
 }
 
 // Wire up the unified search module with definitions reference
-setDefinitionsRef(definitions, isToolDirectlyExposedToModel, isMasterOnlyToolName, getToolPermissionNode);
+setDefinitionsRef(definitions, isToolDirectlyExposedToModel, getToolPermissionNode);
 
 // --- callTool dispatcher ---
 export async function callTool(toolName: string, args: any, context: any): Promise<any> {
@@ -109,7 +90,6 @@ export async function callTool(toolName: string, args: any, context: any): Promi
         write: tool_write,
         edit: tool_edit,
         apply_patch: tool_apply_patch,
-        delete_file: tool_delete_file,
         read_memory: tool_read_memory,
         write_memory: tool_write_memory,
         edit_memory: tool_edit_memory,
@@ -192,7 +172,6 @@ export const edit_memory = tool_edit_memory;
 export const delete_memory = tool_delete_memory;
 export const apply_patch_memory = tool_apply_patch_memory;
 export const apply_patch = tool_apply_patch;
-export const delete_file = tool_delete_file;
 export const copy_between_nodes = tool_copy_between_nodes;
 export const image_crop = tool_image_crop;
 export const image_write_to_file = tool_image_write_to_file;

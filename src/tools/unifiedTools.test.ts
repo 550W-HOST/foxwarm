@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as mcpClient from '../mcpClient';
 import { nodesManager } from '../nodes/manager';
+import * as sessionManager from '../sessionManager';
+import { executeTools } from '../llm';
 import {
   call_mcp,
   call_tool,
   definitions,
-  MASTER_ONLY_TOOL_NAMES,
   mcp_config,
   modelFacingDefinitions,
   search_tools,
@@ -134,6 +135,32 @@ test('call_tool can invoke hidden builtin browse_list', async () => {
   );
 
   assert.match(String(result), /no tabs open/i);
+});
+
+test('direct and unified builtin dispatch keep session-owner tools local under a remote currentNode', async () => {
+  const sessionId = `placement_parity_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const session = await sessionManager.getSession(sessionId);
+  session.currentNode = 'unreachable-placement-test-node';
+  await sessionManager.saveSession(sessionId);
+
+  try {
+    const direct = await executeTools([{
+      id: 'placement-direct',
+      name: 'set_session_compact_threshold',
+      args: { thresholdTokens: 1234 },
+    }], { sessionId, session }, session);
+    assert.equal(direct.parts[0].functionResponse?.response.error, undefined);
+    assert.equal((await sessionManager.getSession(sessionId)).compactThresholdTokens, 1234);
+
+    const unified: any = await call_tool({
+      toolId: 'builtin:set_session_compact_threshold',
+      args: { thresholdTokens: 2345 },
+    }, { sessionId, session });
+    assert.equal(unified.error, undefined);
+    assert.equal((await sessionManager.getSession(sessionId)).compactThresholdTokens, 2345);
+  } finally {
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
 });
 
 test('call_tool rejects missing args wrapper with a caller-level error', async () => {
@@ -598,12 +625,10 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
   assert.equal(modelFacingDefinitions.some(def => def.name === 'session'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'skill'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'node'), true);
-  for (const removedName of ['update_session_name', 'list_skills', 'load_skill', 'list_nodes', 'change_current_node']) {
+  for (const removedName of ['delete_file', 'update_session_name', 'list_skills', 'load_skill', 'list_nodes', 'change_current_node']) {
     assert.equal(definitions.some(def => def.name === removedName), false, `${removedName} should be removed from the builtin registry`);
   }
   assert.equal(definitions.some(def => def.name === 'list_sessions'), false);
-  assert.equal(MASTER_ONLY_TOOL_NAMES.includes('session'), true);
-  assert.equal(MASTER_ONLY_TOOL_NAMES.includes('list_sessions'), false);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'wait'), true);
   assert.equal(definitions.some(def => def.name === 'set_todo'), false);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'end_turn'), false);
@@ -685,7 +710,6 @@ test('default model-facing tool names and serialized schema size stay consolidat
     'edit_memory',
     'delete_memory',
     'apply_patch_memory',
-    'delete_file',
     'copy_between_nodes',
     'image_crop',
     'image_write_to_file',
@@ -710,7 +734,7 @@ test('default model-facing tool names and serialized schema size stay consolidat
   ]);
 
   const serializedBytes = Buffer.byteLength(JSON.stringify(modelFacingDefinitions), 'utf8');
-  assert.equal(serializedBytes, 34_242);
+  assert.equal(serializedBytes, 33_786);
   assert.ok(serializedBytes < 38_069, 'serialized default schema should stay below the pre-consolidation baseline');
 });
 
@@ -741,7 +765,7 @@ test('consolidated resource tool schemas expose their approved actions', () => {
 });
 
 test('builtin file/browser tool schemas no longer expose node selector parameters', () => {
-  for (const name of ['read', 'write', 'edit', 'apply_patch', 'delete_file', 'browse_open', 'browse_list', 'browse_get', 'browse_close', 'browse_interact']) {
+  for (const name of ['read', 'write', 'edit', 'apply_patch', 'browse_open', 'browse_list', 'browse_get', 'browse_close', 'browse_interact']) {
     const def = definitions.find(entry => entry.name === name);
     assert.ok(def, `${name} should exist`);
     assert.equal(Object.prototype.hasOwnProperty.call(def?.parameters?.properties || {}, 'node'), false, `${name} should not expose node parameter`);

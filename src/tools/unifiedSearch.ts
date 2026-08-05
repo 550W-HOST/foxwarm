@@ -4,17 +4,16 @@ import * as mcpClient from '../mcpClient';
 import { nodesManager } from '../nodes/manager';
 import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
 import { tool_remote_node } from './nodeTools';
+import { resolveBuiltinToolPlacement } from './placement';
 
 // Forward reference - will be set by the main tools module after definitions are created
 let _definitions: any[] = [];
 let _isToolDirectlyExposedToModel: (toolName: string) => boolean = () => false;
-let _isMasterOnlyToolName: (toolName: string) => boolean = () => false;
 let _getToolPermissionNode: (toolName: string, executionNode: string, targetNode: string) => string = (_t, e) => e;
 
-export function setDefinitionsRef(defs: any[], isExposed: (n: string) => boolean, isMasterOnly: (n: string) => boolean, getPermNode: (t: string, e: string, tn: string) => string) {
+export function setDefinitionsRef(defs: any[], isExposed: (n: string) => boolean, getPermNode: (t: string, e: string, tn: string) => string) {
     _definitions = defs;
     _isToolDirectlyExposedToModel = isExposed;
-    _isMasterOnlyToolName = isMasterOnly;
     _getToolPermissionNode = getPermNode;
 }
 
@@ -208,7 +207,7 @@ async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolA
     const toolArgs = { ...(rawArgs || {}) };
     delete toolArgs.node;
 
-    const executionNode = _isMasterOnlyToolName(toolName) ? 'master' : targetNode;
+    const executionNode = resolveBuiltinToolPlacement(toolName, toolArgs, targetNode).executionNode;
     const permissionNode = _getToolPermissionNode(toolName, executionNode, targetNode);
 
     if (ctx.sessionId) {

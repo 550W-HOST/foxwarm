@@ -1,6 +1,7 @@
 # Unit: src-tools
 
-Files: src/tools.ts (facade), src/tools/helpers.ts, src/tools/fileTools.ts, src/tools/memoryTools.ts, src/tools/execTools.ts, src/tools/imageTools.ts, src/tools/browserTools.ts, src/tools/mcpTools.ts, src/tools/nodeTools.ts, src/tools/vectorTools.ts, src/tools/unifiedSearch.ts, src/tools/definitions.ts, src/tools/applyPatchOutput.test.ts, src/utils/pathResolve.ts
+Files: src/tools.ts (facade), src/tools/placement.ts, src/tools/helpers.ts, src/tools/fileTools.ts, src/tools/memoryTools.ts, src/tools/execTools.ts, src/tools/imageTools.ts, src/tools/browserTools.ts, src/tools/mcpTools.ts, src/tools/nodeTools.ts, src/tools/vectorTools.ts, src/tools/unifiedSearch.ts, src/tools/definitions.ts, src/tools/placement.test.ts, src/tools/applyPatchOutput.test.ts, src/utils/pathResolve.ts
+Secondary files: src/tools/unifiedTools.test.ts
 
 ## Purpose
 
@@ -11,8 +12,9 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - `definitions` — Array of all tool definition objects (from `tools/definitions.ts`)
 - `modelFacingDefinitions` — Subset of definitions directly exposed to the model
 - `callTool(toolName, args, context)` — Main dispatcher that routes tool calls to implementations
-- `MASTER_ONLY_TOOL_NAMES` — List of tool names restricted to master-level sessions
-- `isMasterOnlyToolName(toolName)` — Check if a tool is master-only
+- `BUILTIN_TOOL_PLACEMENTS` — Exhaustive ownership metadata for every registered builtin, independent of schemas and permission rules.
+- `NODE_ENVIRONMENT_BUILTIN_NAMES` — Intentional current-node environment primitive names.
+- `resolveBuiltinToolPlacement(name, args, currentNode)` — Resolves action-aware ownership and the current execution node.
 - `isToolDirectlyExposedToModel(toolName)` — Check if a tool has `defaultInject: true`
 - `getToolPermissionNode(toolName, executionNode, targetNode)` — Determine which node governs permission for a tool call
 - `resolveMemorySearchOptions` — Scope/lineage helper used by `recall({ vector_query })` to constrain semantic retrieval before archive back-resolution.
@@ -43,7 +45,6 @@ Implements the core tool registry and execution layer for the agent system. Defi
 | `tool_write` | Writes content, supports contentRef for large writes, and can explicitly create parent dirs with `createDirs=true` |
 | `tool_edit` | Exact text replacement in a file |
 | `tool_apply_patch` | Applies structured patch edits to files |
-| `tool_delete_file` | Deletes a single file |
 
 ### tools/memoryTools.ts — Agent memory operations
 | Function | Description |
@@ -112,6 +113,13 @@ Implements the core tool registry and execution layer for the agent system. Defi
 |--------|-------------|
 | `definitions` | Array of all tool definition objects (schemas, descriptions, permissions) |
 
+### tools/placement.ts — Process-placement ownership
+| Export | Description |
+|--------|-------------|
+| `BUILTIN_TOOL_PLACEMENTS` | Typed exhaustive map across node-environment, session-owner, main-management, external-service, and dispatcher/container owners |
+| `resolveBuiltinToolPlacement` | Resolves mixed action metadata and routes only node-environment builtins to `currentNode` |
+| `NODE_ENVIRONMENT_BUILTIN_NAMES` | Stable derived list used by parity tests against applicable CLI-node capabilities |
+
 ## Dependencies
 
 - `./vector` — Vector/semantic search operations used internally by `recall({ vector_query })` and memory context helpers
@@ -143,7 +151,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - **Pending write refs**: Large file writes that fail validation produce a `contentRef` token cached in memory (TTL 15 min, max 2 MB per entry, 8 MB total). Failure guidance provides an executable `write({ ... })` retry call with the actual escaped path, reference, and required flags, explicitly tells the model not to include the mutually exclusive `content` argument because the attempted content is already cached, and directs intentional content corrections to omit `contentRef` and submit only the new content plus required path/flags.
 - **Command execution**: `tool_exec` delegates to `execManager` for persistent processes with configurable timeouts, foreground/background modes, and working-directory tracking. Its schema has no hard maximum so finite requests above 60 seconds reach the shared resolver, clamp to 60, and produce a warning in the immediate result footer; minimum/finite validation remains strict. Inline display is already bounded, so model guidance tells agents not to add `head`/`tail` merely for context control: a filtering pipeline changes the captured command output. The master description also reminds agents that a timed-out process remains outstanding while they continue other work; this stays aligned with node guidance under [D-persistent-exec-background-timeout-footer-tree](./shared-persistent-exec.md#d-persistent-exec-background-timeout-footer-tree). Canonical capture/excerpt semantics: [D-persistent-exec-bounded-log-excerpts](./shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts).
 - **Exec cwd sync notice**: When a command changes the session cwd, the `exec` tool appends a `SESSION CWD CHANGED` notice at the end of the tool output and states that the new cwd becomes the default for later `exec/read/edit/write/apply_patch` calls. Parallel segments defer this mutation/notice until every segment member settles, then replay it in model order before the next barrier under [D-dispatch-exec-parallel-segments](../threads/tool-dispatch.md#d-dispatch-exec-parallel-segments).
-- **Permission gating**: Tools are partitioned into master-only vs. general, and isolated sessions are restricted by the current `checkToolPermission` rule set plus tool-local guards.
+- **Placement versus permissions**: Process-placement ownership is exhaustive metadata in `tools/placement.ts`; isolation remains independently enforced by `checkToolPermission` plus tool-local guards.
 - **Unified tool dispatch**: `search_tools` and `call_tool` provide a single interface across builtin, MCP, and remote-node tool sources. The resolved target still passes its normal isolation and tool-local checks.
 - **Context retrieval**: `recall` is the single model-facing entry point for exact archive drill-down (`target`) and semantic vector retrieval (`vector_query`). `search_vector` / `search_memory` are removed rather than compatibility-wrapped. `recall` and `get_session_messages` share a context preview renderer with total-budget `previewLength`, tool folding, and staged `contentFilter`/regex result post-filtering. `get_session_messages` additionally reports the target session's canonical execution-state summary on every successful response. Their old literal `query` field is absent from model-facing schemas and explicitly rejected at runtime.
 - **Consolidated resource tools**: `session` owns status/list/update-display-name, `skill` owns list/load, and `node` owns list/select. Removed internal names and superseded action aliases are absent from definitions/runtime exports; the canonical consolidation decision is [D-tools-resource-action-consolidation](../modules/tools-and-permissions.md#d-tools-resource-action-consolidation).

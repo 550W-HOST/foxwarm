@@ -1295,7 +1295,7 @@ async function prepareToolCall(
     const targetNode = normalizeRequestedNode(nodeParam, currentNode);
     const toolArgs = { ...call.args };
     if (supportsExplicitNode) delete toolArgs.node;
-    const executionNode = tools.isMasterOnlyToolName(call.name) ? 'master' : targetNode;
+    const executionNode = tools.resolveBuiltinToolPlacement(call.name, toolArgs, targetNode).executionNode;
     const permissionNode = tools.getToolPermissionNode(call.name, executionNode, targetNode);
     if (notifyStart) {
         const startedAt = Date.now();
