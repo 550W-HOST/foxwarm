@@ -20,7 +20,7 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 | `generateGuestAgentName(baseAgentId)` | Allocates a directory-safe inherited guest name. |
 | `MessageRouter.addSourceSystemParts(parts, source)` | Adds current channel/time wrappers exactly once before enqueue. |
 | `MessageRouter.prepareUserParts(parts, source)` | Clones user parts and applies source wrappers. |
-| `MessageRouter.buildChannelUserQueueItem(ctx, message)` | Builds the canonical prompt-ready channel queue item and preserves `clientMessageId`. |
+| `MessageRouter.buildChannelUserQueueItem(ctx, message)` | Builds the canonical prompt-ready channel queue item and preserves `clientMessageId` plus true direct-reply routing intent. |
 | `MessageRouter.maybeCreateGuestSessionForUnauthorizedMessage(ctx)` | Resolves configured guest access without bypassing authorization policy. |
 | `MessageRouter.createGuestSession(config)` | Creates single/inherited guest sessions with current isolation semantics. |
 | `MessageRouter.handleCommandIfNeeded(ctx, text)` | Parses and dispatches slash commands with raw multiline arguments. |
@@ -40,6 +40,7 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 
 - Authorization and command dispatch complete before ordinary session queue insertion.
 - Source wrappers are created once at ingress. Queue processing receives prompt-ready parts and does not reconstruct channel metadata.
+- QueueSource snapshots persist `preferDirectReply` only when true; queue JSON round trips retain it for merge and final-routing decisions.
 - WebUI `clientMessageId` remains queue/transport metadata and is copied to canonical history by the turn runner.
 - Active managed sessions route input through the existing SessionRuntime enqueue path and receive the existing manager-facing acknowledgement.
 - Busy input is enqueued silently. Idle input is enqueued and then invokes the same local turn runner.

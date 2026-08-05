@@ -77,7 +77,7 @@ export interface SessionTurnHost {
   sendTyping(sourceCtx: ChannelContext): Promise<void>;
   hasBroadcast(session: Session): boolean;
   broadcast(session: Session, text: string, options?: any): void;
-  sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any): Promise<void>;
+  sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any, preferDirectReply?: boolean): Promise<void>;
 }
 
 /** Existing in-process effects, exposed without changing their behavior. */
@@ -121,8 +121,8 @@ export class LocalSessionTurnHost implements SessionTurnHost {
   hasBroadcast(session: Session): boolean { return !!session.broadcast; }
   broadcast(session: Session, text: string, options?: any): void { session.broadcast?.(text, options); }
 
-  async sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any): Promise<void> {
-    if (sourceCtx?.preferDirectReply && sourceCtx.reply) {
+  async sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any, preferDirectReply = false): Promise<void> {
+    if (preferDirectReply && sourceCtx?.reply) {
       await sourceCtx.reply(text, options);
       return;
     }
@@ -149,6 +149,7 @@ export class SessionTurnRunner {
       username: ctx.username,
       senderId: ctx.senderId,
       weworkStreamId: ctx.weworkStreamId,
+      ...(ctx.preferDirectReply === true ? { preferDirectReply: true } : {}),
     };
   }
 
@@ -157,6 +158,11 @@ export class SessionTurnRunner {
       return undefined;
     }
     return `${source.channelId || source.platform}:${source.conversationId || source.channelUserId}:${source.weworkStreamId}`;
+  }
+
+  private getSourceMergeKey(source?: QueueSource): string | undefined {
+    const streamKey = this.getSourceStreamKey(source);
+    return source?.preferDirectReply === true ? `${streamKey || ''}\u0000prefer-direct-reply` : streamKey;
   }
 
   private getTurnChannelOptions(sourceCtx?: ChannelContext, source?: QueueSource): Record<string, any> {
@@ -285,8 +291,9 @@ export class SessionTurnRunner {
     };
   }
 
-  async sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any): Promise<void> {
-    await this.host.sendSessionReply(session, sourceCtx, text, options);
+  async sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any, source?: QueueSource): Promise<void> {
+    const effectiveSource = source ?? (sourceCtx ? this.snapshotSource(sourceCtx) : undefined);
+    await this.host.sendSessionReply(session, sourceCtx, text, options, effectiveSource?.preferDirectReply === true);
   }
 
   private prepareTurnParts(session: Session, sessionId: string, parts: MessagePart[]): MessagePart[] {
@@ -319,7 +326,7 @@ export class SessionTurnRunner {
       if (session.queue[0].type === 'compact-commit') {
         break;
       }
-      const nextStreamKey = this.getSourceStreamKey(session.queue[0].source);
+      const nextStreamKey = this.getSourceMergeKey(session.queue[0].source);
       if (items.length > 0 && streamKey !== nextStreamKey) {
         break;
       }
@@ -354,11 +361,12 @@ export class SessionTurnRunner {
       if (session.queue[0].type === 'compact-commit') {
         break;
       }
-      const queuedStreamKey = this.getSourceStreamKey(session.queue[0].source);
-      // A different WeWork stream id already has its own passive card. Leave it
-      // queued so the next turn's broadcasts update/finish that card instead
-      // of merging its text into the current stream card.
-      if (queuedStreamKey && queuedStreamKey !== turnStreamKey) {
+      const queuedStreamKey = this.getSourceMergeKey(session.queue[0].source);
+      // A different WeWork stream or final-delivery intent owns a separate
+      // turn. Leave it queued so its progress/final routing remains coherent.
+      const queuedPrefersDirectReply = session.queue[0].source?.preferDirectReply === true;
+      const turnPrefersDirectReply = turnStreamKey?.endsWith('\u0000prefer-direct-reply') === true;
+      if (queuedPrefersDirectReply !== turnPrefersDirectReply || (queuedStreamKey && queuedStreamKey !== turnStreamKey)) {
         break;
       }
 
@@ -707,19 +715,19 @@ export class SessionTurnRunner {
     await this.host.appendSessionMessage(session, reminder);
   }
 
-  private async sendFinalResponse(session: Session, sourceCtx: ChannelContext | undefined, response: string, alreadyBroadcasted: boolean, turnOptions?: Record<string, any>): Promise<boolean> {
+  private async sendFinalResponse(session: Session, sourceCtx: ChannelContext | undefined, source: QueueSource | undefined, response: string, alreadyBroadcasted: boolean, turnOptions?: Record<string, any>): Promise<boolean> {
     if (!alreadyBroadcasted && shouldBroadcastChannelText(response)) {
-      await this.sendSessionReply(session, sourceCtx, response, this.mergeTurnOptions(turnOptions || {}, { excludePlatforms: ['webui'], turnFinal: true }));
+      await this.sendSessionReply(session, sourceCtx, response, this.mergeTurnOptions(turnOptions || {}, { excludePlatforms: ['webui'], turnFinal: true }), source);
       return true;
     }
     return false;
   }
 
-  private async sendSessionError(session: Session, sourceCtx: ChannelContext | undefined, error: any, turnOptions?: Record<string, any>): Promise<void> {
+  private async sendSessionError(session: Session, sourceCtx: ChannelContext | undefined, error: any, turnOptions?: Record<string, any>, source?: QueueSource): Promise<void> {
     const text = llm.isLlmRequestError(error)
       ? `⚠️ LLM request failed: ${error?.message || 'Unknown error'}`
       : `Error: ${error?.message || 'Unknown error'}`;
-    await this.sendSessionReply(session, sourceCtx, text, this.mergeTurnOptions(turnOptions || {}, { turnFinal: true }));
+    await this.sendSessionReply(session, sourceCtx, text, this.mergeTurnOptions(turnOptions || {}, { turnFinal: true }), source);
   }
 
   private sendEmptyTurnFinal(broadcast: Session['broadcast'] | undefined, turnOptions: Record<string, any>): void {
@@ -757,8 +765,9 @@ export class SessionTurnRunner {
 
     await maybeRefreshStaleSessionSnapshot(session, this.host.refreshSessionSnapshot);
 
-    const turnChannelOptions = this.getTurnChannelOptions(options.sourceCtx, options.source);
-    const turnStreamKey = this.getSourceStreamKey(options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined));
+    const turnSource = options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined);
+    const turnChannelOptions = this.getTurnChannelOptions(undefined, turnSource);
+    const turnStreamKey = this.getSourceMergeKey(turnSource);
     const broadcast = this.host.hasBroadcast(session)
       ? (text: string, broadcastOptions?: any) => this.host.broadcast(session, text, this.mergeTurnOptions(turnChannelOptions, broadcastOptions))
       : undefined;
@@ -1023,7 +1032,7 @@ export class SessionTurnRunner {
       }
 
       await this.maybeQueueChildReminder(session);
-      const finalSent = await this.sendFinalResponse(session, options.sourceCtx, response, lastTextBroadcasted, turnChannelOptions);
+      const finalSent = await this.sendFinalResponse(session, options.sourceCtx, turnSource, response, lastTextBroadcasted, turnChannelOptions);
       if (!finalSent) {
         this.sendEmptyTurnFinal(broadcast, turnChannelOptions);
       }
@@ -1041,11 +1050,11 @@ export class SessionTurnRunner {
         if (this.host.hasBroadcast(session)) {
           this.sendEmptyTurnFinal(broadcast, turnChannelOptions);
         } else {
-          await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions);
+          await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions, turnSource);
         }
       } else {
         await this.maybeQueueChildReminder(session);
-        await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions);
+        await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions, turnSource);
       }
     } finally {
       const runQueuedAfterStop = !!session.meta?.runQueuedAfterStop;

@@ -98,7 +98,7 @@ Catalog projection delivery and main-owned lifecycle handoff are deliberately de
 
 ### D-process-topology-session-events
 
-[2026-08-04] Worker-to-main committed session events carry the owner generation plus a monotonic session state revision/cursor or an equivalent explicit gap/resync signal. Event backpressure may discard transient display progress, but it cannot silently lose committed history; main resynchronizes from the authoritative per-session JSON after a committed-event gap.
+[2026-08-04, updated 2026-08-06] Do not add a persisted session `stateRevision`. A future worker publishes a reliable, awaited, complete bounded projection only after authoritative JSON/archive persistence (and mailbox acknowledgement when applicable). Main resynchronizes from the authoritative per-session JSON whenever publication outcome/order is ambiguous and on worker lifecycle boundaries; transient model/tool/typing progress remains separate and may be dropped under backpressure. Final external delivery carries the serialized QueueSource direct-reply intent to Main after the committed turn, uses one channel-send attempt, and is not automatically retried or backed by an outbox in the first version.
 
 ### D-process-topology-session-tool-placement
 

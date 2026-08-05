@@ -384,6 +384,85 @@ test('MessageRouter queue draining keeps different WeWork stream ids separate', 
   assert.equal(session.queue.length, 1);
 });
 
+test('MessageRouter snapshots and serializes direct-reply routing intent', () => {
+  const router = new MessageRouter() as any;
+  const baseCtx = {
+    channelUserId: 'conversation-a',
+    conversationId: 'conversation-a',
+    channelId: 'channel-a',
+    channelType: 'test',
+    username: 'user-a',
+    platform: 'test',
+    reply: async () => {},
+    sendTyping: async () => {},
+  };
+  const direct = router.buildChannelUserQueueItem({ ...baseCtx, preferDirectReply: true }, {
+    parts: [{ text: 'direct' }], channelUserId: 'conversation-a', conversationId: 'conversation-a',
+  });
+  const broadcast = router.buildChannelUserQueueItem({ ...baseCtx, preferDirectReply: false }, {
+    parts: [{ text: 'broadcast' }], channelUserId: 'conversation-a', conversationId: 'conversation-a',
+  });
+
+  assert.equal(JSON.parse(JSON.stringify(direct)).source.preferDirectReply, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(JSON.parse(JSON.stringify(broadcast)).source, 'preferDirectReply'), false);
+});
+
+test('MessageRouter keeps different direct-reply intents in separate queued turns', () => {
+  const router = new MessageRouter() as any;
+  const session: any = {
+    queue: [
+      { type: 'user', source: { platform: 'test', channelUserId: 'conversation', preferDirectReply: true }, parts: [{ text: 'direct' }] },
+      { type: 'user', source: { platform: 'test', channelUserId: 'conversation' }, parts: [{ text: 'broadcast' }] },
+    ],
+  };
+
+  const drained = router.turnRunner.drainLeadingQueuedTurnInputs(session);
+  assert.equal(drained.items.length, 1);
+  assert.equal(drained.items[0].source?.preferDirectReply, true);
+  assert.equal(session.queue.length, 1);
+});
+
+test('MessageRouter does not merge a different direct-reply intent into an active turn', async () => {
+  const router = new MessageRouter() as any;
+  const session: any = {
+    queue: [
+      { type: 'user', source: { platform: 'test', channelUserId: 'conversation' }, parts: [{ text: 'broadcast follow-up' }] },
+    ],
+  };
+  const directKey = router.turnRunner.getSourceMergeKey({
+    platform: 'test', channelUserId: 'conversation', preferDirectReply: true,
+  });
+  const consumed = await router.turnRunner.consumeLeadingQueuedTurnInputs(session, [{ text: 'current direct turn' }], directKey);
+  assert.equal(consumed.consumedInput, false);
+  assert.equal(session.queue.length, 1);
+});
+
+test('SessionTurnRunner uses snapshotted direct intent instead of a mutated live context flag', async () => {
+  const router = new MessageRouter() as any;
+  const directReplies: string[] = [];
+  const broadcasts: string[] = [];
+  const session: any = { broadcast: (text: string) => broadcasts.push(text) };
+  const ctx: any = {
+    channelUserId: 'conversation-a', conversationId: 'conversation-a', channelId: 'channel-a',
+    channelType: 'test', username: 'user-a', platform: 'test', preferDirectReply: true,
+    reply: async (text: string) => { directReplies.push(text); }, sendTyping: async () => {},
+  };
+  const directSource = router.turnRunner.snapshotSource(ctx);
+  ctx.preferDirectReply = false;
+  assert.equal(await router.turnRunner.sendFinalResponse(session, ctx, directSource, 'direct once', false, {}), true);
+  assert.deepEqual(directReplies, ['direct once']);
+  assert.deepEqual(broadcasts, []);
+
+  ctx.preferDirectReply = true;
+  await router.turnRunner.sendFinalResponse(session, ctx, { platform: 'test', channelUserId: 'conversation-a' }, 'broadcast absent', false, {});
+  await router.turnRunner.sendFinalResponse(session, ctx, { platform: 'test', channelUserId: 'conversation-a', preferDirectReply: false }, 'broadcast false', false, {});
+  assert.deepEqual(directReplies, ['direct once']);
+  assert.deepEqual(broadcasts, ['broadcast absent', 'broadcast false']);
+
+  await router.turnRunner.sendFinalResponse(session, { ...ctx, reply: undefined }, directSource, 'fallback without callback', false, {});
+  assert.deepEqual(broadcasts, ['broadcast absent', 'broadcast false', 'fallback without callback']);
+});
+
 test('MessageRouter emits turn progress as an empty targeted channel broadcast', () => {
   const router = new MessageRouter() as any;
   const events: Array<{ text: string; options: any }> = [];

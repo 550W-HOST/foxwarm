@@ -65,7 +65,7 @@ Persist the canonical provider-qualified model key on model messages so mixed-mo
 
 ### D-pipeline-source-boundary
 
-Queued follow-up merge and progress/final delivery respect explicit platform turn/source identifiers. Different or unbound sources remain separate turns.
+[2026-08-06] Queued follow-up merge and progress/final delivery respect the immutable serialized turn-source snapshot, including platform turn/source identifiers and the optional `preferDirectReply:true` routing intent. False is omitted by current writers. Different direct-reply intents are hard merge boundaries. Local delivery uses the snapshotted intent to choose the originating live reply callback when it is still available; later mutation of `ChannelContext.preferDirectReply` cannot change the turn, and missing callbacks retain session-broadcast fallback. A future Session-worker delivery call carries this boolean intent rather than a channel callback across the process boundary.
 
 ### D-pipeline-canonical-queue-item-boundaries
 

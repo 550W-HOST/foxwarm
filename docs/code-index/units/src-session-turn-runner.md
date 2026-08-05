@@ -21,7 +21,7 @@ This extraction is behavior-preserving and local-only. One turn-specific `Sessio
 ## Canonical flow
 
 1. `processSessionQueue` prevents reentry, loads and claims the live session, then enters retry or queued work.
-2. `continueWithQueuedWork` validates leading queue records, respects ready compact commits, drains one compatible source batch, and calls `runSessionTurn`.
+2. `continueWithQueuedWork` validates leading queue records, respects ready compact commits, drains one compatible source batch, and calls `runSessionTurn`. Serialized direct-reply intent participates in the compatibility key alongside platform stream identity.
 3. `runSessionTurn` clears direct-turn waits, refreshes stale snapshots, persists queued input as separate canonical messages, and applies pre-provider compact/goal safe points.
 4. `llm.chat` performs provider retries/journaling and appends its assistant result. Tool calls enter the existing `llm.executeTools` path; the complete tool result is appended before wait/compact/follow-up decisions.
 5. Final delivery, child reminders, automatic compaction, terminal provider/runtime error presentation, Stop finalization, busy clearing, and queued continuation all stay in the same `try/catch/finally` owner.
@@ -32,13 +32,13 @@ This extraction is behavior-preserving and local-only. One turn-specific `Sessio
 - `LocalSessionTurnHost` delegates live session load, queue/busy persistence, canonical history append, wait, runtime-state, compact, child reminder, provider/tool execution, and channel delivery to their existing owners. Its provider/tool delegates inject one local-only `CurrentSessionEffects` object for append/persist, stream events, abort registration, and explicit-wait rollback; detached tests may provide alternate effects without changing the runner or provider schema. Tool execution validates the passed owner identity before deriving a local-only current-session persist callback; owner mismatch fails before any effect is used.
 - Pure session-local policy helpers such as goal/managed-state checks, usage thresholds, and provider error predicates remain direct runner dependencies rather than host capabilities.
 - `session/goal`, `session/managedState`, and `session/snapshotRefresh` — existing safe-point and lifecycle rules.
-- Channel context/session broadcast functions — typing, retry/progress, tool progress, final reply, and `turnFinal` effects.
+- Channel context/session broadcast functions — typing, retry/progress, tool progress, final reply, and `turnFinal` effects. Final routing reads the immutable QueueSource snapshot's direct-reply intent while retaining the live callback only as the local delivery mechanism.
 
 ## Invariants
 
 - One runner owns a session turn at a time.
 - Queue items retain individual canonical history boundaries even when a compatible batch shares one provider request.
-- Platform stream identifiers, ready compact commits, and Stop are hard turn/safe-point boundaries.
+- Platform stream identifiers, differing direct-reply intents, ready compact commits, and Stop are hard turn/safe-point boundaries.
 - Goal reminders are appended only at the pre-provider safe point after complete input/tool persistence.
 - Non-null provider `parts` are cleared only after `llm.chat` returns and has appended them.
 - Only `LlmRequestError` uses terminal provider presentation; other runtime errors retain the existing terminal runtime path.
