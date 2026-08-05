@@ -6,6 +6,7 @@ import {
 } from './rpc';
 import * as sessionManager from './sessionManager';
 import { nodesManager } from './nodes/manager';
+import type { Session } from './types';
 
 export type NodeExecutionRoutingSnapshot = {
   currentNode: string;
@@ -61,6 +62,23 @@ function normalizeRoutingSnapshot(value: unknown): NodeExecutionRoutingSnapshot 
   return { currentNode, ...(typeof candidate.cwd === 'string' ? { cwd: candidate.cwd } : {}) };
 }
 
+export async function requireNodeExecutionTarget(sourceSessionId: string, nodeId: string): Promise<Session> {
+  const source = await sessionManager.getExistingSession(sourceSessionId);
+  if (!source) {
+    throw new RpcError('NODE_EXECUTION_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
+  }
+  if (sessionManager.isSessionEffectivelyIsolated(source)) {
+    const allowedNodes = Array.from(new Set([
+      sessionManager.getAgentIsolationNode(source.agent || 'main') || source.currentNode || 'master',
+      source.currentNode,
+    ].filter((value): value is string => typeof value === 'string' && value.length > 0)));
+    if (!allowedNodes.includes(nodeId)) {
+      throw new RpcError('NODE_EXECUTION_ISOLATED_NODE_DENIED', `Isolated session can only call tools on its bound/current node (${allowedNodes.join(', ')}).`);
+    }
+  }
+  return source;
+}
+
 export function createNodeExecutionServiceHandler(): RpcServiceHandler<typeof nodeExecutionServiceDescriptor> {
   return {
     async execute(input) {
@@ -77,19 +95,7 @@ export function createNodeExecutionServiceHandler(): RpcServiceHandler<typeof no
         throw new RpcError('NODE_EXECUTION_MASTER_FORBIDDEN', 'The colocated master node must execute directly without Node execution RPC.');
       }
 
-      const source = await sessionManager.getExistingSession(sourceSessionId);
-      if (!source) {
-        throw new RpcError('NODE_EXECUTION_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
-      }
-      if (sessionManager.isSessionEffectivelyIsolated(source)) {
-        const allowedNodes = Array.from(new Set([
-          sessionManager.getAgentIsolationNode(source.agent || 'main') || source.currentNode || 'master',
-          source.currentNode,
-        ].filter((value): value is string => typeof value === 'string' && value.length > 0)));
-        if (!allowedNodes.includes(nodeId)) {
-          throw new RpcError('NODE_EXECUTION_ISOLATED_NODE_DENIED', `Isolated session can only call tools on its bound/current node (${allowedNodes.join(', ')}).`);
-        }
-      }
+      await requireNodeExecutionTarget(sourceSessionId, nodeId);
 
       const node = nodesManager.getNode(nodeId);
       if (!node || !node.ws) {

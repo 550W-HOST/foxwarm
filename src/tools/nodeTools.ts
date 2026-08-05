@@ -10,6 +10,8 @@ import { buildNodeBootstrapInfo, ensureNodePairingToken } from '../nodes/bootstr
 import { logger } from '../common';
 import { getAgentDir } from '../config';
 import { executeRemoteNodeTool } from '../nodeExecution';
+import { requireNodeExecutionTarget } from '../nodeExecutionService';
+import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
 
 export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
     const { sourceNode, sourcePath, targetNode, targetPath, overwrite = false } = args;
@@ -89,6 +91,13 @@ export async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
         
         if (!ctx.sessionId) {
             throw new Error('Remote node calls require an active source session.');
+        }
+        if (nodeId === 'master') {
+            await requireNodeExecutionTarget(ctx.sessionId, nodeId);
+            if (!NODE_ENVIRONMENT_BUILTIN_NAMES.includes(tool as any)) {
+                throw new Error(`Tool \`${tool}\` not available on node \`master\``);
+            }
+            return nodesManager.executeNodeTool(nodeId, tool, toolArgs || {}, ctx.sessionId);
         }
         const result = await executeRemoteNodeTool(ctx.sessionId, nodeId, tool, toolArgs || {});
         

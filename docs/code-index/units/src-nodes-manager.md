@@ -51,7 +51,7 @@ Maintains the in-memory view of connected nodes and routes tool/file/session req
 
 ## Behavior
 
-- `master` is always present in the runtime node map and cannot be disconnected by `disconnectNode`.
+- `master` is always present in the runtime node map and cannot be disconnected by `disconnectNode`. Its advertised model-tool set and discovery schemas are derived from canonical `NODE_ENVIRONMENT_BUILTIN_NAMES`, not a handwritten broad list.
 - Registering a remote node with an already-online id closes the previous WebSocket and replaces runtime capabilities.
 - Remote tool calls, file transfers, and backend service requests are tracked by generated ids and time out if no response arrives. Service timers are cleared on reply/disconnect. Fixed commands avoid per-keystroke response state; authenticated service events are dispatched to registered listeners.
 - Node disconnect emits `node-unavailable` to each advertised service before removal, allowing terminal bridges to close clients while leaving detached node-owned PTYs eligible for rediscovery after a same-process reconnect.

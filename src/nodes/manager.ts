@@ -11,6 +11,7 @@ import * as sessionManager from '../sessionManager';
 import { WebSocket } from 'ws';
 import { isReservedNodeId } from './registry';
 import { adaptLegacyRemoteNodeToolResult } from './legacyToolResultCompatibility';
+import { NODE_ENVIRONMENT_BUILTIN_NAMES } from '../tools/placement';
 
 interface ToolDefinition {
   name: string;
@@ -84,46 +85,7 @@ export class NodesManager {
   }
 
   private setupTools() {
-    // Register available tools
-    this.tools = new Set([
-      'read',
-      'write',
-      'edit',
-      'read_memory',
-      'write_memory',
-      'edit_memory',
-      'delete_memory',
-      'apply_patch_memory',
-      'apply_patch',
-      'exec',
-      'get_memory_context',
-      'create_child_session',
-      'create_agent',
-      'create_session',
-      'set_agent_inherit',
-      'send_to_session',
-      'wait',
-      'submit_compact_plan',
-      'session',
-      'skill',
-      'get_session_messages',
-      'get_archived_messages',
-      'get_archived_blocks',
-      'recall',
-      'delete_session',
-      'set_session_child_model',
-      'set_session_compact_threshold',
-      'stop_session',
-      'compact_session',
-      'browse_open',
-      'browse_list',
-      'browse_get',
-      'browse_close',
-      'browse_interact',
-      'search_tools',
-      'call_tool',
-      'copy_between_nodes',
-    ]);
+    this.tools = new Set(NODE_ENVIRONMENT_BUILTIN_NAMES);
   }
 
   /**
@@ -341,11 +303,13 @@ export class NodesManager {
    */
   listNodesWithTools(): Array<{ id: string; type: string; tools: ToolDefinition[] }> {
     return Array.from(this.nodes.values())
-      .filter((node) => node.type !== 'master' && node.capabilities)
+      .filter((node) => node.type === 'master' || node.capabilities)
       .map((node) => ({
         id: node.id,
         type: node.type,
-        tools: node.capabilities?.tools || []
+        tools: node.type === 'master'
+          ? [...node.tools].map(name => this.getToolDefinition(name)).filter(Boolean)
+          : (node.capabilities?.tools || [])
       }));
   }
 

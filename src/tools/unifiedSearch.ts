@@ -5,6 +5,7 @@ import { nodesManager } from '../nodes/manager';
 import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
 import { tool_remote_node } from './nodeTools';
 import { resolveBuiltinToolPlacement } from './placement';
+import { executeRemoteNodeTool } from '../nodeExecution';
 
 // Forward reference - will be set by the main tools module after definitions are created
 let _definitions: any[] = [];
@@ -215,7 +216,7 @@ async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolA
     }
 
     if (executionNode !== 'master') {
-        return await nodesManager.executeTool(executionNode, toolName, toolArgs, sessionId);
+        return await executeRemoteNodeTool(sessionId, executionNode, toolName, toolArgs);
     }
 
     if (toolName === 'send_file' || toolName === 'image_write_to_file') {

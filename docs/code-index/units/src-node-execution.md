@@ -25,9 +25,9 @@ Direct adjacent `exec` calls pass the batch's captured node/cwd snapshot. Dynami
 
 ## Integration
 
-- `src/llm.ts` calls this service only after placement resolves a node-environment builtin to a remote execution node. `executionNode=master` still invokes the local named builtin directly and never enters this service.
-- `remote_node({ action: "call" })`, `call_tool(source=node)`, and ToolScript's nested node wrapper converge on `executeRemoteNodeTool()`.
-- Node list/select/management queries remain on their existing Main path.
+- `src/llm.ts` and unified builtin dispatch call this service only after placement resolves a node-environment builtin to a remote execution node. `executionNode=master` still invokes the local named builtin directly and never enters this service.
+- Remote `remote_node({ action: "call" })`, `call_tool(source=node)`, and ToolScript node/builtin wrappers converge on `executeRemoteNodeTool()`. An explicit `nodeId=master` call first passes the shared source/target isolation check, then bypasses RPC only when the tool belongs to `NODE_ENVIRONMENT_BUILTIN_NAMES`.
+- Node list/select/management queries remain on their existing Main path. Master Node discovery derives its definitions from the same canonical node-environment metadata.
 - `NodesManager.executeTool()` remains the authoritative WebSocket request/result/timeout and cwd-forwarding implementation after service validation.
 - `src/index.ts` initializes this service locally and terminally drains it before other Main services.
 

@@ -4,6 +4,8 @@ import * as mcpClient from '../mcpClient';
 import { nodesManager } from '../nodes/manager';
 import * as sessionManager from '../sessionManager';
 import { executeTools } from '../llm';
+import * as nodeExecution from '../nodeExecution';
+import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
 import {
   call_mcp,
   call_tool,
@@ -555,6 +557,91 @@ test('search_tools and call_tool cover remote node tools', async () => {
     (nodesManager as any).executeTool = originalExecuteTool;
     (nodesManager as any).getCurrentNode = originalGetCurrentNode;
     (nodesManager as any).getNode = originalGetNode;
+  }
+});
+
+test('master Node discovery and dynamic calls expose only canonical node-environment builtins and bypass RPC', async () => {
+  const sourceId = `master_node_source_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const isolatedId = `master_node_isolated_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const isolatedAgent = `master_node_agent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const source = await sessionManager.getSession(sourceId);
+  source.currentNode = 'master';
+  await sessionManager.saveSession(sourceId);
+  const isolated = await sessionManager.getSession(isolatedId);
+  isolated.agent = isolatedAgent;
+  isolated.currentNode = 'bound-remote';
+  await sessionManager.saveSession(isolatedId);
+  const originalRemoteExecute = (nodeExecution as any).executeRemoteNodeTool;
+  let remoteCalls = 0;
+
+  try {
+    (nodeExecution as any).executeRemoteNodeTool = async () => {
+      remoteCalls += 1;
+      throw new Error('master calls must not enter node execution RPC');
+    };
+    const discovered: any = await search_tools({
+      sources: ['node'],
+      nodeId: 'master',
+      includeSchema: true,
+      limit: 200,
+    }, { sessionId: sourceId, session: source });
+    assert.deepEqual(
+      [...discovered.tools.map((tool: any) => tool.name)].sort(),
+      [...NODE_ENVIRONMENT_BUILTIN_NAMES].sort(),
+    );
+    assert.equal(discovered.tools.every((tool: any) => tool.toolId === `node:master/${tool.name}`), true);
+
+    const byId: any = await call_tool({
+      toolId: 'node:master/read',
+      args: { filePath: 'package.json', startLine: 1, endLine: 1 },
+    }, { sessionId: sourceId, session: source });
+    const explicit: any = await call_tool({
+      source: 'node',
+      nodeId: 'master',
+      name: 'read',
+      args: { filePath: 'package.json', startLine: 1, endLine: 1 },
+    }, { sessionId: sourceId, session: source });
+    assert.equal(byId.error, undefined);
+    assert.equal(explicit.error, undefined);
+    assert.equal(remoteCalls, 0);
+
+    await assert.rejects(
+      () => call_tool({ source: 'node', nodeId: 'master', name: 'list_agents', args: {} }, { sessionId: sourceId, session: source }),
+      /not available on node `master`/,
+    );
+
+    await sessionManager.setAgentMetadata(isolatedAgent, { isolated: true, isolatedNode: 'bound-remote' });
+    await assert.rejects(
+      () => call_tool({ source: 'node', nodeId: 'master', name: 'read', args: { filePath: 'x' } }, { sessionId: isolatedId, session: isolated }),
+      /Isolated session can only call tools on its bound\/current node/,
+    );
+
+    const forwarded: any[] = [];
+    (nodeExecution as any).executeRemoteNodeTool = async (...args: any[]) => {
+      remoteCalls += 1;
+      forwarded.push(args);
+      return { remote: true, toolName: args[2] };
+    };
+    source.currentNode = 'remote-a';
+    await sessionManager.saveSession(sourceId);
+    assert.deepEqual(
+      await call_tool({ toolId: 'builtin:read', args: { filePath: 'remote.txt' } }, { sessionId: sourceId, session: source }),
+      { remote: true, toolName: 'read' },
+    );
+    assert.deepEqual(
+      await call_tool({ source: 'node', nodeId: 'remote-a', name: 'dynamic_probe', args: {} }, { sessionId: sourceId, session: source }),
+      { remote: true, toolName: 'dynamic_probe' },
+    );
+    assert.equal(remoteCalls, 2);
+    assert.deepEqual(forwarded.map(call => [call[0], call[1], call[2]]), [
+      [sourceId, 'remote-a', 'read'],
+      [sourceId, 'remote-a', 'dynamic_probe'],
+    ]);
+  } finally {
+    (nodeExecution as any).executeRemoteNodeTool = originalRemoteExecute;
+    await sessionManager.setAgentMetadata(isolatedAgent, { isolated: false }).catch(() => {});
+    await sessionManager.deleteSession(sourceId).catch(() => false);
+    await sessionManager.deleteSession(isolatedId).catch(() => false);
   }
 });
 

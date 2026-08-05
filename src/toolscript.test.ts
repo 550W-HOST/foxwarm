@@ -11,6 +11,7 @@ import * as managedSessions from './managedSessions';
 import * as tools from './tools';
 import * as mcpClient from './mcpClient';
 import { nodesManager } from './nodes/manager';
+import * as nodeExecution from './nodeExecution';
 import { getAgentDir, STATE_DIR } from './config';
 import { convertToOpenAIResponsesFormat } from './llmProviders/openai';
 import { tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, forceToolScriptNativeImportFailureForTests, getToolScriptRunForTests, resetToolScriptMontyRuntimeForTests, resetToolScriptRunsForTests } from './toolscript';
@@ -502,6 +503,42 @@ test('run_script nested dynamic node call uses the Node execution service', asyn
   } finally {
     (nodesManager as any).getNode = originalGetNode;
     (nodesManager as any).executeTool = originalExecuteTool;
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('run_script nested remote builtin uses the Node execution service', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_remote_builtin');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain(
+    'return call_tool({"toolId": "builtin:read", "args": {"filePath": "remote.txt"}})',
+  ));
+  const session = await sessionManager.getSession(sessionId);
+  session.currentNode = 'remote-script';
+  await sessionManager.saveSession(sessionId);
+  const originalRemoteExecute = (nodeExecution as any).executeRemoteNodeTool;
+  let captured: any[] | undefined;
+
+  try {
+    (nodeExecution as any).executeRemoteNodeTool = async (...args: any[]) => {
+      captured = args;
+      return { forwarded: true };
+    };
+    const toolMessage = await executeTools(
+      [{ id: 'run-script-remote-builtin', name: 'run_script', args: { filePath: scriptName } }],
+      { sessionId, session },
+      session,
+    );
+    const response = toolMessage.parts[0].functionResponse?.response;
+    assert.equal(response?.status, 'completed');
+    assert.deepEqual(response?.executedTools, ['read']);
+    assert.equal(response?.result?.forwarded, true);
+    assert.deepEqual(captured?.slice(0, 3), [sessionId, 'remote-script', 'read']);
+  } finally {
+    (nodeExecution as any).executeRemoteNodeTool = originalRemoteExecute;
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
     await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
