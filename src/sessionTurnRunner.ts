@@ -16,6 +16,11 @@ export function shouldBroadcastChannelText(text: string | undefined | null): boo
   return typeof text === 'string' && text.trim().length > 0;
 }
 
+type SourceMergeBoundary = {
+  streamKey?: string;
+  preferDirectReply: boolean;
+};
+
 function formatRetryDelay(delayMs: number): string {
   const seconds = Math.max(1, Math.ceil(delayMs / 1000));
   return `${seconds} second${seconds === 1 ? '' : 's'}`;
@@ -160,9 +165,11 @@ export class SessionTurnRunner {
     return `${source.channelId || source.platform}:${source.conversationId || source.channelUserId}:${source.weworkStreamId}`;
   }
 
-  private getSourceMergeKey(source?: QueueSource): string | undefined {
-    const streamKey = this.getSourceStreamKey(source);
-    return source?.preferDirectReply === true ? `${streamKey || ''}\u0000prefer-direct-reply` : streamKey;
+  private getSourceMergeBoundary(source?: QueueSource): SourceMergeBoundary {
+    return {
+      streamKey: this.getSourceStreamKey(source),
+      preferDirectReply: source?.preferDirectReply === true,
+    };
   }
 
   private getTurnChannelOptions(sourceCtx?: ChannelContext, source?: QueueSource): Record<string, any> {
@@ -316,7 +323,7 @@ export class SessionTurnRunner {
   private drainLeadingQueuedTurnInputs(session: Session): { items: QueueItem[]; broadcastSource?: QueueSource } {
     const items: QueueItem[] = [];
     let broadcastSource: QueueSource | undefined;
-    let streamKey: string | undefined;
+    let sourceBoundary: SourceMergeBoundary | undefined;
 
     while (session.queue[0]) {
       if (!isQueueItem(session.queue[0])) {
@@ -326,8 +333,10 @@ export class SessionTurnRunner {
       if (session.queue[0].type === 'compact-commit') {
         break;
       }
-      const nextStreamKey = this.getSourceMergeKey(session.queue[0].source);
-      if (items.length > 0 && streamKey !== nextStreamKey) {
+      const nextBoundary = this.getSourceMergeBoundary(session.queue[0].source);
+      if (sourceBoundary
+        && (sourceBoundary.streamKey !== nextBoundary.streamKey
+          || sourceBoundary.preferDirectReply !== nextBoundary.preferDirectReply)) {
         break;
       }
       const item = session.queue.shift();
@@ -336,7 +345,7 @@ export class SessionTurnRunner {
 
       if (items.length === 0) {
         broadcastSource = item.source;
-        streamKey = nextStreamKey;
+        sourceBoundary = nextBoundary;
       }
 
       items.push(item);
@@ -348,7 +357,7 @@ export class SessionTurnRunner {
   private async consumeLeadingQueuedTurnInputs(
     session: Session,
     pendingParts: MessagePart[] | null,
-    turnStreamKey?: string,
+    turnBoundary: SourceMergeBoundary,
   ): Promise<{ parts: MessagePart[] | null; consumedInput: boolean }> {
     let parts = pendingParts;
     let consumedInput = false;
@@ -361,12 +370,11 @@ export class SessionTurnRunner {
       if (session.queue[0].type === 'compact-commit') {
         break;
       }
-      const queuedStreamKey = this.getSourceMergeKey(session.queue[0].source);
+      const queuedBoundary = this.getSourceMergeBoundary(session.queue[0].source);
       // A different WeWork stream or final-delivery intent owns a separate
       // turn. Leave it queued so its progress/final routing remains coherent.
-      const queuedPrefersDirectReply = session.queue[0].source?.preferDirectReply === true;
-      const turnPrefersDirectReply = turnStreamKey?.endsWith('\u0000prefer-direct-reply') === true;
-      if (queuedPrefersDirectReply !== turnPrefersDirectReply || (queuedStreamKey && queuedStreamKey !== turnStreamKey)) {
+      if (queuedBoundary.preferDirectReply !== turnBoundary.preferDirectReply
+        || (queuedBoundary.streamKey && queuedBoundary.streamKey !== turnBoundary.streamKey)) {
         break;
       }
 
@@ -767,7 +775,7 @@ export class SessionTurnRunner {
 
     const turnSource = options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined);
     const turnChannelOptions = this.getTurnChannelOptions(undefined, turnSource);
-    const turnStreamKey = this.getSourceMergeKey(turnSource);
+    const turnBoundary = this.getSourceMergeBoundary(turnSource);
     const broadcast = this.host.hasBroadcast(session)
       ? (text: string, broadcastOptions?: any) => this.host.broadcast(session, text, this.mergeTurnOptions(turnChannelOptions, broadcastOptions))
       : undefined;
@@ -816,7 +824,7 @@ export class SessionTurnRunner {
           parts = null;
         }
 
-        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, turnStreamKey);
+        const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, turnBoundary);
         parts = queuedBeforeLlm.parts;
 
         if (session.stopping) {
@@ -992,7 +1000,7 @@ export class SessionTurnRunner {
           continue;
         }
 
-        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, turnStreamKey);
+        const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, turnBoundary);
         parts = queuedAfterTools.parts;
 
         if (result.usage) {

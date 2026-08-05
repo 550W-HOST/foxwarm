@@ -249,7 +249,7 @@ test('MessageRouter in-turn queue consumption drains same-stream WeWork inputs b
     const consumed = await router.turnRunner.consumeLeadingQueuedTurnInputs(
       session,
       [{ text: 'pending' }],
-      'wework-a:chat-a:stream-a',
+      { streamKey: 'wework-a:chat-a:stream-a', preferDirectReply: false },
     );
 
     assert.equal(consumed.parts, null);
@@ -279,7 +279,7 @@ test('MessageRouter in-turn queue consumption leaves different WeWork stream car
   const consumed = await router.turnRunner.consumeLeadingQueuedTurnInputs(
     session,
     [{ text: 'pending' }],
-    'wework-a:chat-a:stream-a',
+    { streamKey: 'wework-a:chat-a:stream-a', preferDirectReply: false },
   );
 
   assert.equal(consumed.parts.some((part: any) => part.text === 'next card input'), false);
@@ -422,6 +422,27 @@ test('MessageRouter keeps different direct-reply intents in separate queued turn
   assert.equal(session.queue.length, 1);
 });
 
+test('MessageRouter source boundaries do not collide with sentinel-like legal stream ids', () => {
+  const router = new MessageRouter() as any;
+  const sentinelLike = 'stream-a\u0000prefer-direct-reply';
+  const falseSentinelSource = { platform: 'wework', channelUserId: 'conversation', weworkStreamId: sentinelLike };
+  const trueNormalSource = { platform: 'wework', channelUserId: 'conversation', weworkStreamId: 'stream-a', preferDirectReply: true };
+  for (const sources of [[falseSentinelSource, trueNormalSource], [trueNormalSource, falseSentinelSource]]) {
+    const session: any = { queue: sources.map((source, index) => ({ type: 'user', source, parts: [{ text: `item-${index}` }] })) };
+    assert.equal(router.turnRunner.drainLeadingQueuedTurnInputs(session).items.length, 1);
+    assert.equal(session.queue.length, 1);
+  }
+
+  for (const source of [falseSentinelSource, { ...falseSentinelSource, preferDirectReply: true }]) {
+    const session: any = { queue: [
+      { type: 'user', source, parts: [{ text: 'same-a' }] },
+      { type: 'user', source: { ...source }, parts: [{ text: 'same-b' }] },
+    ] };
+    assert.equal(router.turnRunner.drainLeadingQueuedTurnInputs(session).items.length, 2);
+    assert.equal(session.queue.length, 0);
+  }
+});
+
 test('MessageRouter does not merge a different direct-reply intent into an active turn', async () => {
   const router = new MessageRouter() as any;
   const session: any = {
@@ -429,12 +450,34 @@ test('MessageRouter does not merge a different direct-reply intent into an activ
       { type: 'user', source: { platform: 'test', channelUserId: 'conversation' }, parts: [{ text: 'broadcast follow-up' }] },
     ],
   };
-  const directKey = router.turnRunner.getSourceMergeKey({
+  const directKey = router.turnRunner.getSourceMergeBoundary({
     platform: 'test', channelUserId: 'conversation', preferDirectReply: true,
   });
   const consumed = await router.turnRunner.consumeLeadingQueuedTurnInputs(session, [{ text: 'current direct turn' }], directKey);
   assert.equal(consumed.consumedInput, false);
   assert.equal(session.queue.length, 1);
+});
+
+test('MessageRouter active turns do not decode sentinel-like stream suffixes as direct intent', async () => {
+  const router = new MessageRouter() as any;
+  const session: any = {
+    history: [],
+    queue: [
+      { type: 'user', source: { platform: 'test', channelUserId: 'conversation' }, parts: [{ text: 'unbound broadcast follow-up' }] },
+    ],
+  };
+  const boundary = router.turnRunner.getSourceMergeBoundary({
+    platform: 'wework', channelUserId: 'conversation', weworkStreamId: 'stream-a\u0000prefer-direct-reply',
+  });
+  const originalAppend = sessionManager.appendSessionMessage;
+  (sessionManager as any).appendSessionMessage = async (target: any, message: Message) => target.history.push(message);
+  try {
+    const consumed = await router.turnRunner.consumeLeadingQueuedTurnInputs(session, null, boundary);
+    assert.equal(consumed.consumedInput, true);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (sessionManager as any).appendSessionMessage = originalAppend;
+  }
 });
 
 test('SessionTurnRunner uses snapshotted direct intent instead of a mutated live context flag', async () => {
