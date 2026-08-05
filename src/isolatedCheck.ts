@@ -163,6 +163,11 @@ export async function requireNotIsolated(sessionIdOrCtx: string | { sessionId?: 
   if (!sessionId) return;
   
   const session = await sessionManager.getExistingSession(sessionId);
+  requireNotIsolatedForSession(session, operation);
+}
+
+/** Apply the same non-isolated guard to an already-authoritative current Session. */
+export function requireNotIsolatedForSession(session: Session | undefined, operation: string): void {
   if (sessionManager.isSessionEffectivelyIsolated(session)) {
     throw new Error(`Isolated session cannot use ${operation} tool.`);
   }

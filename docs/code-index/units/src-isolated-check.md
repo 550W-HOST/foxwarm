@@ -13,6 +13,7 @@ Enforces the current isolation boundary for tool execution, master-side paths, c
 - `checkToolPermissionForSession(session, toolName, executionNode?, toolArgs?)` — evaluate the same rules from an already-authoritative current Session without loading the global session map.
 - `checkPathAccess(fullPath, agentName)` — restrict master-side filesystem access to the isolated agent's own directory.
 - `requireNotIsolated(sessionIdOrCtx, operation)` — reject operations that are unavailable to isolated sessions.
+- `requireNotIsolatedForSession(session, operation)` — apply the identical denial to an already-authoritative passed Session without an ID lookup.
 - `checkArchivedReadPermission(...)` — restrict archive inspection to sessions under the same agent.
 - `checkChannelPermission(...)` — restrict direct channel sends to attached channel targets.
 - `checkSendFilePermission(...)` — restrict file delivery to the current isolated session or its attached channel.
@@ -29,6 +30,7 @@ Enforces the current isolation boundary for tool execution, master-side paths, c
 | `checkCopyBetweenNodesPermission` | Restricts source/target nodes and master paths |
 | `checkPathAccess` | Enforces the master agent-directory boundary |
 | `requireNotIsolated` | Shared hard guard for unsupported isolated operations |
+| `requireNotIsolatedForSession` | Same hard guard for a passed current Session; the ID/context entry loads when needed and delegates |
 | `checkArchivedReadPermission` | Same-agent archive-read guard |
 | `checkChannelPermission` | Attached-channel guard |
 | `checkSendFilePermission` | File target guard |

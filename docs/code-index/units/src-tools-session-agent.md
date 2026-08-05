@@ -55,7 +55,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 ### toolsSessionAgent/archiveRecall.ts — Archive retrieval and recall
 | Function | Description |
 |----------|-------------|
-| `tool_get_session_messages` | Returns recent messages plus the target session's canonical execution-state summary through the shared total-budget preview renderer |
+| `tool_get_session_messages` | Returns recent messages plus the target session's canonical execution-state summary through the shared total-budget preview renderer; a trusted current owner reads its passed history directly |
 | `tool_get_archived_messages` | Fetches archived messages by sequence range |
 | `tool_get_archived_blocks` | Fetches archived context blocks by ID range |
 | `tool_recall` | Retrieves archived context via target selector syntax |
@@ -147,7 +147,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 
 ## Behavior
 
-- `get_session_messages` and `recall` render through the shared context preview renderer: `previewLength` is a total output budget, values are clamped to 1000-20000 with a warning, tool calls/results default to name/id/status-only, and `contentFilter` / `includeRegex` / `excludeRegex` post-filter full message/block/tool content with match-centered snippets. Every successful `get_session_messages` result also includes the target session's concise canonical runtime-state summary, including empty pages and pages reduced to zero matches; a nonzero queue length is appended without changing message selection or filter semantics.
+- `get_session_messages` and `recall` render through the shared context preview renderer: `previewLength` is a total output budget, values are clamped to 1000-20000 with a warning, tool calls/results default to name/id/status-only, and `contentFilter` / `includeRegex` / `excludeRegex` post-filter full message/block/tool content with match-centered snippets. An exact trusted current owner (matching target/context/passed Session plus the local owner persistence hook) slices passed history directly and uses the passed-session isolation guard; other/no-hook/mismatched calls retain global ID lookups. Every successful result includes the target session's concise canonical runtime-state summary, including empty pages and pages reduced to zero matches; a nonzero queue length is appended without changing message selection or filter semantics.
 - `contentFilter` is a literal case-insensitive result post-filter, never a semantic or retrieval query. `get_session_messages` first selects its page; exact recall first resolves `target`; vector recall first searches with `vector_query` and reloads source archive items; only then does the shared renderer filter. Filter stages run in the documented order `contentFilter` -> `includeRegex` -> `excludeRegex`, report separate exclusion counts, and keep the notice visible even when zero items remain or body previews are truncated.
 - For CTX-BLOCK drill-down, the block metadata/summary header is not counted as a raw source message. Message-backed blocks post-filter/count source messages; block-backed blocks post-filter/count immediate child block summary items. When `contentFilter` excludes anything, recall tells the caller to omit it for complete target contents and use `vector_query` for semantic search.
 - The old `query` argument has been removed from both model-facing schemas and is explicitly rejected by the `recall` / `get_session_messages` runtime rather than silently ignored or compatibility-read.

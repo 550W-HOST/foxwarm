@@ -15,7 +15,7 @@ import {
 } from '../contextPreviewRenderer';
 import { truncateUnicodeSafe } from '../utils/unicode';
 import { formatLocalTimestamp } from '../utils/localTime';
-import { requireNotIsolated, checkArchivedReadPermission } from '../isolatedCheck';
+import { requireNotIsolated, requireNotIsolatedForSession, checkArchivedReadPermission } from '../isolatedCheck';
 import { resolveMemorySearchOptions } from '../tools/vectorTools';
 import {
   ToolArgs,
@@ -666,10 +666,17 @@ function formatSessionExecutionState(session: Session): string {
 
 export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContext) {
   assertNoRemovedQueryArg(args, 'get_session_messages');
-  await requireNotIsolated(ctx, 'get_session_messages');
   const { sessionId, start, count } = args;
+  const trustedSession = ctx?.persistCurrentSession
+    && ctx.session
+    && ctx.sessionId === sessionId
+    && ctx.session.id === sessionId
+    ? ctx.session
+    : undefined;
+  if (trustedSession) requireNotIsolatedForSession(trustedSession, 'get_session_messages');
+  else await requireNotIsolated(ctx as any, 'get_session_messages');
 
-  const session = await sessionManager.getExistingSession(sessionId);
+  const session = trustedSession || await sessionManager.getExistingSession(sessionId);
   if (!session) {
     return `Session \`${sessionId}\` not found.`;
   }
@@ -695,7 +702,9 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
   actualStart = Math.max(0, Math.min(actualStart, totalMessages));
   actualCount = Math.min(actualCount, totalMessages - actualStart);
 
-  const messages = await sessionManager.getSessionMessages(sessionId, actualStart, actualCount);
+  const messages: Message[] = trustedSession
+    ? trustedSession.history.slice(actualStart, actualStart + actualCount)
+    : await sessionManager.getSessionMessages(sessionId, actualStart, actualCount);
 
   if (messages.length === 0) {
     return `${executionState}\n\nNo messages found in session \`${sessionId}\` (total: ${totalMessages} messages).`;
