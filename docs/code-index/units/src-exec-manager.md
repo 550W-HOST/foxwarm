@@ -26,7 +26,7 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 
 | Function | Lines (approx) | Description |
 |----------|---------------|-------------|
-| `createExecRuntime(options)` | factory | Owns one manager, mutable late-bound dispatcher, node default, persistence paths, formatting/cwd delegates, list, and dispose lifecycle without exposing the manager |
+| `createExecRuntime(options)` | factory | Owns one manager, mutable late-bound dispatcher, node default, persistence paths, formatting/cwd delegates, and list without exposing the manager |
 | `completionDispatcher` (default) | ~46–51 | Default completion callback that queues a session system event |
 | `initializeExecManager(options?)` | ~53–58 | Sets custom dispatcher and initializes the underlying manager |
 | `startPersistentExec(options)` | ~60–62 | Delegates exec start to PersistentExecManager with default nodeId |
@@ -51,7 +51,7 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 ## Behavior
 
 - The process-default runtime is itself created by `createExecRuntime`, configured with the unchanged project paths (agent directories, temp dirs, registry file at `STATE_DIR/running-exec.json`) and `master` node default. Every existing exported wrapper delegates to that real factory-built default.
-- Each factory call owns independent manager, dispatcher closure, registry, temp-root providers, initialization/reconcile state, and dispose lifecycle. Disposing stops that runtime's reconciliation without killing persisted child processes, so a new runtime over the same registry can recover them.
+- Each factory call owns independent manager, dispatcher closure, registry, temp-root providers, and initialization/reconcile state for the lifetime of its process. There is intentionally no same-process stop/dispose/handoff API at this checkpoint. The reconcile timer is unref'd; a future one-session worker exits only after active execs reach zero or completion notification is handed back, and OS process teardown owns timer cleanup.
 - The default completion dispatcher sends a system event to the session associated with the exec entry; this can be overridden at initialization.
 - All public functions are thin async delegates to the underlying manager instance, adding only the default `nodeId: 'master'`.
 - The exec handler uses shared timeout resolution: finite requests above 60 seconds wait for only 60 seconds, while forwarding the requested/effective warning into either foreground or background-switch result formatting. Oversized persistent logs use the shared bounded excerpt contract rather than full reads; see [D-persistent-exec-bounded-log-excerpts](./shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts). Background-switch footer and live-tree behavior is canonical in [D-persistent-exec-background-timeout-footer-tree](./shared-persistent-exec.md#d-persistent-exec-background-timeout-footer-tree).

@@ -64,7 +64,6 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 | `PersistentExecManager.commitRegistryMutation()` | registry helpers | Serializes one in-memory registry mutation with its durable replacement write |
 | `PersistentExecManager.initializeOnce()` | initialization | Loads/reconciles the registry behind a shared concurrent-initialization promise |
 | `PersistentExecManager.startReconcileLoop()` | ~270 | Starts periodic reconciliation interval |
-| `PersistentExecManager.dispose()` | ~275 | Stops reconcile loop and cleans up |
 
 ## Dependencies
 

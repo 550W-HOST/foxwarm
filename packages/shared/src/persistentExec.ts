@@ -525,16 +525,6 @@ export class PersistentExecManager {
     await this.initializationPromise;
   }
 
-  async dispose(): Promise<void> {
-    if (this.reconcileTimer) {
-      clearInterval(this.reconcileTimer);
-      this.reconcileTimer = null;
-    }
-    await this.reconcileChain;
-    await this.registryMutationChain;
-    this.initialized = false;
-  }
-
   private async initializeOnce(): Promise<void> {
     await this.loadRunningExecs();
     let changed = false;

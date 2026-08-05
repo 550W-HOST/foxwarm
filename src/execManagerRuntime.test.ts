@@ -14,37 +14,24 @@ function createRuntime(root: string, name: string): ExecRuntime {
   });
 }
 
-async function waitForFile(filePath: string, timeoutMs = 3000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await fs.pathExists(filePath)) return;
-    await new Promise(resolve => setTimeout(resolve, 20));
-  }
-  throw new Error(`Timed out waiting for ${filePath}`);
-}
-
-test('exec runtime factory isolates manager, registry, temp root, and lifecycle', async () => {
+test('exec runtime factory isolates manager, registry, temp root, and foreground lifecycle', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-runtimes-'));
   const first = createRuntime(root, 'first');
   const second = createRuntime(root, 'second');
-  let firstRecovered: ExecRuntime | undefined;
-  let secondRecovered: ExecRuntime | undefined;
   try {
+    assert.equal('dispose' in first, false);
+    assert.equal('stop' in first, false);
     await Promise.all([fs.ensureDir(path.join(root, 'first')), fs.ensureDir(path.join(root, 'second'))]);
     await Promise.all([first.initialize(), first.initialize(), second.initialize()]);
     const [firstEntry, secondEntry] = await Promise.all([
-      first.startPersistentExec({ command: 'sleep 0.1; printf first-runtime', agentName: 'main', sessionId: 'session-first' }),
-      second.startPersistentExec({ command: 'sleep 0.1; printf second-runtime', agentName: 'main', sessionId: 'session-second' }),
+      first.startPersistentExec({ command: 'printf first-runtime', agentName: 'main', sessionId: 'session-first' }),
+      second.startPersistentExec({ command: 'printf second-runtime', agentName: 'main', sessionId: 'session-second' }),
     ]);
 
     assert.deepEqual(first.listRunningExecs().map(entry => entry.id), [firstEntry.id]);
     assert.deepEqual(second.listRunningExecs().map(entry => entry.id), [secondEntry.id]);
     assert.match(firstEntry.logPath, new RegExp(`${path.sep}first${path.sep}temp${path.sep}`));
     assert.match(secondEntry.logPath, new RegExp(`${path.sep}second${path.sep}temp${path.sep}`));
-    await Promise.all([
-      first.markExecForBackgroundNotification(firstEntry.id),
-      second.markExecForBackgroundNotification(secondEntry.id),
-    ]);
 
     const [firstStatus, secondStatus] = await Promise.all([
       first.waitForExecCompletion(firstEntry.id, 5000),
@@ -60,67 +47,67 @@ test('exec runtime factory isolates manager, registry, temp root, and lifecycle'
     assert.deepEqual(firstRegistry.execs.map((entry: any) => entry.id), [firstEntry.id]);
     assert.deepEqual(secondRegistry.execs.map((entry: any) => entry.id), [secondEntry.id]);
 
-    await Promise.all([first.dispose(), second.dispose()]);
-    const firstNotifications: string[] = [];
-    const secondNotifications: string[] = [];
-    firstRecovered = createRuntime(root, 'first');
-    secondRecovered = createRuntime(root, 'second');
     await Promise.all([
-      firstRecovered.initialize({ completionDispatcher: async entry => { firstNotifications.push(entry.id); } }),
-      secondRecovered.initialize({ completionDispatcher: async entry => { secondNotifications.push(entry.id); } }),
+      first.finalizeForegroundExec(firstEntry.id),
+      second.finalizeForegroundExec(secondEntry.id),
     ]);
-    assert.deepEqual(firstNotifications, [firstEntry.id]);
-    assert.deepEqual(secondNotifications, [secondEntry.id]);
-    assert.deepEqual(firstRecovered.listRunningExecs(), []);
-    assert.deepEqual(secondRecovered.listRunningExecs(), []);
+    assert.deepEqual(first.listRunningExecs(), []);
+    assert.deepEqual(second.listRunningExecs(), []);
+    assert.deepEqual((await fs.readJson(path.join(root, 'first', 'running.json'))).execs, []);
+    assert.deepEqual((await fs.readJson(path.join(root, 'second', 'running.json'))).execs, []);
   } finally {
-    await Promise.all([first.dispose(), second.dispose()]);
-    if (firstRecovered) await firstRecovered.dispose();
-    if (secondRecovered) await secondRecovered.dispose();
     await fs.remove(root);
   }
 });
 
-test('exec runtime recovery uses its late dispatcher once and dispose permits a new owner', async () => {
+test('exec runtime recovery uses a late dispatcher exactly once without a stop lifecycle', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-recovery-'));
   const registryPath = path.join(root, 'running.json');
-  const options = {
+  const logPath = path.join(root, 'finished.log');
+  const statusPath = path.join(root, 'finished.status.json');
+  const cwdPath = path.join(root, 'finished.cwd.txt');
+  const id = 'exec_recovery_fixture';
+  await fs.writeFile(logPath, 'recovered-runtime');
+  await fs.writeJson(statusPath, { exitCode: 0, finishedAt: new Date().toISOString() });
+  await fs.writeFile(cwdPath, root);
+  await fs.writeJson(registryPath, { execs: [{
+    id,
+    pid: 99999999,
+    sessionId: 'recovery-session',
+    agentName: 'main',
+    nodeId: 'master',
+    command: 'printf recovered-runtime',
+    initialCwd: root,
+    logPath,
+    statusPath,
+    cwdPath,
+    startedAt: Date.now() - 1000,
+    notifyOnCompletion: true,
+  }] });
+
+  const runtime = createExecRuntime({
     getDefaultCwd: () => root,
     getExecTempDir: () => path.join(root, 'temp'),
     registryPath,
-  };
-  const first = createExecRuntime(options);
-  let second: ExecRuntime | undefined;
+  });
+  const notifications: Array<{ id: string; message: string }> = [];
   try {
-    await first.initialize();
-    const entry = await first.startPersistentExec({
-      command: 'sleep 0.2; printf recovered-runtime',
-      agentName: 'main',
-      sessionId: 'recovery-session',
-    });
-    await first.markExecForBackgroundNotification(entry.id);
-    await first.dispose();
-    await waitForFile(entry.statusPath);
-
-    const notifications: Array<{ id: string; message: string }> = [];
-    second = createExecRuntime(options);
-    await second.initialize({
-      completionDispatcher: async (completed, _status, message) => {
-        notifications.push({ id: completed.id, message });
-      },
-    });
+    await Promise.all([
+      runtime.initialize({
+        completionDispatcher: async (entry, _status, message) => {
+          notifications.push({ id: entry.id, message });
+        },
+      }),
+      runtime.initialize(),
+    ]);
     assert.equal(notifications.length, 1);
-    assert.equal(notifications[0].id, entry.id);
+    assert.equal(notifications[0].id, id);
     assert.match(notifications[0].message, /recovered-runtime/);
-    assert.deepEqual(second.listRunningExecs(), []);
-
-    await second.initialize();
+    assert.deepEqual(runtime.listRunningExecs(), []);
+    assert.deepEqual((await fs.readJson(registryPath)).execs, []);
+    await runtime.initialize();
     assert.equal(notifications.length, 1);
-    const registry = await fs.readJson(registryPath);
-    assert.deepEqual(registry.execs, []);
   } finally {
-    await first.dispose();
-    if (second) await second.dispose();
     await fs.remove(root);
   }
 });

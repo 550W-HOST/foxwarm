@@ -41,7 +41,6 @@ export interface ExecRuntime {
   readFinishedExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null>;
   readLiveExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null>;
   listRunningExecs(): RunningExecEntry[];
-  dispose(): Promise<void>;
 }
 
 export function createExecRuntime(options: ExecRuntimeOptions): ExecRuntime {
@@ -70,7 +69,6 @@ export function createExecRuntime(options: ExecRuntimeOptions): ExecRuntime {
     readFinishedExecWorkingDirectory: entry => manager.readFinishedExecWorkingDirectory(entry),
     readLiveExecWorkingDirectory: entry => manager.readLiveExecWorkingDirectory(entry),
     listRunningExecs: () => manager.listRunningExecs(),
-    dispose: () => manager.dispose(),
   };
 }
 
