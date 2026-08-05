@@ -22,7 +22,7 @@ Canonical façade and child-ID ownership: [session core façade](../modules/sess
 3. `getSession(id)` lazily loads the authoritative per-session history snapshot.
 4. When an embedded `contextFrontier` exists, hydration calls `renderHistoryFromFrontier(session)` or annotates an already matching rendered history.
 5. Accessed legacy live history/queue images are lazily materialized into canonical content-addressed blob references; there is no startup-wide image migration.
-6. The shared metadata file remains a presentation/list index; per-session history owns messages, prompt snapshot/cache key, and frontier.
+6. The shared metadata file remains a main-owned presentation/list index; the per-session JSON owns full semantic state, including messages, queue, wait/managed metadata, prompt snapshot/cache key, frontier, and any session-worker mailbox cursor.
 7. Creation-critical history and metadata writes propagate errors. A known failed creation removes its map/history/archive artifacts so the same uncommitted ID can be retried; ordinary noncritical saves retain best-effort logging behavior.
 
 Canonical data authority: [D-session-core-authoritative-history](../modules/session-core.md#d-session-core-authoritative-history).

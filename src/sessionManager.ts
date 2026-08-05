@@ -17,10 +17,11 @@ import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getLegacySes
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
 import { appendMessagesToArchive, ensureMessageSeq, getNextSessionMessageSeq } from './session/archive';
-import { externalizeMessages, externalizeQueueItemImages, externalizeQueueItems } from './imageBlobs';
+import { externalizeMessages, externalizeQueueItemImages } from './imageBlobs';
 import { annotateHistoryWithContextFrontierMetadata, appendMessagesToContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier } from './session/layeredContext';
 import { ensureSessionBranch, hasArchivedSessionId, rollbackUncommittedSessionArchive } from './session/archiveStore';
-import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload, stripSessionMetadataForSave, writeSessionHistoryAtomically, writeSessionsMetadataAtomically } from './session/metadataStore';
+import { applySessionHistoryState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, stripSessionMetadataForSave, withSessionsMetadataWriteLock, writeSessionsMetadataAtomically } from './session/metadataStore';
+import { externalizeAuthoritativeSessionImages, externalizeAuthoritativeSessionQueueImages, writeAuthoritativeSessionState } from './session/stateFile';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
 import * as sessionRelations from './session/relations';
@@ -47,60 +48,6 @@ const MANAGED_OWNER_WAKEUP_COOLDOWN_MS = 30 * 1000;
 
 let sessionIdentityLockTail: Promise<void> = Promise.resolve();
 const channelSessionCreationTails = new Map<string, Promise<void>>();
-
-async function externalizeSessionQueueImages(session: Session): Promise<boolean> {
-  const queue = session.queue || [];
-  const queueSnapshot = queue.slice();
-  const queueResult = await externalizeQueueItems(queueSnapshot);
-  const managed = getManagedSessionState(session);
-  const managedInboxResult = managed
-    ? await externalizeQueueItems(managed.pendingInbox)
-    : { items: [] as QueueItem[], changed: false };
-
-  if (!queueResult.changed && !managedInboxResult.changed) {
-    return false;
-  }
-
-  let changed = false;
-  if (queueResult.changed
-    && session.queue === queue
-    && queueSnapshot.every((item, index) => queue[index] === item)) {
-    queue.splice(0, queueSnapshot.length, ...queueResult.items);
-    changed = true;
-  } else if (queueResult.changed) {
-    throw new Error(`Session ${session.id} queue changed while image references were being materialized.`);
-  }
-  if (managed && managedInboxResult.changed) {
-    const currentManaged = getManagedSessionState(session);
-    if (currentManaged
-      && currentManaged.leaseId === managed.leaseId
-      && currentManaged.revision === managed.revision) {
-      currentManaged.pendingInbox = managedInboxResult.items;
-      setManagedSessionState(session, currentManaged);
-      changed = true;
-    } else {
-      throw new Error(`Session ${session.id} managed inbox changed while image references were being materialized.`);
-    }
-  }
-  return changed;
-}
-
-async function externalizeSessionImages(session: Session): Promise<boolean> {
-  const history = session.history || [];
-  const historySnapshot = history.slice();
-  const historyResult = await externalizeMessages(historySnapshot);
-  const queueChanged = await externalizeSessionQueueImages(session);
-  let historyChanged = false;
-  if (historyResult.changed
-    && session.history === history
-    && historySnapshot.every((message, index) => history[index] === message)) {
-    history.splice(0, historySnapshot.length, ...historyResult.messages);
-    historyChanged = true;
-  } else if (historyResult.changed) {
-    throw new Error(`Session ${session.id} history changed while image references were being materialized.`);
-  }
-  return historyChanged || queueChanged;
-}
 
 async function withSessionIdentityLock<T>(operation: () => Promise<T>): Promise<T> {
   const previous = sessionIdentityLockTail;
@@ -947,7 +894,7 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
   }
 
   try {
-    if (await externalizeSessionImages(session)) {
+    if (await externalizeAuthoritativeSessionImages(session)) {
       await saveSessionCritical(session.id);
     }
   } catch (error) {
@@ -1728,24 +1675,7 @@ async function saveSessionCritical(sessionId: string): Promise<void> {
     throw new Error(`Session "${sessionId}" not found for saving.`);
   }
 
-  await externalizeSessionImages(session);
-
-  // Initialize historyVersion if not exists
-  if (session.historyVersion === undefined) {
-    session.historyVersion = 0;
-  }
-
-  // Update message count in metadata
-  session.meta.messageCount = session.history.length;
-
-  // Ensure sessions directory exists
-  await fs.ensureDir(SESSIONS_DIR);
-
-  // Save history, persistentMemorySnapshot, parentSessionId, indexingState, historyVersion, displayName, currentNode, agent to separate file
-  const historyFile = path.join(SESSIONS_DIR, `${sessionId}.json`);
-  await fs.ensureDir(path.dirname(historyFile));
-  sessionPersistenceFaultInjector?.('history', sessionId);
-  await writeSessionHistoryAtomically(sessionId, serializeSessionHistoryPayload(session));
+  await saveSessionStateOnlyCritical(session);
 
   // Save metadata (lightweight operation)
   await saveSessionsMetadataCritical();
@@ -1765,6 +1695,12 @@ async function saveSessionCritical(sessionId: string): Promise<void> {
   notifySessionUpdated(sessionId);
 }
 
+/** Local save composition half; the underlying state-file writer is worker-safe. */
+async function saveSessionStateOnlyCritical(session: Session): Promise<void> {
+  sessionPersistenceFaultInjector?.('history', session.id);
+  await writeAuthoritativeSessionState(session);
+}
+
 /**
  * Save sessions metadata (sessions.json)
  */
@@ -1777,6 +1713,10 @@ export async function saveSessionsMetadata(): Promise<void> {
 }
 
 async function saveSessionsMetadataCritical(): Promise<void> {
+  return withSessionsMetadataWriteLock(saveSessionsMetadataCriticalUnlocked);
+}
+
+async function saveSessionsMetadataCriticalUnlocked(): Promise<void> {
   sessionPersistenceFaultInjector?.('metadata');
   const { data: snapshot, source } = await loadSessionsMetadataSnapshot();
   const data: any = { sessions: {} };
@@ -1792,7 +1732,7 @@ async function saveSessionsMetadataCritical(): Promise<void> {
     }
 
     for (const [sessionId, session] of sessions.entries()) {
-      await externalizeSessionQueueImages(session);
+      await externalizeAuthoritativeSessionQueueImages(session);
       data.sessions[sessionId] = stripSessionMetadataForSave(session);
     }
 

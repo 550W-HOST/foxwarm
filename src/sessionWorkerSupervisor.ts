@@ -51,6 +51,7 @@ export class SessionWorkerSupervisor {
   private readonly restartTimers = new Map<string, NodeJS.Timeout>();
   private readonly restartDelays = new Map<string, number>();
   private readonly lifecycleFailures = new Map<string, unknown>();
+  private readonly mainMutationClaims = new Map<string, Promise<void>>();
   private readonly restartBaseDelayMs: number;
   private readonly restartMaxDelayMs: number;
   private shuttingDown = false;
@@ -89,6 +90,9 @@ export class SessionWorkerSupervisor {
   async ensureWorker(sessionId: string): Promise<SessionWorkerSupervisorStatus> {
     if (!this.reconciled) throw new RpcError('SESSION_WORKER_RECOVERY_REQUIRED', 'Session worker ownership must be reconciled before spawning.', true);
     if (this.shuttingDown) throw new RpcError('SESSION_WORKER_SHUTTING_DOWN', 'Session worker supervisor is shutting down.', true);
+    if (this.mainMutationClaims.has(sessionId)) {
+      throw new RpcError('SESSION_WORKER_MAIN_MUTATION', `Session worker ${sessionId} is quiesced for a main-owned mutation.`, true);
+    }
     if (this.lifecycleFailures.has(sessionId)) {
       throw new SessionWorkerLifecycleError(`Session worker ${sessionId} retains an unresolved lifecycle fence.`, [this.lifecycleFailures.get(sessionId)]);
     }
@@ -111,6 +115,23 @@ export class SessionWorkerSupervisor {
   }
 
   touch(sessionId: string): void { const entry = this.entries.get(sessionId); if (entry?.ready) this.touchEntry(entry); }
+
+  async withWorkerQuiesced<T>(sessionId: string, operation: () => Promise<T>, timeoutMs = 10_000): Promise<T> {
+    if (this.shuttingDown) throw new RpcError('SESSION_WORKER_SHUTTING_DOWN', 'Session worker supervisor is shutting down.', true);
+    if (this.mainMutationClaims.has(sessionId)) {
+      throw new RpcError('SESSION_WORKER_MAIN_MUTATION', `Session ${sessionId} already has a main-owned mutation claim.`, true);
+    }
+    let releaseClaim!: () => void;
+    const completion = new Promise<void>(resolve => { releaseClaim = resolve; });
+    this.mainMutationClaims.set(sessionId, completion);
+    try {
+      await this.stopWorker(sessionId, timeoutMs);
+      return await operation();
+    } finally {
+      this.mainMutationClaims.delete(sessionId);
+      releaseClaim();
+    }
+  }
 
   async stopWorker(sessionId: string, timeoutMs = 10_000): Promise<boolean> {
     const failures: unknown[] = this.lifecycleFailures.has(sessionId) ? [this.lifecycleFailures.get(sessionId)] : [];
@@ -148,6 +169,7 @@ export class SessionWorkerSupervisor {
   async shutdown(timeoutMs = 10_000): Promise<void> {
     this.shuttingDown = true;
     for (const timer of this.restartTimers.values()) clearTimeout(timer); this.restartTimers.clear();
+    await Promise.allSettled([...this.mainMutationClaims.values()]);
     const sessionIds = [...new Set([
       ...this.entries.keys(), ...this.starts.keys(), ...this.provisionalChildren.keys(), ...this.lifecycleFailures.keys(),
     ])];

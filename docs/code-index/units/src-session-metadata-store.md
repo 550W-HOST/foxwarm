@@ -1,6 +1,6 @@
 # Unit: src-session-metadata-store
 
-Files: src/session/metadataStore.ts, src/session/metadataStore.test.ts
+Files: src/session/metadataStore.ts, src/session/stateFile.ts, src/session/stateHydration.ts, src/session/metadataStore.test.ts
 
 ## Purpose
 
@@ -8,16 +8,19 @@ Manages persistence of session metadata and history as separate JSON files on di
 
 ## Key Exports
 
-- `serializeSessionHistoryPayload(session)` — extracts history and state fields for persistence, including embedded `contextFrontier`; UI-only sidebar ordering is intentionally excluded
+- `serializeSessionHistoryPayload(session)` — extracts authoritative history and semantic state fields, including stats/meta wait/managed state, queue, `contextFrontier`, prompt/cache state, and `lastAppliedMailboxId`; UI-only sidebar ordering is excluded
 - `applySessionHistoryState(target, historyData)` — applies loaded history state (including `contextFrontier`) onto a session object
 - `stripSessionMetadataForSave(session)` — picks metadata-only fields from a session for the index file
 - `getSessionHistoryFilePath(sessionId)` — resolves the disk path for a session's history file
 - `getSessionHistoryStore(sessionId)` — returns a cached `DiskJsonData` instance for a session's history
 - `readSessionHistorySnapshot(sessionId)` — reads a session's history from disk
 - `writeSessionHistoryAtomically(sessionId, data)` — atomically writes session history
+- `writeAuthoritativeSessionState(session)` — worker-safe per-session state write with image canonicalization; never writes shared `sessions.json`
+- `hydrateAuthoritativeSessionState(target, raw)` — reuses current queue/frontier/image compatibility behavior when loading the authoritative file into a catalog stub
 - `sessionsMetadataStore` — singleton `DiskJsonData` instance for the sessions index
 - `loadSessionsMetadataSnapshot()` — loads metadata from primary/backups or rebuilds from history files
 - `writeSessionsMetadataAtomically(data)` — atomically writes the sessions metadata index
+- `withSessionsMetadataWriteLock(operation)` — process-local main-writer serialization shared by ordinary local saves and bounded worker catalog projection merges
 - `rebuildSessionsMetadataFromHistoryFiles()` — reconstructs the metadata index by scanning history files
 - `buildRecoveredSessionMetadata(sessionId, historyData, history)` — derives metadata for a single session from its history
 - `collectSessionHistoryFiles(dir)` — recursively finds all `.json` history files, excluding legacy `*.frontier.json`
@@ -61,7 +64,7 @@ Manages persistence of session metadata and history as separate JSON files on di
 
 ## Behavior
 
-- Separates session data into two tiers: a shared metadata index (`sessions.json`) with backup rotation (5 numbered + legacy `.bak`), and per-session history files (no backups).
+- Separates session data into two tiers: a main-owned shared metadata index (`sessions.json`) with backup rotation (5 numbered + legacy `.bak`), and authoritative full semantic per-session state files (no backups). Local save writes state then catalog; a future worker writes state only and main consumes a bounded projection.
 - `sidebarOrder` and `pinned` are WebUI/session-list metadata fields saved in the shared metadata index only. They are excluded from per-session history serialization/application so reorder/pin operations do not touch or risk stale rewrites of history JSON files.
 - Uses an in-memory `Map` cache for history store instances to avoid recreating them.
 - Normalization hooks handle legacy formats (e.g., metadata stored without a `sessions` wrapper, missing `history` arrays).
@@ -70,6 +73,7 @@ Manages persistence of session metadata and history as separate JSON files on di
 - Recovery path: if the metadata index and all backups are unreadable, rebuilds from individual history files by scanning `SESSIONS_DIR` recursively.
 - Metadata recovery deliberately ignores legacy `*.frontier.json` files so they are not mistaken for sessions named `*.frontier`.
 - `applySessionHistoryState` sets defaults for `currentNode` (`'master'`) and `queue` (`[]`) when missing, and filters loaded queue state through the current `isQueueItem` boundary so invalid persisted records are not retained.
+- Missing/invalid legacy `lastAppliedMailboxId` normalizes to zero. Current files retain wait and managed-session state through `meta`, plus stats/vector position, so a worker-only state write does not depend on clobbering the shared catalog.
 - `buildRecoveredSessionMetadata` infers agent name from session ID path segments and computes `nextMessageSeq` from message history when not stored.
 
 ## Design Decisions

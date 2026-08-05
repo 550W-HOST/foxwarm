@@ -79,7 +79,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 ## Invariants
 
 - One `MessageRouter.processSessionQueue()` invocation may claim a session at a time; this façade persists and exposes the `busy` compatibility/concurrency flag.
-- Session history files are authoritative for conversation content and the embedded `contextFrontier`; the shared metadata file is an index and presentation-metadata store.
+- Per-session JSON files are authoritative for full semantic Session state, including conversation content, queue, wait/managed metadata, prompt/cache state, embedded `contextFrontier`, and the worker mailbox cursor. The shared metadata file is a main-owned index/presentation store.
 - Queue insertion passes through wait-state and managed-inbox transitions before work is persisted or triggered.
 - Retry and compact planning are not queue insertion paths. Async compact planning starts immediately from a snapshot; a busy `asyncCompact:false` explicit request reports unavailable; ready compact commits alone use the queue safe point.
 - Generic history append persists and notifies only its supplied messages; router-owned goal evaluation is intentionally outside this low-level persistence path.

@@ -122,15 +122,20 @@ test('session history payload embeds context frontier and recovery ignores legac
       stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
       busy: false,
       queue: [],
-      meta: { lastMessageTime: 1 },
+      meta: { lastMessageTime: 1, wait: { id: 'wait-1' }, managedSession: { ownerSessionId: 'owner', leaseId: 'lease', revision: 1, pendingInbox: [] } },
       contextFrontier: [{ kind: 'message', seq: 1 }],
+      lastAppliedMailboxId: 7,
     };
     const payload = serializeSessionHistoryPayload(session);
     assert.deepEqual(payload.contextFrontier, [{ kind: 'message', seq: 1 }]);
+    assert.equal(payload.lastAppliedMailboxId, 7);
+    assert.equal(payload.meta.wait.id, 'wait-1');
 
     const target: any = { history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 } };
     applySessionHistoryState(target, payload);
     assert.deepEqual(target.contextFrontier, [{ kind: 'message', seq: 1 }]);
+    assert.equal(target.lastAppliedMailboxId, 7);
+    assert.equal(target.meta.managedSession.leaseId, 'lease');
   });
 });
 

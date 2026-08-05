@@ -57,6 +57,19 @@ test('unexpected child restart begins only after old exit and durable fence rele
   } finally { await fixture.close(); }
 });
 
+test('main mutation claim keeps the worker quiesced until the mutation callback completes', async () => {
+  const fixture = await createFixture(5_000);
+  try {
+    const first = await fixture.supervisor.ensureWorker('main-mutation');
+    await fixture.supervisor.withWorkerQuiesced('main-mutation', async () => {
+      assert.equal(fixture.store.getOwnership('main-mutation').state, 'inactive');
+      await assert.rejects(() => fixture.supervisor.ensureWorker('main-mutation'), (error: any) => error?.code === 'SESSION_WORKER_MAIN_MUTATION');
+    });
+    const replacement = await fixture.supervisor.ensureWorker('main-mutation');
+    assert.equal(replacement.generation, first.generation + 1);
+  } finally { await fixture.close(); }
+});
+
 test('parent crash reconciliation keeps generation fenced until exact activated incarnation exits', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-session-worker-crash-'));
   const dbPath = path.join(root, 'runtime.sqlite'); const markerPath = path.join(root, 'ready.json');
@@ -72,8 +85,8 @@ test('parent crash reconciliation keeps generation fenced until exact activated 
     const store = new SessionWorkerStore(dbPath); store.open();
     assert.equal(store.getOwnership('parent-crash-session').state, 'ready');
     assert.throws(() => store.beginGeneration('parent-crash-session', 'too-early'), (error: any) => error?.code === 'SESSION_WORKER_OWNED');
-    assert.throws(() => store.publishHead({ sessionId: 'parent-crash-session', generation: 2, incarnationId: 'too-early',
-      expectedRevision: 0, revision: 1, headPath: 'bad', headSha256: 'bad', appliedMailboxIds: [] }), (error: any) => error?.code === 'SESSION_WORKER_STALE_GENERATION');
+    assert.throws(() => store.acknowledgeMailboxPrefix({ sessionId: 'parent-crash-session', generation: 2, incarnationId: 'too-early',
+      expectedCursor: 0, upToId: 1 }), (error: any) => error?.code === 'SESSION_WORKER_STALE_GENERATION');
 
     const supervisor = new SessionWorkerSupervisor({ store, idleMs: 5_000 });
     const recovery = supervisor.reconcileStartupOwnerships(800);

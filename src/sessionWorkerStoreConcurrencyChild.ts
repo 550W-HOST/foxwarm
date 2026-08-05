@@ -20,8 +20,8 @@ process.on('message', (message: any) => {
       result = store.enqueueIntent(action.sessionId, action.intentId, action.kind, action.payload);
     } else if (action.type === 'begin') {
       result = store.beginGeneration(action.sessionId, action.incarnationId);
-    } else if (action.type === 'publish') {
-      result = store.publishHead(action);
+    } else if (action.type === 'ack') {
+      result = store.acknowledgeMailboxPrefix(action);
     } else {
       throw new Error(`Unknown action ${action.type}`);
     }

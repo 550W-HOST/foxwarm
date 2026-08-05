@@ -41,9 +41,10 @@ Context frontier, compaction, archive-store, and vector retrieval are owned by [
 ## Data ownership
 
 - `state/sessions.json` is the shared metadata/presentation index and uses five numbered backups.
-- `state/sessions/<id>.json` owns durable history, prompt snapshot/cache key, and embedded `contextFrontier`; per-session files use durable serialized replacement without numbered rotation.
+- `state/sessions/<id>.json` owns authoritative full semantic session state: durable history, queue, wait/managed metadata, prompt snapshot/cache key, embedded `contextFrontier`, settings, and worker mailbox cursor. Per-session files use durable serialized replacement without numbered rotation.
 - `state/channels.json` owns channel attachments.
-- `state/session-runtime.sqlite` owns future session-worker generations, mailbox intent acknowledgements, and authoritative snapshot-head revisions; it is currently exercised only by the disconnected worker foundation.
+- `state/session-runtime.sqlite` owns future session-worker generations, incarnations, mailbox intents, and acknowledged mailbox cursors; it does not own semantic Session state and is currently exercised only by the disconnected worker foundation.
+- `state/sessions/<id>.json` additionally persists `lastAppliedMailboxId`; worker placement must durably replace this authoritative file before SQLite acknowledges the corresponding ordered session-local mailbox prefix.
 - Agent metadata is separate from session history.
 - Active model/tool phases are in memory; wait metadata is persisted on the session.
 
@@ -76,7 +77,7 @@ The durable JSON implementation and backup semantics are canonical in [src-utils
 
 ### D-session-core-authoritative-history
 
-Per-session history snapshots are authoritative for conversation/prefix state. The shared metadata file is rebuildable and may contain UI-only fields that are intentionally not duplicated into history.
+Per-session JSON is authoritative for full semantic Session state. The shared metadata file is main-owned, rebuildable, and may contain UI-only fields intentionally excluded from session state. The cross-process save-before-mailbox-ack ordering is canonical in [D-process-topology-session-state-authority](../threads/process-topology-and-rpc.md#d-process-topology-session-state-authority).
 
 ### D-session-core-runtime-state
 

@@ -33,10 +33,12 @@ test('strict stable mailbox JSON round-trips across reopen and rejects invalid v
     assert.deepEqual(reopened.listPendingIntents('s')[0].payload, payload);
     assert.equal(reopened.countMailboxIntents(), 1);
     reopened.close();
-    const rawDb = new DatabaseSync(dbPath, { readOnly: true });
+    const rawDb = new DatabaseSync(dbPath);
     const rawPayload = (rawDb.prepare('SELECT payload_json FROM session_worker_mailbox WHERE session_id=? AND intent_id=?').get('s', 'same') as any).payload_json;
     assert.equal(rawPayload, '{"a":[null,true,"x",{"a":1,"b":2}],"z":1}');
+    rawDb.prepare('UPDATE session_worker_mailbox SET payload_json=? WHERE session_id=?').run('{"z":1,"a":2}', 's');
     rawDb.close();
+    assert.throws(() => new SessionWorkerStore(dbPath).open(), error => assertRpcCode(error, 'SESSION_WORKER_SCHEMA_INVALID'));
 
     const invalidStore = new SessionWorkerStore(path.join(root, 'invalid.sqlite'));
     const cyclic: any = {}; cyclic.self = cyclic;
@@ -61,29 +63,29 @@ test('strict stable mailbox JSON round-trips across reopen and rejects invalid v
   });
 });
 
-test('generation incarnation activation and ordered mailbox/head CAS fail closed', async () => {
+test('generation incarnation activation and ordered mailbox acknowledgement fail closed', async () => {
   await withRoot(async root => {
     const store = new SessionWorkerStore(path.join(root, 'runtime.sqlite')); store.open();
     const first = store.enqueueIntent('agent/session', 'intent-1', 'enqueue', { value: 1 });
     const candidate = store.beginGeneration('agent/session', 'inc-1');
     assert.equal(candidate.state, 'candidate');
-    assert.throws(() => store.publishHead({ sessionId: 'agent/session', generation: 1, incarnationId: 'inc-1', expectedRevision: 0,
-      revision: 1, headPath: 'early', headSha256: 'early', appliedMailboxIds: [first.id] }), error => assertRpcCode(error, 'SESSION_WORKER_STALE_GENERATION'));
+    assert.throws(() => store.acknowledgeMailboxPrefix({ sessionId: 'agent/session', generation: 1, incarnationId: 'inc-1',
+      expectedCursor: 0, upToId: first.id }), error => assertRpcCode(error, 'SESSION_WORKER_STALE_GENERATION'));
     const identity = readSessionWorkerProcessIdentity(process.pid)!;
     store.registerCandidate('agent/session', 1, 'inc-1', process.pid, identity);
     store.activateCandidate('agent/session', 1, 'inc-1', process.pid, identity);
     store.verifyActivatedIncarnation('agent/session', 1, 'inc-1', process.pid, identity);
 
-    const published = store.publishHead({ sessionId: 'agent/session', generation: 1, incarnationId: 'inc-1', expectedRevision: 0,
-      revision: 1, headPath: 'head-1', headSha256: 'hash-1', appliedMailboxIds: [first.id] });
-    assert.equal(published.headRevision, 1);
+    const acknowledged = store.acknowledgeMailboxPrefix({ sessionId: 'agent/session', generation: 1, incarnationId: 'inc-1',
+      expectedCursor: 0, upToId: first.id });
+    assert.equal(acknowledged.mailboxCursor, first.id);
     const second = store.enqueueIntent('agent/session', 'intent-2', 'control', { action: 'stop' });
     const third = store.enqueueIntent('agent/session', 'intent-3', 'enqueue', { text: 'later' });
-    assert.throws(() => store.publishHead({ sessionId: 'agent/session', generation: 1, incarnationId: 'inc-1', expectedRevision: 1,
-      revision: 2, headPath: 'skip', headSha256: 'skip', appliedMailboxIds: [third.id] }), error => assertRpcCode(error, 'SESSION_WORKER_MAILBOX_CONFLICT'));
+    assert.throws(() => store.acknowledgeMailboxPrefix({ sessionId: 'agent/session', generation: 1, incarnationId: 'inc-1',
+      expectedCursor: first.id, upToId: third.id + 100 }), error => assertRpcCode(error, 'SESSION_WORKER_MAILBOX_CONFLICT'));
     store.markDraining('agent/session', 1, 'inc-1');
-    store.publishHead({ sessionId: 'agent/session', generation: 1, incarnationId: 'inc-1', expectedRevision: 1,
-      revision: 2, headPath: 'head-2', headSha256: 'hash-2', appliedMailboxIds: [second.id] });
+    store.acknowledgeMailboxPrefix({ sessionId: 'agent/session', generation: 1, incarnationId: 'inc-1',
+      expectedCursor: first.id, upToId: second.id });
     assert.deepEqual(store.listPendingIntents('agent/session').map(item => item.id), [third.id]);
     store.markExitObserved('agent/session', 1, 'inc-1', 'stopped');
     assert.equal(store.beginGeneration('agent/session', 'inc-2').generation, 2);
@@ -126,7 +128,7 @@ async function runConcurrent(dbPath: string, actions: ChildAction[]): Promise<an
   }
 }
 
-test('two process connections safely open, deduplicate/enqueue, claim generation, and race publication CAS', async () => {
+test('two process connections safely open, deduplicate/enqueue, claim generation, and race mailbox CAS', async () => {
   await withRoot(async root => {
     const dbPath = path.join(root, 'runtime.sqlite');
     const same = await runConcurrent(dbPath, [
@@ -157,12 +159,13 @@ test('two process connections safely open, deduplicate/enqueue, claim generation
     const identity = readSessionWorkerProcessIdentity(process.pid)!;
     store.registerCandidate('owner', owner.generation, owner.incarnationId!, process.pid, identity);
     store.activateCandidate('owner', owner.generation, owner.incarnationId!, process.pid, identity);
+    const ownerIntent = store.enqueueIntent('owner', 'apply', 'enqueue', { value: 1 });
     store.close();
     const publications = await runConcurrent(dbPath, [
-      { type: 'publish', sessionId: 'owner', generation: owner.generation, incarnationId: owner.incarnationId,
-        expectedRevision: 0, revision: 1, headPath: 'a', headSha256: 'a', appliedMailboxIds: [] },
-      { type: 'publish', sessionId: 'owner', generation: owner.generation, incarnationId: owner.incarnationId,
-        expectedRevision: 0, revision: 1, headPath: 'b', headSha256: 'b', appliedMailboxIds: [] },
+      { type: 'ack', sessionId: 'owner', generation: owner.generation, incarnationId: owner.incarnationId,
+        expectedCursor: 0, upToId: ownerIntent.id },
+      { type: 'ack', sessionId: 'owner', generation: owner.generation, incarnationId: owner.incarnationId,
+        expectedCursor: 0, upToId: ownerIntent.id },
     ]);
     assert.equal(publications.filter(item => item.ok).length, 1);
     assert.equal(publications.filter(item => item.code === 'SESSION_WORKER_STALE_GENERATION').length, 1);
@@ -193,8 +196,35 @@ test('schema migration upgrades known v0 and rejects unknown newer versions', as
     assert.equal((canonicalDb.prepare("SELECT payload_json FROM session_worker_mailbox WHERE intent_id='legacy'").get() as any).payload_json, '{"a":2,"z":1}');
     canonicalDb.close();
 
-    const newerPath = path.join(root, 'newer.sqlite'); const newer = new DatabaseSync(newerPath); newer.exec('PRAGMA user_version=2'); newer.close();
+    const newerPath = path.join(root, 'newer.sqlite'); const newer = new DatabaseSync(newerPath); newer.exec('PRAGMA user_version=3'); newer.close();
     assert.throws(() => new SessionWorkerStore(newerPath).open(), error => assertRpcCode(error, 'SESSION_WORKER_SCHEMA_NEWER'));
+
+    const v1Path = path.join(root, 'valid-v1.sqlite'); const v1 = new DatabaseSync(v1Path);
+    v1.exec(`
+      CREATE TABLE session_worker_ownership(session_id TEXT PRIMARY KEY NOT NULL,generation INTEGER NOT NULL DEFAULT 0,
+        state TEXT NOT NULL DEFAULT 'inactive' CHECK (state IN ('inactive','candidate','ready','draining')),
+        incarnation_id TEXT,worker_pid INTEGER,process_identity TEXT,activated_at INTEGER,head_revision INTEGER NOT NULL DEFAULT 0,
+        head_path TEXT,head_sha256 TEXT,mailbox_cursor INTEGER NOT NULL DEFAULT 0,last_activity_at INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL,last_exit_reason TEXT);
+      CREATE TABLE session_worker_mailbox(id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,session_id TEXT NOT NULL,intent_id TEXT NOT NULL,
+        kind TEXT NOT NULL,payload_json TEXT NOT NULL,created_at INTEGER NOT NULL,applied_generation INTEGER,applied_revision INTEGER,
+        UNIQUE(session_id,intent_id));
+      CREATE INDEX idx_session_worker_mailbox_pending ON session_worker_mailbox(session_id,id) WHERE applied_revision IS NULL;
+      INSERT INTO session_worker_ownership(session_id,generation,state,head_revision,head_path,head_sha256,mailbox_cursor,updated_at)
+        VALUES('v1',2,'inactive',7,'obsolete','obsolete',1,1);
+      INSERT INTO session_worker_mailbox(session_id,intent_id,kind,payload_json,created_at,applied_generation,applied_revision)
+        VALUES('v1','done','enqueue','{"z":1,"a":2}',10,2,7);
+      PRAGMA user_version=1;
+    `); v1.close();
+    const migratedV1 = new SessionWorkerStore(v1Path); migratedV1.open();
+    assert.equal(migratedV1.getOwnership('v1').mailboxCursor, 1);
+    migratedV1.close();
+    const v2Raw = new DatabaseSync(v1Path, { readOnly: true });
+    assert.equal((v2Raw.prepare('PRAGMA user_version').get() as any).user_version, 2);
+    assert.equal((v2Raw.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('session_worker_ownership') WHERE name LIKE 'head_%'").get() as any).count, 0);
+    assert.equal((v2Raw.prepare("SELECT applied_at FROM session_worker_mailbox WHERE intent_id='done'").get() as any).applied_at, 10);
+    assert.equal((v2Raw.prepare("SELECT payload_json FROM session_worker_mailbox WHERE intent_id='done'").get() as any).payload_json, '{"a":2,"z":1}');
+    v2Raw.close();
 
     const malformedCases = [
       { name: 'missing-check', sessionNotNull: true, check: '', unique: 'session_id,intent_id', predicate: 'applied_revision IS NULL' },
@@ -235,5 +265,39 @@ test('schema migration upgrades known v0 and rejects unknown newer versions', as
     assert.equal((rolledBack.prepare("SELECT COUNT(*) AS count FROM session_worker_mailbox WHERE intent_id='poison'").get() as any).count, 1);
     assert.equal((rolledBack.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='session_worker_mailbox_v0'").get() as any).count, 0);
     rolledBack.close();
+
+    const poisonedV1Path = path.join(root, 'poisoned-v1.sqlite'); const poisonedV1 = new DatabaseSync(poisonedV1Path);
+    poisonedV1.exec(`
+      CREATE TABLE session_worker_ownership(session_id TEXT PRIMARY KEY NOT NULL,generation INTEGER NOT NULL DEFAULT 0,
+        state TEXT NOT NULL DEFAULT 'inactive' CHECK (state IN ('inactive','candidate','ready','draining')),
+        incarnation_id TEXT,worker_pid INTEGER,process_identity TEXT,activated_at INTEGER,head_revision INTEGER NOT NULL DEFAULT 0,
+        head_path TEXT,head_sha256 TEXT,mailbox_cursor INTEGER NOT NULL DEFAULT 0,last_activity_at INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL,last_exit_reason TEXT);
+      CREATE TABLE session_worker_mailbox(id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,session_id TEXT NOT NULL,intent_id TEXT NOT NULL,
+        kind TEXT NOT NULL,payload_json TEXT NOT NULL,created_at INTEGER NOT NULL,applied_generation INTEGER,applied_revision INTEGER,
+        UNIQUE(session_id,intent_id));
+      CREATE INDEX idx_session_worker_mailbox_pending ON session_worker_mailbox(session_id,id) WHERE applied_revision IS NULL;
+      INSERT INTO session_worker_mailbox(session_id,intent_id,kind,payload_json,created_at) VALUES('old','poison','enqueue','[, ]',1);
+      PRAGMA user_version=1;
+    `); poisonedV1.close();
+    assert.throws(() => new SessionWorkerStore(poisonedV1Path).open(), error => assertRpcCode(error, 'SESSION_WORKER_SCHEMA_INVALID'));
+    const rolledBackV1 = new DatabaseSync(poisonedV1Path, { readOnly: true });
+    assert.equal((rolledBackV1.prepare('PRAGMA user_version').get() as any).user_version, 1);
+    assert.equal((rolledBackV1.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='session_worker_mailbox_v1'").get() as any).count, 0);
+    rolledBackV1.close();
+
+    const weakV2Path = path.join(root, 'weak-v2.sqlite'); const weakV2 = new DatabaseSync(weakV2Path);
+    weakV2.exec(`
+      CREATE TABLE session_worker_ownership(session_id TEXT PRIMARY KEY NOT NULL,generation INTEGER NOT NULL DEFAULT 0,
+        state TEXT NOT NULL DEFAULT 'inactive' CHECK (state IN ('inactive','candidate','ready','draining')),
+        incarnation_id TEXT,worker_pid INTEGER,process_identity TEXT,activated_at INTEGER,mailbox_cursor INTEGER NOT NULL DEFAULT 0,
+        last_activity_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,last_exit_reason TEXT);
+      CREATE TABLE session_worker_mailbox(id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,session_id TEXT NOT NULL,intent_id TEXT NOT NULL,
+        kind TEXT NOT NULL,payload_json TEXT NOT NULL,created_at INTEGER NOT NULL,applied_generation INTEGER,
+        applied_incarnation_id TEXT,applied_at INTEGER,UNIQUE(session_id,intent_id));
+      CREATE INDEX idx_session_worker_mailbox_pending ON session_worker_mailbox(session_id,id) WHERE applied_at IS NULL;
+      PRAGMA user_version=2;
+    `); weakV2.close();
+    assert.throws(() => new SessionWorkerStore(weakV2Path).open(), error => assertRpcCode(error, 'SESSION_WORKER_SCHEMA_INVALID'));
   });
 });

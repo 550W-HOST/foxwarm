@@ -1,16 +1,18 @@
 # Unit: src-session-worker-runtime
 
-Files: src/sessionWorkerStore.ts, src/sessionWorkerStoreSchema.ts, src/sessionWorkerStableJson.ts, src/sessionWorkerSupervisor.ts, src/sessionWorkerControlService.ts, src/sessionWorkerProcessIdentity.ts, src/sessionWorker.ts
-Secondary files: src/sessionWorkerStore.test.ts, src/sessionWorkerSupervisor.test.ts, src/sessionWorkerStoreConcurrencyChild.ts, src/sessionWorkerCrashParent.ts, src/sessionWorkerHangingChild.ts
+Files: src/sessionWorkerStore.ts, src/sessionWorkerStoreSchema.ts, src/sessionWorkerStableJson.ts, src/sessionWorkerSupervisor.ts, src/sessionWorkerPersistence.ts, src/sessionWorkerCatalog.ts, src/sessionWorkerControlService.ts, src/sessionWorkerProcessIdentity.ts, src/sessionWorker.ts
+Secondary files: src/sessionWorkerStore.test.ts, src/sessionWorkerSupervisor.test.ts, src/sessionWorkerPersistence.test.ts, src/sessionWorkerStoreConcurrencyChild.ts, src/sessionWorkerCrashParent.ts, src/sessionWorkerHangingChild.ts, src/sessionWorkerStateFileChild.ts
 
 ## Purpose
 
-Provides the durable ownership/mailbox and supervised process-lifecycle foundation for future per-session workers. The foundation is intentionally not wired into production SessionRuntime placement yet: `sessionWorkers:true` continues to fail startup until the worker owns hydrated session state and the complete supported turn path.
+Provides durable ownership/mailbox coordination, save-before-ack authoritative state persistence, bounded catalog projection, main lifecycle quiescing, and supervised process lifecycle for future per-session workers. The seams are intentionally not wired into production SessionRuntime placement yet: `sessionWorkers:true` continues to fail startup until the complete supported turn path exists.
 
 ## Key exports
 
-- `SessionWorkerStore` — SQLite-backed generation/incarnation ownership, durable mailbox intents, head revision publication, cursor acknowledgement, activity, exit, and fail-closed reconciliation records.
+- `SessionWorkerStore` — SQLite-backed generation/incarnation ownership, durable mailbox intents, acknowledgement cursor, activity, exit, cleanup, and fail-closed cursor reconciliation.
 - `SessionWorkerSupervisor` — one-child-per-session candidate activation, exact-process startup reconciliation, idle release, bounded drain/TERM/KILL, exit confirmation, and optional post-exit restart.
+- `SessionWorkerPersistence` — authoritative JSON load/apply/save-before-ack recovery, bounded catalog projection, and quiesce/reload/main-mutation seams.
+- `writeSessionWorkerCatalogProjection()` — main-only atomic merge of bounded worker projection that preserves topology/UI fields and removes stale full queue/wait/managed state from the catalog record.
 - `sessionWorkerControlServiceDescriptor` — minimal versioned candidate identity/activation/status control service used while the real session service is still being implemented.
 - `readSessionWorkerProcessIdentity()` — Linux boot-ID plus proc start-tick identity used to distinguish an exact old process from PID reuse.
 - `sessionWorker.ts` — child bootstrap for the control service.
@@ -19,12 +21,12 @@ Provides the durable ownership/mailbox and supervised process-lifecycle foundati
 
 `state/session-runtime.sqlite` contains:
 
-- `session_worker_ownership`: one row per session with process generation, random incarnation, candidate/ready/draining lifecycle, PID plus process identity, activation time, authoritative head revision/path/hash, mailbox cursor, activity timestamp, and last exit reason;
-- `session_worker_mailbox`: immutable idempotent input intents with per-session intent identity and the generation/revision that applied them.
+- `session_worker_ownership`: one row per session with process generation, random incarnation, candidate/ready/draining lifecycle, PID plus process identity, activation time, acknowledged mailbox cursor, activity timestamp, and last exit reason;
+- `session_worker_mailbox`: immutable idempotent input intents with per-session intent identity and optional applied generation/incarnation/time audit fields.
 
-A mailbox publication may acknowledge only one ordered pending prefix. The head revision CAS and mailbox acknowledgements commit in one SQLite transaction, so a crash cannot publish a snapshot while losing its input cursor or advance the cursor past an older unconsumed input. Mailbox payloads accept only strict JSON values and use stable object-key ordering; descriptor-only traversal prevents getters from executing, and invalid/cyclic/non-finite/sparse/accessor/non-plain values fail before a database write. Exact duplicate intent insertion is one database-level idempotent transaction across concurrent connections.
+`state/sessions/<id>.json` is the sole full semantic authority and carries `lastAppliedMailboxId`. The worker applies only the exact ordered pending prefix for that session, durably replaces the complete JSON, then marks rows applied and advances SQLite's cursor in one transaction. Numeric gaps for globally allocated IDs belonging to other sessions are valid. Recovery acknowledges `JSON > SQLite` without reapplying and rejects `SQLite > JSON`; applied-row deletion is a later bounded operation limited by the acknowledged cursor. Mailbox payloads accept only strict JSON values and use stable object-key ordering; descriptor-only traversal prevents getters from executing, and invalid/cyclic/non-finite/sparse/accessor/non-plain values fail before a database write. Exact duplicate intent insertion is one database-level idempotent transaction across concurrent connections.
 
-Schema open sets the busy timeout before lock-taking pragmas, migrates known version zero state inside `BEGIN IMMEDIATE`, records `user_version=1`, validates required column constraints, state checks, uniqueness, and partial-index semantics, and rejects unknown newer versions. Version-zero mailbox payloads are parsed through the strict validator and rewritten canonically inside the migration transaction; poison data rolls the whole migration back. A legacy inactive ownership row remains inactive, while any legacy noninactive row without a provable incarnation/process identity becomes an unproven retained fence instead of being cleared. Snapshot artifacts and production hydration remain a later integration step.
+Schema open sets the busy timeout before lock-taking pragmas, migrates known version zero/one state inside `BEGIN IMMEDIATE`, records `user_version=2`, validates exact columns, state-dependent ownership and mailbox-application constraints, uniqueness/partial-index semantics, canonical strict-JSON payload rows, and cursor/application row ordering, and rejects unknown newer versions. Version zero/one payloads are strictly canonicalized inside the rollback-safe migration; version one head columns are intentionally removed because semantic state remains in per-session JSON. A legacy inactive ownership row remains inactive, while any legacy noninactive row without provable process identity becomes an unproven retained fence.
 
 ## Lifecycle
 
@@ -40,7 +42,8 @@ Schema open sets the busy timeout before lock-taking pragmas, migrates known ver
 ## Invariants
 
 - At most one activated generation/incarnation is recorded for one session.
-- Candidates cannot hydrate, process, touch activity, or publish before durable activation. Stale generations/incarnations cannot publish a head, acknowledge mailbox inputs, or replace a current owner.
+- Candidates cannot hydrate, process, touch activity, or acknowledge mailbox inputs before durable activation. Stale generations/incarnations cannot advance the mailbox cursor or replace a current owner.
+- SQLite acknowledgement can never advance before the authoritative JSON cursor; a main lifecycle claim blocks worker respawn across quiesce, reload, mutation, and save.
 - Invalid/reused mailbox intent identities fail closed; exact idempotent repeats return the original record.
 - Draining generations may publish one final revision before confirmed exit.
 - The supervisor never treats IPC disconnect alone as permission to replace a worker.
@@ -48,7 +51,7 @@ Schema open sets the busy timeout before lock-taking pragmas, migrates known ver
 
 ## Integration status
 
-The store and supervisor currently have isolated real-child tests but are not initialized by `src/index.ts`. Worker-safe session persistence, router execution, event/reverse-service bridges, and SessionRuntime routing must land before `sessionWorkers:true` becomes functional.
+The store, persistence coordinator, and supervisor have isolated real-child/crash-boundary tests but are not initialized by `src/index.ts`. Router execution, archive append fencing, event/reverse-service bridges, and SessionRuntime routing must land before `sessionWorkers:true` becomes functional.
 
 ## Canonical ownership
 

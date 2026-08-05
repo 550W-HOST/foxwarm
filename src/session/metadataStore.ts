@@ -11,7 +11,10 @@ const SESSION_HISTORY_STATE_FIELDS = [
   'promptCacheKey',
   'systemPromptFiles',
   'indexingState',
+  'vectorIndexPosition',
   'historyVersion',
+  'stats',
+  'meta',
   'displayName',
   'currentNode',
   'cwd',
@@ -27,6 +30,7 @@ const SESSION_HISTORY_STATE_FIELDS = [
   'contextFrontier',
   'goalState',
   'compactThresholdTokens',
+  'lastAppliedMailboxId',
 ] as const;
 
 const SESSION_METADATA_FIELDS = [
@@ -109,6 +113,9 @@ export function applySessionHistoryState(target: Session, historyData: Record<st
     target.queue = [];
   } else {
     target.queue = target.queue.filter(isQueueItem);
+  }
+  if (!Number.isSafeInteger(target.lastAppliedMailboxId) || (target.lastAppliedMailboxId || 0) < 0) {
+    target.lastAppliedMailboxId = 0;
   }
 }
 
@@ -195,6 +202,16 @@ export function createSessionsMetadataStore(filePath: string = SESSIONS_FILE): D
 }
 
 export const sessionsMetadataStore = createSessionsMetadataStore();
+let sessionsMetadataWriteTail: Promise<void> = Promise.resolve();
+
+export async function withSessionsMetadataWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = sessionsMetadataWriteTail;
+  let release!: () => void;
+  sessionsMetadataWriteTail = new Promise<void>(resolve => { release = resolve; });
+  await previous;
+  try { return await operation(); }
+  finally { release(); }
+}
 
 export async function collectSessionHistoryFiles(dir: string): Promise<string[]> {
   if (!await fs.pathExists(dir)) {

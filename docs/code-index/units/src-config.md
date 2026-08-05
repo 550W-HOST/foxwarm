@@ -39,7 +39,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 - Agent, skill, and MCP paths may also be selected through their documented app-config fields.
 - The archive moved-ID reservation ledger is explicit durable state at `<data-root>/state/session-id-reservations.jsonl`.
 - The temporary crash-recovery journal for one in-progress identity move is `<data-root>/state/session-id-move-pending.json`.
-- Future session-worker ownership/mailbox state is `<data-root>/state/session-runtime.sqlite`; immutable published snapshot artifacts use `<data-root>/state/session-runtime-snapshots`. The current disconnected foundation does not create them during normal startup.
+- Future session-worker ownership/mailbox coordination uses `<data-root>/state/session-runtime.sqlite`; full semantic session state remains in the existing authoritative per-session JSON files under `<data-root>/state/sessions/`. The disconnected foundation does not open the runtime database during normal startup.
 
 Worker placement is startup configuration:
 

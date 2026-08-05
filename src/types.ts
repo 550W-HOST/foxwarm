@@ -316,6 +316,8 @@ export interface Session {
   parentSessionId?: string; // Parent session ID for child sessions
   goalState?: SessionGoalState; // Session-local goal reminder configuration
   compactThresholdTokens?: number; // Optional per-session auto-compact threshold override in tokens
+  /** Last durable session-worker mailbox row incorporated into this authoritative state file. */
+  lastAppliedMailboxId?: number;
   broadcast?: SessionBroadcast; // Broadcast message to all attached channels (fire-and-forget)
 }
 

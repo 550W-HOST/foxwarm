@@ -7,7 +7,7 @@ import { stableSessionWorkerJson } from './sessionWorkerStableJson';
 import { configureAndMigrateSessionWorkerDb } from './sessionWorkerStoreSchema';
 
 export type SessionWorkerOwnershipState = 'inactive' | 'candidate' | 'ready' | 'draining';
-export type SessionWorkerStoreOperation = 'register-candidate' | 'activate' | 'clear' | 'drain' | 'exit' | 'touch' | 'publish';
+export type SessionWorkerStoreOperation = 'register-candidate' | 'activate' | 'clear' | 'drain' | 'exit' | 'touch' | 'ack' | 'cleanup';
 
 export type SessionWorkerOwnershipRecord = {
   sessionId: string;
@@ -17,9 +17,6 @@ export type SessionWorkerOwnershipRecord = {
   workerPid?: number;
   processIdentity?: string;
   activatedAt?: number;
-  headRevision: number;
-  headPath?: string;
-  headSha256?: string;
   mailboxCursor: number;
   lastActivityAt: number;
   updatedAt: number;
@@ -34,18 +31,16 @@ export type SessionWorkerMailboxIntent = {
   payload: unknown;
   createdAt: number;
   appliedGeneration?: number;
-  appliedRevision?: number;
+  appliedIncarnationId?: string;
+  appliedAt?: number;
 };
 
-export type SessionWorkerHeadPublication = {
+export type SessionWorkerMailboxAcknowledgement = {
   sessionId: string;
   generation: number;
   incarnationId: string;
-  expectedRevision: number;
-  revision: number;
-  headPath: string;
-  headSha256: string;
-  appliedMailboxIds: number[];
+  expectedCursor: number;
+  upToId: number;
 };
 
 export type SessionWorkerStoreOptions = {
@@ -223,54 +218,115 @@ export class SessionWorkerStore {
     const cursor = afterId === undefined ? this.getOwnership(sessionId).mailboxCursor : Math.max(0, Math.floor(afterId));
     return (this.getDb().prepare(`
       SELECT * FROM session_worker_mailbox
-      WHERE session_id=? AND id>? AND applied_revision IS NULL ORDER BY id LIMIT ?
+      WHERE session_id=? AND id>? AND applied_at IS NULL ORDER BY id LIMIT ?
     `).all(sessionId, cursor, Math.max(1, Math.min(4096, Math.floor(limit)))) as any[]).map(row => this.toIntent(row));
   }
 
-  publishHead(publication: SessionWorkerHeadPublication): SessionWorkerOwnershipRecord {
-    this.inject('publish', publication.sessionId);
-    const { sessionId, generation, incarnationId, expectedRevision, revision, headPath, headSha256 } = publication;
-    if (!Number.isSafeInteger(revision) || revision !== expectedRevision + 1 || !headPath || !headSha256) {
-      throw new RpcError('SESSION_WORKER_INVALID_REVISION', 'Published head must increment once and include path/hash.');
+  acknowledgeMailboxPrefix(input: SessionWorkerMailboxAcknowledgement): SessionWorkerOwnershipRecord {
+    return this.acknowledgePrefix(input, false);
+  }
+
+  reconcileActivatedMailboxCursor(
+    sessionId: string,
+    generation: number,
+    incarnationId: string,
+    stateCursor: number,
+  ): SessionWorkerOwnershipRecord {
+    const current = this.verifyMailboxOwner(sessionId, generation, incarnationId);
+    if (current.mailboxCursor > stateCursor) {
+      throw new RpcError('SESSION_WORKER_CURSOR_AHEAD', `SQLite mailbox cursor ${current.mailboxCursor} is ahead of session JSON cursor ${stateCursor}.`);
     }
-    const ids = [...new Set(publication.appliedMailboxIds)].sort((a, b) => a - b);
+    if (current.mailboxCursor === stateCursor) return current;
+    return this.acknowledgePrefix({ sessionId, generation, incarnationId, expectedCursor: current.mailboxCursor, upToId: stateCursor }, true);
+  }
+
+  reconcileInactiveMailboxCursor(sessionId: string, stateCursor: number): SessionWorkerOwnershipRecord {
+    const current = this.getOwnership(sessionId);
+    if (current.state !== 'inactive' || current.incarnationId !== undefined || current.workerPid !== undefined) {
+      throw new RpcError('SESSION_WORKER_OWNED', `Session ${sessionId} must be inactive before main cursor reconciliation.`, true);
+    }
+    if (current.mailboxCursor > stateCursor) {
+      throw new RpcError('SESSION_WORKER_CURSOR_AHEAD', `SQLite mailbox cursor ${current.mailboxCursor} is ahead of session JSON cursor ${stateCursor}.`);
+    }
+    if (current.mailboxCursor === stateCursor) return current;
+    return this.acknowledgePrefix({ sessionId, generation: current.generation, incarnationId: 'main-reconcile',
+      expectedCursor: current.mailboxCursor, upToId: stateCursor }, true, true);
+  }
+
+  deleteAppliedMailboxThrough(sessionId: string, throughId: number): number {
+    this.inject('cleanup', sessionId);
+    sessionId = this.sessionId(sessionId);
+    return this.transaction(() => {
+      const current = this.getOwnership(sessionId);
+      if (!Number.isSafeInteger(throughId) || throughId < 0 || throughId > current.mailboxCursor) {
+        throw new RpcError('SESSION_WORKER_INVALID_CURSOR', 'Mailbox cleanup cannot pass the durable SQLite cursor.');
+      }
+      return Number(this.getDb().prepare(`
+        DELETE FROM session_worker_mailbox WHERE session_id=? AND id<=? AND applied_at IS NOT NULL
+      `).run(sessionId, throughId).changes);
+    });
+  }
+
+  private acknowledgePrefix(
+    input: SessionWorkerMailboxAcknowledgement,
+    recovery: boolean,
+    inactive = false,
+  ): SessionWorkerOwnershipRecord {
+    this.inject('ack', input.sessionId);
+    const sessionId = this.sessionId(input.sessionId);
+    const incarnationId = requiredText(input.incarnationId, 'SESSION_WORKER_INVALID_INCARNATION', 'Worker incarnation ID');
+    if (!Number.isSafeInteger(input.expectedCursor) || input.expectedCursor < 0
+      || !Number.isSafeInteger(input.upToId) || input.upToId <= input.expectedCursor) {
+      throw new RpcError('SESSION_WORKER_INVALID_CURSOR', 'Mailbox acknowledgement must advance a non-negative cursor.');
+    }
     const db = this.getDb();
     return this.transaction(() => {
-      const current = this.verifyPublicationOwner(sessionId, generation, incarnationId, expectedRevision);
-      if (ids.length) {
-        const prefix = db.prepare(`
-          SELECT id FROM session_worker_mailbox
-          WHERE session_id=? AND id>? AND applied_revision IS NULL ORDER BY id LIMIT ?
-        `).all(sessionId, current.mailboxCursor, ids.length) as Array<{ id: number }>;
-        if (prefix.length !== ids.length || prefix.some((row, index) => Number(row.id) !== ids[index])) {
-          throw new RpcError('SESSION_WORKER_MAILBOX_CONFLICT', `Mailbox publication for ${sessionId} must acknowledge an ordered pending prefix.`);
-        }
+      const current = inactive
+        ? this.getOwnership(sessionId)
+        : this.verifyMailboxOwner(sessionId, input.generation, incarnationId);
+      if (inactive && (current.state !== 'inactive' || current.incarnationId !== undefined || current.workerPid !== undefined)) {
+        throw new RpcError('SESSION_WORKER_OWNED', `Session ${sessionId} is not inactive for main reconciliation.`, true);
       }
-      let cursor = current.mailboxCursor;
-      for (const id of ids) {
-        const changed = db.prepare(`
-          UPDATE session_worker_mailbox SET applied_generation=?,applied_revision=?
-          WHERE id=? AND session_id=? AND applied_revision IS NULL
-        `).run(generation, revision, id, sessionId);
-        this.requireChanged(changed.changes, sessionId, generation, `mailbox ${id}`);
-        cursor = Math.max(cursor, id);
+      if (current.generation !== input.generation || current.mailboxCursor !== input.expectedCursor) {
+        throw new RpcError('SESSION_WORKER_STALE_GENERATION', `Session ${sessionId} mailbox cursor changed before acknowledgement.`, true);
       }
-      const changed = db.prepare(`
-        UPDATE session_worker_ownership
-        SET head_revision=?,head_path=?,head_sha256=?,mailbox_cursor=?,last_activity_at=?,updated_at=?
-        WHERE session_id=? AND generation=? AND incarnation_id=?
-          AND state IN ('ready','draining') AND head_revision=?
-      `).run(revision, headPath, headSha256, cursor, Date.now(), Date.now(), sessionId, generation, incarnationId, expectedRevision);
-      this.requireChanged(changed.changes, sessionId, generation, 'publication');
+      const rows = db.prepare(`
+        SELECT id,applied_at FROM session_worker_mailbox
+        WHERE session_id=? AND id>? AND id<=? ORDER BY id
+      `).all(sessionId, input.expectedCursor, input.upToId) as Array<{ id: number; applied_at: number | null }>;
+      if (!rows.length || Number(rows[rows.length - 1].id) !== input.upToId || rows.some(row => row.applied_at != null)) {
+        throw new RpcError('SESSION_WORKER_MAILBOX_CONFLICT',
+          `Mailbox cursor ${input.upToId} is not the exact ordered ${recovery ? 'recovery ' : ''}prefix for ${sessionId}.`);
+      }
+      const now = Date.now();
+      const applied = db.prepare(`
+        UPDATE session_worker_mailbox
+        SET applied_generation=?,applied_incarnation_id=?,applied_at=?
+        WHERE session_id=? AND id>? AND id<=? AND applied_at IS NULL
+      `).run(input.generation, incarnationId, now, sessionId, input.expectedCursor, input.upToId);
+      if (Number(applied.changes) !== rows.length) {
+        throw new RpcError('SESSION_WORKER_MAILBOX_CONFLICT', `Mailbox prefix for ${sessionId} changed during acknowledgement.`, true);
+      }
+      const ownerSql = inactive
+        ? `UPDATE session_worker_ownership SET mailbox_cursor=?,last_activity_at=?,updated_at=?
+           WHERE session_id=? AND generation=? AND state='inactive' AND incarnation_id IS NULL AND mailbox_cursor=?`
+        : `UPDATE session_worker_ownership SET mailbox_cursor=?,last_activity_at=?,updated_at=?
+           WHERE session_id=? AND generation=? AND incarnation_id=?
+             AND state IN ('ready','draining') AND activated_at IS NOT NULL AND mailbox_cursor=?`;
+      const ownerArgs = inactive
+        ? [input.upToId, now, now, sessionId, input.generation, input.expectedCursor]
+        : [input.upToId, now, now, sessionId, input.generation, incarnationId, input.expectedCursor];
+      const changed = db.prepare(ownerSql).run(...ownerArgs);
+      this.requireChanged(changed.changes, sessionId, input.generation, 'mailbox acknowledgement');
       return this.getOwnership(sessionId);
     });
   }
 
-  private verifyPublicationOwner(sessionId: string, generation: number, incarnationId: string, revision: number): SessionWorkerOwnershipRecord {
+  private verifyMailboxOwner(sessionId: string, generation: number, incarnationId: string): SessionWorkerOwnershipRecord {
     const current = this.getOwnership(sessionId);
     if (current.generation !== generation || current.incarnationId !== incarnationId
-      || !['ready', 'draining'].includes(current.state) || current.headRevision !== revision || !current.activatedAt) {
-      throw new RpcError('SESSION_WORKER_STALE_GENERATION', `Session ${sessionId} generation/revision cannot publish.`, true);
+      || !['ready', 'draining'].includes(current.state) || !current.activatedAt) {
+      throw new RpcError('SESSION_WORKER_STALE_GENERATION', `Session ${sessionId} generation/incarnation cannot acknowledge mailbox input.`, true);
     }
     return current;
   }
@@ -282,7 +338,8 @@ export class SessionWorkerStore {
     return { id: Number(row.id), sessionId: String(row.session_id), intentId: String(row.intent_id), kind: String(row.kind),
       payload: JSON.parse(String(row.payload_json)), createdAt: Number(row.created_at),
       ...(row.applied_generation == null ? {} : { appliedGeneration: Number(row.applied_generation) }),
-      ...(row.applied_revision == null ? {} : { appliedRevision: Number(row.applied_revision) }) };
+      ...(row.applied_incarnation_id == null ? {} : { appliedIncarnationId: String(row.applied_incarnation_id) }),
+      ...(row.applied_at == null ? {} : { appliedAt: Number(row.applied_at) }) };
   }
   private toOwnership(row: any): SessionWorkerOwnershipRecord {
     return { sessionId: String(row.session_id), generation: Number(row.generation), state: row.state,
@@ -290,8 +347,7 @@ export class SessionWorkerStore {
       ...(row.worker_pid == null ? {} : { workerPid: Number(row.worker_pid) }),
       ...(row.process_identity == null ? {} : { processIdentity: String(row.process_identity) }),
       ...(row.activated_at == null ? {} : { activatedAt: Number(row.activated_at) }),
-      headRevision: Number(row.head_revision), ...(row.head_path == null ? {} : { headPath: String(row.head_path) }),
-      ...(row.head_sha256 == null ? {} : { headSha256: String(row.head_sha256) }), mailboxCursor: Number(row.mailbox_cursor),
+      mailboxCursor: Number(row.mailbox_cursor),
       lastActivityAt: Number(row.last_activity_at), updatedAt: Number(row.updated_at),
       ...(row.last_exit_reason == null ? {} : { lastExitReason: String(row.last_exit_reason) }) };
   }
