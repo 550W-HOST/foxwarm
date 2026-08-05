@@ -1,7 +1,7 @@
 import DOMPurify from 'dompurify'
 import katex from 'katex'
 import { Marked } from 'marked'
-import type { Tokens, TokenizerAndRendererExtension } from 'marked'
+import type { Token, Tokens, TokenizerAndRendererExtension } from 'marked'
 
 type MathToken = Tokens.Generic & {
   text: string
@@ -18,15 +18,9 @@ export type MarkdownRenderSegment =
   | { kind: 'latex'; raw: string; source: string; html: string }
   | { kind: 'mermaid'; raw: string; source: string }
 
-type SpecialBlockPlaceholder = Exclude<MarkdownRenderSegment, { kind: 'html' }> & {
-  marker: string
-}
-
 type MathRenderContext = {
   markerPrefix: string
   placeholders: MathPlaceholder[]
-  specialBlocks: SpecialBlockPlaceholder[]
-  extractSpecialBlocks: boolean
 }
 
 type DisplayMathBlockMatch = {
@@ -79,18 +73,6 @@ const renderMathToken = (token: Tokens.Generic): string => {
 
   if (!context) {
     return html
-  }
-
-  if (context.extractSpecialBlocks && token.type === 'displayMathBlock') {
-    const marker = `${context.markerPrefix}SPECIAL_${context.specialBlocks.length}\uE001`
-    context.specialBlocks.push({
-      kind: 'latex',
-      marker,
-      raw: token.raw,
-      source: mathToken.text,
-      html,
-    })
-    return marker
   }
 
   const marker = `${context.markerPrefix}${context.placeholders.length}\uE001`
@@ -172,17 +154,6 @@ const isInsideMarkdownCode = (src: string, index: number): boolean => {
 
 const matchDisplayMathBlock = (src: string, index: number): DisplayMathBlockMatch | undefined => {
   const candidate = src.slice(index)
-  const singleLine = /^ {0,3}\\\[([^\r\n]*?)\\\][\t ]*(?:\r?\n|$)/.exec(candidate)
-  if (singleLine) {
-    const text = singleLine[1].trim()
-    if (!text) return undefined
-    return {
-      index,
-      raw: singleLine[0],
-      text,
-    }
-  }
-
   const opening = /^ {0,3}\\\[[\t ]*\r?\n/.exec(candidate)
   if (!opening) return undefined
 
@@ -202,7 +173,7 @@ const matchDisplayMathBlock = (src: string, index: number): DisplayMathBlockMatc
 }
 
 const findDisplayMathBlock = (src: string): DisplayMathBlockMatch | undefined => {
-  const openingPattern = /^ {0,3}\\\[/gm
+  const openingPattern = /^ {0,3}\\\[[\t ]*\r?\n/gm
   let opening: RegExpExecArray | null
 
   while ((opening = openingPattern.exec(src))) {
@@ -252,29 +223,10 @@ const displayMathBlockExtension: TokenizerAndRendererExtension = {
   renderer: renderMathToken,
 }
 
-const mermaidCodeExtension: TokenizerAndRendererExtension = {
-  name: 'code',
-  renderer(token: Tokens.Generic) {
-    const codeToken = token as Tokens.Code
-    const language = codeToken.lang?.trim().toLowerCase()
-    const context = activeMathRenderContext
-    if (!context?.extractSpecialBlocks || language !== 'mermaid') return false
-
-    const marker = `${context.markerPrefix}SPECIAL_${context.specialBlocks.length}\uE001`
-    context.specialBlocks.push({
-      kind: 'mermaid',
-      marker,
-      raw: codeToken.raw,
-      source: codeToken.text,
-    })
-    return marker
-  },
-}
-
 const markdown = new Marked({
   breaks: true,
   gfm: true,
-  extensions: [mermaidCodeExtension, displayMathBlockExtension, displayMathPrefixExtension, displayMathExtension, inlineMathExtension],
+  extensions: [displayMathBlockExtension, displayMathPrefixExtension, displayMathExtension, inlineMathExtension],
 })
 
 const sanitizeHtml = (html: string): string => {
@@ -297,35 +249,27 @@ const replaceMathPlaceholders = (html: string, placeholders: MathPlaceholder[]):
   return placeholders.reduce((current, placeholder) => current.split(placeholder.marker).join(placeholder.html), html)
 }
 
-const parseMarkdown = (text: string, sanitizer: HtmlSanitizer, extractSpecialBlocks: boolean): {
-  html: string
-  specialBlocks: SpecialBlockPlaceholder[]
-} => {
+const renderMarkdownTokens = (tokens: Token[], sanitizer: HtmlSanitizer): string => {
   const previousContext = activeMathRenderContext
   const context: MathRenderContext = {
     markerPrefix: createMathMarkerPrefix(),
     placeholders: [],
-    specialBlocks: [],
-    extractSpecialBlocks,
   }
 
   activeMathRenderContext = context
   let html = ''
   try {
-    html = markdown.parse(text) as string
+    html = markdown.parser(tokens) as string
   } finally {
     activeMathRenderContext = previousContext
   }
 
   const sanitized = addLinkTargetAttrs(sanitizer(html))
-  return {
-    html: replaceMathPlaceholders(sanitized, context.placeholders),
-    specialBlocks: context.specialBlocks,
-  }
+  return replaceMathPlaceholders(sanitized, context.placeholders)
 }
 
 export const renderMarkdownWithSanitizer = (text: string, sanitizer: HtmlSanitizer = sanitizeHtml): string => {
-  return parseMarkdown(text, sanitizer, false).html
+  return renderMarkdownTokens(markdown.lexer(text), sanitizer)
 }
 
 export const renderMarkdown = (text: string): string => renderMarkdownWithSanitizer(text)
@@ -334,20 +278,37 @@ export const renderAssistantMarkdownSegmentsWithSanitizer = (
   text: string,
   sanitizer: HtmlSanitizer = sanitizeHtml,
 ): MarkdownRenderSegment[] => {
-  const { html, specialBlocks } = parseMarkdown(text, sanitizer, true)
-  if (specialBlocks.length === 0) return html ? [{ kind: 'html', html }] : []
-
   const segments: MarkdownRenderSegment[] = []
-  let cursor = 0
-  for (const specialBlock of specialBlocks) {
-    const markerIndex = html.indexOf(specialBlock.marker, cursor)
-    if (markerIndex < 0) continue
-    if (markerIndex > cursor) segments.push({ kind: 'html', html: html.slice(cursor, markerIndex) })
-    const { marker: _marker, ...segment } = specialBlock
-    segments.push(segment)
-    cursor = markerIndex + specialBlock.marker.length
+  let ordinaryTokens: Token[] = []
+
+  const flushOrdinaryTokens = () => {
+    if (ordinaryTokens.length === 0) return
+    const html = renderMarkdownTokens(ordinaryTokens, sanitizer)
+    if (html) segments.push({ kind: 'html', html })
+    ordinaryTokens = []
   }
-  if (cursor < html.length) segments.push({ kind: 'html', html: html.slice(cursor) })
+
+  for (const token of markdown.lexer(text)) {
+    if (token.type === 'code' && token.lang?.trim().toLowerCase() === 'mermaid') {
+      flushOrdinaryTokens()
+      segments.push({ kind: 'mermaid', raw: token.raw, source: token.text })
+      continue
+    }
+    if (token.type === 'displayMathBlock') {
+      const mathToken = token as MathToken
+      flushOrdinaryTokens()
+      segments.push({
+        kind: 'latex',
+        raw: token.raw,
+        source: mathToken.text,
+        html: renderKatexHtml(mathToken.text, true),
+      })
+      continue
+    }
+    ordinaryTokens.push(token)
+  }
+
+  flushOrdinaryTokens()
   return segments
 }
 

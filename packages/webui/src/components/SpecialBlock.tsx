@@ -1,6 +1,6 @@
 import { Check, Code, Copy, Eye } from 'lucide-react'
 import { memo, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
-import { copyTextToClipboard, handleMarkdownLinkClick, IconToggleButton } from './chatShared'
+import { copyTextToClipboard, IconToggleButton } from './chatShared'
 
 type SpecialBlockProps = {
   kind: 'latex' | 'mermaid'
@@ -75,7 +75,103 @@ type MermaidRenderResult = { svg: string }
 let mermaidRenderSequence = 0
 let mermaidRenderQueue: Promise<void> = Promise.resolve()
 
+const MERMAID_SECURE_CONFIG_KEYS = [
+  'secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'maxEdges', 'suppressErrorRendering',
+  'theme', 'themeVariables', 'themeCSS', 'look', 'layout', 'handDrawnSeed', 'darkMode', 'htmlLabels',
+  'fontFamily', 'altFontFamily', 'logLevel', 'deterministicIds', 'deterministicIDSeed',
+  'dompurifyConfig', 'flowchart', 'swimlane', 'sequence', 'gantt', 'journey', 'timeline', 'class', 'state',
+  'er', 'pie', 'quadrantChart', 'xyChart', 'requirement', 'architecture', 'mindmap', 'ishikawa', 'kanban',
+  'gitGraph', 'c4', 'sankey', 'packet', 'block', 'eventmodeling', 'treeView', 'radar', 'venn', 'cynefin',
+  'railroad', 'elk', 'wrap', 'fontSize', 'markdownAutoWrap', 'legacyMathML', 'forceLegacyMathML',
+  'arrowMarkerAbsolute', 'titleTopMargin', 'subGraphTitleMargin',
+]
+
+export const getMermaidSourcePolicyError = (source: string): string | null => {
+  const trimmed = source.trimStart()
+  if (/^---(?:\r?\n|$)/.test(trimmed)) return 'Mermaid frontmatter is disabled.'
+  if (/%%\s*\{/i.test(source)) return 'Mermaid configuration directives are disabled.'
+  if (/@\{[^}]*\b(?:img|link|href)\s*:/is.test(source)) return 'Mermaid image and link resources are disabled.'
+  if (/(?:^|[;\r\n])\s*(?:click|href)\b/i.test(source)) return 'Interactive Mermaid links are disabled.'
+  if (/\burl\s*\(/i.test(source)) return 'Mermaid CSS resources are disabled.'
+  if (/(?:^|[;\r\n])\s*(?:style|classDef|linkStyle)\b/i.test(source)) return 'Custom Mermaid styling directives are disabled.'
+  if (/(?:<\/?\s*(?:a|img|image|link|script|style|iframe|foreignObject)\b|@import\b)/i.test(source)) return 'Embedded Mermaid resources are disabled.'
+  return null
+}
+
+const FORBIDDEN_MERMAID_SVG_ELEMENTS = new Set([
+  'a', 'audio', 'embed', 'foreignobject', 'iframe', 'image', 'link', 'object', 'script', 'video',
+])
+
+const LOCAL_FRAGMENT_URL = /^['"]?#[A-Za-z_][\w:.-]*['"]?$/
+const DANGEROUS_RESOURCE_PROTOCOL = /(?:javascript|vbscript|data|https?|file|blob)\s*:/i
+
+const sanitizeSvgCssUrls = (value: string): { value: string; removed: boolean } => {
+  let removed = false
+  const sanitized = value.replace(/url\s*\(([^)]*)\)/gi, (match, target: string) => {
+    if (LOCAL_FRAGMENT_URL.test(target.trim())) return match
+    removed = true
+    return 'none'
+  })
+  return { value: sanitized, removed }
+}
+
+export const sanitizeMermaidSvg = (svg: string): string => {
+  const documentNode = new DOMParser().parseFromString(svg, 'image/svg+xml')
+  if (documentNode.querySelector('parsererror') || documentNode.documentElement.localName.toLowerCase() !== 'svg') {
+    throw new Error('Mermaid returned invalid SVG output.')
+  }
+
+  const root = documentNode.documentElement
+  for (const element of Array.from(root.querySelectorAll('*'))) {
+    const name = element.localName.toLowerCase()
+    if (FORBIDDEN_MERMAID_SVG_ELEMENTS.has(name)) {
+      if (name === 'a' && element.parentNode) {
+        while (element.firstChild) element.parentNode.insertBefore(element.firstChild, element)
+      }
+      element.remove()
+      continue
+    }
+
+    if (name === 'style') {
+      let css = element.textContent || ''
+      css = css.replace(/@import\s+(?:url\s*\([^;]*\)|["'][^"']*["'])[^;]*;?/gi, '')
+      css = sanitizeSvgCssUrls(css).value
+      if (DANGEROUS_RESOURCE_PROTOCOL.test(css)) element.remove()
+      else element.textContent = css
+    }
+  }
+
+  for (const element of [root, ...Array.from(root.querySelectorAll('*'))]) {
+    for (const attribute of Array.from(element.attributes)) {
+      const name = attribute.name.toLowerCase()
+      const localName = attribute.localName.toLowerCase()
+      if (localName.startsWith('on') || localName === 'href' || localName === 'src') {
+        element.removeAttributeNode(attribute)
+        continue
+      }
+      if (!name.startsWith('xmlns') && DANGEROUS_RESOURCE_PROTOCOL.test(attribute.value)) {
+        element.removeAttributeNode(attribute)
+        continue
+      }
+      if (/url\s*\(/i.test(attribute.value)) {
+        const sanitized = sanitizeSvgCssUrls(attribute.value)
+        if (sanitized.removed) element.removeAttributeNode(attribute)
+        else attribute.value = sanitized.value
+      }
+    }
+  }
+
+  const serialized = new XMLSerializer().serializeToString(root)
+  if (/<\/?(?:script|foreignObject|image|a|link)\b|\s(?:on\w+|href|xlink:href|src)\s*=/i.test(serialized)) {
+    throw new Error('Mermaid returned unsupported interactive or resource-bearing SVG output.')
+  }
+  return serialized
+}
+
 const renderMermaid = (source: string, dark: boolean): Promise<MermaidRenderResult> => {
+  const policyError = getMermaidSourcePolicyError(source)
+  if (policyError) return Promise.reject(new Error(policyError))
+
   const task = mermaidRenderQueue.then(async () => {
     const { default: mermaid } = await import('mermaid')
     mermaid.initialize({
@@ -85,7 +181,7 @@ const renderMermaid = (source: string, dark: boolean): Promise<MermaidRenderResu
       maxTextSize: 50_000,
       maxEdges: 500,
       htmlLabels: false,
-      secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'maxEdges', 'suppressErrorRendering', 'htmlLabels'],
+      secure: MERMAID_SECURE_CONFIG_KEYS,
       theme: dark ? 'dark' : 'neutral',
     })
     mermaidRenderSequence += 1
@@ -121,7 +217,7 @@ export const MermaidDiagram = memo(function MermaidDiagram({ source }: { source:
     setError('')
 
     void renderMermaid(source, dark).then((result) => {
-      if (!cancelled) setSvg(result.svg)
+      if (!cancelled) setSvg(sanitizeMermaidSvg(result.svg))
     }).catch((reason: unknown) => {
       if (cancelled) return
       const message = reason instanceof Error ? reason.message : String(reason)
@@ -149,7 +245,6 @@ export const MermaidDiagram = memo(function MermaidDiagram({ source }: { source:
       data-mermaid-diagram
       className="max-w-full overflow-x-auto [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full"
       dangerouslySetInnerHTML={{ __html: svg }}
-      onClick={handleMarkdownLinkClick}
     />
   )
 })

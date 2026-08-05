@@ -53,7 +53,7 @@ A collection of small, reusable React UI components and utility functions for th
 | `SyntaxHighlightedText({ text, filePath })` | ~92–115 | Tokenizes and wraps code text in colored spans |
 | `ThreadLineButton({ ... })` | ~10–30 | Accessible toggle button rendering a vertical thread line |
 | `SpecialBlock({ kind, label, raw, children })` | `SpecialBlock.tsx` | Reusable special-rendering surface with exact raw view/copy feedback |
-| `MermaidDiagram({ source })` | `SpecialBlock.tsx` | Lazy strict Mermaid SVG rendering with theme refresh and bounded error recovery |
+| `MermaidDiagram({ source })` | `SpecialBlock.tsx` | Lazy static Mermaid rendering with pre-render network/interaction rejection, dedicated SVG sanitization, theme refresh, and bounded error recovery |
 | `inferSimpleLanguage(filePath)` | ~30–95 | Maps file extension/name to a SimpleLanguage value |
 | `getMonacoLanguage(filePath)` | ~97–110 | Converts SimpleLanguage to Monaco editor language string |
 | `basename(filePath)` | ~25 | Extracts lowercase filename from a path |
