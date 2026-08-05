@@ -1,46 +1,52 @@
 const FORBIDDEN_RESOURCE_KEYS = new Set(['img', 'link', 'href'])
 
-const readQuotedKey = (raw: string): string | null => {
-  if (raw.startsWith('"')) {
-    try {
-      const parsed = JSON.parse(raw)
-      return typeof parsed === 'string' ? parsed : null
-    } catch {
-      return null
+type MetadataPolicyFinding = 'resource-key' | 'unreliable-key'
+
+const inspectMetadataProperty = (property: string): MetadataPolicyFinding | null => {
+  const trimmed = property.trim()
+  if (!trimmed) return null
+
+  const openingQuote = trimmed[0]
+  if (openingQuote === '"' || openingQuote === "'") {
+    let escaped = false
+    let hasEscape = false
+    let closingIndex = -1
+    for (let index = 1; index < trimmed.length; index += 1) {
+      const character = trimmed[index]
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (character === '\\') {
+        escaped = true
+        hasEscape = true
+        continue
+      }
+      if (character === openingQuote) {
+        closingIndex = index
+        break
+      }
     }
+
+    if (closingIndex < 0 || !/^\s*:/.test(trimmed.slice(closingIndex + 1))) return 'unreliable-key'
+    if (hasEscape) return 'unreliable-key'
+    return FORBIDDEN_RESOURCE_KEYS.has(trimmed.slice(1, closingIndex).toLowerCase()) ? 'resource-key' : null
   }
 
-  if (!raw.startsWith("'") || !raw.endsWith("'")) return null
-  let value = ''
-  for (let index = 1; index < raw.length - 1; index += 1) {
-    const character = raw[index]
-    if (character === '\\' && index + 1 < raw.length - 1) {
-      index += 1
-      value += raw[index]
-    } else {
-      value += character
-    }
-  }
-  return value
+  const bareKey = /^([A-Za-z_$][\w$-]*)\s*:/.exec(trimmed)
+  if (!bareKey) return 'unreliable-key'
+  return FORBIDDEN_RESOURCE_KEYS.has(bareKey[1].toLowerCase()) ? 'resource-key' : null
 }
 
-const metadataPropertyKey = (property: string): string | null => {
-  const match = /^\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:[A-Za-z_$][\w$-]*))\s*:/.exec(property)
-  if (!match) return null
-  const rawKey = match[1]
-  return rawKey.startsWith('"') || rawKey.startsWith("'") ? readQuotedKey(rawKey) : rawKey
-}
-
-const hasForbiddenMetadataProperty = (body: string): boolean => {
+const inspectMetadataProperties = (body: string): MetadataPolicyFinding | null => {
   let propertyStart = 0
   let quote = ''
   let escaped = false
   let nestedDepth = 0
 
-  const checkProperty = (end: number): boolean => {
-    const key = metadataPropertyKey(body.slice(propertyStart, end))
-    return key !== null && FORBIDDEN_RESOURCE_KEYS.has(key.toLowerCase())
-  }
+  const inspectProperty = (end: number): MetadataPolicyFinding | null => (
+    inspectMetadataProperty(body.slice(propertyStart, end))
+  )
 
   for (let index = 0; index < body.length; index += 1) {
     const character = body[index]
@@ -57,12 +63,45 @@ const hasForbiddenMetadataProperty = (body: string): boolean => {
     if (character === '{' || character === '[' || character === '(') nestedDepth += 1
     else if (character === '}' || character === ']' || character === ')') nestedDepth = Math.max(0, nestedDepth - 1)
     else if (character === ',' && nestedDepth === 0) {
-      if (checkProperty(index)) return true
+      const finding = inspectProperty(index)
+      if (finding) return finding
       propertyStart = index + 1
     }
   }
 
-  return checkProperty(body.length)
+  return inspectProperty(body.length)
+}
+
+const findMetadataObjectOpening = (source: string, startIndex: number): number => {
+  let quote = ''
+  let escaped = false
+  let comment = false
+
+  for (let index = startIndex; index < source.length; index += 1) {
+    const character = source[index]
+    if (comment) {
+      if (character === '\n' || character === '\r') comment = false
+      else continue
+    }
+    if (quote) {
+      if (escaped) escaped = false
+      else if (character === '\\') escaped = true
+      else if (character === quote) quote = ''
+      continue
+    }
+    if (character === '%' && source[index + 1] === '%') {
+      comment = true
+      index += 1
+      continue
+    }
+    if (character === '"' || character === "'") {
+      quote = character
+      continue
+    }
+    if (character === '@' && source[index + 1] === '{') return index
+  }
+
+  return -1
 }
 
 const findMetadataObjectEnd = (source: string, openingIndex: number): number => {
@@ -92,24 +131,27 @@ const findMetadataObjectEnd = (source: string, openingIndex: number): number => 
   return -1
 }
 
-const hasForbiddenMermaidMetadata = (source: string): boolean => {
+const inspectMermaidMetadata = (source: string): MetadataPolicyFinding | null => {
   let searchIndex = 0
   while (searchIndex < source.length) {
-    const openingIndex = source.indexOf('@{', searchIndex)
-    if (openingIndex < 0) return false
+    const openingIndex = findMetadataObjectOpening(source, searchIndex)
+    if (openingIndex < 0) return null
     const closingIndex = findMetadataObjectEnd(source, openingIndex)
-    if (closingIndex < 0) return false
-    if (hasForbiddenMetadataProperty(source.slice(openingIndex + 2, closingIndex))) return true
+    if (closingIndex < 0) return 'unreliable-key'
+    const finding = inspectMetadataProperties(source.slice(openingIndex + 2, closingIndex))
+    if (finding) return finding
     searchIndex = closingIndex + 1
   }
-  return false
+  return null
 }
 
 export const getMermaidSourcePolicyError = (source: string): string | null => {
   const trimmed = source.trimStart()
   if (/^---(?:\r?\n|$)/.test(trimmed)) return 'Mermaid frontmatter is disabled.'
   if (/%%\s*\{/i.test(source)) return 'Mermaid configuration directives are disabled.'
-  if (hasForbiddenMermaidMetadata(source)) return 'Mermaid image and link resources are disabled.'
+  const metadataFinding = inspectMermaidMetadata(source)
+  if (metadataFinding === 'resource-key') return 'Mermaid image and link resources are disabled.'
+  if (metadataFinding === 'unreliable-key') return 'Escaped or unrecognized Mermaid metadata property keys are disabled.'
   if (/(?:^|[;\r\n])\s*(?:click|href)[\t ]+/i.test(source)) return 'Interactive Mermaid links are disabled.'
   if (/(?:^|[;\r\n])\s*(?:style|classDef|linkStyle)[\t ]+/i.test(source)) return 'Custom Mermaid styling directives are disabled.'
   if (/(?:<\/?\s*(?:a|img|image|link|script|style|iframe|foreignObject)\b|@import\b)/i.test(source)) return 'Embedded Mermaid resources are disabled.'

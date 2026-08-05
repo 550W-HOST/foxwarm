@@ -50,11 +50,17 @@ await writeFile(entryPath, `
     'flowchart LR\\nA-->B\\nclassDef custom fill:#fff',
     'flowchart TD\\nA@{ label: "}", img: "https://example.invalid/brace-bypass.png", pos: "t", h: 60 }',
     'flowchart TD\\nA@{ label: "}", img: "/reviewer-bypass.png", pos: "t", h: 60 }',
+    'flowchart TD\\nA@{ "\\\\x69mg": "https://example.invalid/x-key.png" }',
+    "flowchart TD\\nA@{ 'i\\\\x6dg': '/reviewer-x-key.png' }",
+    'flowchart TD\\nX["@{"]\\nA@{ img: "https://example.invalid/after-literal.png", label: "remote" }',
+    'flowchart TD\\n%% comment containing @{ before resource\\nA@{ img: "/reviewer-after-comment.png", label: "remote" }',
   ]
   const benignMermaidSources = [
     'flowchart LR\\nclick[Click guide] --> B',
     'flowchart LR\\nhref[Href guide] --> B',
     'sequenceDiagram\\nA->>B: Call url(foo) safely',
+    'flowchart TD\\nX["@{"]\\nX-->B',
+    'flowchart TD\\n%% comment containing @{ only\\nX-->B',
   ]
   const postSanitizedSvg = sanitizeMermaidSvg('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><style>@import "https://reviewer.invalid/theme.css";.bad{fill:url(https://reviewer.invalid/a.png)}.ok{marker-end:url(#arrow)}</style><defs><marker id="arrow"><path d="M0 0L1 1"/></marker></defs><a href="https://reviewer.invalid/link"><text>kept text</text></a><image href="/reviewer-image.png"/><use xlink:href="https://reviewer.invalid/xlink.svg#shape"/><rect onclick="alert(1)" fill="javascript:alert(1)" style="fill:url(https://reviewer.invalid/b.png)" marker-end="url(#arrow)"/></svg>')
 
@@ -313,7 +319,7 @@ test('nested Mermaid and LaTeX retain their valid Markdown ancestry in the actua
 })
 
 test('unsafe Mermaid resources and links are rejected before any network request', async () => {
-  await page.waitForFunction(() => document.querySelectorAll('#security-fixtures [data-mermaid-error]').length === 9)
+  await page.waitForFunction(() => document.querySelectorAll('#security-fixtures [data-mermaid-error]').length === 13)
   assert.deepEqual(reviewerResourceRequests, [])
 
   const errors = await page.$$eval('#security-fixtures [data-mermaid-error]', elements => elements.map(element => element.textContent))
@@ -326,14 +332,18 @@ test('unsafe Mermaid resources and links are rejected before any network request
   assert.match(errors[6], /styling directives are disabled/i)
   assert.match(errors[7], /image and link resources are disabled/i)
   assert.match(errors[8], /image and link resources are disabled/i)
+  assert.match(errors[9], /escaped or unrecognized Mermaid metadata property keys are disabled/i)
+  assert.match(errors[10], /escaped or unrecognized Mermaid metadata property keys are disabled/i)
+  assert.match(errors[11], /image and link resources are disabled/i)
+  assert.match(errors[12], /image and link resources are disabled/i)
 
   const clickBlock = (await page.$$('#security-fixtures [data-special-block]'))[3]
   await clickBlock.$eval('button[title="Raw Mermaid"]', button => button.click())
   assert.match(await clickBlock.$eval('[data-special-block-raw]', element => element.textContent), /^flowchart LR[\s\S]*click A href/)
 })
 
-test('legal click/href node IDs and url label text still render as Mermaid', async () => {
-  await page.waitForFunction(() => document.querySelectorAll('#benign-policy-fixtures [data-mermaid-diagram] svg').length === 3)
+test('legal IDs, label text, and quoted/comment metadata literals still render as Mermaid', async () => {
+  await page.waitForFunction(() => document.querySelectorAll('#benign-policy-fixtures [data-mermaid-diagram] svg').length === 5)
   assert.equal((await page.$$('#benign-policy-fixtures [data-mermaid-error]')).length, 0)
   assert.deepEqual(reviewerResourceRequests, [])
 })

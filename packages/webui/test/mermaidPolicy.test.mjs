@@ -32,7 +32,7 @@ test('quote-aware metadata scanning rejects resource keys after quoted braces', 
 })
 
 test('metadata scanning recognizes quoted resource keys without matching label text', () => {
-  for (const key of ['"img"', "'link'", '"\\u0068ref"']) {
+  for (const key of ['"img"', "'link'"]) {
     assert.match(
       getMermaidSourcePolicyError(`flowchart TD\nA@{ label: "safe", ${key}: "/resource" }`),
       /image and link resources are disabled/i,
@@ -40,6 +40,39 @@ test('metadata scanning recognizes quoted resource keys without matching label t
   }
 
   assert.equal(getMermaidSourcePolicyError('flowchart TD\nA@{ label: "img: is text, and } is safe", shape: "rect" }'), null)
+})
+
+test('escaped or unrecognized quoted metadata keys are rejected conservatively', () => {
+  const cases = [
+    ['"\\x69mg"', 'https://example.invalid/x-key.png'],
+    ['"i\\x6dg"', '/reviewer-x-key.png'],
+    ["'\\x69mg'", 'https://example.invalid/single-x-key.png'],
+    ["'i\\x6dg'", '/reviewer-single-x-key.png'],
+    ['"\\u0068ref"', 'https://example.invalid/unicode-key'],
+  ]
+
+  for (const [key, resource] of cases) {
+    assert.match(
+      getMermaidSourcePolicyError(`flowchart TD\nA@{ ${key}: "${resource}" }`),
+      /escaped or unrecognized Mermaid metadata property keys are disabled/i,
+    )
+  }
+})
+
+test('outer scanning ignores quoted/comment literals before real metadata objects', () => {
+  const quotedLiteral = 'flowchart TD\nX["@{"]'
+  const commentLiteral = 'flowchart TD\n%% comment containing @{ and }'
+  assert.equal(getMermaidSourcePolicyError(quotedLiteral), null)
+  assert.equal(getMermaidSourcePolicyError(commentLiteral), null)
+
+  assert.match(
+    getMermaidSourcePolicyError(`${quotedLiteral}\nA@{ img: "https://example.invalid/after-literal.png" }`),
+    /image and link resources are disabled/i,
+  )
+  assert.match(
+    getMermaidSourcePolicyError(`${commentLiteral}\nA@{ img: "/reviewer-after-comment.png" }`),
+    /image and link resources are disabled/i,
+  )
 })
 
 test('directive boundaries do not reject legal node IDs or label url text', () => {
