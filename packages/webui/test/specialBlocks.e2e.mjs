@@ -48,6 +48,13 @@ await writeFile(entryPath, `
     '---\\nconfig:\\n  themeCSS: "rect{fill:url(https://reviewer.invalid/frontmatter.png)}"\\n---\\nflowchart LR\\nA-->B',
     'flowchart LR\\nA-->B\\nstyle A fill:url(https://reviewer.invalid/direct-css.png)',
     'flowchart LR\\nA-->B\\nclassDef custom fill:#fff',
+    'flowchart TD\\nA@{ label: "}", img: "https://example.invalid/brace-bypass.png", pos: "t", h: 60 }',
+    'flowchart TD\\nA@{ label: "}", img: "/reviewer-bypass.png", pos: "t", h: 60 }',
+  ]
+  const benignMermaidSources = [
+    'flowchart LR\\nclick[Click guide] --> B',
+    'flowchart LR\\nhref[Href guide] --> B',
+    'sequenceDiagram\\nA->>B: Call url(foo) safely',
   ]
   const postSanitizedSvg = sanitizeMermaidSvg('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><style>@import "https://reviewer.invalid/theme.css";.bad{fill:url(https://reviewer.invalid/a.png)}.ok{marker-end:url(#arrow)}</style><defs><marker id="arrow"><path d="M0 0L1 1"/></marker></defs><a href="https://reviewer.invalid/link"><text>kept text</text></a><image href="/reviewer-image.png"/><use xlink:href="https://reviewer.invalid/xlink.svg#shape"/><rect onclick="alert(1)" fill="javascript:alert(1)" style="fill:url(https://reviewer.invalid/b.png)" marker-end="url(#arrow)"/></svg>')
 
@@ -89,6 +96,13 @@ await writeFile(entryPath, `
         <AssistantSegments id="mixed-specials-fixture" source={mixedSpecials} />
         <div id="security-fixtures">
           {unsafeMermaidSources.map((source, index) => (
+            <SpecialBlock key={index} kind="mermaid" label="Mermaid" raw={source}>
+              <MermaidDiagram source={source} />
+            </SpecialBlock>
+          ))}
+        </div>
+        <div id="benign-policy-fixtures">
+          {benignMermaidSources.map((source, index) => (
             <SpecialBlock key={index} kind="mermaid" label="Mermaid" raw={source}>
               <MermaidDiagram source={source} />
             </SpecialBlock>
@@ -161,7 +175,7 @@ before(async () => {
   })
   await page.setRequestInterception(true)
   page.on('request', request => {
-    if (/reviewer\.invalid|reviewer-(?:image|theme)/.test(request.url())) {
+    if (/reviewer\.invalid|example\.invalid|reviewer-(?:image|theme|bypass)|brace-bypass/.test(request.url())) {
       reviewerResourceRequests.push(request.url())
       void request.abort()
       return
@@ -299,7 +313,7 @@ test('nested Mermaid and LaTeX retain their valid Markdown ancestry in the actua
 })
 
 test('unsafe Mermaid resources and links are rejected before any network request', async () => {
-  await page.waitForFunction(() => document.querySelectorAll('#security-fixtures [data-mermaid-error]').length === 7)
+  await page.waitForFunction(() => document.querySelectorAll('#security-fixtures [data-mermaid-error]').length === 9)
   assert.deepEqual(reviewerResourceRequests, [])
 
   const errors = await page.$$eval('#security-fixtures [data-mermaid-error]', elements => elements.map(element => element.textContent))
@@ -308,12 +322,20 @@ test('unsafe Mermaid resources and links are rejected before any network request
   assert.match(errors[2], /configuration directives are disabled/i)
   assert.match(errors[3], /interactive Mermaid links are disabled/i)
   assert.match(errors[4], /frontmatter is disabled/i)
-  assert.match(errors[5], /CSS resources are disabled/i)
+  assert.match(errors[5], /styling directives are disabled/i)
   assert.match(errors[6], /styling directives are disabled/i)
+  assert.match(errors[7], /image and link resources are disabled/i)
+  assert.match(errors[8], /image and link resources are disabled/i)
 
   const clickBlock = (await page.$$('#security-fixtures [data-special-block]'))[3]
   await clickBlock.$eval('button[title="Raw Mermaid"]', button => button.click())
   assert.match(await clickBlock.$eval('[data-special-block-raw]', element => element.textContent), /^flowchart LR[\s\S]*click A href/)
+})
+
+test('legal click/href node IDs and url label text still render as Mermaid', async () => {
+  await page.waitForFunction(() => document.querySelectorAll('#benign-policy-fixtures [data-mermaid-diagram] svg').length === 3)
+  assert.equal((await page.$$('#benign-policy-fixtures [data-mermaid-error]')).length, 0)
+  assert.deepEqual(reviewerResourceRequests, [])
 })
 
 test('Mermaid-specific SVG sanitizer removes resources and interaction but keeps local markers', async () => {

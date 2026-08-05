@@ -1,6 +1,7 @@
 import { Check, Code, Copy, Eye } from 'lucide-react'
 import { memo, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { copyTextToClipboard, IconToggleButton } from './chatShared'
+import { getMermaidSourcePolicyError } from './mermaidPolicy'
 
 type SpecialBlockProps = {
   kind: 'latex' | 'mermaid'
@@ -85,18 +86,6 @@ const MERMAID_SECURE_CONFIG_KEYS = [
   'railroad', 'elk', 'wrap', 'fontSize', 'markdownAutoWrap', 'legacyMathML', 'forceLegacyMathML',
   'arrowMarkerAbsolute', 'titleTopMargin', 'subGraphTitleMargin',
 ]
-
-export const getMermaidSourcePolicyError = (source: string): string | null => {
-  const trimmed = source.trimStart()
-  if (/^---(?:\r?\n|$)/.test(trimmed)) return 'Mermaid frontmatter is disabled.'
-  if (/%%\s*\{/i.test(source)) return 'Mermaid configuration directives are disabled.'
-  if (/@\{[^}]*\b(?:img|link|href)\s*:/is.test(source)) return 'Mermaid image and link resources are disabled.'
-  if (/(?:^|[;\r\n])\s*(?:click|href)\b/i.test(source)) return 'Interactive Mermaid links are disabled.'
-  if (/\burl\s*\(/i.test(source)) return 'Mermaid CSS resources are disabled.'
-  if (/(?:^|[;\r\n])\s*(?:style|classDef|linkStyle)\b/i.test(source)) return 'Custom Mermaid styling directives are disabled.'
-  if (/(?:<\/?\s*(?:a|img|image|link|script|style|iframe|foreignObject)\b|@import\b)/i.test(source)) return 'Embedded Mermaid resources are disabled.'
-  return null
-}
 
 const FORBIDDEN_MERMAID_SVG_ELEMENTS = new Set([
   'a', 'audio', 'embed', 'foreignobject', 'iframe', 'image', 'link', 'object', 'script', 'video',

@@ -6,6 +6,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test:markdown": "node --test test/markdownRenderer.test.mjs",
+    "test:mermaid-policy": "node --test test/mermaidPolicy.test.mjs",
     "test:setup-models": "node --test test/setupModels.test.mjs",
     "test:config-editor": "node --test test/configEditor.test.mjs",
     "test:model-options": "node --test test/modelOptionsLoader.test.mjs",
