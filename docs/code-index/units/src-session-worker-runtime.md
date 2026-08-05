@@ -12,7 +12,7 @@ Provides durable ownership/mailbox coordination, save-before-ack authoritative s
 - `SessionWorkerStore` — SQLite-backed generation/incarnation ownership, durable mailbox intents, acknowledgement cursor, activity, exit, cleanup, and fail-closed cursor reconciliation.
 - `SessionWorkerSupervisor` — one-child-per-session candidate activation, exact-process startup reconciliation, idle release, bounded drain/TERM/KILL, exit confirmation, and optional post-exit restart.
 - `SessionWorkerPersistence` — versioned authoritative JSON replace/legacy upgrade, canonical-intent apply/save-before-ack recovery, bounded catalog projection, and token-fenced main mutation seam.
-- `SessionWorkerCatalogCoordinator` / `writeSessionWorkerCatalogProjection()` — explicit main-owned projection registration/update/release plus atomic catalog merge; full/global saves preserve worker-owned fields while accepting topology/UI/channel changes, and stale full queue/wait/managed state is removed.
+- `SessionWorkerCatalogCoordinator` / `writeSessionWorkerCatalogProjection()` — explicit main-owned projection registration/update/reconciled-release plus atomic catalog merge; full/global saves preserve worker-owned fields while accepting topology/UI/channel changes, and stale full queue/wait/managed state is removed.
 - `sessionWorkerControlServiceDescriptor` — minimal versioned candidate identity/activation/status control service used while the real session service is still being implemented.
 - `readSessionWorkerProcessIdentity()` — Linux boot-ID plus proc start-tick identity used to distinguish an exact old process from PID reuse.
 - `sessionWorker.ts` — child bootstrap for the control service.
@@ -46,6 +46,7 @@ Schema open sets the busy timeout before lock-taking pragmas, migrates known ver
 - SQLite acknowledgement can never advance before the authoritative JSON cursor; a tokenized main lifecycle claim blocks respawn across quiesce, reload, mutation, and save. Claim assertions fence every supported state/catalog write and are rechecked immediately before atomic rename.
 - Shutdown aborts main claims and waits only within its deadline. Cooperative callbacks stop normally; noncooperative callbacks become stale, shutdown aggregates a timeout, and no late state/catalog rename can commit.
 - Full/global catalog saves serialize through the main writer lock and consult registered projection ownership, so stale in-memory Session records cannot restore worker-owned queue/wait/managed/stat/runtime fields.
+- After a successful main mutation, the bounded committed main-owned patch is installed into the real live catalog stub before the claim is released. Worker ownership release is rejected during an active claim and otherwise requires an explicit reconciled authoritative Session handoff matching the latest registered projection before coordinator protection is removed.
 - Invalid/reused mailbox intent identities fail closed; exact idempotent repeats return the original record.
 - Draining generations may publish one final revision before confirmed exit.
 - The supervisor never treats IPC disconnect alone as permission to replace a worker.

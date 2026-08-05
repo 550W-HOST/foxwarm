@@ -178,6 +178,9 @@ export function prepareSessionSemanticStateForHydration(
   if (Object.prototype.hasOwnProperty.call(source, 'queue') && !Array.isArray(source.queue)) {
     throw new Error('Per-session state queue must be an array.');
   }
+  if (Object.prototype.hasOwnProperty.call(source, 'contextFrontier') && !Array.isArray(source.contextFrontier)) {
+    throw new Error('Per-session context frontier must be an array.');
+  }
   if (Object.prototype.hasOwnProperty.call(source, 'stats')
     && (!source.stats || typeof source.stats !== 'object' || Array.isArray(source.stats))) {
     throw new Error('Per-session state stats must be an object.');
@@ -219,9 +222,14 @@ export function getSessionHistoryFilePath(sessionId: string): string {
 }
 
 function normalizeSessionHistoryPayload(raw: any, filePath: string): Record<string, any> {
-  if (!raw || typeof raw !== 'object') {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error(`Invalid session history payload in ${filePath}`);
   }
+
+  // Versioned payloads must reach strict hydration with their original
+  // property shapes intact. Only unversioned legacy files receive tolerant
+  // read-old normalization.
+  if (raw.sessionStateVersion !== undefined) return raw;
 
   const normalized = {
     ...raw,

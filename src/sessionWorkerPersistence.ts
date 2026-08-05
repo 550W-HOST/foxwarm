@@ -5,7 +5,7 @@ import { writeAuthoritativeSessionState } from './session/stateFile';
 import { buildSessionRuntimeState, type SessionRuntimeState } from './sessionRuntimeState';
 import { SessionWorkerMailboxIntent, SessionWorkerStore } from './sessionWorkerStore';
 import type { SessionWorkerMainMutationClaim } from './sessionWorkerSupervisor';
-import type { SessionWorkerCatalogCoordinator } from './sessionWorkerCatalog';
+import { applySessionWorkerMainOwnedCatalogPatch, type SessionWorkerCatalogCoordinator } from './sessionWorkerCatalog';
 import type { Session, SessionStats } from './types';
 
 export type SessionWorkerCatalogProjection = {
@@ -189,6 +189,8 @@ export class SessionWorkerPersistence {
         const result = await mutate(session, claim.signal);
         claim.assertActive('after main mutation');
         const projection = await this.saveMainMutation(session, claim);
+        claim.assertActive('before live catalog stub handoff');
+        applySessionWorkerMainOwnedCatalogPatch(baseSession, projection);
         if (coordinator && ownerId) coordinator.finishMainMutation(baseSession.id, ownerId, claim.id, projection);
         return { result, session, projection };
       } catch (error) {

@@ -4,6 +4,7 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import { collectSessionHistoryFiles, createSessionHistoryStore, createSessionsMetadataStore, prepareSessionSemanticStateForHydration, replaceSessionSemanticState, serializeSessionHistoryPayload, stripSessionMetadataForSave } from './metadataStore';
+import { replaceAuthoritativeSessionState } from './stateHydration';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-session-metadata-store-'));
@@ -101,6 +102,43 @@ test('session history store uses lightweight no-backup config and still round-tr
 
     const siblingFiles = await fs.readdir(path.dirname(filePath));
     assert.deepEqual(siblingFiles, ['alpha.json']);
+  });
+});
+
+test('real state-file reader preserves strict v1 shapes while normalizing only unversioned legacy', async () => {
+  await withTempDir(async dirPath => {
+    const currentPath = path.join(dirPath, 'current.json');
+    const malformedCurrent = { sessionStateVersion: 1, history: 'NOT-ARRAY', contextFrontier: { stale: true } };
+    await fs.writeFile(currentPath, JSON.stringify(malformedCurrent));
+    const currentRaw = await createSessionHistoryStore(currentPath).readFromPath();
+    assert.equal(currentRaw?.history, 'NOT-ARRAY');
+    assert.deepEqual(currentRaw?.contextFrontier, { stale: true });
+    const target: any = { id: 'current', history: [{ role: 'user', parts: [{ text: 'keep' }] }],
+      persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 0 } };
+    assert.throws(() => replaceAuthoritativeSessionState(target, currentRaw!),
+      (error: any) => error?.code === 'SESSION_WORKER_STATE_INVALID');
+    assert.equal(target.history[0].parts[0].text, 'keep');
+    assert.deepEqual(JSON.parse(await fs.readFile(currentPath, 'utf8')), malformedCurrent);
+
+    const frontierPath = path.join(dirPath, 'frontier.json');
+    await fs.writeJson(frontierPath, { sessionStateVersion: 1, history: [], contextFrontier: { invalid: true } });
+    const frontierRaw = await createSessionHistoryStore(frontierPath).readFromPath();
+    assert.throws(() => replaceAuthoritativeSessionState(target, frontierRaw!),
+      (error: any) => error?.code === 'SESSION_WORKER_STATE_INVALID');
+
+    const unknownPath = path.join(dirPath, 'unknown.json');
+    await fs.writeJson(unknownPath, { sessionStateVersion: 99, history: [] });
+    const unknownRaw = await createSessionHistoryStore(unknownPath).readFromPath();
+    assert.throws(() => replaceAuthoritativeSessionState(target, unknownRaw!),
+      (error: any) => error?.code === 'SESSION_WORKER_STATE_VERSION');
+
+    const legacyPath = path.join(dirPath, 'legacy.json');
+    await fs.writeJson(legacyPath, { history: 'legacy-not-array', contextFrontier: { tolerated: true } });
+    const legacyRaw = await createSessionHistoryStore(legacyPath).readFromPath();
+    assert.deepEqual(legacyRaw?.history, []);
+    assert.equal(Object.prototype.hasOwnProperty.call(legacyRaw, 'contextFrontier'), false);
+    assert.equal(replaceAuthoritativeSessionState(target, legacyRaw!).upgradedLegacy, true);
+    assert.deepEqual(target.history, []);
   });
 });
 

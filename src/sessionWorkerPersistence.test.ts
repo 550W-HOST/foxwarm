@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { RpcError } from './rpc';
-import { captureSessionSemanticState, serializeSessionHistoryPayload, SESSION_STATE_FORMAT_VERSION, withSessionsMetadataWriteLock } from './session/metadataStore';
+import { captureSessionSemanticState, serializeSessionHistoryPayload, SESSION_STATE_FORMAT_VERSION, stripSessionMetadataForSave, withSessionsMetadataWriteLock } from './session/metadataStore';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { mergeSessionWorkerCatalogProjection, SessionWorkerCatalogCoordinator, writeSessionWorkerCatalogProjection } from './sessionWorkerCatalog';
 import { buildSessionWorkerCatalogProjection, SessionWorkerPersistence } from './sessionWorkerPersistence';
@@ -344,7 +344,10 @@ test('quiesce/reload reconciles lagging ack and main mutation writes state plus 
       catalogCoordinator: coordinator,
       catalogOwnerId: 'owner-1',
     });
-    const mutation = await persistence.runMainMutation(session('s'), async (_sessionId, operation) => {
+    const liveStub = session('s');
+    liveStub.displayName = 'Old';
+    liveStub.meta.lastChannel = { channelId: 'old', channelUserId: 'u' };
+    const mutation = await persistence.runMainMutation(liveStub, async (_sessionId, operation) => {
       store.markDraining('s', owner.generation, owner.incarnationId);
       store.markExitObserved('s', owner.generation, owner.incarnationId, 'quiesced');
       return operation(activeClaim('s'));
@@ -354,6 +357,8 @@ test('quiesce/reload reconciles lagging ack and main mutation writes state plus 
       assert.equal(reloaded.meta.managedSession.pendingInbox.length, 1);
       assert.deepEqual(reloaded.contextFrontier, [{ kind: 'message', seq: intent.id }]);
       reloaded.history.push({ role: 'model', parts: [{ text: 'main mutation' }], __meta: { seq: intent.id + 1, timestamp: 20 } });
+      reloaded.displayName = 'New';
+      reloaded.meta.lastChannel = { channelId: 'new', channelUserId: 'u' };
       return 'mutated';
     });
     assert.equal(store.getOwnership('s').mailboxCursor, intent.id);
@@ -364,6 +369,22 @@ test('quiesce/reload reconciles lagging ack and main mutation writes state plus 
     assert.equal(projection.queueLength, 1);
     assert.equal(coordinator.getOwnership('s')?.mainClaimId, undefined);
     assert.equal(coordinator.getOwnership('s')?.projection.messageCount, 2);
+    assert.equal(liveStub.displayName, 'New');
+    assert.equal(liveStub.meta.lastChannel.channelId, 'new');
+    assert.equal(liveStub.history.length, 0);
+    assert.equal(liveStub.queue.length, 0);
+    assert.equal(liveStub.meta.wait, undefined);
+    const staleLaterInput = stripSessionMetadataForSave(liveStub) as any;
+    staleLaterInput.busy = false;
+    staleLaterInput.stats = { ...liveStub.stats, totalInputTokens: 999 };
+    staleLaterInput.queue = [{ type: 'trigger', parts: [{ text: 'stale' }] }];
+    const laterFullSave = coordinator.mergeFullSave('s', mergeSessionWorkerCatalogProjection({ id: 's' }, projection), {
+      ...staleLaterInput,
+    });
+    assert.equal(laterFullSave.displayName, 'New');
+    assert.equal(laterFullSave.meta.lastChannel.channelId, 'new');
+    assert.equal(laterFullSave.stats.totalInputTokens, projection.stats.totalInputTokens);
+    assert.equal('queue' in laterFullSave, false);
   });
 });
 
@@ -522,8 +543,56 @@ test('catalog ownership preserves worker projections and main-only updates in bo
   assert.equal(data.sessions.owned.displayName, 'Concurrent Main');
   assert.equal(data.sessions.owned.stats.totalInputTokens, 33);
   assert.equal(data.sessions.unrelated.displayName, 'Keep');
-  coordinator.releaseWorker('owned', 'generation-1');
+
+  const staleMainStub = session('owned');
+  staleMainStub.displayName = 'Stale Main';
+  staleMainStub.queue = [{ type: 'trigger', parts: [{ text: 'stale queue' }] }];
+  staleMainStub.meta.wait = { id: 'stale-wait' };
+  staleMainStub.meta.managedSession = { ownerSessionId: 'old', leaseId: 'old', revision: 1, pendingInbox: [], openedAt: 1, leaseTouchedAt: 1 };
+  const reconciled = session('owned');
+  reconciled.displayName = 'Current Main';
+  reconciled.stats.totalInputTokens = 44;
+  reconciled.queue = [{ type: 'trigger', parts: [{ text: 'current queue' }] }];
+  reconciled.meta.wait = { id: 'current-wait' };
+  reconciled.meta.managedSession = { ownerSessionId: 'current', leaseId: 'current', revision: 2, pendingInbox: [], openedAt: 2, leaseTouchedAt: 2 };
+  reconciled.meta.lastChannel = { channelId: 'current-channel', channelUserId: 'u' };
+  const releaseProjection = buildSessionWorkerCatalogProjection(reconciled);
+  assert.throws(() => coordinator.releaseWorker('owned', 'generation-1'),
+    (error: any) => error?.code === 'SESSION_WORKER_CATALOG_HANDOFF');
+  assert.throws(() => coordinator.releaseWorker('owned', 'generation-1', {
+    mainStub: staleMainStub, reconciledSession: reconciled, projection: releaseProjection,
+  }), (error: any) => error?.code === 'SESSION_WORKER_CATALOG_HANDOFF');
+  coordinator.beginMainMutation('owned', 'generation-1', 'release-claim');
+  coordinator.updateWorker('owned', 'generation-1', releaseProjection);
+  const claimConcurrentFull = coordinator.mergeFullSave('owned', data.sessions.owned, {
+    ...stripSessionMetadataForSave(staleMainStub), displayName: 'Stale Main',
+  } as any);
+  assert.equal(claimConcurrentFull.displayName, 'Current Main');
+  assert.equal(claimConcurrentFull.meta.lastChannel.channelId, 'current-channel');
+  assert.throws(() => coordinator.releaseWorker('owned', 'generation-1', {
+    mainStub: staleMainStub, reconciledSession: reconciled, projection: releaseProjection,
+  }), (error: any) => error?.code === 'SESSION_WORKER_CATALOG_CLAIMED');
+  coordinator.cancelMainMutation('owned', 'generation-1', 'release-claim');
+  const mismatchedReconciled = structuredClone(reconciled);
+  mismatchedReconciled.stats.totalInputTokens = 999;
+  assert.throws(() => coordinator.releaseWorker('owned', 'generation-1', {
+    mainStub: staleMainStub, reconciledSession: mismatchedReconciled, projection: releaseProjection,
+  }), (error: any) => error?.code === 'SESSION_WORKER_CATALOG_HANDOFF');
+  coordinator.releaseWorker('owned', 'generation-1', {
+    mainStub: staleMainStub, reconciledSession: reconciled, projection: releaseProjection,
+  });
   assert.equal(coordinator.getOwnership('owned'), undefined);
+  assert.equal(staleMainStub.displayName, 'Current Main');
+  assert.equal(staleMainStub.stats.totalInputTokens, 44);
+  assert.equal(staleMainStub.queue[0].parts[0].text, 'current queue');
+  assert.equal(staleMainStub.meta.wait.id, 'current-wait');
+  assert.equal(staleMainStub.meta.managedSession.leaseId, 'current');
+  assert.equal(staleMainStub.meta.lastChannel.channelId, 'current-channel');
+  const afterReleaseFullSave = coordinator.mergeFullSave('owned', data.sessions.owned, stripSessionMetadataForSave(staleMainStub) as any);
+  assert.equal(afterReleaseFullSave.displayName, 'Current Main');
+  assert.equal(afterReleaseFullSave.stats.totalInputTokens, 44);
+  assert.equal(afterReleaseFullSave.queue[0].parts[0].text, 'current queue');
+  assert.equal(afterReleaseFullSave.meta.wait.id, 'current-wait');
 });
 
 test('real state-file writer atomically canonicalizes history/queue/managed images without touching shared catalog', async () => {
