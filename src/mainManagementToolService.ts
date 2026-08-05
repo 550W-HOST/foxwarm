@@ -8,6 +8,7 @@ import * as sessionManager from './sessionManager';
 import * as interSessionTools from './toolsSessionAgent/interSession';
 import * as agentTools from './toolsSessionAgent/agents';
 import * as timerTools from './toolsSessionAgent/timers';
+import * as timers from './timers';
 import type { ToolArgs, ToolContext } from './tools/helpers';
 
 export const MAIN_MANAGEMENT_TOOL_OPERATIONS = [
@@ -27,9 +28,12 @@ export type MainManagementToolRequest = {
   args: ToolArgs;
 };
 export type MainManagementToolResponse = { result: unknown };
+export type ScheduleWaitTimeoutRequest = { sourceSessionId: string; waitId: string; timeoutSeconds: number };
+export type ScheduleWaitTimeoutResponse = { scheduled: true; waitId: string };
 
 export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 1, {
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),
+  scheduleWaitTimeout: rpcMethod<ScheduleWaitTimeoutRequest, ScheduleWaitTimeoutResponse>(),
 });
 
 const allowedOperations = new Set<string>(MAIN_MANAGEMENT_TOOL_OPERATIONS);
@@ -46,6 +50,13 @@ function normalizeArgs(value: unknown): ToolArgs {
     throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'args must be an object.');
   }
   return value as ToolArgs;
+}
+
+function normalizeNonEmptyString(value: unknown, field: 'waitId'): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new RpcError('MAIN_MANAGEMENT_INVALID_WAIT_TIMEOUT', `${field} must be a non-empty string.`);
+  }
+  return value.trim();
 }
 
 async function invokeAllowedOperation(operation: MainManagementToolOperation, args: ToolArgs, ctx: ToolContext): Promise<unknown> {
@@ -79,6 +90,27 @@ export function createMainManagementToolServiceHandler(): RpcServiceHandler<type
       return {
         result: await invokeAllowedOperation(operation as MainManagementToolOperation, args, { sessionId: sourceSessionId }),
       };
+    },
+    async scheduleWaitTimeout(input) {
+      const prototype = input && typeof input === 'object' ? Object.getPrototypeOf(input) : undefined;
+      const keys = input && typeof input === 'object' ? Object.keys(input) : [];
+      if (!input || typeof input !== 'object' || Array.isArray(input)
+        || (prototype !== Object.prototype && prototype !== null)
+        || keys.length !== 3
+        || keys.some(key => !['sourceSessionId', 'waitId', 'timeoutSeconds'].includes(key))) {
+        throw new RpcError('MAIN_MANAGEMENT_INVALID_WAIT_TIMEOUT', 'scheduleWaitTimeout requires exactly sourceSessionId, waitId, and timeoutSeconds.');
+      }
+      const sourceSessionId = normalizeSourceSessionId(input.sourceSessionId);
+      const waitId = normalizeNonEmptyString(input.waitId, 'waitId');
+      if (typeof input.timeoutSeconds !== 'number' || !Number.isFinite(input.timeoutSeconds) || input.timeoutSeconds <= 0) {
+        throw new RpcError('MAIN_MANAGEMENT_INVALID_WAIT_TIMEOUT', 'timeoutSeconds must be a positive finite number.');
+      }
+      const source = await sessionManager.getExistingSession(sourceSessionId);
+      if (!source) {
+        throw new RpcError('MAIN_MANAGEMENT_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
+      }
+      await timers.createWaitTimeoutTimer({ sessionId: sourceSessionId, waitId, timeoutSeconds: input.timeoutSeconds });
+      return { scheduled: true, waitId };
     },
   };
 }

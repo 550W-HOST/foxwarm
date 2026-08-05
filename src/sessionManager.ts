@@ -285,6 +285,15 @@ export async function startSessionWait(sessionId: string, options: {
   waitExecIds?: string[];
 } = {}): Promise<SessionWaitState> {
   const session = await getSession(sessionId);
+  return startSessionWaitForSession(session, options, () => saveSession(session.id));
+}
+
+export async function startSessionWaitForSession(session: Session, options: {
+  reason?: string;
+  timeoutSeconds?: number;
+  waitAllSessions?: string[];
+  waitExecIds?: string[];
+} = {}, persistSession: () => Promise<void>): Promise<SessionWaitState> {
   const existingWait = getSessionWaitState(session);
   const existingWaitAll = existingWait ? getWaitAllState(existingWait) : undefined;
   if (existingWaitAll?.deferredQueue.length) {
@@ -314,7 +323,7 @@ export async function startSessionWait(sessionId: string, options: {
   }
 
   session.meta.wait = state;
-  await saveSession(session.id);
+  await persistSession();
   return state;
 }
 

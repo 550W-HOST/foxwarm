@@ -80,7 +80,7 @@ Manages scheduled timers that fire messages into sessions — either as one-time
 
 ## Integration
 
-- Triggered by session tools that allow agents to schedule future work or set wait timeouts.
+- Public timer CRUD is triggered through the seven-operation Main Management tool allowlist. Internal wait timeout scheduling enters the same Main-owned timer implementation through its separate fixed `scheduleWaitTimeout` RPC method after canonical wait persistence; it is not an eighth model operation.
 - Delivers events back into the session system via `sessionManager`, which processes them as background system events.
 - Can spawn new sessions in a specified agent directory, enabling scheduled autonomous tasks.
 - Relies on `config` for file paths and agent directory resolution.

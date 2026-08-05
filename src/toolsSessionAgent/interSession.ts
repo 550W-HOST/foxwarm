@@ -12,7 +12,7 @@ import {
   buildSendFileResult,
 } from './helpers';
 import * as sessionManager from '../sessionManager';
-import * as timers from '../timers';
+import { scheduleMainWaitTimeout } from '../mainManagementTools';
 import { logger } from '../common';
 import { requireNotIsolated, checkChannelPermission, checkSendFilePermission } from '../isolatedCheck';
 import { COMPACT_PLAN_TOOL_NAME } from '../session/compactPlan';
@@ -88,17 +88,20 @@ export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
   let explicitWaitId: string | undefined;
 
   if (ctx?.sessionId) {
-    const waitState = await sessionManager.startSessionWait(ctx.sessionId, {
+    const waitOptions = {
       reason: typeof reason === 'string' ? reason : undefined,
       timeoutSeconds,
       waitAllSessions,
       waitExecIds,
-    });
+    };
+    const waitState = ctx.persistCurrentSession && ctx.session?.id === ctx.sessionId
+      ? await sessionManager.startSessionWaitForSession(ctx.session, waitOptions, ctx.persistCurrentSession)
+      : await sessionManager.startSessionWait(ctx.sessionId, waitOptions);
     explicitWaitId = waitState.id;
 
     if (timeoutSeconds !== undefined) {
-      await timers.createWaitTimeoutTimer({
-        sessionId: ctx.sessionId,
+      await scheduleMainWaitTimeout({
+        sourceSessionId: ctx.sessionId,
         waitId: waitState.id,
         timeoutSeconds,
       });

@@ -7,6 +7,8 @@ import {
 import {
   createMainManagementToolServiceHandler,
   MainManagementToolOperation,
+  ScheduleWaitTimeoutRequest,
+  ScheduleWaitTimeoutResponse,
   mainManagementToolServiceDescriptor,
 } from './mainManagementToolService';
 import type { ToolArgs, ToolContext } from './tools/helpers';
@@ -65,6 +67,10 @@ export async function executeMainManagementTool(
     args,
   });
   return response.result;
+}
+
+export async function scheduleMainWaitTimeout(request: ScheduleWaitTimeoutRequest): Promise<ScheduleWaitTimeoutResponse> {
+  return await (await getClient()).call('scheduleWaitTimeout', request);
 }
 
 export const tool_send_to_session = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('send_to_session', args, ctx);

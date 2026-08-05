@@ -28,7 +28,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - `enqueueSessionItem` — canonical queue insertion with wait-state and managed-inbox handling.
 - `claimSessionsForDestructiveLifecycle`, `releaseSessionsForDestructiveLifecycle`, `assertSessionDestructiveMutationAllowed` — bounded process-local WebUI delete coordination; mutation entry points reject late work/relation/channel changes while a claimed subtree is being deleted.
 - `queueSessionEvent`, `queueSessionStructuredEvent`, `queueSessionMessageEvent`, `queueSessionSystemEvent` — typed event wrappers.
-- `startSessionWait`, `clearSessionWaitById`, `queueSessionWaitTimeoutEvent`, `clearSessionWaitForDirectTurn` — persisted wait state, token-aware surgical cleanup, and race-safe timeout events.
+- `startSessionWaitForSession`, `startSessionWait`, `clearSessionWaitById`, `queueSessionWaitTimeoutEvent`, `clearSessionWaitForDirectTurn` — passed-owner and ID-loading forms of the same persisted wait mutation, token-aware surgical cleanup, and race-safe timeout events.
 - `requestSessionStop`, `requestSessionDequeue`, `retrySession` — current run/queue controls; retry delegates directly to the router without queue persistence.
 - `setSessionTriggerCallback`, `setSessionRetryCallback`, `triggerSessionProcessing`, `resumeBusySessions` — router/scheduler integration and restart recovery.
 - `registerSessionAbortController`, `clearSessionAbortController`, `abortSessionInFlight` — active provider-request cancellation.
