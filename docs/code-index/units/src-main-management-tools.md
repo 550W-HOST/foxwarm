@@ -12,7 +12,8 @@ Provides the versioned local RPC boundary for a closed first set of tools whose 
 - `mainManagementToolServiceDescriptor` — version 1 descriptor with one closed `execute` method.
 - `MAIN_MANAGEMENT_TOOL_OPERATIONS` — exact allowlist: `send_to_session`, `send_to_channel`, `list_agents`, and timer CRUD.
 - `createMainManagementToolServiceHandler()` — validates source identity and operation, then invokes the existing authoritative raw handler.
-- `initializeMainManagementTools()` / `shutdownMainManagementTools()` — local transport lifecycle and graceful drain.
+- `initializeMainManagementTools()` / `shutdownMainManagementTools()` — local transport lifecycle and one-way terminal graceful drain.
+- `resetMainManagementToolsForTests()` — explicit test-only reset after a completed terminal shutdown.
 - `executeMainManagementTool()` — placement-neutral local caller used by the seven public tool wrappers.
 - `tool_send_to_session`, `tool_send_to_channel`, `tool_list_agents`, and timer CRUD wrappers — current real builtin entry points.
 
@@ -24,6 +25,8 @@ The handler rejects missing/deleted source sessions before dispatch. It reconstr
 
 This boundary has no arbitrary builtin dispatch, Session/history/queue payload, mutable patch, callback, generic registry, capability negotiation, retry/outbox protocol, process reverse transport, or Session-worker caller.
 
+Production shutdown sets a terminal fence before awaiting initialization or drain. An in-flight initializer must observe that fence or publish a transport that shutdown then drains and closes; later initialize/execute calls cannot recreate the service before process exit. Same-process reuse is available only through the explicitly test-only reset after no client, transport, or initializer remains.
+
 ## Integration
 
 - `src/tools.ts` maps the seven public named exports and `callTool` entries to these wrappers rather than the raw handlers.
@@ -34,4 +37,4 @@ This boundary has no arbitrary builtin dispatch, Session/history/queue payload, 
 
 ## Tests
 
-Focused coverage verifies the closed allowlist, missing/stale source failures, structured-clone isolation, late handler replacement, structured error parity, direct/unified send delivery and handoff control metadata, isolated-session rejection, channel delivery, timer CRUD scoping, ToolScript nesting, and clean shutdown/reinitialization.
+Focused coverage verifies the closed allowlist, missing/stale source failures, structured-clone isolation, late handler replacement, structured error parity, direct/unified send delivery and handoff control metadata, isolated-session rejection, channel delivery, timer CRUD scoping, ToolScript nesting, accepted-call drain, initialization fencing, terminal rejection, and explicit test-only reset.

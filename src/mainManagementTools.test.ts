@@ -6,6 +6,8 @@ import * as agentTools from './toolsSessionAgent/agents';
 import {
   executeMainManagementTool,
   getMainManagementToolServiceStatus,
+  initializeMainManagementTools,
+  resetMainManagementToolsForTests,
   shutdownMainManagementTools,
 } from './mainManagementTools';
 import {
@@ -20,6 +22,7 @@ function makeId(prefix: string): string {
 
 async function cleanup(...sessionIds: string[]): Promise<void> {
   await shutdownMainManagementTools().catch(() => {});
+  resetMainManagementToolsForTests();
   for (const sessionId of sessionIds) {
     await sessionManager.deleteSession(sessionId).catch(() => false);
   }
@@ -128,7 +131,7 @@ test('list_agents uses the service and preserves isolated-session rejection', as
   }
 });
 
-test('shutdown drains and permits clean lazy reinitialization', async () => {
+test('terminal shutdown rejects later calls until explicit test reset', async () => {
   const sourceId = makeId('management_lifecycle');
   await sessionManager.getSession(sourceId);
   try {
@@ -136,9 +139,60 @@ test('shutdown drains and permits clean lazy reinitialization', async () => {
     assert.equal(getMainManagementToolServiceStatus().ready, true);
     await shutdownMainManagementTools();
     assert.equal(getMainManagementToolServiceStatus().ready, false);
+    await assert.rejects(
+      () => executeMainManagementTool('list_agents', {}, { sessionId: sourceId }),
+      (error: any) => error?.code === 'MAIN_MANAGEMENT_SHUTDOWN',
+    );
+    assert.equal(getMainManagementToolServiceStatus().ready, false);
+    resetMainManagementToolsForTests();
     await executeMainManagementTool('list_agents', {}, { sessionId: sourceId });
     assert.equal(getMainManagementToolServiceStatus().ready, true);
   } finally {
     await cleanup(sourceId);
   }
+});
+
+test('terminal shutdown drains accepted work and fences new calls', async () => {
+  const sourceId = makeId('management_drain');
+  await sessionManager.getSession(sourceId);
+  const original = (agentTools as any).tool_list_agents;
+  let markStarted!: () => void;
+  let releaseHandler!: () => void;
+  const started = new Promise<void>(resolve => { markStarted = resolve; });
+  const release = new Promise<void>(resolve => { releaseHandler = resolve; });
+  (agentTools as any).tool_list_agents = async () => {
+    markStarted();
+    await release;
+    return 'drained result';
+  };
+
+  try {
+    const accepted = executeMainManagementTool('list_agents', {}, { sessionId: sourceId });
+    await started;
+    let shutdownSettled = false;
+    const shutdown = shutdownMainManagementTools().then(() => { shutdownSettled = true; });
+    await Promise.resolve();
+    assert.equal(shutdownSettled, false);
+    await assert.rejects(
+      () => executeMainManagementTool('list_agents', {}, { sessionId: sourceId }),
+      (error: any) => error?.code === 'MAIN_MANAGEMENT_SHUTDOWN',
+    );
+    releaseHandler();
+    assert.equal(await accepted, 'drained result');
+    await shutdown;
+    assert.equal(getMainManagementToolServiceStatus().ready, false);
+  } finally {
+    releaseHandler?.();
+    (agentTools as any).tool_list_agents = original;
+    await cleanup(sourceId);
+  }
+});
+
+test('terminal shutdown fences an initialization already in flight', async () => {
+  const initialization = initializeMainManagementTools();
+  const shutdown = shutdownMainManagementTools();
+  await assert.rejects(initialization, (error: any) => error?.code === 'MAIN_MANAGEMENT_SHUTDOWN');
+  await shutdown;
+  assert.equal(getMainManagementToolServiceStatus().ready, false);
+  resetMainManagementToolsForTests();
 });

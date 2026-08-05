@@ -14,15 +14,29 @@ import type { ToolArgs, ToolContext } from './tools/helpers';
 let transport: LocalRpcTransport | undefined;
 let client: RpcClient<typeof mainManagementToolServiceDescriptor> | undefined;
 let initializing: Promise<void> | undefined;
+let terminalShutdown = false;
+
+function assertNotTerminallyShutDown(): void {
+  if (terminalShutdown) {
+    throw new RpcError('MAIN_MANAGEMENT_SHUTDOWN', 'Main management tool service is shutting down.', true);
+  }
+}
 
 export async function initializeMainManagementTools(): Promise<void> {
+  assertNotTerminallyShutDown();
   if (client) return;
   if (!initializing) {
     initializing = Promise.resolve().then(() => {
+      assertNotTerminallyShutDown();
       const registry = new RpcServiceRegistry();
       registry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler());
-      transport = new LocalRpcTransport(registry, { maxPendingRequests: 128 });
-      client = new RpcClient(mainManagementToolServiceDescriptor, transport);
+      const nextTransport = new LocalRpcTransport(registry, { maxPendingRequests: 128 });
+      if (terminalShutdown) {
+        nextTransport.close();
+        assertNotTerminallyShutDown();
+      }
+      transport = nextTransport;
+      client = new RpcClient(mainManagementToolServiceDescriptor, nextTransport);
     }).catch(error => {
       initializing = undefined;
       throw error;
@@ -66,8 +80,17 @@ export function getMainManagementToolServiceStatus(): { placement: 'local'; read
 }
 
 export async function shutdownMainManagementTools(timeoutMs = 10_000): Promise<void> {
+  terminalShutdown = true;
+  const pendingInitialization = initializing;
+  if (pendingInitialization) {
+    await pendingInitialization.catch(() => {});
+  }
   const currentTransport = transport;
-  if (!currentTransport) return;
+  if (!currentTransport) {
+    client = undefined;
+    initializing = undefined;
+    return;
+  }
   try {
     await currentTransport.drain(timeoutMs);
   } finally {
@@ -76,4 +99,12 @@ export async function shutdownMainManagementTools(timeoutMs = 10_000): Promise<v
     transport = undefined;
     initializing = undefined;
   }
+}
+
+/** Test-only: ordinary production shutdown is terminal and cannot be reset. */
+export function resetMainManagementToolsForTests(): void {
+  if (transport || client || initializing) {
+    throw new RpcError('MAIN_MANAGEMENT_TEST_RESET_ACTIVE', 'Shut down the Main Management tool service before resetting tests.');
+  }
+  terminalShutdown = false;
 }
