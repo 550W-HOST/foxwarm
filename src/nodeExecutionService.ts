@@ -79,7 +79,7 @@ export async function requireNodeExecutionTarget(sourceSessionId: string, nodeId
   return source;
 }
 
-export function createNodeExecutionServiceHandler(): RpcServiceHandler<typeof nodeExecutionServiceDescriptor> {
+export function createNodeExecutionServiceHandler(options: { expectedSourceSessionId?: string } = {}): RpcServiceHandler<typeof nodeExecutionServiceDescriptor> {
   return {
     async execute(input) {
       if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -87,6 +87,9 @@ export function createNodeExecutionServiceHandler(): RpcServiceHandler<typeof no
       }
       assertOnlyKeys(input, ['sourceSessionId', 'nodeId', 'toolName', 'args', 'routingSnapshot'], 'request');
       const sourceSessionId = requireString(input?.sourceSessionId, 'sourceSessionId');
+      if (options.expectedSourceSessionId && sourceSessionId !== options.expectedSourceSessionId) {
+        throw new RpcError('NODE_EXECUTION_SOURCE_MISMATCH', `Node execution reverse source must be \`${options.expectedSourceSessionId}\`.`);
+      }
       const nodeId = requireString(input?.nodeId, 'nodeId');
       const toolName = requireString(input?.toolName, 'toolName');
       const args = normalizeArgs(input?.args);

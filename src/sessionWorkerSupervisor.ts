@@ -3,10 +3,14 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { logger } from './common';
 import { createMainManagementToolServiceHandler, mainManagementToolServiceDescriptor } from './mainManagementToolService';
+import { createMcpExternalServiceHandler, mcpExternalServiceDescriptor } from './mcpExternalService';
+import { createNodeExecutionServiceHandler, nodeExecutionServiceDescriptor } from './nodeExecutionService';
 import { ProcessRpcClientTransport, ProcessRpcServer, RpcClient, RpcError, RpcServiceRegistry } from './rpc';
 import { SessionWorkerIdentity, sessionWorkerControlServiceDescriptor } from './sessionWorkerControlService';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { SessionWorkerOwnershipRecord, SessionWorkerStore } from './sessionWorkerStore';
+import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
+import { vectorServiceDescriptor } from './vectorServiceDescriptor';
 
 export type SessionWorkerSupervisorOptions = {
   store: SessionWorkerStore;
@@ -192,6 +196,9 @@ export class SessionWorkerSupervisor {
     try {
       const reverseRegistry = new RpcServiceRegistry();
       reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ expectedSourceSessionId: sessionId }));
+      reverseRegistry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: sessionId }));
+      reverseRegistry.register(mcpExternalServiceDescriptor, createMcpExternalServiceHandler({ expectedSourceSessionId: sessionId }));
+      reverseRegistry.register(vectorServiceDescriptor, createVectorFacadeProxyHandler());
       reverseServer = new ProcessRpcServer(reverseRegistry, {
         generation, peer: child, direction: 'reverse', exitOnDisconnect: false,
       });

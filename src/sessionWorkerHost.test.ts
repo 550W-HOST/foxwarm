@@ -7,6 +7,10 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { ProcessRpcClientTransport, ProcessRpcServer, RpcClient, RpcServiceRegistry } from './rpc';
 import { createMainManagementToolServiceHandler, mainManagementToolServiceDescriptor } from './mainManagementToolService';
+import { createMcpExternalServiceHandler, mcpExternalServiceDescriptor } from './mcpExternalService';
+import { createNodeExecutionServiceHandler, nodeExecutionServiceDescriptor } from './nodeExecutionService';
+import * as mcpClient from './mcpClient';
+import { nodesManager } from './nodes/manager';
 import { serializeSessionHistoryPayload } from './session/metadataStore';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { sessionWorkerControlServiceDescriptor } from './sessionWorkerControlService';
@@ -18,6 +22,9 @@ import * as llm from './llm';
 import * as sessionManager from './sessionManager';
 import { SESSIONS_FILE, TIMERS_FILE } from './config';
 import * as timers from './timers';
+import * as vector from './vector';
+import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
+import { vectorServiceDescriptor } from './vectorServiceDescriptor';
 
 function baseSession(id: string): Session {
   return {
@@ -225,6 +232,17 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   const store = new SessionWorkerStore(dbPath); store.open();
   const incarnationId = 'runtime-test-incarnation';
   const ownership = store.beginGeneration(sessionId, incarnationId);
+  const externalOriginals = {
+    getNode: nodesManager.getNode, executeTool: nodesManager.executeTool,
+    listServers: mcpClient.listServers, callTool: mcpClient.callTool, vectorSearch: vector.search,
+  };
+  const externalCalls: any[] = [];
+  (nodesManager as any).getNode = (nodeId: string) => ({ id: nodeId, ws: {}, tools: new Set(['read']) });
+  (nodesManager as any).executeTool = async (...args: any[]) => { externalCalls.push(['node', ...args]); return { node: args[0], tool: args[1] }; };
+  (mcpClient as any).listServers = async () => [{ name: 'reverse-mcp', enabled: true, transport: 'http', argsCount: 0,
+    envKeys: [] as string[], headerKeys: [] as string[], hasToken: false }];
+  (mcpClient as any).callTool = async (...args: any[]) => { externalCalls.push(['mcp', ...args]); return { echoed: args[2] }; };
+  (vector as any).search = async (...args: any[]) => { externalCalls.push(['vector', ...args]); return [{ id: 'reverse-hit' }]; };
   const child = fork(path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'), [], {
     env: {
       ...process.env,
@@ -236,12 +254,16 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
       FOXWARM_TEST_FAIL_WRITE_AT: '2',
       FOXWARM_TEST_FAIL_GOAL: '1',
       FOXWARM_TEST_WAIT_TOOL: '1',
+      FOXWARM_TEST_EXTERNAL_REVERSE: '1',
     },
     serialization: 'advanced',
   });
   const transport = new ProcessRpcClientTransport(child, { generation: ownership.generation });
   const reverseRegistry = new RpcServiceRegistry();
   reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ expectedSourceSessionId: sessionId }));
+  reverseRegistry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: sessionId }));
+  reverseRegistry.register(mcpExternalServiceDescriptor, createMcpExternalServiceHandler({ expectedSourceSessionId: sessionId }));
+  reverseRegistry.register(vectorServiceDescriptor, createVectorFacadeProxyHandler());
   const reverseServer = new ProcessRpcServer(reverseRegistry, {
     generation: ownership.generation, peer: child, direction: 'reverse', exitOnDisconnect: false,
   });
@@ -305,6 +327,13 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.equal(afterWait.meta.wait.reason, 'reverse wait');
     const waitTimer = (await fs.readJson(TIMERS_FILE)).timers.find((timer: any) => timer.waitTimeoutId === afterWait.meta.wait.id);
     assert.equal(waitTimer?.waitTimeoutSeconds, 30);
+    assert.deepEqual(externalCalls.map(call => call[0]), ['node', 'mcp', 'vector']);
+    assert.deepEqual(externalCalls[0].slice(1, 5), ['reverse-node', 'read', { filePath: 'reverse.txt' }, sessionId]);
+    assert.equal(externalCalls[1][1], 'reverse-mcp');
+    assert.equal(externalCalls[2][1], 'reverse vector query');
+    assert.match(afterWait.history.at(-1).parts[0].text, /"fenceErrors":\["NODE_EXECUTION_SOURCE_MISMATCH","MCP_EXTERNAL_SOURCE_MISMATCH"\]/);
+    assert.match(afterWait.history.at(-1).parts[0].text, /reverse-hit/);
+    assert.match(afterWait.history.at(-1).parts[0].text, /"loadedLocalVectorOwner":false/);
     if (waitTimer) await timers.deleteTimer(waitTimer.id, sessionId);
 
     const cursorBeforeInvalid = store.getOwnership(sessionId).mailboxCursor;
@@ -316,6 +345,11 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     Object.defineProperty(accessor, 'parts', { enumerable: true, get() { throw new Error('accessor ran'); } });
     assert.throws(() => store.enqueueIntent(sessionId, 'accessor', 'enqueue', accessor), /enumerable data properties/);
   } finally {
+    (nodesManager as any).getNode = externalOriginals.getNode;
+    (nodesManager as any).executeTool = externalOriginals.executeTool;
+    (mcpClient as any).listServers = externalOriginals.listServers;
+    (mcpClient as any).callTool = externalOriginals.callTool;
+    (vector as any).search = externalOriginals.vectorSearch;
     try { await transport.drain(2_000); } catch {}
     try { await reverseServer.drain(2_000); } catch {}
     reverseServer.close();

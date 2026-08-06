@@ -2,6 +2,7 @@ import {
   LocalRpcTransport,
   RpcClient,
   RpcError,
+  type RpcTransport,
   RpcServiceRegistry,
 } from './rpc';
 import {
@@ -10,10 +11,13 @@ import {
   NodeExecutionRoutingSnapshot,
 } from './nodeExecutionService';
 
-let transport: LocalRpcTransport | undefined;
+let transport: RpcTransport | undefined;
 let client: RpcClient<typeof nodeExecutionServiceDescriptor> | undefined;
 let initializing: Promise<void> | undefined;
+let initializingTransport: RpcTransport | null | undefined;
 let terminalShutdown = false;
+let ownsTransport = true;
+let placement: 'local' | 'child-reverse' = 'local';
 
 function assertNotTerminallyShutDown(): void {
   if (terminalShutdown) {
@@ -21,12 +25,28 @@ function assertNotTerminallyShutDown(): void {
   }
 }
 
-export async function initializeNodeExecution(): Promise<void> {
+export async function initializeNodeExecution(options: { transport?: RpcTransport; placement?: 'child-reverse' } = {}): Promise<void> {
   assertNotTerminallyShutDown();
-  if (client) return;
+  if (client) {
+    if ((options.transport && transport !== options.transport) || (!options.transport && placement !== 'local')) {
+      throw new RpcError('NODE_EXECUTION_PLACEMENT_LOCKED', 'Node execution placement is already initialized.');
+    }
+    return;
+  }
+  if (initializing) {
+    if (initializingTransport !== (options.transport || null)) {
+      throw new RpcError('NODE_EXECUTION_PLACEMENT_LOCKED', 'Node execution placement initialization is already in progress.');
+    }
+    await initializing; return;
+  }
   if (!initializing) {
+    initializingTransport = options.transport || null;
     initializing = Promise.resolve().then(() => {
       assertNotTerminallyShutDown();
+      if (options.transport) {
+        transport = options.transport; ownsTransport = false; placement = options.placement || 'child-reverse';
+        client = new RpcClient(nodeExecutionServiceDescriptor, options.transport); return;
+      }
       const registry = new RpcServiceRegistry();
       registry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler());
       const nextTransport = new LocalRpcTransport(registry, { maxPendingRequests: 128 });
@@ -36,16 +56,16 @@ export async function initializeNodeExecution(): Promise<void> {
       }
       transport = nextTransport;
       client = new RpcClient(nodeExecutionServiceDescriptor, nextTransport);
-    }).catch(error => {
-      initializing = undefined;
-      throw error;
     });
   }
-  await initializing;
+  const pending = initializing;
+  try { await pending; }
+  finally { if (initializing === pending) { initializing = undefined; initializingTransport = undefined; } }
 }
 
 async function getClient(): Promise<RpcClient<typeof nodeExecutionServiceDescriptor>> {
-  await initializeNodeExecution();
+  assertNotTerminallyShutDown();
+  if (!client) await initializeNodeExecution();
   if (!client) throw new RpcError('NODE_EXECUTION_UNAVAILABLE', 'Node execution service is unavailable.', true);
   return client;
 }
@@ -67,8 +87,8 @@ export async function executeRemoteNodeTool(
   return response.result;
 }
 
-export function getNodeExecutionStatus(): { placement: 'local'; ready: boolean } {
-  return { placement: 'local', ready: !!client };
+export function getNodeExecutionStatus(): { placement: 'local' | 'child-reverse'; ready: boolean } {
+  return { placement, ready: !!client };
 }
 
 export async function shutdownNodeExecution(timeoutMs = 10_000): Promise<void> {
@@ -79,7 +99,11 @@ export async function shutdownNodeExecution(timeoutMs = 10_000): Promise<void> {
   if (!currentTransport) {
     client = undefined;
     initializing = undefined;
+    initializingTransport = undefined;
     return;
+  }
+  if (!ownsTransport) {
+    client = undefined; transport = undefined; initializing = undefined; initializingTransport = undefined; return;
   }
   try {
     await currentTransport.drain(timeoutMs);
@@ -88,6 +112,7 @@ export async function shutdownNodeExecution(timeoutMs = 10_000): Promise<void> {
     client = undefined;
     transport = undefined;
     initializing = undefined;
+    initializingTransport = undefined;
   }
 }
 
@@ -97,6 +122,9 @@ export function resetNodeExecutionForTests(): void {
     throw new RpcError('NODE_EXECUTION_TEST_RESET_ACTIVE', 'Shut down Node execution before resetting tests.');
   }
   terminalShutdown = false;
+  ownsTransport = true;
+  placement = 'local';
+  initializingTransport = undefined;
 }
 
 export type { NodeExecutionRoutingSnapshot } from './nodeExecutionService';

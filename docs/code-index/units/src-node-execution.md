@@ -5,14 +5,14 @@ Secondary files: src/llm.ts, src/tools/nodeTools.ts, src/tools/unifiedTools.test
 
 ## Purpose
 
-Provides the versioned local RPC boundary for model-tool execution over a connected remote node. The main process remains the sole owner of authenticated node WebSocket connections, while the colocated `master` execution environment bypasses this service and runs the existing local named handler directly.
+Provides the versioned RPC boundary for model-tool execution over a connected remote node. Main-local callers use a local transport; a Session worker borrows its one reverse transport to reach the same Main-owned handler. Main remains the sole owner of authenticated node WebSocket connections, while the colocated `master` execution environment bypasses this service and runs the existing local named handler directly.
 
 ## Key exports
 
 - `nodeExecutionServiceDescriptor` — version 1 descriptor with one fixed `execute` method.
-- `createNodeExecutionServiceHandler()` — validates source identity, remote target, isolation binding, connection state, advertised tool, args, and optional routing snapshot before dispatch.
+- `createNodeExecutionServiceHandler()` — validates source identity, optional exact worker-source fence, remote target, isolation binding, connection state, advertised tool, args, and optional routing snapshot before dispatch.
 - `executeRemoteNodeTool()` — placement-neutral current caller used by direct remote node-environment builtins and dynamic node calls.
-- `initializeNodeExecution()` / `shutdownNodeExecution()` — local transport lifecycle with one-way terminal drain fencing.
+- `initializeNodeExecution()` / `shutdownNodeExecution()` — owned-local or borrowed-reverse client lifecycle with one-way terminal fencing.
 - `resetNodeExecutionForTests()` — explicit test-only reset after terminal shutdown.
 
 ## Boundary
@@ -33,7 +33,7 @@ Direct adjacent `exec` calls pass the batch's captured node/cwd snapshot. Dynami
 
 ## Lifecycle
 
-Production shutdown fences initialization and all new calls before waiting for an in-flight initializer and draining accepted work. The service cannot lazy-reopen during later shutdown. Same-process reuse exists only through the test-only reset after no client, transport, or initializer remains.
+Production initialization is bound to one exact local/borrowed transport; a conflicting concurrent placement cannot silently join. Shutdown fences initialization and all new calls before waiting for an in-flight initializer. Main-local placement drains/closes its owned transport. Borrowed Session-worker placement only clears its client; the worker drains/closes the shared reverse transport once after all borrowed facades are fenced. The service cannot lazy-reopen during later shutdown. Same-process reuse exists only through the test-only reset after no client, transport, or initializer remains.
 
 ## Tests
 

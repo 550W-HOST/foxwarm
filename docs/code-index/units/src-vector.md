@@ -1,6 +1,6 @@
 # Unit: src-vector
 
-Files: src/vector.ts, src/vectorRuntime.ts, src/vectorService.ts, src/vectorServiceManager.ts, src/vectorWorker.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.lineage.test.ts, src/vector.memoryFacts.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.segmentBuilder.test.ts, src/vectorService.smoke.test.ts, src/vectorServiceManager.test.ts
+Files: src/vector.ts, src/vectorRuntime.ts, src/vectorService.ts, src/vectorServiceDescriptor.ts, src/vectorFacadeProxy.ts, src/vectorServiceManager.ts, src/vectorWorker.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.lineage.test.ts, src/vector.memoryFacts.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.segmentBuilder.test.ts, src/vectorService.smoke.test.ts, src/vectorServiceManager.test.ts, src/vectorExternalPlacement.test.ts
 
 ## Purpose
 
@@ -64,7 +64,8 @@ Model-facing `contentFilter` and final preview filtering are owned by the shared
 
 ## Process placement
 
-- `vector.ts` is the caller-facing asynchronous facade; compatibility indexing never sends the supplied full history over RPC.
+- `vector.ts` is the caller-facing asynchronous facade; compatibility indexing never sends the supplied full history over RPC. Main owns its selected local/worker manager. A Session worker can instead borrow an external client over its shared reverse transport; this placement never constructs the manager, imports the runtime, opens LanceDB, or falls back locally.
+- `vectorFacadeProxy.ts` registers the same bounded vector descriptor on Main but delegates only through the already selected `vector.ts` facade, preserving `dbWorkers` ownership rather than calling `vectorRuntime` directly.
 - `vectorRuntime.ts` owns LanceDB state and imports the native LanceDB module lazily, so the main process does not load it when `dbWorkers:true`.
 - `vectorService.ts` maps bounded request/response DTOs to the same runtime in either placement.
 - `vectorServiceManager.ts` starts the child, waits until LanceDB is open, reports retryable unavailability while it is down, and restarts an unexpected exit with bounded backoff. It never opens a local fallback owner after a child failure.

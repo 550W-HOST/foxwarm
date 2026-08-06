@@ -12,10 +12,11 @@ import {
   createMcpExternalServiceHandler,
   listMcpServers,
   listMcpTools,
+  mcpExternalServiceDescriptor,
   resetMcpExternalServiceForTests,
   shutdownMcpExternalService,
 } from './mcpExternalService';
-import { RpcError } from './rpc';
+import { LocalRpcTransport, RpcClient, RpcError, RpcServiceRegistry } from './rpc';
 import * as isolatedCheck from './isolatedCheck';
 
 function makeId(prefix: string): string {
@@ -39,6 +40,20 @@ async function withTempStore(run: (store: ReturnType<typeof mcpClient.createMcpC
     await fs.remove(dirPath).catch(() => {});
   }
 }
+
+test('bound reverse MCP handler rejects wrong source before lookup or client effect', async () => {
+  const registry = new RpcServiceRegistry();
+  registry.register(mcpExternalServiceDescriptor, createMcpExternalServiceHandler({ expectedSourceSessionId: 'owned' }));
+  const transport = new LocalRpcTransport(registry);
+  const originalLookup = sessionManager.getExistingSession;
+  let lookups = 0;
+  (sessionManager as any).getExistingSession = async (): Promise<null> => { lookups += 1; return null; };
+  try {
+    await assert.rejects(() => new RpcClient(mcpExternalServiceDescriptor, transport).call('listServers', { sourceSessionId: 'wrong' }),
+      { code: 'MCP_EXTERNAL_SOURCE_MISMATCH' });
+    assert.equal(lookups, 0);
+  } finally { (sessionManager as any).getExistingSession = originalLookup; await transport.drain(); transport.close(); }
+});
 
 test('MCP external service clones secret-bearing config and returns only redacted summaries', async () => {
   const sourceId = makeId('mcp_service_config');

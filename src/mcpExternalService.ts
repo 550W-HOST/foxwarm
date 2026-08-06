@@ -4,6 +4,7 @@ import {
   rpcMethod,
   RpcClient,
   RpcError,
+  type RpcTransport,
   RpcServiceHandler,
   RpcServiceRegistry,
 } from './rpc';
@@ -160,8 +161,11 @@ async function runWithAllSecretsRedacted<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-async function authorize(sourceSessionId: unknown, toolName: string, args: Record<string, unknown> = {}): Promise<string> {
+async function authorize(sourceSessionId: unknown, toolName: string, args: Record<string, unknown> = {}, expectedSourceSessionId?: string): Promise<string> {
   const source = requireString(sourceSessionId, 'sourceSessionId');
+  if (expectedSourceSessionId && source !== expectedSourceSessionId) {
+    throw new RpcError('MCP_EXTERNAL_SOURCE_MISMATCH', `MCP external reverse source must be \`${expectedSourceSessionId}\`.`);
+  }
   if (!await sessionManager.getExistingSession(source)) {
     throw new RpcError('MCP_EXTERNAL_SOURCE_NOT_FOUND', `Source session \`${source}\` was not found.`);
   }
@@ -169,17 +173,17 @@ async function authorize(sourceSessionId: unknown, toolName: string, args: Recor
   return source;
 }
 
-export function createMcpExternalServiceHandler(): RpcServiceHandler<typeof mcpExternalServiceDescriptor> {
+export function createMcpExternalServiceHandler(options: { expectedSourceSessionId?: string } = {}): RpcServiceHandler<typeof mcpExternalServiceDescriptor> {
   return {
     async listServers(input) {
       const request = requireExactRecord(input, 'listServers request', ['sourceSessionId']);
-      await authorize(request.sourceSessionId, 'list_mcp_servers');
+      await authorize(request.sourceSessionId, 'list_mcp_servers', {}, options.expectedSourceSessionId);
       return { servers: await mcpClient.listServers() };
     },
     async listTools(input) {
       const request = requireExactRecord(input, 'listTools request', ['sourceSessionId', 'server']);
       const server = optionalString(request.server, 'server');
-      await authorize(request.sourceSessionId, 'search_mcp_tools', { server });
+      await authorize(request.sourceSessionId, 'search_mcp_tools', { server }, options.expectedSourceSessionId);
       return { result: await runWithAllSecretsRedacted(() => mcpClient.listTools(server)) };
     },
     async callTool(input) {
@@ -187,7 +191,7 @@ export function createMcpExternalServiceHandler(): RpcServiceHandler<typeof mcpE
       const server = optionalString(request.server, 'server');
       const name = requireString(request.name, 'name');
       const args = requireJsonArgs(request.args);
-      await authorize(request.sourceSessionId, 'call_mcp', { server, tool: name, args });
+      await authorize(request.sourceSessionId, 'call_mcp', { server, tool: name, args }, options.expectedSourceSessionId);
       return { result: await runWithAllSecretsRedacted(() => mcpClient.callTool(server, name, args)) };
     },
     async configure(input) {
@@ -199,7 +203,7 @@ export function createMcpExternalServiceHandler(): RpcServiceHandler<typeof mcpE
         if (typeof request.enabled !== 'boolean') {
           throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', 'enabled must be a boolean.');
         }
-        await authorize(request.sourceSessionId, 'mcp_config', { name, action });
+        await authorize(request.sourceSessionId, 'mcp_config', { name, action }, options.expectedSourceSessionId);
         try {
           await mcpClient.setServerEnabled(name, request.enabled);
         } catch (error) {
@@ -209,7 +213,7 @@ export function createMcpExternalServiceHandler(): RpcServiceHandler<typeof mcpE
         requireExactRecord(request, 'configure upsert request', ['sourceSessionId', 'name', 'action', 'config']);
         const name = requireString(request.name, 'name');
         const config = requireServerConfig(request.config);
-        await authorize(request.sourceSessionId, 'mcp_config', { name, action });
+        await authorize(request.sourceSessionId, 'mcp_config', { name, action }, options.expectedSourceSessionId);
         try {
           await mcpClient.upsertServer(name, config);
         } catch (error) {
@@ -223,21 +227,40 @@ export function createMcpExternalServiceHandler(): RpcServiceHandler<typeof mcpE
   };
 }
 
-let transport: LocalRpcTransport | undefined;
+let transport: RpcTransport | undefined;
 let client: RpcClient<typeof mcpExternalServiceDescriptor> | undefined;
 let initializing: Promise<void> | undefined;
+let initializingTransport: RpcTransport | null | undefined;
 let terminalShutdown = false;
+let ownsTransport = true;
+let placement: 'local' | 'child-reverse' = 'local';
 
 function assertNotTerminallyShutDown(): void {
   if (terminalShutdown) throw new RpcError('MCP_EXTERNAL_SHUTDOWN', 'MCP external service is shutting down.', true);
 }
 
-export async function initializeMcpExternalService(): Promise<void> {
+export async function initializeMcpExternalService(options: { transport?: RpcTransport; placement?: 'child-reverse' } = {}): Promise<void> {
   assertNotTerminallyShutDown();
-  if (client) return;
+  if (client) {
+    if ((options.transport && transport !== options.transport) || (!options.transport && placement !== 'local')) {
+      throw new RpcError('MCP_EXTERNAL_PLACEMENT_LOCKED', 'MCP external placement is already initialized.');
+    }
+    return;
+  }
+  if (initializing) {
+    if (initializingTransport !== (options.transport || null)) {
+      throw new RpcError('MCP_EXTERNAL_PLACEMENT_LOCKED', 'MCP external placement initialization is already in progress.');
+    }
+    await initializing; return;
+  }
   if (!initializing) {
+    initializingTransport = options.transport || null;
     initializing = Promise.resolve().then(() => {
       assertNotTerminallyShutDown();
+      if (options.transport) {
+        transport = options.transport; ownsTransport = false; placement = options.placement || 'child-reverse';
+        client = new RpcClient(mcpExternalServiceDescriptor, options.transport); return;
+      }
       const registry = new RpcServiceRegistry();
       registry.register(mcpExternalServiceDescriptor, createMcpExternalServiceHandler());
       const nextTransport = new LocalRpcTransport(registry, { maxPendingRequests: 128 });
@@ -247,16 +270,16 @@ export async function initializeMcpExternalService(): Promise<void> {
       }
       transport = nextTransport;
       client = new RpcClient(mcpExternalServiceDescriptor, nextTransport);
-    }).catch(error => {
-      initializing = undefined;
-      throw error;
     });
   }
-  await initializing;
+  const pending = initializing;
+  try { await pending; }
+  finally { if (initializing === pending) { initializing = undefined; initializingTransport = undefined; } }
 }
 
 async function getClient(): Promise<RpcClient<typeof mcpExternalServiceDescriptor>> {
-  await initializeMcpExternalService();
+  assertNotTerminallyShutDown();
+  if (!client) await initializeMcpExternalService();
   if (!client) throw new RpcError('MCP_EXTERNAL_UNAVAILABLE', 'MCP external service is unavailable.', true);
   return client;
 }
@@ -284,7 +307,11 @@ export async function shutdownMcpExternalService(timeoutMs = 10_000): Promise<vo
   if (!currentTransport) {
     client = undefined;
     initializing = undefined;
+    initializingTransport = undefined;
     return;
+  }
+  if (!ownsTransport) {
+    client = undefined; transport = undefined; initializing = undefined; initializingTransport = undefined; return;
   }
   try {
     await currentTransport.drain(timeoutMs);
@@ -293,6 +320,7 @@ export async function shutdownMcpExternalService(timeoutMs = 10_000): Promise<vo
     client = undefined;
     transport = undefined;
     initializing = undefined;
+    initializingTransport = undefined;
   }
 }
 
@@ -302,4 +330,7 @@ export function resetMcpExternalServiceForTests(): void {
     throw new RpcError('MCP_EXTERNAL_TEST_RESET_ACTIVE', 'Shut down MCP external service before resetting tests.');
   }
   terminalShutdown = false;
+  ownsTransport = true;
+  placement = 'local';
+  initializingTransport = undefined;
 }

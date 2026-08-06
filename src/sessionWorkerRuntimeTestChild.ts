@@ -1,5 +1,7 @@
 import { logger } from './common';
 import { initializeMainManagementTools, shutdownMainManagementTools } from './mainManagementTools';
+import { callMcpTool, initializeMcpExternalService, listMcpServers, shutdownMcpExternalService } from './mcpExternalService';
+import { executeRemoteNodeTool, initializeNodeExecution, shutdownNodeExecution } from './nodeExecution';
 import * as llm from './llm';
 import { initLlmRequestJournal } from './llmRequestJournal';
 import { ProcessRpcClientTransport, ProcessRpcServer, RpcServiceRegistry } from './rpc';
@@ -17,6 +19,7 @@ import { createSessionWorkerRuntimeServiceHandler, sessionWorkerRuntimeServiceDe
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { tool_set_goal } from './toolsSessionAgent/settings';
 import { tool_wait } from './toolsSessionAgent/interSession';
+import * as vector from './vector';
 
 async function start(): Promise<void> {
   const sessionId = process.env.FOXWARM_SESSION_WORKER_SESSION_ID!;
@@ -46,6 +49,21 @@ async function start(): Promise<void> {
         { reason: 'reverse wait', timeoutSeconds: 30 },
         { sessionId: session.id, session, persistCurrentSession: () => options.currentSessionEffects.persistSession(session) } as any,
       );
+      if (process.env.FOXWARM_TEST_EXTERNAL_REVERSE === '1') {
+        const fenceErrors: string[] = [];
+        try { await executeRemoteNodeTool('wrong-source', 'reverse-node', 'read', {}); }
+        catch (error: any) { fenceErrors.push(error?.code); }
+        try { await listMcpServers('wrong-source'); }
+        catch (error: any) { fenceErrors.push(error?.code); }
+        const nodeResult = await executeRemoteNodeTool(session.id, 'reverse-node', 'read', { filePath: 'reverse.txt' },
+          { currentNode: 'reverse-node', cwd: '/worker-cwd' });
+        const servers = await listMcpServers(session.id);
+        const mcpResult = await callMcpTool(session.id, 'reverse-mcp', 'echo', { value: 7 });
+        const vectorResult = await vector.search('reverse vector query', 2, false, { sessionIds: [session.id] });
+        const loadedLocalVectorOwner = Object.keys(require.cache).some(file => /vector(Runtime|ServiceManager)\.js$/.test(file));
+        await options.appendMessage({ role: 'model', parts: [{ text: JSON.stringify({ fenceErrors, nodeResult, servers, mcpResult, vectorResult, loadedLocalVectorOwner }) }] });
+        return { text: 'reverse external services complete' };
+      }
       await options.appendMessage({ role: 'model', parts: [{ text: 'reverse wait scheduled' }] });
       return { text: 'reverse wait scheduled' };
     }
@@ -59,6 +77,9 @@ async function start(): Promise<void> {
   const reverseTransport = new ProcessRpcClientTransport(process, { generation, direction: 'reverse' });
   await reverseTransport.waitUntilReady();
   await initializeMainManagementTools({ transport: reverseTransport, placement: 'child-reverse' });
+  await initializeNodeExecution({ transport: reverseTransport, placement: 'child-reverse' });
+  await initializeMcpExternalService({ transport: reverseTransport, placement: 'child-reverse' });
+  await vector.init({ transport: reverseTransport, placement: 'child-reverse' });
   const host = new SessionWorkerHost(identity, store, {
     persistence: {
       readState: async id => {
@@ -89,7 +110,10 @@ async function start(): Promise<void> {
     gate,
   ));
   registry.register(sessionWorkerRuntimeServiceDescriptor, createSessionWorkerRuntimeServiceHandler(gate, host));
-  new ProcessRpcServer(registry, { generation, exitOnDrain: true, onDrain: async () => { await shutdownMainManagementTools(); store.close(); } }).start();
+  new ProcessRpcServer(registry, { generation, exitOnDrain: true, onDrain: async () => {
+    await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownMcpExternalService(), vector.shutdown()]);
+    await reverseTransport.drain(); reverseTransport.close(); store.close();
+  } }).start();
 }
 
 void start().catch(error => {

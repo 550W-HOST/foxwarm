@@ -6,6 +6,8 @@ import * as nodeExecution from './nodeExecution';
 import { nodesManager } from './nodes/manager';
 import * as sessionManager from './sessionManager';
 import { call_tool } from './tools';
+import { createNodeExecutionServiceHandler, nodeExecutionServiceDescriptor } from './nodeExecutionService';
+import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -22,6 +24,21 @@ async function cleanup(...sessionIds: string[]): Promise<void> {
     await sessionManager.deleteSession(sessionId).catch(() => false);
   }
 }
+
+test('bound reverse Node handler rejects wrong source before lookup or effect', async () => {
+  const registry = new RpcServiceRegistry();
+  registry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: 'owned' }));
+  const transport = new LocalRpcTransport(registry);
+  const originalLookup = sessionManager.getExistingSession;
+  let lookups = 0;
+  (sessionManager as any).getExistingSession = async (): Promise<null> => { lookups += 1; return null; };
+  try {
+    await assert.rejects(() => new RpcClient(nodeExecutionServiceDescriptor, transport).call('execute', {
+      sourceSessionId: 'wrong', nodeId: 'remote', toolName: 'read', args: {},
+    }), { code: 'NODE_EXECUTION_SOURCE_MISMATCH' });
+    assert.equal(lookups, 0);
+  } finally { (sessionManager as any).getExistingSession = originalLookup; await transport.drain(); transport.close(); }
+});
 
 test('direct remote builtin and dynamic node calls share the Node execution service', async () => {
   const sourceId = makeId('node_execution_source');

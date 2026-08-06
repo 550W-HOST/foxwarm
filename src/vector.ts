@@ -1,21 +1,43 @@
 import { Message } from './types';
-import { RpcError } from './rpc';
-import { VectorServiceManager } from './vectorServiceManager';
-import * as runtime from './vectorRuntime';
+import { RpcClient, RpcError, type RpcTransport } from './rpc';
+import type { VectorServiceManager } from './vectorServiceManager';
+import type * as runtime from './vectorRuntime';
+import { vectorServiceDescriptor } from './vectorServiceDescriptor';
 
 let manager: VectorServiceManager | undefined;
+let externalTransport: RpcTransport | undefined;
+let externalClient: RpcClient<typeof vectorServiceDescriptor> | undefined;
+let externalTerminal = false;
 
 export type VectorInitOptions = {
   useWorker?: boolean;
+  transport?: RpcTransport;
+  placement?: 'child-reverse';
 };
 
 export async function init(options: VectorInitOptions = {}): Promise<void> {
+  if (externalTerminal) throw new RpcError('VECTOR_SHUTTING_DOWN', 'Vector facade is shutting down.', true);
+  if (options.transport) {
+    if (manager || (externalTransport && externalTransport !== options.transport)) {
+      throw new RpcError('VECTOR_PLACEMENT_CHANGE_REQUIRES_RESTART', 'Vector service placement cannot change after startup.');
+    }
+    externalTransport = options.transport;
+    externalClient = new RpcClient(vectorServiceDescriptor, options.transport);
+    return;
+  }
+  if (externalClient) throw new RpcError('VECTOR_PLACEMENT_CHANGE_REQUIRES_RESTART', 'Vector service placement cannot change after startup.');
   const useWorker = options.useWorker === true;
-  if (!manager) manager = new VectorServiceManager({ useWorker });
+  if (!manager) {
+    const { VectorServiceManager } = await import('./vectorServiceManager');
+    manager = new VectorServiceManager({ useWorker });
+  }
   await manager.start();
 }
 
 export async function shutdown(): Promise<void> {
+  if (externalClient || externalTransport) {
+    externalTerminal = true; externalClient = undefined; externalTransport = undefined; return;
+  }
   const current = manager;
   if (!current) return;
   await current.shutdown();
@@ -24,7 +46,8 @@ export async function shutdown(): Promise<void> {
   if (manager === current) manager = undefined;
 }
 
-export function getVectorServiceStatus(): ReturnType<VectorServiceManager['getStatus']> {
+export function getVectorServiceStatus(): { mode?: 'local' | 'worker' | 'external'; ready: boolean; generation?: number; pid?: number } {
+  if (externalClient) return { mode: 'external', ready: true };
   return manager?.getStatus() || { ready: false };
 }
 
@@ -90,18 +113,18 @@ export async function indexMemoryFactsFromCompaction(input: runtime.CompactMemor
 }
 
 export async function renameSessionArchiveIndex(oldSessionId: string, newSessionId: string): Promise<void> {
-  if (!manager) {
+  if (!manager && !externalClient) {
     // Startup move-journal recovery runs before vector placement starts and
     // touches only archive SQLite checkpoints, never LanceDB.
-    await runtime.renameSessionArchiveIndex(oldSessionId, newSessionId);
+    await localRuntime().renameSessionArchiveIndex(oldSessionId, newSessionId);
     return;
   }
   await callVector('renameSessionArchiveIndex', { oldSessionId, newSessionId });
 }
 
 export async function copySessionArchiveIndexCheckpoint(sourceSessionId: string, targetSessionId: string): Promise<void> {
-  if (!manager) {
-    await runtime.copySessionArchiveIndexCheckpoint(sourceSessionId, targetSessionId);
+  if (!manager && !externalClient) {
+    await localRuntime().copySessionArchiveIndexCheckpoint(sourceSessionId, targetSessionId);
     return;
   }
   await callVector('copySessionArchiveIndexCheckpoint', { sourceSessionId, targetSessionId });
@@ -117,11 +140,12 @@ async function callVector<MethodName extends Parameters<ReturnType<VectorService
   methodName: MethodName,
   input: any,
 ): Promise<any> {
-  if (!manager) {
+  const selectedClient = externalClient || manager?.getClient();
+  if (!selectedClient) {
     throw new RpcError('VECTOR_UNAVAILABLE', 'Vector service has not been initialized.', true);
   }
   try {
-    return await manager.getClient().call(methodName as any, input);
+    return await selectedClient.call(methodName as any, input);
   } catch (error) {
     if (error instanceof RpcError && [
       'RPC_UNAVAILABLE',
@@ -129,6 +153,9 @@ async function callVector<MethodName extends Parameters<ReturnType<VectorService
       'RPC_SEND_FAILED',
       'RPC_READY_TIMEOUT',
       'RPC_DRAINING',
+      'RPC_PROTOCOL_MISMATCH',
+      'RPC_SERVICE_UNAVAILABLE',
+      'RPC_SERVICE_VERSION_MISMATCH',
     ].includes(error.code)) {
       throw new RpcError('VECTOR_UNAVAILABLE', error.message, true);
     }
@@ -137,11 +164,12 @@ async function callVector<MethodName extends Parameters<ReturnType<VectorService
 }
 
 // Pure/vector-row helpers remain local and never carry a LanceDB handle.
-export const buildArchiveSegments = runtime.buildArchiveSegments;
-export const calculateNextSegmentStartIndex = runtime.calculateNextSegmentStartIndex;
-export const createRowsFromMemoryFacts = runtime.createRowsFromMemoryFacts;
-export const createRowsFromSegment = runtime.createRowsFromSegment;
-export const createRowFromBlockRecord = runtime.createRowFromBlockRecord;
-export const estimateArchiveMessageTokenCount = runtime.estimateArchiveMessageTokenCount;
-export const getArchiveIndexBatchDecision = runtime.getArchiveIndexBatchDecision;
-export const sanitizeEmbeddingInput = runtime.sanitizeEmbeddingInput;
+function localRuntime(): typeof import('./vectorRuntime') { return require('./vectorRuntime'); }
+export const buildArchiveSegments: typeof runtime.buildArchiveSegments = (...args) => localRuntime().buildArchiveSegments(...args);
+export const calculateNextSegmentStartIndex: typeof runtime.calculateNextSegmentStartIndex = (...args) => localRuntime().calculateNextSegmentStartIndex(...args);
+export const createRowsFromMemoryFacts: typeof runtime.createRowsFromMemoryFacts = (...args) => localRuntime().createRowsFromMemoryFacts(...args);
+export const createRowsFromSegment: typeof runtime.createRowsFromSegment = (...args) => localRuntime().createRowsFromSegment(...args);
+export const createRowFromBlockRecord: typeof runtime.createRowFromBlockRecord = (...args) => localRuntime().createRowFromBlockRecord(...args);
+export const estimateArchiveMessageTokenCount: typeof runtime.estimateArchiveMessageTokenCount = (...args) => localRuntime().estimateArchiveMessageTokenCount(...args);
+export const getArchiveIndexBatchDecision: typeof runtime.getArchiveIndexBatchDecision = (...args) => localRuntime().getArchiveIndexBatchDecision(...args);
+export const sanitizeEmbeddingInput: typeof runtime.sanitizeEmbeddingInput = (...args) => localRuntime().sanitizeEmbeddingInput(...args);

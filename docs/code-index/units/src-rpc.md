@@ -13,7 +13,7 @@ Provides the minimal typed asynchronous service boundary shared by in-process ha
 - `RpcServiceRegistry` — exact service/version registration and handler dispatch.
 - `RpcClient` / `RpcTransport` — placement-neutral typed callers.
 - `LocalRpcTransport` — asynchronous structured-clone local dispatch with bounded requests/events and process-equivalent error DTOs.
-- `ProcessRpcClientTransport` / `ProcessRpcServer` — versioned bidirectional parent/child IPC with distinct forward/reverse wire kinds, readiness, cancellation, generation filtering, and drain. Forward mode retains events; reverse v1 rejects subscriptions/events explicitly.
+- `ProcessRpcClientTransport` / `ProcessRpcServer` — versioned bidirectional parent/child IPC with distinct forward/reverse wire kinds, readiness, cancellation, generation filtering, and channel-wide drain. One Session-worker reverse client is borrowed concurrently by Main Management, Node execution, MCP external, and vector facades; facade shutdown never drains/closes that shared transport individually. Forward mode retains events; reverse v1 rejects subscriptions/events explicitly.
 - `RpcError` — transport-safe code/message/retryability/details envelope.
 
 ## Behavior

@@ -1,5 +1,7 @@
 import { logger } from './common';
 import { initializeMainManagementTools, shutdownMainManagementTools } from './mainManagementTools';
+import { initializeMcpExternalService, shutdownMcpExternalService } from './mcpExternalService';
+import { initializeNodeExecution, shutdownNodeExecution } from './nodeExecution';
 import { ProcessRpcClientTransport, ProcessRpcServer, RpcServiceRegistry } from './rpc';
 import {
   createSessionWorkerControlServiceHandler,
@@ -10,6 +12,7 @@ import { SessionWorkerHost } from './sessionWorkerHost';
 import { createSessionWorkerRuntimeServiceHandler, sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { SessionWorkerStore } from './sessionWorkerStore';
+import * as vector from './vector';
 
 async function start(): Promise<void> {
   const sessionId = process.env.FOXWARM_SESSION_WORKER_SESSION_ID || '';
@@ -29,7 +32,15 @@ async function start(): Promise<void> {
   const host = new SessionWorkerHost(identity, store);
   const reverseTransport = new ProcessRpcClientTransport(process, { generation, direction: 'reverse' });
   await reverseTransport.waitUntilReady();
-  await initializeMainManagementTools({ transport: reverseTransport, placement: 'child-reverse' });
+  try {
+    await initializeMainManagementTools({ transport: reverseTransport, placement: 'child-reverse' });
+    await initializeNodeExecution({ transport: reverseTransport, placement: 'child-reverse' });
+    await initializeMcpExternalService({ transport: reverseTransport, placement: 'child-reverse' });
+    await vector.init({ transport: reverseTransport, placement: 'child-reverse' });
+  } catch (error) {
+    await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownMcpExternalService(), vector.shutdown()]);
+    reverseTransport.close(); store.close(); throw error;
+  }
   const registry = new RpcServiceRegistry();
   registry.register(
     sessionWorkerControlServiceDescriptor,
@@ -41,7 +52,10 @@ async function start(): Promise<void> {
   new ProcessRpcServer(registry, {
     generation,
     exitOnDrain: true,
-    onDrain: async () => { await shutdownMainManagementTools(); store.close(); },
+    onDrain: async () => {
+      await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownMcpExternalService(), vector.shutdown()]);
+      await reverseTransport.drain(); reverseTransport.close(); store.close();
+    },
   }).start();
 }
 

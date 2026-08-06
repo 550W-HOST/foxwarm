@@ -21,6 +21,7 @@ let initializingTransport: RpcTransport | null | undefined;
 let initializingPlacement: 'local' | 'child-reverse' | undefined;
 let terminalShutdown = false;
 let placement: 'local' | 'child-reverse' = 'local';
+let ownsTransport = true;
 
 function assertNotTerminallyShutDown(): void {
   if (terminalShutdown) {
@@ -54,6 +55,7 @@ export async function initializeMainManagementTools(options: {
       assertNotTerminallyShutDown();
       if (options.transport) {
         transport = options.transport;
+        ownsTransport = false;
         placement = options.placement || 'child-reverse';
         client = new RpcClient(mainManagementToolServiceDescriptor, options.transport);
         return;
@@ -66,6 +68,7 @@ export async function initializeMainManagementTools(options: {
         assertNotTerminallyShutDown();
       }
       transport = nextTransport;
+      ownsTransport = true;
       client = new RpcClient(mainManagementToolServiceDescriptor, nextTransport);
     });
   }
@@ -133,6 +136,10 @@ export async function shutdownMainManagementTools(timeoutMs = 10_000): Promise<v
     initializingPlacement = undefined;
     return;
   }
+  if (!ownsTransport) {
+    client = undefined; transport = undefined; initializing = undefined;
+    initializingTransport = undefined; initializingPlacement = undefined; return;
+  }
   try {
     await currentTransport.drain(timeoutMs);
   } finally {
@@ -152,6 +159,7 @@ export function resetMainManagementToolsForTests(): void {
   }
   terminalShutdown = false;
   placement = 'local';
+  ownsTransport = true;
   initializingTransport = undefined;
   initializingPlacement = undefined;
 }
