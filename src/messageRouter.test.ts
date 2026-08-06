@@ -72,6 +72,28 @@ test('shouldBroadcastChannelText accepts non-empty trimmed text', () => {
   assert.equal(shouldBroadcastChannelText('\nhello\n'), true);
 });
 
+test('MessageRouter keeps QQ Bot passive reply identifiers bound to their source turn', () => {
+  const router = new MessageRouter() as any;
+  const source = {
+    platform: 'qqbot',
+    channelId: 'qq-primary',
+    channelType: 'qqbot',
+    channelUserId: 'c2c:user-openid',
+    conversationId: 'c2c:user-openid',
+    qqbotMessageId: 'incoming-message-id',
+  };
+
+  assert.equal(
+    router.getSourceStreamKey(source),
+    'qqbot:qq-primary:c2c:user-openid:incoming-message-id',
+  );
+  assert.deepEqual(router.getTurnChannelOptions(undefined, source), {
+    qqbotMessageId: 'incoming-message-id',
+    qqbotChannelId: 'qq-primary',
+    qqbotConversationId: 'c2c:user-openid',
+  });
+});
+
 test('MessageRouter top-level queue drain persists user and intersession inputs separately before one model request', async () => {
   const router = new MessageRouter() as any;
   const session = await createRouterQueueTestSession('top_level_queue_message_boundaries');

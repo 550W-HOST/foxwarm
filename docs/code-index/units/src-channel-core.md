@@ -1,10 +1,10 @@
 # Unit: src-channel-core
 
-Files: src/channel.ts, src/channelAuth.ts, src/channelFiles.ts, src/channelFiles.test.ts, src/channelRuntime.ts
+Files: src/channel.ts, src/channelAuth.ts, src/channelFiles.ts, src/channelFiles.test.ts, src/channelRuntime.ts, src/channelRuntime.test.ts
 
 ## Purpose
 
-Defines the platform-neutral channel contract/registry, authorization inspection, inbound file storage, and managed adapter lifecycle for Telegram, Matrix, WeWork, and Weixin instances.
+Defines the platform-neutral channel contract/registry, authorization inspection, inbound file storage, and managed adapter lifecycle for Telegram, Matrix, WeWork, Weixin, and QQ Bot instances.
 
 ## Key exports
 
@@ -42,7 +42,7 @@ Defines the platform-neutral channel contract/registry, authorization inspection
 
 - `initializeChannelRuntime` stores inbound handlers and builds factories from normalized current config.
 - `startManagedChannel` creates, starts, and registers one configured adapter; legacy main-attachment config is applied where supported.
-- `reloadManagedChannels` stops **all** currently managed/registered Telegram, Matrix, WeWork, and Weixin instances, rebuilds factories from the latest config file, and starts every enabled/configured instance. It is a managed-channel restart, not an unchanged-config diff.
+- `reloadManagedChannels` stops **all** currently managed/registered Telegram, Matrix, WeWork, Weixin, and QQ Bot instances, rebuilds factories from the latest config file, and starts every enabled/configured instance. It is a managed-channel restart, not an unchanged-config diff.
 - Per-channel start/stop/restart APIs remain available.
 - Failures are retained in runtime status rather than hiding the adapter from status inspection.
 - Factories pass canonical config objects into adapters rather than duplicating every field.

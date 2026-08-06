@@ -205,31 +205,41 @@ export class MessageRouter {
       username: ctx.username,
       senderId: ctx.senderId,
       weworkStreamId: ctx.weworkStreamId,
+      qqbotMessageId: ctx.qqbotMessageId,
     };
   }
 
   private getSourceStreamKey(source?: QueueSource): string | undefined {
-    if (!source?.weworkStreamId) {
-      return undefined;
+    if (source?.weworkStreamId) {
+      return `${source.channelId || source.platform}:${source.conversationId || source.channelUserId}:${source.weworkStreamId}`;
     }
-    return `${source.channelId || source.platform}:${source.conversationId || source.channelUserId}:${source.weworkStreamId}`;
+    if (source?.qqbotMessageId) {
+      return `qqbot:${source.channelId || source.platform}:${source.conversationId || source.channelUserId}:${source.qqbotMessageId}`;
+    }
+    return undefined;
   }
 
   private getTurnChannelOptions(sourceCtx?: ChannelContext, source?: QueueSource): Record<string, any> {
     const streamId = sourceCtx?.weworkStreamId || source?.weworkStreamId;
-    if (!streamId) {
-      return {};
-    }
     const channelId = sourceCtx ? getChannelId(sourceCtx) : (source?.channelId || source?.platform);
     const conversationId = sourceCtx ? getConversationId(sourceCtx) : (source?.conversationId || source?.channelUserId);
-    if (!channelId || !conversationId) {
-      return { weworkStreamId: streamId };
+    const options: Record<string, any> = {};
+    if (streamId) {
+      if (!channelId || !conversationId) {
+        options.weworkStreamId = streamId;
+      } else {
+        options.weworkStreamId = streamId;
+        options.weworkStreamChannelId = channelId;
+        options.weworkStreamConversationId = conversationId;
+      }
     }
-    return {
-      weworkStreamId: streamId,
-      weworkStreamChannelId: channelId,
-      weworkStreamConversationId: conversationId,
-    };
+    const qqbotMessageId = sourceCtx?.qqbotMessageId || source?.qqbotMessageId;
+    if (qqbotMessageId && channelId && conversationId) {
+      options.qqbotMessageId = qqbotMessageId;
+      options.qqbotChannelId = channelId;
+      options.qqbotConversationId = conversationId;
+    }
+    return options;
   }
 
   private mergeTurnOptions(turnOptions: Record<string, any>, options?: any): any {

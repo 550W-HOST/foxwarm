@@ -65,7 +65,7 @@ Persist the canonical provider-qualified model key on model messages so mixed-mo
 
 ### D-pipeline-source-boundary
 
-Queued follow-up merge and progress/final delivery respect explicit platform turn/source identifiers. Different or unbound sources remain separate turns.
+Queued follow-up merge and progress/final delivery respect explicit platform turn/source identifiers. Different or unbound sources remain separate turns. QQ Bot snapshots its official inbound `msg_id` together with the configured instance and scoped conversation: different IDs are hard merge boundaries, and only the matching QQ adapter consumes that ID as a passive-reply reference while other session attachments retain ordinary delivery.
 
 ### D-pipeline-canonical-queue-item-boundaries
 
