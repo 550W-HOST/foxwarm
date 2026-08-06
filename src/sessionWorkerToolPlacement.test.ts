@@ -10,6 +10,7 @@ import { tool_call_tool } from './tools/unifiedSearch';
 import { tool_run_script } from './toolscript';
 import { executeTools } from './llm';
 import * as nodeExecution from './nodeExecution';
+import * as agentMetadata from './session/agentMetadata';
 import type { Session } from './types';
 
 function owner(): Session {
@@ -126,8 +127,8 @@ test('worker guarded errors precede direct notifications, permissions, and recur
   const effects: any = { placement: 'session-worker', appendMessage: async () => {}, persistSession: async () => {},
     notifySessionEvent: () => {}, registerAbortController: () => {}, clearAbortController: () => {}, clearWaitById: async () => false };
   const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
-  const originalIsolated = sessionManager.isSessionEffectivelyIsolated;
-  (sessionManager as any).isSessionEffectivelyIsolated = () => { throw new Error('concrete permission reached before guard'); };
+  const originalIsolated = agentMetadata.isSessionEffectivelyIsolated;
+  (agentMetadata as any).isSessionEffectivelyIsolated = () => { throw new Error('concrete permission reached before guard'); };
   try {
     const direct = await executeTools([{ id: 'guarded', name: 'compact_session', args: {}, argsParseError: 'malformed', rawArgsText: '{' } as any],
       { sessionId: session.id, broadcast: async () => { broadcasts += 1; }, onToolStart: () => { starts += 1; } }, session,
@@ -137,8 +138,42 @@ test('worker guarded errors precede direct notifications, permissions, and recur
     assert.equal(broadcasts, 0); assert.equal(starts, 0);
     await assert.rejects(() => tool_call_tool({ source: 'builtin', name: 'compact_session', args: {} }, ctx),
       { code: 'SESSION_WORKER_TOOL_UNAVAILABLE', retryable: true });
-  } finally { (sessionManager as any).isSessionEffectivelyIsolated = originalIsolated; }
+  } finally { (agentMetadata as any).isSessionEffectivelyIsolated = originalIsolated; }
   const nested = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="compact_session", args={})' }, ctx);
   assert.equal(nested.status, 'failed');
   assert.match(String(nested.error), /SESSION_WORKER_TOOL_UNAVAILABLE/);
+});
+
+test('recursive Worker ToolScript guards drop transient progress while Main local progress remains', async () => {
+  const session = owner();
+  let progressEvents = 0;
+  const originals = { notify: sessionManager.notifySessionEvent, get: sessionManager.getSession,
+    getExisting: sessionManager.getExistingSession, save: sessionManager.saveSession };
+  (sessionManager as any).notifySessionEvent = () => { progressEvents += 1; };
+  (sessionManager as any).getSession = async () => { throw new Error('recursive child getSession'); };
+  (sessionManager as any).getExistingSession = async () => { throw new Error('recursive child getExistingSession'); };
+  (sessionManager as any).saveSession = async () => { throw new Error('recursive child saveSession'); };
+  const workerCtx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', toolUseId: 'outer-worker',
+    persistCurrentSession: async () => {} };
+  try {
+    const recursive = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="call_tool", args={"source":"builtin", "name":"compact_session", "args":{}})' }, workerCtx);
+    assert.equal(recursive.status, 'failed');
+    assert.match(String(recursive.error), /SESSION_WORKER_TOOL_UNAVAILABLE/);
+    assert.equal(progressEvents, 0);
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'local-toolscript-progress-'));
+    const filePath = path.join(dir, 'probe.txt');
+    await fs.writeFile(filePath, 'local-progress');
+    try {
+      const local = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="read", args={"filePath":args["path"]})', args: { path: filePath } },
+        { ...workerCtx, sessionPlacement: 'local', toolUseId: 'outer-local' });
+      assert.equal(local.status, 'completed');
+      assert.ok(progressEvents >= 2);
+    } finally { await fs.remove(dir); }
+  } finally {
+    (sessionManager as any).notifySessionEvent = originals.notify;
+    (sessionManager as any).getSession = originals.get;
+    (sessionManager as any).getExistingSession = originals.getExisting;
+    (sessionManager as any).saveSession = originals.save;
+  }
 });

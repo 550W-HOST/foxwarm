@@ -935,6 +935,7 @@ function normalizeManagedSessionStepInput(_positionalArgs: any[], kwargs: Record
 }
 
 function emitToolScriptProgress(ctx: ToolContext, state: RuntimeState): void {
+  if (ctx.sessionPlacement === 'session-worker') return;
   if (!ctx.sessionId || !ctx.toolUseId) return;
   sessionManager.notifySessionEvent(ctx.sessionId, {
     type: 'toolscript-progress',
