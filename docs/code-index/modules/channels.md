@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Owns the platform-neutral channel contract/registry/authorization/runtime plus Matrix, Telegram, Weixin, WeChat Work, TUI, and WebUI adapters. Each adapter converts native input into `ChannelContext`/`ChannelMessage` and sends replies without exposing platform details to the router.
+Owns the platform-neutral channel contract/registry/authorization/runtime plus Matrix, Telegram, QQ Bot, Weixin, WeChat Work, TUI, and WebUI adapters. Each adapter converts native input into `ChannelContext`/`ChannelMessage` and sends replies without exposing platform details to the router.
 
 ## Units
 
@@ -11,6 +11,7 @@ Owns the platform-neutral channel contract/registry/authorization/runtime plus M
 - [src-channels-tui](../units/src-channels-tui.md) — blessed terminal channel.
 - [src-channels-webui](../units/src-channels-webui.md) — authenticated HTTP/SSE/upload/setup/terminal WebUI surface.
 - [src-channels-wework](../units/src-channels-wework.md) — WeChat Work webhook/callback/WebSocket modes and opt-in turn-bound stream cards.
+- [src-channels-qqbot](../units/src-channels-qqbot.md) — official QQ Bot gateway text ingress and REST delivery.
 - [src-weixin](../units/src-weixin.md) — Weixin polling/send/QR-login protocol helpers.
 
 Persisted conversation attachments and broadcast selection are owned by [session channels](../units/src-session-channels.md).
@@ -38,7 +39,7 @@ Persisted conversation attachments and broadcast selection are owned by [session
 ## Runtime behavior
 
 - Normalized config permits multiple instances per type and passes each adapter its canonical config object plus instance ID.
-- `reloadManagedChannels` stops all current managed Telegram/Matrix/WeWork/Weixin instances, rebuilds factories from config, and starts every enabled/configured instance.
+- `reloadManagedChannels` stops all current managed Telegram/Matrix/WeWork/Weixin/QQ Bot instances, rebuilds factories from config, and starts every enabled/configured instance.
 - Registry IDs are unique across adapter types.
 - Internal WebUI/TUI pass channel authorization; external sources require allowlist or explicit per-attachment allow-all-users.
 - Inbound files go to the agent's master `.temp/channel-files` area unless an isolated session targets its bound remote node. Descriptors report node and path without prescribing a file tool.

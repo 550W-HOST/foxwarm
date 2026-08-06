@@ -32,7 +32,7 @@ This extraction is behavior-preserving and local-only. One turn-specific `Sessio
 - `LocalSessionTurnHost` delegates compact, child reminder, provider/tool execution, and channel delivery to their existing owners. Its bound local `CurrentSessionTurnEffects` carries exact-owner save, canonical one/many append, busy, wait, history/runtime events, provider stream/abort effects, and the process-local default ExecRuntime. The default effects reuse the existing SessionManager/archive/event behavior; detached tests may provide one alternate exact owner without changing the runner or provider schema. Tool execution validates the passed owner identity before deriving the local-only persistence/runtime context; owner mismatch fails before any effect is used.
 - Pure session-local policy helpers such as goal/managed-state checks, usage thresholds, and provider error predicates remain direct runner dependencies rather than host capabilities.
 - `session/goal`, `session/managedState`, and `session/snapshotRefresh` — existing safe-point and lifecycle rules.
-- Channel context/session broadcast functions — typing, retry/progress, tool progress, final reply, and `turnFinal` effects. Final routing reads the immutable QueueSource snapshot's direct-reply intent while retaining the live callback only as the local delivery mechanism.
+- Channel context/session broadcast functions — typing, retry/progress, tool progress, final reply, and `turnFinal` effects. Final routing reads the immutable QueueSource snapshot's direct-reply intent while retaining the live callback only as the local delivery mechanism; WeWork stream IDs and QQ Bot inbound `msg_id` remain exact source/merge boundaries and are propagated only to their matching channel delivery options.
 
 ## Invariants
 

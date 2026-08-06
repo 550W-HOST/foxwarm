@@ -389,6 +389,20 @@ async function start() {
             } else if (config.baseUrl || config.enabled) {
                 logger.info({ channelId: entry.id }, 'Weixin channel configured without token; use /weixin login and foxwarm will start it dynamically once config is ready');
             }
+            continue;
+        }
+
+        if (entry.type === 'qqbot') {
+            if (config.enabled === false) continue;
+            if (config.appId?.trim() && config.clientSecret?.trim()) {
+                void startWithRetry(`qqbot:${entry.id}`, async () => {
+                    const result = await startManagedChannel(entry.id);
+                    logger.info({ channelId: entry.id }, 'QQ Bot channel initialized');
+                    return result.status;
+                }, { retries: 1, delayMs: 3000 });
+            } else if (config.appId || config.enabled) {
+                logger.info({ channelId: entry.id }, 'QQ Bot channel configured without appId/clientSecret; use /channel status after adding official QQ Bot credentials');
+            }
         }
     }
 

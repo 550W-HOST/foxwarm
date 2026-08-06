@@ -30,7 +30,7 @@ test('committed-final handler uses exact direct context and awaited attachment f
       sent.push({ id, conversationId, text, options }); if (fail) throw new Error(`${id} failed`);
     },
   });
-  for (const [id, fail] of [['telegram', false], ['secondary', true], ['webui', false], ['wework', false]] as const) registerChannel(id, channel(id, fail));
+  for (const [id, fail] of [['telegram', false], ['secondary', true], ['webui', false], ['wework', false], ['qqbot', false]] as const) registerChannel(id, channel(id, fail));
   attachChannel('telegram', 'room', 'owner'); attachChannel('secondary', 'other', 'owner');
   attachChannel('webui', 'browser', 'owner'); attachChannel('wework', 'stream-room', 'owner');
   await saveChannels();
@@ -80,8 +80,26 @@ test('committed-final handler uses exact direct context and awaited attachment f
     try {
       assert.deepEqual(await emptyClient.call('deliverCommittedFinal', { sourceSessionId: 'empty-owner', source: { platform: 'test', channelUserId: 'none' }, outcome: 'response', text: 'nobody' }), { attempted: 0, delivered: 0 });
     } finally { emptyTransport.close(); }
+
+    attachChannel('qqbot', 'qq-room', 'qq-owner'); await saveChannels();
+    const qqSource = { platform: 'qqbot', channelId: 'qqbot', channelType: 'qqbot', channelUserId: 'qq-room', conversationId: 'qq-room', qqbotMessageId: 'qq-msg-1', preferDirectReply: true as const };
+    let qqContext: ChannelContext | undefined = {
+      platform: 'qqbot', channelId: 'qqbot', channelType: 'qqbot', channelUserId: 'qq-room', conversationId: 'qq-room',
+      qqbotMessageId: 'qq-msg-1', preferDirectReply: true, reply: async (text, options) => { replies.push({ text, options }); }, sendTyping: async () => {},
+    };
+    const qqRegistry = new RpcServiceRegistry();
+    qqRegistry.register(sessionTurnDeliveryServiceDescriptor, createSessionTurnDeliveryServiceHandler({ expectedSourceSessionId: 'qq-owner', resolveExactSourceContext: () => qqContext }));
+    const qqTransport = new LocalRpcTransport(qqRegistry); const qqClient = new RpcClient(sessionTurnDeliveryServiceDescriptor, qqTransport);
+    try {
+      assert.deepEqual(await qqClient.call('deliverCommittedFinal', { sourceSessionId: 'qq-owner', source: qqSource, outcome: 'response', text: 'qq direct' }), { attempted: 1, delivered: 1 });
+      assert.equal(replies.at(-1).options.qqbotMessageId, 'qq-msg-1');
+      qqContext = { ...qqContext!, qqbotMessageId: 'concurrent-wrong-msg' };
+      sent.length = 0;
+      assert.deepEqual(await qqClient.call('deliverCommittedFinal', { sourceSessionId: 'qq-owner', source: qqSource, outcome: 'response', text: 'qq fallback' }), { attempted: 1, delivered: 1 });
+      assert.equal(sent[0].id, 'qqbot'); assert.equal(sent[0].options.qqbotMessageId, 'qq-msg-1');
+    } finally { qqTransport.close(); }
   } finally {
-    transport.close(); for (const id of ['telegram', 'secondary', 'webui', 'wework']) unregisterChannel(id);
+    transport.close(); for (const id of ['telegram', 'secondary', 'webui', 'wework', 'qqbot']) unregisterChannel(id);
     resetChannelsForTests(); setChannelsStoreForTests(null); await fs.remove(root);
   }
 });

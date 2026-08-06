@@ -23,7 +23,7 @@ function text(value: unknown, label: string, max: number, allowEmpty = false): s
   }
   return value;
 }
-const SOURCE_KEYS = ['platform', 'channelId', 'channelType', 'channelUserId', 'conversationId', 'username', 'senderId', 'weworkStreamId', 'preferDirectReply'] as const;
+const SOURCE_KEYS = ['platform', 'channelId', 'channelType', 'channelUserId', 'conversationId', 'username', 'senderId', 'weworkStreamId', 'qqbotMessageId', 'preferDirectReply'] as const;
 function normalizeSource(value: unknown): QueueSource {
   plain(value, 'source');
   exactKeys(value, [...SOURCE_KEYS], 'source');
@@ -50,6 +50,7 @@ function sourceFromContext(ctx: ChannelContext): QueueSource {
     username: ctx.username,
     senderId: ctx.senderId,
     weworkStreamId: ctx.weworkStreamId,
+    qqbotMessageId: ctx.qqbotMessageId,
     ...(ctx.preferDirectReply === true ? { preferDirectReply: true } : {}),
   };
 }
@@ -60,11 +61,16 @@ function finalOptions(source: QueueSource, outcome: SessionTurnFinalKind): any {
     weworkStreamChannelId: source.channelId || source.platform,
     weworkStreamConversationId: source.conversationId || source.channelUserId,
   } : {};
+  const qqbot = source.qqbotMessageId ? {
+    qqbotMessageId: source.qqbotMessageId,
+    qqbotChannelId: source.channelId || source.platform,
+    qqbotConversationId: source.conversationId || source.channelUserId,
+  } : {};
   if (outcome === 'empty-final') return {
     ...stream, turnFinal: true, allowEmptyBroadcast: true,
     targetChannel: { channelId: source.channelId || source.platform, conversationId: source.conversationId || source.channelUserId },
   };
-  return { ...stream, ...(outcome === 'response' ? { excludePlatforms: ['webui'] } : {}), turnFinal: true };
+  return { ...stream, ...qqbot, ...(outcome === 'response' ? { excludePlatforms: ['webui'] } : {}), turnFinal: true };
 }
 export function createSessionTurnDeliveryServiceHandler(options: {
   expectedSourceSessionId: string;
