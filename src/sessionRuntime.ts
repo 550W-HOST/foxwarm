@@ -15,6 +15,7 @@ import {
   SessionRuntimeSessionDto,
   SessionRuntimeSettingsPatchDto,
   SessionRuntimeSettingsResultDto,
+  SessionRuntimeWorkerProjectionOptions,
   sessionRuntimeServiceDescriptor,
 } from './sessionRuntimeService';
 import type { QueueItem } from './types';
@@ -34,13 +35,13 @@ export function assertSessionWorkerPlacementSupported(enabled = SESSION_WORKERS_
   );
 }
 
-export async function initializeSessionRuntime(): Promise<void> {
+export async function initializeSessionRuntime(options?: { worker?: SessionRuntimeWorkerProjectionOptions }): Promise<void> {
   if (client) return;
   assertSessionWorkerPlacementSupported();
   if (!initializing) {
     initializing = Promise.resolve().then(() => {
       const registry = new RpcServiceRegistry();
-      registry.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler());
+      registry.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler(options));
       transport = new LocalRpcTransport(registry, { maxPendingEvents: 4096 });
       client = new RpcClient(sessionRuntimeServiceDescriptor, transport);
     }).catch((error) => {

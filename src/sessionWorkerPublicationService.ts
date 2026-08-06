@@ -4,7 +4,7 @@ import type { SessionWorkerProjection } from './sessionWorkerPersistence';
 
 export type SessionWorkerPublicationIdentity = { sessionId: string; generation: number; incarnationId: string };
 type PublishRequest = SessionWorkerPublicationIdentity & { projection: SessionWorkerProjection };
-type ProjectionEntry = SessionWorkerPublicationIdentity & { projection?: SessionWorkerProjection; stale: boolean };
+export type SessionWorkerProjectionEntry = SessionWorkerPublicationIdentity & { projection?: SessionWorkerProjection; stale: boolean };
 
 export const sessionWorkerPublicationServiceDescriptor = defineRpcService('session-worker-publication', 1, {
   publishCommitted: rpcMethod<PublishRequest, { applied: true }>(),
@@ -75,10 +75,10 @@ function validateProjection(value: unknown, sessionId: string): SessionWorkerPro
 }
 
 export class SessionWorkerProjectionRegistry {
-  private readonly entries = new Map<string, ProjectionEntry>();
+  private readonly entries = new Map<string, SessionWorkerProjectionEntry>();
   private readonly current = new Map<string, string>();
   private readonly closed = new Set<string>();
-  private readonly subscribers = new Set<(entry: ProjectionEntry) => void | Promise<void>>();
+  private readonly subscribers = new Set<(entry: SessionWorkerProjectionEntry) => void | Promise<void>>();
 
   establish(identity: SessionWorkerPublicationIdentity): void {
     assertIdentity(identity);
@@ -94,7 +94,7 @@ export class SessionWorkerProjectionRegistry {
     assertIdentity(identity); const key = identityKey(identity);
     if (this.current.get(identity.sessionId) !== key || this.closed.has(key)) throw new RpcError('SESSION_WORKER_PUBLICATION_STALE', 'Publication does not belong to an accepting worker generation.', true);
     const projection = validateProjection(projectionValue, identity.sessionId);
-    const entry: ProjectionEntry = { ...identity, projection: structuredClone(projection), stale: false };
+    const entry: SessionWorkerProjectionEntry = { ...identity, projection: structuredClone(projection), stale: false };
     this.entries.set(key, entry);
     try { for (const subscriber of this.subscribers) await subscriber(structuredClone(entry)); }
     catch (error) { entry.stale = true; this.closed.add(key); throw new RpcError('SESSION_WORKER_PUBLICATION_APPLY_FAILED', String((error as any)?.message || error).slice(0, 4096), true); }
@@ -108,12 +108,12 @@ export class SessionWorkerProjectionRegistry {
     const key = identityKey(identity); if (this.current.get(identity.sessionId) !== key) return false;
     this.current.delete(identity.sessionId); this.closed.delete(key); return this.entries.delete(key);
   }
-  get(sessionId: string): ProjectionEntry | undefined {
+  get(sessionId: string): SessionWorkerProjectionEntry | undefined {
     const key = this.current.get(sessionId); const entry = key ? this.entries.get(key) : undefined;
     return entry ? structuredClone(entry) : undefined;
   }
-  list(): ProjectionEntry[] { return [...this.current.keys()].sort().map(id => this.get(id)!); }
-  subscribe(callback: (entry: ProjectionEntry) => void | Promise<void>): () => void { this.subscribers.add(callback); return () => this.subscribers.delete(callback); }
+  list(): SessionWorkerProjectionEntry[] { return [...this.current.keys()].sort().map(id => this.get(id)!); }
+  subscribe(callback: (entry: SessionWorkerProjectionEntry) => void | Promise<void>): () => void { this.subscribers.add(callback); return () => this.subscribers.delete(callback); }
 }
 
 export function createSessionWorkerPublicationServiceHandler(options: {

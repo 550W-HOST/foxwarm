@@ -24,6 +24,8 @@ WorkerHost publishes once after initial authoritative load before queue processi
 
 Supervisor disconnect/exit marks the exact entry stale. A replacement generation is established stale and becomes fresh only after its initial full authority publication. Main restart naturally begins with an empty registry.
 
+The Main-local SessionRuntime may consume a projection only when the durable ownership row is noninactive and its generation/incarnation exactly matches the registry entry. It overlays committed Worker fields for list/state presentation and emits bounded existing state/list events without copying the projection into the Main Session or catalog. Explicit history remains an atomic authoritative JSON read, not a projection payload.
+
 ## Tests
 
 Coverage proves exact DTO/source/generation fencing, nested runtime validation and duplicated counter agreement, clone isolation, ordered callbacks, callback-failure staleness, no `stateRevision`, replacement generation full apply, postcommit failure without semantic rollback, pre-archive/queue mutation fencing, empty-mailbox no-op behavior, initial/busy/final/settings publications, and real forked reverse publication.

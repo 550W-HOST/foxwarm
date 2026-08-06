@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'fs-extra';
+import os from 'node:os';
+import path from 'node:path';
 import {
   LocalRpcTransport,
   RpcClient,
@@ -13,6 +16,12 @@ import {
   sessionRuntimeServiceDescriptor,
 } from './sessionRuntimeService';
 import type { Message, SessionStreamEvent } from './types';
+import type { Session } from './types';
+import { SessionWorkerStore } from './sessionWorkerStore';
+import { SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
+import { buildSessionWorkerProjection } from './sessionWorkerPersistence';
+import { writeAuthoritativeSessionState } from './session/stateFile';
+import { getSessionHistoryFilePath } from './session/metadataStore';
 import {
   assertSessionWorkerPlacementSupported,
   getSessionRuntimeStatus,
@@ -189,6 +198,99 @@ test('local SessionRuntime DTO seam clones projections and preserves event order
     sessionManager.setOnSessionListUpdated(() => {});
     sessionManager.setOnSessionStateUpdated(() => {});
     sessionManager.setSessionRetryCallback(async () => {});
+    (vector as any).scheduleSessionArchiveIndex = originalScheduleIndex;
+  }
+});
+
+test('SessionRuntime overlays only the exact current Worker and reads detached authority', async () => {
+  const originalScheduleIndex = vector.scheduleSessionArchiveIndex;
+  (vector as any).scheduleSessionArchiveIndex = async (): Promise<void> => {};
+  await sessionManager.loadSessions();
+  const sessionId = makeSessionId('session_runtime_worker_projection');
+  const { session: stub } = await sessionManager.createEmptySession(sessionId);
+  stub.displayName = 'Catalog name'; stub.pinned = true; stub.sidebarOrder = 7;
+  await sessionManager.saveSession(sessionId);
+  const worker = {
+    ...stub,
+    history: [{ role: 'user', parts: [{ text: 'authoritative worker history' }], __meta: { seq: 1, timestamp: 123 } }],
+    queue: [{ type: 'background', parts: [{ text: 'authoritative worker queue' }] }],
+    contextFrontier: [{ kind: 'message', seq: 1 }],
+    persistentMemorySnapshot: 'worker prompt',
+    busy: true, busyStartedAt: 100, currentNode: 'worker-node', cwd: '/worker/cwd', model: 'worker/model',
+    meta: { lastMessageTime: 123, messageCount: 1 },
+    stats: { totalCachedTokens: 1, totalInputTokens: 2, totalOutputTokens: 3, lastUsage: null },
+  } as Session;
+  await writeAuthoritativeSessionState(worker);
+  const authorityPath = getSessionHistoryFilePath(sessionId);
+  const authorityBefore = await fs.readFile(authorityPath);
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-runtime-worker-view-'));
+  const store = new SessionWorkerStore(path.join(root, 'runtime.sqlite')); store.open();
+  assert.equal(store.findOwnership(sessionId), undefined);
+  const incarnationId = 'runtime-worker-incarnation'; const ownership = store.beginGeneration(sessionId, incarnationId);
+  store.registerCandidate(sessionId, ownership.generation, incarnationId, process.pid, 'runtime-worker-process');
+  store.activateCandidate(sessionId, ownership.generation, incarnationId, process.pid, 'runtime-worker-process');
+  const registry = new SessionWorkerProjectionRegistry();
+  const identity = { sessionId, generation: ownership.generation, incarnationId }; registry.establish(identity);
+  const services = new RpcServiceRegistry();
+  services.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler({ worker: { store, registry } }));
+  const transport = new LocalRpcTransport(services); const client = new RpcClient(sessionRuntimeServiceDescriptor, transport);
+  const events: string[] = []; const unsubscribe = client.subscribe(name => { events.push(name); });
+  try {
+    await client.call('startEvents', {});
+    const projection = buildSessionWorkerProjection(worker);
+    await registry.apply(identity, projection); await flushEvents();
+    assert.deepEqual(events, ['stateChanged', 'listChanged']); events.length = 0;
+    await registry.apply(identity, projection); await flushEvents();
+    assert.deepEqual(events, ['stateChanged']);
+
+    const projected = (await client.call('getSession', { sessionId })).session!;
+    assert.equal(projected.busy, true); assert.equal(projected.currentNode, 'worker-node');
+    assert.equal(projected.displayName, 'Catalog name'); assert.equal(projected.pinned, true); assert.equal(projected.sidebarOrder, 7);
+    projected.runtimeState.queueLength = 999; projected.tokenUsage.inputTokens = 999;
+    assert.equal((await client.call('getSession', { sessionId })).session!.runtimeState.queueLength, 1);
+    assert.equal((await client.call('getSession', { sessionId })).session!.tokenUsage.inputTokens, 2);
+    const listed = (await client.call('listSessions', {})).sessions.find(item => item.id === sessionId)!;
+    assert.equal(listed.model, 'worker/model');
+    registry.markStale(identity);
+    assert.equal((await client.call('getSession', { sessionId })).session!.busy, true);
+
+    const history = await client.call('getHistory', { sessionId });
+    assert.equal(history!.messages[0].parts[0].text, 'authoritative worker history');
+    assert.equal(history!.messages[0].__meta?.seq, 1);
+    assert.deepEqual(history!.messages[0].__meta?.contextFrontierItem, { kind: 'message', seq: 1 });
+    assert.equal(history!.queue[0].parts![0].text, 'authoritative worker queue');
+    assert.equal(history!.persistentMemorySnapshot, 'worker prompt');
+    history!.messages[0].parts[0].text = 'caller mutation'; history!.queue[0].parts![0].text = 'caller queue mutation';
+    assert.equal((await client.call('getHistory', { sessionId }))!.messages[0].parts[0].text, 'authoritative worker history');
+    assert.deepEqual(await fs.readFile(authorityPath), authorityBefore);
+
+    await fs.remove(authorityPath);
+    await assert.rejects(() => client.call('getHistory', { sessionId }), { code: 'SESSION_WORKER_HISTORY_UNAVAILABLE' });
+    assert.equal(await fs.pathExists(authorityPath), false);
+    await fs.writeFile(authorityPath, '{malformed worker authority');
+    const malformed = await fs.readFile(authorityPath);
+    await assert.rejects(() => client.call('getHistory', { sessionId }), { code: 'SESSION_WORKER_HISTORY_UNAVAILABLE' });
+    assert.deepEqual(await fs.readFile(authorityPath), malformed);
+    await fs.writeFile(authorityPath, authorityBefore);
+
+    store.markDraining(sessionId, identity.generation, identity.incarnationId);
+    store.markExitObserved(sessionId, identity.generation, identity.incarnationId, 'released');
+    await writeAuthoritativeSessionState({
+      ...stub, busy: false, currentNode: 'master',
+      history: [{ role: 'user', parts: [{ text: 'later local authority' }], __meta: { seq: 1, timestamp: 456 } }],
+      queue: [], contextFrontier: [{ kind: 'message', seq: 1 }], meta: { lastMessageTime: 456, messageCount: 1 },
+    } as Session);
+    assert.equal(stub.busy, false);
+    const localAgain = (await client.call('getSession', { sessionId })).session!;
+    assert.equal(localAgain.busy, false); assert.equal(localAgain.currentNode, 'master');
+    assert.equal((await client.call('getHistory', { sessionId }))!.messages[0].parts[0].text, 'later local authority');
+    await client.call('stopEvents', {});
+  } finally {
+    unsubscribe(); transport.close(); store.close(); await fs.remove(root);
+    await fs.writeFile(authorityPath, authorityBefore).catch(() => {});
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+    sessionManager.setOnHistoryUpdated(() => {}); sessionManager.setOnSessionEventUpdated(() => {});
+    sessionManager.setOnSessionListUpdated(() => {}); sessionManager.setOnSessionStateUpdated(() => {});
     (vector as any).scheduleSessionArchiveIndex = originalScheduleIndex;
   }
 });

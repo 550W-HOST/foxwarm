@@ -89,6 +89,12 @@ export class SessionWorkerStore {
     return this.toOwnership(row);
   }
 
+  findOwnership(sessionId: string): SessionWorkerOwnershipRecord | undefined {
+    sessionId = this.sessionId(sessionId);
+    const row = this.getDb().prepare('SELECT * FROM session_worker_ownership WHERE session_id=?').get(sessionId) as any;
+    return row ? this.toOwnership(row) : undefined;
+  }
+
   beginGeneration(sessionId: string, incarnationId: string): SessionWorkerOwnershipRecord {
     sessionId = this.sessionId(sessionId);
     incarnationId = this.incarnationId(incarnationId);

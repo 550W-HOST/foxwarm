@@ -1,6 +1,6 @@
 # Unit: src-session-runtime
 
-Files: src/sessionRuntime.ts, src/sessionRuntimeService.ts, src/sessionRuntimeService.test.ts
+Files: src/sessionRuntime.ts, src/sessionRuntimeService.ts, src/sessionWorkerSnapshot.ts, src/sessionRuntimeService.test.ts
 
 ## Purpose
 
@@ -11,7 +11,7 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 - `sessionRuntimeServiceDescriptor` — versioned request/event descriptor.
 - `createSessionRuntimeServiceHandler()` — local authoritative handler over current session-manager operations.
 - `initializeSessionRuntime()` / `shutdownSessionRuntime()` — local service lifecycle and bounded drain.
-- `listSessions()`, `getSession()`, `getHistory()` — immutable projections.
+- `listSessions()`, `getSession()`, `getHistory()` — immutable local or exact current-Worker projections/snapshots.
 - `enqueue()`, `queueEvent()`, `updateSettings()`, `control()` — high-level mutation commands.
 - `startEvents()`, `subscribe()` — cloned history/list/state event publication.
 - `assertSessionWorkerPlacementSupported()` / `getSessionRuntimeStatus()` — explicit current placement capability/status.
@@ -31,6 +31,9 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 - Queue insertion still passes through the manager's wait/managed-inbox transition and router trigger. SessionRuntime does not create another queue or turn owner.
 - Settings validate every supplied field before mutating the live session, persist once, and return previous/current projections.
 - Event publication binds to the existing independent manager callbacks and preserves callback order through the RPC event queue.
+- When exact Worker store ownership and projection identity agree, get/list overlay only projection-owned committed fields onto the Main catalog/presentation DTO without mutating its Session or writing `sessions.json`. A stale current-generation projection remains last-known presentation; an inactive/released ownership ignores the old registry entry.
+- Worker-owned history reads one atomic per-session JSON file directly, replaces a detached read-only owner with the current state format, renders/annotates its frontier, and externalizes the returned snapshot. Missing, malformed, legacy, or unsupported authority fails retryably without backup recovery, catalog fallback, migration, or authority rewrite.
+- Current Worker projection publication emits the existing state event and emits a list event only when list-visible projected fields change. No history body enters projection/SSE; WebUI uses message-count state changes to coalesce an exact history refresh.
 - `sessionWorkers:false` uses this local service. `sessionWorkers:true` throws `SESSION_WORKERS_NOT_IMPLEMENTED`; child process, mailbox, snapshot generation, ownership fencing, wake, and idle release are not simulated by the local facade.
 - Shutdown first stops event publication, then drains the local RPC transport so no new command is accepted during process teardown.
 

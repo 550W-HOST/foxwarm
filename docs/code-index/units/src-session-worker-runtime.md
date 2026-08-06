@@ -10,6 +10,7 @@ Provides durable ownership/mailbox coordination, save-before-ack authoritative s
 ## Key exports
 
 - `SessionWorkerStore` — SQLite-backed generation/incarnation ownership, durable mailbox intents, acknowledgement cursor, activity, exit, cleanup, and fail-closed cursor reconciliation.
+- `SessionWorkerStore.findOwnership()` — non-creating exact ownership lookup used by presentation readers so checking a later local owner never creates or revives a Worker fence.
 - `SessionWorkerSupervisor` — one-child-per-session candidate activation, exact-process startup reconciliation, idle release, bounded drain/TERM/KILL, exit confirmation, and optional post-exit restart.
 - `SessionWorkerPersistence` — versioned authoritative JSON replace/legacy upgrade plus canonical pending-prefix apply/save-before-ack recovery; callers choose only a bounded count and cannot supply intent payload rows.
 - `SessionWorkerPersistence.persistActivated()` / `reloadActivated()` — generation/incarnation-verified complete turn-state save without advancing the mailbox cursor, plus exact-owner resync from authoritative JSON after a failed run.

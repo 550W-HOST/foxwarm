@@ -206,17 +206,17 @@ test('same-session refresh triggers coalesce behind one in-flight history reques
 
   await page.evaluate(() => window.emitFixtureEvent({
     type: 'session-state',
-    session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 1, modelKey: 'fixture/model' },
+    session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 0, messageCount: 1, modelKey: 'fixture/model' },
   }))
   await new Promise(resolve => setTimeout(resolve, 150))
   await page.evaluate(() => window.emitFixtureEvent({
     type: 'session-state',
-    session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 2, modelKey: 'fixture/model' },
+    session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 0, messageCount: 2, modelKey: 'fixture/model' },
   }))
   await new Promise(resolve => setTimeout(resolve, 150))
   await page.evaluate(() => window.emitFixtureEvent({
     type: 'session-state',
-    session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 3, modelKey: 'fixture/model' },
+    session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 0, messageCount: 3, modelKey: 'fixture/model' },
   }))
   await new Promise(resolve => setTimeout(resolve, 150))
 

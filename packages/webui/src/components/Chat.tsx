@@ -237,6 +237,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const pendingSentMessageIdsRef = useRef<Set<string>>(new Set())
   const sessionBusyRef = useRef(false)
   const sessionQueueLengthRef = useRef(0)
+  const sessionMessageCountRef = useRef(0)
   const queuedMessagesRef = useRef<Message[]>([])
   const sessionStateInitializedRef = useRef(false)
   const composerHeightRef = useRef<number | null>(null)
@@ -273,6 +274,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     setSessionQueueLength(0)
     sessionBusyRef.current = false
     sessionQueueLengthRef.current = 0
+    sessionMessageCountRef.current = 0
     queuedMessagesRef.current = []
     pendingSentMessageIdsRef.current.clear()
     sessionStateInitializedRef.current = false
@@ -625,8 +627,10 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     if (!session || typeof session.id !== 'string') return
     const nextBusy = isSessionRuntimeActive(session)
     const nextQueueLength = typeof session.queueLength === 'number' ? session.queueLength : 0
+    const nextMessageCount = typeof session.messageCount === 'number' ? session.messageCount : 0
     sessionBusyRef.current = nextBusy
     sessionQueueLengthRef.current = nextQueueLength
+    sessionMessageCountRef.current = nextMessageCount
     sessionStateInitializedRef.current = true
     setSessionRecord(session)
     setSessionBusy(nextBusy)
@@ -786,11 +790,14 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           historyStateEventVersionRef.current += 1
           const hadSessionState = sessionStateInitializedRef.current
           const previousQueueLength = sessionQueueLengthRef.current
+          const previousMessageCount = sessionMessageCountRef.current
           const nextQueueLength = typeof data.session?.queueLength === 'number' ? data.session.queueLength : 0
+          const nextMessageCount = typeof data.session?.messageCount === 'number' ? data.session.messageCount : 0
           setSessionMissing(false)
           applySessionState(data.session)
           if (hadSessionState && (
             nextQueueLength !== previousQueueLength ||
+            nextMessageCount !== previousMessageCount ||
             (nextQueueLength === 0 && queuedMessagesRef.current.length > 0)
           )) {
             scheduleHistoryRefresh()
@@ -820,6 +827,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           lastKnownTimestampRef.current = 0
           sessionBusyRef.current = false
           sessionQueueLengthRef.current = 0
+          sessionMessageCountRef.current = 0
           queuedMessagesRef.current = []
           es.close()
           eventSourceRef.current = null
@@ -975,6 +983,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
                 lastKnownTimestampRef.current = 0
                 sessionBusyRef.current = false
                 sessionQueueLengthRef.current = 0
+                sessionMessageCountRef.current = 0
                 queuedMessagesRef.current = []
                 eventSourceRef.current = null
                 setConnectionState('disconnected')

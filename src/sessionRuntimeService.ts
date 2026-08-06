@@ -11,6 +11,10 @@ import * as sessionManager from './sessionManager';
 import type { Message, QueueItem, Session, SessionStreamEvent, TokenUsage } from './types';
 import { isQueueItem } from './types';
 import type { SessionRuntimeState } from './sessionRuntimeState';
+import type { SessionWorkerProjection } from './sessionWorkerPersistence';
+import type { SessionWorkerProjectionEntry, SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
+import type { SessionWorkerStore } from './sessionWorkerStore';
+import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 
 export type SessionRuntimeTokenTotalsDto = {
   cachedTokens: number;
@@ -183,6 +187,38 @@ export function buildSessionRuntimeSessionDto(session: Session): SessionRuntimeS
   };
 }
 
+export function overlaySessionWorkerProjection(
+  session: SessionRuntimeSessionDto,
+  projection: SessionWorkerProjection | undefined,
+): SessionRuntimeSessionDto {
+  if (!projection) return session;
+  return {
+    ...session,
+    busy: projection.busy,
+    busyStartedAt: projection.busyStartedAt,
+    queueLength: projection.queueLength,
+    runtimeState: structuredClone(projection.runtimeState),
+    messageCount: projection.messageCount,
+    lastMessageTime: projection.lastMessageTime,
+    currentNode: projection.currentNode,
+    cwd: projection.cwd,
+    model: projection.model,
+    childModelDefault: projection.childModelDefault,
+    compactThresholdTokens: projection.compactThresholdTokens,
+    tokenUsage: {
+      cachedTokens: projection.stats.totalCachedTokens,
+      inputTokens: projection.stats.totalInputTokens,
+      outputTokens: projection.stats.totalOutputTokens,
+      lastUsage: projection.stats.lastUsage,
+    },
+  };
+}
+
+export type SessionRuntimeWorkerProjectionOptions = {
+  store: SessionWorkerStore;
+  registry: SessionWorkerProjectionRegistry;
+};
+
 function requireSession(sessionId: string): Promise<Session> {
   return sessionManager.getExistingSession(sessionId).then((session) => {
     if (!session) {
@@ -192,8 +228,28 @@ function requireSession(sessionId: string): Promise<Session> {
   });
 }
 
-export function createSessionRuntimeServiceHandler(): RpcServiceHandler<typeof sessionRuntimeServiceDescriptor> {
+export function createSessionRuntimeServiceHandler(options?: { worker?: SessionRuntimeWorkerProjectionOptions }): RpcServiceHandler<typeof sessionRuntimeServiceDescriptor> {
   let eventContext: SessionRuntimeEventContext | undefined;
+  let unsubscribeWorkerProjections: (() => void) | undefined;
+  const workerListSignatures = new Map<string, string>();
+  const workerEntry = (sessionId: string): SessionWorkerProjectionEntry | undefined => {
+    const ownership = options?.worker?.store.findOwnership(sessionId);
+    const entry = options?.worker?.registry.get(sessionId);
+    return ownership && ownership.state !== 'inactive' && entry
+      && ownership.generation === entry.generation && ownership.incarnationId === entry.incarnationId
+      ? entry
+      : undefined;
+  };
+  const projectedDto = (session: Session): SessionRuntimeSessionDto => overlaySessionWorkerProjection(
+    buildSessionRuntimeSessionDto(session), workerEntry(session.id)?.projection,
+  );
+  const listSignature = (session: SessionRuntimeSessionDto) => JSON.stringify({
+    busy: session.busy, busyStartedAt: session.busyStartedAt, queueLength: session.queueLength,
+    runtimeState: session.runtimeState, messageCount: session.messageCount, lastMessageTime: session.lastMessageTime,
+    currentNode: session.currentNode, cwd: session.cwd, model: session.model,
+    childModelDefault: session.childModelDefault, compactThresholdTokens: session.compactThresholdTokens,
+    tokenUsage: session.tokenUsage,
+  });
 
   const emitState = (sessionId: string) => {
     const session = sessionManager.getAllSessions().get(sessionId);
@@ -215,6 +271,17 @@ export function createSessionRuntimeServiceHandler(): RpcServiceHandler<typeof s
       eventContext?.emit('listChanged', {});
     });
     sessionManager.setOnSessionStateUpdated(emitState);
+    unsubscribeWorkerProjections = options?.worker?.registry.subscribe((entry) => {
+      if (workerEntry(entry.sessionId)?.incarnationId !== entry.incarnationId) return;
+      const session = sessionManager.getAllSessions().get(entry.sessionId);
+      if (!session) return;
+      const current = projectedDto(session);
+      eventContext?.emit('stateChanged', { sessionId: session.id, session: current });
+      const currentSignature = listSignature(current);
+      const previousSignature = workerListSignatures.get(session.id) || listSignature(buildSessionRuntimeSessionDto(session));
+      workerListSignatures.set(session.id, currentSignature);
+      if (previousSignature !== currentSignature) eventContext?.emit('listChanged', {});
+    });
   };
 
   const uninstallEventCallbacks = () => {
@@ -223,23 +290,41 @@ export function createSessionRuntimeServiceHandler(): RpcServiceHandler<typeof s
     sessionManager.setOnSessionEventUpdated(() => {});
     sessionManager.setOnSessionListUpdated(() => {});
     sessionManager.setOnSessionStateUpdated(() => {});
+    unsubscribeWorkerProjections?.(); unsubscribeWorkerProjections = undefined;
+    workerListSignatures.clear();
   };
 
   return {
     async getSession(input) {
-      const session = await sessionManager.getExistingSession(normalizeSessionId(input.sessionId));
-      return { session: session ? buildSessionRuntimeSessionDto(session) : null };
+      const sessionId = normalizeSessionId(input.sessionId);
+      const session = workerEntry(sessionId)
+        ? sessionManager.getAllSessions().get(sessionId) || null
+        : await sessionManager.getExistingSession(sessionId);
+      return { session: session ? projectedDto(session) : null };
     },
     listSessions() {
       return {
         sessions: [...sessionManager.getAllSessions().values()]
-          .map(buildSessionRuntimeSessionDto)
+          .map(projectedDto)
           .sort((a, b) => b.lastMessageTime - a.lastMessageTime),
       };
     },
     async getHistory(input) {
-      const session = await sessionManager.getExistingSession(normalizeSessionId(input.sessionId));
+      const sessionId = normalizeSessionId(input.sessionId);
+      const currentWorker = workerEntry(sessionId);
+      const session = currentWorker
+        ? sessionManager.getAllSessions().get(sessionId) || null
+        : await sessionManager.getExistingSession(sessionId);
       if (!session) return null;
+      if (currentWorker) {
+        const detached = await readDetachedWorkerSession(session.id, session);
+        return {
+          session: projectedDto(session),
+          messages: detached.history,
+          queue: detached.queue || [],
+          persistentMemorySnapshot: detached.persistentMemorySnapshot || '',
+        };
+      }
       const history = session.history;
       const historySnapshot = history.slice();
       const canonical = await externalizeMessages(historySnapshot);
