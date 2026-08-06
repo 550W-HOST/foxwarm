@@ -2,6 +2,7 @@ import { logger } from './common';
 import { initializeMainManagementTools, shutdownMainManagementTools } from './mainManagementTools';
 import { callMcpTool, initializeMcpExternalService, listMcpServers, shutdownMcpExternalService } from './mcpExternalService';
 import { copyBetweenNodes, executeRemoteNodeTool, initializeNodeExecution, listNodeTopology, shutdownNodeExecution, validateNodeSelection } from './nodeExecution';
+import { deliverFile, initializeFileDelivery, shutdownFileDelivery } from './fileDelivery';
 import * as llm from './llm';
 import { initLlmRequestJournal } from './llmRequestJournal';
 import { ProcessRpcClientTransport, ProcessRpcServer, RpcServiceRegistry } from './rpc';
@@ -56,6 +57,8 @@ async function start(): Promise<void> {
         catch (error: any) { fenceErrors.push(error?.code); }
         try { await listNodeTopology('wrong-source'); }
         catch (error: any) { fenceErrors.push(error?.code); }
+        try { await deliverFile({ sourceSessionId: 'wrong-source', intent: { filePath: 'x' }, routing: { runtimeNodeId: 'master', currentNode: 'master' } }); }
+        catch (error: any) { fenceErrors.push(error?.code); }
         try { await listMcpServers('wrong-source'); }
         catch (error: any) { fenceErrors.push(error?.code); }
         const nodeResult = await tool_call_tool({ source: 'node', nodeId: 'reverse-node', name: 'read', args: { filePath: 'reverse.txt' } },
@@ -63,11 +66,15 @@ async function start(): Promise<void> {
         const topology = await listNodeTopology(session.id);
         const selected = await validateNodeSelection(session.id, 'reverse-node');
         const copied = await copyBetweenNodes(session.id, { sourceNode: 'master', sourcePath: 'from.txt', targetNode: 'reverse-node', targetPath: 'to.txt' });
+        const workerCtx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: () => options.currentSessionEffects.persistSession(session) };
+        const sendWebui = await tool_call_tool({ source: 'builtin', name: 'send_file', args: { filePath: 'worker-send.txt', channelTargetId: 'webui:room' } }, workerCtx);
+        const sendSession = await tool_call_tool({ source: 'builtin', name: 'send_file', args: { filePath: 'remote.txt', node: 'reverse-node', sessionId: session.id } }, workerCtx);
+        const sendChannel = await tool_call_tool({ source: 'builtin', name: 'send_file', args: { filePath: 'worker-send.txt', channelTargetId: 'telegram:room' } }, workerCtx);
         const servers = await listMcpServers(session.id);
         const mcpResult = await callMcpTool(session.id, 'reverse-mcp', 'echo', { value: 7 });
         const vectorResult = await vector.search('reverse vector query', 2, false, { sessionIds: [session.id] });
         const loadedLocalVectorOwner = Object.keys(require.cache).some(file => /vector(Runtime|ServiceManager)\.js$/.test(file));
-        await options.appendMessage({ role: 'model', parts: [{ text: JSON.stringify({ fenceErrors, nodeResult, topology, selected, copied, servers, mcpResult, vectorResult, loadedLocalVectorOwner }) }] });
+        await options.appendMessage({ role: 'model', parts: [{ text: JSON.stringify({ fenceErrors, nodeResult, topology, selected, copied, sendWebui, sendSession, sendChannel, servers, mcpResult, vectorResult, loadedLocalVectorOwner }) }] });
         return { text: 'reverse external services complete' };
       }
       await options.appendMessage({ role: 'model', parts: [{ text: 'reverse wait scheduled' }] });
@@ -84,6 +91,7 @@ async function start(): Promise<void> {
   await reverseTransport.waitUntilReady();
   await initializeMainManagementTools({ transport: reverseTransport, placement: 'child-reverse' });
   await initializeNodeExecution({ transport: reverseTransport, placement: 'child-reverse' });
+  await initializeFileDelivery({ transport: reverseTransport, placement: 'child-reverse' });
   await initializeMcpExternalService({ transport: reverseTransport, placement: 'child-reverse' });
   await vector.init({ transport: reverseTransport, placement: 'child-reverse' });
   const host = new SessionWorkerHost(identity, store, {
@@ -117,7 +125,7 @@ async function start(): Promise<void> {
   ));
   registry.register(sessionWorkerRuntimeServiceDescriptor, createSessionWorkerRuntimeServiceHandler(gate, host));
   new ProcessRpcServer(registry, { generation, exitOnDrain: true, onDrain: async () => {
-    await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownMcpExternalService(), vector.shutdown()]);
+    await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownMcpExternalService(), vector.shutdown()]);
     await reverseTransport.drain(); reverseTransport.close(); store.close();
   } }).start();
 }

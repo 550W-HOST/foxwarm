@@ -87,7 +87,7 @@ export function getToolPermissionNode(toolName: string, executionNode: string, t
 setDefinitionsRef(definitions, isToolDirectlyExposedToModel, getToolPermissionNode, callTool, assertToolAvailableForPlacement);
 
 const WORKER_UNSUPPORTED_TOOLS = new Set([
-    'create_child_session', 'send_file', 'delete_session', 'compact_session',
+    'create_child_session', 'delete_session', 'compact_session',
     'node_bootstrap_info', 'node_pair_approve', 'node_pair_list',
     'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
     'get_memory_context',
@@ -115,10 +115,6 @@ export function assertToolAvailableForPlacement(toolName: string, args: any, ctx
     if (toolName === 'remote_node' || toolName === 'node_tools') {
         const action = args?.action;
         if (action !== 'list') workerUnavailable(toolName);
-    }
-    if (toolName === 'image_write_to_file') {
-        const targetNode = ctx.runtimeNodeId || owner?.currentNode || 'master';
-        if (targetNode !== 'master') workerUnavailable(toolName);
     }
     if (['get_session_messages', 'stop_session'].includes(toolName) && !isCurrent(literalTarget)) workerUnavailable(toolName);
     if (['get_archived_messages', 'get_archived_blocks', 'set_session_child_model',

@@ -10,6 +10,7 @@ import { ProcessRpcClientTransport, ProcessRpcServer, RpcClient, RpcServiceRegis
 import { createMainManagementToolServiceHandler, mainManagementToolServiceDescriptor } from './mainManagementToolService';
 import { createMcpExternalServiceHandler, mcpExternalServiceDescriptor } from './mcpExternalService';
 import { createNodeExecutionServiceHandler, nodeExecutionServiceDescriptor } from './nodeExecutionService';
+import { createFileDeliveryServiceHandler, fileDeliveryServiceDescriptor } from './fileDeliveryService';
 import * as mcpClient from './mcpClient';
 import { nodesManager } from './nodes/manager';
 import { serializeSessionHistoryPayload } from './session/metadataStore';
@@ -21,7 +22,7 @@ import { SessionWorkerStore } from './sessionWorkerStore';
 import type { Session } from './types';
 import * as llm from './llm';
 import * as sessionManager from './sessionManager';
-import { SESSIONS_FILE, TIMERS_FILE } from './config';
+import { getAgentDir, SESSIONS_FILE, TIMERS_FILE } from './config';
 import * as timers from './timers';
 import * as vector from './vector';
 import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
@@ -230,6 +231,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   const dbPath = path.join(root, 'session-runtime.sqlite');
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  await fs.outputFile(path.join(getAgentDir('main'), 'worker-send.txt'), 'worker-master-file');
   const store = new SessionWorkerStore(dbPath); store.open();
   const incarnationId = 'runtime-test-incarnation';
   const ownership = store.beginGeneration(sessionId, incarnationId);
@@ -237,6 +239,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     getNode: nodesManager.getNode, executeTool: nodesManager.executeTool,
     listNodesWithTools: nodesManager.listNodesWithTools, setCurrentNode: nodesManager.setCurrentNode,
     readFileFromNode: nodesManager.readFileFromNode, writeFileToNode: nodesManager.writeFileToNode,
+    sendFileToSession: sessionManager.sendFileToSession, sendFileToChannelTargetId: sessionManager.sendFileToChannelTargetId,
     listServers: mcpClient.listServers, callTool: mcpClient.callTool, vectorSearch: vector.search,
   };
   const externalCalls: any[] = [];
@@ -248,6 +251,8 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   (nodesManager as any).readFileFromNode = async () => ({ dataBase64: 'c2VjcmV0LWJ5dGVz', sizeBytes: 12,
     sha256: createHash('sha256').update('secret-bytes').digest('hex') });
   (nodesManager as any).writeFileToNode = async () => ({ sha256: 'a'.repeat(64), overwritten: false, absolutePath: '/remote/to.txt' });
+  (sessionManager as any).sendFileToSession = async () => ({ deliveredChannels: ['telegram:session'], skippedChannels: [] as any[], failedChannels: [] as any[] });
+  (sessionManager as any).sendFileToChannelTargetId = async () => {};
   (mcpClient as any).listServers = async () => [{ name: 'reverse-mcp', enabled: true, transport: 'http', argsCount: 0,
     envKeys: [] as string[], headerKeys: [] as string[], hasToken: false }];
   (mcpClient as any).callTool = async (...args: any[]) => { externalCalls.push(['mcp', ...args]); return { echoed: args[2] }; };
@@ -271,6 +276,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   const reverseRegistry = new RpcServiceRegistry();
   reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ expectedSourceSessionId: sessionId }));
   reverseRegistry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: sessionId }));
+  reverseRegistry.register(fileDeliveryServiceDescriptor, createFileDeliveryServiceHandler({ expectedSourceSessionId: sessionId }));
   reverseRegistry.register(mcpExternalServiceDescriptor, createMcpExternalServiceHandler({ expectedSourceSessionId: sessionId }));
   reverseRegistry.register(vectorServiceDescriptor, createVectorFacadeProxyHandler());
   const reverseServer = new ProcessRpcServer(reverseRegistry, {
@@ -340,9 +346,12 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.deepEqual(externalCalls[0].slice(1, 5), ['reverse-node', 'read', { filePath: 'reverse.txt' }, sessionId]);
     assert.equal(externalCalls[1][1], 'reverse-mcp');
     assert.equal(externalCalls[2][1], 'reverse vector query');
-    assert.match(afterWait.history.at(-1).parts[0].text, /"fenceErrors":\["NODE_EXECUTION_SOURCE_MISMATCH","NODE_EXECUTION_SOURCE_MISMATCH","MCP_EXTERNAL_SOURCE_MISMATCH"\]/);
+    assert.match(afterWait.history.at(-1).parts[0].text, /"fenceErrors":\["NODE_EXECUTION_SOURCE_MISMATCH","NODE_EXECUTION_SOURCE_MISMATCH","FILE_DELIVERY_SOURCE_MISMATCH","MCP_EXTERNAL_SOURCE_MISMATCH"\]/);
     assert.match(afterWait.history.at(-1).parts[0].text, /"defaultCwd":"node process cwd/);
     assert.match(afterWait.history.at(-1).parts[0].text, new RegExp(`"sha256":"${'a'.repeat(64)}"`));
+    assert.match(afterWait.history.at(-1).parts[0].text, /ready for WebUI target/);
+    assert.match(afterWait.history.at(-1).parts[0].text, /Delivered: 1/);
+    assert.match(afterWait.history.at(-1).parts[0].text, /telegram:room/);
     assert.doesNotMatch(afterWait.history.at(-1).parts[0].text, /c2VjcmV0LWJ5dGVz/);
     assert.match(afterWait.history.at(-1).parts[0].text, /reverse-hit/);
     assert.match(afterWait.history.at(-1).parts[0].text, /"loadedLocalVectorOwner":false/);
@@ -363,6 +372,8 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     (nodesManager as any).setCurrentNode = externalOriginals.setCurrentNode;
     (nodesManager as any).readFileFromNode = externalOriginals.readFileFromNode;
     (nodesManager as any).writeFileToNode = externalOriginals.writeFileToNode;
+    (sessionManager as any).sendFileToSession = externalOriginals.sendFileToSession;
+    (sessionManager as any).sendFileToChannelTargetId = externalOriginals.sendFileToChannelTargetId;
     (mcpClient as any).listServers = externalOriginals.listServers;
     (mcpClient as any).callTool = externalOriginals.callTool;
     (vector as any).search = externalOriginals.vectorSearch;

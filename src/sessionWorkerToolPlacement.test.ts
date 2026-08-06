@@ -13,6 +13,7 @@ import { executeTools } from './llm';
 import * as nodeExecution from './nodeExecution';
 import * as agentMetadata from './session/agentMetadata';
 import { RpcError } from './rpc';
+import * as fileDelivery from './fileDelivery';
 import type { Session } from './types';
 
 function owner(): Session {
@@ -70,7 +71,7 @@ test('worker guards run before unsupported handlers and exact current state tool
   (sessionManager as any).getArchivedBlocks = async () => ({ records: [] as any[], totalMatched: 0, requestedRange: {} });
   try {
   for (const [name, args, extra] of [
-    ['create_child_session', { suffix: 'x' }], ['send_file', { filePath: 'x' }], ['compact_session', {}],
+    ['create_child_session', { suffix: 'x' }], ['compact_session', {}],
     ['session', { action: 'list' }],
     ['session', { action: ' list ' }], ['get_memory_context', { timestamp: 1 }],
     ['remote_node', { action: ' list ' }], ['node_tools', { action: 'List' }],
@@ -80,7 +81,6 @@ test('worker guards run before unsupported handlers and exact current state tool
     ['session', { action: 'update-display-name', sessionId: 'other/session', name: 'x' }],
     ['set_session_child_model', { sessionId: ' ', model: 'x' }],
     ['recall', { agentName: ' other-agent ', vector_query: 'x' }],
-    ['image_write_to_file', { id: 'x', filePath: 'x' }, { runtimeNodeId: 'remote' }],
   ] as any[]) {
     await assert.rejects(() => callTool(name, args, { ...ctx, ...(extra || {}) }), { code: 'SESSION_WORKER_TOOL_UNAVAILABLE', retryable: true });
   }
@@ -236,4 +236,22 @@ test('worker node topology select and compound copy use fixed facade with exact 
     (nodeExecution as any).copyBetweenNodes = originals.copy; (sessionManager as any).getSession = originals.get;
     (sessionManager as any).saveSession = originals.save; (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
   }
+});
+
+test('worker send_file direct unified and ToolScript calls share exact fixed delivery facade', async () => {
+  const session = owner(); session.currentNode = 'remote-a'; session.cwd = '/exact/cwd';
+  const calls: any[] = []; const original = fileDelivery.deliverFile;
+  (fileDelivery as any).deliverFile = async (request: any) => { calls.push(request); return { output: 'sent', fullPath: '/prepared/file' }; };
+  const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', runtimeNodeId: 'remote-a', persistCurrentSession: async () => {} };
+  const args = { filePath: ' demo.txt ', sessionId: 'target', caption: ' cap ' };
+  try {
+    assert.equal((await callTool('send_file', args, ctx)).output, 'sent');
+    assert.equal((await tool_call_tool({ source: 'builtin', name: 'send_file', args }, ctx)).output, 'sent');
+    const script = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="send_file", args=args)', args }, ctx);
+    assert.equal(script.status, 'completed'); assert.match(JSON.stringify(script.result), /prepared\/file/);
+    assert.equal(calls.length, 3);
+    assert.deepEqual(calls[0], { sourceSessionId: session.id,
+      intent: { sessionId: 'target', filePath: 'demo.txt', caption: 'cap' },
+      routing: { runtimeNodeId: 'remote-a', currentNode: 'remote-a', cwd: '/exact/cwd' } });
+  } finally { (fileDelivery as any).deliverFile = original; }
 });

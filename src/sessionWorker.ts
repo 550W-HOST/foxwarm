@@ -2,6 +2,7 @@ import { logger } from './common';
 import { initializeMainManagementTools, shutdownMainManagementTools } from './mainManagementTools';
 import { initializeMcpExternalService, shutdownMcpExternalService } from './mcpExternalService';
 import { initializeNodeExecution, shutdownNodeExecution } from './nodeExecution';
+import { initializeFileDelivery, shutdownFileDelivery } from './fileDelivery';
 import { ProcessRpcClientTransport, ProcessRpcServer, RpcServiceRegistry } from './rpc';
 import {
   createSessionWorkerControlServiceHandler,
@@ -35,10 +36,11 @@ async function start(): Promise<void> {
   try {
     await initializeMainManagementTools({ transport: reverseTransport, placement: 'child-reverse' });
     await initializeNodeExecution({ transport: reverseTransport, placement: 'child-reverse' });
+    await initializeFileDelivery({ transport: reverseTransport, placement: 'child-reverse' });
     await initializeMcpExternalService({ transport: reverseTransport, placement: 'child-reverse' });
     await vector.init({ transport: reverseTransport, placement: 'child-reverse' });
   } catch (error) {
-    await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownMcpExternalService(), vector.shutdown()]);
+    await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownMcpExternalService(), vector.shutdown()]);
     reverseTransport.close(); store.close(); throw error;
   }
   const registry = new RpcServiceRegistry();
@@ -53,7 +55,7 @@ async function start(): Promise<void> {
     generation,
     exitOnDrain: true,
     onDrain: async () => {
-      await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownMcpExternalService(), vector.shutdown()]);
+      await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownMcpExternalService(), vector.shutdown()]);
       await reverseTransport.drain(); reverseTransport.close(); store.close();
     },
   }).start();

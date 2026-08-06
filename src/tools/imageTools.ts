@@ -9,6 +9,8 @@ import {
 import { checkPathAccess } from '../isolatedCheck';
 import { cropImageById, cropImageForSession, resolveImageById, resolveImageForSession } from '../toolImages';
 import { nodesManager } from '../nodes/manager';
+import { getAgentDir } from '../config';
+import { copyBetweenNodes } from '../nodeExecution';
 
 function getTrustedCurrentSession(ctx: ToolContext) {
     if (!ctx.persistCurrentSession || !ctx.session || !ctx.sessionId) return undefined;
@@ -88,7 +90,18 @@ export async function tool_image_write_to_file(args: ToolArgs, ctx: ToolContext)
         await fs.ensureDir(path.dirname(fullPath));
         await fs.writeFile(fullPath, resolved.buffer);
     } else {
-        await nodesManager.writeFileToNode(targetNode, filePath, resolved.buffer.toString('base64'), overwrite === true, sessionId);
+        if (ctx.sessionPlacement === 'session-worker') {
+            const tempDir = path.join(getAgentDir(ctx.session?.agent || 'main'), '.temp', 'image-write-handoff');
+            await fs.ensureDir(tempDir);
+            const extension = path.extname(filePath).slice(0, 32);
+            const tempPath = path.join(tempDir, `${Date.now()}_${Math.random().toString(36).slice(2, 10)}${extension}`);
+            await fs.writeFile(tempPath, resolved.buffer, { mode: 0o600 });
+            try {
+                await copyBetweenNodes(sessionId, { sourceNode: 'master', sourcePath: tempPath, targetNode, targetPath: filePath, overwrite: overwrite === true });
+            } finally { await fs.remove(tempPath).catch(() => {}); }
+        } else {
+            await nodesManager.writeFileToNode(targetNode, filePath, resolved.buffer.toString('base64'), overwrite === true, sessionId);
+        }
     }
 
     return [
