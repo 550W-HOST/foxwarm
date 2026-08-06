@@ -17,6 +17,8 @@ import type { ToolArgs, ToolContext } from './tools/helpers';
 let transport: RpcTransport | undefined;
 let client: RpcClient<typeof mainManagementToolServiceDescriptor> | undefined;
 let initializing: Promise<void> | undefined;
+let initializingTransport: RpcTransport | null | undefined;
+let initializingPlacement: 'local' | 'child-reverse' | undefined;
 let terminalShutdown = false;
 let placement: 'local' | 'child-reverse' = 'local';
 
@@ -31,11 +33,23 @@ export async function initializeMainManagementTools(options: {
   placement?: 'child-reverse';
 } = {}): Promise<void> {
   assertNotTerminallyShutDown();
+  const requestedPlacement = options.transport ? (options.placement || 'child-reverse') : 'local';
   if (client) {
-    if (options.transport && transport !== options.transport) throw new RpcError('MAIN_MANAGEMENT_PLACEMENT_LOCKED', 'Main management tool placement is already initialized.');
+    if (placement !== requestedPlacement || (options.transport && transport !== options.transport)) {
+      throw new RpcError('MAIN_MANAGEMENT_PLACEMENT_LOCKED', 'Main management tool placement is already initialized.');
+    }
+    return;
+  }
+  if (initializing) {
+    if (initializingPlacement !== requestedPlacement || initializingTransport !== (options.transport || null)) {
+      throw new RpcError('MAIN_MANAGEMENT_PLACEMENT_LOCKED', 'Main management tool placement initialization is already in progress.');
+    }
+    await initializing;
     return;
   }
   if (!initializing) {
+    initializingTransport = options.transport || null;
+    initializingPlacement = requestedPlacement;
     initializing = Promise.resolve().then(() => {
       assertNotTerminallyShutDown();
       if (options.transport) {
@@ -53,16 +67,22 @@ export async function initializeMainManagementTools(options: {
       }
       transport = nextTransport;
       client = new RpcClient(mainManagementToolServiceDescriptor, nextTransport);
-    }).catch(error => {
-      initializing = undefined;
-      throw error;
     });
   }
-  await initializing;
+  const pending = initializing;
+  try { await pending; }
+  finally {
+    if (initializing === pending) {
+      initializing = undefined;
+      initializingTransport = undefined;
+      initializingPlacement = undefined;
+    }
+  }
 }
 
 async function getClient(): Promise<RpcClient<typeof mainManagementToolServiceDescriptor>> {
-  await initializeMainManagementTools();
+  assertNotTerminallyShutDown();
+  if (!client) await initializeMainManagementTools();
   if (!client) throw new RpcError('MAIN_MANAGEMENT_UNAVAILABLE', 'Main management tool service is unavailable.', true);
   return client;
 }
@@ -109,6 +129,8 @@ export async function shutdownMainManagementTools(timeoutMs = 10_000): Promise<v
   if (!currentTransport) {
     client = undefined;
     initializing = undefined;
+    initializingTransport = undefined;
+    initializingPlacement = undefined;
     return;
   }
   try {
@@ -118,6 +140,8 @@ export async function shutdownMainManagementTools(timeoutMs = 10_000): Promise<v
     client = undefined;
     transport = undefined;
     initializing = undefined;
+    initializingTransport = undefined;
+    initializingPlacement = undefined;
   }
 }
 
@@ -128,4 +152,6 @@ export function resetMainManagementToolsForTests(): void {
   }
   terminalShutdown = false;
   placement = 'local';
+  initializingTransport = undefined;
+  initializingPlacement = undefined;
 }

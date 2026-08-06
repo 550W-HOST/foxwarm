@@ -39,6 +39,7 @@ export class ProcessRpcServer {
   private drainRequest?: DrainMessage;
   private drainStarted = false;
   private started = false;
+  private closed = false;
   private cleanupPromise?: Promise<void>;
   private intentionalDisconnect = false;
   private disconnectCleanupStarted = false;
@@ -75,7 +76,7 @@ export class ProcessRpcServer {
     const message = raw as any;
     if (!message || typeof message !== 'object' || message.generation !== this.generation) return;
     if (this.direction === 'reverse' && (message as any).kind === 'rpc-reverse-init') {
-      this.sendReady();
+      if (!this.draining && !this.closed) this.sendReady();
     } else if (message.kind === this.kind('rpc-request')) {
       void this.handleRequest(message);
     } else if (message.kind === this.kind('rpc-cancel')) {
@@ -259,6 +260,7 @@ export class ProcessRpcServer {
   }
 
   close(reason = new RpcError('RPC_CLOSED', 'RPC server closed.', true)): void {
+    this.closed = true;
     this.draining = true;
     this.peer.off('message', this.onMessage);
     this.peer.off('disconnect', this.onParentDisconnect);

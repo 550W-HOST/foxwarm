@@ -186,21 +186,23 @@ export class SessionWorkerSupervisor {
     // From this point the exact ChildProcess is provisionally owned before any
     // identity read or transport construction can throw.
     const provisional = this.trackProvisionalChild(sessionId, generation, incarnationId, child);
-    const reverseRegistry = new RpcServiceRegistry();
-    reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler());
-    const reverseServer = new ProcessRpcServer(reverseRegistry, {
-      generation, peer: child, direction: 'reverse', exitOnDisconnect: false,
-    });
-    provisional.reverseServer = reverseServer;
-    reverseServer.start();
+    let reverseServer: ProcessRpcServer | undefined;
     let processIdentity: string;
     let transport: ProcessRpcClientTransport;
     try {
+      const reverseRegistry = new RpcServiceRegistry();
+      reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ expectedSourceSessionId: sessionId }));
+      reverseServer = new ProcessRpcServer(reverseRegistry, {
+        generation, peer: child, direction: 'reverse', exitOnDisconnect: false,
+      });
+      provisional.reverseServer = reverseServer;
+      reverseServer.start();
       const identity = this.readProcessIdentity(child.pid!);
       if (!identity) throw new RpcError('SESSION_WORKER_PROCESS_IDENTITY_UNAVAILABLE', `Session worker ${sessionId} has no process identity.`, true);
       processIdentity = identity;
       transport = new ProcessRpcClientTransport(child, { generation });
     } catch (error) {
+      reverseServer?.close();
       try { await this.cleanupProvisionalChild(provisional, 2_000, 'post-fork-startup-failure'); }
       catch (cleanupError) {
         throw new SessionWorkerLifecycleError(`Session worker ${sessionId} post-fork cleanup failed.`, [error, cleanupError]);
@@ -210,7 +212,7 @@ export class SessionWorkerSupervisor {
     let resolveExit!: () => void;
     const exitPromise = new Promise<void>(resolve => { resolveExit = resolve; });
     const entry: WorkerEntry = { sessionId, generation, incarnationId, processIdentity, child, transport,
-      reverseServer, ready: false, activeCalls: 0, intentionalStop: false, exitPromise, resolveExit };
+      reverseServer: reverseServer!, ready: false, activeCalls: 0, intentionalStop: false, exitPromise, resolveExit };
     this.entries.set(sessionId, entry);
     provisional.entry = entry;
     this.provisionalChildren.delete(sessionId);

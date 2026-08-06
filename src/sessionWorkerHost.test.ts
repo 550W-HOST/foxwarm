@@ -241,7 +241,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   });
   const transport = new ProcessRpcClientTransport(child, { generation: ownership.generation });
   const reverseRegistry = new RpcServiceRegistry();
-  reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler());
+  reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ expectedSourceSessionId: sessionId }));
   const reverseServer = new ProcessRpcServer(reverseRegistry, {
     generation: ownership.generation, peer: child, direction: 'reverse', exitOnDisconnect: false,
   });

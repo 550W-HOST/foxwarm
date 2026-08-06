@@ -19,7 +19,7 @@ Provides the minimal typed asynchronous service boundary shared by in-process ha
 ## Behavior
 
 - Local calls clone both request and response DTOs and schedule handler invocation asynchronously. Handler failures cross the same serialized/cloned/deserialized error envelope as process calls, while a caller's own abort reason retains its identity.
-- Process calls in either direction require matching protocol/build/service versions and generation. Child exit or IPC disconnect rejects outstanding work as retryable unavailable; stale-generation messages are ignored. Reverse readiness uses a child init handshake so Main cannot race a one-shot ready message before the child listener exists.
+- Process calls in either direction require matching protocol/build/service versions and generation. Child exit or IPC disconnect rejects outstanding work as retryable unavailable; stale-generation messages are ignored. Reverse readiness uses bounded repeated child init announcements until ready/terminal/close/timeout, so either listener may start first without leaving a retry timer behind.
 - Abort and deadline signals are forwarded to handlers. Cancellation is cooperative: a handler or native dependency may finish after its caller has stopped waiting.
 - Request count and unacknowledged events are bounded. Server events carry sequence and trace metadata and receive client acknowledgements.
 - Drain rejects new calls, waits for accepted handlers, invokes service cleanup, then acknowledges. A parent-owned reverse server also exposes local drain/close so the supervisor can stop child-run acceptance, let nested reverse calls finish, and then close the reverse side before process termination.

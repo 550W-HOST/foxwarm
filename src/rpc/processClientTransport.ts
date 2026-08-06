@@ -48,6 +48,7 @@ export class ProcessRpcClientTransport implements RpcTransport {
   private draining = false;
   private closed = false;
   private terminalError?: RpcError;
+  private readyRetryTimer?: NodeJS.Timeout;
 
   private readonly direction: 'forward' | 'reverse';
 
@@ -65,12 +66,15 @@ export class ProcessRpcClientTransport implements RpcTransport {
     child.once('error', this.onChildError);
     child.once('disconnect', this.onChildDisconnect);
     child.once('exit', this.onChildExit);
-    if (this.direction === 'reverse') this.send({ kind: 'rpc-reverse-init', generation: this.generation } as any);
+    if (this.direction === 'reverse') this.announceReverseReady();
   }
 
   async waitUntilReady(): Promise<void> {
     if (this.terminalError) throw this.terminalError;
     if (this.ready) return;
+    if (this.direction === 'reverse' && !this.readyRetryTimer) {
+      this.readyRetryTimer = setInterval(() => this.announceReverseReady(), 50);
+    }
     let timer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
@@ -80,6 +84,12 @@ export class ProcessRpcClientTransport implements RpcTransport {
           timer.unref?.();
         }),
       ]);
+    } catch (error) {
+      if (this.direction === 'reverse' && error instanceof RpcError && error.code === 'RPC_READY_TIMEOUT') {
+        this.terminalError = error;
+        this.stopReadyRetry();
+      }
+      throw error;
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -210,6 +220,7 @@ export class ProcessRpcClientTransport implements RpcTransport {
       this.drainPending = undefined;
     }
     this.listeners.clear();
+    this.stopReadyRetry();
   }
 
   private readonly onMessage = (raw: unknown): void => {
@@ -221,6 +232,7 @@ export class ProcessRpcClientTransport implements RpcTransport {
         return;
       }
       this.ready = message as RpcReadyMessage;
+      this.stopReadyRetry();
       this.resolveReady(message);
       return;
     }
@@ -265,6 +277,7 @@ export class ProcessRpcClientTransport implements RpcTransport {
   private failChild(error: Error): void {
     const rpcError = new RpcError('RPC_UNAVAILABLE', error.message, true);
     this.terminalError = rpcError;
+    this.stopReadyRetry();
     this.draining = true;
     this.rejectReady(rpcError);
     this.rejectAll(rpcError);
@@ -301,6 +314,15 @@ export class ProcessRpcClientTransport implements RpcTransport {
 
   private kind(kind: string): string {
     return this.direction === 'reverse' ? kind.replace('rpc-', 'rpc-reverse-') : kind;
+  }
+
+  private stopReadyRetry(): void {
+    if (this.readyRetryTimer) clearInterval(this.readyRetryTimer);
+    this.readyRetryTimer = undefined;
+  }
+
+  private announceReverseReady(): void {
+    this.send({ kind: 'rpc-reverse-init', generation: this.generation } as any);
   }
 
   private send(message: any, callback?: (error: Error | null) => void): void {

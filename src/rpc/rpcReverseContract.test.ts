@@ -67,6 +67,33 @@ test('reverse process RPC preserves unary contract, bounds, cancellation, drain,
   } finally { server.close(); await stopChild(child); }
 });
 
+test('reverse readiness retries until a late Main listener starts and then stops announcing', async () => {
+  const child = fork(path.join(__dirname, 'rpcReverseTestChild.js'), [], {
+    env: { ...process.env, FOXWARM_RPC_GENERATION: '12', FOXWARM_RPC_READY_TIMEOUT_MS: '2000' }, serialization: 'advanced',
+  });
+  let initCount = 0;
+  let firstInitResolve!: () => void;
+  const firstInit = new Promise<void>(resolve => { firstInitResolve = resolve; });
+  child.on('message', message => {
+    if ((message as any)?.kind === 'rpc-reverse-init') { initCount += 1; if (initCount === 1) firstInitResolve(); }
+  });
+  const ready = waitForMessage(child, message => message?.kind === 'reverse-test-ready');
+  void ready.catch(() => {});
+  let server: ProcessRpcServer | undefined;
+  try {
+    await firstInit;
+    await new Promise(resolve => setTimeout(resolve, 300));
+    const registry = new RpcServiceRegistry(); registry.register(rpcTestService, rpcTestHandler);
+    server = new ProcessRpcServer(registry, { generation: 12, peer: child, direction: 'reverse', exitOnDisconnect: false });
+    server.start();
+    await ready;
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const settledCount = initCount;
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.equal(initCount, settledCount);
+  } finally { server?.close(); await stopChild(child); }
+});
+
 test('reverse process RPC rejects generation mismatch and aborts accepted calls on close', async () => {
   const mismatch = fork(path.join(__dirname, 'rpcReverseTestChild.js'), [], {
     env: { ...process.env, FOXWARM_RPC_GENERATION: '2', FOXWARM_RPC_READY_TIMEOUT_MS: '50' }, serialization: 'advanced',
@@ -74,9 +101,14 @@ test('reverse process RPC rejects generation mismatch and aborts accepted calls 
   const mismatchRegistry = new RpcServiceRegistry(); mismatchRegistry.register(rpcTestService, rpcTestHandler);
   const mismatchServer = new ProcessRpcServer(mismatchRegistry, { generation: 1, peer: mismatch, direction: 'reverse', exitOnDisconnect: false });
   mismatchServer.start();
+  let mismatchInitCount = 0;
+  mismatch.on('message', message => { if ((message as any)?.kind === 'rpc-reverse-init') mismatchInitCount += 1; });
   try {
     const result = await waitForMessage(mismatch, message => message?.kind === 'reverse-test-start-error');
     assert.equal(result.error.code, 'RPC_READY_TIMEOUT');
+    const settledCount = mismatchInitCount;
+    await new Promise(resolve => setTimeout(resolve, 120));
+    assert.equal(mismatchInitCount, settledCount);
   } finally { mismatchServer.close(); await stopChild(mismatch); }
 
   let started!: () => void;
@@ -111,5 +143,20 @@ test('reverse client rejects outstanding calls on IPC disconnect and exit', asyn
     else peer.emit('exit', 1, null);
     await assert.rejects(() => pending, (error: any) => error?.code === 'RPC_UNAVAILABLE');
     transport.close();
+    assert.equal(peer.listenerCount('message'), 0);
   }
+
+  class ClosingPeer extends EventEmitter {
+    connected = true; sends = 0;
+    send(_message: unknown, callback?: (error: Error | null) => void) { this.sends += 1; callback?.(null); }
+  }
+  const closingPeer = new ClosingPeer();
+  const closingTransport = new ProcessRpcClientTransport(closingPeer as any, { generation: 10, direction: 'reverse' });
+  const closingReady = closingTransport.waitUntilReady();
+  closingTransport.close();
+  await assert.rejects(() => closingReady, { code: 'RPC_CLOSED' });
+  const sendsAtClose = closingPeer.sends;
+  await new Promise(resolve => setTimeout(resolve, 120));
+  assert.equal(closingPeer.sends, sendsAtClose);
+  assert.equal(closingPeer.listenerCount('message'), 0);
 });

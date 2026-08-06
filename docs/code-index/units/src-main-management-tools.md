@@ -11,7 +11,7 @@ Provides the versioned RPC boundary for a closed first set of tools whose mutabl
 
 - `mainManagementToolServiceDescriptor` — version 1 descriptor with closed `execute` and separate internal `scheduleWaitTimeout` methods.
 - `MAIN_MANAGEMENT_TOOL_OPERATIONS` — exact allowlist: `send_to_session`, `send_to_channel`, `list_agents`, and timer CRUD.
-- `createMainManagementToolServiceHandler()` — validates source identity and operation, then invokes the existing authoritative raw handler.
+- `createMainManagementToolServiceHandler()` — validates source identity and operation, optionally fences a reverse handler to one expected worker source before any lookup/mutation, then invokes the existing authoritative raw handler.
 - `initializeMainManagementTools()` / `shutdownMainManagementTools()` — placement-injectable local or child-reverse client lifecycle and one-way terminal graceful drain.
 - `resetMainManagementToolsForTests()` — explicit test-only reset after a completed terminal shutdown.
 - `executeMainManagementTool()` — placement-neutral local caller used by the seven public tool wrappers.
@@ -28,7 +28,7 @@ The handler rejects missing/deleted source sessions before dispatch. It reconstr
 
 This boundary has no arbitrary builtin dispatch, Session/history/queue payload, mutable patch, callback, capability negotiation, retry/outbox protocol, or fallback from child reverse placement to a child-local handler. Only the existing descriptor is registered on Main's per-worker reverse server; other Node/MCP/vector/SessionRuntime services remain unwired.
 
-Production shutdown sets a terminal fence before awaiting initialization or drain. An in-flight initializer must observe that fence or publish a transport that shutdown then drains and closes; later initialize/execute calls cannot recreate the service before process exit. Same-process reuse is available only through the explicitly test-only reset after no client, transport, or initializer remains.
+Production shutdown sets a terminal fence before awaiting initialization or drain. Concurrent initialization is bound to one stored placement/transport: an identical caller may join, while local-vs-reverse or different reverse transports fail rather than silently joining. In-flight initialization state is cleared on success, failure, terminal cleanup, and test reset. Later initialize/execute calls cannot recreate the service before process exit. Same-process reuse is available only through the explicitly test-only reset after no client, transport, or initializer remains.
 
 ## Integration
 

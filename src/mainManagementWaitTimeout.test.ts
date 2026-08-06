@@ -4,7 +4,10 @@ import * as sessionManager from './sessionManager';
 import * as timers from './timers';
 import {
   MAIN_MANAGEMENT_TOOL_OPERATIONS,
+  createMainManagementToolServiceHandler,
+  mainManagementToolServiceDescriptor,
 } from './mainManagementToolService';
+import { LocalRpcTransport, RpcClient, RpcServiceRegistry, type RpcTransport } from './rpc';
 import {
   executeMainManagementTool,
   getMainManagementToolServiceStatus,
@@ -59,6 +62,58 @@ test('named wait-timeout method validates exact DTO and does not expand model op
     (timers as any).createWaitTimeoutTimer = originals.create;
     await resetService();
   }
+});
+
+test('bound reverse handler rejects wrong source before lookup or mutation', async () => {
+  const registry = new RpcServiceRegistry();
+  registry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ expectedSourceSessionId: 'owned' }));
+  const transport = new LocalRpcTransport(registry);
+  const client = new RpcClient(mainManagementToolServiceDescriptor, transport);
+  const originalLookup = sessionManager.getExistingSession;
+  const originalCreate = timers.createWaitTimeoutTimer;
+  let lookups = 0;
+  let timerWrites = 0;
+  (sessionManager as any).getExistingSession = async (id: string): Promise<Session | null> => { lookups += 1; return id === 'owned' ? session(id) : null; };
+  (timers as any).createWaitTimeoutTimer = async () => { timerWrites += 1; return { id: 'timer' }; };
+  try {
+    await assert.rejects(() => client.call('execute', { sourceSessionId: 'wrong', operation: 'list_agents', args: {} }),
+      { code: 'MAIN_MANAGEMENT_SOURCE_MISMATCH' });
+    await assert.rejects(() => client.call('scheduleWaitTimeout', { sourceSessionId: 'wrong', waitId: 'w', timeoutSeconds: 1 }),
+      { code: 'MAIN_MANAGEMENT_SOURCE_MISMATCH' });
+    assert.equal(lookups, 0);
+    assert.equal(timerWrites, 0);
+    assert.deepEqual(await client.call('scheduleWaitTimeout', { sourceSessionId: 'owned', waitId: 'w', timeoutSeconds: 1 }),
+      { scheduled: true, waitId: 'w' });
+    assert.equal(lookups, 1);
+    assert.equal(timerWrites, 1);
+  } finally {
+    (sessionManager as any).getExistingSession = originalLookup;
+    (timers as any).createWaitTimeoutTimer = originalCreate;
+    await transport.drain(); transport.close();
+  }
+});
+
+test('concurrent Main Management initialization locks exact placement transport', async () => {
+  await resetService();
+  const fake = (): RpcTransport => ({
+    call: async () => ({}), subscribe: () => () => {}, drain: async () => {}, close: () => {},
+  });
+  const firstTransport = fake();
+  const otherTransport = fake();
+  try {
+    const first = initializeMainManagementTools({ transport: firstTransport, placement: 'child-reverse' });
+    const identical = initializeMainManagementTools({ transport: firstTransport, placement: 'child-reverse' });
+    await assert.rejects(() => initializeMainManagementTools({ transport: otherTransport, placement: 'child-reverse' }),
+      { code: 'MAIN_MANAGEMENT_PLACEMENT_LOCKED' });
+    await Promise.all([first, identical]);
+    await assert.rejects(() => initializeMainManagementTools(), { code: 'MAIN_MANAGEMENT_PLACEMENT_LOCKED' });
+  } finally { await resetService(); }
+
+  const local = initializeMainManagementTools();
+  await assert.rejects(() => initializeMainManagementTools({ transport: fake(), placement: 'child-reverse' }),
+    { code: 'MAIN_MANAGEMENT_PLACEMENT_LOCKED' });
+  await local;
+  await resetService();
 });
 
 test('accepted wait-timeout schedule drains and terminal fence rejects new calls', async () => {

@@ -73,10 +73,16 @@ async function invokeAllowedOperation(operation: MainManagementToolOperation, ar
   }
 }
 
-export function createMainManagementToolServiceHandler(): RpcServiceHandler<typeof mainManagementToolServiceDescriptor> {
+export function createMainManagementToolServiceHandler(options: { expectedSourceSessionId?: string } = {}): RpcServiceHandler<typeof mainManagementToolServiceDescriptor> {
+  const assertExpectedSource = (sourceSessionId: string): void => {
+    if (options.expectedSourceSessionId && sourceSessionId !== options.expectedSourceSessionId) {
+      throw new RpcError('MAIN_MANAGEMENT_SOURCE_MISMATCH', `Main management reverse source must be \`${options.expectedSourceSessionId}\`.`);
+    }
+  };
   return {
     async execute(input) {
       const sourceSessionId = normalizeSourceSessionId(input?.sourceSessionId);
+      assertExpectedSource(sourceSessionId);
       const operation = input?.operation;
       if (typeof operation !== 'string' || !allowedOperations.has(operation)) {
         throw new RpcError('MAIN_MANAGEMENT_OPERATION_NOT_ALLOWED', `Main management operation is not allowed: ${String(operation)}`);
@@ -101,6 +107,7 @@ export function createMainManagementToolServiceHandler(): RpcServiceHandler<type
         throw new RpcError('MAIN_MANAGEMENT_INVALID_WAIT_TIMEOUT', 'scheduleWaitTimeout requires exactly sourceSessionId, waitId, and timeoutSeconds.');
       }
       const sourceSessionId = normalizeSourceSessionId(input.sourceSessionId);
+      assertExpectedSource(sourceSessionId);
       const waitId = normalizeNonEmptyString(input.waitId, 'waitId');
       if (typeof input.timeoutSeconds !== 'number' || !Number.isFinite(input.timeoutSeconds) || input.timeoutSeconds <= 0) {
         throw new RpcError('MAIN_MANAGEMENT_INVALID_WAIT_TIMEOUT', 'timeoutSeconds must be a positive finite number.');
