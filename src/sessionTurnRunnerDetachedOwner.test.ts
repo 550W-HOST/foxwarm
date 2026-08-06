@@ -8,6 +8,7 @@ import { writeAuthoritativeSessionState } from './session/stateFile';
 import { readSessionHistorySnapshot } from './session/metadataStore';
 import { LocalSessionTurnHost, SessionTurnRunner } from './sessionTurnRunner';
 import type { Message, Session } from './types';
+import { logger } from './common';
 
 function createSession(id: string, text: string): Session {
   return {
@@ -407,6 +408,76 @@ test('successful finish-window input still starts the next processor', async () 
     assert.equal(session.busy, false);
   } finally {
     (llm as any).chat = originalChat;
+  }
+});
+
+test('failed spawned finish-window claim is logged once and remains explicitly retryable', async () => {
+  const session = createSession(`detached_runner_spawn_failure_${Date.now()}`, 'first turn');
+  const effects = createEffects(session, []);
+  const originalUpdateBusy = effects.updateBusy;
+  let injected = false;
+  let claimAttempt = 0;
+  let chatCount = 0;
+  effects.updateBusy = (owner, busy) => {
+    if (busy) {
+      claimAttempt += 1;
+      if (claimAttempt === 2) {
+        return sessionManager.updateSessionBusyStateForSession(
+          owner,
+          true,
+          async () => { throw new Error('spawned claim persist rejected'); },
+          effects.clearRuntimeState,
+          () => {},
+        );
+      }
+    } else if (!injected) {
+      injected = true;
+      owner.queue.push({ type: 'background', parts: [{ text: 'spawned second turn' }] });
+    }
+    return originalUpdateBusy(owner, busy);
+  };
+  const originalChat = llm.chat;
+  const originalLoggerError = logger.error;
+  const logged: Array<{ details: any; message: string }> = [];
+  (logger as any).error = (details: any, message: string) => { logged.push({ details, message }); };
+  (llm as any).chat = async (parts: any, _owner: Session, _iteration: number, options: any) => {
+    chatCount += 1;
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    await options.appendMessage({ role: 'model', parts: [{ text: `done-${chatCount}` }] });
+    return { text: `done-${chatCount}` };
+  };
+  const unhandled: unknown[] = [];
+  const onUnhandled = (error: unknown) => { unhandled.push(error); };
+  process.on('unhandledRejection', onUnhandled);
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
+  try {
+    await runner.processSessionQueue(session.id);
+    for (let attempt = 0; attempt < 100 && logged.length === 0; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(chatCount, 1);
+    assert.equal(claimAttempt, 2);
+    assert.equal(session.busy, false);
+    assert.equal(session.busyStartedAt, undefined);
+    assert.equal(session.queue.length, 1);
+    assert.deepEqual(unhandled, []);
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0].details.sessionId, session.id);
+    assert.match(String(logged[0].details.err?.message), /spawned claim persist rejected/);
+    assert.equal(logged[0].message, 'Trailing queued work failed');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(claimAttempt, 2, 'failed spawned processor must not start a third processor');
+
+    await runner.processSessionQueue(session.id);
+    assert.equal(claimAttempt, 3);
+    assert.equal(chatCount, 2);
+    assert.equal(session.queue.length, 0);
+    assert.equal(session.busy, false);
+    assert.equal(logged.length, 1);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+    (llm as any).chat = originalChat;
+    (logger as any).error = originalLoggerError;
   }
 });
 

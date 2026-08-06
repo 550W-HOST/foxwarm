@@ -1201,7 +1201,9 @@ export class SessionTurnRunner {
         && !session.busy
         && !this.host.isSessionDestructiveLifecycleClaimed(session.id)
         && session.queue.some(isQueueItem)) {
-        void this.processSessionQueue(sessionId);
+        void this.processSessionQueue(sessionId).catch(error => {
+          logger.error({ err: error, sessionId }, 'Trailing queued work failed');
+        });
       }
     }
   }
