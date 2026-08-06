@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Android Node Server for Alphabot
+Android Node Server for Foxwarm
 Provides Android automation tools via uiautomator2
 """
 
@@ -227,7 +227,7 @@ class AndroidNode:
         }
         
     async def handle_tool_call(self, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle tool call from alphabot"""
+        """Handle tool call from Foxwarm"""
         try:
             if tool == "android_tap":
                 return await self.tap(args)
@@ -632,7 +632,7 @@ async def connect_to_foxwarm(node: AndroidNode):
     """Connect to foxwarm using pairing-based auth or stored credentials."""
     config = parse_connection_config()
     if not config:
-        raise RuntimeError("Missing FOXWARM/ALPHABOT host configuration")
+        raise RuntimeError("Missing FOXWARM host configuration")
 
     connected_node_id = config.node_id
     auth_token = config.auth_token
@@ -782,7 +782,7 @@ async def main():
     device_serial = os.getenv("ANDROID_DEVICE_SERIAL")
     node = AndroidNode(device_serial)
     
-    # Check if should connect to Alphabot
+    # Check if the node should connect to Foxwarm
     connection_config = parse_connection_config()
 
     if connection_config:

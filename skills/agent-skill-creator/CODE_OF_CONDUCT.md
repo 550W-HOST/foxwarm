@@ -1,6 +1,11 @@
 
 # Contributor Covenant Code of Conduct
 
+> **Vendored upstream document:** This file is retained from the
+> [Agent Skill Creator](https://github.com/FrancyJGLisboa/agent-skill-creator)
+> project for attribution and reference. It does not designate an enforcement
+> contact for the Foxwarm project.
+
 ## Our Pledge
 
 We as members, contributors, and leaders pledge to make participation in our community a harassment-free experience for everyone, regardless of age, body size, visible or invisible disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, caste, color, religion, or sexual identity and orientation.
@@ -37,7 +42,9 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement at agrolisboa@gmail.com. All complaints will be reviewed and investigated promptly and fairly.
+For the upstream project's current enforcement process, consult the
+[Agent Skill Creator repository](https://github.com/FrancyJGLisboa/agent-skill-creator).
+This vendored copy does not designate a Foxwarm enforcement contact.
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 

@@ -1,12 +1,12 @@
 # Android Node
 
-Experimental Android remote node for foxwarm/alphabot.
+Experimental Android remote node for Foxwarm.
 
 This package currently supports one practical workflow:
 
 - run `server.py` on the host machine
 - connect to a real Android device over **ADB**
-- optionally register the node into foxwarm/alphabot over `/node_ws`
+- optionally register the node into Foxwarm over `/node_ws`
 
 Everything else from the older docs was stale and has been removed.
 
@@ -142,31 +142,7 @@ Sending node registration...
 ✅ Successfully registered as node: android-e2e
 ```
 
-### Backward-compatible env support
-
-The server also still accepts older env names for convenience:
-
-- `ALPHABOT_URL`
-- `ALPHABOT_HOST`
-- `ALPHABOT_NODE_TOKEN`
-- `ALPHABOT_NODE_ID`
-- `ALPHABOT_NODE_CREDENTIALS_FILE`
-
-If you still pass an old-style URL like:
-
-```bash
-export ALPHABOT_URL="ws://localhost:3002/node_ws?token=...&id=android-e2e"
-```
-
-it is now interpreted as:
-
-- host = `http://localhost:3002`
-- pairing token = `...`
-- requested node name = `android-e2e`
-
-instead of trying the removed direct-registration flow.
-
-Then from a foxwarm/alphabot session, use:
+Then from a Foxwarm session, use:
 - `remote_node(action="list")`
 - `remote_node(action="call", nodeId="...", tool="android_screenshot", args={"inline": true})`
 - `remote_node(action="call", nodeId="...", tool="android_list_elements", args={"clickableOnly": true})`
@@ -186,7 +162,7 @@ This is the flow that has actually been exercised on a real Android device:
 2. `python server.py` in standalone mode
 3. `python test.py`
 4. restart `server.py` with `FOXWARM_HOST=http://localhost:3002` and `FOXWARM_NODE_TOKEN=...`
-5. from alphabot test, call:
+5. from a Foxwarm test session, call:
    - `remote_node(list)`
    - `remote_node(call -> android_screenshot)`
    - `remote_node(call -> android_unlock)`

@@ -73,7 +73,6 @@ interface ContextMenuState {
 }
 
 const FOXWARM_TOKEN_KEY = 'foxwarm_token'
-const LEGACY_TOKEN_KEY = 'alphabot_token'
 const DEFAULT_VISIBLE_CHILDREN = 5
 const MORE_VISIBLE_CHILDREN_STEP = 10
 const DEFAULT_VISIBLE_ROOTS = 50
@@ -159,19 +158,7 @@ const RuntimeActivityDots = ({ state }: { state: string }) => {
 }
 
 const getStoredAuthToken = () => {
-  const foxwarmToken = localStorage.getItem(FOXWARM_TOKEN_KEY)
-  if (foxwarmToken) {
-    return foxwarmToken
-  }
-
-  const legacyToken = localStorage.getItem(LEGACY_TOKEN_KEY)
-  if (legacyToken) {
-    localStorage.setItem(FOXWARM_TOKEN_KEY, legacyToken)
-    localStorage.removeItem(LEGACY_TOKEN_KEY)
-    return legacyToken
-  }
-
-  return null
+  return localStorage.getItem(FOXWARM_TOKEN_KEY)
 }
 
 const formatPromoteApiError = async (response: Response): Promise<string> => {

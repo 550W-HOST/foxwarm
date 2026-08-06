@@ -74,7 +74,6 @@ const SEND_KEY_MODE_STORAGE_KEY = 'foxwarm_send_key_mode_v1'
 const GROUP_TOOLS_STORAGE_KEY = 'foxwarm_group_tools_v1'
 const SHOW_USAGE_BADGE_STORAGE_KEY = 'foxwarm_show_usage_badge_v1'
 const FOXWARM_TOKEN_KEY = 'foxwarm_token'
-const LEGACY_TOKEN_KEY = 'alphabot_token'
 const LEGACY_PREVIEW_CHAT_TAB_ID = 'chat:__preview__'
 const CUSTOM_FAVICON_LINK_ID = 'foxwarm-custom-favicon'
 
@@ -102,20 +101,10 @@ function normalizeWebUiSettingsPayload(settings: unknown): WebUiSettings {
 
 function getStoredAuthToken() {
   try {
-    const foxwarmToken = localStorage.getItem(FOXWARM_TOKEN_KEY)
-    if (foxwarmToken) return foxwarmToken
-
-    const legacyToken = localStorage.getItem(LEGACY_TOKEN_KEY)
-    if (legacyToken) {
-      localStorage.setItem(FOXWARM_TOKEN_KEY, legacyToken)
-      localStorage.removeItem(LEGACY_TOKEN_KEY)
-      return legacyToken
-    }
+    return localStorage.getItem(FOXWARM_TOKEN_KEY)
   } catch {
     return null
   }
-
-  return null
 }
 
 async function readApiErrorDetails(response: Response): Promise<ApiErrorDetails> {
@@ -1471,7 +1460,6 @@ function App() {
     }
 
     ;(window as any).foxwarmTest = helper
-    ;(window as any).alphabotTest = helper
   }, [focusedActiveTab, sessions])
 
   const renderTabContent = (tab: WorkbenchTab, onBack?: () => void) => {

@@ -25,10 +25,10 @@ function uri(input) {
 }
 
 test('parses foxwarm node URI into node id and absolute real path', () => {
-  assert.deepEqual(parseFoxwarmUri(uri('foxwarm://node+master/home/ldmbot/git/foxwarm/')), {
+  assert.deepEqual(parseFoxwarmUri(uri('foxwarm://node+master/srv/foxwarm/')), {
     namespace: 'node',
     nodeId: 'master',
-    realPath: '/home/ldmbot/git/foxwarm',
+    realPath: '/srv/foxwarm',
   });
 });
 

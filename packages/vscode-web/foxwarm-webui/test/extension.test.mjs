@@ -118,7 +118,7 @@ test('fixed bridges open, restore, activate, and explicitly close session/Agents
   });
   assert.match(sidebarWebview.html, /https:\/\/example\.test\/proxy\/\?foxwarmEmbed=sidebar/);
   assert.match(sidebarWebview.html, /foxwarm-webui-host/);
-  assert.doesNotMatch(sidebarWebview.html, /foxwarm_token|alphabot_token/);
+  assert.doesNotMatch(sidebarWebview.html, /foxwarm_token/);
   await sidebarWebview.receive({ type: 'sidebar-ready' });
   await tick();
   assert.equal(sidebarWebview.posted.at(-1).target, null);

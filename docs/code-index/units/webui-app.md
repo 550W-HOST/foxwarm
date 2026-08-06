@@ -33,6 +33,7 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 - Chat per-session runtime/history remains inside Chat.
 - Desktop expanded/collapsed sidebar and mobile shell share the same current tab records.
 - Browser-only theme, UI style, sidebar, send-key, last-tab/session, and Code preferences use local storage. Instance branding comes from server settings.
+- Browser auth storage reads only `foxwarm_token`. The browser E2E helper is exposed only as `window.foxwarmTest`.
 - Main launcher options consume the authenticated node summary. Code persists its standalone node/path target in browser storage; terminal defaults follow the focused session. Session-header terminal placement reuses a lower pane only for the exact normalized node/cwd target and otherwise adds the requested target there.
 - Idle-notification settings are browser-local too. App and the embedded sidebar each observe their accepted list snapshots once; the notification transition contract belongs to [webui-session-list](./webui-session-list.md#design-decisions).
 

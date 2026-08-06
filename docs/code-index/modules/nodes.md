@@ -73,7 +73,7 @@ Bootstrap distributes one minimal dynamic source archive with prebuilt CLI bundl
 
 ### D-node-android-adb-host
 
-The current `packages/android-node` implementation is an unpublished ADB host-run node. Inline screenshots are JPEG quality 80. It is not the unimplemented Termux/standalone accessibility-and-capture architecture.
+[2026-08-06] The current `packages/android-node` implementation is an unpublished ADB host-run node. Inline screenshots are JPEG quality 80. Connection configuration reads only the current `FOXWARM_*` environment variables; removed predecessor aliases are not accepted. It is not the unimplemented Termux/standalone accessibility-and-capture architecture.
 
 ## Canonical ownership
 
