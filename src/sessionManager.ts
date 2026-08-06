@@ -974,6 +974,9 @@ export async function updateSessionBusyStateForSession(
   clearRuntimeState: (sessionId: string) => void = clearActiveSessionRuntimeState,
   notifySession?: (sessionId: string) => void,
 ): Promise<void> {
+  const previousBusy = session.busy;
+  const hadBusyStartedAt = Object.prototype.hasOwnProperty.call(session, 'busyStartedAt');
+  const previousBusyStartedAt = session.busyStartedAt;
   const changed = session.busy !== busy;
   const busyStartedChanged = busy
     ? typeof session.busyStartedAt !== 'number'
@@ -985,15 +988,23 @@ export async function updateSessionBusyStateForSession(
       session.busyStartedAt = Date.now();
     }
   } else {
-    clearRuntimeState(session.id);
     session.busyStartedAt = undefined;
   }
 
   if (!changed && !busyStartedChanged) {
+    if (!busy) clearRuntimeState(session.id);
     return;
   }
 
-  await persistSession();
+  try {
+    await persistSession();
+  } catch (error) {
+    session.busy = previousBusy;
+    if (hadBusyStartedAt) session.busyStartedAt = previousBusyStartedAt;
+    else delete session.busyStartedAt;
+    throw error;
+  }
+  if (!busy) clearRuntimeState(session.id);
   notifySession?.(session.id);
 }
 

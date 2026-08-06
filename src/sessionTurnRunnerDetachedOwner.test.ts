@@ -215,10 +215,19 @@ test('claim persistence failure blocks the turn without later append or unhandle
   const session = createSession(`detached_runner_claim_failure_${Date.now()}`, 'must not run');
   const events: string[] = [];
   const effects = createEffects(session, events);
+  const originalUpdateBusy = effects.updateBusy;
+  const originalAppendMessage = effects.appendMessage;
+  const originalAppendMessages = effects.appendMessages;
   let appendCount = 0;
   effects.appendMessage = async () => { appendCount += 1; };
   effects.appendMessages = async () => { appendCount += 1; };
-  effects.updateBusy = async () => { throw new Error('claim persist rejected'); };
+  effects.updateBusy = (owner, busy) => sessionManager.updateSessionBusyStateForSession(
+    owner,
+    busy,
+    async () => { throw new Error('claim persist rejected'); },
+    effects.clearRuntimeState,
+    () => {},
+  );
   const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
   const unhandled: unknown[] = [];
   const onUnhandled = (error: unknown) => { unhandled.push(error); };
@@ -228,7 +237,26 @@ test('claim persistence failure blocks the turn without later append or unhandle
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(appendCount, 0);
     assert.equal(session.queue.length, 1);
+    assert.equal(session.busy, false);
+    assert.equal(Object.prototype.hasOwnProperty.call(session, 'busyStartedAt'), false);
     assert.deepEqual(unhandled, []);
+
+    effects.updateBusy = originalUpdateBusy;
+    effects.appendMessage = originalAppendMessage;
+    effects.appendMessages = originalAppendMessages;
+    const originalChat = llm.chat;
+    (llm as any).chat = async (parts: any, _owner: Session, _iteration: number, options: any) => {
+      if (parts) await options.appendMessage({ role: 'user', parts });
+      await options.appendMessage({ role: 'model', parts: [{ text: 'retry succeeded' }] });
+      return { text: 'retry succeeded' };
+    };
+    try {
+      await new SessionTurnRunner(new LocalSessionTurnHost(effects, session)).processSessionQueue(session.id);
+    } finally {
+      (llm as any).chat = originalChat;
+    }
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'model']);
+    assert.equal(session.busy, false);
   } finally {
     process.off('unhandledRejection', onUnhandled);
   }
@@ -272,6 +300,116 @@ test('claim persistence completes before any turn append begins', async () => {
   }
 });
 
+test('release persistence failure restores ownership and suppresses trailing handoff', async () => {
+  const session = createSession(`detached_runner_release_failure_${Date.now()}`, 'first turn');
+  const events: string[] = [];
+  const effects = createEffects(session, events);
+  const originalUpdateBusy = effects.updateBusy;
+  let chatCount = 0;
+  let releaseStartedAt: number | undefined;
+  effects.updateBusy = async (owner, busy) => {
+    if (busy) return originalUpdateBusy(owner, true);
+    releaseStartedAt = owner.busyStartedAt;
+    owner.queue.push({ type: 'background', parts: [{ text: 'finish-window input' }] });
+    return sessionManager.updateSessionBusyStateForSession(
+      owner,
+      false,
+      async () => { throw new Error('release persist rejected'); },
+      effects.clearRuntimeState,
+      () => {},
+    );
+  };
+  const originalChat = llm.chat;
+  (llm as any).chat = async (parts: any, _owner: Session, _iteration: number, options: any) => {
+    chatCount += 1;
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    await options.appendMessage({ role: 'model', parts: [{ text: 'first done' }] });
+    return { text: 'first done' };
+  };
+  try {
+    await assert.rejects(
+      () => new SessionTurnRunner(new LocalSessionTurnHost(effects, session)).processSessionQueue(session.id),
+      /release persist rejected/,
+    );
+    assert.equal(session.busy, true);
+    assert.equal(typeof releaseStartedAt, 'number');
+    assert.equal(session.busyStartedAt, releaseStartedAt);
+    assert.equal(session.queue.length, 1);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(session.busyStartedAt, releaseStartedAt);
+    assert.equal(chatCount, 1);
+    assert.equal(session.queue.length, 1);
+  } finally {
+    (llm as any).chat = originalChat;
+  }
+});
+
+test('processor failure gate suppresses handoff even when a custom release leaves idle state', async () => {
+  const session = createSession(`detached_runner_adversarial_release_${Date.now()}`, 'first turn');
+  const effects = createEffects(session, []);
+  const originalUpdateBusy = effects.updateBusy;
+  let chatCount = 0;
+  effects.updateBusy = async (owner, busy) => {
+    if (busy) return originalUpdateBusy(owner, true);
+    owner.busy = false;
+    owner.busyStartedAt = undefined;
+    owner.queue.push({ type: 'background', parts: [{ text: 'must stay queued' }] });
+    throw new Error('adversarial release rejected');
+  };
+  const originalChat = llm.chat;
+  (llm as any).chat = async (parts: any, _owner: Session, _iteration: number, options: any) => {
+    chatCount += 1;
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    await options.appendMessage({ role: 'model', parts: [{ text: 'done' }] });
+    return { text: 'done' };
+  };
+  try {
+    await assert.rejects(
+      () => new SessionTurnRunner(new LocalSessionTurnHost(effects, session)).processSessionQueue(session.id),
+      /adversarial release rejected/,
+    );
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(session.busy, false);
+    assert.equal(session.queue.length, 1);
+    assert.equal(chatCount, 1);
+  } finally {
+    (llm as any).chat = originalChat;
+  }
+});
+
+test('successful finish-window input still starts the next processor', async () => {
+  const session = createSession(`detached_runner_finish_window_${Date.now()}`, 'first turn');
+  const effects = createEffects(session, []);
+  const originalUpdateBusy = effects.updateBusy;
+  let injected = false;
+  let chatCount = 0;
+  effects.updateBusy = async (owner, busy) => {
+    if (!busy && !injected) {
+      injected = true;
+      owner.queue.push({ type: 'background', parts: [{ text: 'second turn' }] });
+    }
+    return originalUpdateBusy(owner, busy);
+  };
+  const originalChat = llm.chat;
+  (llm as any).chat = async (parts: any, _owner: Session, _iteration: number, options: any) => {
+    chatCount += 1;
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    await options.appendMessage({ role: 'model', parts: [{ text: `done-${chatCount}` }] });
+    return { text: `done-${chatCount}` };
+  };
+  try {
+    await new SessionTurnRunner(new LocalSessionTurnHost(effects, session)).processSessionQueue(session.id);
+    for (let attempt = 0; attempt < 100 && (chatCount < 2 || session.busy); attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(chatCount, 2);
+    assert.equal(session.queue.length, 0);
+    assert.equal(session.busy, false);
+  } finally {
+    (llm as any).chat = originalChat;
+  }
+});
+
 test('base effects fallback persists both busy transitions with one notification each', async () => {
   const session = createSession(`detached_runner_base_busy_${Date.now()}`, 'unused');
   session.queue = [];
@@ -307,4 +445,35 @@ test('full turn effects own both busy persistence and notification exactly once'
   await host.updateSessionBusyState(session, false);
   assert.deepEqual(events.filter(event => event.startsWith('persist:')), ['persist:busy:0', 'persist:idle:0']);
   assert.deepEqual(events.filter(event => event.startsWith('state:')), [`state:${session.id}`, `state:${session.id}`]);
+});
+
+test('default unbound busy claim honors destructive fencing while bound custom effects stay independent', async () => {
+  const session = createSession(`detached_runner_destructive_claim_${Date.now()}`, 'unused');
+  session.queue = [];
+  sessionManager.getAllSessions().set(session.id, session);
+  const claim = await sessionManager.claimSessionsForDestructiveLifecycle([session.id]);
+  const originalSave = sessionManager.saveSession;
+  let defaultPersistCount = 0;
+  (sessionManager as any).saveSession = async () => { defaultPersistCount += 1; };
+  try {
+    const defaultHost = new LocalSessionTurnHost();
+    assert.throws(
+      () => defaultHost.updateSessionBusyState(session, true),
+      /prepared for deletion/,
+    );
+    assert.equal(session.busy, false);
+    assert.equal(Object.prototype.hasOwnProperty.call(session, 'busyStartedAt'), false);
+    assert.equal(defaultPersistCount, 0);
+
+    const events: string[] = [];
+    const boundHost = new LocalSessionTurnHost(createEffects(session, events), session);
+    await boundHost.updateSessionBusyState(session, true);
+    assert.equal(session.busy, true);
+    assert.equal(events.filter(event => event.startsWith('persist:')).length, 1);
+    await boundHost.updateSessionBusyState(session, false);
+  } finally {
+    (sessionManager as any).saveSession = originalSave;
+    sessionManager.releaseSessionsForDestructiveLifecycle(claim.claimId);
+    sessionManager.getAllSessions().delete(session.id);
+  }
 });

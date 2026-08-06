@@ -1157,6 +1157,7 @@ export class SessionTurnRunner {
 
     this.processingSessions.add(sessionId);
     let claimed = false;
+    let failed = false;
     try {
       const session = await this.host.getExistingSession(sessionId);
       if (!session) {
@@ -1184,6 +1185,9 @@ export class SessionTurnRunner {
       }
 
       await this.host.updateSessionBusyState(session, false);
+    } catch (error) {
+      failed = true;
+      throw error;
     } finally {
       this.processingSessions.delete(sessionId);
       // An item can become visible after the previous loop's final queue scan
@@ -1192,6 +1196,7 @@ export class SessionTurnRunner {
       // than losing the enqueue trigger to this re-entrancy guard.
       const session = await this.host.getExistingSession(sessionId);
       if (claimed
+        && !failed
         && session
         && !session.busy
         && !this.host.isSessionDestructiveLifecycleClaimed(session.id)

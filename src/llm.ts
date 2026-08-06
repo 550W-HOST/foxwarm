@@ -213,9 +213,12 @@ export function createDefaultCurrentSessionEffects(): CurrentSessionTurnEffects 
         appendMessage: (session, message) => sessionManager.appendSessionMessage(session, message),
         appendMessages: (session, messages) => sessionManager.appendSessionMessages(session, messages),
         persistSession,
-        updateBusy: (session, busy) => sessionManager.updateSessionBusyStateForSession(
-            session, busy, () => persistSession(session), clearRuntimeState,
-        ),
+        updateBusy: (session, busy) => {
+            if (busy) sessionManager.assertSessionDestructiveMutationAllowed([session.id], 'start new work');
+            return sessionManager.updateSessionBusyStateForSession(
+                session, busy, () => persistSession(session), clearRuntimeState,
+            );
+        },
         startWait: (session, options) => sessionManager.startSessionWaitForSession(session, options, () => persistSession(session)),
         notifyHistoryUpdate: (sessionId, message) => sessionManager.notifyHistoryUpdate(sessionId, message),
         notifySessionEvent: (sessionId, event) => sessionManager.notifySessionEvent(sessionId, event),
