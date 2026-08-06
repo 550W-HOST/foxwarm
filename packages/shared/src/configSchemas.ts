@@ -153,12 +153,14 @@ const channelEntry = {
   properties: {
     type: {
       anyOf: [
-        { enum: ['telegram', 'matrix', 'wework', 'weixin'] },
+        { enum: ['telegram', 'matrix', 'wework', 'weixin', 'qqbot'] },
         { type: 'string' },
       ],
       description: 'Known managed channel type or a custom channel type.',
     },
     enabled: { type: 'boolean' },
+    appId: { type: 'string' },
+    clientSecret: { type: 'string' },
     allowedUsers: { type: 'array', items: { type: 'string' } },
     guestAgent,
     botToken: { type: 'string' },

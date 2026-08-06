@@ -26,6 +26,7 @@ const schemas = await loadModule('src/yamlConfigSchemas.ts', 'schemas.cjs')
 const sharedSchemas = await loadModule(path.resolve(webuiRoot, '../shared/src/configSchemas.ts'), 'shared-schemas.cjs')
 const completions = await loadModule('src/modelsYamlCompletions.ts', 'completions.cjs')
 const validateModelsSchema = new Ajv({ allErrors: true, strict: false }).compile(schemas.MODELS_CONFIG_SCHEMA)
+const validateAppConfigSchema = new Ajv({ allErrors: true, strict: false }).compile(schemas.APP_CONFIG_SCHEMA)
 
 after(async () => {
   await rm(tempDir, { recursive: true, force: true })
@@ -40,6 +41,26 @@ test('static config schemas are distinct, permissive, and omit the removed model
   assert.equal(schemas.APP_CONFIG_SCHEMA.properties.channels.additionalProperties.additionalProperties, true)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.paths.properties, 'modelsConfigPath'), false)
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.required?.includes('default') || false, false)
+})
+
+test('app config schema suggests all managed channel types and QQ credential keys while accepting custom types', () => {
+  const channel = schemas.APP_CONFIG_SCHEMA.properties.channels.additionalProperties
+  assert.deepEqual(channel.properties.type.anyOf[0].enum, ['telegram', 'matrix', 'wework', 'weixin', 'qqbot'])
+  assert.equal(channel.properties.appId.type, 'string')
+  assert.equal(channel.properties.clientSecret.type, 'string')
+  assert.equal(channel.properties.allowedUsers.items.type, 'string')
+  assert.equal(channel.properties.allowAllUsers.type, 'boolean')
+
+  assert.equal(validateAppConfigSchema({
+    channels: {
+      telegram: { type: 'telegram', botToken: 'token' },
+      matrix: { type: 'matrix', homeserver: 'https://matrix.example' },
+      wework: { type: 'wework' },
+      weixin: { type: 'weixin' },
+      qq: { type: 'qqbot', appId: 'app-id', clientSecret: 'secret', allowedUsers: ['openid'] },
+      custom: { type: 'company-channel', customField: true },
+    },
+  }), true)
 })
 
 test('WebUI schema wrappers reuse the shared canonical schema objects without a duplicate copy', async () => {
