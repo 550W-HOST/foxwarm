@@ -31,13 +31,14 @@ export type SessionWorkerPersistenceDependencies = {
 
 export function buildSessionWorkerProjection(session: Session): SessionWorkerProjection {
   const lastMessage = session.history[session.history.length - 1];
+  const runtimeState = buildSessionRuntimeState(session);
   return JSON.parse(JSON.stringify({
     sessionId: session.id,
     lastAppliedMailboxId: session.lastAppliedMailboxId || 0,
     busy: !!session.busy,
     busyStartedAt: typeof session.busyStartedAt === 'number' ? session.busyStartedAt : null,
     queueLength: session.queue.length,
-    runtimeState: buildSessionRuntimeState(session),
+    runtimeState: { ...runtimeState, busy: !!session.busy, queueLength: session.queue.length },
     messageCount: session.meta?.messageCount ?? session.history.length,
     lastMessageTime: session.meta?.lastMessageTime
       ?? (typeof lastMessage?.__meta?.timestamp === 'number' ? lastMessage.__meta.timestamp : 0),

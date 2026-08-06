@@ -82,6 +82,14 @@ async function start(): Promise<void> {
       await options.appendMessage({ role: 'model', parts: [{ text: 'reverse wait scheduled' }] });
       return { text: 'reverse wait scheduled' };
     }
+    if (process.env.FOXWARM_TEST_PUBLICATION_TOOL === '1' && chatCount === 4) {
+      try {
+        await tool_set_goal({ goal: 'committed-before-publication-loss', remindEvery: 2 },
+          { sessionId: session.id, session, persistCurrentSession: () => options.currentSessionEffects.persistSession(session) } as any);
+      } catch (error: any) {
+        await options.appendMessage({ role: 'model', parts: [{ text: `folded publication failure: ${error.message}` }] });
+      }
+    }
     await options.appendMessage({ role: 'model', parts: [{ text: 'deterministic child answer' }] });
     return { text: 'deterministic child answer' };
   };

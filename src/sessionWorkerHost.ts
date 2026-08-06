@@ -65,6 +65,7 @@ export class SessionWorkerHost {
     const session = this.session!;
     try {
       this.assertSupportedQueue(session);
+      const mailboxCursorBefore = session.lastAppliedMailboxId || 0;
       await this.persistence.applyAndPersistPendingPrefix(
         session,
         this.identity.generation,
@@ -83,7 +84,7 @@ export class SessionWorkerHost {
           }
         },
       );
-      await this.publishCurrent();
+      if ((session.lastAppliedMailboxId || 0) !== mailboxCursorBefore) await this.publishCurrent();
       await this.runner!.processSessionQueue(session.id);
     } catch (error) {
       await this.resyncAfterFailure(error);
@@ -116,6 +117,7 @@ export class SessionWorkerHost {
       ownerEffects, owner, {
         refreshSessionSnapshot: async sessionId => {
         this.assertId(sessionId);
+        await this.fenceMutation();
         const before = captureSessionSemanticState(owner);
         try {
           return await refreshSessionSnapshotForSession(owner, () => this.persistOwner());
@@ -143,6 +145,7 @@ export class SessionWorkerHost {
   private createEffects(session: Session, execRuntime: ExecRuntime): CurrentSessionTurnEffects {
     const persist = () => this.persistOwner();
     const transactional = async (operation: () => Promise<void>): Promise<void> => {
+      await this.fenceMutation();
       const before = captureSessionSemanticState(session);
       try { await operation(); }
       catch (error) {
@@ -211,6 +214,7 @@ export class SessionWorkerHost {
   }
 
   private async applyAndPersistQueueItem(item: QueueItem): Promise<void> {
+    await this.fenceMutation();
     const session = this.session!;
     this.assertSupportedQueue(session);
     const before = captureSessionSemanticState(session);
@@ -229,10 +233,7 @@ export class SessionWorkerHost {
   }
 
   private async persistOwner(): Promise<void> {
-    if (this.publicationPoison) {
-      await this.persistence.reloadActivated(this.session!, this.identity.generation, this.identity.incarnationId);
-      throw this.publicationError(this.publicationPoison);
-    }
+    await this.fenceMutation();
     if (this.poison) {
       const prior = this.poison;
       await this.ensureHealthy();
@@ -250,6 +251,12 @@ export class SessionWorkerHost {
       });
     }
     await this.publishCurrent();
+  }
+
+  private async fenceMutation(): Promise<void> {
+    if (!this.publicationPoison) return;
+    await this.persistence.reloadActivated(this.session!, this.identity.generation, this.identity.incarnationId);
+    throw this.publicationError(this.publicationPoison);
   }
 
   private async publishCurrent(): Promise<void> {

@@ -39,14 +39,32 @@ function validateProjection(value: unknown, sessionId: string): SessionWorkerPro
       && safeInt(usage.cachedTokens) && safeInt(usage.inputTokens) && safeInt(usage.outputTokens)
       && (usage.reasoningTokens === undefined || safeInt(usage.reasoningTokens))));
   const runtime = projection.runtimeState;
+  const shortString = (item: any, max = 512) => typeof item === 'string' && item.length <= max;
+  const stringList = (item: any) => Array.isArray(item) && item.length <= 128 && item.every((entry: any) => shortString(entry, 256));
+  const active = runtime?.active; const tool = runtime?.tool; const waiting = runtime?.waiting;
+  const validActive = active === undefined || (exactKeys(active, ['iteration','phase','modelKey','streamId'])
+    && (active.iteration === undefined || safeInt(active.iteration))
+    && (active.phase === undefined || ['normal-turn','compaction','managed-step','unknown'].includes(active.phase))
+    && (active.modelKey === undefined || shortString(active.modelKey)) && (active.streamId === undefined || shortString(active.streamId)));
+  const validTool = tool === undefined || (exactKeys(tool, ['id','name','index','total','executionNode','argsPreview','startedAt'], ['name','startedAt'])
+    && shortString(tool.name) && safeInt(tool.startedAt) && (tool.id === undefined || shortString(tool.id))
+    && (tool.index === undefined || safeInt(tool.index)) && (tool.total === undefined || safeInt(tool.total))
+    && (tool.executionNode === undefined || shortString(tool.executionNode)) && (tool.argsPreview === undefined || shortString(tool.argsPreview, 4096)));
+  const validWaiting = waiting === undefined || (exactKeys(waiting, ['waitId','waitingFor','reason','waitAllSessions','satisfiedSessions','pendingSessions','timeoutSeconds','timeoutAt','waitExecIds'], ['waitId','waitingFor'])
+    && shortString(waiting.waitId) && ['sessions','exec','timer'].includes(waiting.waitingFor)
+    && (waiting.reason === undefined || shortString(waiting.reason, 4096))
+    && ['waitAllSessions','satisfiedSessions','pendingSessions','waitExecIds'].every(key => waiting[key] === undefined || stringList(waiting[key]))
+    && (waiting.timeoutSeconds === undefined || (Number.isFinite(waiting.timeoutSeconds) && waiting.timeoutSeconds >= 0))
+    && (waiting.timeoutAt === undefined || safeInt(waiting.timeoutAt)));
   const validRuntime = exactKeys(runtime, ['state','since','note','queueLength','busy','active','tool','waiting'], ['state','queueLength','busy'])
     && ['requesting-model','running-tool','waiting','idle'].includes(runtime.state) && safeInt(runtime.queueLength)
     && typeof runtime.busy === 'boolean' && (runtime.since === undefined || safeInt(runtime.since))
-    && (runtime.note === undefined || (typeof runtime.note === 'string' && runtime.note.length <= 4096));
+    && (runtime.note === undefined || (typeof runtime.note === 'string' && runtime.note.length <= 4096))
+    && validActive && validTool && validWaiting;
   if (projection.sessionId !== sessionId || !safeInt(projection.lastAppliedMailboxId) || typeof projection.busy !== 'boolean'
     || !(projection.busyStartedAt === null || safeInt(projection.busyStartedAt)) || !safeInt(projection.queueLength)
     || !safeInt(projection.messageCount) || !safeInt(projection.lastMessageTime)
-    || !validRuntime || !validStats
+    || !validRuntime || !validStats || runtime.busy !== projection.busy || runtime.queueLength !== projection.queueLength
     || typeof projection.currentNode !== 'string' || !projection.currentNode || projection.currentNode.length > 128
     || !nullableString(projection.cwd, 4096) || !nullableString(projection.model, 512)
     || !nullableString(projection.childModelDefault, 512)

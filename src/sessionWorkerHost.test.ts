@@ -231,6 +231,7 @@ test('bound worker host closes reminder and compaction exact-owner escapes', asy
 test('postcommit publication failure preserves authority and poisons later mutation', async () => {
   const initial = baseSession('publication-postcommit'); let publishes = 0;
   await withLocalHost(initial, async ({ host, session, turnHost, readDurable }) => {
+    await host.runPending(8); assert.equal(publishes, 1);
     await assert.rejects(() => turnHost.currentSessionEffects.updateBusy(session, true), assertRpcCode('SESSION_WORKER_PUBLICATION_RESYNC_REQUIRED'));
     assert.equal(readDurable().busy, true); assert.equal(session.busy, true);
     session.model = 'uncommitted-later';
@@ -283,6 +284,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
       FOXWARM_TEST_FAIL_GOAL: '1',
       FOXWARM_TEST_WAIT_TOOL: '1',
       FOXWARM_TEST_EXTERNAL_REVERSE: '1',
+      FOXWARM_TEST_PUBLICATION_TOOL: '1',
     },
     serialization: 'advanced',
   });
@@ -291,9 +293,9 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   const projectionRegistry = new SessionWorkerProjectionRegistry();
   const publicationIdentity = { sessionId, generation: ownership.generation, incarnationId };
   projectionRegistry.establish(publicationIdentity);
-  let failPublicationReply = false;
+  let failPublicationAfter = 0;
   const published: any[] = []; projectionRegistry.subscribe(entry => {
-    published.push(entry); if (failPublicationReply) throw new Error('publication reply disconnected');
+    published.push(entry); if (failPublicationAfter > 0 && --failPublicationAfter === 0) throw new Error('publication reply disconnected');
   });
   reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ expectedSourceSessionId: sessionId }));
   reverseRegistry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: sessionId }));
@@ -354,8 +356,11 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     } finally { archive.close(); }
 
     projection.stats.totalInputTokens = 999;
+    const publicationCountBeforeNoop = published.length;
     const clonedProjection = await runtime.call('runPending', { limit: 8 });
     assert.notEqual(clonedProjection.stats.totalInputTokens, 999);
+    assert.equal(published.length, publicationCountBeforeNoop + 2);
+    assert.deepEqual(published.slice(-2).map(entry => entry.projection.busy), [true, false]);
 
     store.enqueueIntent(sessionId, 'goal-fault', 'enqueue', { type: 'user', parts: [{ text: 'set-goal-fault' }] });
     await runtime.call('runPending', { limit: 8 });
@@ -394,12 +399,25 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     Object.defineProperty(accessor, 'parts', { enumerable: true, get() { throw new Error('accessor ran'); } });
     assert.throws(() => store.enqueueIntent(sessionId, 'accessor', 'enqueue', accessor), /enumerable data properties/);
 
-    const ambiguous = store.enqueueIntent(sessionId, 'publication-disconnect', 'enqueue', { type: 'background', parts: [{ text: 'commit before lost reply' }] });
-    failPublicationReply = true;
+    const ambiguous = store.enqueueIntent(sessionId, 'publication-disconnect', 'enqueue', { type: 'user', parts: [{ text: 'commit tool mutation before lost reply' }] });
+    failPublicationAfter = 5;
     await assert.rejects(() => runtime.call('runPending', { limit: 8 }), assertRpcCode('SESSION_WORKER_PUBLICATION_RESYNC_REQUIRED'));
     const committedBeforeDisconnect = await fs.readJson(statePath);
     assert.equal(committedBeforeDisconnect.lastAppliedMailboxId, ambiguous.id);
+    assert.equal(committedBeforeDisconnect.goalState.goal, 'committed-before-publication-loss');
+    assert.equal(committedBeforeDisconnect.history.length, afterWait.history.length + 1);
+    const archiveAfterFailure = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'), { readOnly: true });
+    const archiveCount = Number((archiveAfterFailure.prepare('SELECT COUNT(*) AS count FROM archive_messages WHERE session_id=?').get(sessionId) as any).count);
+    archiveAfterFailure.close();
+    assert.equal(archiveCount, committedBeforeDisconnect.history.length);
     assert.equal(projectionRegistry.get(sessionId)?.stale, true);
+    const blocked = store.enqueueIntent(sessionId, 'blocked-after-publication', 'enqueue', { type: 'background', parts: [{ text: 'must remain uncommitted' }] });
+    await assert.rejects(() => runtime.call('runPending', { limit: 8 }), assertRpcCode('SESSION_WORKER_PUBLICATION_RESYNC_REQUIRED'));
+    assert.ok(blocked.id > store.getOwnership(sessionId).mailboxCursor);
+    assert.equal((await fs.readJson(statePath)).history.length, committedBeforeDisconnect.history.length);
+    const archiveAfterBlocked = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'), { readOnly: true });
+    assert.equal(Number((archiveAfterBlocked.prepare('SELECT COUNT(*) AS count FROM archive_messages WHERE session_id=?').get(sessionId) as any).count), archiveCount);
+    archiveAfterBlocked.close();
     child.disconnect();
 
   } finally {
