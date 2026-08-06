@@ -228,7 +228,7 @@ export class ProcessRpcClientTransport implements RpcTransport {
     if (!message || typeof message !== 'object' || (message as any).generation !== this.generation) return;
     if (message.kind === this.kind('rpc-ready')) {
       if (message.protocolVersion !== RPC_PROTOCOL_VERSION || message.buildId !== this.buildId) {
-        this.rejectReady(new RpcError('RPC_PROTOCOL_MISMATCH', 'RPC child protocol or build does not match.'));
+        this.failTerminal(new RpcError('RPC_PROTOCOL_MISMATCH', 'RPC child protocol or build does not match.'));
         return;
       }
       this.ready = message as RpcReadyMessage;
@@ -276,6 +276,11 @@ export class ProcessRpcClientTransport implements RpcTransport {
 
   private failChild(error: Error): void {
     const rpcError = new RpcError('RPC_UNAVAILABLE', error.message, true);
+    this.failTerminal(rpcError);
+  }
+
+  private failTerminal(rpcError: RpcError): void {
+    if (this.terminalError) return;
     this.terminalError = rpcError;
     this.stopReadyRetry();
     this.draining = true;
@@ -286,6 +291,10 @@ export class ProcessRpcClientTransport implements RpcTransport {
       this.drainPending.reject(rpcError);
       this.drainPending = undefined;
     }
+    this.child.off('message', this.onMessage);
+    this.child.off('error', this.onChildError);
+    this.child.off('disconnect', this.onChildDisconnect);
+    this.child.off('exit', this.onChildExit);
   }
 
   private rejectPending(requestId: string, error: unknown): void {

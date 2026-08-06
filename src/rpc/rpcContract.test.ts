@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   LocalRpcTransport,
   ProcessRpcClientTransport,
+  RPC_PROTOCOL_VERSION,
   RpcClient,
   RpcError,
   RpcServiceRegistry,
@@ -104,6 +105,11 @@ test('child-process transport rejects an incompatible build before readiness', a
       transport.waitUntilReady(),
       (error: any) => error?.code === 'RPC_PROTOCOL_MISMATCH',
     );
+    child.emit('message', { kind: 'rpc-ready', protocolVersion: RPC_PROTOCOL_VERSION, buildId: 'intentionally-incompatible-build',
+      generation, services: [{ name: rpcTestService.name, version: rpcTestService.version }] });
+    await assert.rejects(() => transport.waitUntilReady(), { code: 'RPC_PROTOCOL_MISMATCH' });
+    await assert.rejects(() => new RpcClient(rpcTestService, transport).call('echo', { nested: { value: 1 } }),
+      { code: 'RPC_PROTOCOL_MISMATCH' });
   } finally {
     await transport.close();
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');

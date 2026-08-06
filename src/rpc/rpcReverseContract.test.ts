@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { fork, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { ProcessRpcClientTransport, ProcessRpcServer, RpcClient, RpcError, RpcServiceRegistry } from './index';
+import { DEFAULT_RPC_BUILD_ID, ProcessRpcClientTransport, ProcessRpcServer, RPC_PROTOCOL_VERSION, RpcClient, RpcError, RpcServiceRegistry } from './index';
 import { rpcTestHandler, rpcTestService } from './rpcTestService';
 
 function waitForMessage(child: ChildProcess, predicate: (message: any) => boolean, timeoutMs = 3_000): Promise<any> {
@@ -95,6 +95,24 @@ test('reverse readiness retries until a late Main listener starts and then stops
 });
 
 test('reverse process RPC rejects generation mismatch and aborts accepted calls on close', async () => {
+  const protocolMismatch = fork(path.join(__dirname, 'rpcReverseTestChild.js'), [], {
+    env: { ...process.env, FOXWARM_RPC_GENERATION: '15', FOXWARM_RPC_READY_TIMEOUT_MS: '2000' }, serialization: 'advanced',
+  });
+  let protocolInitCount = 0;
+  protocolMismatch.on('message', message => { if ((message as any)?.kind === 'rpc-reverse-init') protocolInitCount += 1; });
+  const protocolRegistry = new RpcServiceRegistry(); protocolRegistry.register(rpcTestService, rpcTestHandler);
+  const protocolServer = new ProcessRpcServer(protocolRegistry, {
+    generation: 15, buildId: 'mismatched-build', peer: protocolMismatch, direction: 'reverse', exitOnDisconnect: false,
+  });
+  protocolServer.start();
+  try {
+    const result = await waitForMessage(protocolMismatch, message => message?.kind === 'reverse-test-start-error');
+    assert.equal(result.error.code, 'RPC_PROTOCOL_MISMATCH');
+    const settledCount = protocolInitCount;
+    await new Promise(resolve => setTimeout(resolve, 120));
+    assert.equal(protocolInitCount, settledCount);
+  } finally { protocolServer.close(); await stopChild(protocolMismatch); }
+
   const mismatch = fork(path.join(__dirname, 'rpcReverseTestChild.js'), [], {
     env: { ...process.env, FOXWARM_RPC_GENERATION: '2', FOXWARM_RPC_READY_TIMEOUT_MS: '50' }, serialization: 'advanced',
   });
@@ -159,4 +177,30 @@ test('reverse client rejects outstanding calls on IPC disconnect and exit', asyn
   await new Promise(resolve => setTimeout(resolve, 120));
   assert.equal(closingPeer.sends, sendsAtClose);
   assert.equal(closingPeer.listenerCount('message'), 0);
+});
+
+test('ready protocol mismatch is terminal and cannot be rehabilitated', async () => {
+  class FakePeer extends EventEmitter {
+    connected = true; sends = 0;
+    send(_message: unknown, callback?: (error: Error | null) => void) { this.sends += 1; callback?.(null); }
+  }
+  const peer = new FakePeer();
+  const transport = new ProcessRpcClientTransport(peer as any, { generation: 20, direction: 'reverse', readyTimeoutMs: 1_000 });
+  const firstReady = transport.waitUntilReady();
+  peer.emit('message', { kind: 'rpc-reverse-ready', protocolVersion: RPC_PROTOCOL_VERSION, buildId: 'wrong-build',
+    generation: 20, services: [{ name: rpcTestService.name, version: rpcTestService.version }] });
+  await assert.rejects(() => firstReady, { code: 'RPC_PROTOCOL_MISMATCH' });
+  const sendsAfterMismatch = peer.sends;
+  await new Promise(resolve => setTimeout(resolve, 120));
+  assert.equal(peer.sends, sendsAfterMismatch);
+  assert.equal(peer.listenerCount('message'), 0);
+
+  peer.emit('message', { kind: 'rpc-reverse-ready', protocolVersion: RPC_PROTOCOL_VERSION, buildId: DEFAULT_RPC_BUILD_ID,
+    generation: 20, services: [{ name: rpcTestService.name, version: rpcTestService.version }] });
+  await assert.rejects(() => transport.waitUntilReady(), { code: 'RPC_PROTOCOL_MISMATCH' });
+  await assert.rejects(() => new RpcClient(rpcTestService, transport).call('echo', { nested: { value: 1 } }),
+    { code: 'RPC_PROTOCOL_MISMATCH' });
+  await assert.rejects(() => transport.drain(), { code: 'RPC_PROTOCOL_MISMATCH' });
+  transport.close(); transport.close();
+  assert.equal(peer.listenerCount('message'), 0);
 });
