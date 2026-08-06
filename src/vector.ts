@@ -8,6 +8,14 @@ let manager: VectorServiceManager | undefined;
 let externalTransport: RpcTransport | undefined;
 let externalClient: RpcClient<typeof vectorServiceDescriptor> | undefined;
 let externalTerminal = false;
+type VectorPlacement = { kind: 'owned'; useWorker: boolean } | { kind: 'external'; transport: RpcTransport };
+let activePlacement: VectorPlacement | undefined;
+let initializingPlacement: VectorPlacement | undefined;
+let initializing: Promise<void> | undefined;
+let managerFactory = async (useWorker: boolean): Promise<VectorServiceManager> => {
+  const { VectorServiceManager } = await import('./vectorServiceManager');
+  return new VectorServiceManager({ useWorker });
+};
 
 export type VectorInitOptions = {
   useWorker?: boolean;
@@ -17,33 +25,52 @@ export type VectorInitOptions = {
 
 export async function init(options: VectorInitOptions = {}): Promise<void> {
   if (externalTerminal) throw new RpcError('VECTOR_SHUTTING_DOWN', 'Vector facade is shutting down.', true);
-  if (options.transport) {
-    if (manager || (externalTransport && externalTransport !== options.transport)) {
-      throw new RpcError('VECTOR_PLACEMENT_CHANGE_REQUIRES_RESTART', 'Vector service placement cannot change after startup.');
-    }
-    externalTransport = options.transport;
-    externalClient = new RpcClient(vectorServiceDescriptor, options.transport);
+  const requested: VectorPlacement = options.transport
+    ? { kind: 'external', transport: options.transport }
+    : { kind: 'owned', useWorker: options.useWorker === true };
+  const matches = (placement: VectorPlacement | undefined): boolean => {
+    if (!placement || placement.kind !== requested.kind) return false;
+    if (placement.kind === 'external') return requested.kind === 'external' && placement.transport === requested.transport;
+    return requested.kind === 'owned' && placement.useWorker === requested.useWorker;
+  };
+  if (activePlacement) {
+    if (!matches(activePlacement)) throw new RpcError('VECTOR_PLACEMENT_CHANGE_REQUIRES_RESTART', 'Vector service placement cannot change after startup.');
+    if (manager) await manager.start();
     return;
   }
-  if (externalClient) throw new RpcError('VECTOR_PLACEMENT_CHANGE_REQUIRES_RESTART', 'Vector service placement cannot change after startup.');
-  const useWorker = options.useWorker === true;
-  if (!manager) {
-    const { VectorServiceManager } = await import('./vectorServiceManager');
-    manager = new VectorServiceManager({ useWorker });
+  if (initializing) {
+    if (!matches(initializingPlacement)) throw new RpcError('VECTOR_PLACEMENT_CHANGE_REQUIRES_RESTART', 'Vector service placement initialization conflicts with an in-flight owner.');
+    await initializing; return;
   }
-  await manager.start();
+  initializingPlacement = requested;
+  initializing = (async () => {
+    if (requested.kind === 'external') {
+      externalTransport = requested.transport;
+      externalClient = new RpcClient(vectorServiceDescriptor, requested.transport);
+      activePlacement = requested;
+      return;
+    }
+    const next = await managerFactory(requested.useWorker);
+    manager = next;
+    activePlacement = requested;
+    await next.start();
+  })();
+  const pending = initializing;
+  try { await pending; }
+  finally { if (initializing === pending) { initializing = undefined; initializingPlacement = undefined; } }
 }
 
 export async function shutdown(): Promise<void> {
+  if (initializing) await initializing.catch(() => {});
   if (externalClient || externalTransport) {
-    externalTerminal = true; externalClient = undefined; externalTransport = undefined; return;
+    externalTerminal = true; externalClient = undefined; externalTransport = undefined; activePlacement = undefined; return;
   }
   const current = manager;
   if (!current) return;
   await current.shutdown();
   // Preserve the global ownership fence until shutdown has confirmed that the
   // old child exited. A failed shutdown remains visible and blocks replacement.
-  if (manager === current) manager = undefined;
+  if (manager === current) { manager = undefined; activePlacement = undefined; }
 }
 
 export function getVectorServiceStatus(): { mode?: 'local' | 'worker' | 'external'; ready: boolean; generation?: number; pid?: number } {
@@ -154,7 +181,7 @@ async function callVector<MethodName extends Parameters<ReturnType<VectorService
       'RPC_READY_TIMEOUT',
       'RPC_DRAINING',
       'RPC_PROTOCOL_MISMATCH',
-      'RPC_SERVICE_UNAVAILABLE',
+      'RPC_SERVICE_NOT_FOUND',
       'RPC_SERVICE_VERSION_MISMATCH',
     ].includes(error.code)) {
       throw new RpcError('VECTOR_UNAVAILABLE', error.message, true);
@@ -165,6 +192,12 @@ async function callVector<MethodName extends Parameters<ReturnType<VectorService
 
 // Pure/vector-row helpers remain local and never carry a LanceDB handle.
 function localRuntime(): typeof import('./vectorRuntime') { return require('./vectorRuntime'); }
+export function setVectorServiceManagerFactoryForTests(factory?: (useWorker: boolean) => Promise<VectorServiceManager>): void {
+  managerFactory = factory || (async useWorker => {
+    const { VectorServiceManager } = await import('./vectorServiceManager');
+    return new VectorServiceManager({ useWorker });
+  });
+}
 export const buildArchiveSegments: typeof runtime.buildArchiveSegments = (...args) => localRuntime().buildArchiveSegments(...args);
 export const calculateNextSegmentStartIndex: typeof runtime.calculateNextSegmentStartIndex = (...args) => localRuntime().calculateNextSegmentStartIndex(...args);
 export const createRowsFromMemoryFacts: typeof runtime.createRowsFromMemoryFacts = (...args) => localRuntime().createRowsFromMemoryFacts(...args);

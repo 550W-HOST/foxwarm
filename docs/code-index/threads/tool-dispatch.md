@@ -9,7 +9,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 1. The LLM returns one or more tool calls in a `ChatResult`.
 2. The message-processing loop schedules the batch in model order. Adjacent direct `exec` calls form a bounded parallel segment; every other direct or unified tool is a serial barrier.
    The segment carries one process-local ExecRuntime plus the exact current Session persistence hook. Each call keeps all exec lifecycle methods on that runtime; deferred cwd changes replay against the same passed owner in model order.
-3. Direct builtins resolve exhaustive ownership metadata independently from permission policy. Only node-environment builtins select the session's current node; all other ownership classes remain in the main process in the current local-only runtime.
+3. Direct builtins resolve exhaustive ownership metadata independently from permission policy. Node-environment builtins select the session's current node. Main-local production still uses local facades, while the activated WorkerHost now borrows reverse Main Management, remote Node, MCP, and vector facades; production Session-worker routing remains gated.
 4. Isolation checks evaluate the resolved concrete execution target before the selected handler runs.
 5. The closed v1 main-management set (`send_to_session`, `send_to_channel`, `list_agents`, and timer CRUD) enters one versioned local RPC service. Its handler reconstructs only source session identity before invoking the existing authoritative raw handler.
 6. `search_tools` discovers non-default builtins, MCP tools, and tools advertised by the selected node.
@@ -54,7 +54,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 - MCP and node credentials remain transport/runtime state and are not exposed to the model through tool summaries.
 - Tool batches emit one result for every call and append one tool message only after the batch settles. Image/result parts and function responses remain in original model-call order rather than completion order.
 - Direct builtins and unified builtin calls share `resolveBuiltinToolPlacement`; ToolScript nested calls inherit it through the existing `call_tool` wrapper.
-- The first main-management service is local-only. It has a fixed seven-operation allowlist and carries no live Session, history, queue, patch, or callback; no child reverse wiring exists yet.
+- Main Management, remote Node execution, MCP external, and bounded vector calls are reverse-wired for the activated WorkerHost through one shared channel. Main Management retains its fixed seven-operation allowlist and carries no live Session, history, queue, patch, or callback. Production Session-worker routing remains gated.
 - The Node execution facade uses local or borrowed reverse transport to one Main handler and accepts dynamic names only inside one authenticated remote node's currently advertised tool set. The colocated `master` execution environment bypasses it and runs the local named handler directly, while master Node discovery exposes exactly the canonical node-environment definitions.
 
 ## Compatibility

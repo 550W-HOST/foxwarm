@@ -1,6 +1,6 @@
 # Unit: src-vector
 
-Files: src/vector.ts, src/vectorRuntime.ts, src/vectorService.ts, src/vectorServiceDescriptor.ts, src/vectorFacadeProxy.ts, src/vectorServiceManager.ts, src/vectorWorker.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.lineage.test.ts, src/vector.memoryFacts.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.segmentBuilder.test.ts, src/vectorService.smoke.test.ts, src/vectorServiceManager.test.ts, src/vectorExternalPlacement.test.ts
+Files: src/vector.ts, src/vectorRuntime.ts, src/vectorService.ts, src/vectorServiceDescriptor.ts, src/vectorFacadeProxy.ts, src/vectorServiceManager.ts, src/vectorWorker.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.lineage.test.ts, src/vector.memoryFacts.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.segmentBuilder.test.ts, src/vectorService.smoke.test.ts, src/vectorServiceManager.test.ts, src/vectorExternalPlacement.test.ts, src/vectorPlacementConcurrency.test.ts
 
 ## Purpose
 
@@ -8,7 +8,8 @@ Provides one asynchronous vector facade with local and supervised-child placemen
 
 ## Key exports
 
-- `init({ useWorker })`, `shutdown()` — start or gracefully drain the local/child vector owner; production passes normalized `dbWorkers` placement at startup.
+- `init({ useWorker | transport })`, `shutdown()` — start/drain the owned local/child vector owner or bind/clear one borrowed external client; production Main passes normalized `dbWorkers` placement.
+- `setVectorServiceManagerFactoryForTests()` — narrow test-only delayed-manager factory seam for placement-race coverage; production retains dynamic manager import.
 - `getVectorServiceStatus()` — report local/worker readiness and worker generation/PID for diagnostics.
 - `search(query, limit=5, format=true, options?)` — vector query with session/agent/lineage scope, optional regex candidate filters, and block preference.
 - `getContextAround(timestamp, limit=10)` — raw rows overlapping a 30-minute window around a timestamp.
@@ -66,6 +67,7 @@ Model-facing `contentFilter` and final preview filtering are owned by the shared
 
 - `vector.ts` is the caller-facing asynchronous facade; compatibility indexing never sends the supplied full history over RPC. Main owns its selected local/worker manager. A Session worker can instead borrow an external client over its shared reverse transport; this placement never constructs the manager, imports the runtime, opens LanceDB, or falls back locally.
 - `vectorFacadeProxy.ts` registers the same bounded vector descriptor on Main but delegates only through the already selected `vector.ts` facade, preserving `dbWorkers` ownership rather than calling `vectorRuntime` directly.
+- Facade initialization serializes one exact placement identity across dynamic manager import/start: identical owned or borrowed placement joins, while local-vs-worker, owned-vs-borrowed, and different borrowed transports fail before another owner/client can publish. Shutdown waits for that initialization and preserves an already-published failed manager fence.
 - `vectorRuntime.ts` owns LanceDB state and imports the native LanceDB module lazily, so the main process does not load it when `dbWorkers:true`.
 - `vectorService.ts` maps bounded request/response DTOs to the same runtime in either placement.
 - `vectorServiceManager.ts` starts the child, waits until LanceDB is open, reports retryable unavailability while it is down, and restarts an unexpected exit with bounded backoff. It never opens a local fallback owner after a child failure.

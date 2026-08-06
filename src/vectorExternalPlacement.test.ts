@@ -1,24 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RpcError, type RpcTransport } from './rpc';
+import { EventEmitter } from 'node:events';
+import { DEFAULT_RPC_BUILD_ID, ProcessRpcClientTransport, RPC_PROTOCOL_VERSION } from './rpc';
 import * as vector from './vector';
 
-test('borrowed vector placement never falls back to a local owner when service is missing', async () => {
-  let drainCalls = 0; let closeCalls = 0; let callCount = 0;
-  const transport: RpcTransport = {
-    async call() { callCount += 1; throw new RpcError('RPC_SERVICE_UNAVAILABLE', 'vector service missing', true); },
-    subscribe: () => () => {},
-    async drain() { drainCalls += 1; },
-    close() { closeCalls += 1; },
-  };
+class ReversePeer extends EventEmitter {
+  connected = true;
+  sends: unknown[] = [];
+  send(message: unknown, callback?: (error: Error | null) => void) { this.sends.push(message); callback?.(null); }
+}
+
+test('borrowed vector placement never falls back when real reverse ready omits vector service', async () => {
+  const peer = new ReversePeer();
+  const transport = new ProcessRpcClientTransport(peer as any, { generation: 1, direction: 'reverse' });
+  peer.emit('message', { kind: 'rpc-reverse-ready', protocolVersion: RPC_PROTOCOL_VERSION, buildId: DEFAULT_RPC_BUILD_ID,
+    generation: 1, services: [] });
+  await transport.waitUntilReady();
   const localOwnerLoaded = () => Object.keys(require.cache).some(file => /vector(Runtime|ServiceManager)\.js$/.test(file));
   assert.equal(localOwnerLoaded(), false);
   await vector.init({ transport, placement: 'child-reverse' });
   await assert.rejects(() => vector.search('missing service'), { code: 'VECTOR_UNAVAILABLE' });
-  assert.equal(callCount, 1);
   assert.equal(localOwnerLoaded(), false);
+  const sendsBeforeShutdown = peer.sends.length;
   await vector.shutdown();
-  assert.equal(drainCalls, 0);
-  assert.equal(closeCalls, 0);
-  await assert.rejects(() => vector.init({ useWorker: false }), { code: 'VECTOR_SHUTTING_DOWN' });
+  assert.equal(peer.sends.length, sendsBeforeShutdown);
+  transport.close();
+  assert.equal(localOwnerLoaded(), false);
 });
