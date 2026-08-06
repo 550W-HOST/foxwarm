@@ -14,6 +14,7 @@ const SpecialBlock = memo(function SpecialBlock({ kind, label, raw, children }: 
   const [rawVisible, setRawVisible] = useState(false)
   const [copied, setCopied] = useState(false)
   const copyResetTimeoutRef = useRef<number | null>(null)
+  const hasVisibleHeader = kind === 'mermaid'
 
   useEffect(() => () => {
     if (copyResetTimeoutRef.current !== null) window.clearTimeout(copyResetTimeoutRef.current)
@@ -41,10 +42,12 @@ const SpecialBlock = memo(function SpecialBlock({ kind, label, raw, children }: 
       data-special-block-kind={kind}
       className="foxwarm-special-block not-prose group/special relative my-2 min-w-0 max-w-full overflow-hidden rounded-md border border-slate-200 bg-slate-50/60 dark:border-slate-700 dark:bg-slate-900/40"
     >
-      <span className="pointer-events-none absolute left-2 top-1.5 z-10 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
-        {label}
-      </span>
-      <div className="absolute right-1 top-1 z-20 flex gap-0.5 opacity-60 transition-opacity group-hover/special:opacity-100 focus-within:opacity-100">
+      {hasVisibleHeader ? (
+        <span data-special-block-header className="pointer-events-none absolute left-2 top-1.5 z-10 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
+          {label}
+        </span>
+      ) : null}
+      <div data-special-block-controls className="absolute right-1 top-1 z-20 flex gap-0.5">
         <IconToggleButton onClick={() => setRawVisible(false)} active={!rawVisible} title={`Rendered ${label}`}>
           <Eye size={12} />
         </IconToggleButton>
@@ -58,12 +61,12 @@ const SpecialBlock = memo(function SpecialBlock({ kind, label, raw, children }: 
       {rawVisible ? (
         <pre
           data-special-block-raw
-          className="m-0 max-h-80 min-w-0 max-w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent px-2 pb-2 pt-8 font-mono text-xs text-slate-800 dark:text-slate-200"
+          className="m-0 max-h-80 min-w-0 max-w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent font-mono text-xs text-slate-800 dark:text-slate-200"
         >
           {raw}
         </pre>
       ) : (
-        <div data-special-block-rendered className="min-w-0 max-w-full overflow-hidden px-2 pb-2 pt-8">
+        <div data-special-block-rendered className="min-w-0 max-w-full overflow-hidden">
           {children}
         </div>
       )}

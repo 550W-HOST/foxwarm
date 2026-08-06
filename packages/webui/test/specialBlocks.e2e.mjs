@@ -25,6 +25,7 @@ const reviewerResourceRequests = []
 const latexRaw = '\\[\nx^2 + y^2 = z^2\n\\]\n'
 const mermaidRaw = '```mermaid\nflowchart LR\n  A --> B\n```\n'
 const invalidMermaidRaw = '```mermaid\nflowchart TD\n  A -- broken\n```\n'
+const ordinaryCodeRaw = '```js\nconst compact = true\n```\n'
 
 await writeFile(entryPath, `
   import { createRoot } from 'react-dom/client'
@@ -35,6 +36,7 @@ await writeFile(entryPath, `
   const latexRaw = ${JSON.stringify(latexRaw)}
   const mermaidRaw = ${JSON.stringify(mermaidRaw)}
   const invalidMermaidRaw = ${JSON.stringify(invalidMermaidRaw)}
+  const ordinaryCodeRaw = ${JSON.stringify(ordinaryCodeRaw)}
   const sanitizedSegments = renderAssistantMarkdownSegments('<img src=x onerror=alert(1)>\\n\\n[bad](javascript:alert(2))')
   const nestedMermaid = '- Diagram:\\n\\n  \`\`\`mermaid\\n  flowchart LR\\n    A --> B\\n  \`\`\`\\n- After'
   const nestedMath = '> Formula:\\n> \\\\[\\n> x = y\\n> \\\\]\\n'
@@ -84,15 +86,20 @@ await writeFile(entryPath, `
   createRoot(document.getElementById('root')).render(
     <main className="foxwarm-chat-timeline w-full min-w-0 max-w-full overflow-x-hidden p-4">
       <div className="w-full min-w-0 max-w-[80%]">
-        <SpecialBlock kind="latex" label="LaTeX" raw={latexRaw}>
-          <div data-latex-fixture>rendered latex</div>
-        </SpecialBlock>
-        <SpecialBlock kind="mermaid" label="Mermaid" raw={mermaidRaw}>
-          <MermaidDiagram source={'flowchart LR\\n  A --> B'} />
-        </SpecialBlock>
+        <div id="latex-layout-fixture">
+          <SpecialBlock kind="latex" label="LaTeX" raw={latexRaw}>
+            <div data-latex-fixture>rendered latex</div>
+          </SpecialBlock>
+        </div>
+        <div id="mermaid-layout-fixture">
+          <SpecialBlock kind="mermaid" label="Mermaid" raw={mermaidRaw}>
+            <MermaidDiagram source={'flowchart LR\\n  A --> B'} />
+          </SpecialBlock>
+        </div>
         <SpecialBlock kind="mermaid" label="Mermaid" raw={invalidMermaidRaw}>
           <MermaidDiagram source={'flowchart TD\\n  A -- broken'} />
         </SpecialBlock>
+        <AssistantSegments id="ordinary-code-fixture" source={ordinaryCodeRaw} />
         <div id="sanitizer-fixture">
           {sanitizedSegments.map((segment, index) => segment.kind === 'html' ? <div key={index} dangerouslySetInnerHTML={{ __html: segment.html }} /> : null)}
         </div>
@@ -216,6 +223,72 @@ test('shared special block toggles exact raw source and copies with feedback', a
   assert.ok(await latexBlock.$('[data-latex-fixture]'))
 })
 
+test('ordinary code and special-block chrome keep their compact spacing and hover visibility', async () => {
+  await page.mouse.move(0, 0)
+  await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur())
+
+  const initial = await page.evaluate(() => {
+    const code = document.querySelector('#ordinary-code-fixture pre')
+    const latex = document.querySelector('#latex-layout-fixture [data-special-block]')
+    const mermaid = document.querySelector('#mermaid-layout-fixture [data-special-block]')
+    const latexRendered = latex.querySelector('[data-special-block-rendered]')
+    const mermaidRendered = mermaid.querySelector('[data-special-block-rendered]')
+    return {
+      codeMarginTop: getComputedStyle(code).marginTop,
+      codeMarginBottom: getComputedStyle(code).marginBottom,
+      latexHeaders: latex.querySelectorAll('[data-special-block-header]').length,
+      latexPaddingTop: getComputedStyle(latexRendered).paddingTop,
+      latexPaddingBottom: getComputedStyle(latexRendered).paddingBottom,
+      mermaidHeader: mermaid.querySelector('[data-special-block-header]')?.textContent?.trim(),
+      mermaidPaddingTop: getComputedStyle(mermaidRendered).paddingTop,
+      mermaidPaddingBottom: getComputedStyle(mermaidRendered).paddingBottom,
+      latexControlsOpacity: getComputedStyle(latex.querySelector('[data-special-block-controls]')).opacity,
+      mermaidControlsOpacity: getComputedStyle(mermaid.querySelector('[data-special-block-controls]')).opacity,
+    }
+  })
+
+  assert.equal(initial.codeMarginTop, '8px')
+  assert.equal(initial.codeMarginBottom, '8px')
+  assert.equal(initial.latexHeaders, 0)
+  assert.equal(initial.latexPaddingTop, initial.latexPaddingBottom)
+  assert.equal(initial.latexPaddingTop, '8px')
+  assert.equal(initial.mermaidHeader, 'Mermaid')
+  assert.equal(initial.mermaidPaddingTop, '32px')
+  assert.equal(initial.mermaidPaddingBottom, '8px')
+  assert.equal(initial.latexControlsOpacity, '0')
+  assert.equal(initial.mermaidControlsOpacity, '0')
+
+  for (const fixture of ['#latex-layout-fixture', '#mermaid-layout-fixture']) {
+    await page.$eval(`${fixture} [data-special-block]`, element => element.scrollIntoView({ block: 'center' }))
+    await page.hover(`${fixture} [data-special-block]`)
+    await page.waitForFunction(selector => (
+      getComputedStyle(document.querySelector(`${selector} [data-special-block-controls]`)).opacity === '1'
+    ), {}, fixture)
+  }
+
+  await page.$eval('#latex-layout-fixture button[title="Raw LaTeX"]', button => button.click())
+  await page.$eval('#mermaid-layout-fixture button[title="Raw Mermaid"]', button => button.click())
+  const rawSpacing = await page.evaluate(() => {
+    const latex = getComputedStyle(document.querySelector('#latex-layout-fixture [data-special-block-raw]'))
+    const mermaid = getComputedStyle(document.querySelector('#mermaid-layout-fixture [data-special-block-raw]'))
+    return {
+      latexTop: latex.paddingTop,
+      latexBottom: latex.paddingBottom,
+      mermaidTop: mermaid.paddingTop,
+      mermaidBottom: mermaid.paddingBottom,
+    }
+  })
+  assert.deepEqual(rawSpacing, {
+    latexTop: '8px',
+    latexBottom: '8px',
+    mermaidTop: '32px',
+    mermaidBottom: '8px',
+  })
+  await page.$eval('#latex-layout-fixture button[title="Rendered LaTeX"]', button => button.click())
+  await page.$eval('#mermaid-layout-fixture button[title="Rendered Mermaid"]', button => button.click())
+  await page.waitForSelector('#mermaid-layout-fixture [data-mermaid-diagram] svg', { timeout: 15_000 })
+})
+
 test('Mermaid lazy renderer produces bounded strict SVG output', async () => {
   const validBlock = (await page.$$('[data-special-block-kind="mermaid"]'))[0]
   await validBlock.waitForSelector('[data-mermaid-diagram] svg', { timeout: 15_000 })
@@ -240,16 +313,15 @@ test('Mermaid lazy renderer produces bounded strict SVG output', async () => {
 })
 
 test('Mermaid diagrams re-render readably when the WebUI switches to dark mode', async () => {
-  const validBlock = (await page.$$('[data-special-block-kind="mermaid"]'))[0]
-  const lightSvg = await validBlock.$eval('[data-mermaid-diagram] svg', element => element.innerHTML)
+  const lightSvg = await page.$eval('#mermaid-layout-fixture [data-mermaid-diagram] svg', element => element.innerHTML)
 
   await page.evaluate(() => document.documentElement.classList.add('dark'))
   await page.waitForFunction(previous => {
-    const svg = document.querySelector('[data-special-block-kind="mermaid"] [data-mermaid-diagram] svg')
+    const svg = document.querySelector('#mermaid-layout-fixture [data-mermaid-diagram] svg')
     return svg && svg.innerHTML !== previous
   }, { timeout: 15_000 }, lightSvg)
 
-  const darkLayout = await validBlock.$eval('[data-mermaid-diagram] svg', element => ({
+  const darkLayout = await page.$eval('#mermaid-layout-fixture [data-mermaid-diagram] svg', element => ({
     width: element.getBoundingClientRect().width,
     blockWidth: element.closest('[data-special-block]').getBoundingClientRect().width,
   }))
