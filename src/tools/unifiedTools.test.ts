@@ -655,6 +655,20 @@ test('wait is the model-facing pause tool and end_turn is removed', () => {
   assert.equal(definitions.some(def => def.name === 'end_turn'), false);
 });
 
+test('wait schema documents event-driven wake and active-turn queue semantics without polling', () => {
+  const waitDef = definitions.find(def => def.name === 'wait');
+  assert.ok(waitDef);
+
+  const description = String(waitDef.description);
+  assert.match(description, /supported inbound user\/inter-agent messages and session\/system wake events automatically wake an idle waiting session/i);
+  assert.match(description, /generating or executing tools.*queued.*next safe provider\/tool-loop point.*source boundaries/i);
+  assert.match(description, /wait is event-driven, not a polling primitive/i);
+
+  const timeoutDescription = String((waitDef.parameters?.properties as any)?.timeoutSeconds?.description);
+  assert.match(timeoutDescription, /one-shot wake deadline\/fallback/i);
+  assert.match(timeoutDescription, /not a polling interval/i);
+});
+
 test('set_goal schema keeps goal optional so clear can omit it', () => {
   const definition = definitions.find(def => def.name === 'set_goal');
   assert.ok(definition);
@@ -710,7 +724,7 @@ test('default model-facing tool names and serialized schema size stay consolidat
   ]);
 
   const serializedBytes = Buffer.byteLength(JSON.stringify(modelFacingDefinitions), 'utf8');
-  assert.equal(serializedBytes, 34_242);
+  assert.equal(serializedBytes, 34_752);
   assert.ok(serializedBytes < 38_069, 'serialized default schema should stay below the pre-consolidation baseline');
 });
 
