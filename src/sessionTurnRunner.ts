@@ -17,6 +17,12 @@ export function shouldBroadcastChannelText(text: string | undefined | null): boo
   return typeof text === 'string' && text.trim().length > 0;
 }
 
+export function formatTerminalSessionError(error: any): string {
+  return llm.isLlmRequestError(error)
+    ? `⚠️ LLM request failed: ${error?.message || 'Unknown error'}`
+    : `Error: ${error?.message || 'Unknown error'}`;
+}
+
 type SourceMergeBoundary = {
   streamKey?: string;
   preferDirectReply: boolean;
@@ -801,9 +807,7 @@ export class SessionTurnRunner {
   }
 
   private async sendSessionError(session: Session, sourceCtx: ChannelContext | undefined, error: any, turnOptions?: Record<string, any>, source?: QueueSource): Promise<void> {
-    const text = llm.isLlmRequestError(error)
-      ? `⚠️ LLM request failed: ${error?.message || 'Unknown error'}`
-      : `Error: ${error?.message || 'Unknown error'}`;
+    const text = formatTerminalSessionError(error);
     await this.sendSessionReply(session, sourceCtx, text, this.mergeTurnOptions(turnOptions || {}, { turnFinal: true }), source);
   }
 
@@ -1122,7 +1126,7 @@ export class SessionTurnRunner {
       }
     } catch (e: any) {
       logger.error(e, 'Error handling message');
-      const errorText = `Error: ${e?.message || 'Unknown error'}`;
+      const errorText = formatTerminalSessionError(e);
       if (!llm.isLlmRequestError(e)) {
         await this.appendTerminalModelMessage(session, errorText);
       }

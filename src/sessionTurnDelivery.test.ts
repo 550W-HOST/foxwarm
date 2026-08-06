@@ -34,20 +34,33 @@ test('committed-final handler uses exact direct context and awaited attachment f
   attachChannel('telegram', 'room', 'owner'); attachChannel('secondary', 'other', 'owner');
   attachChannel('webui', 'browser', 'owner'); attachChannel('wework', 'stream-room', 'owner');
   await saveChannels();
-  const replies: any[] = []; let resolved: ChannelContext | undefined = fakeContext('room', replies);
+  const replies: any[] = []; let resolved: ChannelContext | undefined = fakeContext('room', replies); let resolverError: Error | undefined; let resolverCalls = 0;
   const registry = new RpcServiceRegistry();
   registry.register(sessionTurnDeliveryServiceDescriptor, createSessionTurnDeliveryServiceHandler({
-    expectedSourceSessionId: 'owner', resolveExactSourceContext: () => resolved,
+    expectedSourceSessionId: 'owner', resolveExactSourceContext: () => {
+      resolverCalls += 1; if (resolverError) throw resolverError; return resolved;
+    },
   }));
   const transport = new LocalRpcTransport(registry); const client = new RpcClient(sessionTurnDeliveryServiceDescriptor, transport);
   try {
     assert.deepEqual(await client.call('deliverCommittedFinal', { sourceSessionId: 'owner', source, outcome: 'response', text: 'direct' }), { attempted: 1, delivered: 1 });
     assert.equal(replies[0].text, 'direct'); assert.equal(replies[0].options.turnFinal, true); assert.equal(sent.length, 0);
+    assert.equal(resolverCalls, 1);
 
     resolved = fakeContext('wrong-room');
     assert.deepEqual(await client.call('deliverCommittedFinal', { sourceSessionId: 'owner', source, outcome: 'response', text: 'fallback' }), { attempted: 3, delivered: 2 });
     assert.deepEqual(sent.map(item => item.id), ['telegram', 'secondary', 'wework']);
     assert.equal(sent.every(item => item.options.excludePlatforms.includes('webui')), true);
+
+    sent.length = 0; resolverError = new Error('lookup unavailable');
+    assert.deepEqual(await client.call('deliverCommittedFinal', { sourceSessionId: 'owner', source, outcome: 'response', text: 'lookup fallback' }), { attempted: 3, delivered: 2 });
+    assert.equal(sent.filter(item => item.id === 'telegram').length, 1);
+    resolverError = undefined;
+
+    sent.length = 0; let directAttempts = 0;
+    resolved = { ...fakeContext('room'), reply: async () => { directAttempts += 1; throw new Error('direct ambiguous'); } };
+    assert.deepEqual(await client.call('deliverCommittedFinal', { sourceSessionId: 'owner', source, outcome: 'response', text: 'direct fails' }), { attempted: 1, delivered: 0 });
+    assert.equal(directAttempts, 1); assert.equal(sent.length, 0);
 
     resolved = undefined; sent.length = 0;
     const streamSource = { platform: 'wework', channelId: 'wework', channelType: 'wework', channelUserId: 'stream-room', conversationId: 'stream-room', weworkStreamId: 'stream-1' };
@@ -55,9 +68,18 @@ test('committed-final handler uses exact direct context and awaited attachment f
     assert.deepEqual(sent.map(item => item.id), ['wework']); assert.equal(sent[0].options.allowEmptyBroadcast, true);
 
     sent.length = 0;
+    const resolverCallsBeforeFalse = resolverCalls;
     assert.deepEqual(await client.call('deliverCommittedFinal', { sourceSessionId: 'owner', source: { ...source, preferDirectReply: undefined }, outcome: 'error', text: 'failed turn' }), { attempted: 4, delivered: 3 });
+    assert.equal(resolverCalls, resolverCallsBeforeFalse);
     assert.equal(sent.some(item => item.id === 'webui'), true, 'error final preserves ordinary broadcast inclusion');
     await assert.rejects(() => client.call('deliverCommittedFinal', { sourceSessionId: 'wrong', source, outcome: 'response', text: 'x' }), { code: 'SESSION_TURN_DELIVERY_SOURCE_MISMATCH' });
+
+    const emptyRegistry = new RpcServiceRegistry();
+    emptyRegistry.register(sessionTurnDeliveryServiceDescriptor, createSessionTurnDeliveryServiceHandler({ expectedSourceSessionId: 'empty-owner' }));
+    const emptyTransport = new LocalRpcTransport(emptyRegistry); const emptyClient = new RpcClient(sessionTurnDeliveryServiceDescriptor, emptyTransport);
+    try {
+      assert.deepEqual(await emptyClient.call('deliverCommittedFinal', { sourceSessionId: 'empty-owner', source: { platform: 'test', channelUserId: 'none' }, outcome: 'response', text: 'nobody' }), { attempted: 0, delivered: 0 });
+    } finally { emptyTransport.close(); }
   } finally {
     transport.close(); for (const id of ['telegram', 'secondary', 'webui', 'wework']) unregisterChannel(id);
     resetChannelsForTests(); setChannelsStoreForTests(null); await fs.remove(root);

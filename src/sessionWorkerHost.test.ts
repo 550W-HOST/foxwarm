@@ -87,6 +87,7 @@ async function withLocalHost(
 
 test('worker swallows one ambiguous final-delivery failure after committed response and error finals', async () => {
   const initial = baseSession('worker-final-ambiguity'); let deliveryCalls = 0; let chatCalls = 0; const outcomes: string[] = [];
+  let latestProjection: any; const deliveryRecords: any[] = [];
   const originalChat = llm.chat;
   (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
     if (parts) await options.appendMessage({ role: 'user', parts });
@@ -96,6 +97,7 @@ test('worker swallows one ambiguous final-delivery failure after committed respo
       await options.appendMessage({ role: 'model', parts: [{ text: '' }] });
       return { text: '' };
     }
+    if (chatCalls === 4) throw new llm.LlmRequestError('provider terminal');
     await options.appendMessage({ role: 'model', parts: [{ text: 'committed before ambiguous delivery' }] });
     return { text: 'committed before ambiguous delivery' };
   };
@@ -114,6 +116,8 @@ test('worker swallows one ambiguous final-delivery failure after committed respo
       await host.runPending(8);
       assert.equal(deliveryCalls, 2);
       assert.equal(readDurable().history.at(-1).parts[0].text, 'Error: committed final error');
+      assert.equal(deliveryRecords[1].text, 'Error: committed final error');
+      assert.equal(deliveryRecords[1].messageCount, readDurable().history.length);
       assert.equal(readDurable().busy, false);
       store.enqueueIntent(initial.id, 'empty-final', 'enqueue', {
         type: 'user', source: { platform: 'wework', channelUserId: 'room', weworkStreamId: 'stream' }, parts: [{ text: 'empty' }],
@@ -121,7 +125,20 @@ test('worker swallows one ambiguous final-delivery failure after committed respo
       await host.runPending(8);
       assert.equal(deliveryCalls, 3);
       assert.deepEqual(outcomes, ['response', 'error', 'empty-final']);
-    }, true, undefined, async (_source, _text, outcome) => { deliveryCalls += 1; outcomes.push(outcome); throw new Error('ambiguous reverse transport'); });
+      const historyBeforeLlmFailure = readDurable().history.length;
+      store.enqueueIntent(initial.id, 'llm-error-final', 'enqueue', {
+        type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'llm fail' }],
+      });
+      await host.runPending(8);
+      assert.equal(deliveryCalls, 4);
+      assert.equal(deliveryRecords.at(-1).text, '⚠️ LLM request failed: provider terminal');
+      assert.equal(readDurable().history.length, historyBeforeLlmFailure + 1);
+      assert.equal(readDurable().history.at(-1).parts[0].text, 'llm fail');
+      assert.equal(deliveryRecords.at(-1).messageCount, readDurable().history.length);
+    }, true, async projection => { latestProjection = structuredClone(projection); }, async (_source, text, outcome) => {
+      deliveryCalls += 1; outcomes.push(outcome); deliveryRecords.push({ text, outcome, messageCount: latestProjection?.messageCount });
+      throw new Error('ambiguous reverse transport');
+    });
   } finally { (llm as any).chat = originalChat; }
 });
 

@@ -81,18 +81,25 @@ export function createSessionTurnDeliveryServiceHandler(options: {
       if (outcome === 'empty-final' && finalText !== '') throw new RpcError('SESSION_TURN_DELIVERY_INVALID', 'empty-final text must be empty.');
       const source = normalizeSource(input.source);
       const deliveryOptions = finalOptions(source, outcome);
-      try {
-        const ctx = await options.resolveExactSourceContext?.(sourceSessionId, structuredClone(source));
-        if (source.preferDirectReply && ctx && sameSource(sourceFromContext(ctx), source)) {
-          await ctx.reply(finalText, deliveryOptions);
-          return { attempted: 1, delivered: 1 };
+      if (source.preferDirectReply && options.resolveExactSourceContext) {
+        let ctx: ChannelContext | undefined;
+        try { ctx = await options.resolveExactSourceContext(sourceSessionId, structuredClone(source)); }
+        catch (error) { logger.warn({ err: error, sessionId: sourceSessionId }, 'Exact committed-final source lookup failed; using attachments'); }
+        if (ctx && sameSource(sourceFromContext(ctx), source)) {
+          try { await ctx.reply(finalText, deliveryOptions); return { attempted: 1, delivered: 1 }; }
+          catch (error: any) {
+            logger.error({ err: error, sessionId: sourceSessionId, outcome }, 'Committed final direct delivery failed');
+            return { attempted: 1, delivered: 0 };
+          }
         }
+      }
+      try {
         const result = await deliverCommittedFinalToAttachments(sourceSessionId, finalText, deliveryOptions);
         for (const failure of result.failures) logger.error({ sessionId: sourceSessionId, failure }, 'Committed final attachment delivery failed');
         return { attempted: result.attempted, delivered: result.delivered };
       } catch (error: any) {
         logger.error({ err: error, sessionId: sourceSessionId, outcome }, 'Committed final delivery failed');
-        return { attempted: 1, delivered: 0 };
+        return { attempted: 0, delivered: 0 };
       }
     },
   };
