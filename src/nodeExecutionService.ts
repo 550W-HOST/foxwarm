@@ -52,6 +52,54 @@ function requireString(value: unknown, field: string): string {
   return value.trim();
 }
 
+function requireBoundedString(value: unknown, field: string, maxLength: number): string {
+  const result = requireString(value, field);
+  if (result.length > maxLength) throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', `${field} exceeds ${maxLength} characters.`);
+  return result;
+}
+
+function plainJsonWithin(value: unknown, maxBytes: number): unknown | undefined {
+  const seen = new WeakSet<object>();
+  const copy = (item: unknown, depth: number): unknown => {
+    if (item === null || typeof item === 'boolean') return item;
+    if (typeof item === 'string') { if (Buffer.byteLength(item, 'utf8') > maxBytes) throw new Error(); return item; }
+    if (typeof item === 'number') { if (!Number.isFinite(item)) throw new Error(); return item; }
+    if (!item || typeof item !== 'object' || depth > 12 || seen.has(item as object)) throw new Error();
+    seen.add(item as object);
+    if (Array.isArray(item)) {
+      if (item.length > 2048) throw new Error();
+      const descriptors = Object.getOwnPropertyDescriptors(item);
+      if (Object.getOwnPropertySymbols(item).some(symbol => Object.getOwnPropertyDescriptor(item, symbol)?.enumerable)) throw new Error();
+      if (Object.entries(descriptors).some(([key, descriptor]) => key !== 'length' && descriptor.enumerable && !/^(0|[1-9]\d*)$/.test(key))) throw new Error();
+      const result = Array.from({ length: item.length }, (_, index) => {
+        const descriptor = descriptors[String(index)];
+        if (!descriptor || !('value' in descriptor)) throw new Error();
+        return copy(descriptor.value, depth + 1);
+      });
+      seen.delete(item as object); return result;
+    }
+    const proto = Object.getPrototypeOf(item);
+    if (proto !== Object.prototype && proto !== null) throw new Error();
+    if (Reflect.ownKeys(item).length > 2048) throw new Error();
+    if (Object.getOwnPropertySymbols(item).some(symbol => Object.getOwnPropertyDescriptor(item, symbol)?.enumerable)) throw new Error();
+    const result: Record<string, unknown> = {};
+    for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(item))) {
+      if (!descriptor.enumerable) continue;
+      if (!('value' in descriptor) || key.length > 256) throw new Error();
+      result[key] = copy(descriptor.value, depth + 1);
+    }
+    seen.delete(item as object); return result;
+  };
+  try {
+    const result = copy(value, 0);
+    return Buffer.byteLength(JSON.stringify(result), 'utf8') <= maxBytes ? result : undefined;
+  } catch { return undefined; }
+}
+
+function invalidResponse(message: string): never {
+  throw new RpcError('NODE_EXECUTION_INVALID_RESPONSE', message);
+}
+
 function normalizeArgs(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'args must be an object.');
@@ -136,28 +184,48 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
     },
     async list(input) {
       const { source } = await requireSource(input, ['sourceSessionId', 'nodeId', 'currentNode'], 'Node list request');
-      const filter = input.nodeId === undefined ? undefined : requireString(input.nodeId, 'nodeId');
-      const currentNode = input.currentNode === undefined ? source.currentNode : requireString(input.currentNode, 'currentNode');
+      const filter = input.nodeId === undefined ? undefined : requireBoundedString(input.nodeId, 'nodeId', 128);
+      if (input.currentNode !== undefined) requireBoundedString(input.currentNode, 'currentNode', 128);
       const isolated = sessionManager.isSessionEffectivelyIsolated(source);
-      const allowed = isolated ? new Set([sessionManager.getAgentIsolationNode(source.agent || 'main') || currentNode || 'master', currentNode].filter(Boolean)) : null;
+      const allowed = isolated ? new Set([sessionManager.getAgentIsolationNode(source.agent || 'main') || source.currentNode || 'master', source.currentNode].filter(Boolean)) : null;
       const nodes = nodesManager.listNodesWithTools().filter(node => (!filter || node.id === filter) && (!allowed || allowed.has(node.id))).slice(0, 100);
       const activity = new Map(nodesManager.listNodes().map(node => [node.id, node.lastActivity]));
-      return { nodes: nodes.map(node => ({ id: node.id, type: node.type, ...(activity.has(node.id) ? { lastActivity: activity.get(node.id) } : {}), tools: node.tools.slice(0, 200).map(tool => ({
-        name: String(tool.name), ...(tool.description ? { description: String(tool.description).slice(0, 2000) } : {}),
-        ...(tool.parameters ? { parameters: structuredClone(tool.parameters) } : {}),
-      })) })) };
+      const output: NodeTopologyListResponse['nodes'] = []; let totalBytes = Buffer.byteLength('{"nodes":[]}', 'utf8');
+      for (const node of nodes) {
+        if (typeof node.id !== 'string' || !node.id || node.id.length > 128 || typeof node.type !== 'string' || !node.type || node.type.length > 64) continue;
+        const tools: NodeTopologyListResponse['nodes'][number]['tools'] = [];
+        for (const tool of node.tools.slice(0, 200)) {
+          const descriptors = Object.getOwnPropertyDescriptors(tool);
+          const name = descriptors.name && 'value' in descriptors.name ? descriptors.name.value : undefined;
+          if (typeof name !== 'string' || !name || name.length > 128) continue;
+          const descriptionValue = descriptors.description && 'value' in descriptors.description ? descriptors.description.value : undefined;
+          const description = typeof descriptionValue === 'string' ? descriptionValue.slice(0, 2000) : undefined;
+          const parametersValue = descriptors.parameters && 'value' in descriptors.parameters ? descriptors.parameters.value : undefined;
+          const parameters = parametersValue === undefined ? undefined : plainJsonWithin(parametersValue, 16 * 1024);
+          tools.push({ name, ...(description ? { description } : {}), ...(parameters !== undefined ? { parameters } : {}) });
+        }
+        const lastActivity = activity.get(node.id);
+        const candidate = { id: node.id, type: node.type,
+          ...(typeof lastActivity === 'number' && Number.isFinite(lastActivity) && lastActivity >= 0 ? { lastActivity } : {}), tools };
+        const size = Buffer.byteLength(JSON.stringify(candidate), 'utf8') + (output.length ? 1 : 0);
+        if (totalBytes + size > 256 * 1024) break;
+        totalBytes += size; output.push(candidate);
+      }
+      return { nodes: output };
     },
     async select(input) {
       const { sourceSessionId, source } = await requireSource(input, ['sourceSessionId', 'nodeId'], 'Node select request');
-      const nodeId = requireString(input.nodeId, 'nodeId');
+      const nodeId = requireBoundedString(input.nodeId, 'nodeId', 128);
       await requireNodeExecutionTarget(sourceSessionId, nodeId);
       nodesManager.setCurrentNode(sourceSessionId, nodeId);
-      if (nodeId === 'master') return { nodeId, defaultCwd: getAgentDir(source.agent || 'main') };
+      if (nodeId === 'master') return { nodeId, defaultCwd: getAgentDir(source.agent || 'main').slice(0, 4096) };
       const node = nodesManager.getNode(nodeId);
       if (node?.ws && node.tools.has('get_default_cwd')) {
         try {
           const value = await nodesManager.executeTool(nodeId, 'get_default_cwd', {}, sourceSessionId);
-          const cwd = String(typeof value === 'object' && value && 'output' in value ? (value as any).output : value || '').trim();
+          const descriptor = value && typeof value === 'object' ? Object.getOwnPropertyDescriptor(value, 'output') : undefined;
+          const raw = descriptor && 'value' in descriptor ? descriptor.value : value;
+          const cwd = typeof raw === 'string' ? raw.trim().slice(0, 4096) : '';
           if (cwd) return { nodeId, defaultCwd: cwd };
         } catch { /* preserve the existing bounded fallback */ }
       }
@@ -166,13 +234,18 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
     async copy(input) {
       const { sourceSessionId } = await requireSource(input,
         ['sourceSessionId', 'sourceNode', 'sourcePath', 'targetNode', 'targetPath', 'overwrite'], 'Node copy request');
-      const sourceNode = requireString(input.sourceNode, 'sourceNode'); const sourcePath = requireString(input.sourcePath, 'sourcePath');
-      const targetNode = requireString(input.targetNode, 'targetNode'); const targetPath = requireString(input.targetPath, 'targetPath');
+      const sourceNode = requireBoundedString(input.sourceNode, 'sourceNode', 128); const sourcePath = requireBoundedString(input.sourcePath, 'sourcePath', 4096);
+      const targetNode = requireBoundedString(input.targetNode, 'targetNode', 128); const targetPath = requireBoundedString(input.targetPath, 'targetPath', 4096);
       if (input.overwrite !== undefined && typeof input.overwrite !== 'boolean') throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'overwrite must be a boolean.');
       await checkToolPermission('copy_between_nodes', sourceSessionId, 'master', { sourceNode, sourcePath, targetNode, targetPath, overwrite: input.overwrite === true });
-      await requireNodeExecutionTarget(sourceSessionId, sourceNode); await requireNodeExecutionTarget(sourceSessionId, targetNode);
+      if (sourceNode !== 'master') await requireNodeExecutionTarget(sourceSessionId, sourceNode);
+      if (targetNode !== 'master') await requireNodeExecutionTarget(sourceSessionId, targetNode);
       const file = await nodesManager.readFileFromNode(sourceNode, sourcePath, sourceSessionId);
       const written = await nodesManager.writeFileToNode(targetNode, targetPath, file.dataBase64, input.overwrite === true, sourceSessionId);
+      if (!Number.isSafeInteger(file.sizeBytes) || file.sizeBytes < 0) invalidResponse('Node copy returned an invalid sizeBytes.');
+      if (typeof written.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(written.sha256)) invalidResponse('Node copy returned an invalid sha256.');
+      if (typeof written.overwritten !== 'boolean') invalidResponse('Node copy returned an invalid overwritten flag.');
+      if (written.absolutePath !== undefined && (typeof written.absolutePath !== 'string' || written.absolutePath.length > 4096)) invalidResponse('Node copy returned an invalid absolutePath.');
       return { sourceNode, sourcePath, targetNode, targetPath, sizeBytes: file.sizeBytes, sha256: written.sha256,
         overwritten: written.overwritten, ...(written.absolutePath ? { absolutePath: written.absolutePath } : {}) };
     },

@@ -113,7 +113,7 @@ export function assertToolAvailableForPlacement(toolName: string, args: any, ctx
         if (action === 'update-display-name' && !isCurrent(fallbackTarget)) workerUnavailable(toolName);
     }
     if (toolName === 'remote_node' || toolName === 'node_tools') {
-        const action = typeof args?.action === 'string' ? args.action.trim().toLowerCase() : '';
+        const action = args?.action;
         if (action !== 'list') workerUnavailable(toolName);
     }
     if (toolName === 'image_write_to_file') {

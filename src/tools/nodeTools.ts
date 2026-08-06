@@ -204,10 +204,8 @@ export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext)
             throw new Error('This session is isolated and cannot switch node via tools. Use /node from the user channel.');
         }
         const validated = await validateNodeSelection(ctx.sessionId, nodeId);
-        const previousNode = session.currentNode; const previousCwd = session.cwd;
         session.currentNode = validated.nodeId; delete session.cwd;
-        try { await ctx.persistCurrentSession(); }
-        catch (error) { session.currentNode = previousNode; session.cwd = previousCwd; throw error; }
+        await ctx.persistCurrentSession();
         return `Current node changed to \`${validated.nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${validated.defaultCwd}\`.`;
     }
 

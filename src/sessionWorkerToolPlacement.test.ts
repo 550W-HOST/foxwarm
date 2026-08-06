@@ -12,6 +12,7 @@ import { tool_run_script } from './toolscript';
 import { executeTools } from './llm';
 import * as nodeExecution from './nodeExecution';
 import * as agentMetadata from './session/agentMetadata';
+import { RpcError } from './rpc';
 import type { Session } from './types';
 
 function owner(): Session {
@@ -72,6 +73,7 @@ test('worker guards run before unsupported handlers and exact current state tool
     ['create_child_session', { suffix: 'x' }], ['send_file', { filePath: 'x' }], ['compact_session', {}],
     ['session', { action: 'list' }],
     ['session', { action: ' list ' }], ['get_memory_context', { timestamp: 1 }],
+    ['remote_node', { action: ' list ' }], ['node_tools', { action: 'List' }],
     ['get_session_messages', { sessionId: 'other/session' }], ['recall', { sessionId: 'other/session' }],
     ['get_session_messages', { sessionId: '' }], ['get_session_messages', { sessionId: ' ' }],
     ['stop_session', { sessionId: '' }], ['stop_session', { sessionId: ' ' }],
@@ -82,6 +84,10 @@ test('worker guards run before unsupported handlers and exact current state tool
   ] as any[]) {
     await assert.rejects(() => callTool(name, args, { ...ctx, ...(extra || {}) }), { code: 'SESSION_WORKER_TOOL_UNAVAILABLE', retryable: true });
   }
+  await assert.rejects(() => tool_call_tool({ source: 'builtin', name: 'remote_node', args: { action: 'List' } }, ctx),
+    { code: 'SESSION_WORKER_TOOL_UNAVAILABLE', retryable: true });
+  const crafted = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="remote_node", args={"action":" list "})' }, ctx);
+  assert.equal(crafted.status, 'failed'); assert.match(String(crafted.error), /SESSION_WORKER_TOOL_UNAVAILABLE/);
   assert.match(String(await callTool('session', { action: 'status' }, ctx)), new RegExp(session.id));
   assert.match(String(await callTool('session', { action: 'update-display-name', name: 'Worker exact' }, ctx)), /changed/);
   assert.match(String(await callTool('session', { action: 'update-display-name', sessionId: '', name: 'Worker exact 2' }, ctx)), /changed/);
@@ -199,13 +205,23 @@ test('worker node topology select and compound copy use fixed facade with exact 
     assert.equal(session.currentNode, 'remote-a'); assert.equal(session.cwd, undefined); assert.equal(persists, 1);
 
     session.currentNode = 'master'; session.cwd = '/before';
-    ctx.persistCurrentSession = async () => { throw new Error('select persist failed'); };
-    await assert.rejects(() => callTool('node', { action: 'select', nodeId: 'remote-a' }, ctx), /select persist failed/);
-    assert.equal(session.currentNode, 'master'); assert.equal(session.cwd, '/before');
+    ctx.persistCurrentSession = async () => {
+      session.currentNode = 'authoritative-after-resync'; session.cwd = '/authority';
+      throw new RpcError('SESSION_WORKER_PERSIST_FAILED', 'select persist failed', true);
+    };
+    await assert.rejects(() => callTool('node', { action: 'select', nodeId: 'remote-a' }, ctx), { code: 'SESSION_WORKER_PERSIST_FAILED' });
+    assert.equal(session.currentNode, 'authoritative-after-resync'); assert.equal(session.cwd, '/authority');
+
+    ctx.persistCurrentSession = async () => {
+      session.currentNode = 'authoritative-before-poison'; session.cwd = '/poison-authority';
+      throw new RpcError('SESSION_WORKER_RESYNC_REQUIRED', 'resync failed', true);
+    };
+    await assert.rejects(() => callTool('node', { action: 'select', nodeId: 'remote-a' }, ctx), { code: 'SESSION_WORKER_RESYNC_REQUIRED' });
+    assert.equal(session.currentNode, 'authoritative-before-poison'); assert.equal(session.cwd, '/poison-authority');
 
     (sessionManager as any).isSessionEffectivelyIsolated = () => true;
     await assert.rejects(() => callTool('node', { action: 'select', nodeId: 'remote-a' }, ctx), /isolated and cannot switch node/);
-    assert.equal(selectCalls, 2);
+    assert.equal(selectCalls, 3);
     (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
     ctx.persistCurrentSession = async () => { persists += 1; };
 

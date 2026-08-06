@@ -245,7 +245,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     { id: 'reverse-node', type: 'node', tools: [{ name: 'read', description: 'remote read', parameters: { type: 'object' } }] }];
   (nodesManager as any).setCurrentNode = () => {};
   (nodesManager as any).readFileFromNode = async () => ({ dataBase64: 'c2VjcmV0LWJ5dGVz', sizeBytes: 12, sha256: 'source-hash' });
-  (nodesManager as any).writeFileToNode = async () => ({ sha256: 'target-hash', overwritten: false, absolutePath: '/remote/to.txt' });
+  (nodesManager as any).writeFileToNode = async () => ({ sha256: 'a'.repeat(64), overwritten: false, absolutePath: '/remote/to.txt' });
   (mcpClient as any).listServers = async () => [{ name: 'reverse-mcp', enabled: true, transport: 'http', argsCount: 0,
     envKeys: [] as string[], headerKeys: [] as string[], hasToken: false }];
   (mcpClient as any).callTool = async (...args: any[]) => { externalCalls.push(['mcp', ...args]); return { echoed: args[2] }; };
@@ -340,7 +340,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.equal(externalCalls[2][1], 'reverse vector query');
     assert.match(afterWait.history.at(-1).parts[0].text, /"fenceErrors":\["NODE_EXECUTION_SOURCE_MISMATCH","NODE_EXECUTION_SOURCE_MISMATCH","MCP_EXTERNAL_SOURCE_MISMATCH"\]/);
     assert.match(afterWait.history.at(-1).parts[0].text, /"defaultCwd":"node process cwd/);
-    assert.match(afterWait.history.at(-1).parts[0].text, /"sha256":"target-hash"/);
+    assert.match(afterWait.history.at(-1).parts[0].text, new RegExp(`"sha256":"${'a'.repeat(64)}"`));
     assert.doesNotMatch(afterWait.history.at(-1).parts[0].text, /c2VjcmV0LWJ5dGVz/);
     assert.match(afterWait.history.at(-1).parts[0].text, /reverse-hit/);
     assert.match(afterWait.history.at(-1).parts[0].text, /"loadedLocalVectorOwner":false/);

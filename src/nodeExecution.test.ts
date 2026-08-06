@@ -8,6 +8,7 @@ import * as sessionManager from './sessionManager';
 import { call_tool } from './tools';
 import { createNodeExecutionServiceHandler, nodeExecutionServiceDescriptor } from './nodeExecutionService';
 import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
+import { getAgentDir } from './config';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -51,18 +52,51 @@ test('Node compound copy keeps bytes inside Main for master and remote sources',
   const originals = { read: nodesManager.readFileFromNode, write: nodesManager.writeFileToNode };
   const writes: any[] = [];
   (nodesManager as any).readFileFromNode = async (nodeId: string) => ({ dataBase64: `bytes-${nodeId}`, sizeBytes: 7, sha256: 'source' });
-  (nodesManager as any).writeFileToNode = async (...args: any[]) => { writes.push(args); return { sha256: 'written', overwritten: false }; };
+  const sha256 = 'a'.repeat(64);
+  (nodesManager as any).writeFileToNode = async (...args: any[]) => { writes.push(args); return { sha256, overwritten: false }; };
   try {
     const first = await nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'master', sourcePath: 'a', targetNode: 'remote-a', targetPath: 'b' });
     const second = await nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'remote-a', sourcePath: 'c', targetNode: 'remote-b', targetPath: 'd', overwrite: true });
-    assert.equal(first.sha256, 'written'); assert.equal(second.overwritten, false);
+    assert.equal(first.sha256, sha256); assert.equal(second.overwritten, false);
     assert.deepEqual(writes.map(call => call.slice(0, 5)), [
       ['remote-a', 'b', 'bytes-master', false, sourceId],
       ['remote-b', 'd', 'bytes-remote-a', true, sourceId],
     ]);
     assert.equal(JSON.stringify([first, second]).includes('bytes-'), false);
+    assert.deepEqual(Object.keys(first).sort(), ['overwritten', 'sha256', 'sizeBytes', 'sourceNode', 'sourcePath', 'targetNode', 'targetPath']);
+    (nodesManager as any).writeFileToNode = async () => ({ sha256: 'bad', overwritten: false });
+    await assert.rejects(() => nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'master', sourcePath: 'a', targetNode: 'remote-a', targetPath: 'b' }),
+      { code: 'NODE_EXECUTION_INVALID_RESPONSE' });
+    (nodesManager as any).readFileFromNode = async () => ({ dataBase64: '', sizeBytes: -1, sha256: 'source' });
+    (nodesManager as any).writeFileToNode = async () => ({ sha256, overwritten: false });
+    await assert.rejects(() => nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'master', sourcePath: 'a', targetNode: 'remote-a', targetPath: 'b' }),
+      { code: 'NODE_EXECUTION_INVALID_RESPONSE' });
   } finally {
     (nodesManager as any).readFileFromNode = originals.read; (nodesManager as any).writeFileToNode = originals.write;
+    await cleanup(sourceId);
+  }
+});
+
+test('Node topology bounds schemas without invoking capability accessors', async () => {
+  const sourceId = makeId('node_topology_bounds'); await sessionManager.getSession(sourceId);
+  const originals = { withTools: nodesManager.listNodesWithTools, list: nodesManager.listNodes };
+  let accessorCalls = 0;
+  const accessorTool: any = { name: 'accessor', description: 'safe' };
+  Object.defineProperty(accessorTool, 'parameters', { enumerable: true, get() { accessorCalls += 1; return { type: 'object' }; } });
+  (nodesManager as any).listNodesWithTools = () => [{ id: 'bounded', type: 'node', tools: [
+    { name: 'valid', description: 'd'.repeat(3000), parameters: { type: 'object', finite: 1 } },
+    { name: 'oversize', parameters: { value: 'x'.repeat(20 * 1024) } }, accessorTool,
+  ] }];
+  (nodesManager as any).listNodes = () => [{ id: 'bounded', lastActivity: 1 }];
+  try {
+    const [node] = await nodeExecution.listNodeTopology(sourceId);
+    assert.equal(accessorCalls, 0); assert.equal(node.tools.length, 3);
+    assert.equal(node.tools[0].description?.length, 2000);
+    assert.deepEqual(node.tools[0].parameters, { type: 'object', finite: 1 });
+    assert.equal(node.tools[1].parameters, undefined); assert.equal(node.tools[2].parameters, undefined);
+    assert.ok(Buffer.byteLength(JSON.stringify(node), 'utf8') < 256 * 1024);
+  } finally {
+    (nodesManager as any).listNodesWithTools = originals.withTools; (nodesManager as any).listNodes = originals.list;
     await cleanup(sourceId);
   }
 });
@@ -183,6 +217,8 @@ test('Node execution rejects master, stale, offline, unadvertised, and isolated-
   const originalExecuteTool = nodesManager.executeTool;
   const originalList = nodesManager.listNodesWithTools;
   const originalSelect = nodesManager.setCurrentNode;
+  const originalRead = nodesManager.readFileFromNode;
+  const originalWrite = nodesManager.writeFileToNode;
 
   try {
     (nodesManager as any).executeTool = async () => ({ ok: true });
@@ -210,21 +246,29 @@ test('Node execution rejects master, stale, offline, unadvertised, and isolated-
     (nodesManager as any).listNodesWithTools = () => [{ id: 'bound-node', type: 'node', tools: [{ name: 'read' }] },
       { id: 'other-node', type: 'node', tools: [{ name: 'read' }] }];
     (nodesManager as any).setCurrentNode = () => {};
+    (nodesManager as any).readFileFromNode = async () => ({ dataBase64: 'Ynl0ZXM=', sizeBytes: 5, sha256: 'a'.repeat(64) });
+    (nodesManager as any).writeFileToNode = async () => ({ sha256: 'b'.repeat(64), overwritten: false });
     assert.deepEqual(await nodeExecution.executeRemoteNodeTool(sourceId, 'bound-node', 'read', {}), { ok: true });
     assert.deepEqual((await nodeExecution.listNodeTopology(sourceId)).map(node => node.id), ['bound-node']);
+    assert.deepEqual((await nodeExecution.listNodeTopology(sourceId, undefined, 'other-node')).map(node => node.id), ['bound-node']);
     assert.equal((await nodeExecution.validateNodeSelection(sourceId, 'bound-node')).nodeId, 'bound-node');
+    assert.equal((await nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'master', sourcePath: `${getAgentDir(agentName)}/from`, targetNode: 'bound-node', targetPath: '/to' })).sha256, 'b'.repeat(64));
+    assert.equal((await nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'bound-node', sourcePath: '/from', targetNode: 'master', targetPath: `${getAgentDir(agentName)}/to` })).sha256, 'b'.repeat(64));
     await assert.rejects(
       () => nodeExecution.executeRemoteNodeTool(sourceId, 'other-node', 'read', {}),
       (error: any) => error?.code === 'NODE_EXECUTION_ISOLATED_NODE_DENIED',
     );
     await assert.rejects(() => nodeExecution.validateNodeSelection(sourceId, 'other-node'),
       (error: any) => error?.code === 'NODE_EXECUTION_ISOLATED_NODE_DENIED');
+    await assert.rejects(() => nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'master', sourcePath: `${getAgentDir(agentName)}/from`, targetNode: 'other-node', targetPath: '/to' }), /bound\/current node/);
   } finally {
     await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
     (nodesManager as any).getNode = originalGetNode;
     (nodesManager as any).executeTool = originalExecuteTool;
     (nodesManager as any).listNodesWithTools = originalList;
     (nodesManager as any).setCurrentNode = originalSelect;
+    (nodesManager as any).readFileFromNode = originalRead;
+    (nodesManager as any).writeFileToNode = originalWrite;
     await cleanup(sourceId);
   }
 });
