@@ -502,11 +502,22 @@ export class SessionDestructiveLifecycleClaimError extends Error {
 export function resolveLoadedSessionId(sessionId: string): string {
   if (sessions.has(sessionId)) return sessionId;
   const cached = aliasCache.get(sessionId);
-  if (cached && sessions.has(cached)) return cached;
-  for (const [realId, session] of sessions) {
-    if (session.aliases?.includes(sessionId)) return realId;
+  if (cached) {
+    const target = sessions.get(cached);
+    if (!target?.aliases?.includes(sessionId)) aliasCache.delete(sessionId);
   }
-  return sessionId;
+  let matchedId: string | undefined;
+  for (const [realId, session] of sessions) {
+    if (!session.aliases?.includes(sessionId)) continue;
+    if (matchedId) {
+      aliasCache.delete(sessionId);
+      return sessionId;
+    }
+    matchedId = realId;
+  }
+  if (!matchedId) return sessionId;
+  aliasCache.set(sessionId, matchedId);
+  return matchedId;
 }
 
 export function isSessionDestructiveLifecycleClaimed(sessionId: string): boolean {

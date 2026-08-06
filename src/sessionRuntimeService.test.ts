@@ -203,6 +203,35 @@ test('local SessionRuntime DTO seam clones projections and preserves event order
   }
 });
 
+test('loaded alias resolution rejects stale, forged, and duplicate cache identities', async () => {
+  const originalScheduleIndex = vector.scheduleSessionArchiveIndex;
+  (vector as any).scheduleSessionArchiveIndex = async (): Promise<void> => {};
+  await sessionManager.loadSessions();
+  const firstId = makeSessionId('loaded_alias_first'); const secondId = makeSessionId('loaded_alias_second');
+  const { session: first } = await sessionManager.createEmptySession(firstId);
+  const { session: second } = await sessionManager.createEmptySession(secondId);
+  const alias = `${firstId}-alias`; const forged = `${firstId}-forged`;
+  try {
+    first.aliases = [alias]; second.aliases = [];
+    sessionManager.updateAliasCache([alias], firstId);
+    assert.equal(sessionManager.resolveLoadedSessionId(alias), firstId, 'valid cached membership resolves');
+    sessionManager.updateAliasCache([forged], firstId);
+    assert.equal(sessionManager.resolveLoadedSessionId(forged), forged, 'cache-only membership is ignored');
+    first.aliases = [];
+    assert.equal(sessionManager.resolveLoadedSessionId(alias), alias, 'removed alias invalidates its cache hit');
+    sessionManager.updateAliasCache([alias], firstId); second.aliases = [alias];
+    assert.equal(sessionManager.resolveLoadedSessionId(alias), secondId, 'stale cache yields to unique current membership');
+    first.aliases = [alias];
+    assert.equal(sessionManager.resolveLoadedSessionId(alias), alias, 'duplicate current owners fail unresolved');
+    second.aliases = [firstId];
+    assert.equal(sessionManager.resolveLoadedSessionId(firstId), firstId, 'an exact real ID wins before aliases');
+  } finally {
+    first.aliases = []; second.aliases = [];
+    await sessionManager.deleteSession(firstId).catch(() => {}); await sessionManager.deleteSession(secondId).catch(() => {});
+    (vector as any).scheduleSessionArchiveIndex = originalScheduleIndex;
+  }
+});
+
 test('SessionRuntime overlays only the exact current Worker and reads detached authority', async () => {
   const originalScheduleIndex = vector.scheduleSessionArchiveIndex;
   (vector as any).scheduleSessionArchiveIndex = async (): Promise<void> => {};
@@ -260,6 +289,19 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     assert.deepEqual(events, ['stateChanged', 'listChanged']); events.length = 0;
     await registry.apply(identity, projection); await flushEvents();
     assert.deepEqual(events, ['stateChanged']);
+
+    const originalForgedLoader = sessionManager.getExistingSession; let forgedLoads = 0;
+    (sessionManager as any).getExistingSession = async (...args: any[]) => {
+      forgedLoads += 1; return originalForgedLoader(...args as [string]);
+    };
+    stub.aliases = []; sessionManager.updateAliasCache([alias], sessionId);
+    try {
+      assert.equal((await client.call('getSession', { sessionId: alias })).session, null);
+      assert.equal(await client.call('getHistory', { sessionId: alias }), null);
+      assert.equal(forgedLoads, 0);
+    } finally {
+      stub.aliases = [alias]; (sessionManager as any).getExistingSession = originalForgedLoader;
+    }
 
     const projected = (await client.call('getSession', { sessionId: alias })).session!;
     assert.equal(projected.id, sessionId); assert.deepEqual(projected.aliases, [alias]);

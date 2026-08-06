@@ -15,7 +15,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 ### Session identity, loading, and persistence
 
 - `buildAgentMainSessionId`, `buildChildSessionId`, `validateChildSessionSuffix` — canonical agent-main and child identifiers.
-- `resolveLoadedSessionId` — resolves a current ID/alias from the already-loaded catalog/in-memory identity map only, without filesystem lookup or semantic hydration.
+- `resolveLoadedSessionId` — resolves a current ID/alias from the already-loaded catalog/in-memory identity map only, without filesystem lookup or semantic hydration. Exact real IDs win; cached aliases are accepted only while the loaded target still declares them, and duplicate current alias owners remain unresolved.
 - `ARCHIVED_SESSION_ID_ERROR_CODE`, `ArchivedSessionIdError`, `assertSessionIdAvailableForNewLifetime` — the stable explicit-creation error and unified live/archive reservation boundary.
 - `createSessionInAgentWithAutomaticName` — runs a caller-supplied automatic name generator inside the identity commit lock and retries reserved candidates.
 - `getOrCreateSessionForChannel` — per-channel serialized first-session creation and attachment, with an optional guest/session factory and attachment config.

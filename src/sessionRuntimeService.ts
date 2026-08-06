@@ -304,6 +304,9 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       if (selection.kind === 'unavailable') {
         throw new RpcError('SESSION_WORKER_STATE_UNAVAILABLE', `Committed state for session \`${selection.canonicalId}\` is unavailable.`, true);
       }
+      if (options?.worker && selection.kind === 'local' && !sessionManager.getAllSessions().has(selection.canonicalId)) {
+        return { session: null };
+      }
       const session = selection.kind === 'worker'
         ? sessionManager.getAllSessions().get(selection.canonicalId) || null
         : await sessionManager.getExistingSession(selection.canonicalId);
@@ -324,6 +327,9 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       const selection = workerSelection(requestedId);
       if (selection.kind === 'unavailable') {
         throw new RpcError('SESSION_WORKER_HISTORY_UNAVAILABLE', `Authoritative history for session \`${selection.canonicalId}\` is unavailable.`, true);
+      }
+      if (options?.worker && selection.kind === 'local' && !sessionManager.getAllSessions().has(selection.canonicalId)) {
+        return null;
       }
       const session = selection.kind === 'worker'
         ? sessionManager.getAllSessions().get(selection.canonicalId) || null
