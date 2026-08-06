@@ -84,16 +84,17 @@ export function getToolPermissionNode(toolName: string, executionNode: string, t
 }
 
 // Wire up the unified search module with definitions reference
-setDefinitionsRef(definitions, isToolDirectlyExposedToModel, getToolPermissionNode, callTool);
+setDefinitionsRef(definitions, isToolDirectlyExposedToModel, getToolPermissionNode, callTool, assertToolAvailableForPlacement);
 
 const WORKER_UNSUPPORTED_TOOLS = new Set([
     'create_child_session', 'send_file', 'delete_session', 'compact_session',
-    'copy_between_nodes', 'remote_node', 'node_bootstrap_info', 'node_pair_approve', 'node_pair_list',
+    'copy_between_nodes', 'remote_node', 'node_tools', 'node_bootstrap_info', 'node_pair_approve', 'node_pair_list',
     'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
+    'get_memory_context',
 ]);
 
 function workerUnavailable(toolName: string): never {
-    throw new RpcError('SESSION_WORKER_TOOL_UNAVAILABLE', `Tool \`${toolName}\` is not available in Session-worker placement yet.`, true);
+    throw new RpcError('SESSION_WORKER_TOOL_UNAVAILABLE', `SESSION_WORKER_TOOL_UNAVAILABLE: Tool \`${toolName}\` is not available in Session-worker placement yet.`, true);
 }
 
 export function assertToolAvailableForPlacement(toolName: string, args: any, ctx: any): void {
@@ -101,19 +102,29 @@ export function assertToolAvailableForPlacement(toolName: string, args: any, ctx
     if (WORKER_UNSUPPORTED_TOOLS.has(toolName)) workerUnavailable(toolName);
     const owner = ctx.session;
     if (!owner || owner.id !== ctx.sessionId || !ctx.persistCurrentSession) workerUnavailable(toolName);
-    const currentId = owner?.id || ctx.sessionId;
-    const targetId = args?.sessionId || currentId;
-    const isCurrent = targetId === currentId || (Array.isArray(owner?.aliases) && owner.aliases.includes(targetId));
-    if (toolName === 'session' && String(args?.action || 'status').toLowerCase() === 'list') workerUnavailable(toolName);
+    const currentId = owner.id;
+    const isCurrent = (targetId: unknown): boolean => typeof targetId === 'string'
+        && (targetId === currentId || (Array.isArray(owner.aliases) && owner.aliases.includes(targetId)));
+    const fallbackTarget = args?.sessionId || currentId;
+    const literalTarget = args?.sessionId;
+    if (toolName === 'session') {
+        const action = typeof args?.action === 'string' && args.action.trim() ? args.action.trim().toLowerCase() : 'status';
+        if (action === 'list') workerUnavailable(toolName);
+        if (action === 'update-display-name' && !isCurrent(fallbackTarget)) workerUnavailable(toolName);
+    }
     if (toolName === 'node') workerUnavailable(toolName);
     if (toolName === 'image_write_to_file') {
         const targetNode = ctx.runtimeNodeId || owner?.currentNode || 'master';
         if (targetNode !== 'master') workerUnavailable(toolName);
     }
-    if (['get_session_messages', 'get_archived_messages', 'get_archived_blocks', 'recall',
-        'set_session_child_model', 'set_session_compact_threshold', 'update_session_snapshot', 'stop_session']
-        .includes(toolName) && !isCurrent) workerUnavailable(toolName);
-    if (toolName === 'recall' && typeof args?.agentName === 'string' && args.agentName !== (owner?.agent || 'main')) workerUnavailable(toolName);
+    if (['get_session_messages', 'stop_session'].includes(toolName) && !isCurrent(literalTarget)) workerUnavailable(toolName);
+    if (['get_archived_messages', 'get_archived_blocks', 'set_session_child_model',
+        'set_session_compact_threshold', 'update_session_snapshot'].includes(toolName) && !isCurrent(fallbackTarget)) workerUnavailable(toolName);
+    if (toolName === 'recall') {
+        const target = typeof args?.sessionId === 'string' ? (args.sessionId.trim() || currentId) : (args?.sessionId || currentId);
+        const agent = typeof args?.agentName === 'string' ? args.agentName.trim() : args?.agentName;
+        if (!isCurrent(target) || (agent && agent !== (owner.agent || 'main'))) workerUnavailable(toolName);
+    }
 }
 
 // --- callTool dispatcher ---

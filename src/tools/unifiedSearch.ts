@@ -12,12 +12,14 @@ let _definitions: any[] = [];
 let _isToolDirectlyExposedToModel: (toolName: string) => boolean = () => false;
 let _getToolPermissionNode: (toolName: string, executionNode: string, targetNode: string) => string = (_t, e) => e;
 let _dispatchBuiltin: (name: string, args: ToolArgs, ctx: ToolContext) => Promise<any> = async () => { throw new Error('Builtin dispatcher not initialized.'); };
+let _guardBuiltin: (name: string, args: ToolArgs, ctx: ToolContext) => void = () => {};
 
-export function setDefinitionsRef(defs: any[], isExposed: (n: string) => boolean, getPermNode: (t: string, e: string, tn: string) => string, dispatchBuiltin?: typeof _dispatchBuiltin) {
+export function setDefinitionsRef(defs: any[], isExposed: (n: string) => boolean, getPermNode: (t: string, e: string, tn: string) => string, dispatchBuiltin?: typeof _dispatchBuiltin, guardBuiltin?: typeof _guardBuiltin) {
     _definitions = defs;
     _isToolDirectlyExposedToModel = isExposed;
     _getToolPermissionNode = getPermNode;
     if (dispatchBuiltin) _dispatchBuiltin = dispatchBuiltin;
+    if (guardBuiltin) _guardBuiltin = guardBuiltin;
 }
 
 export function buildUnifiedToolId(source: UnifiedToolSource, name: string, options: { server?: string; nodeId?: string } = {}): string {
@@ -196,6 +198,7 @@ async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolA
     }
 
     const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition.parameters?.properties || {}, 'node');
+    if (toolName !== 'image_write_to_file') _guardBuiltin(toolName, rawArgs || {}, ctx);
     if (!supportsExplicitNode && rawArgs && Object.prototype.hasOwnProperty.call(rawArgs, 'node')) {
         throw new Error(`Builtin tool \`${toolName}\` does not support node selection. Use call_tool with source=\`node\` for remote-node execution.`);
     }
@@ -213,20 +216,25 @@ async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolA
     const executionNode = resolveBuiltinToolPlacement(toolName, toolArgs, targetNode).executionNode;
     const permissionNode = _getToolPermissionNode(toolName, executionNode, targetNode);
 
+    const dispatchContext = {
+        ...ctx,
+        ...(toolName === 'send_file' || toolName === 'image_write_to_file' ? { runtimeNodeId: targetNode } : {}),
+    };
+    _guardBuiltin(toolName, toolArgs, dispatchContext);
     if (ctx.session?.id === sessionId) {
         await checkToolPermissionForSession(ctx.session, toolName, permissionNode, toolArgs);
     } else if (ctx.sessionId) {
         await checkToolPermission(toolName, sessionId, permissionNode, toolArgs);
     }
 
+    const routingSnapshot = ctx.sessionPlacement === 'session-worker' && executionNode !== 'master'
+        && executionNode === currentNode
+        ? { currentNode, ...(typeof ctx.session?.cwd === 'string' ? { cwd: ctx.session.cwd } : {}) }
+        : undefined;
     if (executionNode !== 'master') {
-        return await executeRemoteNodeTool(sessionId, executionNode, toolName, toolArgs);
+        return await executeRemoteNodeTool(sessionId, executionNode, toolName, toolArgs, routingSnapshot);
     }
-
-    return await _dispatchBuiltin(toolName, toolArgs, {
-        ...ctx,
-        ...(toolName === 'send_file' || toolName === 'image_write_to_file' ? { runtimeNodeId: targetNode } : {}),
-    });
+    return await _dispatchBuiltin(toolName, toolArgs, dispatchContext);
 }
 
 async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: boolean) {
@@ -429,8 +437,10 @@ export async function tool_call_tool(args: ToolArgs, ctx: ToolContext) {
         if (!NODE_ENVIRONMENT_BUILTIN_NAMES.includes(ref.name as any)) {
             throw new Error(`Tool \`${ref.name}\` not available on node \`master\``);
         }
+        const dispatchContext = { ...ctx, runtimeNodeId: 'master' };
+        _guardBuiltin(ref.name, toolArgs, dispatchContext);
         await checkToolPermissionForSession(ctx.session, ref.name, 'master', toolArgs);
-        return await _dispatchBuiltin(ref.name, toolArgs, { ...ctx, runtimeNodeId: 'master' });
+        return await _dispatchBuiltin(ref.name, toolArgs, dispatchContext);
     }
     await checkToolPermissionForSession(ctx.session, ref.name, ref.nodeId, toolArgs);
     return await executeRemoteNodeTool(ctx.sessionId, ref.nodeId, ref.name, toolArgs);

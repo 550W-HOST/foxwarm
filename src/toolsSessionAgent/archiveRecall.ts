@@ -1202,6 +1202,15 @@ async function buildRecallVectorQuery(
 }
 
 export async function tool_recall(args: ToolArgs = {}, ctx?: ToolContext) {
+  args = { ...args };
+  if (typeof args.sessionId === 'string') {
+    const sessionId = args.sessionId.trim();
+    if (sessionId) args.sessionId = sessionId; else delete args.sessionId;
+  }
+  if (typeof args.agentName === 'string') {
+    const agentName = args.agentName.trim();
+    if (agentName) args.agentName = agentName; else delete args.agentName;
+  }
   assertNoRemovedQueryArg(args, 'recall');
   assertNoLegacyRecallArgs(args);
   const targetSessionId = args.sessionId || ctx?.sessionId;

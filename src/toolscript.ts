@@ -26,7 +26,7 @@ type ToolContext = {
 
 function assertManagedPlacement(ctx: ToolContext): void {
   if (ctx.sessionPlacement === 'session-worker') {
-    throw new RpcError('SESSION_WORKER_TOOL_UNAVAILABLE', 'ToolScript managed-session operations are not available in Session-worker placement yet.', true);
+    throw new RpcError('SESSION_WORKER_TOOL_UNAVAILABLE', 'SESSION_WORKER_TOOL_UNAVAILABLE: ToolScript managed-session operations are not available in Session-worker placement yet.', true);
   }
 }
 

@@ -91,7 +91,7 @@ test('detached current recall exact targets and aliases match legacy output with
     const legacy = await Promise.all(cases.map(args => tool_recall(args, { sessionId: session.id } as any)));
     (sessionManager as any).getExistingSession = async () => { throw new Error('global source lookup forbidden'); };
     (sessionManager as any).getSession = async () => { throw new Error('global source get forbidden'); };
-    const ctx: any = { sessionId: session.id, session, persistCurrentSession: async () => {} };
+    const ctx: any = { sessionId: session.id, session, persistCurrentSession: async () => {}, sessionPlacement: 'session-worker' };
     const detached = await Promise.all(cases.map(args => tool_recall(args, ctx)));
     assert.deepEqual(detached, legacy);
   } finally {
@@ -179,14 +179,17 @@ test('detached vector scope resolution matches legacy for session, alias, and ag
     const detached = await Promise.all(requests.map(request => resolveMemorySearchOptions(request, ctx)));
     assert.deepEqual(detached, legacy);
 
-    (vector as any).search = async (): Promise<any[]> => [];
+    const vectorOptions: any[] = [];
+    (vector as any).search = async (...callArgs: any[]): Promise<any[]> => { vectorOptions.push(callArgs[3]); return []; };
     for (const args of [
+      { vector_query: 'needle' },
       { vector_query: 'needle', scope: 'current-session' },
       { vector_query: 'needle', scope: 'current-agent' },
-      { vector_query: 'needle', sessionId: session.aliases![0] },
+      { vector_query: 'needle', sessionId: `  ${session.aliases![0]}  `, agentName: ' main ' },
     ]) {
       assert.match(String(await tool_recall(args, ctx)), /No archived source messages or blocks found/);
     }
+    assert.deepEqual(vectorOptions[0], { agent: 'main', preferBlocks: undefined });
     (sessionManager as any).isSessionEffectivelyIsolated = () => true;
     const isolated = await resolveMemorySearchOptions({ scope: 'current-agent' }, ctx);
     assert.equal(isolated.effectiveScope, 'current-session');

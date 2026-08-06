@@ -1278,6 +1278,7 @@ type PreparedToolCall = {
     permissionNode: string;
     result?: any;
     sessionSnapshot?: ToolExecutionSnapshot;
+    placementError?: any;
 };
 
 type ExecutedToolCall = PreparedToolCall & {
@@ -1339,24 +1340,38 @@ async function prepareToolCall(
     const toolFn = (tools as any)[call.name];
     const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const argsPreview = buildToolArgsPreview(call);
-    if (notifyStart) {
-        logger.info({ tool: call.name, args: argsPreview }, 'Executing tool');
-        if (toolContext.broadcast && session.verbose) {
-            toolContext.broadcast(`🛠 *[${call.name}]*: \`${argsPreview}\``, { excludePlatforms: ['webui'] });
-        }
-    }
 
     const toolDefinition = tools.definitions.find((def: any) => def.name === call.name);
     const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition?.parameters?.properties || {}, 'node');
     const nodeParam = supportsExplicitNode ? call.args?.node : undefined;
     const sessionId = session.id;
     const currentNode = snapshot?.currentNode || session.currentNode || 'master';
-    const targetNode = normalizeRequestedNode(nodeParam, currentNode);
     const toolArgs = { ...call.args };
     if (supportsExplicitNode) delete toolArgs.node;
+    let placementError: any;
+    if (call.name !== 'image_write_to_file') {
+        try { tools.assertToolAvailableForPlacement(call.name, toolArgs, toolContext); }
+        catch (error) { placementError = error; }
+    }
+    const targetNode = placementError ? currentNode : normalizeRequestedNode(nodeParam, currentNode);
     const executionNode = tools.resolveBuiltinToolPlacement(call.name, toolArgs, targetNode).executionNode;
     const permissionNode = tools.getToolPermissionNode(call.name, executionNode, targetNode);
-    if (notifyStart) {
+    const guardContext = call.name === 'send_file' || call.name === 'image_write_to_file'
+        ? { ...toolContext, runtimeNodeId: targetNode }
+        : toolContext;
+    if (!placementError) {
+        try { tools.assertToolAvailableForPlacement(call.name, toolArgs, guardContext); }
+        catch (error) { placementError = error; }
+    }
+    const effectiveSnapshot = snapshot || (toolContext.sessionPlacement === 'session-worker'
+        && executionNode !== 'master' && executionNode === currentNode
+        ? { currentNode, ...(typeof session.cwd === 'string' ? { cwd: session.cwd } : {}) }
+        : undefined);
+    if (notifyStart && !placementError) {
+        logger.info({ tool: call.name, args: argsPreview }, 'Executing tool');
+        if (toolContext.broadcast && session.verbose) {
+            toolContext.broadcast(`🛠 *[${call.name}]*: \`${argsPreview}\``, { excludePlatforms: ['webui'] });
+        }
         const startedAt = Date.now();
         await Promise.resolve(toolContext.onToolStart?.({
             id: toolId,
@@ -1381,7 +1396,8 @@ async function prepareToolCall(
         executionNode,
         permissionNode,
         result: call.argsParseError ? buildInvalidToolArgsResult(call) : undefined,
-        sessionSnapshot: snapshot,
+        sessionSnapshot: effectiveSnapshot,
+        placementError,
     };
 }
 
@@ -1394,11 +1410,8 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
     let deferredExecCwdSync: { nextCwd: string } | undefined;
 
     try {
+        if (prepared.placementError) throw prepared.placementError;
         if (!result?.error) {
-            tools.assertToolAvailableForPlacement(prepared.call.name, prepared.toolArgs,
-                prepared.call.name === 'send_file' || prepared.call.name === 'image_write_to_file'
-                    ? { ...toolContext, runtimeNodeId: prepared.targetNode }
-                    : toolContext);
             await checkToolPermissionForSession(prepared.sourceSession, prepared.call.name, prepared.permissionNode, prepared.toolArgs);
         }
         if (!result?.error && prepared.executionNode !== 'master') {
@@ -1450,7 +1463,8 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
         imageParts = normalizedImages.imageParts;
         result = normalizedImages.result;
     } catch (error: any) {
-        result = { error: error?.message || String(error) };
+        result = { error: error?.message || String(error), ...(error?.code ? { code: error.code } : {}),
+            ...(error?.retryable === true ? { retryable: true } : {}) };
         imageParts = [];
     }
 

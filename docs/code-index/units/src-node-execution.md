@@ -17,11 +17,11 @@ Provides the versioned RPC boundary for model-tool execution over a connected re
 
 ## Boundary
 
-Requests contain only `sourceSessionId`, a non-master `nodeId`, the dynamic node-domain `toolName`, cloneable args, and an optional bounded `{ currentNode, cwd }` routing snapshot. Responses contain the existing structured remote tool result. Local transport cloning owns request, response, and error parity.
+Requests contain only `sourceSessionId`, a non-master `nodeId`, the dynamic node-domain `toolName`, cloneable args, and an optional bounded `{ currentNode, cwd }` routing snapshot. Worker direct/unified builtins include that snapshot only for the authoritative current remote node; explicit other-node calls omit cwd. Responses contain the existing structured remote tool result. Local transport cloning owns request, response, and error parity.
 
 The handler rejects missing/deleted source sessions, `nodeId=master`, disconnected targets, and names absent from the authenticated node's current advertised tool set. For an isolated source, the target must remain its bound/current node under the existing agent-isolation semantics. Dynamic names are accepted only inside this authenticated Node domain; the service cannot dispatch a builtin, Main-management operation, file-transfer compound, callback, Session patch, history, or queue payload.
 
-Direct adjacent `exec` calls pass the batch's captured node/cwd snapshot. Dynamic explicit node calls omit it, so `NodesManager` sends a cwd only when its authoritative live routing node matches the target; a master-local cwd is not leaked to an explicit remote target.
+Direct adjacent `exec` calls pass the batch's captured node/cwd snapshot. Worker direct non-exec and unified builtins also pass the exact-owner snapshot when they target its current remote node because Main's projection is not authoritative yet. Dynamic explicit node calls omit it, so a cwd is not leaked to an explicitly selected other target.
 
 ## Integration
 
