@@ -5,7 +5,8 @@ import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { ProcessRpcClientTransport, RpcClient } from './rpc';
+import { ProcessRpcClientTransport, ProcessRpcServer, RpcClient, RpcServiceRegistry } from './rpc';
+import { createMainManagementToolServiceHandler, mainManagementToolServiceDescriptor } from './mainManagementToolService';
 import { serializeSessionHistoryPayload } from './session/metadataStore';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { sessionWorkerControlServiceDescriptor } from './sessionWorkerControlService';
@@ -15,7 +16,8 @@ import { SessionWorkerStore } from './sessionWorkerStore';
 import type { Session } from './types';
 import * as llm from './llm';
 import * as sessionManager from './sessionManager';
-import { SESSIONS_FILE } from './config';
+import { SESSIONS_FILE, TIMERS_FILE } from './config';
+import * as timers from './timers';
 
 function baseSession(id: string): Session {
   return {
@@ -233,10 +235,17 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
       FOXWARM_SESSION_WORKER_STORE_PATH: dbPath,
       FOXWARM_TEST_FAIL_WRITE_AT: '2',
       FOXWARM_TEST_FAIL_GOAL: '1',
+      FOXWARM_TEST_WAIT_TOOL: '1',
     },
     serialization: 'advanced',
   });
   const transport = new ProcessRpcClientTransport(child, { generation: ownership.generation });
+  const reverseRegistry = new RpcServiceRegistry();
+  reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler());
+  const reverseServer = new ProcessRpcServer(reverseRegistry, {
+    generation: ownership.generation, peer: child, direction: 'reverse', exitOnDisconnect: false,
+  });
+  reverseServer.start();
   try {
     await transport.waitUntilReady();
     const control = new RpcClient(sessionWorkerControlServiceDescriptor, transport);
@@ -288,6 +297,16 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.equal(afterGoalFault.goalState, undefined);
     assert.match(afterGoalFault.history.at(-1).parts[0].text, /reported tool failure: test goal persistence failure/);
 
+    await sessionManager.getSession(sessionId);
+    store.enqueueIntent(sessionId, 'reverse-wait', 'enqueue', { type: 'user', parts: [{ text: 'wait through reverse RPC' }] });
+    const waitingProjection = await runtime.call('runPending', { limit: 8 });
+    const afterWait = await fs.readJson(statePath);
+    assert.equal(waitingProjection.runtimeState.state, 'waiting');
+    assert.equal(afterWait.meta.wait.reason, 'reverse wait');
+    const waitTimer = (await fs.readJson(TIMERS_FILE)).timers.find((timer: any) => timer.waitTimeoutId === afterWait.meta.wait.id);
+    assert.equal(waitTimer?.waitTimeoutSeconds, 30);
+    if (waitTimer) await timers.deleteTimer(waitTimer.id, sessionId);
+
     const cursorBeforeInvalid = store.getOwnership(sessionId).mailboxCursor;
     store.enqueueIntent(sessionId, 'invalid-item', 'enqueue', { type: 'obsolete-kind', parts: [{ text: 'bad' }] });
     await assert.rejects(() => runtime.call('runPending', { limit: 8 }), assertRpcCode('SESSION_WORKER_INVALID_QUEUE_ITEM'));
@@ -298,6 +317,8 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.throws(() => store.enqueueIntent(sessionId, 'accessor', 'enqueue', accessor), /enumerable data properties/);
   } finally {
     try { await transport.drain(2_000); } catch {}
+    try { await reverseServer.drain(2_000); } catch {}
+    reverseServer.close();
     transport.close();
     if (child.exitCode === null && child.signalCode === null) {
       const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));

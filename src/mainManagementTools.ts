@@ -2,6 +2,7 @@ import {
   LocalRpcTransport,
   RpcClient,
   RpcError,
+  type RpcTransport,
   RpcServiceRegistry,
 } from './rpc';
 import {
@@ -13,10 +14,11 @@ import {
 } from './mainManagementToolService';
 import type { ToolArgs, ToolContext } from './tools/helpers';
 
-let transport: LocalRpcTransport | undefined;
+let transport: RpcTransport | undefined;
 let client: RpcClient<typeof mainManagementToolServiceDescriptor> | undefined;
 let initializing: Promise<void> | undefined;
 let terminalShutdown = false;
+let placement: 'local' | 'child-reverse' = 'local';
 
 function assertNotTerminallyShutDown(): void {
   if (terminalShutdown) {
@@ -24,12 +26,24 @@ function assertNotTerminallyShutDown(): void {
   }
 }
 
-export async function initializeMainManagementTools(): Promise<void> {
+export async function initializeMainManagementTools(options: {
+  transport?: RpcTransport;
+  placement?: 'child-reverse';
+} = {}): Promise<void> {
   assertNotTerminallyShutDown();
-  if (client) return;
+  if (client) {
+    if (options.transport && transport !== options.transport) throw new RpcError('MAIN_MANAGEMENT_PLACEMENT_LOCKED', 'Main management tool placement is already initialized.');
+    return;
+  }
   if (!initializing) {
     initializing = Promise.resolve().then(() => {
       assertNotTerminallyShutDown();
+      if (options.transport) {
+        transport = options.transport;
+        placement = options.placement || 'child-reverse';
+        client = new RpcClient(mainManagementToolServiceDescriptor, options.transport);
+        return;
+      }
       const registry = new RpcServiceRegistry();
       registry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler());
       const nextTransport = new LocalRpcTransport(registry, { maxPendingRequests: 128 });
@@ -81,8 +95,8 @@ export const tool_list_timers = (args: ToolArgs, ctx?: ToolContext) => executeMa
 export const tool_update_timer = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('update_timer', args, ctx);
 export const tool_delete_timer = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('delete_timer', args, ctx);
 
-export function getMainManagementToolServiceStatus(): { placement: 'local'; ready: boolean } {
-  return { placement: 'local', ready: !!client };
+export function getMainManagementToolServiceStatus(): { placement: 'local' | 'child-reverse'; ready: boolean } {
+  return { placement, ready: !!client };
 }
 
 export async function shutdownMainManagementTools(timeoutMs = 10_000): Promise<void> {
@@ -113,4 +127,5 @@ export function resetMainManagementToolsForTests(): void {
     throw new RpcError('MAIN_MANAGEMENT_TEST_RESET_ACTIVE', 'Shut down the Main Management tool service before resetting tests.');
   }
   terminalShutdown = false;
+  placement = 'local';
 }

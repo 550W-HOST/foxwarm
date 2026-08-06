@@ -5,14 +5,14 @@ Secondary files: src/tools.ts, src/tools/toolsChannelNaming.test.ts, src/timers.
 
 ## Purpose
 
-Provides the versioned local RPC boundary for a closed first set of tools whose mutable state is owned by the main process. Current direct builtin calls, unified builtin calls, and ToolScript nested calls all reach the same local service; no child-to-parent transport is wired yet.
+Provides the versioned RPC boundary for a closed first set of tools whose mutable state is owned by Main. Main-local direct/unified/ToolScript calls retain the LocalRpcTransport; an activated Session worker injects a reverse process transport into the same client/descriptor for timeout-wait scheduling.
 
 ## Key exports
 
 - `mainManagementToolServiceDescriptor` — version 1 descriptor with closed `execute` and separate internal `scheduleWaitTimeout` methods.
 - `MAIN_MANAGEMENT_TOOL_OPERATIONS` — exact allowlist: `send_to_session`, `send_to_channel`, `list_agents`, and timer CRUD.
 - `createMainManagementToolServiceHandler()` — validates source identity and operation, then invokes the existing authoritative raw handler.
-- `initializeMainManagementTools()` / `shutdownMainManagementTools()` — local transport lifecycle and one-way terminal graceful drain.
+- `initializeMainManagementTools()` / `shutdownMainManagementTools()` — placement-injectable local or child-reverse client lifecycle and one-way terminal graceful drain.
 - `resetMainManagementToolsForTests()` — explicit test-only reset after a completed terminal shutdown.
 - `executeMainManagementTool()` — placement-neutral local caller used by the seven public tool wrappers.
 - `scheduleMainWaitTimeout()` — placement-neutral caller for the exact internal wait-timeout DTO; it does not expand the model-operation allowlist.
@@ -26,7 +26,7 @@ The separate internal wait-timeout method accepts exactly `{ sourceSessionId, wa
 
 The handler rejects missing/deleted source sessions before dispatch. It reconstructs only `{ sessionId }` as the trusted tool context; isolation, relation, channel, target-session, and timer-scope checks remain in the existing raw handlers. The switch reads module exports at call time so established test/runtime replacement seams are not frozen during service initialization.
 
-This boundary has no arbitrary builtin dispatch, Session/history/queue payload, mutable patch, callback, generic registry, capability negotiation, retry/outbox protocol, process reverse transport, or Session-worker caller.
+This boundary has no arbitrary builtin dispatch, Session/history/queue payload, mutable patch, callback, capability negotiation, retry/outbox protocol, or fallback from child reverse placement to a child-local handler. Only the existing descriptor is registered on Main's per-worker reverse server; other Node/MCP/vector/SessionRuntime services remain unwired.
 
 Production shutdown sets a terminal fence before awaiting initialization or drain. An in-flight initializer must observe that fence or publish a transport that shutdown then drains and closes; later initialize/execute calls cannot recreate the service before process exit. Same-process reuse is available only through the explicitly test-only reset after no client, transport, or initializer remains.
 
@@ -37,6 +37,7 @@ Production shutdown sets a terminal fence before awaiting initialization or drai
 - `src/tools/unifiedSearch.ts` executes builtin calls through `tools.callTool`, reaching the same service.
 - ToolScript nested calls continue through the existing unified `call_tool` wrapper and require no private registry.
 - `src/index.ts` initializes the local service after SessionRuntime and drains it during graceful shutdown.
+- `src/sessionWorker.ts` injects the reverse client before activation/run; `tool_wait` with a timeout is the first real child caller of the named `scheduleWaitTimeout` method.
 
 ## Tests
 

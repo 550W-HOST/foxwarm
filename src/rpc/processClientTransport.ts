@@ -11,35 +11,12 @@ import {
   RpcError,
   RpcEventListener,
   RpcServiceDescriptor,
-  SerializedRpcError,
 } from './types';
 
 type RpcReadyMessage = {
   kind: 'rpc-ready'; protocolVersion: number; buildId: string; generation: number;
   services: Array<{ name: string; version: number }>;
 };
-type RpcRequestMessage = {
-  kind: 'rpc-request'; protocolVersion: number; buildId: string; generation: number;
-  requestId: string; traceId: string; service: string; serviceVersion: number; method: string;
-  deadlineAt?: number; input: unknown;
-};
-type RpcResponseMessage = {
-  kind: 'rpc-response'; protocolVersion: number; buildId: string; generation: number;
-  requestId: string; result?: unknown; error?: SerializedRpcError;
-};
-type RpcCancelMessage = { kind: 'rpc-cancel'; generation: number; requestId: string };
-type RpcDrainMessage = { kind: 'rpc-drain'; generation: number; requestId: string; deadlineAt: number };
-type RpcDrainedMessage = {
-  kind: 'rpc-drained'; protocolVersion: number; buildId: string; generation: number; requestId: string; error?: SerializedRpcError;
-};
-type RpcEventMessage = {
-  kind: 'rpc-event'; protocolVersion: number; buildId: string; generation: number;
-  sequence: number; service: string; serviceVersion: number; event: string; traceId: string; payload: unknown;
-};
-type RpcEventAckMessage = { kind: 'rpc-event-ack'; generation: number; sequence: number };
-type RpcWireMessage = RpcReadyMessage | RpcRequestMessage | RpcResponseMessage | RpcCancelMessage
-  | RpcDrainMessage | RpcDrainedMessage | RpcEventMessage | RpcEventAckMessage;
-
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
@@ -51,7 +28,10 @@ export type ProcessRpcClientOptions = {
   buildId?: string;
   readyTimeoutMs?: number;
   maxPendingRequests?: number;
+  direction?: 'forward' | 'reverse';
 };
+
+type IpcClientPeer = ChildProcess | (NodeJS.Process & { send?: NodeJS.Process['send']; connected?: boolean });
 
 export class ProcessRpcClientTransport implements RpcTransport {
   private readonly generation: number;
@@ -69,11 +49,14 @@ export class ProcessRpcClientTransport implements RpcTransport {
   private closed = false;
   private terminalError?: RpcError;
 
-  constructor(private readonly child: ChildProcess, options: ProcessRpcClientOptions) {
+  private readonly direction: 'forward' | 'reverse';
+
+  constructor(private readonly child: IpcClientPeer, options: ProcessRpcClientOptions) {
     this.generation = options.generation;
     this.buildId = options.buildId || DEFAULT_RPC_BUILD_ID;
     this.readyTimeoutMs = options.readyTimeoutMs ?? 10_000;
     this.maxPendingRequests = options.maxPendingRequests ?? 256;
+    this.direction = options.direction || 'forward';
     this.readyPromise = new Promise<RpcReadyMessage>((resolve, reject) => {
       this.resolveReady = resolve;
       this.rejectReady = reject;
@@ -82,6 +65,7 @@ export class ProcessRpcClientTransport implements RpcTransport {
     child.once('error', this.onChildError);
     child.once('disconnect', this.onChildDisconnect);
     child.once('exit', this.onChildExit);
+    if (this.direction === 'reverse') this.send({ kind: 'rpc-reverse-init', generation: this.generation } as any);
   }
 
   async waitUntilReady(): Promise<void> {
@@ -112,6 +96,8 @@ export class ProcessRpcClientTransport implements RpcTransport {
       throw new RpcError('RPC_DRAINING', `RPC service ${descriptor.name} is draining.`, true);
     }
     await this.waitUntilReady();
+    if (this.terminalError) throw this.terminalError;
+    if (this.closed || this.draining) throw new RpcError('RPC_DRAINING', `RPC service ${descriptor.name} is draining.`, true);
     this.assertServiceAvailable(descriptor);
     // Validate/clone before allocating a pending slot, abort listener, or
     // deadline timer. Invalid DTO attempts therefore cannot consume capacity.
@@ -132,7 +118,7 @@ export class ProcessRpcClientTransport implements RpcTransport {
     return new Promise<unknown>((resolve, reject) => {
       let timer: NodeJS.Timeout | undefined;
       const abort = () => {
-        this.send({ kind: 'rpc-cancel', generation: this.generation, requestId });
+        this.send({ kind: this.kind('rpc-cancel'), generation: this.generation, requestId } as any);
         this.rejectPending(requestId, options.signal?.reason instanceof Error
           ? options.signal.reason
           : new RpcError('RPC_CANCELLED', 'RPC request cancelled.', true));
@@ -140,7 +126,7 @@ export class ProcessRpcClientTransport implements RpcTransport {
       options.signal?.addEventListener('abort', abort, { once: true });
       if (deadlineAt !== undefined) {
         timer = setTimeout(() => {
-          this.send({ kind: 'rpc-cancel', generation: this.generation, requestId });
+          this.send({ kind: this.kind('rpc-cancel'), generation: this.generation, requestId } as any);
           this.rejectPending(requestId, new RpcError('RPC_DEADLINE_EXCEEDED', 'RPC request deadline exceeded.', true));
         }, Math.max(0, deadlineAt - Date.now()));
         timer.unref?.();
@@ -155,7 +141,7 @@ export class ProcessRpcClientTransport implements RpcTransport {
       });
       try {
         this.send({
-          kind: 'rpc-request',
+          kind: this.kind('rpc-request'),
           protocolVersion: RPC_PROTOCOL_VERSION,
           buildId: this.buildId,
           generation: this.generation,
@@ -176,6 +162,7 @@ export class ProcessRpcClientTransport implements RpcTransport {
   }
 
   subscribe(descriptor: RpcServiceDescriptor, listener: RpcEventListener<any>): () => void {
+    if (this.direction === 'reverse') throw new RpcError('RPC_EVENTS_UNSUPPORTED', 'Reverse process RPC does not support events.');
     const key = this.serviceKey(descriptor.name, descriptor.version);
     const listeners = this.listeners.get(key) || new Set<RpcEventListener<any>>();
     listeners.add(listener);
@@ -202,7 +189,7 @@ export class ProcessRpcClientTransport implements RpcTransport {
       }, timeoutMs);
       timer.unref?.();
       this.drainPending = { requestId, resolve, reject, timer };
-      this.send({ kind: 'rpc-drain', generation: this.generation, requestId, deadlineAt: Date.now() + timeoutMs });
+      this.send({ kind: this.kind('rpc-drain'), generation: this.generation, requestId, deadlineAt: Date.now() + timeoutMs } as any);
     });
   }
 
@@ -226,18 +213,18 @@ export class ProcessRpcClientTransport implements RpcTransport {
   }
 
   private readonly onMessage = (raw: unknown): void => {
-    const message = raw as RpcWireMessage;
+    const message = raw as any;
     if (!message || typeof message !== 'object' || (message as any).generation !== this.generation) return;
-    if (message.kind === 'rpc-ready') {
+    if (message.kind === this.kind('rpc-ready')) {
       if (message.protocolVersion !== RPC_PROTOCOL_VERSION || message.buildId !== this.buildId) {
         this.rejectReady(new RpcError('RPC_PROTOCOL_MISMATCH', 'RPC child protocol or build does not match.'));
         return;
       }
-      this.ready = message;
+      this.ready = message as RpcReadyMessage;
       this.resolveReady(message);
       return;
     }
-    if (message.kind === 'rpc-response') {
+    if (message.kind === this.kind('rpc-response')) {
       const pending = this.pending.get(message.requestId);
       if (!pending) return;
       this.pending.delete(message.requestId);
@@ -246,7 +233,7 @@ export class ProcessRpcClientTransport implements RpcTransport {
       else pending.resolve(cloneRpcDto(message.result));
       return;
     }
-    if (message.kind === 'rpc-event') {
+    if (message.kind === this.kind('rpc-event')) {
       const key = this.serviceKey(message.service, message.serviceVersion);
       for (const listener of this.listeners.get(key) || []) {
         listener(message.event, cloneRpcDto(message.payload), {
@@ -255,10 +242,10 @@ export class ProcessRpcClientTransport implements RpcTransport {
           sequence: message.sequence,
         });
       }
-      this.send({ kind: 'rpc-event-ack', generation: this.generation, sequence: message.sequence });
+      this.send({ kind: this.kind('rpc-event-ack'), generation: this.generation, sequence: message.sequence } as any);
       return;
     }
-    if (message.kind === 'rpc-drained' && this.drainPending?.requestId === message.requestId) {
+    if (message.kind === this.kind('rpc-drained') && this.drainPending?.requestId === message.requestId) {
       const pending = this.drainPending;
       this.drainPending = undefined;
       clearTimeout(pending.timer);
@@ -312,11 +299,15 @@ export class ProcessRpcClientTransport implements RpcTransport {
     return `${name}@${version}`;
   }
 
-  private send(message: RpcWireMessage, callback?: (error: Error | null) => void): void {
-    if (!this.child.connected || !this.child.send) {
+  private kind(kind: string): string {
+    return this.direction === 'reverse' ? kind.replace('rpc-', 'rpc-reverse-') : kind;
+  }
+
+  private send(message: any, callback?: (error: Error | null) => void): void {
+    if (this.child.connected === false || !this.child.send) {
       callback?.(new Error('RPC child IPC is disconnected.'));
       return;
     }
-    this.child.send(message, (error) => callback?.(error || null));
+    (this.child.send as any).call(this.child, message, (error: Error | null) => callback?.(error || null));
   }
 }

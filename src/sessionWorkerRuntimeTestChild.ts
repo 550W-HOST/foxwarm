@@ -1,7 +1,8 @@
 import { logger } from './common';
+import { initializeMainManagementTools, shutdownMainManagementTools } from './mainManagementTools';
 import * as llm from './llm';
 import { initLlmRequestJournal } from './llmRequestJournal';
-import { ProcessRpcServer, RpcServiceRegistry } from './rpc';
+import { ProcessRpcClientTransport, ProcessRpcServer, RpcServiceRegistry } from './rpc';
 import { writeAuthoritativeSessionState } from './session/stateFile';
 import { readSessionHistorySnapshot } from './session/metadataStore';
 import { initArchiveStore } from './session/archiveStore';
@@ -15,6 +16,7 @@ import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity
 import { createSessionWorkerRuntimeServiceHandler, sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { tool_set_goal } from './toolsSessionAgent/settings';
+import { tool_wait } from './toolsSessionAgent/interSession';
 
 async function start(): Promise<void> {
   const sessionId = process.env.FOXWARM_SESSION_WORKER_SESSION_ID!;
@@ -39,6 +41,14 @@ async function start(): Promise<void> {
         return { text: 'reported tool failure' };
       }
     }
+    if (process.env.FOXWARM_TEST_WAIT_TOOL === '1' && chatCount === 3) {
+      await tool_wait(
+        { reason: 'reverse wait', timeoutSeconds: 30 },
+        { sessionId: session.id, session, persistCurrentSession: () => options.currentSessionEffects.persistSession(session) } as any,
+      );
+      await options.appendMessage({ role: 'model', parts: [{ text: 'reverse wait scheduled' }] });
+      return { text: 'reverse wait scheduled' };
+    }
     await options.appendMessage({ role: 'model', parts: [{ text: 'deterministic child answer' }] });
     return { text: 'deterministic child answer' };
   };
@@ -46,6 +56,9 @@ async function start(): Promise<void> {
   const store = new SessionWorkerStore(storePath); store.open();
   const identity = { sessionId, generation, incarnationId, pid: process.pid, processIdentity };
   const gate = new SessionWorkerActivationGate();
+  const reverseTransport = new ProcessRpcClientTransport(process, { generation, direction: 'reverse' });
+  await reverseTransport.waitUntilReady();
+  await initializeMainManagementTools({ transport: reverseTransport, placement: 'child-reverse' });
   const host = new SessionWorkerHost(identity, store, {
     persistence: {
       readState: async id => {
@@ -76,7 +89,7 @@ async function start(): Promise<void> {
     gate,
   ));
   registry.register(sessionWorkerRuntimeServiceDescriptor, createSessionWorkerRuntimeServiceHandler(gate, host));
-  new ProcessRpcServer(registry, { generation, exitOnDrain: true, onDrain: () => store.close() }).start();
+  new ProcessRpcServer(registry, { generation, exitOnDrain: true, onDrain: async () => { await shutdownMainManagementTools(); store.close(); } }).start();
 }
 
 void start().catch(error => {

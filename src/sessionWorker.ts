@@ -1,5 +1,6 @@
 import { logger } from './common';
-import { ProcessRpcServer, RpcServiceRegistry } from './rpc';
+import { initializeMainManagementTools, shutdownMainManagementTools } from './mainManagementTools';
+import { ProcessRpcClientTransport, ProcessRpcServer, RpcServiceRegistry } from './rpc';
 import {
   createSessionWorkerControlServiceHandler,
   SessionWorkerActivationGate,
@@ -26,6 +27,9 @@ async function start(): Promise<void> {
   const identity = { sessionId, generation, incarnationId, pid: process.pid, processIdentity };
   const gate = new SessionWorkerActivationGate();
   const host = new SessionWorkerHost(identity, store);
+  const reverseTransport = new ProcessRpcClientTransport(process, { generation, direction: 'reverse' });
+  await reverseTransport.waitUntilReady();
+  await initializeMainManagementTools({ transport: reverseTransport, placement: 'child-reverse' });
   const registry = new RpcServiceRegistry();
   registry.register(
     sessionWorkerControlServiceDescriptor,
@@ -37,7 +41,7 @@ async function start(): Promise<void> {
   new ProcessRpcServer(registry, {
     generation,
     exitOnDrain: true,
-    onDrain: () => store.close(),
+    onDrain: async () => { await shutdownMainManagementTools(); store.close(); },
   }).start();
 }
 

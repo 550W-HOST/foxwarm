@@ -2,7 +2,8 @@ import { ChildProcess, fork } from 'node:child_process';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { logger } from './common';
-import { ProcessRpcClientTransport, RpcClient, RpcError } from './rpc';
+import { createMainManagementToolServiceHandler, mainManagementToolServiceDescriptor } from './mainManagementToolService';
+import { ProcessRpcClientTransport, ProcessRpcServer, RpcClient, RpcError, RpcServiceRegistry } from './rpc';
 import { SessionWorkerIdentity, sessionWorkerControlServiceDescriptor } from './sessionWorkerControlService';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { SessionWorkerOwnershipRecord, SessionWorkerStore } from './sessionWorkerStore';
@@ -23,11 +24,13 @@ type ProvisionalChild = {
   exitPromise: Promise<void>; resolveExit: () => void;
   exitInfo?: { code: number | null; signal: NodeJS.Signals | null };
   disconnected: boolean; error?: Error; entry?: WorkerEntry;
+  reverseServer?: ProcessRpcServer;
 };
 
 type WorkerEntry = {
   sessionId: string; generation: number; incarnationId: string; processIdentity: string;
   child: ChildProcess; transport: ProcessRpcClientTransport;
+  reverseServer: ProcessRpcServer;
   client?: RpcClient<typeof sessionWorkerControlServiceDescriptor>;
   ready: boolean; activeCalls: number; intentionalStop: boolean; idleTimer?: NodeJS.Timeout;
   exitPromise: Promise<void>; resolveExit: () => void; exitRecordError?: unknown;
@@ -135,6 +138,9 @@ export class SessionWorkerSupervisor {
     const phaseMs = Math.max(1, Math.floor(timeoutMs / 4));
     try { await entry.transport.drain(phaseMs); }
     catch (error) { logger.warn({ err: error, sessionId, pid: entry.child.pid }, 'Session worker RPC drain failed; continuing bounded termination'); }
+    try { await entry.reverseServer.drain(phaseMs); }
+    catch (error) { logger.warn({ err: error, sessionId, pid: entry.child.pid }, 'Session worker reverse RPC drain failed; continuing bounded termination'); }
+    entry.reverseServer.close();
     entry.transport.close();
     let exited = await this.waitForChildExit(entry.child, phaseMs);
     if (!exited) { this.signalChild(entry.child, 'SIGTERM'); exited = await this.waitForChildExit(entry.child, phaseMs); }
@@ -180,6 +186,13 @@ export class SessionWorkerSupervisor {
     // From this point the exact ChildProcess is provisionally owned before any
     // identity read or transport construction can throw.
     const provisional = this.trackProvisionalChild(sessionId, generation, incarnationId, child);
+    const reverseRegistry = new RpcServiceRegistry();
+    reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler());
+    const reverseServer = new ProcessRpcServer(reverseRegistry, {
+      generation, peer: child, direction: 'reverse', exitOnDisconnect: false,
+    });
+    provisional.reverseServer = reverseServer;
+    reverseServer.start();
     let processIdentity: string;
     let transport: ProcessRpcClientTransport;
     try {
@@ -197,7 +210,7 @@ export class SessionWorkerSupervisor {
     let resolveExit!: () => void;
     const exitPromise = new Promise<void>(resolve => { resolveExit = resolve; });
     const entry: WorkerEntry = { sessionId, generation, incarnationId, processIdentity, child, transport,
-      ready: false, activeCalls: 0, intentionalStop: false, exitPromise, resolveExit };
+      reverseServer, ready: false, activeCalls: 0, intentionalStop: false, exitPromise, resolveExit };
     this.entries.set(sessionId, entry);
     provisional.entry = entry;
     this.provisionalChildren.delete(sessionId);
@@ -228,6 +241,7 @@ export class SessionWorkerSupervisor {
       return this.getStatus(sessionId)!;
     } catch (error) {
       entry.intentionalStop = true; entry.client = undefined; transport.close();
+      reverseServer.close();
       await this.terminateChildAndConfirm(entry, 2_000); await entry.exitPromise;
       if (entry.exitRecordError) throw new SessionWorkerLifecycleError(`Session worker ${sessionId} startup cleanup failed.`, [error, entry.exitRecordError]);
       throw error instanceof RpcError ? error : new RpcError('SESSION_WORKER_UNAVAILABLE', `Session worker ${sessionId} failed to start: ${(error as any)?.message || error}`, true);
@@ -237,12 +251,14 @@ export class SessionWorkerSupervisor {
   private handleDisconnect(entry: WorkerEntry): void {
     if (this.entries.get(entry.sessionId) !== entry) return;
     entry.ready = false; entry.client = undefined; entry.transport.close(); this.clearIdleTimer(entry);
+    entry.reverseServer.close();
     if (!entry.intentionalStop && !this.shuttingDown) logger.warn({ sessionId: entry.sessionId, generation: entry.generation, pid: entry.child.pid }, 'Session worker IPC disconnected; waiting for process exit');
   }
 
   private async handleExit(entry: WorkerEntry, code: number | null, signal: NodeJS.Signals | null): Promise<void> {
     if (this.entries.get(entry.sessionId) !== entry) { entry.resolveExit(); return; }
     entry.ready = false; entry.client = undefined; entry.transport.close(); this.clearIdleTimer(entry); this.entries.delete(entry.sessionId);
+    entry.reverseServer.close();
     const reason = `${entry.intentionalStop ? 'stopped' : 'unexpected'}:${code ?? signal ?? 'unknown'}`;
     try { this.options.store.markExitObserved(entry.sessionId, entry.generation, entry.incarnationId, reason); }
     catch (error) {
@@ -301,6 +317,7 @@ export class SessionWorkerSupervisor {
       throw error;
     }
     this.provisionalChildren.delete(provisional.sessionId);
+    provisional.reverseServer?.close();
     try {
       this.options.store.clearUnregisteredCandidate(
         provisional.sessionId,

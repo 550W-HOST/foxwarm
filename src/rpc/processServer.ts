@@ -1,3 +1,4 @@
+import type { ChildProcess } from 'node:child_process';
 import { RpcServiceRegistry } from './registry';
 import {
   buildLinkedAbortController,
@@ -15,6 +16,9 @@ export type ProcessRpcServerOptions = {
   onDrain?: () => Promise<void> | void;
   exitOnDrain?: boolean;
   disconnectCleanupTimeoutMs?: number;
+  peer?: ChildProcess;
+  direction?: 'forward' | 'reverse';
+  exitOnDisconnect?: boolean;
 };
 
 type RequestMessage = {
@@ -22,10 +26,7 @@ type RequestMessage = {
   requestId: string; traceId: string; service: string; serviceVersion: number; method: string;
   deadlineAt?: number; input: unknown;
 };
-type CancelMessage = { kind: 'rpc-cancel'; generation: number; requestId: string };
 type DrainMessage = { kind: 'rpc-drain'; generation: number; requestId: string; deadlineAt: number };
-type EventAckMessage = { kind: 'rpc-event-ack'; generation: number; sequence: number };
-type IncomingMessage = RequestMessage | CancelMessage | DrainMessage | EventAckMessage;
 
 export class ProcessRpcServer {
   private readonly generation: number;
@@ -41,6 +42,8 @@ export class ProcessRpcServer {
   private cleanupPromise?: Promise<void>;
   private intentionalDisconnect = false;
   private disconnectCleanupStarted = false;
+  private readonly peer: any;
+  private readonly direction: 'forward' | 'reverse';
 
   constructor(
     private readonly registry: RpcServiceRegistry,
@@ -49,15 +52,17 @@ export class ProcessRpcServer {
     this.generation = options.generation;
     this.buildId = options.buildId || DEFAULT_RPC_BUILD_ID;
     this.maxPendingEvents = options.maxPendingEvents ?? 256;
+    this.peer = options.peer || process;
+    this.direction = options.direction || 'forward';
   }
 
   start(): void {
     if (this.started) return;
-    if (!process.send) throw new Error('Process RPC server requires a child-process IPC channel.');
+    if (!this.peer.send) throw new Error('Process RPC server requires a child-process IPC channel.');
     this.started = true;
-    process.on('message', this.onMessage);
-    process.once('disconnect', this.onParentDisconnect);
-    this.send({
+    this.peer.on('message', this.onMessage);
+    this.peer.once('disconnect', this.onParentDisconnect);
+    if (this.direction === 'forward') this.send({
       kind: 'rpc-ready',
       protocolVersion: RPC_PROTOCOL_VERSION,
       buildId: this.buildId,
@@ -67,17 +72,19 @@ export class ProcessRpcServer {
   }
 
   private readonly onMessage = (raw: unknown): void => {
-    const message = raw as IncomingMessage;
+    const message = raw as any;
     if (!message || typeof message !== 'object' || message.generation !== this.generation) return;
-    if (message.kind === 'rpc-request') {
+    if (this.direction === 'reverse' && (message as any).kind === 'rpc-reverse-init') {
+      this.sendReady();
+    } else if (message.kind === this.kind('rpc-request')) {
       void this.handleRequest(message);
-    } else if (message.kind === 'rpc-cancel') {
+    } else if (message.kind === this.kind('rpc-cancel')) {
       this.activeRequests.get(message.requestId)?.abort(new RpcError('RPC_CANCELLED', 'RPC request cancelled.', true));
-    } else if (message.kind === 'rpc-drain') {
+    } else if (message.kind === this.kind('rpc-drain')) {
       this.draining = true;
       this.drainRequest = message;
       void this.maybeFinishDrain();
-    } else if (message.kind === 'rpc-event-ack') {
+    } else if (message.kind === this.kind('rpc-event-ack')) {
       this.pendingEventSequences.delete(message.sequence);
     }
   };
@@ -117,7 +124,7 @@ export class ProcessRpcServer {
       );
       if (!linked.controller.signal.aborted) {
         this.send({
-          kind: 'rpc-response',
+          kind: this.kind('rpc-response'),
           protocolVersion: RPC_PROTOCOL_VERSION,
           buildId: this.buildId,
           generation: this.generation,
@@ -137,6 +144,7 @@ export class ProcessRpcServer {
   }
 
   private emit(service: string, serviceVersion: number, event: string, payload: unknown, traceId: string): boolean {
+    if (this.direction === 'reverse') throw new RpcError('RPC_EVENTS_UNSUPPORTED', 'Reverse process RPC does not support events.');
     if (!this.registry.hasEvent(service, serviceVersion, event)) {
       throw new RpcError('RPC_EVENT_NOT_FOUND', `RPC event ${service}.${event} is not registered.`);
     }
@@ -144,7 +152,7 @@ export class ProcessRpcServer {
     const sequence = ++this.eventSequence;
     this.pendingEventSequences.add(sequence);
     this.send({
-      kind: 'rpc-event',
+      kind: this.kind('rpc-event'),
       protocolVersion: RPC_PROTOCOL_VERSION,
       buildId: this.buildId,
       generation: this.generation,
@@ -171,7 +179,7 @@ export class ProcessRpcServer {
       error = caught;
     }
     this.send({
-      kind: 'rpc-drained',
+      kind: this.kind('rpc-drained'),
       protocolVersion: RPC_PROTOCOL_VERSION,
       buildId: this.buildId,
       generation: this.generation,
@@ -180,7 +188,7 @@ export class ProcessRpcServer {
     }, () => {
       if (this.options.exitOnDrain) {
         this.intentionalDisconnect = true;
-        process.off('message', this.onMessage);
+        this.peer.off('message', this.onMessage);
         process.disconnect?.();
       }
     });
@@ -194,7 +202,7 @@ export class ProcessRpcServer {
     if (this.disconnectCleanupStarted) return;
     this.disconnectCleanupStarted = true;
     this.draining = true;
-    process.off('message', this.onMessage);
+    this.peer.off('message', this.onMessage);
     const reason = new RpcError('RPC_PARENT_DISCONNECTED', 'Parent IPC disconnected.', true);
     for (const controller of this.activeRequests.values()) controller.abort(reason);
     void this.cleanupAfterParentDisconnect();
@@ -212,7 +220,7 @@ export class ProcessRpcServer {
       ]);
     } finally {
       if (timer) clearTimeout(timer);
-      process.exit(0);
+      if (this.options.exitOnDisconnect !== false) process.exit(0);
     }
   }
 
@@ -225,7 +233,7 @@ export class ProcessRpcServer {
 
   private respondError(requestId: string, error: unknown): void {
     this.send({
-      kind: 'rpc-response',
+      kind: this.kind('rpc-response'),
       protocolVersion: RPC_PROTOCOL_VERSION,
       buildId: this.buildId,
       generation: this.generation,
@@ -235,10 +243,34 @@ export class ProcessRpcServer {
   }
 
   private send(message: any, callback?: (error: Error | null) => void): void {
-    if (!process.send || !process.connected) {
+    if (!this.peer.send || this.peer.connected === false) {
       callback?.(new Error('Parent IPC is disconnected.'));
       return;
     }
-    process.send(message, (error) => callback?.(error || null));
+    this.peer.send(message, (error: Error | null) => callback?.(error || null));
+  }
+
+  async drain(timeoutMs = 10_000): Promise<void> {
+    this.draining = true;
+    const deadline = Date.now() + timeoutMs;
+    while (this.activeRequests.size > 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+    if (this.activeRequests.size > 0) throw new RpcError('RPC_DRAIN_TIMEOUT', 'Timed out draining process RPC server.', true);
+    await this.runCleanup();
+  }
+
+  close(reason = new RpcError('RPC_CLOSED', 'RPC server closed.', true)): void {
+    this.draining = true;
+    this.peer.off('message', this.onMessage);
+    this.peer.off('disconnect', this.onParentDisconnect);
+    for (const controller of this.activeRequests.values()) controller.abort(reason);
+  }
+
+  private sendReady(): void {
+    this.send({ kind: this.kind('rpc-ready'), protocolVersion: RPC_PROTOCOL_VERSION, buildId: this.buildId,
+      generation: this.generation, services: this.registry.listServices() });
+  }
+
+  private kind(kind: string): string {
+    return this.direction === 'reverse' ? kind.replace('rpc-', 'rpc-reverse-') : kind;
   }
 }
