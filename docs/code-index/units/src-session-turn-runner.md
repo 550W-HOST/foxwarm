@@ -13,7 +13,7 @@ This extraction is behavior-preserving and local-only. One turn-specific `Sessio
 
 - `SessionTurnRunner` — stateful local runner with one per-session reentrancy set.
 - `SessionTurnHost` — non-RPC interface for the runner's current persistence, compact, provider/tool, runtime-event, and channel-delivery effects.
-- `LocalSessionTurnHost` — current in-process implementation; it binds one effects owner and can use one explicit exact Session owner while preserving legacy module-backed behavior when no owner is supplied. A bound host rejects every other ID and every different same-ID Session object before invoking effects.
+- `LocalSessionTurnHost` — in-process implementation shared by Main-local turns and the first child host; it binds one effects owner, can use one explicit exact Session owner plus exact snapshot refresh, and preserves legacy module-backed behavior when no owner is supplied. A bound host rejects every other ID and every different same-ID Session object before invoking effects.
 - `SessionTurnRunner.processSessionQueue(sessionId, options)` — canonical queue claim through final trailing-work recheck.
 - `SessionTurnRunner.processSessionRetry(sessionId)` — direct retry entry into the ordinary turn loop without queue control state.
 - `shouldBroadcastChannelText(text)` — shared final-response visibility predicate.
@@ -43,7 +43,7 @@ This extraction is behavior-preserving and local-only. One turn-specific `Sessio
 - Non-null provider `parts` are cleared only after `llm.chat` returns and has appended them.
 - Only `LlmRequestError` uses terminal provider presentation; other runtime errors retain the existing terminal runtime path.
 - The `finally` path owns Stop handling, managed yield, queued continuation, runtime-state clearing, busy clearing, and final persistence.
-- Local mode remains the only caller at this checkpoint.
+- Main-local mode remains the only production-routed caller. `SessionWorkerHost.runPending` is the first activated real-child caller, but production placement remains gated.
 - The host is an in-process implementation boundary only: no method is an RPC descriptor, serialized DTO, capability negotiation, or future-only worker operation.
 - Current-session effects are also in-process only and carry no Session/history/queue DTO across a boundary. The remaining worker host, delivery, compaction, and tool-placement work stays deferred.
 

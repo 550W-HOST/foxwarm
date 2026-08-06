@@ -87,6 +87,26 @@ test('canonical bounded pending-prefix apply persists JSON before ack and leaves
   });
 });
 
+test('activated turn persistence verifies ownership and writes no mailbox acknowledgement', async () => {
+  await withStore(async store => {
+    const owner = activate(store, 'turn-save');
+    const current = session('turn-save');
+    current.history.push({ role: 'model', parts: [{ text: 'committed turn' }] });
+    let durable: Session | undefined;
+    const persistence = new SessionWorkerPersistence(store, {
+      writeState: async value => { durable = structuredClone(value); },
+    });
+    const projection = await persistence.persistActivated(current, owner.generation, owner.incarnationId);
+    assert.equal(durable?.history.length, 1);
+    assert.equal(projection.messageCount, 1);
+    assert.equal(store.getOwnership('turn-save').mailboxCursor, 0);
+    await assert.rejects(
+      () => persistence.persistActivated(current, owner.generation + 1, owner.incarnationId),
+      (error: any) => error?.code === 'SESSION_WORKER_STALE_GENERATION',
+    );
+  });
+});
+
 test('pending-prefix limit is bounded and an empty prefix is a no-op projection', async () => {
   await withStore(async store => {
     const owner = activate(store, 's');

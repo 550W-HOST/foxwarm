@@ -1,21 +1,23 @@
 # Unit: src-session-worker-runtime
 
-Files: src/sessionWorkerStore.ts, src/sessionWorkerStoreSchema.ts, src/sessionWorkerStableJson.ts, src/sessionWorkerSupervisor.ts, src/sessionWorkerPersistence.ts, src/sessionWorkerControlService.ts, src/sessionWorkerProcessIdentity.ts, src/sessionWorker.ts
-Secondary files: src/sessionWorkerStore.test.ts, src/sessionWorkerSupervisor.test.ts, src/sessionWorkerPersistence.test.ts, src/sessionWorkerStoreConcurrencyChild.ts, src/sessionWorkerCrashParent.ts, src/sessionWorkerHangingChild.ts, src/sessionWorkerStateFileChild.ts
+Files: src/sessionWorkerStore.ts, src/sessionWorkerStoreSchema.ts, src/sessionWorkerStableJson.ts, src/sessionWorkerSupervisor.ts, src/sessionWorkerPersistence.ts, src/sessionWorkerControlService.ts, src/sessionWorkerRuntimeService.ts, src/sessionWorkerHost.ts, src/sessionWorkerProcessIdentity.ts, src/sessionWorker.ts
+Secondary files: src/sessionWorkerStore.test.ts, src/sessionWorkerSupervisor.test.ts, src/sessionWorkerPersistence.test.ts, src/sessionWorkerHost.test.ts, src/sessionWorkerRuntimeTestChild.ts, src/sessionWorkerStoreConcurrencyChild.ts, src/sessionWorkerCrashParent.ts, src/sessionWorkerHangingChild.ts, src/sessionWorkerStateFileChild.ts
 
 ## Purpose
 
-Provides durable ownership/mailbox coordination, save-before-ack authoritative state persistence, a pure bounded projection DTO, and supervised process lifecycle for future per-session workers. The seams are intentionally not wired into production SessionRuntime placement yet: `sessionWorkers:true` continues to fail startup until the complete supported turn path exists.
+Provides durable ownership/mailbox coordination, save-before-ack authoritative state persistence, a pure bounded projection DTO, supervised process lifecycle, and the first activated child caller of the canonical SessionTurnRunner. The child host is intentionally not routed from production SessionRuntime yet: `sessionWorkers:true` continues to fail startup until the complete supported tool/reverse/publication/delivery path exists.
 
 ## Key exports
 
 - `SessionWorkerStore` — SQLite-backed generation/incarnation ownership, durable mailbox intents, acknowledgement cursor, activity, exit, cleanup, and fail-closed cursor reconciliation.
 - `SessionWorkerSupervisor` — one-child-per-session candidate activation, exact-process startup reconciliation, idle release, bounded drain/TERM/KILL, exit confirmation, and optional post-exit restart.
 - `SessionWorkerPersistence` — versioned authoritative JSON replace/legacy upgrade plus canonical pending-prefix apply/save-before-ack recovery; callers choose only a bounded count and cannot supply intent payload rows.
+- `SessionWorkerPersistence.persistActivated()` / `reloadActivated()` — generation/incarnation-verified complete turn-state save without advancing the mailbox cursor, plus exact-owner resync from authoritative JSON after a failed run.
 - `buildSessionWorkerProjection()` — pure cloned bounded DTO builder with no catalog writer or ownership protocol.
 - `sessionWorkerControlServiceDescriptor` — minimal versioned candidate identity/activation/status control service used while the real session service is still being implemented.
+- `SessionWorkerHost` / `sessionWorkerRuntimeServiceDescriptor` — one process-lifetime exact owner, canonical runner, worker-local effects/ExecRuntime, and activated `runPending({limit})` method returning only the bounded projection.
 - `readSessionWorkerProcessIdentity()` — Linux boot-ID plus proc start-tick identity used to distinguish an exact old process from PID reuse.
-- `sessionWorker.ts` — child bootstrap for the control service.
+- `sessionWorker.ts` — child bootstrap for the shared-gate control and runtime services.
 
 ## Durable records
 
@@ -52,7 +54,7 @@ Schema open sets the busy timeout before lock-taking pragmas, migrates known ver
 
 ## Integration status
 
-The store, state persistence coordinator, and supervisor have isolated real-child/crash-boundary tests but are not initialized by `src/index.ts`. Router execution, archive append fencing, event/reverse-service bridges, catalog projection delivery, closed lifecycle handoff, and SessionRuntime routing must land before `sessionWorkers:true` becomes functional.
+The real child registers control plus runtime services behind one activation gate. `runPending` hydrates authoritative JSON once, applies and acknowledges only a validated canonical QueueItem prefix, and runs the shared SessionTurnRunner against that same exact owner. A failed run resynchronizes that object from authoritative JSON before returning the error, so already-durable queued work remains retryable without a new intent. Archive/journal and one per-worker ExecRuntime are initialized in the child; turn saves remain generation-fenced. Real-child tests cover preactivation rejection, mailbox acknowledgement before a retryable turn failure, exact retry consumption, archive/frontier/JSON output, invalid payloads, and cloned projection output. Supervisor/Main routing, reverse services, committed projection application, external delivery, full tool closure, and idle release remain deferred, so production bootstrap still rejects `sessionWorkers:true`.
 
 ## Canonical ownership
 

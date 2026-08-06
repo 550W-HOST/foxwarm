@@ -79,6 +79,33 @@ export class SessionWorkerPersistence {
     return session;
   }
 
+  async persistActivated(
+    session: Session,
+    generation: number,
+    incarnationId: string,
+  ): Promise<SessionWorkerProjection> {
+    this.store.reconcileActivatedMailboxCursor(
+      session.id,
+      generation,
+      incarnationId,
+      session.lastAppliedMailboxId || 0,
+    );
+    await this.writeState(session);
+    return buildSessionWorkerProjection(session);
+  }
+
+  async reloadActivated(
+    session: Session,
+    generation: number,
+    incarnationId: string,
+  ): Promise<SessionWorkerProjection> {
+    const raw = await this.requireState(session.id);
+    this.store.reconcileActivatedMailboxCursor(session.id, generation, incarnationId, this.stateCursor(raw));
+    const hydrated = await hydrateAuthoritativeSessionState(session, raw);
+    if (hydrated.imagesCanonicalized || hydrated.upgradedLegacy) await this.writeState(session);
+    return buildSessionWorkerProjection(session);
+  }
+
   /**
    * Read and apply the next canonical pending prefix. Callers choose only a
    * bounded count; intent rows and payloads always come from SQLite.

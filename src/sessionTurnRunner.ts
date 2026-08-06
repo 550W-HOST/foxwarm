@@ -89,7 +89,11 @@ export interface SessionTurnHost {
 export class LocalSessionTurnHost implements SessionTurnHost {
   private readonly currentSessionEffects: llm.CurrentSessionTurnEffects;
 
-  constructor(effects?: llm.CurrentSessionEffects, private readonly ownerSession?: Session) {
+  constructor(
+    effects?: llm.CurrentSessionEffects,
+    private readonly ownerSession?: Session,
+    private readonly refreshSnapshot?: typeof sessionManager.refreshSessionSnapshot,
+  ) {
     const defaults = llm.createDefaultCurrentSessionEffects();
     effects ||= defaults;
     const turnEffects = effects as Partial<llm.CurrentSessionTurnEffects>;
@@ -161,7 +165,7 @@ export class LocalSessionTurnHost implements SessionTurnHost {
   get queueSessionSystemEvent(): typeof sessionManager.queueSessionSystemEvent { return sessionManager.queueSessionSystemEvent; }
   setActiveSessionRuntimeState(sessionId: string, state: Parameters<typeof sessionManager.setActiveSessionRuntimeState>[1]): void { this.assertOwnerId(sessionId); this.currentSessionEffects.setRuntimeState(sessionId, state); }
   clearActiveSessionRuntimeState(sessionId: string): void { this.assertOwnerId(sessionId); this.currentSessionEffects.clearRuntimeState(sessionId); }
-  get refreshSessionSnapshot(): typeof sessionManager.refreshSessionSnapshot { return sessionManager.refreshSessionSnapshot; }
+  get refreshSessionSnapshot(): typeof sessionManager.refreshSessionSnapshot { return this.refreshSnapshot || sessionManager.refreshSessionSnapshot; }
   get chat(): typeof llm.chat {
     return (parts, session, iteration, options) => {
       this.assertOwnerSession(session);
