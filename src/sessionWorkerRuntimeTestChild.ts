@@ -1,7 +1,10 @@
 import { logger } from './common';
 import * as llm from './llm';
+import { initLlmRequestJournal } from './llmRequestJournal';
 import { ProcessRpcServer, RpcServiceRegistry } from './rpc';
 import { writeAuthoritativeSessionState } from './session/stateFile';
+import { readSessionHistorySnapshot } from './session/metadataStore';
+import { initArchiveStore } from './session/archiveStore';
 import {
   createSessionWorkerControlServiceHandler,
   SessionWorkerActivationGate,
@@ -11,6 +14,7 @@ import { SessionWorkerHost } from './sessionWorkerHost';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { createSessionWorkerRuntimeServiceHandler, sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
 import { SessionWorkerStore } from './sessionWorkerStore';
+import { tool_set_goal } from './toolsSessionAgent/settings';
 
 async function start(): Promise<void> {
   const sessionId = process.env.FOXWARM_SESSION_WORKER_SESSION_ID!;
@@ -18,10 +22,23 @@ async function start(): Promise<void> {
   const storePath = process.env.FOXWARM_SESSION_WORKER_STORE_PATH!;
   const generation = Number(process.env.FOXWARM_SESSION_WORKER_GENERATION);
   const processIdentity = readSessionWorkerProcessIdentity(process.pid)!;
-  const failWriteAt = Number(process.env.FOXWARM_TEST_FAIL_WRITE_AT || 0);
-  let writeCount = 0;
-  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+  const failWrites = new Set(String(process.env.FOXWARM_TEST_FAIL_WRITE_AT || '').split(',').map(Number).filter(Boolean));
+  const failReads = new Set(String(process.env.FOXWARM_TEST_FAIL_READ_AT || '').split(',').map(Number).filter(Boolean));
+  let writeCount = 0; let readCount = 0; let initializeCount = 0; let chatCount = 0; let failedGoal = false;
+  (llm as any).chat = async (parts: any, session: any, _iteration: number, options: any) => {
+    chatCount += 1;
     if (parts) await options.appendMessage({ role: 'user', parts });
+    if (process.env.FOXWARM_TEST_FAIL_GOAL === '1' && chatCount === 2) {
+      try {
+        await tool_set_goal(
+          { goal: 'must-not-commit', remindEvery: 2 },
+          { sessionId: session.id, session, persistCurrentSession: () => options.persistSession(session) } as any,
+        );
+      } catch (error: any) {
+        await options.appendMessage({ role: 'model', parts: [{ text: `reported tool failure: ${error.message}` }] });
+        return { text: 'reported tool failure' };
+      }
+    }
     await options.appendMessage({ role: 'model', parts: [{ text: 'deterministic child answer' }] });
     return { text: 'deterministic child answer' };
   };
@@ -31,11 +48,25 @@ async function start(): Promise<void> {
   const gate = new SessionWorkerActivationGate();
   const host = new SessionWorkerHost(identity, store, {
     persistence: {
+      readState: async id => {
+        readCount += 1;
+        if (failReads.delete(readCount)) throw new Error(`test read failure ${readCount}`);
+        return readSessionHistorySnapshot(id);
+      },
       writeState: async session => {
         writeCount += 1;
-        if (writeCount === failWriteAt) throw new Error(`test write failure ${writeCount}`);
+        if (process.env.FOXWARM_TEST_FAIL_GOAL === '1' && !failedGoal && session.goalState?.goal === 'must-not-commit') {
+          failedGoal = true;
+          throw new Error('test goal persistence failure');
+        }
+        if (failWrites.delete(writeCount)) throw new Error(`test write failure ${writeCount}`);
         await writeAuthoritativeSessionState(session);
       },
+    },
+    initialize: async () => {
+      initializeCount += 1;
+      if (process.env.FOXWARM_TEST_INIT_FAIL_ONCE === '1' && initializeCount === 1) throw new Error('test transient init failure');
+      await Promise.all([initArchiveStore(), initLlmRequestJournal()]);
     },
   });
   const registry = new RpcServiceRegistry();

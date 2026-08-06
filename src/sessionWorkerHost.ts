@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { logger } from './common';
 import { STATE_DIR, getAgentDir } from './config';
 import { createExecRuntime, type ExecRuntime } from './execManager';
 import { initLlmRequestJournal } from './llmRequestJournal';
@@ -6,8 +7,9 @@ import type { CurrentSessionTurnEffects } from './llm';
 import { RpcError } from './rpc';
 import { initArchiveStore } from './session/archiveStore';
 import { refreshSessionSnapshotForSession } from './session/agentMetadata';
+import { getManagedSessionState } from './session/managedState';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './session/metadataStore';
-import { appendSessionMessagesForSession, startSessionWaitForSession, updateSessionBusyStateForSession } from './sessionManager';
+import { applyQueuedItemToWaitState, appendSessionMessagesForSession, startSessionWaitForSession, updateSessionBusyStateForSession } from './sessionManager';
 import { clearActiveSessionRuntimeState, setActiveSessionRuntimeState } from './sessionRuntimeState';
 import { LocalSessionTurnHost, SessionTurnRunner, type SessionTurnHost } from './sessionTurnRunner';
 import {
@@ -19,6 +21,7 @@ import {
 import type { SessionWorkerIdentity } from './sessionWorkerControlService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
 import { isQueueItem, type Message, type Session } from './types';
+import { buildTimestampedSystemMessageParts } from './utils/systemMessageParts';
 
 export type SessionWorkerHostDependencies = {
   persistence?: SessionWorkerPersistenceDependencies;
@@ -32,6 +35,7 @@ export class SessionWorkerHost {
   private runTail: Promise<void> = Promise.resolve();
   private session?: Session;
   private runner?: SessionTurnRunner;
+  private poison?: { original: unknown; resync: unknown };
 
   constructor(
     private readonly identity: SessionWorkerIdentity,
@@ -42,39 +46,56 @@ export class SessionWorkerHost {
   }
 
   async runPending(limit: number): Promise<SessionWorkerProjection> {
-    const run = this.runTail.then(() => this.runPendingSerial(limit));
+    const run = this.serialize(() => this.runPendingSerial(limit));
+    return run;
+  }
+
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.runTail.then(operation);
     this.runTail = run.then(() => {}, () => {});
     return run;
   }
 
   private async runPendingSerial(limit: number): Promise<SessionWorkerProjection> {
     await this.ensureLoaded();
+    await this.ensureHealthy();
     const session = this.session!;
     try {
+      this.assertSupportedQueue(session);
       await this.persistence.applyAndPersistPendingPrefix(
         session,
         this.identity.generation,
         this.identity.incarnationId,
         limit,
         (owner, intents) => {
+          if (intents.some(intent => isQueueItem(intent.payload) && intent.payload.type === 'compact-commit')) {
+            throw new RpcError('SESSION_WORKER_QUEUE_UNSUPPORTED', 'Managed-session and compact-commit queues are not supported by the Session worker yet.', true);
+          }
           for (const intent of intents) {
             if (intent.kind !== 'enqueue' || !isQueueItem(intent.payload)) {
               throw new RpcError('SESSION_WORKER_INVALID_QUEUE_ITEM', 'Session worker mailbox payload is not a current QueueItem.');
             }
-            owner.queue.push(structuredClone(intent.payload));
+            const transition = applyQueuedItemToWaitState(owner, structuredClone(intent.payload));
+            if (transition.action === 'enqueue') owner.queue.push(...transition.items);
           }
         },
       );
       await this.runner!.processSessionQueue(session.id);
     } catch (error) {
-      await this.persistence.reloadActivated(session, this.identity.generation, this.identity.incarnationId);
+      await this.resyncAfterFailure(error);
       throw error;
     }
     return buildSessionWorkerProjection(session);
   }
 
   private async ensureLoaded(): Promise<void> {
-    if (!this.loadPromise) this.loadPromise = this.load();
+    if (!this.loadPromise) {
+      const attempt = this.load();
+      this.loadPromise = attempt;
+      try { await attempt; }
+      catch (error) { if (this.loadPromise === attempt && !this.session) this.loadPromise = undefined; throw error; }
+      return;
+    }
     await this.loadPromise;
   }
 
@@ -82,10 +103,11 @@ export class SessionWorkerHost {
     if (this.dependencies.initialize) await this.dependencies.initialize();
     else await Promise.all([initArchiveStore(), initLlmRequestJournal()]);
     const session = await this.persistence.loadActivated(this.baseSession(), this.identity.generation, this.identity.incarnationId);
-    const execRuntime = this.createExecRuntime(session);
-    await execRuntime.initialize();
-    const effects = this.createEffects(session, execRuntime);
     this.session = session;
+    const execRuntime = this.createExecRuntime(session);
+    try { await execRuntime.initialize(); }
+    catch (error) { throw new RpcError('SESSION_WORKER_INITIALIZATION_FAILED', `Session worker ExecRuntime initialization failed: ${(error as any)?.message || error}`, true); }
+    const effects = this.createEffects(session, execRuntime);
     this.runner = new SessionTurnRunner((this.dependencies.createTurnHost || ((ownerEffects, owner) => new LocalSessionTurnHost(
       ownerEffects,
       owner,
@@ -105,11 +127,14 @@ export class SessionWorkerHost {
   }
 
   private createEffects(session: Session, execRuntime: ExecRuntime): CurrentSessionTurnEffects {
-    const persist = () => this.persistence.persistActivated(session, this.identity.generation, this.identity.incarnationId).then(() => {});
+    const persist = () => this.persistOwner();
     const transactional = async (operation: () => Promise<void>): Promise<void> => {
       const before = captureSessionSemanticState(session);
       try { await operation(); }
-      catch (error) { restoreSessionSemanticState(session, before); throw error; }
+      catch (error) {
+        if (!this.isResyncError(error)) restoreSessionSemanticState(session, before);
+        throw error;
+      }
     };
     const appendMessages = (owner: Session, messages: Message[]) => transactional(async () => {
       this.assertOwner(owner);
@@ -149,17 +174,82 @@ export class SessionWorkerHost {
       getExecTempDir: agent => path.join(getAgentDir(agent), '.temp', 'exec'),
       registryPath: path.join(workerDir, 'running-exec.json'),
       nodeId: 'master',
-      completionDispatcher: async (_entry, _status, message) => {
-        const before = captureSessionSemanticState(session);
-        try {
-          session.queue.push({ type: 'background', parts: [{ system: message }] });
-          await this.persistence.persistActivated(session, this.identity.generation, this.identity.incarnationId);
-        } catch (error) {
-          restoreSessionSemanticState(session, before);
-          throw error;
-        }
-      },
+      completionDispatcher: async (_entry, _status, message) => this.commitExecCompletion(message),
     });
+  }
+
+  private async commitExecCompletion(message: string): Promise<void> {
+    if (!this.runner) {
+      throw new RpcError('SESSION_WORKER_EXEC_RECOVERY_UNSUPPORTED', 'Recovered background exec completion cannot run before the Session worker host is initialized.', true);
+    }
+    await this.serialize(async () => {
+      await this.ensureLoaded();
+      await this.ensureHealthy();
+      const session = this.session!;
+      this.assertSupportedQueue(session);
+      const before = captureSessionSemanticState(session);
+      try {
+        const item = { type: 'background' as const, parts: buildTimestampedSystemMessageParts(message) };
+        const transition = applyQueuedItemToWaitState(session, item);
+        if (transition.action === 'enqueue') session.queue.push(...transition.items);
+        await this.persistOwner();
+      } catch (error) {
+        if (!this.isResyncError(error)) restoreSessionSemanticState(session, before);
+        throw error;
+      }
+    });
+    void this.runPending(256).catch(error => {
+      logger.error({ err: error, sessionId: this.identity.sessionId }, 'Durable exec completion queue processing failed');
+    });
+  }
+
+  private async persistOwner(): Promise<void> {
+    if (this.poison) {
+      const prior = this.poison;
+      await this.ensureHealthy();
+      throw new RpcError('SESSION_WORKER_RESYNCED_RETRY', 'Session worker resynchronized before a later mutation; retry that mutation.', true, {
+        original: this.errorSummary(prior.original), resync: this.errorSummary(prior.resync),
+      });
+    }
+    try {
+      await this.persistence.persistActivated(this.session!, this.identity.generation, this.identity.incarnationId);
+    } catch (error) {
+      try { await this.persistence.reloadActivated(this.session!, this.identity.generation, this.identity.incarnationId); }
+      catch (resync) { this.poison = { original: error, resync }; throw this.resyncError(error, resync); }
+      throw new RpcError('SESSION_WORKER_PERSIST_FAILED', String((error as any)?.message || error), true, {
+        original: this.errorSummary(error), resynced: true,
+      });
+    }
+  }
+
+  private async ensureHealthy(): Promise<void> {
+    if (!this.poison) return;
+    const prior = this.poison;
+    try {
+      await this.persistence.reloadActivated(this.session!, this.identity.generation, this.identity.incarnationId);
+      this.poison = undefined;
+    } catch (resync) {
+      this.poison = { original: prior.original, resync };
+      throw this.resyncError(prior.original, resync);
+    }
+  }
+
+  private async resyncAfterFailure(original: unknown): Promise<void> {
+    if (this.poison) throw this.resyncError(this.poison.original, this.poison.resync);
+    try { await this.persistence.reloadActivated(this.session!, this.identity.generation, this.identity.incarnationId); }
+    catch (resync) { this.poison = { original, resync }; throw this.resyncError(original, resync); }
+  }
+
+  private resyncError(original: unknown, resync: unknown): RpcError {
+    return new RpcError('SESSION_WORKER_RESYNC_REQUIRED', 'Session worker mutation failed and authoritative resynchronization also failed.', true, {
+      original: this.errorSummary(original), resync: this.errorSummary(resync),
+    });
+  }
+  private errorSummary(error: unknown): { code?: string; message: string } {
+    return { ...((error as any)?.code ? { code: String((error as any).code) } : {}), message: String((error as any)?.message || error) };
+  }
+  private isResyncError(error: unknown): boolean {
+    return ['SESSION_WORKER_PERSIST_FAILED', 'SESSION_WORKER_RESYNCED_RETRY', 'SESSION_WORKER_RESYNC_REQUIRED'].includes(String((error as any)?.code || ''));
   }
 
   private baseSession(): Session {
@@ -179,5 +269,10 @@ export class SessionWorkerHost {
   }
   private assertId(sessionId: string): void {
     if (sessionId !== this.identity.sessionId) throw new RpcError('SESSION_WORKER_OWNER_MISMATCH', 'Session worker effect received a different session ID.');
+  }
+  private assertSupportedQueue(session: Session): void {
+    if (getManagedSessionState(session) || session.queue.some(item => item.type === 'compact-commit')) {
+      throw new RpcError('SESSION_WORKER_QUEUE_UNSUPPORTED', 'Managed-session and compact-commit queues are not supported by the Session worker yet.', true);
+    }
   }
 }

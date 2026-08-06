@@ -101,7 +101,7 @@ export interface SessionWaitAllState {
   deferredQueue: QueueItem[];
 }
 
-type WaitQueueTransition =
+export type WaitQueueTransition =
   | { action: 'drop' }
   | { action: 'defer' }
   | { action: 'enqueue'; items: QueueItem[] };
@@ -202,7 +202,7 @@ function markWaitAllSessionSatisfied(waitAll: SessionWaitAllState, sourceSession
   }
 }
 
-function applyQueuedItemToWaitState(session: Session, item: QueueItem): WaitQueueTransition {
+export function applyQueuedItemToWaitState(session: Session, item: QueueItem): WaitQueueTransition {
   const wait = getSessionWaitState(session);
   if (!wait) {
     if (typeof item.waitTimeoutId === 'string') {

@@ -25,7 +25,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 
 ### Queue, wait, and execution coordination
 
-- `enqueueSessionItem` — canonical queue insertion with wait-state and managed-inbox handling.
+- `applyQueuedItemToWaitState`, `enqueueSessionItem` — shared pure wait/drop/defer/enqueue transition plus canonical Main insertion with managed-inbox handling.
 - `claimSessionsForDestructiveLifecycle`, `releaseSessionsForDestructiveLifecycle`, `assertSessionDestructiveMutationAllowed` — bounded process-local WebUI delete coordination; mutation entry points reject late work/relation/channel changes while a claimed subtree is being deleted.
 - `queueSessionEvent`, `queueSessionStructuredEvent`, `queueSessionMessageEvent`, `queueSessionSystemEvent` — typed event wrappers.
 - `updateSessionBusyStateForSession`, `updateSessionBusyState` — exact-owner and current local metadata-backed forms of the same busy/busy-start/runtime-clear/persist/optional-notify transition. Persistence rejection restores the exact prior busy fields without clearing runtime state or notifying; successful release clears runtime only after persistence. Exact turn effects can use full owner persistence whose normal save already emits the state notification; legacy metadata-only callers supply the notification explicitly.

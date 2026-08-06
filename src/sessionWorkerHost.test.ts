@@ -9,6 +9,7 @@ import { ProcessRpcClientTransport, RpcClient } from './rpc';
 import { serializeSessionHistoryPayload } from './session/metadataStore';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { sessionWorkerControlServiceDescriptor } from './sessionWorkerControlService';
+import { SessionWorkerHost } from './sessionWorkerHost';
 import { sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import type { Session } from './types';
@@ -34,6 +35,140 @@ function assertRpcCode(code: string) {
   return (error: any) => error?.code === code;
 }
 
+async function withLocalHost(
+  initial: Session,
+  testBody: (fixture: { host: SessionWorkerHost; store: SessionWorkerStore; session: Session; readDurable: () => Record<string, any> }) => Promise<void>,
+): Promise<void> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-local-worker-host-'));
+  const store = new SessionWorkerStore(path.join(root, 'runtime.sqlite')); store.open();
+  const incarnationId = 'local-host-incarnation';
+  const ownership = store.beginGeneration(initial.id, incarnationId);
+  store.registerCandidate(initial.id, ownership.generation, incarnationId, process.pid, 'local-test-process');
+  store.activateCandidate(initial.id, ownership.generation, incarnationId, process.pid, 'local-test-process');
+  let durable = structuredClone(serializeSessionHistoryPayload(initial));
+  const host = new SessionWorkerHost({
+    sessionId: initial.id, generation: ownership.generation, incarnationId,
+    pid: process.pid, processIdentity: 'local-test-process',
+  }, store, {
+    initialize: async () => {},
+    persistence: {
+      readState: async () => structuredClone(durable),
+      writeState: async session => { durable = structuredClone(serializeSessionHistoryPayload(session)); },
+    },
+  });
+  try {
+    await (host as any).ensureLoaded();
+    (host as any).runner = { processSessionQueue: async () => {} };
+    await testBody({ host, store, session: (host as any).session, readDurable: () => structuredClone(durable) });
+  } finally { store.close(); await fs.remove(root); }
+}
+
+test('worker mailbox reuses canonical wait and waitAll transitions', async () => {
+  const scenarios: Array<{ name: string; wait?: any; items: any[]; queueTypes: string[]; waitPresent: boolean }> = [
+    { name: 'ordinary wait wakes', wait: { id: 'w', startedAt: 1 }, items: [{ type: 'user', parts: [{ text: 'wake' }] }], queueTypes: ['user'], waitPresent: false },
+    { name: 'stale timeout drops', wait: { id: 'w', startedAt: 1 }, items: [{ type: 'background', waitTimeoutId: 'old', parts: [{ system: 'late' }] }], queueTypes: [], waitPresent: true },
+    { name: 'listed waitAll defers', wait: { id: 'w', startedAt: 1, waitAll: { sessions: ['a', 'b'], satisfiedSessions: [], deferredQueue: [] } }, items: [{ type: 'intersession', sourceSessionId: 'a', parts: [{ text: 'a' }] }], queueTypes: [], waitPresent: true },
+    { name: 'listed waitAll completes', wait: { id: 'w', startedAt: 1, waitAll: { sessions: ['a', 'b'], satisfiedSessions: [], deferredQueue: [] } }, items: [{ type: 'intersession', sourceSessionId: 'a', parts: [{ text: 'a' }] }, { type: 'intersession', sourceSessionId: 'b', parts: [{ text: 'b' }] }], queueTypes: ['intersession', 'intersession'], waitPresent: false },
+    { name: 'unrelated waitAll wakes with reminder', wait: { id: 'w', startedAt: 1, waitAll: { sessions: ['a'], satisfiedSessions: [], deferredQueue: [] } }, items: [{ type: 'user', parts: [{ text: 'other' }] }], queueTypes: ['user', 'background'], waitPresent: false },
+    { name: 'active timeout wakes', wait: { id: 'w', startedAt: 1 }, items: [{ type: 'background', waitTimeoutId: 'w', parts: [{ system: 'timeout' }] }], queueTypes: ['background'], waitPresent: false },
+  ];
+  for (const scenario of scenarios) {
+    const initial = baseSession(`wait-${scenario.name.replace(/\W/g, '-')}`); initial.meta.wait = scenario.wait;
+    await withLocalHost(initial, async ({ host, store, session }) => {
+      for (const [index, item] of scenario.items.entries()) store.enqueueIntent(initial.id, `${scenario.name}-${index}`, 'enqueue', item);
+      await host.runPending(32);
+      assert.deepEqual(session.queue.map(item => item.type), scenario.queueTypes, scenario.name);
+      assert.equal(!!session.meta.wait, scenario.waitPresent, scenario.name);
+    });
+  }
+});
+
+test('worker fails managed and compact queues before state write or mailbox acknowledgement', async () => {
+  for (const mode of ['managed', 'existing-compact', 'mailbox-compact'] as const) {
+    const initial = baseSession(`unsupported-${mode}`);
+    if (mode === 'managed') (initial.meta as any).managedSession = { ownerSessionId: 'owner', leaseId: 'lease', revision: 1, pendingInbox: [], openedAt: 1, leaseTouchedAt: 1 };
+    if (mode === 'existing-compact') initial.queue.push({ type: 'compact-commit', request: {} } as any);
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      const before = readDurable();
+      if (mode === 'mailbox-compact') store.enqueueIntent(initial.id, 'compact', 'enqueue', { type: 'compact-commit', request: {} });
+      await assert.rejects(() => host.runPending(8), assertRpcCode('SESSION_WORKER_QUEUE_UNSUPPORTED'));
+      assert.equal(store.getOwnership(initial.id).mailboxCursor, 0);
+      assert.deepEqual(readDurable(), before);
+    });
+  }
+});
+
+test('worker retries a transient pre-hydration initialization failure', async () => {
+  const initial = baseSession('transient-worker-init');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-init-'));
+  const store = new SessionWorkerStore(path.join(root, 'runtime.sqlite')); store.open();
+  const owner = store.beginGeneration(initial.id, 'inc');
+  store.registerCandidate(initial.id, owner.generation, 'inc', process.pid, 'test');
+  store.activateCandidate(initial.id, owner.generation, 'inc', process.pid, 'test');
+  let attempts = 0; let durable = serializeSessionHistoryPayload(initial);
+  const host = new SessionWorkerHost({ sessionId: initial.id, generation: owner.generation, incarnationId: 'inc', pid: process.pid, processIdentity: 'test' }, store, {
+    initialize: async () => { attempts += 1; if (attempts === 1) throw new Error('transient init'); },
+    persistence: { readState: async () => structuredClone(durable), writeState: async session => { durable = serializeSessionHistoryPayload(session); } },
+  });
+  try {
+    await assert.rejects(() => host.runPending(8), /transient init/);
+    await host.runPending(8);
+    assert.equal(attempts, 2);
+  } finally { store.close(); await fs.remove(root); }
+});
+
+test('failed mutation plus failed reload poisons until a later run resynchronizes first', async () => {
+  const initial = baseSession('poisoned-worker-owner');
+  await withLocalHost(initial, async ({ host, session, readDurable }) => {
+    const persistence = (host as any).persistence;
+    const originalWrite = persistence.writeState;
+    const originalRead = persistence.readState;
+    persistence.writeState = async () => { throw new Error('primary write failed'); };
+    persistence.readState = async () => { throw new Error('secondary reload failed'); };
+    session.displayName = 'must-not-survive';
+    await assert.rejects(() => (host as any).persistOwner(), (error: any) => {
+      assert.equal(error.code, 'SESSION_WORKER_RESYNC_REQUIRED');
+      assert.match(error.details.original.message, /primary write failed/);
+      assert.match(error.details.resync.message, /secondary reload failed/);
+      return true;
+    });
+    persistence.writeState = originalWrite;
+    persistence.readState = originalRead;
+    await host.runPending(8);
+    assert.equal(session.displayName, undefined);
+    assert.equal(readDurable().displayName, undefined);
+  });
+});
+
+test('exec completion is serialized after a failed turn and remains one durable wait-aware item', async () => {
+  const initial = baseSession('serialized-exec-completion');
+  initial.meta.wait = { id: 'wait-exec', startedAt: 1 };
+  await withLocalHost(initial, async ({ host, session, readDurable }) => {
+    let calls = 0; let started!: () => void; let failFirst!: () => void;
+    const firstStarted = new Promise<void>(resolve => { started = resolve; });
+    const firstFailure = new Promise<void>(resolve => { failFirst = resolve; });
+    (host as any).runner = {
+      processSessionQueue: async () => {
+        calls += 1;
+        if (calls === 1) { started(); await firstFailure; throw new Error('turn mutation failed'); }
+        throw new Error('scheduled completion processing failed');
+      },
+    };
+    const turn = host.runPending(8);
+    await firstStarted;
+    const completion = (host as any).commitExecCompletion('background exec finished');
+    failFirst();
+    await assert.rejects(() => turn, /turn mutation failed/);
+    await completion;
+    for (let index = 0; index < 20 && calls < 2; index += 1) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(calls, 2);
+    assert.equal(session.meta.wait, undefined);
+    assert.equal(session.queue.length, 1);
+    assert.match(String((session.queue[0] as any).parts?.[0]?.system), /foxwarm-system kind="system" time=/);
+    assert.equal(readDurable().queue.length, 1);
+  });
+});
+
 test('real activated child runs durable mailbox through canonical SessionTurnRunner', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-host-'));
   const sessionId = 'worker-host-real-child';
@@ -52,6 +187,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
       FOXWARM_SESSION_WORKER_INCARNATION_ID: incarnationId,
       FOXWARM_SESSION_WORKER_STORE_PATH: dbPath,
       FOXWARM_TEST_FAIL_WRITE_AT: '2',
+      FOXWARM_TEST_FAIL_GOAL: '1',
     },
     serialization: 'advanced',
   });
@@ -100,6 +236,12 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     projection.stats.totalInputTokens = 999;
     const clonedProjection = await runtime.call('runPending', { limit: 8 });
     assert.notEqual(clonedProjection.stats.totalInputTokens, 999);
+
+    store.enqueueIntent(sessionId, 'goal-fault', 'enqueue', { type: 'user', parts: [{ text: 'set-goal-fault' }] });
+    await runtime.call('runPending', { limit: 8 });
+    const afterGoalFault = await fs.readJson(statePath);
+    assert.equal(afterGoalFault.goalState, undefined);
+    assert.match(afterGoalFault.history.at(-1).parts[0].text, /Error: test goal persistence failure/);
 
     const cursorBeforeInvalid = store.getOwnership(sessionId).mailboxCursor;
     store.enqueueIntent(sessionId, 'invalid-item', 'enqueue', { type: 'obsolete-kind', parts: [{ text: 'bad' }] });
