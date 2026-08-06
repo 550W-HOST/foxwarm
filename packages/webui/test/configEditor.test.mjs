@@ -182,3 +182,14 @@ test('invalid partial YAML returns null so the editor can retain its last valid 
   assert.deepEqual(completions.getModelsCompletionKind(['providers:', '  route:', '    targets:', '      - one'], 3), 'targets')
   assert.equal(completions.getModelsCompletionKind(['providers:', '  route:', '    providerType: failover'], 2), null)
 })
+
+test('YAML scalar completion words retain model punctuation', () => {
+  assert.deepEqual(
+    'default: gpt-5.6-sol/provider'.match(completions.YAML_SCALAR_WORD_PATTERN),
+    ['default', 'gpt-5.6-sol/provider'],
+  )
+  assert.deepEqual(
+    '    providerType: openai-completions # comment'.match(completions.YAML_SCALAR_WORD_PATTERN),
+    ['providerType', 'openai-completions', 'comment'],
+  )
+})

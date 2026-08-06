@@ -80,6 +80,23 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
   )
 }
 
+type SaveResult = { kind: 'success' | 'error'; message: string }
+
+function SaveFeedback({ section, result }: { section: 'models' | 'config'; result: SaveResult | null }) {
+  if (!result) return null
+  const isError = result.kind === 'error'
+  return (
+    <div
+      role={isError ? 'alert' : 'status'}
+      aria-live={isError ? 'assertive' : 'polite'}
+      data-save-feedback={section}
+      className={`min-w-0 basis-full break-words text-sm sm:basis-auto ${isError ? 'text-red-600 dark:text-red-300' : 'text-green-700 dark:text-green-300'}`}
+    >
+      {result.message}
+    </div>
+  )
+}
+
 function normalizeWeixinQrPayload(value: string): { imageSrc: string | null; raw: string } {
   const trimmed = value.trim()
   if (!trimmed) return { imageSrc: null, raw: '' }
@@ -93,45 +110,96 @@ function normalizeWeixinQrPayload(value: string): { imageSrc: string | null; raw
 export default function SetupView({ forced = false, onClose, onSetupChanged, focusModelsRequest = 0 }: SetupViewProps) {
   const [status, setStatus] = useState<SetupStatus | null>(null)
   const [loading, setLoading] = useState(true)
-  const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const [rawModelsYaml, setRawModelsYaml] = useState(DEFAULT_MODELS_YAML)
   const [configYaml, setConfigYaml] = useState(DEFAULT_CONFIG_YAML)
   const [savingModels, setSavingModels] = useState(false)
   const [savingConfig, setSavingConfig] = useState(false)
+  const [modelsSaveResult, setModelsSaveResult] = useState<SaveResult | null>(null)
+  const [configSaveResult, setConfigSaveResult] = useState<SaveResult | null>(null)
   const [weixinBusy, setWeixinBusy] = useState(false)
   const [weixinSessionKey, setWeixinSessionKey] = useState('')
   const [weixinQrSrc, setWeixinQrSrc] = useState('')
   const [weixinRawPairingUrl, setWeixinRawPairingUrl] = useState('')
   const [weixinMessage, setWeixinMessage] = useState<string | null>(null)
   const modelsSectionRef = useRef<HTMLElement | null>(null)
+  const rawModelsYamlRef = useRef(rawModelsYaml)
+  const configYamlRef = useRef(configYaml)
+  const modelsRevisionRef = useRef(0)
+  const configRevisionRef = useRef(0)
+  const modelsSaveGenerationRef = useRef(0)
+  const configSaveGenerationRef = useRef(0)
+  const loadGenerationRef = useRef(0)
+
+  rawModelsYamlRef.current = rawModelsYaml
+  configYamlRef.current = configYaml
 
   const modelConfigured = !!status?.models.exists
   const channelAvailable = (status?.channels || []).some((channel) => channel.running) || true // WebUI itself is available when this page is open.
   const canLeave = !forced || (modelConfigured && channelAvailable)
   const channelRows = useMemo(() => status?.channels || [], [status])
 
-  const loadStatus = async () => {
+  const updateModelsYaml = (nextValue: string) => {
+    if (rawModelsYamlRef.current === nextValue) return
+    rawModelsYamlRef.current = nextValue
+    modelsRevisionRef.current += 1
+    setRawModelsYaml(nextValue)
+    setModelsSaveResult(null)
+  }
+
+  const updateConfigYaml = (nextValue: string) => {
+    if (configYamlRef.current === nextValue) return
+    configYamlRef.current = nextValue
+    configRevisionRef.current += 1
+    setConfigYaml(nextValue)
+    setConfigSaveResult(null)
+  }
+
+  const loadStatus = async ({
+    clearSaveResults = true,
+    hydrateModels = true,
+    hydrateConfig = true,
+    expectedModelsRevision = modelsRevisionRef.current,
+    expectedConfigRevision = configRevisionRef.current,
+  }: {
+    clearSaveResults?: boolean
+    hydrateModels?: boolean
+    hydrateConfig?: boolean
+    expectedModelsRevision?: number
+    expectedConfigRevision?: number
+  } = {}) => {
+    const loadGeneration = ++loadGenerationRef.current
+    if (clearSaveResults) {
+      modelsSaveGenerationRef.current += 1
+      configSaveGenerationRef.current += 1
+      setSavingModels(false)
+      setSavingConfig(false)
+      setModelsSaveResult(null)
+      setConfigSaveResult(null)
+    }
     setLoading(true)
     setError(null)
     try {
       const res = await fetch(`${API_BASE_PATH}/setup/status`)
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Failed to load setup status (${res.status})`)
+      if (loadGeneration !== loadGenerationRef.current) return
       setStatus(data)
-      if (typeof data?.models?.rawYaml === 'string' && data.models.rawYaml.trim()) {
-        setRawModelsYaml(data.models.rawYaml)
+      if (hydrateModels && modelsRevisionRef.current === expectedModelsRevision && typeof data?.models?.rawYaml === 'string' && data.models.rawYaml.trim()) {
+        updateModelsYaml(data.models.rawYaml)
       }
-      if (typeof data?.config?.rawYaml === 'string') {
-        setConfigYaml(data.config.rawYaml.trim() ? data.config.rawYaml : DEFAULT_CONFIG_YAML)
-      } else if (typeof data?.config?.channelsYaml === 'string') {
-        setConfigYaml(data.config.channelsYaml.trim() ? data.config.channelsYaml : DEFAULT_CONFIG_YAML)
+      if (hydrateConfig && configRevisionRef.current === expectedConfigRevision) {
+        if (typeof data?.config?.rawYaml === 'string') {
+          updateConfigYaml(data.config.rawYaml.trim() ? data.config.rawYaml : DEFAULT_CONFIG_YAML)
+        } else if (typeof data?.config?.channelsYaml === 'string') {
+          updateConfigYaml(data.config.channelsYaml.trim() ? data.config.channelsYaml : DEFAULT_CONFIG_YAML)
+        }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (loadGeneration === loadGenerationRef.current) setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setLoading(false)
+      if (loadGeneration === loadGenerationRef.current) setLoading(false)
     }
   }
 
@@ -146,48 +214,69 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   }, [focusModelsRequest])
 
   const saveModels = async () => {
+    const saveGeneration = ++modelsSaveGenerationRef.current
+    const submittedRevision = modelsRevisionRef.current
+    const submittedYaml = rawModelsYamlRef.current
     setSavingModels(true)
-    setMessage(null)
+    setModelsSaveResult(null)
     setError(null)
     try {
       const res = await fetch(`${API_BASE_PATH}/setup/models`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ yaml: rawModelsYaml }),
+        body: JSON.stringify({ yaml: submittedYaml }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Failed to save models (${res.status})`)
-      setRawModelsYaml(rawModelsYaml)
-      setMessage(`Models saved to ${data.models?.path || 'state/models.yaml'}.`)
-      await loadStatus()
+      if (saveGeneration !== modelsSaveGenerationRef.current) return
+      const submissionIsCurrent = modelsRevisionRef.current === submittedRevision && rawModelsYamlRef.current === submittedYaml
+      if (submissionIsCurrent) {
+        setModelsSaveResult({ kind: 'success', message: `Models saved to ${data.models?.path || 'state/models.yaml'}.` })
+      }
+      await loadStatus({ clearSaveResults: false, hydrateConfig: false, expectedModelsRevision: submittedRevision })
       onSetupChanged?.()
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (saveGeneration === modelsSaveGenerationRef.current
+        && modelsRevisionRef.current === submittedRevision
+        && rawModelsYamlRef.current === submittedYaml) {
+        setModelsSaveResult({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
+      }
     } finally {
-      setSavingModels(false)
+      if (saveGeneration === modelsSaveGenerationRef.current) setSavingModels(false)
     }
   }
 
   const saveConfig = async () => {
+    const saveGeneration = ++configSaveGenerationRef.current
+    const submittedRevision = configRevisionRef.current
+    const submittedYaml = configYamlRef.current
     setSavingConfig(true)
-    setMessage(null)
+    setConfigSaveResult(null)
     setError(null)
     try {
       const res = await fetch(`${API_BASE_PATH}/setup/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ yaml: configYaml }),
+        body: JSON.stringify({ yaml: submittedYaml }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Failed to save config (${res.status})`)
-      setMessage(`Config saved. Channels reloaded; started: ${(data.reload?.started || []).join(', ') || 'none'}.`)
-      if (typeof data.rawYaml === 'string') setConfigYaml(data.rawYaml)
-      await loadStatus()
+      if (saveGeneration !== configSaveGenerationRef.current) return
+      const submissionIsCurrent = configRevisionRef.current === submittedRevision && configYamlRef.current === submittedYaml
+      if (submissionIsCurrent) {
+        setConfigSaveResult({ kind: 'success', message: `Config saved. Channels reloaded; started: ${(data.reload?.started || []).join(', ') || 'none'}.` })
+        if (typeof data.rawYaml === 'string') updateConfigYaml(data.rawYaml)
+      }
+      await loadStatus({ clearSaveResults: false, hydrateModels: false, expectedConfigRevision: submittedRevision })
       onSetupChanged?.()
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (saveGeneration === configSaveGenerationRef.current
+        && configRevisionRef.current === submittedRevision
+        && configYamlRef.current === submittedYaml) {
+        setConfigSaveResult({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
+      }
     } finally {
-      setSavingConfig(false)
+      if (saveGeneration === configSaveGenerationRef.current) setSavingConfig(false)
     }
   }
 
@@ -280,7 +369,6 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
       <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">
         <div className="mx-auto max-w-5xl space-y-4">
           {loading && <div className="rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-600 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300">Loading setup status…</div>}
-          {message && <div className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-700 dark:border-green-900/60 dark:bg-green-950/30 dark:text-green-200">{message}</div>}
           {error && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200">{error}</div>}
 
           <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
@@ -311,7 +399,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
             <div className="mt-4">
               <SimpleCodeEditor
                 value={rawModelsYaml}
-                onChange={setRawModelsYaml}
+                onChange={updateModelsYaml}
                 language="yaml"
                 height={SETUP_EDITOR_HEIGHT}
                 modelUri={MODELS_YAML_MODEL_URI}
@@ -322,11 +410,12 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
 
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <button disabled={savingModels} onClick={() => void saveModels()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
+              <SaveFeedback section="models" result={modelsSaveResult} />
               {forced && !canLeave && <span className="text-sm text-amber-600 dark:text-amber-300">Required for first-time setup.</span>}
             </div>
           </section>
 
-          <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+          <section data-setup-section="config" className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
             <h2 className="text-base font-semibold text-gray-900 dark:text-white">Config / Channels</h2>
             <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Edit the full <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">state/config.yaml</code> file as raw YAML. Saving writes your text back directly, then hot-reloads managed channels without restarting Foxwarm.</p>
 
@@ -350,10 +439,11 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
             </div>
 
             <div className="mt-4">
-              <SimpleCodeEditor value={configYaml} onChange={setConfigYaml} language="yaml" height={SETUP_EDITOR_HEIGHT} modelUri={APP_CONFIG_YAML_MODEL_URI} ariaLabel="Application config YAML editor" />
+              <SimpleCodeEditor value={configYaml} onChange={updateConfigYaml} language="yaml" height={SETUP_EDITOR_HEIGHT} modelUri={APP_CONFIG_YAML_MODEL_URI} ariaLabel="Application config YAML editor" />
             </div>
-            <div className="mt-4 flex items-center gap-2">
+            <div className="mt-4 flex flex-wrap items-center gap-2">
               <button disabled={savingConfig} onClick={() => void saveConfig()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">{savingConfig ? 'Saving…' : 'Save config and reload channels'}</button>
+              <SaveFeedback section="config" result={configSaveResult} />
             </div>
             {channelRows.length > 0 && (
               <div className="mt-4 overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800">
