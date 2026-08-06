@@ -12,6 +12,7 @@ import { putImageBlob, resolveImageBlobPath } from '../imageBlobs';
 import { nodesManager } from '../nodes/manager';
 import type { Session } from '../types';
 import * as nodeExecution from '../nodeExecution';
+import { getAgentDir } from '../config';
 
 async function makePngBase64(width: number, height: number, rgb: { r: number; g: number; b: number } = { r: 32, g: 96, b: 192 }): Promise<string> {
   const buffer = await sharp({
@@ -271,6 +272,63 @@ test('detached current owner resolves live and archived images and writes master
       ...ctx, runtimeNodeId: 'remote-a', sessionPlacement: 'session-worker',
     }), /copy failed/);
     assert.equal(await fs.pathExists(failedTemp), false);
+
+    const originalNow = Date.now; const originalRandom = Math.random;
+    Date.now = () => 1; Math.random = () => 0.5;
+    const concurrentPaths: string[] = [];
+    (nodeExecution as any).copyBetweenNodes = async (_sourceId: string, request: any) => { concurrentPaths.push(request.sourcePath); };
+    try {
+      await Promise.all(['one.png', 'two.png'].map(filePath => image_write_to_file({ id: 'live-inline', filePath }, {
+        ...ctx, runtimeNodeId: 'remote-a', sessionPlacement: 'session-worker',
+      })));
+      assert.equal(new Set(concurrentPaths).size, 2);
+      assert.equal(concurrentPaths.every(filePath => !fs.pathExistsSync(path.dirname(filePath))), true);
+    } finally { Date.now = originalNow; Math.random = originalRandom; }
+
+    const handoffRoot = path.join(getAgentDir('main'), '.temp', 'image-write-handoff');
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'image-handoff-outside-'));
+    await fs.remove(handoffRoot); await fs.ensureDir(path.dirname(handoffRoot)); await fs.symlink(outside, handoffRoot, 'dir');
+    await assert.rejects(() => image_write_to_file({ id: 'live-inline', filePath: 'symlink.png' }, {
+      ...ctx, runtimeNodeId: 'remote-a', sessionPlacement: 'session-worker',
+    }), /real directory/);
+    await fs.remove(handoffRoot); await fs.remove(outside); await fs.ensureDir(handoffRoot);
+
+    const originalWriteFile = fs.writeFile;
+    (fs as any).writeFile = async (filePath: string, ...args: any[]) => {
+      if (filePath.includes(`${path.sep}image-write-handoff${path.sep}operation-`)) throw new Error('staging write failed');
+      return await (originalWriteFile as any)(filePath, ...args);
+    };
+    try {
+      await assert.rejects(() => image_write_to_file({ id: 'live-inline', filePath: 'write-fail.png' }, {
+        ...ctx, runtimeNodeId: 'remote-a', sessionPlacement: 'session-worker',
+      }), /staging write failed/);
+    } finally { (fs as any).writeFile = originalWriteFile; }
+    assert.deepEqual((await fs.readdir(handoffRoot)).filter(name => name.startsWith('operation-')), []);
+
+    const originalRemove = fs.remove; let residue = '';
+    (nodeExecution as any).copyBetweenNodes = async (_sourceId: string, request: any) => { residue = path.dirname(request.sourcePath); };
+    (fs as any).remove = async (filePath: string) => {
+      if (filePath === residue) throw new Error('cleanup refused');
+      return await originalRemove(filePath);
+    };
+    try {
+      await assert.rejects(() => image_write_to_file({ id: 'live-inline', filePath: 'cleanup-fail.png' }, {
+        ...ctx, runtimeNodeId: 'remote-a', sessionPlacement: 'session-worker',
+      }), /cleanup failed: cleanup refused/);
+    } finally { (fs as any).remove = originalRemove; }
+    await fs.remove(residue);
+
+    (nodeExecution as any).copyBetweenNodes = async (_sourceId: string, request: any) => { residue = path.dirname(request.sourcePath); throw new Error('operation refused'); };
+    (fs as any).remove = async (filePath: string) => {
+      if (filePath === residue) throw new Error('cleanup refused');
+      return await originalRemove(filePath);
+    };
+    try {
+      await assert.rejects(() => image_write_to_file({ id: 'live-inline', filePath: 'both-fail.png' }, {
+        ...ctx, runtimeNodeId: 'remote-a', sessionPlacement: 'session-worker',
+      }), /handoff failed: operation refused; cleanup failed: cleanup refused/);
+    } finally { (fs as any).remove = originalRemove; }
+    await fs.remove(residue);
 
     (sessionManager as any).isSessionEffectivelyIsolated = () => true;
     await assert.rejects(() => image_write_to_file({

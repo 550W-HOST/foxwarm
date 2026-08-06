@@ -30,6 +30,14 @@ function boundedRaw(value: unknown, field: string, max: number): string {
   if (value.length > max) throw new RpcError('FILE_DELIVERY_INVALID_REQUEST', `${field} exceeds ${max} characters.`);
   return value;
 }
+function boundedUtf8(value: unknown, maxBytes: number): string {
+  const text = String(value);
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length <= maxBytes) return text;
+  let end = maxBytes;
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end -= 1;
+  return bytes.subarray(0, end).toString('utf8');
+}
 
 export function createFileDeliveryServiceHandler(options: { expectedSourceSessionId?: string } = {}): RpcServiceHandler<typeof fileDeliveryServiceDescriptor> {
   return {
@@ -58,17 +66,16 @@ export function createFileDeliveryServiceHandler(options: { expectedSourceSessio
       };
       if (runtimeNodeId !== 'master') await requireNodeExecutionTarget(sourceSessionId, runtimeNodeId);
       const exactSource = { ...source, currentNode, ...(cwd !== undefined ? { cwd } : { cwd: undefined }) };
-      try {
-        const result = await executeSendFileMain(intent, { sessionId: sourceSessionId, session: exactSource, runtimeNodeId } as any);
-        if (!result || typeof result !== 'object' || typeof result.output !== 'string' || typeof result.fullPath !== 'string') {
-          throw new RpcError('FILE_DELIVERY_INVALID_RESPONSE', 'File delivery returned an invalid result.');
-        }
-        if (result.fullPath.length > 4096) throw new RpcError('FILE_DELIVERY_INVALID_RESPONSE', 'File delivery fullPath exceeds 4096 characters.');
-        return { output: result.output.slice(0, 16 * 1024), fullPath: result.fullPath };
-      } catch (error: any) {
-        if (error instanceof RpcError) throw error;
-        throw new RpcError('FILE_DELIVERY_FAILED', String(error?.message || error).slice(0, 16 * 1024));
+      let result: any;
+      try { result = await executeSendFileMain(intent, { sessionId: sourceSessionId, session: exactSource, runtimeNodeId } as any); }
+      catch (error: any) {
+        throw new RpcError('FILE_DELIVERY_FAILED', boundedUtf8(error?.message || error, 16 * 1024));
       }
+      if (!result || typeof result !== 'object' || typeof result.output !== 'string' || typeof result.fullPath !== 'string') {
+        throw new RpcError('FILE_DELIVERY_INVALID_RESPONSE', 'File delivery returned an invalid result.');
+      }
+      if (result.fullPath.length > 4096) throw new RpcError('FILE_DELIVERY_INVALID_RESPONSE', 'File delivery fullPath exceeds 4096 characters.');
+      return { output: boundedUtf8(result.output, 16 * 1024), fullPath: result.fullPath };
     },
   };
 }

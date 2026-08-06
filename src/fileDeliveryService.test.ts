@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
-import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
+import { LocalRpcTransport, RpcClient, RpcError, RpcServiceRegistry } from './rpc';
 import { createFileDeliveryServiceHandler, fileDeliveryServiceDescriptor } from './fileDeliveryService';
 import * as sessionManager from './sessionManager';
 import { nodesManager } from './nodes/manager';
@@ -63,6 +63,11 @@ test('file delivery preserves Main preparation, target routing, WebUI fallback, 
     await assert.rejects(() => rpc.client.call('deliver', { sourceSessionId: sourceId,
       intent: { filePath: 'demo.txt', channelTargetId: 'telegram:room' }, routing: { ...baseRouting, cwd: dir } }),
       (error: any) => error?.code === 'FILE_DELIVERY_FAILED' && error.message.length <= 16 * 1024);
+    (sessionManager as any).sendFileToChannelTargetId = async () => { throw new RpcError('DEPENDENCY_SECRET', `rpc failed ${'z'.repeat(20_000)}`, true, { secret: 'never-cross' }); };
+    await assert.rejects(() => rpc.client.call('deliver', { sourceSessionId: sourceId,
+      intent: { filePath: 'demo.txt', channelTargetId: 'telegram:room' }, routing: { ...baseRouting, cwd: dir } }),
+      (error: any) => error?.code === 'FILE_DELIVERY_FAILED' && Buffer.byteLength(error.message, 'utf8') <= 16 * 1024
+        && error.retryable === false && error.details === undefined && !JSON.stringify(error).includes('never-cross'));
   } finally {
     (sessionManager as any).getExistingSession = originals.get; (sessionManager as any).sendFileToSession = originals.session;
     (sessionManager as any).sendFileToChannelTargetId = originals.channel; (nodesManager as any).readFileFromNode = originals.read;

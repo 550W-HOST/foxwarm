@@ -17,7 +17,7 @@ Provides the fixed versioned Main-owned file-delivery boundary used by a trusted
 
 Requests contain only bounded source ID, normalized file/target/caption intent, and `{runtimeNodeId,currentNode,cwd}` routing snapshot. They contain no file bytes, base64, callbacks, Session objects, channel objects, or delivery result arrays. Main verifies source identity before lookup/effect, derives agent/isolation identity from its authoritative source, validates non-master targets through the Node boundary, and then reuses `executeSendFileMain` for the single synchronous delivery attempt.
 
-Responses contain only bounded `{output,fullPath}`. Session/channel result arrays and errors are formatted and bounded inside Main before reverse response. WebUI retains its download-path fallback, remote source files retain the Main-owned download cache, caption remains preferred over the `text` alias, and session/channel targets remain mutually exclusive. There is no retry ledger or outbox.
+Responses contain only bounded `{output,fullPath}`. Session/channel result arrays and all business/dependency errors, including RpcErrors with details, are converted inside Main to detail-free bounded `FILE_DELIVERY_FAILED`; request/source/routing and handler-response validation errors retain their stable boundary codes. WebUI retains its download-path fallback, remote source files retain the Main-owned download cache, caption remains preferred over the `text` alias, and session/channel targets remain mutually exclusive. There is no retry ledger or outbox.
 
 The facade borrows the Session worker's one reverse transport and never owns its drain. Partial initialization and shutdown fence/clear this client alongside the other borrowed facades before the shared transport drains once.
 

@@ -17,6 +17,50 @@ function getTrustedCurrentSession(ctx: ToolContext) {
     return ctx.session.id === ctx.sessionId ? ctx.session : undefined;
 }
 
+function boundedError(error: unknown): string {
+    return String((error as any)?.message || error).slice(0, 4096);
+}
+
+async function writeWorkerRemoteImage(options: {
+    sessionId: string; agentName: string; targetNode: string; targetPath: string; overwrite: boolean;
+    imageId: string; buffer: Buffer;
+}): Promise<string> {
+    const agentDir = getAgentDir(options.agentName);
+    const handoffRoot = path.join(agentDir, '.temp', 'image-write-handoff');
+    await fs.ensureDir(path.dirname(handoffRoot));
+    try { await fs.mkdir(handoffRoot, { mode: 0o700 }); }
+    catch (error: any) { if (error?.code !== 'EEXIST') throw error; }
+    const rootStat = await fs.lstat(handoffRoot);
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw new Error('Image handoff root must be a real directory.');
+    const [realAgentDir, realRoot] = await Promise.all([fs.realpath(agentDir), fs.realpath(handoffRoot)]);
+    if (realRoot !== realAgentDir && !realRoot.startsWith(realAgentDir + path.sep)) throw new Error('Image handoff root escapes the agent directory.');
+
+    let operationDir: string | undefined; let result: string | undefined; let operationError: unknown;
+    try {
+        operationDir = await fs.mkdtemp(path.join(realRoot, 'operation-'));
+        const extension = path.extname(options.targetPath).slice(0, 32);
+        const tempPath = path.join(operationDir, `image${extension}`);
+        await fs.writeFile(tempPath, options.buffer, { flag: 'wx', mode: 0o600 });
+        await copyBetweenNodes(options.sessionId, { sourceNode: 'master', sourcePath: tempPath,
+            targetNode: options.targetNode, targetPath: options.targetPath, overwrite: options.overwrite });
+        result = [
+            `Image \`${options.imageId}\` written to \`${options.targetPath}\` on node \`${options.targetNode}\`.`,
+            `You can send it with send_file({ filePath: "${options.targetPath}", node: "${options.targetNode}" }).`,
+        ].join('\n');
+    } catch (error) { operationError = error; }
+
+    let cleanupError: unknown;
+    if (operationDir) {
+        try { await fs.remove(operationDir); }
+        catch (error) { cleanupError = error; }
+    }
+    if (operationError && cleanupError) throw new Error(`Image handoff failed: ${boundedError(operationError)}; cleanup failed: ${boundedError(cleanupError)}`);
+    if (cleanupError) throw new Error(`Image handoff cleanup failed: ${boundedError(cleanupError)}`);
+    if (operationError) throw operationError;
+    if (!result) throw new Error('Image handoff completed without a result.');
+    return result;
+}
+
 export async function tool_image_crop(args: ToolArgs, ctx: ToolContext) {
     const { id, x, y, width, height } = args;
 
@@ -91,14 +135,8 @@ export async function tool_image_write_to_file(args: ToolArgs, ctx: ToolContext)
         await fs.writeFile(fullPath, resolved.buffer);
     } else {
         if (ctx.sessionPlacement === 'session-worker') {
-            const tempDir = path.join(getAgentDir(ctx.session?.agent || 'main'), '.temp', 'image-write-handoff');
-            await fs.ensureDir(tempDir);
-            const extension = path.extname(filePath).slice(0, 32);
-            const tempPath = path.join(tempDir, `${Date.now()}_${Math.random().toString(36).slice(2, 10)}${extension}`);
-            await fs.writeFile(tempPath, resolved.buffer, { mode: 0o600 });
-            try {
-                await copyBetweenNodes(sessionId, { sourceNode: 'master', sourcePath: tempPath, targetNode, targetPath: filePath, overwrite: overwrite === true });
-            } finally { await fs.remove(tempPath).catch(() => {}); }
+            return await writeWorkerRemoteImage({ sessionId, agentName: ctx.session?.agent || 'main', targetNode,
+                targetPath: filePath, overwrite: overwrite === true, imageId: id, buffer: resolved.buffer });
         } else {
             await nodesManager.writeFileToNode(targetNode, filePath, resolved.buffer.toString('base64'), overwrite === true, sessionId);
         }
