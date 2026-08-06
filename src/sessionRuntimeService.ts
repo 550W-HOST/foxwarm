@@ -232,16 +232,18 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
   let eventContext: SessionRuntimeEventContext | undefined;
   let unsubscribeWorkerProjections: (() => void) | undefined;
   const workerListSignatures = new Map<string, string>();
-  const workerEntry = (sessionId: string): SessionWorkerProjectionEntry | undefined => {
-    const ownership = options?.worker?.store.findOwnership(sessionId);
-    const entry = options?.worker?.registry.get(sessionId);
-    return ownership && ownership.state !== 'inactive' && entry
-      && ownership.generation === entry.generation && ownership.incarnationId === entry.incarnationId
-      ? entry
-      : undefined;
+  type WorkerSelection = { canonicalId: string; kind: 'local' | 'unavailable' | 'worker'; entry?: SessionWorkerProjectionEntry };
+  const workerSelection = (requestedId: string): WorkerSelection => {
+    const canonicalId = sessionManager.resolveLoadedSessionId(requestedId);
+    const ownership = options?.worker?.store.findOwnership(canonicalId);
+    if (!ownership || ownership.state === 'inactive') return { canonicalId, kind: 'local' };
+    const entry = options?.worker?.registry.get(canonicalId);
+    return entry?.projection && ownership.generation === entry.generation && ownership.incarnationId === entry.incarnationId
+      ? { canonicalId, kind: 'worker', entry }
+      : { canonicalId, kind: 'unavailable' };
   };
-  const projectedDto = (session: Session): SessionRuntimeSessionDto => overlaySessionWorkerProjection(
-    buildSessionRuntimeSessionDto(session), workerEntry(session.id)?.projection,
+  const projectedDto = (session: Session, selection = workerSelection(session.id)): SessionRuntimeSessionDto => overlaySessionWorkerProjection(
+    buildSessionRuntimeSessionDto(session), selection.kind === 'worker' ? selection.entry?.projection : undefined,
   );
   const listSignature = (session: SessionRuntimeSessionDto) => JSON.stringify({
     busy: session.busy, busyStartedAt: session.busyStartedAt, queueLength: session.queueLength,
@@ -272,10 +274,11 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
     });
     sessionManager.setOnSessionStateUpdated(emitState);
     unsubscribeWorkerProjections = options?.worker?.registry.subscribe((entry) => {
-      if (workerEntry(entry.sessionId)?.incarnationId !== entry.incarnationId) return;
+      const selection = workerSelection(entry.sessionId);
+      if (selection.kind !== 'worker' || selection.entry?.incarnationId !== entry.incarnationId) return;
       const session = sessionManager.getAllSessions().get(entry.sessionId);
       if (!session) return;
-      const current = projectedDto(session);
+      const current = projectedDto(session, selection);
       eventContext?.emit('stateChanged', { sessionId: session.id, session: current });
       const currentSignature = listSignature(current);
       const previousSignature = workerListSignatures.get(session.id) || listSignature(buildSessionRuntimeSessionDto(session));
@@ -296,30 +299,43 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
 
   return {
     async getSession(input) {
-      const sessionId = normalizeSessionId(input.sessionId);
-      const session = workerEntry(sessionId)
-        ? sessionManager.getAllSessions().get(sessionId) || null
-        : await sessionManager.getExistingSession(sessionId);
-      return { session: session ? projectedDto(session) : null };
+      const requestedId = normalizeSessionId(input.sessionId);
+      const selection = workerSelection(requestedId);
+      if (selection.kind === 'unavailable') {
+        throw new RpcError('SESSION_WORKER_STATE_UNAVAILABLE', `Committed state for session \`${selection.canonicalId}\` is unavailable.`, true);
+      }
+      const session = selection.kind === 'worker'
+        ? sessionManager.getAllSessions().get(selection.canonicalId) || null
+        : await sessionManager.getExistingSession(selection.canonicalId);
+      if (selection.kind === 'worker' && !session) {
+        throw new RpcError('SESSION_WORKER_STATE_UNAVAILABLE', `Committed state for session \`${selection.canonicalId}\` is unavailable.`, true);
+      }
+      return { session: session ? projectedDto(session, selection) : null };
     },
     listSessions() {
       return {
         sessions: [...sessionManager.getAllSessions().values()]
-          .map(projectedDto)
+          .map(session => projectedDto(session))
           .sort((a, b) => b.lastMessageTime - a.lastMessageTime),
       };
     },
     async getHistory(input) {
-      const sessionId = normalizeSessionId(input.sessionId);
-      const currentWorker = workerEntry(sessionId);
-      const session = currentWorker
-        ? sessionManager.getAllSessions().get(sessionId) || null
-        : await sessionManager.getExistingSession(sessionId);
+      const requestedId = normalizeSessionId(input.sessionId);
+      const selection = workerSelection(requestedId);
+      if (selection.kind === 'unavailable') {
+        throw new RpcError('SESSION_WORKER_HISTORY_UNAVAILABLE', `Authoritative history for session \`${selection.canonicalId}\` is unavailable.`, true);
+      }
+      const session = selection.kind === 'worker'
+        ? sessionManager.getAllSessions().get(selection.canonicalId) || null
+        : await sessionManager.getExistingSession(selection.canonicalId);
+      if (selection.kind === 'worker' && !session) {
+        throw new RpcError('SESSION_WORKER_HISTORY_UNAVAILABLE', `Authoritative history for session \`${selection.canonicalId}\` is unavailable.`, true);
+      }
       if (!session) return null;
-      if (currentWorker) {
-        const detached = await readDetachedWorkerSession(session.id, session);
+      if (selection.kind === 'worker') {
+        const detached = await readDetachedWorkerSession(selection.canonicalId, session);
         return {
-          session: projectedDto(session),
+          session: projectedDto(session, selection),
           messages: detached.history,
           queue: detached.queue || [],
           persistentMemorySnapshot: detached.persistentMemorySnapshot || '',

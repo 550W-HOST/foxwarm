@@ -22,6 +22,7 @@ import { SessionWorkerProjectionRegistry } from './sessionWorkerPublicationServi
 import { buildSessionWorkerProjection } from './sessionWorkerPersistence';
 import { writeAuthoritativeSessionState } from './session/stateFile';
 import { getSessionHistoryFilePath } from './session/metadataStore';
+import { SESSIONS_FILE } from './config';
 import {
   assertSessionWorkerPlacementSupported,
   getSessionRuntimeStatus,
@@ -208,8 +209,10 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
   await sessionManager.loadSessions();
   const sessionId = makeSessionId('session_runtime_worker_projection');
   const { session: stub } = await sessionManager.createEmptySession(sessionId);
-  stub.displayName = 'Catalog name'; stub.pinned = true; stub.sidebarOrder = 7;
+  const alias = `${sessionId}-alias`;
+  stub.displayName = 'Catalog name'; stub.pinned = true; stub.sidebarOrder = 7; stub.aliases = [alias];
   await sessionManager.saveSession(sessionId);
+  const catalogBefore = await fs.readFile(SESSIONS_FILE);
   const worker = {
     ...stub,
     history: [{ role: 'user', parts: [{ text: 'authoritative worker history' }], __meta: { seq: 1, timestamp: 123 } }],
@@ -230,20 +233,36 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
   store.registerCandidate(sessionId, ownership.generation, incarnationId, process.pid, 'runtime-worker-process');
   store.activateCandidate(sessionId, ownership.generation, incarnationId, process.pid, 'runtime-worker-process');
   const registry = new SessionWorkerProjectionRegistry();
-  const identity = { sessionId, generation: ownership.generation, incarnationId }; registry.establish(identity);
+  const identity = { sessionId, generation: ownership.generation, incarnationId };
   const services = new RpcServiceRegistry();
   services.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler({ worker: { store, registry } }));
   const transport = new LocalRpcTransport(services); const client = new RpcClient(sessionRuntimeServiceDescriptor, transport);
   const events: string[] = []; const unsubscribe = client.subscribe(name => { events.push(name); });
   try {
     await client.call('startEvents', {});
+    const originalGetExistingSession = sessionManager.getExistingSession;
+    let semanticLoads = 0;
+    (sessionManager as any).getExistingSession = async (...args: any[]) => {
+      semanticLoads += 1; return originalGetExistingSession(...args as [string]);
+    };
+    try {
+      await assert.rejects(() => client.call('getSession', { sessionId: alias }), { code: 'SESSION_WORKER_STATE_UNAVAILABLE' });
+      await assert.rejects(() => client.call('getHistory', { sessionId: alias }), { code: 'SESSION_WORKER_HISTORY_UNAVAILABLE' });
+      const catalogOnly = (await client.call('listSessions', {})).sessions.find(item => item.id === sessionId)!;
+      assert.equal(catalogOnly.busy, false); assert.equal(semanticLoads, 0);
+    } finally {
+      (sessionManager as any).getExistingSession = originalGetExistingSession;
+    }
+
+    registry.establish(identity);
     const projection = buildSessionWorkerProjection(worker);
     await registry.apply(identity, projection); await flushEvents();
     assert.deepEqual(events, ['stateChanged', 'listChanged']); events.length = 0;
     await registry.apply(identity, projection); await flushEvents();
     assert.deepEqual(events, ['stateChanged']);
 
-    const projected = (await client.call('getSession', { sessionId })).session!;
+    const projected = (await client.call('getSession', { sessionId: alias })).session!;
+    assert.equal(projected.id, sessionId); assert.deepEqual(projected.aliases, [alias]);
     assert.equal(projected.busy, true); assert.equal(projected.currentNode, 'worker-node');
     assert.equal(projected.displayName, 'Catalog name'); assert.equal(projected.pinned, true); assert.equal(projected.sidebarOrder, 7);
     projected.runtimeState.queueLength = 999; projected.tokenUsage.inputTokens = 999;
@@ -254,7 +273,8 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     registry.markStale(identity);
     assert.equal((await client.call('getSession', { sessionId })).session!.busy, true);
 
-    const history = await client.call('getHistory', { sessionId });
+    const history = await client.call('getHistory', { sessionId: alias });
+    assert.equal(history!.session.id, sessionId); assert.deepEqual(history!.session.aliases, [alias]);
     assert.equal(history!.messages[0].parts[0].text, 'authoritative worker history');
     assert.equal(history!.messages[0].__meta?.seq, 1);
     assert.deepEqual(history!.messages[0].__meta?.contextFrontierItem, { kind: 'message', seq: 1 });
@@ -263,6 +283,25 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     history!.messages[0].parts[0].text = 'caller mutation'; history!.queue[0].parts![0].text = 'caller queue mutation';
     assert.equal((await client.call('getHistory', { sessionId }))!.messages[0].parts[0].text, 'authoritative worker history');
     assert.deepEqual(await fs.readFile(authorityPath), authorityBefore);
+    assert.deepEqual(await fs.readFile(SESSIONS_FILE), catalogBefore);
+
+    const mismatchRegistry = new SessionWorkerProjectionRegistry();
+    mismatchRegistry.establish({ sessionId, generation: identity.generation + 1, incarnationId: 'mismatched-incarnation' });
+    const mismatchServices = new RpcServiceRegistry();
+    mismatchServices.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler({ worker: { store, registry: mismatchRegistry } }));
+    const mismatchTransport = new LocalRpcTransport(mismatchServices);
+    const mismatchClient = new RpcClient(sessionRuntimeServiceDescriptor, mismatchTransport);
+    const originalMismatchLoader = sessionManager.getExistingSession; let mismatchLoads = 0;
+    (sessionManager as any).getExistingSession = async (...args: any[]) => {
+      mismatchLoads += 1; return originalMismatchLoader(...args as [string]);
+    };
+    try {
+      await assert.rejects(() => mismatchClient.call('getSession', { sessionId: alias }), { code: 'SESSION_WORKER_STATE_UNAVAILABLE' });
+      await assert.rejects(() => mismatchClient.call('getHistory', { sessionId: alias }), { code: 'SESSION_WORKER_HISTORY_UNAVAILABLE' });
+      assert.equal(mismatchLoads, 0);
+    } finally { (sessionManager as any).getExistingSession = originalMismatchLoader; mismatchTransport.close(); }
+    assert.deepEqual(await fs.readFile(authorityPath), authorityBefore);
+    assert.deepEqual(await fs.readFile(SESSIONS_FILE), catalogBefore);
 
     await fs.remove(authorityPath);
     await assert.rejects(() => client.call('getHistory', { sessionId }), { code: 'SESSION_WORKER_HISTORY_UNAVAILABLE' });

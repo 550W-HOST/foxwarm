@@ -499,7 +499,7 @@ export class SessionDestructiveLifecycleClaimError extends Error {
   }
 }
 
-function resolveLiveSessionIdSync(sessionId: string): string {
+export function resolveLoadedSessionId(sessionId: string): string {
   if (sessions.has(sessionId)) return sessionId;
   const cached = aliasCache.get(sessionId);
   if (cached && sessions.has(cached)) return cached;
@@ -510,7 +510,7 @@ function resolveLiveSessionIdSync(sessionId: string): string {
 }
 
 export function isSessionDestructiveLifecycleClaimed(sessionId: string): boolean {
-  return destructiveLifecycleClaims.has(resolveLiveSessionIdSync(sessionId));
+  return destructiveLifecycleClaims.has(resolveLoadedSessionId(sessionId));
 }
 
 export function assertSessionDestructiveMutationAllowed(
@@ -520,7 +520,7 @@ export function assertSessionDestructiveMutationAllowed(
 ): void {
   for (const sessionId of sessionIds) {
     if (!sessionId) continue;
-    const realId = resolveLiveSessionIdSync(sessionId);
+    const realId = resolveLoadedSessionId(sessionId);
     const claimId = destructiveLifecycleClaims.get(realId);
     if (claimId && claimId !== owningClaimId) {
       throw new SessionDestructiveLifecycleClaimError(realId, operation);
@@ -530,7 +530,7 @@ export function assertSessionDestructiveMutationAllowed(
 
 export async function claimSessionsForDestructiveLifecycle(sessionIds: string[]): Promise<{ claimId: string; sessionIds: string[] }> {
   return withSessionIdentityLock(async () => {
-    const canonicalIds = [...new Set(sessionIds.map(resolveLiveSessionIdSync))];
+    const canonicalIds = [...new Set(sessionIds.map(resolveLoadedSessionId))];
     assertSessionDestructiveMutationAllowed(canonicalIds, 'start another destructive lifecycle action');
     const claimId = `delete-${process.pid}-${Date.now()}-${++destructiveLifecycleClaimSequence}`;
     for (const sessionId of canonicalIds) destructiveLifecycleClaims.set(sessionId, claimId);
