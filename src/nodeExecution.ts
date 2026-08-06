@@ -87,6 +87,20 @@ export async function executeRemoteNodeTool(
   return response.result;
 }
 
+export async function listNodeTopology(sourceSessionId: string, nodeId?: string, currentNode?: string) {
+  return (await (await getClient()).call('list', { sourceSessionId, ...(nodeId ? { nodeId } : {}), ...(currentNode ? { currentNode } : {}) })).nodes;
+}
+
+export async function validateNodeSelection(sourceSessionId: string, nodeId: string) {
+  return await (await getClient()).call('select', { sourceSessionId, nodeId });
+}
+
+export async function copyBetweenNodes(sourceSessionId: string, request: {
+  sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; overwrite?: boolean;
+}) {
+  return await (await getClient()).call('copy', { sourceSessionId, ...request });
+}
+
 export function getNodeExecutionStatus(): { placement: 'local' | 'child-reverse'; ready: boolean } {
   return { placement, ready: !!client };
 }

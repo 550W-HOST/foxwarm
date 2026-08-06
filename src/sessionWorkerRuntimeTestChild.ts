@@ -1,7 +1,7 @@
 import { logger } from './common';
 import { initializeMainManagementTools, shutdownMainManagementTools } from './mainManagementTools';
 import { callMcpTool, initializeMcpExternalService, listMcpServers, shutdownMcpExternalService } from './mcpExternalService';
-import { executeRemoteNodeTool, initializeNodeExecution, shutdownNodeExecution } from './nodeExecution';
+import { copyBetweenNodes, executeRemoteNodeTool, initializeNodeExecution, listNodeTopology, shutdownNodeExecution, validateNodeSelection } from './nodeExecution';
 import * as llm from './llm';
 import { initLlmRequestJournal } from './llmRequestJournal';
 import { ProcessRpcClientTransport, ProcessRpcServer, RpcServiceRegistry } from './rpc';
@@ -54,15 +54,20 @@ async function start(): Promise<void> {
         const fenceErrors: string[] = [];
         try { await executeRemoteNodeTool('wrong-source', 'reverse-node', 'read', {}); }
         catch (error: any) { fenceErrors.push(error?.code); }
+        try { await listNodeTopology('wrong-source'); }
+        catch (error: any) { fenceErrors.push(error?.code); }
         try { await listMcpServers('wrong-source'); }
         catch (error: any) { fenceErrors.push(error?.code); }
         const nodeResult = await tool_call_tool({ source: 'node', nodeId: 'reverse-node', name: 'read', args: { filePath: 'reverse.txt' } },
           { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: () => options.currentSessionEffects.persistSession(session) } as any);
+        const topology = await listNodeTopology(session.id);
+        const selected = await validateNodeSelection(session.id, 'reverse-node');
+        const copied = await copyBetweenNodes(session.id, { sourceNode: 'master', sourcePath: 'from.txt', targetNode: 'reverse-node', targetPath: 'to.txt' });
         const servers = await listMcpServers(session.id);
         const mcpResult = await callMcpTool(session.id, 'reverse-mcp', 'echo', { value: 7 });
         const vectorResult = await vector.search('reverse vector query', 2, false, { sessionIds: [session.id] });
         const loadedLocalVectorOwner = Object.keys(require.cache).some(file => /vector(Runtime|ServiceManager)\.js$/.test(file));
-        await options.appendMessage({ role: 'model', parts: [{ text: JSON.stringify({ fenceErrors, nodeResult, servers, mcpResult, vectorResult, loadedLocalVectorOwner }) }] });
+        await options.appendMessage({ role: 'model', parts: [{ text: JSON.stringify({ fenceErrors, nodeResult, topology, selected, copied, servers, mcpResult, vectorResult, loadedLocalVectorOwner }) }] });
         return { text: 'reverse external services complete' };
       }
       await options.appendMessage({ role: 'model', parts: [{ text: 'reverse wait scheduled' }] });

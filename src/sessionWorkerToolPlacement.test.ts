@@ -7,6 +7,7 @@ import * as sessionManager from './sessionManager';
 import { SESSIONS_FILE } from './config';
 import { callTool } from './tools';
 import { tool_call_tool } from './tools/unifiedSearch';
+import { tool_search_tools } from './tools/unifiedSearch';
 import { tool_run_script } from './toolscript';
 import { executeTools } from './llm';
 import * as nodeExecution from './nodeExecution';
@@ -69,8 +70,8 @@ test('worker guards run before unsupported handlers and exact current state tool
   try {
   for (const [name, args, extra] of [
     ['create_child_session', { suffix: 'x' }], ['send_file', { filePath: 'x' }], ['compact_session', {}],
-    ['node', { action: 'list' }], ['copy_between_nodes', {}], ['session', { action: 'list' }],
-    ['session', { action: ' list ' }], ['node_tools', { action: 'list' }], ['get_memory_context', { timestamp: 1 }],
+    ['session', { action: 'list' }],
+    ['session', { action: ' list ' }], ['get_memory_context', { timestamp: 1 }],
     ['get_session_messages', { sessionId: 'other/session' }], ['recall', { sessionId: 'other/session' }],
     ['get_session_messages', { sessionId: '' }], ['get_session_messages', { sessionId: ' ' }],
     ['stop_session', { sessionId: '' }], ['stop_session', { sessionId: ' ' }],
@@ -175,5 +176,48 @@ test('recursive Worker ToolScript guards drop transient progress while Main loca
     (sessionManager as any).getSession = originals.get;
     (sessionManager as any).getExistingSession = originals.getExisting;
     (sessionManager as any).saveSession = originals.save;
+  }
+});
+
+test('worker node topology select and compound copy use fixed facade with exact persistence', async () => {
+  const session = owner();
+  let persists = 0; let selectCalls = 0; let copyCalls = 0;
+  const originals = { list: nodeExecution.listNodeTopology, select: nodeExecution.validateNodeSelection,
+    copy: nodeExecution.copyBetweenNodes, get: sessionManager.getSession, save: sessionManager.saveSession,
+    isolated: sessionManager.isSessionEffectivelyIsolated };
+  (nodeExecution as any).listNodeTopology = async () => [{ id: 'master', type: 'master', tools: [{ name: 'read', description: 'read', parameters: { type: 'object' } }] }];
+  (nodeExecution as any).validateNodeSelection = async () => { selectCalls += 1; return { nodeId: 'remote-a', defaultCwd: '/remote/default' }; };
+  (nodeExecution as any).copyBetweenNodes = async () => { copyCalls += 1; return { sizeBytes: 3, sha256: 'copy-hash', overwritten: false }; };
+  (sessionManager as any).getSession = async () => { throw new Error('child node getSession'); };
+  (sessionManager as any).saveSession = async () => { throw new Error('child node saveSession'); };
+  const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => { persists += 1; } };
+  try {
+    assert.match(String(await callTool('node', { action: 'list' }, ctx)), /master/);
+    assert.equal((await callTool('remote_node', { action: 'list' }, ctx)).nodes[0].id, 'master');
+    assert.equal((await tool_search_tools({ sources: ['node'], query: 'read' }, ctx)).tools[0].name, 'read');
+    assert.match(String(await callTool('node', { action: 'select', nodeId: 'remote-a' }, ctx)), /remote\/default/);
+    assert.equal(session.currentNode, 'remote-a'); assert.equal(session.cwd, undefined); assert.equal(persists, 1);
+
+    session.currentNode = 'master'; session.cwd = '/before';
+    ctx.persistCurrentSession = async () => { throw new Error('select persist failed'); };
+    await assert.rejects(() => callTool('node', { action: 'select', nodeId: 'remote-a' }, ctx), /select persist failed/);
+    assert.equal(session.currentNode, 'master'); assert.equal(session.cwd, '/before');
+
+    (sessionManager as any).isSessionEffectivelyIsolated = () => true;
+    await assert.rejects(() => callTool('node', { action: 'select', nodeId: 'remote-a' }, ctx), /isolated and cannot switch node/);
+    assert.equal(selectCalls, 2);
+    (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
+    ctx.persistCurrentSession = async () => { persists += 1; };
+
+    const copyArgs = { sourceNode: 'master', sourcePath: 'a', targetNode: 'remote-a', targetPath: 'b' };
+    assert.match(String(await callTool('copy_between_nodes', copyArgs, ctx)), /copy-hash/);
+    assert.match(String(await tool_call_tool({ source: 'builtin', name: 'copy_between_nodes', args: copyArgs }, ctx)), /copy-hash/);
+    const script = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="copy_between_nodes", args=args)', args: copyArgs }, ctx);
+    assert.equal(script.status, 'completed'); assert.match(JSON.stringify(script.result), /copy-hash/);
+    assert.equal(copyCalls, 3);
+  } finally {
+    (nodeExecution as any).listNodeTopology = originals.list; (nodeExecution as any).validateNodeSelection = originals.select;
+    (nodeExecution as any).copyBetweenNodes = originals.copy; (sessionManager as any).getSession = originals.get;
+    (sessionManager as any).saveSession = originals.save; (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
   }
 });

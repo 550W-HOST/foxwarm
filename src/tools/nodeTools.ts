@@ -9,7 +9,7 @@ import { nodesManager } from '../nodes/manager';
 import { buildNodeBootstrapInfo, ensureNodePairingToken } from '../nodes/bootstrapInfo';
 import { logger } from '../common';
 import { getAgentDir } from '../config';
-import { executeRemoteNodeTool } from '../nodeExecution';
+import { copyBetweenNodes, executeRemoteNodeTool, listNodeTopology, validateNodeSelection } from '../nodeExecution';
 import { requireNodeExecutionTarget } from '../nodeExecutionService';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
 
@@ -22,6 +22,14 @@ export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) 
 
     if (!sourceNode || !targetNode || !sourcePath || !targetPath) {
         throw new Error('copy_between_nodes requires sourceNode, sourcePath, targetNode, and targetPath.');
+    }
+
+    if (ctx.sessionPlacement === 'session-worker') {
+        const result = await copyBetweenNodes(ctx.sessionId, { sourceNode, sourcePath, targetNode, targetPath, overwrite: overwrite === true });
+        const lines = [`Copied \`${sourcePath}\` from node \`${sourceNode}\` to \`${targetPath}\` on node \`${targetNode}\`.`,
+            `Size: ${result.sizeBytes} B`, `SHA256: ${result.sha256}`, `Overwrote existing file: ${result.overwritten ? 'yes' : 'no'}`];
+        if (result.absolutePath) lines.push(`Target absolute path: ${result.absolutePath}`);
+        return lines.join('\n');
     }
 
     await checkToolPermission('copy_between_nodes', ctx.sessionId, 'master', {
@@ -50,6 +58,11 @@ export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) 
 export async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
     const { action, nodeId, tool, args: toolArgs } = args;
     
+    if (action === 'list' && ctx.sessionPlacement === 'session-worker') {
+        if (!ctx.sessionId || ctx.session?.id !== ctx.sessionId) throw new Error('Remote node listing requires exact session context.');
+        return { nodes: await listNodeTopology(ctx.sessionId, typeof nodeId === 'string' && nodeId.trim() ? nodeId.trim() : undefined, ctx.session.currentNode || 'master') };
+    }
+
     // Get session for isolated check
     const session = ctx.sessionId ? await sessionManager.getExistingSession(ctx.sessionId) : undefined;
     
@@ -120,6 +133,16 @@ async function resolveCurrentNodeForList(ctx?: ToolContext): Promise<string> {
 }
 
 export const tool_list_nodes = async (_args: ToolArgs = {}, ctx?: ToolContext) => {
+    if (ctx?.sessionPlacement === 'session-worker') {
+        if (!ctx.sessionId || ctx.session?.id !== ctx.sessionId) throw new Error('Node listing requires exact session context.');
+        const nodes = await listNodeTopology(ctx.sessionId, undefined, ctx.session.currentNode || 'master');
+        const currentNode = ctx.session.currentNode || 'master';
+        if (nodes.length === 0) return `No nodes registered. Current node: \`${currentNode}\`.`;
+        const body = nodes.map(node => `- \`${node.id}\`${node.id === 'master' ? ' (local)' : ' (remote)'}${node.id === currentNode ? ' ✅ current' : ''}`
+            + (typeof node.lastActivity === 'number' ? ` - Last activity: ${new Date(node.lastActivity).toISOString()}` : '')).join('\n');
+        return `Found ${nodes.length} node(s). Current node: \`${currentNode}\`.\n\n${body}\n`
+            + (nodes.some(node => node.id === currentNode) ? '' : `\nCurrent node \`${currentNode}\` is not currently registered/connected.\n`);
+    }
     const nodes = nodesManager.listNodes();
     const currentNode = await resolveCurrentNodeForList(ctx);
     
@@ -172,6 +195,20 @@ export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext)
     
     if (!ctx || !ctx.sessionId) {
         throw new Error('Cannot change node: missing context');
+    }
+
+    if (ctx.sessionPlacement === 'session-worker') {
+        const session = ctx.session;
+        if (!session || session.id !== ctx.sessionId || !ctx.persistCurrentSession) throw new Error('Node selection requires exact session context.');
+        if (sessionManager.isSessionEffectivelyIsolated(session)) {
+            throw new Error('This session is isolated and cannot switch node via tools. Use /node from the user channel.');
+        }
+        const validated = await validateNodeSelection(ctx.sessionId, nodeId);
+        const previousNode = session.currentNode; const previousCwd = session.cwd;
+        session.currentNode = validated.nodeId; delete session.cwd;
+        try { await ctx.persistCurrentSession(); }
+        catch (error) { session.currentNode = previousNode; session.cwd = previousCwd; throw error; }
+        return `Current node changed to \`${validated.nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${validated.defaultCwd}\`.`;
     }
 
     const session = await sessionManager.getSession(ctx.sessionId);

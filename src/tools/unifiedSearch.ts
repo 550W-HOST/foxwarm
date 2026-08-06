@@ -351,9 +351,7 @@ export async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
     }
 
     if (sources.includes('node')) {
-        if (ctx?.sessionPlacement === 'session-worker') {
-            warnings.push('Node discovery is unavailable in Session-worker placement until the Main topology service is connected.');
-        } else try {
+        try {
             collected.push(...await collectNodeUnifiedSearchResults(query, includeSchema, nodeId, ctx));
         } catch (e: any) {
             warnings.push(e?.message || String(e));

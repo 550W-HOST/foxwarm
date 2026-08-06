@@ -88,7 +88,7 @@ setDefinitionsRef(definitions, isToolDirectlyExposedToModel, getToolPermissionNo
 
 const WORKER_UNSUPPORTED_TOOLS = new Set([
     'create_child_session', 'send_file', 'delete_session', 'compact_session',
-    'copy_between_nodes', 'remote_node', 'node_tools', 'node_bootstrap_info', 'node_pair_approve', 'node_pair_list',
+    'node_bootstrap_info', 'node_pair_approve', 'node_pair_list',
     'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
     'get_memory_context',
 ]);
@@ -112,7 +112,10 @@ export function assertToolAvailableForPlacement(toolName: string, args: any, ctx
         if (action === 'list') workerUnavailable(toolName);
         if (action === 'update-display-name' && !isCurrent(fallbackTarget)) workerUnavailable(toolName);
     }
-    if (toolName === 'node') workerUnavailable(toolName);
+    if (toolName === 'remote_node' || toolName === 'node_tools') {
+        const action = typeof args?.action === 'string' ? args.action.trim().toLowerCase() : '';
+        if (action !== 'list') workerUnavailable(toolName);
+    }
     if (toolName === 'image_write_to_file') {
         const targetNode = ctx.runtimeNodeId || owner?.currentNode || 'master';
         if (targetNode !== 'master') workerUnavailable(toolName);

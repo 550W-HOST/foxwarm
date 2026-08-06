@@ -36,8 +36,35 @@ test('bound reverse Node handler rejects wrong source before lookup or effect', 
     await assert.rejects(() => new RpcClient(nodeExecutionServiceDescriptor, transport).call('execute', {
       sourceSessionId: 'wrong', nodeId: 'remote', toolName: 'read', args: {},
     }), { code: 'NODE_EXECUTION_SOURCE_MISMATCH' });
+    await assert.rejects(() => new RpcClient(nodeExecutionServiceDescriptor, transport).call('list', { sourceSessionId: 'wrong' }),
+      { code: 'NODE_EXECUTION_SOURCE_MISMATCH' });
+    await assert.rejects(() => new RpcClient(nodeExecutionServiceDescriptor, transport).call('copy', {
+      sourceSessionId: 'wrong', sourceNode: 'master', sourcePath: 'a', targetNode: 'remote', targetPath: 'b',
+    }), { code: 'NODE_EXECUTION_SOURCE_MISMATCH' });
     assert.equal(lookups, 0);
   } finally { (sessionManager as any).getExistingSession = originalLookup; await transport.drain(); transport.close(); }
+});
+
+test('Node compound copy keeps bytes inside Main for master and remote sources', async () => {
+  const sourceId = makeId('node_copy_source');
+  await sessionManager.getSession(sourceId);
+  const originals = { read: nodesManager.readFileFromNode, write: nodesManager.writeFileToNode };
+  const writes: any[] = [];
+  (nodesManager as any).readFileFromNode = async (nodeId: string) => ({ dataBase64: `bytes-${nodeId}`, sizeBytes: 7, sha256: 'source' });
+  (nodesManager as any).writeFileToNode = async (...args: any[]) => { writes.push(args); return { sha256: 'written', overwritten: false }; };
+  try {
+    const first = await nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'master', sourcePath: 'a', targetNode: 'remote-a', targetPath: 'b' });
+    const second = await nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'remote-a', sourcePath: 'c', targetNode: 'remote-b', targetPath: 'd', overwrite: true });
+    assert.equal(first.sha256, 'written'); assert.equal(second.overwritten, false);
+    assert.deepEqual(writes.map(call => call.slice(0, 5)), [
+      ['remote-a', 'b', 'bytes-master', false, sourceId],
+      ['remote-b', 'd', 'bytes-remote-a', true, sourceId],
+    ]);
+    assert.equal(JSON.stringify([first, second]).includes('bytes-'), false);
+  } finally {
+    (nodesManager as any).readFileFromNode = originals.read; (nodesManager as any).writeFileToNode = originals.write;
+    await cleanup(sourceId);
+  }
 });
 
 test('direct remote builtin and dynamic node calls share the Node execution service', async () => {
@@ -154,6 +181,8 @@ test('Node execution rejects master, stale, offline, unadvertised, and isolated-
   await sessionManager.saveSession(sourceId);
   const originalGetNode = nodesManager.getNode;
   const originalExecuteTool = nodesManager.executeTool;
+  const originalList = nodesManager.listNodesWithTools;
+  const originalSelect = nodesManager.setCurrentNode;
 
   try {
     (nodesManager as any).executeTool = async () => ({ ok: true });
@@ -178,15 +207,24 @@ test('Node execution rejects master, stale, offline, unadvertised, and isolated-
 
     await sessionManager.setAgentMetadata(agentName, { isolated: true, isolatedNode: 'bound-node' });
     (nodesManager as any).getNode = (nodeId: string) => fakeNode(nodeId, ['read']);
+    (nodesManager as any).listNodesWithTools = () => [{ id: 'bound-node', type: 'node', tools: [{ name: 'read' }] },
+      { id: 'other-node', type: 'node', tools: [{ name: 'read' }] }];
+    (nodesManager as any).setCurrentNode = () => {};
     assert.deepEqual(await nodeExecution.executeRemoteNodeTool(sourceId, 'bound-node', 'read', {}), { ok: true });
+    assert.deepEqual((await nodeExecution.listNodeTopology(sourceId)).map(node => node.id), ['bound-node']);
+    assert.equal((await nodeExecution.validateNodeSelection(sourceId, 'bound-node')).nodeId, 'bound-node');
     await assert.rejects(
       () => nodeExecution.executeRemoteNodeTool(sourceId, 'other-node', 'read', {}),
       (error: any) => error?.code === 'NODE_EXECUTION_ISOLATED_NODE_DENIED',
     );
+    await assert.rejects(() => nodeExecution.validateNodeSelection(sourceId, 'other-node'),
+      (error: any) => error?.code === 'NODE_EXECUTION_ISOLATED_NODE_DENIED');
   } finally {
     await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
     (nodesManager as any).getNode = originalGetNode;
     (nodesManager as any).executeTool = originalExecuteTool;
+    (nodesManager as any).listNodesWithTools = originalList;
+    (nodesManager as any).setCurrentNode = originalSelect;
     await cleanup(sourceId);
   }
 });

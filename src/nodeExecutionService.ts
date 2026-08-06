@@ -7,6 +7,8 @@ import {
 import * as sessionManager from './sessionManager';
 import { nodesManager } from './nodes/manager';
 import type { Session } from './types';
+import { getAgentDir } from './config';
+import { checkToolPermission } from './isolatedCheck';
 
 export type NodeExecutionRoutingSnapshot = {
   currentNode: string;
@@ -22,9 +24,18 @@ export type NodeExecutionRequest = {
 };
 
 export type NodeExecutionResponse = { result: unknown };
+export type NodeTopologyListRequest = { sourceSessionId: string; nodeId?: string; currentNode?: string };
+export type NodeTopologyListResponse = { nodes: Array<{ id: string; type: string; lastActivity?: number; tools: Array<{ name: string; description?: string; parameters?: unknown }> }> };
+export type NodeSelectRequest = { sourceSessionId: string; nodeId: string };
+export type NodeSelectResponse = { nodeId: string; defaultCwd: string };
+export type NodeCopyRequest = { sourceSessionId: string; sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; overwrite?: boolean };
+export type NodeCopyResponse = { sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; sizeBytes: number; sha256: string; overwritten: boolean; absolutePath?: string };
 
 export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 1, {
   execute: rpcMethod<NodeExecutionRequest, NodeExecutionResponse>(),
+  list: rpcMethod<NodeTopologyListRequest, NodeTopologyListResponse>(),
+  select: rpcMethod<NodeSelectRequest, NodeSelectResponse>(),
+  copy: rpcMethod<NodeCopyRequest, NodeCopyResponse>(),
 });
 
 function assertOnlyKeys(value: object, allowed: readonly string[], label: string): void {
@@ -80,6 +91,17 @@ export async function requireNodeExecutionTarget(sourceSessionId: string, nodeId
 }
 
 export function createNodeExecutionServiceHandler(options: { expectedSourceSessionId?: string } = {}): RpcServiceHandler<typeof nodeExecutionServiceDescriptor> {
+  const requireSource = async (input: any, allowed: readonly string[], label: string): Promise<{ sourceSessionId: string; source: Session }> => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', `${label} must be an object.`);
+    assertOnlyKeys(input, allowed, label);
+    const sourceSessionId = requireString(input.sourceSessionId, 'sourceSessionId');
+    if (options.expectedSourceSessionId && sourceSessionId !== options.expectedSourceSessionId) {
+      throw new RpcError('NODE_EXECUTION_SOURCE_MISMATCH', `Node execution reverse source must be \`${options.expectedSourceSessionId}\`.`);
+    }
+    const source = await sessionManager.getExistingSession(sourceSessionId);
+    if (!source) throw new RpcError('NODE_EXECUTION_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
+    return { sourceSessionId, source };
+  };
   return {
     async execute(input) {
       if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -111,6 +133,48 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
       return {
         result: await nodesManager.executeTool(nodeId, toolName, args, sourceSessionId, routingSnapshot),
       };
+    },
+    async list(input) {
+      const { source } = await requireSource(input, ['sourceSessionId', 'nodeId', 'currentNode'], 'Node list request');
+      const filter = input.nodeId === undefined ? undefined : requireString(input.nodeId, 'nodeId');
+      const currentNode = input.currentNode === undefined ? source.currentNode : requireString(input.currentNode, 'currentNode');
+      const isolated = sessionManager.isSessionEffectivelyIsolated(source);
+      const allowed = isolated ? new Set([sessionManager.getAgentIsolationNode(source.agent || 'main') || currentNode || 'master', currentNode].filter(Boolean)) : null;
+      const nodes = nodesManager.listNodesWithTools().filter(node => (!filter || node.id === filter) && (!allowed || allowed.has(node.id))).slice(0, 100);
+      const activity = new Map(nodesManager.listNodes().map(node => [node.id, node.lastActivity]));
+      return { nodes: nodes.map(node => ({ id: node.id, type: node.type, ...(activity.has(node.id) ? { lastActivity: activity.get(node.id) } : {}), tools: node.tools.slice(0, 200).map(tool => ({
+        name: String(tool.name), ...(tool.description ? { description: String(tool.description).slice(0, 2000) } : {}),
+        ...(tool.parameters ? { parameters: structuredClone(tool.parameters) } : {}),
+      })) })) };
+    },
+    async select(input) {
+      const { sourceSessionId, source } = await requireSource(input, ['sourceSessionId', 'nodeId'], 'Node select request');
+      const nodeId = requireString(input.nodeId, 'nodeId');
+      await requireNodeExecutionTarget(sourceSessionId, nodeId);
+      nodesManager.setCurrentNode(sourceSessionId, nodeId);
+      if (nodeId === 'master') return { nodeId, defaultCwd: getAgentDir(source.agent || 'main') };
+      const node = nodesManager.getNode(nodeId);
+      if (node?.ws && node.tools.has('get_default_cwd')) {
+        try {
+          const value = await nodesManager.executeTool(nodeId, 'get_default_cwd', {}, sourceSessionId);
+          const cwd = String(typeof value === 'object' && value && 'output' in value ? (value as any).output : value || '').trim();
+          if (cwd) return { nodeId, defaultCwd: cwd };
+        } catch { /* preserve the existing bounded fallback */ }
+      }
+      return { nodeId, defaultCwd: 'node process cwd (run `pwd` to inspect)' };
+    },
+    async copy(input) {
+      const { sourceSessionId } = await requireSource(input,
+        ['sourceSessionId', 'sourceNode', 'sourcePath', 'targetNode', 'targetPath', 'overwrite'], 'Node copy request');
+      const sourceNode = requireString(input.sourceNode, 'sourceNode'); const sourcePath = requireString(input.sourcePath, 'sourcePath');
+      const targetNode = requireString(input.targetNode, 'targetNode'); const targetPath = requireString(input.targetPath, 'targetPath');
+      if (input.overwrite !== undefined && typeof input.overwrite !== 'boolean') throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'overwrite must be a boolean.');
+      await checkToolPermission('copy_between_nodes', sourceSessionId, 'master', { sourceNode, sourcePath, targetNode, targetPath, overwrite: input.overwrite === true });
+      await requireNodeExecutionTarget(sourceSessionId, sourceNode); await requireNodeExecutionTarget(sourceSessionId, targetNode);
+      const file = await nodesManager.readFileFromNode(sourceNode, sourcePath, sourceSessionId);
+      const written = await nodesManager.writeFileToNode(targetNode, targetPath, file.dataBase64, input.overwrite === true, sourceSessionId);
+      return { sourceNode, sourcePath, targetNode, targetPath, sizeBytes: file.sizeBytes, sha256: written.sha256,
+        overwritten: written.overwritten, ...(written.absolutePath ? { absolutePath: written.absolutePath } : {}) };
     },
   };
 }

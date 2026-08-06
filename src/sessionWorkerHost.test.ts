@@ -234,11 +234,18 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   const ownership = store.beginGeneration(sessionId, incarnationId);
   const externalOriginals = {
     getNode: nodesManager.getNode, executeTool: nodesManager.executeTool,
+    listNodesWithTools: nodesManager.listNodesWithTools, setCurrentNode: nodesManager.setCurrentNode,
+    readFileFromNode: nodesManager.readFileFromNode, writeFileToNode: nodesManager.writeFileToNode,
     listServers: mcpClient.listServers, callTool: mcpClient.callTool, vectorSearch: vector.search,
   };
   const externalCalls: any[] = [];
   (nodesManager as any).getNode = (nodeId: string) => ({ id: nodeId, ws: {}, tools: new Set(['read']) });
   (nodesManager as any).executeTool = async (...args: any[]) => { externalCalls.push(['node', ...args]); return { node: args[0], tool: args[1] }; };
+  (nodesManager as any).listNodesWithTools = () => [{ id: 'master', type: 'master', tools: [{ name: 'read', description: 'read', parameters: { type: 'object' } }] },
+    { id: 'reverse-node', type: 'node', tools: [{ name: 'read', description: 'remote read', parameters: { type: 'object' } }] }];
+  (nodesManager as any).setCurrentNode = () => {};
+  (nodesManager as any).readFileFromNode = async () => ({ dataBase64: 'c2VjcmV0LWJ5dGVz', sizeBytes: 12, sha256: 'source-hash' });
+  (nodesManager as any).writeFileToNode = async () => ({ sha256: 'target-hash', overwritten: false, absolutePath: '/remote/to.txt' });
   (mcpClient as any).listServers = async () => [{ name: 'reverse-mcp', enabled: true, transport: 'http', argsCount: 0,
     envKeys: [] as string[], headerKeys: [] as string[], hasToken: false }];
   (mcpClient as any).callTool = async (...args: any[]) => { externalCalls.push(['mcp', ...args]); return { echoed: args[2] }; };
@@ -331,7 +338,10 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.deepEqual(externalCalls[0].slice(1, 5), ['reverse-node', 'read', { filePath: 'reverse.txt' }, sessionId]);
     assert.equal(externalCalls[1][1], 'reverse-mcp');
     assert.equal(externalCalls[2][1], 'reverse vector query');
-    assert.match(afterWait.history.at(-1).parts[0].text, /"fenceErrors":\["NODE_EXECUTION_SOURCE_MISMATCH","MCP_EXTERNAL_SOURCE_MISMATCH"\]/);
+    assert.match(afterWait.history.at(-1).parts[0].text, /"fenceErrors":\["NODE_EXECUTION_SOURCE_MISMATCH","NODE_EXECUTION_SOURCE_MISMATCH","MCP_EXTERNAL_SOURCE_MISMATCH"\]/);
+    assert.match(afterWait.history.at(-1).parts[0].text, /"defaultCwd":"node process cwd/);
+    assert.match(afterWait.history.at(-1).parts[0].text, /"sha256":"target-hash"/);
+    assert.doesNotMatch(afterWait.history.at(-1).parts[0].text, /c2VjcmV0LWJ5dGVz/);
     assert.match(afterWait.history.at(-1).parts[0].text, /reverse-hit/);
     assert.match(afterWait.history.at(-1).parts[0].text, /"loadedLocalVectorOwner":false/);
     if (waitTimer) await timers.deleteTimer(waitTimer.id, sessionId);
@@ -347,6 +357,10 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   } finally {
     (nodesManager as any).getNode = externalOriginals.getNode;
     (nodesManager as any).executeTool = externalOriginals.executeTool;
+    (nodesManager as any).listNodesWithTools = externalOriginals.listNodesWithTools;
+    (nodesManager as any).setCurrentNode = externalOriginals.setCurrentNode;
+    (nodesManager as any).readFileFromNode = externalOriginals.readFileFromNode;
+    (nodesManager as any).writeFileToNode = externalOriginals.writeFileToNode;
     (mcpClient as any).listServers = externalOriginals.listServers;
     (mcpClient as any).callTool = externalOriginals.callTool;
     (vector as any).search = externalOriginals.vectorSearch;
