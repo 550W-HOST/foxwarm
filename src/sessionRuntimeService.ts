@@ -15,6 +15,7 @@ import type { SessionWorkerProjection } from './sessionWorkerPersistence';
 import type { SessionWorkerProjectionEntry, SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
 import type { SessionWorkerIngressCoordinator, SessionWorkerIngressResult } from './sessionWorkerIngress';
+import { normalizeSessionWorkerIngressRequest } from './sessionWorkerIngress';
 import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 
 export type SessionRuntimeTokenTotalsDto = {
@@ -382,10 +383,11 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       return { accepted: true };
     },
     async submitAndRun(input) {
+      const normalized = normalizeSessionWorkerIngressRequest(input);
       if (!options?.worker?.ingress) {
         throw new RpcError('SESSION_WORKER_INGRESS_UNAVAILABLE', 'Session-worker ingress is unavailable.', true);
       }
-      return options.worker.ingress.submitQueuedInput(input.sessionId, input.item);
+      return options.worker.ingress.submitQueuedInput(normalized.sessionId, normalized.item);
     },
     async queueEvent(input) {
       const sessionId = normalizeSessionId(input.sessionId);

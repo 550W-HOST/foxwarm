@@ -21,6 +21,7 @@ import {
 import type { QueueItem } from './types';
 import type { ChannelContext } from './channel';
 import type { SessionWorkerIngressCoordinator, SessionWorkerIngressResult } from './sessionWorkerIngress';
+import { normalizeSessionWorkerIngressRequest } from './sessionWorkerIngress';
 
 export type SessionRuntimeEventListener = RpcEventListener<typeof sessionRuntimeServiceDescriptor>;
 
@@ -83,6 +84,8 @@ export async function submitAndRun(
   item: QueueItem,
   sourceContext?: ChannelContext,
 ): Promise<SessionWorkerIngressResult> {
+  const normalized = normalizeSessionWorkerIngressRequest({ sessionId, item });
+  sessionId = normalized.sessionId; item = normalized.item;
   const runtimeClient = await getClient();
   if (!workerIngress) throw new RpcError('SESSION_WORKER_INGRESS_UNAVAILABLE', 'Session-worker ingress is unavailable.', true);
   const cleanup = workerIngress.registerSourceContext(sessionId, item, sourceContext);

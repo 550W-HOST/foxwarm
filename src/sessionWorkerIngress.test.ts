@@ -7,10 +7,12 @@ import test from 'node:test';
 import { registerChannel, unregisterChannel, type ChannelContext } from './channel';
 import { SESSIONS_FILE } from './config';
 import { shutdownSessionRuntime, initializeSessionRuntime, submitAndRun } from './sessionRuntime';
+import { createSessionRuntimeServiceHandler, sessionRuntimeServiceDescriptor } from './sessionRuntimeService';
+import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
 import { createChannelsStore, attachChannel, resetChannelsForTests, saveChannels, setChannelsStoreForTests } from './session/channels';
 import { serializeSessionHistoryPayload } from './session/metadataStore';
 import * as sessionManager from './sessionManager';
-import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
+import { normalizeSessionWorkerIngressRequest, SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
 import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
@@ -69,6 +71,61 @@ test('Main submitAndRun owns exact activated-worker ingress without Main semanti
   });
   try {
     await supervisor.reconcileStartupOwnerships();
+    let invalidRunCalls = 0;
+    const originalPrecheckRun = supervisor.runPendingActivated.bind(supervisor);
+    (supervisor as any).runPendingActivated = async (...args: any[]) => { invalidRunCalls += 1; return originalPrecheckRun(args[0], args[1], args[2]); };
+    const validRef = { imageId: 'image-ref', blobId: 'blob-ref', mimeType: 'image/png', byteLength: 12, sha256: 'a'.repeat(64), width: 2, height: 3 };
+    const validMeta = { imageId: 'image-ref', mimeType: 'image/png', width: 2, height: 3, sizeBytes: 12, sha256: 'a'.repeat(64) };
+    const validPartsItem = itemFor('valid normalized parts', {
+      platform: 'qqbot', channelId: 'qq', channelType: 'qqbot', channelUserId: 'room', conversationId: 'room',
+      username: 'name', senderId: 'sender', weworkStreamId: 'stream', qqbotMessageId: 'message', preferDirectReply: true,
+    }, 'valid-client');
+    (validPartsItem.parts[0] as any).inlineDataRef = validRef; validPartsItem.parts[0].imageMeta = validMeta;
+    assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validPartsItem }), { sessionId, item: validPartsItem });
+    const validMessageItem = { type: 'intersession' as const, sourceSessionId: 'origin', message: {
+      role: 'user' as const, parts: [{ system: 'canonical message' }], modelVisible: true, __meta: { timestamp: 1, seq: 2 },
+    } };
+    assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validMessageItem }), { sessionId, item: validMessageItem });
+
+    const accessorPart: any = {}; Object.defineProperty(accessorPart, 'text', { enumerable: true, get() { throw new Error('accessor executed'); } });
+    const cyclicRef: any = { ...validRef }; cyclicRef.path = cyclicRef;
+    const symbolItem: any = itemFor('symbol', { platform: 'test', channelUserId: 'room' }, 'symbol'); symbolItem[Symbol('extra')] = true;
+    const invalidItems: any[] = [
+      { ...itemFor('extra', { platform: 'test', channelUserId: 'room' }, 'extra'), extra: true },
+      { type: 'user', parts: [{}] }, { type: 'intersession', message: {} },
+      { type: 'intersession', message: { role: 'user', parts: [{ text: 'x' }], extra: true } },
+      { type: 'user', parts: [{ text: 'x' }], message: { role: 'user', parts: [{ text: 'x' }] } },
+      { type: 'user', parts: [{ text: 'x' }], clientMessageId: 7 },
+      { type: 'user', parts: [{ text: 'x' }], clientMessageId: 'x'.repeat(513) },
+      { type: 'user', parts: [{ text: 'x' }], source: { platform: 'test', channelUserId: 7 } },
+      { type: 'user', parts: [{ text: 'x' }], source: { platform: 'test', channelUserId: 'x'.repeat(513) } },
+      { type: 'intersession', parts: [{ system: 'x' }], sourceSessionId: 7 },
+      { type: 'background', parts: [{ system: 'x' }], waitTimeoutId: 7 },
+      { type: 'background', parts: [{ system: 'x' }], waitTimeoutId: 'x'.repeat(257) },
+      { type: 'user', parts: [{ text: 'x', inlineDataRef: { ...validRef, sha256: 'bad' } }] },
+      { type: 'user', parts: [{ text: 'x', imageMeta: { ...validMeta, width: Number.POSITIVE_INFINITY } }] },
+      { type: 'user', parts: [accessorPart] },
+      { type: 'user', parts: [{ text: 'x', inlineDataRef: cyclicRef }] },
+      { type: 'user', parts: [{ text: () => 'x' }] }, symbolItem,
+      { type: 'user', parts: [{ text: 'x'.repeat(1024 * 1024 + 1) }] },
+    ];
+    for (const invalidItem of invalidItems) {
+      await assert.rejects(() => submitAndRun(sessionId, invalidItem), (error: any) => ['SESSION_WORKER_INGRESS_INVALID', 'SESSION_WORKER_INGRESS_TOO_LARGE'].includes(error?.code));
+    }
+    await assert.rejects(() => submitAndRun('x'.repeat(257), validPartsItem), (error: any) => error?.code === 'SESSION_WORKER_INGRESS_INVALID');
+    await assert.rejects(() => submitAndRun(` ${sessionId}`, validPartsItem), (error: any) => error?.code === 'SESSION_WORKER_INGRESS_INVALID');
+    const requestRegistry = new RpcServiceRegistry();
+    requestRegistry.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler({ worker: { store, registry: supervisor.projectionRegistry, ingress } }));
+    const requestTransport = new LocalRpcTransport(requestRegistry); const requestClient = new RpcClient(sessionRuntimeServiceDescriptor, requestTransport);
+    try {
+      await assert.rejects(
+        () => requestClient.call('submitAndRun', { sessionId, item: validPartsItem, extra: true } as any),
+        (error: any) => error?.code === 'SESSION_WORKER_INGRESS_INVALID',
+      );
+    } finally { requestTransport.close(); }
+    assert.equal(store.countMailboxIntents(), 0); assert.equal(sourceContexts.size, 0);
+    assert.equal(invalidRunCalls, 0); assert.equal(mainSemanticCalls, 0);
+    (supervisor as any).runPendingActivated = originalPrecheckRun;
     await initializeSessionRuntime({ worker: { store, registry: supervisor.projectionRegistry, ingress } });
     const unavailableSource: QueueSource = { platform: 'test', channelUserId: 'missing', preferDirectReply: true };
     await assert.rejects(
@@ -78,7 +135,7 @@ test('Main submitAndRun owns exact activated-worker ingress without Main semanti
     assert.equal(store.countMailboxIntents(), 0); assert.equal(sourceContexts.size, 0); assert.equal(mainSemanticCalls, 0);
     const activated = await supervisor.ensureWorker(sessionId);
     await assert.rejects(
-      () => submitAndRun(sessionId, { type: 'compact-commit', request: {} } as any),
+      () => submitAndRun(sessionId, { type: 'compact-commit', parts: [{ text: 'compact' }] } as any),
       (error: any) => error?.code === 'SESSION_WORKER_QUEUE_UNSUPPORTED',
     );
     assert.equal(store.countMailboxIntents(), 0);
