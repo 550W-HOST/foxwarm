@@ -26,7 +26,13 @@ import type { LucideIcon } from 'lucide-react'
 export { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
 import { formatCompactObjectPreview } from '../../../shared/src/toolResponseFormatting'
 import { parseSessionLinkText } from '../../../shared/src/webuiToolRendering'
-export { renderMarkdown, renderMarkdownWithSanitizer } from './markdownRenderer'
+export {
+  renderAssistantMarkdownSegments,
+  renderAssistantMarkdownSegmentsWithSanitizer,
+  renderMarkdown,
+  renderMarkdownWithSanitizer,
+  type MarkdownRenderSegment,
+} from './markdownRenderer'
 
 export const formatObject = formatCompactObjectPreview
 

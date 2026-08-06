@@ -507,8 +507,7 @@ input, textarea, select {
   }
 
   .foxwarm-markdown :where(pre):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
-    margin-top: 0;
-    margin-bottom: 0;
+    margin: 0.5rem 0;
     max-width: 100%;
     min-width: 0;
     overflow-x: visible;
@@ -521,6 +520,24 @@ input, textarea, select {
     white-space: inherit;
     overflow-wrap: inherit;
     word-break: inherit;
+  }
+
+  .foxwarm-special-block :where([data-special-block-rendered], [data-special-block-raw]) {
+    padding: 0.5rem;
+  }
+
+  .foxwarm-special-block[data-special-block-kind="mermaid"] :where([data-special-block-rendered], [data-special-block-raw]) {
+    padding-top: 2rem;
+  }
+
+  .foxwarm-special-block [data-special-block-controls] {
+    opacity: 0;
+    transition: opacity 150ms ease;
+  }
+
+  .foxwarm-special-block:hover [data-special-block-controls],
+  .foxwarm-special-block:focus-within [data-special-block-controls] {
+    opacity: 1;
   }
 
   .foxwarm-markdown :where(table):not(:where([class~="not-prose"], [class~="not-prose"] *)) {

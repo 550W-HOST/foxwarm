@@ -21,7 +21,7 @@ It is intentionally separate from `packages/webui` so the VS Code workbench and 
 Example workspace folder URI:
 
 ```text
-foxwarm://node+master/home/ldmbot/git/foxwarm/
+foxwarm://node+master/srv/foxwarm/
 ```
 
 In the Docker test environment the backend sees the repository at `/app`, so use:
@@ -34,7 +34,7 @@ foxwarm://node+master/app/
 
 VS Code workbench, extension, filesystem, Git, and terminal routes use the same token mechanism as the main WebUI:
 
-- `Cookie: foxwarm_token=<token>` / legacy `alphabot_token=<token>`
+- `Cookie: foxwarm_token=<token>`
 - or `Authorization: Bearer <token>`
 
 The browser extension uses same-origin `fetch(..., { credentials: 'include' })`, so the normal WebUI login cookie is sent to `/api/vscode-web/fs/*`. Do not expose the filesystem API without this auth layer.
@@ -55,7 +55,7 @@ Each selected session opens through a read-only custom editor at a deterministic
 
 The extension watches Code's tab-group change events rather than polling. It classifies only its three fixed custom-editor view types and sends a nonce-bound `active-target` message back through the sidebar bridge. The sidebar highlights the active session row, Agents button, or Setup/settings entry; switching to an ordinary file, Welcome, or another non-Foxwarm editor clears all three selections. Session links inside embedded Chat or Agents ask the host extension to open the matching chat editor, while commit markers retain the fixed `foxwarm-scm.openCommitDetails` bridge.
 
-The embed URLs never contain the WebUI token. They use the normal WebUI cookie and are intended for the current same-public-origin deployment, including reverse-proxy base paths. Chrome and Firefox E2E cover HTTPS with a stripping `/alphabot/` proxy. A separately configured wildcard webview origin—and localhost's default hashed webview origin—can make the inner WebUI a third-party-cookie context; a scoped cross-origin embed credential exchange is intentionally not part of this first phase, so those isolated-origin deployments may show the login view until that flow is designed.
+The embed URLs never contain the WebUI token. They use the normal WebUI cookie and are intended for the current same-public-origin deployment, including reverse-proxy base paths. Chrome and Firefox E2E cover HTTPS with a stripping `/foxwarm-prefix/` proxy. A separately configured wildcard webview origin—and localhost's default hashed webview origin—can make the inner WebUI a third-party-cookie context; a scoped cross-origin embed credential exchange is intentionally not part of this first phase, so those isolated-origin deployments may show the login view until that flow is designed.
 
 ## Foxwarm YAML schemas
 
@@ -181,7 +181,7 @@ At runtime the route can also read assets from another directory:
 FOXWARM_VSCODE_WEB_ASSET_DIR=/path/to/vscode-web-assets npm run start:notmux
 ```
 
-When the required static files exist (`out/nls.messages.js`, `out/vs/workbench/workbench.web.main.internal.css`, `out/vs/workbench/workbench.web.main.internal.js`), `/vscode-web` emits a VS Code Web workbench bootstrap that includes `foxwarm-fs` as an additional browser builtin extension. Direct launches open the requested `folderUri`; embedded launches open the persistent workspace configuration created under the Foxwarm state directory. The default folder URI can be overridden with `FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI`; otherwise the route prefers `/app` when running in the Docker test environment and falls back to the host checkout path when present.
+When the required static files exist (`out/nls.messages.js`, `out/vs/workbench/workbench.web.main.internal.css`, `out/vs/workbench/workbench.web.main.internal.js`), `/vscode-web` emits a VS Code Web workbench bootstrap that includes `foxwarm-fs` as an additional browser builtin extension. Direct launches open the requested `folderUri`; embedded launches open the persistent workspace configuration created under the Foxwarm state directory. `FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI` overrides the default folder URI; otherwise the route derives the master folder URI from the canonical `BASE_DIR` without probing installation-specific paths.
 
 When the assets are absent, authenticated requests to `/vscode-web` return a styled `503 Code is not built` page rather than a blank workbench. It shows both preparation commands and the configured asset location. Individual missing static assets continue to return `404`.
 

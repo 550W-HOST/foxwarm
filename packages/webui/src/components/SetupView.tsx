@@ -44,7 +44,7 @@ interface SetupViewProps {
   focusModelsRequest?: number
 }
 
-const DEFAULT_MODELS_YAML = buildModelsYaml([makeDefaultProvider(0)], 'openai/gpt-5.2-codex')
+const DEFAULT_MODELS_YAML = buildModelsYaml([makeDefaultProvider(0)], 'openai/gpt-5.6-sol')
 const SETUP_EDITOR_HEIGHT = 'calc(min(600px, 80vh))'
 
 const DEFAULT_CONFIG_YAML = `# Foxwarm config. Changes to channels are hot-reloaded after Save.

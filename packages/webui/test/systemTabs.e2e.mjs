@@ -42,7 +42,7 @@ before(async () => {
   })
   await page.setViewport({ width: 1440, height: 900 })
   await page.goto(`${baseUrl}/#token=${encodeURIComponent(authToken)}`, { waitUntil: 'networkidle2' })
-  await page.waitForFunction(() => !!window.alphabotTest, { timeout: 15_000 })
+  await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
   await page.evaluate(() => {
     const token = localStorage.getItem('foxwarm_token')
     localStorage.clear()

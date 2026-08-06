@@ -256,12 +256,12 @@ Example:
         {
             name: 'wait',
             defaultInject: true,
-            description: 'Pause this session until a new message or event arrives. Use this only when you have no useful user-facing reply or tool work to do right now. Omit timeoutSeconds or pass 0 for no timeout. If a positive timeoutSeconds is provided, the session will be woken by a system message after that many seconds only if no other message/event woke it first.',
+            description: 'End an otherwise-finished turn and leave this session idle until supported inbound work wakes it. Supported inbound user/inter-agent messages and session/system wake events automatically wake an idle waiting session. If inbound work arrives while this session is generating or executing tools, it is queued and incorporated at the next safe provider/tool-loop point permitted by normal source boundaries. Do not use short timeout waits to retrieve messages: wait is event-driven, not a polling primitive. Use this only when you have no useful user-facing reply or tool work to do right now. Omit timeoutSeconds or pass 0 for no timeout. A positive timeoutSeconds is a one-shot fallback that wakes the session with a system message only if no other message/event woke it first.',
             parameters: {
                 type: 'object',
                 properties: {
                     reason: { type: 'string', description: 'Optional short note for logs/debugging.' },
-                    timeoutSeconds: { type: 'number', description: 'Optional timeout in seconds. If a positive value is provided and no newer message/event wakes the session first, a system message wakes it after this many seconds.' },
+                    timeoutSeconds: { type: 'number', description: 'Optional one-shot wake deadline/fallback in seconds, not a polling interval. Omit or pass 0 for no deadline. If a positive value is provided and no newer message/event wakes the session first, a system message wakes it after this many seconds.' },
                     waitAllSessions: {
                         type: 'array',
                         description: 'Optional list of session IDs. Omit or pass [] for ordinary wait. When provided, wait until every listed session has sent at least one new message to this session after the wait starts; unrelated messages/events and timeout still wake normally with a pending reminder.',

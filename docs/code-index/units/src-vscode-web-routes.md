@@ -23,6 +23,8 @@ Cross-module behavior: [Code integration](../threads/code-integration.md).
 
 Required official asset files are loaded from `FOXWARM_VSCODE_WEB_ASSET_DIR` or the ignored package asset directory. `FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN`, `FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI`, and `FOXWARM_VSCODE_WEB_WORKSPACE_PATH` select current deployment behavior.
 
+When no explicit default-folder URI is configured, a direct workbench launch derives its master URI from the canonical `BASE_DIR`. It does not probe installation-specific filesystem paths. The fixed workspace-roots response remains authoritative for app/data commands.
+
 ### Filesystem API
 
 Authenticated routes under `/api/vscode-web/fs` implement stat, directory read, file read/write, directory create, delete, and rename against real absolute POSIX paths. File read/write cap is 50 MiB.

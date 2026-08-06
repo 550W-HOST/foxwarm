@@ -115,7 +115,7 @@ test('Code workspace URLs preserve paths and reverse-proxy base paths', async ()
 })
 
 test('global Code launch preference defaults safely and controls sidebar launches', async () => {
-  const { CODE_OPEN_NEW_WINDOW_STORAGE_KEY, CODE_WORKSPACE_PATH_STORAGE_KEY, parseCodeOpenInNewWindow, readCodeOpenInNewWindowPreference, readCodeWorkspacePathPreference, shouldOpenCodeInNewWindow, writeCodeOpenInNewWindowPreference, writeCodeWorkspacePathPreference } = await loadTypeScriptModule('../src/vscodeWeb.ts')
+  const { CODE_OPEN_NEW_WINDOW_STORAGE_KEY, CODE_WORKSPACE_NODE_STORAGE_KEY, CODE_WORKSPACE_PATH_STORAGE_KEY, parseCodeOpenInNewWindow, readCodeOpenInNewWindowPreference, readCodeWorkspaceNodePreference, readCodeWorkspacePathPreference, shouldOpenCodeInNewWindow, writeCodeOpenInNewWindowPreference, writeCodeWorkspaceNodePreference, writeCodeWorkspacePathPreference } = await loadTypeScriptModule('../src/vscodeWeb.ts')
   const values = new Map()
   const storage = {
     getItem: (key) => values.get(key) ?? null,
@@ -130,10 +130,64 @@ test('global Code launch preference defaults safely and controls sidebar launche
   assert.equal(values.get(CODE_OPEN_NEW_WINDOW_STORAGE_KEY), 'true')
   assert.equal(readCodeOpenInNewWindowPreference(storage), true)
   assert.equal(readCodeWorkspacePathPreference(storage), '/')
+  assert.equal(readCodeWorkspaceNodePreference(storage), 'master')
+  assert.equal(writeCodeWorkspaceNodePreference(storage, 'worker-a'), 'worker-a')
+  assert.equal(values.get(CODE_WORKSPACE_NODE_STORAGE_KEY), 'worker-a')
+  assert.equal(readCodeWorkspaceNodePreference(storage), 'worker-a')
   assert.equal(writeCodeWorkspacePathPreference(storage, '/work dir/你好'), '/work dir/你好')
   assert.equal(values.get(CODE_WORKSPACE_PATH_STORAGE_KEY), '/work dir/你好')
   assert.equal(shouldOpenCodeInNewWindow(false), false)
   assert.equal(shouldOpenCodeInNewWindow(true), true)
+})
+
+test('node launch targets preserve stale selection and apply service-specific availability', async () => {
+  const { formatNodeTargetLabel, getNodeTargetAvailability, parseWebUiNodeTargets, preserveSelectedNodeTarget } = await loadTypeScriptModule('../src/nodeTargets.ts')
+  const nodes = parseWebUiNodeTargets({ nodes: [
+    { id: 'master', type: 'master', online: true, services: {} },
+    { id: 'full', type: 'cli-node', online: true, services: { 'vscode-fs': 1, 'vscode-git': 2, 'vscode-pty': 1 } },
+    { id: 'fs-only', type: 'cli-node', online: true, services: { 'vscode-fs': 1 } },
+    { id: 'offline', type: 'cli-node', online: false, services: { 'vscode-fs': 1, 'vscode-pty': 1 } },
+  ] })
+  assert.equal(getNodeTargetAvailability(nodes.find(node => node.id === 'master'), 'vscode-pty').available, true)
+  assert.equal(getNodeTargetAvailability(nodes.find(node => node.id === 'full'), 'vscode-pty').available, true)
+  assert.equal(getNodeTargetAvailability(nodes.find(node => node.id === 'fs-only'), 'vscode-fs').available, true, 'Git is optional for Code')
+  assert.deepEqual(getNodeTargetAvailability(nodes.find(node => node.id === 'fs-only'), 'vscode-pty'), { available: false, reason: 'terminal unavailable' })
+  assert.deepEqual(getNodeTargetAvailability(nodes.find(node => node.id === 'offline'), 'vscode-fs'), { available: false, reason: 'offline' })
+  assert.match(formatNodeTargetLabel(nodes.find(node => node.id === 'full'), 'vscode-pty'), /online/)
+  assert.match(formatNodeTargetLabel(nodes.find(node => node.id === 'offline'), 'vscode-fs'), /offline/)
+  assert.match(formatNodeTargetLabel(nodes.find(node => node.id === 'fs-only'), 'vscode-fs'), /online · no Git/)
+
+  const withStale = preserveSelectedNodeTarget(nodes, 'removed-node')
+  const stale = withStale.find(node => node.id === 'removed-node')
+  assert.ok(stale)
+  assert.equal(stale.unavailable, true)
+  assert.deepEqual(getNodeTargetAvailability(stale, 'vscode-fs'), { available: false, reason: 'unavailable' })
+  assert.equal(withStale.some(node => node.id === 'master'), true)
+})
+
+test('terminal targets normalize cwd and never reuse a different node at the same path', async () => {
+  const { buildTerminalCreateRequest, findTerminalForTarget, normalizeTerminalTarget, terminalTargetsMatch } = await loadTypeScriptModule('../src/terminalTarget.ts')
+  assert.deepEqual(normalizeTerminalTarget({ nodeId: 'worker-a', cwd: '/srv/project/' }), { nodeId: 'worker-a', cwd: '/srv/project' })
+  assert.equal(terminalTargetsMatch({ nodeId: 'master', cwd: '/srv/project' }, { nodeId: 'worker-a', cwd: '/srv/project/' }), false)
+  const terminals = [
+    { id: 'local', nodeId: 'master', cwd: '/srv/project' },
+    { id: 'remote', nodeId: 'worker-a', cwd: '/srv/project' },
+  ]
+  assert.equal(findTerminalForTarget(terminals, { nodeId: 'worker-a', cwd: '/srv/project/' })?.id, 'remote')
+  assert.equal(findTerminalForTarget(terminals, { nodeId: 'worker-b', cwd: '/srv/project' }), undefined)
+  assert.deepEqual(buildTerminalCreateRequest({ nodeId: 'worker-a', cwd: '/srv/project/' }, 120, 40), {
+    nodeId: 'worker-a', cwd: '/srv/project', cols: 120, rows: 40,
+  })
+})
+
+test('session-header terminal orchestration keeps the session node and replaces a mismatched lower-pane target', async () => {
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
+  assert.match(app, /onOpenTerminal=\{\(\) => openTerminalTab\(\{ nodeId: sessionRecord\?\.currentNode \|\| 'master', path: sessionRecord\?\.cwd \|\| '\/', sourcePaneId \}\)\}/)
+  const openTerminalStart = app.indexOf('const openTerminalTab')
+  const openTerminalEnd = app.indexOf('const closeWorkbenchTab', openTerminalStart)
+  const block = app.slice(openTerminalStart, openTerminalEnd)
+  assert.match(block, /getTerminalTabInPane\(paneBelow\.id, \{ nodeId, path \}\)/)
+  assert.match(block, /upsertTab\(draftTab, \{ paneId: paneBelow\.id, activate: true \}\)/)
 })
 
 test('session header Code target preserves valid remote nodes, falls back safely, and honors forced-new-tab', async () => {

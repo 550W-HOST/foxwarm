@@ -117,7 +117,7 @@ export class HttpServer {
       cookies[name.trim()] = decodeURIComponent(rest.join('='));
     });
 
-    return cookies.foxwarm_token || cookies.alphabot_token;
+    return cookies.foxwarm_token;
   }
 
   addRoute(route: RouteHandler): void {

@@ -7,6 +7,7 @@ import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 import AgentCreationMenu from './AgentCreationMenu'
 import type { AgentSummary } from '../agentCreation'
+import type { WebUiNodeTarget } from '../nodeTargets'
 
 interface SidebarProps {
   sessions: Session[]
@@ -33,9 +34,14 @@ interface SidebarProps {
   onSelectArchitecture: () => void
   onSelectSetup: () => void
   codePath: string
+  codeNodeId: string
   codeOpenInNewWindow: boolean
   codeActive: boolean
-  onOpenCode: (path: string) => void
+  nodeTargets: readonly WebUiNodeTarget[]
+  nodeTargetsError?: string
+  onRefreshNodeTargets: () => void
+  onOpenCode: (nodeId: string, path: string) => void
+  onCodeNodeChange: (nodeId: string) => void
   onCodePathChange: (path: string) => void
   onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
@@ -72,9 +78,14 @@ export default function Sidebar({
   onSelectArchitecture,
   onSelectSetup,
   codePath,
+  codeNodeId,
   codeOpenInNewWindow,
   codeActive,
+  nodeTargets,
+  nodeTargetsError,
+  onRefreshNodeTargets,
   onOpenCode,
+  onCodeNodeChange,
   onCodePathChange,
   onCodeOpenInNewWindowChange,
   onCreateTerminalTab,
@@ -147,16 +158,24 @@ export default function Sidebar({
           </div>
           <CodeLaunchButton
             path={codePath}
+            nodeId={codeNodeId}
+            nodeTargets={nodeTargets}
+            nodeTargetsError={nodeTargetsError}
             openInNewWindow={codeOpenInNewWindow}
             active={codeActive}
             onOpen={onOpenCode}
+            onNodeChange={onCodeNodeChange}
             onPathChange={onCodePathChange}
             onOpenInNewWindowChange={onCodeOpenInNewWindowChange}
+            onRefreshNodeTargets={onRefreshNodeTargets}
           />
           <CreateTabButton
             defaultNodeId={defaultNodeId}
             defaultPath={defaultPath}
             onCreate={(options) => onCreateTerminalTab(options)}
+            nodeTargets={nodeTargets}
+            nodeTargetsError={nodeTargetsError}
+            onRefreshNodeTargets={onRefreshNodeTargets}
           />
         </div>
       </div>

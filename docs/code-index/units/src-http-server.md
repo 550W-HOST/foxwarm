@@ -4,13 +4,11 @@ Files: src/httpServer.ts, src/httpServerAuth.test.ts
 
 ## Purpose
 
-Provides a unified HTTP server with Express, WebSocket support, and token-based authentication (via cookie or Bearer header). Serves as the shared HTTP infrastructure for all channels in the system. It distinguishes admin auth (the instance token) from WebUI guest auth contexts supplied by a guest-token verifier.
+Provides a unified HTTP server with Express, WebSocket support, and instance-token authentication via cookie or Bearer header. It serves as the shared HTTP infrastructure for all channels in the system. The current `testing` implementation has no guest-token verifier or guest-auth context API.
 
 ## Key Exports
 
 - `HttpServer` — class encapsulating Express app, HTTP server, WebSocket server, routing, and auth
-- `HttpAuthContext` — discriminated auth context (`admin` or `guest` with bound `sessionIds`) exposed to WebUI route handlers
-- `GuestTokenVerifier` — callback type used by WebUI to plug hashed guest-token verification into the shared server
 - `httpServer` — singleton instance variable (initialized externally)
 - `setHttpServer(instance)` — sets the singleton instance
 - `HttpServerOptions` — interface for server configuration
@@ -23,19 +21,17 @@ Provides a unified HTTP server with Express, WebSocket support, and token-based 
 |----------|----------------|-------------|
 | `HttpServer.constructor(port, token)` | ~43–56 | Initializes Express app, HTTP server, and WebSocket server |
 | `setupMiddleware()` | ~58–80 | Configures compression, JSON parsing, and cookie parsing |
-| `checkToken(req)` | ~90 | Validates the admin token from an Express request |
-| `checkIncomingToken(req)` | ~95 | Validates the admin token from a raw HTTP incoming message |
-| `setGuestTokenVerifier(verifier)` | ~100 | Installs/removes the async guest-token verifier used by WebUI |
-| `getAuthContext(req)` / `getIncomingAuthContext(req)` | ~105 | Resolves admin or guest auth context from cookies/Bearer headers |
-| `extractTokenFromHeaders(cookieHeader, authHeader)` | ~120 | Extracts `foxwarm_token`/legacy cookie or Bearer token before admin/guest classification |
-| `parseCookieToken(cookieHeader)` | ~105–115 | Parses cookie string and extracts foxwarm_token or alphabot_token |
-| `addRoute(route)` | ~117–133 | Registers an Express route with optional auth middleware and error handling |
-| `authMiddleware(req, res, next)` | ~135–139 | Express middleware that rejects unauthorized requests with 401 |
-| `addWebSocket(path, handler)` | ~141–144 | Registers a WebSocket handler for a given path |
-| `setupWebSocketHandlers()` | ~146–165 | Handles HTTP upgrade events, routing to registered WebSocket handlers |
-| `start()` | ~167–173 | Starts the HTTP server on the configured port |
-| `stop()` | ~175–183 | Gracefully shuts down the HTTP server |
-| `setHttpServer(instance)` | ~188 | Sets the module-level singleton |
+| `checkToken(req)` | ~80 | Validates the instance token from an Express request |
+| `checkIncomingToken(req)` | ~85 | Validates the instance token from a raw HTTP incoming message |
+| `checkTokenFromHeaders(cookieHeader, authHeader)` | ~90 | Checks the current cookie and then a Bearer token against the instance token |
+| `parseCookieToken(cookieHeader)` | ~110 | Parses cookie text and extracts `foxwarm_token` |
+| `addRoute(route)` | ~120 | Registers an Express route with optional auth middleware and error handling |
+| `authMiddleware(req, res, next)` | ~140 | Rejects requests without the instance token with 401 |
+| `addWebSocket(path, handler)` | ~150 | Registers a WebSocket handler for a given path |
+| `setupWebSocketHandlers()` | ~155 | Handles HTTP upgrade events and routes them by exact path |
+| `start()` | ~175 | Starts the HTTP server |
+| `stop()` | ~185 | Gracefully shuts down the HTTP server |
+| `setHttpServer(instance)` | ~200 | Sets or clears the module-level singleton |
 | `withServer(fn)` (test) | ~5–13 | Test helper that creates, starts, and tears down a server |
 
 ## Dependencies
@@ -44,12 +40,18 @@ Provides a unified HTTP server with Express, WebSocket support, and token-based 
 
 ## Behavior
 
-- Token auth checks cookies (`foxwarm_token`, `alphabot_token`) and `Authorization: Bearer` header. Admin routes require the stored instance secret; `auth: 'webui'` routes allow either admin or a guest context returned by the installed verifier.
+- Token auth checks the `foxwarm_token` cookie and the `Authorization: Bearer` header against the stored instance secret.
 - Routes can opt out of auth via `noAuth: true`.
-- Admin-route middleware returns 403 for a valid guest token and 401 for missing/invalid auth; WebUI-route middleware returns 401 for missing/invalid auth.
+- Authenticated route middleware returns 401 for missing or invalid auth.
 - WebSocket upgrade requests are matched by path; unmatched connections are destroyed.
 - Compression is enabled for all responses except streaming endpoints (`/stream`).
 - Route handlers are wrapped in try/catch, returning 500 on unhandled errors.
+
+## Design Decisions
+
+### D-http-auth-cookie-name
+
+[2026-08-06] Authenticated browser requests use only the `foxwarm_token` cookie. Bearer-token authentication is unchanged. Removed predecessor cookie aliases are not accepted as compatibility inputs.
 
 ## Integration
 

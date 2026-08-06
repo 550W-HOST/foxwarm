@@ -20,17 +20,19 @@ The Foxwarm `SKILL.md` entry point was rewritten to fit Foxwarm's SKILL.md-first
 
 ## Included upstream materials
 
-Included:
+The tracked contents of this skill directory are the bundled materials. They
+currently include:
 
 - Core reference docs under `references/`.
 - Helper scripts under `scripts/`.
-- Small artifact template files under `references/artifact-templates/`.
-- Small static/reference assets and superpower design notes needed by upstream docs.
+- Artifact templates and examples referenced by the methodology.
+- Tracked static/demo assets under `assets/`.
+- Upstream project, contribution, launch, and design/history documents retained
+  for provenance or reference.
+- The upstream license, citation, and Contributor Covenant files. The bundled
+  Contributor Covenant is explicitly marked as an upstream document and does
+  not designate a Foxwarm enforcement contact.
 
-Excluded from the bundled copy to keep Foxwarm lightweight:
-
-- `.git`, GitHub workflow/issue templates, launch docs, contribution docs.
-- Large demo media (`assets/demo.gif`, `assets/demo.cast`).
-- Upstream examples and script test fixtures.
-
-For the full upstream repository, use the upstream URL above.
+Repository metadata such as upstream `.git` internals and GitHub automation is
+not part of the bundled skill. For the canonical and complete upstream tree,
+use the upstream URL above.

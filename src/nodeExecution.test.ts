@@ -188,7 +188,7 @@ test('master-currentNode node tools bypass Node execution RPC', async () => {
 
   try {
     const result = await executeTools(
-      [{ id: 'local-read', name: 'read', args: { filePath: 'package.json', startLine: 1, endLine: 1 } }],
+      [{ id: 'local-read', name: 'read', args: { filePath: `${process.cwd()}/package.json`, startLine: 1, endLine: 1 } }],
       { sessionId: sourceId, session },
       session,
     );

@@ -1,6 +1,6 @@
 # Unit: src-channels-webui
 
-Files: src/channels/webuiChannel.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts
+Files: src/channels/webuiChannel.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts
 Secondary files: src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
 
 ## Purpose
@@ -27,6 +27,7 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
 - Model/provider and channel configuration, validation, and connectivity tests.
 - ASR and messaging-platform setup helpers.
 - Browser terminal REST/WebSocket routes.
+- Authenticated public-safe node/service summaries for WebUI launch selectors.
 - Read-only one-layer CTX-BLOCK expansion.
 - Registration of the independent optional Code routes.
 
@@ -39,6 +40,7 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
 - `channelFiles` for upload persistence and model-facing file descriptions.
 - `httpServer` for authenticated routes and WebSocket upgrades.
 - `terminalManager` and terminal routing for browser PTYs.
+- Node registry and runtime manager for approved-node metadata, online state, and versioned service summaries.
 - `webuiSettings` for instance branding.
 - `vscodeWebRoutes` for optional Code integration.
 
@@ -61,6 +63,7 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
 - Setup diagnostics and both raw and retained structured model writes resolve the active models file through the data-directory-only path contract in [D-config-models-data-path](./src-config.md#d-config-models-data-path).
 - Model setup diagnostics expose virtual strategy/targets/failover values, while session model selection remains the virtual key. Canonical backend contract: [model routing](../threads/model-routing.md).
 - The former custom workspace filesystem routes remain removed; authenticated file download remains available for tool/file affordances.
+- `GET /api/nodes` returns `master` plus approved remote node IDs, public labels/types, current online state, last-seen time, and only the allowlisted Code/terminal launcher service versions. Pending pairings, credentials, token hashes, model-tool schemas, other backend services, and private configuration are not part of this DTO.
 - `sendFile` is a channel no-op because the browser consumes file information through tool result metadata and authenticated download routes.
 
 ## Compatibility

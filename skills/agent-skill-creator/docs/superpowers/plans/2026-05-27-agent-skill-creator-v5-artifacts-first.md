@@ -98,7 +98,7 @@ This is a manual research task that unblocks all template work. The spec's Open 
 
 - [ ] **Step 1: Open Claude Code in this project**
 
-Start a fresh Claude Code session in `/Users/francylisboacharuto/agent-skill-creator/`. This task is conducted manually by a human + Claude pair, not by an agent.
+Start a fresh Claude Code session in `/path/to/agent-skill-creator/`. This task is conducted manually by a human + Claude pair, not by an agent.
 
 - [ ] **Step 2: Ask Claude to emit a minimal artifact**
 
@@ -205,7 +205,7 @@ Create `scripts/tests/__init__.py` as an empty file.
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd /Users/francylisboacharuto/agent-skill-creator
+cd /path/to/agent-skill-creator
 uv run python -m unittest scripts.tests.test_template_structure.LineChartTemplateTest -v
 ```
 
@@ -1339,9 +1339,9 @@ degradation note, bypass flags, and failure handling."
 - [ ] **Step 1: Read current Phase 2 sections to find insertion points**
 
 ```bash
-grep -n "Phase 2" /Users/francylisboacharuto/agent-skill-creator/SKILL.md | head -20
-grep -n "Phase 2" /Users/francylisboacharuto/agent-skill-creator/references/pipeline-phases.md | head -20
-head -50 /Users/francylisboacharuto/agent-skill-creator/references/phase2-design.md
+grep -n "Phase 2" /path/to/agent-skill-creator/SKILL.md | head -20
+grep -n "Phase 2" /path/to/agent-skill-creator/references/pipeline-phases.md | head -20
+head -50 /path/to/agent-skill-creator/references/phase2-design.md
 ```
 
 Identify the natural insertion points in each file. The plan does not pre-specify line numbers because they depend on the current file state at execution time.
@@ -1522,9 +1522,9 @@ The spec leaves the v4 skill selection to the implementation plan. Pick 10 repre
 - [ ] **Step 1: Inventory candidate v4 skills in this repo**
 
 ```bash
-find /Users/francylisboacharuto/agent-skill-creator/references/examples -name "SKILL.md" -type f
-find /Users/francylisboacharuto/agent-skill-creator -name "*.md" -path "*/examples/*" | head -20
-ls /Users/francylisboacharuto/agent-skill-creator/registry/skills/ 2>/dev/null
+find /path/to/agent-skill-creator/references/examples -name "SKILL.md" -type f
+find /path/to/agent-skill-creator -name "*.md" -path "*/examples/*" | head -20
+ls /path/to/agent-skill-creator/registry/skills/ 2>/dev/null
 ```
 
 Examine what exists. The README at the project root also lists named example skills — extract any that have concrete SKILL.md output documented.
@@ -1665,7 +1665,7 @@ handles v4-era descriptions without crashing."
 - [ ] **Step 1: Run the full test suite**
 
 ```bash
-cd /Users/francylisboacharuto/agent-skill-creator
+cd /path/to/agent-skill-creator
 uv run python -m unittest discover scripts/tests -v
 ```
 
@@ -1783,7 +1783,7 @@ Manual verification of Success Criterion #4 from the v6 spec."
 - [ ] **Step 1: Read current templates-guide.md to find insertion point**
 
 ```bash
-cat /Users/francylisboacharuto/agent-skill-creator/references/templates-guide.md
+cat /path/to/agent-skill-creator/references/templates-guide.md
 ```
 
 The existing guide covers the README activation template. Add a new section for artifact templates.
@@ -1843,7 +1843,7 @@ git commit -m "docs: document the four bundled artifact templates"
 - [ ] **Step 1: Read current README to find insertion point**
 
 ```bash
-head -80 /Users/francylisboacharuto/agent-skill-creator/README.md
+head -80 /path/to/agent-skill-creator/README.md
 ```
 
 The README starts with a project description. Add a "v6.0 — Artifacts" section near the top, after the headline but before usage instructions.
@@ -1947,7 +1947,7 @@ git commit -m "verify: spec coverage audit complete — all v6 spec sections cov
 - [ ] **Step 1: Run the full test suite one final time**
 
 ```bash
-cd /Users/francylisboacharuto/agent-skill-creator
+cd /path/to/agent-skill-creator
 uv run python -m unittest discover scripts/tests -v
 ```
 

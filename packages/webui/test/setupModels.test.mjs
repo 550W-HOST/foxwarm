@@ -65,6 +65,13 @@ function virtual(providerType, overrides = {}) {
   }
 }
 
+test('generated OOBE provider uses the current OpenAI model set and default', () => {
+  const provider = makeDefaultProvider(0)
+  assert.equal(provider.defaultModel, 'gpt-5.6-sol')
+  assert.equal(provider.models, 'gpt-5.6-sol\ngpt-5.6-terra\ngpt-5.6-luna')
+  assert.match(buildModelsYaml([provider], 'openai/gpt-5.6-sol'), /^default: "openai\/gpt-5\.6-sol"$/m)
+})
+
 test('setup status hydrates virtual targets and round-trips through structured request and YAML', () => {
   const drafts = hydrateProviderDrafts([
     {

@@ -32,10 +32,20 @@ import type { Message, MessagePart, QueueItem } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
 import { registerVscodeWebRoutes } from '../vscodeWebRoutes';
 import { externalizeMessages, externalizeQueueItems, getSafeRasterMimeType, resolveImageBlobPath } from '../imageBlobs';
+import { nodesManager } from '../nodes/manager';
+import { listApprovedNodes } from '../nodes/registry';
 
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 const MAX_QUEUED_PREVIEW_ITEMS = 20;
 const MAX_QUEUED_PREVIEW_TEXT_CHARS = 4000;
+const WEBUI_NODE_LAUNCH_SERVICES = ['vscode-fs', 'vscode-git', 'vscode-pty'] as const;
+
+function pickWebUiNodeLaunchServices(services: Record<string, number> | undefined): Record<string, number> {
+  return Object.fromEntries(WEBUI_NODE_LAUNCH_SERVICES.flatMap((service) => {
+    const version = Number(services?.[service] || 0);
+    return Number.isInteger(version) && version > 0 ? [[service, version]] : [];
+  }));
+}
 
 function isPlaceholderSecret(value: unknown): boolean {
   return typeof value === 'string' && MODEL_PLACEHOLDER_RE.test(value.trim()) && value.trim().length > 0;
@@ -1234,6 +1244,41 @@ export class WebUIChannel implements Channel {
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session child model');
             res.status(400).json({ error: e.message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/nodes',
+        method: 'GET',
+        handler: async (_req: express.Request, res: express.Response) => {
+          try {
+            const approvedNodes = await listApprovedNodes();
+            const runtimeNodes = new Map(nodesManager.listNodeServiceSummaries().map(node => [node.id, node]));
+            const nodes = [
+              {
+                id: 'master',
+                type: 'master',
+                displayName: 'master',
+                online: true,
+                services: {},
+              },
+              ...approvedNodes.map((approved) => {
+                const runtime = runtimeNodes.get(approved.nodeId);
+                return {
+                  id: approved.nodeId,
+                  type: runtime?.type || approved.nodeType,
+                  displayName: approved.displayName || approved.requestedName || approved.nodeId,
+                  online: !!runtime,
+                  lastSeenAt: approved.lastSeenAt,
+                  services: pickWebUiNodeLaunchServices(runtime?.services || approved.capabilities?.services),
+                };
+              }),
+            ];
+            res.json({ nodes });
+          } catch (e: any) {
+            logger.error({ err: e }, 'Failed to list WebUI nodes');
+            res.status(500).json({ error: e.message });
           }
         },
       });

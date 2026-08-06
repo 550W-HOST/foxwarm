@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, SquareTerminal } from 'lucide-react'
+import NodeTargetSelect from './NodeTargetSelect'
+import { getNodeTargetAvailability, MASTER_NODE_TARGET, preserveSelectedNodeTarget, type WebUiNodeTarget } from '../nodeTargets'
 
 interface CreateTabButtonProps {
   defaultNodeId: string
   defaultPath: string
   onCreate: (options: { nodeId: string; path: string }) => void
+  nodeTargets?: readonly WebUiNodeTarget[]
+  nodeTargetsError?: string
+  onRefreshNodeTargets?: () => void
 }
 
-export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate }: CreateTabButtonProps) {
+export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, nodeTargets, nodeTargetsError, onRefreshNodeTargets }: CreateTabButtonProps) {
   const [open, setOpen] = useState(false)
   const [nodeId, setNodeId] = useState(defaultNodeId || 'master')
   const [path, setPath] = useState(defaultPath || '')
@@ -36,6 +41,10 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate }
 
   const label = 'Terminal'
   const baseClass = 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
+  const availableTargets = nodeTargets || [MASTER_NODE_TARGET]
+  const selectedTarget = preserveSelectedNodeTarget(availableTargets, nodeId).find(node => node.id === nodeId)
+  const selectedAvailability = selectedTarget ? getNodeTargetAvailability(selectedTarget, 'vscode-pty') : { available: false, reason: 'unavailable' }
+  const customCreateAvailable = nodeTargets ? selectedAvailability.available : true
 
   const handleDefaultCreate = () => {
     onCreate({ nodeId: defaultNodeId || 'master', path: defaultPath || '/' })
@@ -58,7 +67,12 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate }
           <span>{label}</span>
         </button>
         <button
-          onClick={() => setOpen((value) => !value)}
+          onClick={() => {
+            setOpen((value) => {
+              if (!value) onRefreshNodeTargets?.()
+              return !value
+            })
+          }}
           className={`inline-flex items-center justify-center rounded-lg px-2 transition-colors ${baseClass}`}
           title={`Custom ${label.toLowerCase()} tab`}
         >
@@ -70,16 +84,19 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate }
         <div className="absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-gray-200 bg-white p-3 shadow-xl dark:border-gray-700 dark:bg-gray-800">
           <div className="text-sm font-semibold text-gray-900 dark:text-white">Create {label.toLowerCase()} tab</div>
           <div className="mt-3 space-y-3">
-            <div>
+            {nodeTargets && <div>
               <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Node</label>
-              <select
+              <NodeTargetSelect
                 value={nodeId}
-                onChange={(event) => setNodeId(event.target.value)}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
-              >
-                <option value="master">master</option>
-              </select>
-            </div>
+                nodes={availableTargets}
+                requiredService="vscode-pty"
+                onChange={setNodeId}
+              />
+              {nodeTargetsError && <div className="mt-1 text-xs text-red-600 dark:text-red-400">{nodeTargetsError}</div>}
+              {!selectedAvailability.available && !nodeTargetsError && (
+                <div className="mt-1 text-xs text-amber-600 dark:text-amber-400">Selected node is {selectedAvailability.reason}.</div>
+              )}
+            </div>}
             <div>
               <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Path</label>
               <input
@@ -98,7 +115,8 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate }
               </button>
               <button
                 onClick={handleCustomCreate}
-                className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700"
+                disabled={!customCreateAvailable}
+                className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Create tab
               </button>

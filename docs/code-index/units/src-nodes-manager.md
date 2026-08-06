@@ -25,6 +25,7 @@ Maintains the in-memory view of connected nodes and routes tool/file/session req
 | `disconnectNode(nodeId, reason?)` | Forcibly removes a non-master runtime node, rejects pending operations for it, and closes its WebSocket. |
 | `getCurrentNode(sessionId)` / `setCurrentNode(sessionId, nodeId)` | Reads or validates a session's current node selection. |
 | `getNode(nodeId)` / `listNodes()` / `listNodesWithTools()` | Query runtime node state and dynamic capabilities. |
+| `listNodeServiceSummaries()` | Returns a copy of connected node IDs/types/service versions and activity without exposing model-tool schemas. |
 | `executeNodeTool(...)` / `executeTool(...)` | Dispatches a tool call locally for `master` or over WebSocket for a remote node; direct parallel exec may provide a node/cwd routing snapshot. |
 | `handleToolResponse(...)` / `handleToolError(...)` | Resolves/rejects a pending remote tool call by call id. |
 | `adaptLegacyRemoteNodeToolResult(result)` | Converts the explicitly supported old remote-node image result shapes to current structured inline data without mutating canonical or malformed values. |
@@ -65,7 +66,9 @@ Maintains the in-memory view of connected nodes and routes tool/file/session req
 
 - `src/nodes/websocket.ts` registers authenticated node sockets with `registerNodeWithTools`, forwards responses/events into this manager, and unregisters sockets on close/error.
 - `src/commands.ts` uses `nodesManager` for `/node` list/switch/remove/move runtime behavior.
-- `src/nodeExecutionService.ts` validates the closed model-tool forwarding request before calling `executeTool`; `src/llm.ts`, dynamic node tools, and ToolScript use that service for remote execution. Node management/listing and channel/file helpers continue to query the singleton directly.
+- `src/nodeExecutionService.ts` validates the closed model-tool forwarding request before calling `executeTool`; `src/llm.ts`, dynamic node tools, and ToolScript use that service for remote execution. Main-local node management/listing and channel/file helpers continue to query the singleton directly.
+- `src/tools/nodeTools.ts` and `src/tools/unifiedSearch.ts` use the fixed Node facade where Session-worker placement requires Main-owned topology or execution.
+- The WebUI node-summary route combines `listNodeServiceSummaries()` with approved registry records so launch selectors can distinguish online capabilities from offline snapshots.
 
 ## Design Decisions
 

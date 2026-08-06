@@ -74,7 +74,7 @@ before(async () => {
   page = await browser.newPage()
   await page.setViewport({ width: 1440, height: 900 })
   await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'networkidle2' })
-  await page.waitForFunction(() => !!window.alphabotTest, { timeout: 15_000 })
+  await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
 
   await page.evaluate(() => {
     const token = localStorage.getItem('foxwarm_token')
@@ -82,7 +82,7 @@ before(async () => {
     if (token) localStorage.setItem('foxwarm_token', token)
   })
   await page.reload({ waitUntil: 'networkidle2' })
-  await page.waitForFunction(() => !!window.alphabotTest, { timeout: 15_000 })
+  await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
   await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
 
   sessions = await page.evaluate(async () => {
@@ -106,7 +106,7 @@ after(async () => {
 })
 
 test('sidebar refresh does not refocus the unchanged current session, but a real selection does', async () => {
-  await page.evaluate((sessionId) => window.alphabotTest.switchToSession(sessionId), sidebarPrimarySessionId)
+  await page.evaluate((sessionId) => window.foxwarmTest.switchToSession(sessionId), sidebarPrimarySessionId)
   await waitForChat(sidebarPrimarySessionId)
   await page.waitForFunction((sessionId) => {
     const container = document.querySelector('[data-session-list-scroll-container]')
@@ -162,7 +162,7 @@ test('sidebar refresh does not refocus the unchanged current session, but a real
   assert.equal(afterRefresh?.rowVisible, false)
   assert.ok(Math.abs(afterRefresh.scrollTop - beforeRefresh.scrollTop) <= 2)
 
-  await page.evaluate((sessionId) => window.alphabotTest.switchToSession(sessionId), sidebarSecondarySessionId)
+  await page.evaluate((sessionId) => window.foxwarmTest.switchToSession(sessionId), sidebarSecondarySessionId)
   await waitForChat(sidebarSecondarySessionId)
   await page.waitForFunction((sessionId) => {
     const container = document.querySelector('[data-session-list-scroll-container]')
@@ -215,7 +215,7 @@ test('full timeline prepend preserves a stable row while content below resizes',
 
 test('continued user scrolling cancels the stale prepend restore target', async () => {
   await page.reload({ waitUntil: 'networkidle2' })
-  await page.waitForFunction(() => !!window.alphabotTest, { timeout: 15_000 })
+  await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
   await openPersistentChat(primarySessionId)
   await page.waitForFunction(() => document.body.textContent?.includes('Scroll upward to load'), { timeout: 15_000 })
 

@@ -348,7 +348,7 @@ with open('my-skill-api-v1.0.0.zip', 'rb') as f:
 
 # 3. Use in production
 response = client.messages.create(
-    model="claude-sonnet-4",
+    model="claude-opus-5",
     messages=[{"role": "user", "content": query}],
     container={"type": "custom_skill", "skill_id": skill.id},
     betas=["code-execution-2025-08-25", "skills-2025-10-02"]

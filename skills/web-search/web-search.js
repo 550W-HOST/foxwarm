@@ -32,7 +32,7 @@ const GEMINI_SECRET_PATHS = {
   ],
 };
 
-const DEFAULT_OPENAI_MODEL = 'gpt-5.5';
+const DEFAULT_OPENAI_MODEL = 'gpt-5.6-sol';
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_OPENAI_WEB_SEARCH_TOOL = 'web_search';
 const DEFAULT_OPENAI_TOOL_CHOICE = 'required';
@@ -1000,6 +1000,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  DEFAULT_OPENAI_MODEL,
   findGptModelCandidates,
   chooseGptCandidate,
   WEB_SEARCH_REQUEST_TIMEOUT_MS,

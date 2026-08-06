@@ -630,7 +630,7 @@ export interface ModelOverrideHandler {
 ```yaml
 enabled: false
 
-teacherModel: openai/gpt-5.4
+teacherModel: openai/gpt-5.6-sol
 studentModel: local/qwen3-8b
 
 schedule:

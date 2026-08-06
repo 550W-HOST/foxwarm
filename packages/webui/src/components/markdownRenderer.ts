@@ -1,7 +1,7 @@
 import DOMPurify from 'dompurify'
 import katex from 'katex'
 import { Marked } from 'marked'
-import type { Tokens, TokenizerAndRendererExtension } from 'marked'
+import type { Token, Tokens, TokenizerAndRendererExtension } from 'marked'
 
 type MathToken = Tokens.Generic & {
   text: string
@@ -12,6 +12,11 @@ type MathPlaceholder = {
   marker: string
   html: string
 }
+
+export type MarkdownRenderSegment =
+  | { kind: 'html'; html: string }
+  | { kind: 'latex'; raw: string; source: string; html: string }
+  | { kind: 'mermaid'; raw: string; source: string }
 
 type MathRenderContext = {
   markerPrefix: string
@@ -244,7 +249,7 @@ const replaceMathPlaceholders = (html: string, placeholders: MathPlaceholder[]):
   return placeholders.reduce((current, placeholder) => current.split(placeholder.marker).join(placeholder.html), html)
 }
 
-export const renderMarkdownWithSanitizer = (text: string, sanitizer: HtmlSanitizer = sanitizeHtml): string => {
+const renderMarkdownTokens = (tokens: Token[], sanitizer: HtmlSanitizer): string => {
   const previousContext = activeMathRenderContext
   const context: MathRenderContext = {
     markerPrefix: createMathMarkerPrefix(),
@@ -254,7 +259,7 @@ export const renderMarkdownWithSanitizer = (text: string, sanitizer: HtmlSanitiz
   activeMathRenderContext = context
   let html = ''
   try {
-    html = markdown.parse(text) as string
+    html = markdown.parser(tokens) as string
   } finally {
     activeMathRenderContext = previousContext
   }
@@ -263,4 +268,50 @@ export const renderMarkdownWithSanitizer = (text: string, sanitizer: HtmlSanitiz
   return replaceMathPlaceholders(sanitized, context.placeholders)
 }
 
+export const renderMarkdownWithSanitizer = (text: string, sanitizer: HtmlSanitizer = sanitizeHtml): string => {
+  return renderMarkdownTokens(markdown.lexer(text), sanitizer)
+}
+
 export const renderMarkdown = (text: string): string => renderMarkdownWithSanitizer(text)
+
+export const renderAssistantMarkdownSegmentsWithSanitizer = (
+  text: string,
+  sanitizer: HtmlSanitizer = sanitizeHtml,
+): MarkdownRenderSegment[] => {
+  const segments: MarkdownRenderSegment[] = []
+  let ordinaryTokens: Token[] = []
+
+  const flushOrdinaryTokens = () => {
+    if (ordinaryTokens.length === 0) return
+    const html = renderMarkdownTokens(ordinaryTokens, sanitizer)
+    if (html) segments.push({ kind: 'html', html })
+    ordinaryTokens = []
+  }
+
+  for (const token of markdown.lexer(text)) {
+    if (token.type === 'code' && token.lang?.trim().toLowerCase() === 'mermaid') {
+      flushOrdinaryTokens()
+      segments.push({ kind: 'mermaid', raw: token.raw, source: token.text })
+      continue
+    }
+    if (token.type === 'displayMathBlock') {
+      const mathToken = token as MathToken
+      flushOrdinaryTokens()
+      segments.push({
+        kind: 'latex',
+        raw: token.raw,
+        source: mathToken.text,
+        html: renderKatexHtml(mathToken.text, true),
+      })
+      continue
+    }
+    ordinaryTokens.push(token)
+  }
+
+  flushOrdinaryTokens()
+  return segments
+}
+
+export const renderAssistantMarkdownSegments = (text: string): MarkdownRenderSegment[] => (
+  renderAssistantMarkdownSegmentsWithSanitizer(text)
+)

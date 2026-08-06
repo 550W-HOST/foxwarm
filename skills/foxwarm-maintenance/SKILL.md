@@ -1,17 +1,20 @@
 ---
 name: foxwarm-maintenance
-description: "Use for safely maintaining a Foxwarm installation: restarting, reading logs, updating from upstream, and protecting runtime data in state/agents/data_dir layouts."
+description: "Use for safely maintaining a Foxwarm installation: backing up or restoring data and SQLite stores, restarting, reading logs, updating from upstream, and protecting runtime data in state/agents/data_dir layouts."
 ---
 
 # Foxwarm Maintenance
 
-Use this skill when the task is to operate or update a running Foxwarm installation: inspect health, read logs, restart, upgrade from upstream, or reason about `data_dir` / `state/` / `agents/` layout safety.
+Use this skill when the task is to operate or update a running Foxwarm installation: back up or restore data, inspect health, read logs, restart, upgrade from upstream, or reason about `data_dir` / `state/` / `agents/` layout safety.
 
 ## Safety Rules
 
 - Do not restart, stop, upgrade, migrate data layout, or rewrite git history unless the user has authorized that action.
 - Never use broad destructive commands such as `git reset --hard`, `git clean -fdx`, or unscoped `rm -rf` in a live install. They can delete runtime data.
 - Treat `state/`, `agents/`, tokens, model/channel configs, session archives, vector DBs, and logs as user data unless proven otherwise.
+- Back up and restore the complete data root as one coordinated restore set; a snapshot of one SQLite database is only a component backup.
+- For a live SQLite database, use an online backup API or a verified quiesced checkpoint/copy procedure. Never copy only the main `.sqlite` file while WAL writers are active.
+- Stop or isolate Foxwarm before replacing live restore targets. Restore into new paths and verify first; never let a helper overwrite a live database in place.
 - Before changing code or pulling from upstream, inspect the source repo status and the data directory layout.
 - Prefer fast-forward/merge-based updates and scoped file operations. Preserve evidence and report blockers instead of forcing through conflicts.
 
@@ -45,6 +48,27 @@ Bundled skills live in the program repo under:
 ```text
 <repo>/skills/
 ```
+
+## Back Up or Restore Data
+
+For backup composition, recovery safety, the bundled SQLite fixed-chunk helper,
+and legacy chunk read compatibility, read:
+
+```text
+skills/foxwarm-maintenance/references/BACKUP-RESTORE.md
+```
+
+The helper has one explicit entry point:
+
+```bash
+python3 skills/foxwarm-maintenance/scripts/sqlite-chunks.py create SOURCE.sqlite NEW-SNAPSHOT-DIRECTORY
+python3 skills/foxwarm-maintenance/scripts/sqlite-chunks.py verify SNAPSHOT-DIRECTORY
+python3 skills/foxwarm-maintenance/scripts/sqlite-chunks.py restore SNAPSHOT-DIRECTORY NEW.sqlite
+```
+
+It creates or checks one SQLite component. It does not snapshot the whole data
+root, create a cross-database transaction, upload data, manage retention, or
+replace a live database.
 
 ## Read Logs
 
