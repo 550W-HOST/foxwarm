@@ -5,6 +5,7 @@ import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
 import { ProcessRpcClientTransport, ProcessRpcServer, RpcClient, RpcServiceRegistry } from './rpc';
 import { createMainManagementToolServiceHandler, mainManagementToolServiceDescriptor } from './mainManagementToolService';
 import { createMcpExternalServiceHandler, mcpExternalServiceDescriptor } from './mcpExternalService';
@@ -244,7 +245,8 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   (nodesManager as any).listNodesWithTools = () => [{ id: 'master', type: 'master', tools: [{ name: 'read', description: 'read', parameters: { type: 'object' } }] },
     { id: 'reverse-node', type: 'node', tools: [{ name: 'read', description: 'remote read', parameters: { type: 'object' } }] }];
   (nodesManager as any).setCurrentNode = () => {};
-  (nodesManager as any).readFileFromNode = async () => ({ dataBase64: 'c2VjcmV0LWJ5dGVz', sizeBytes: 12, sha256: 'source-hash' });
+  (nodesManager as any).readFileFromNode = async () => ({ dataBase64: 'c2VjcmV0LWJ5dGVz', sizeBytes: 12,
+    sha256: createHash('sha256').update('secret-bytes').digest('hex') });
   (nodesManager as any).writeFileToNode = async () => ({ sha256: 'a'.repeat(64), overwritten: false, absolutePath: '/remote/to.txt' });
   (mcpClient as any).listServers = async () => [{ name: 'reverse-mcp', enabled: true, transport: 'http', argsCount: 0,
     envKeys: [] as string[], headerKeys: [] as string[], hasToken: false }];

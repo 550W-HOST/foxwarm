@@ -9,6 +9,7 @@ import { call_tool } from './tools';
 import { createNodeExecutionServiceHandler, nodeExecutionServiceDescriptor } from './nodeExecutionService';
 import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
 import { getAgentDir } from './config';
+import { createHash } from 'node:crypto';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -50,27 +51,41 @@ test('Node compound copy keeps bytes inside Main for master and remote sources',
   const sourceId = makeId('node_copy_source');
   await sessionManager.getSession(sourceId);
   const originals = { read: nodesManager.readFileFromNode, write: nodesManager.writeFileToNode };
-  const writes: any[] = [];
-  (nodesManager as any).readFileFromNode = async (nodeId: string) => ({ dataBase64: `bytes-${nodeId}`, sizeBytes: 7, sha256: 'source' });
+  const reads: any[] = []; const writes: any[] = [];
+  (nodesManager as any).readFileFromNode = async (...args: any[]) => {
+    reads.push(args); const data = Buffer.from(`bytes-${args[0]}`);
+    return { dataBase64: data.toString('base64'), sizeBytes: data.length, sha256: createHash('sha256').update(data).digest('hex') };
+  };
   const sha256 = 'a'.repeat(64);
   (nodesManager as any).writeFileToNode = async (...args: any[]) => { writes.push(args); return { sha256, overwritten: false }; };
   try {
     const first = await nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'master', sourcePath: 'a', targetNode: 'remote-a', targetPath: 'b' });
     const second = await nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'remote-a', sourcePath: 'c', targetNode: 'remote-b', targetPath: 'd', overwrite: true });
+    await nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'master', sourcePath: '  a  ', targetNode: 'remote-a', targetPath: '   ' });
     assert.equal(first.sha256, sha256); assert.equal(second.overwritten, false);
     assert.deepEqual(writes.map(call => call.slice(0, 5)), [
-      ['remote-a', 'b', 'bytes-master', false, sourceId],
-      ['remote-b', 'd', 'bytes-remote-a', true, sourceId],
+      ['remote-a', 'b', Buffer.from('bytes-master').toString('base64'), false, sourceId],
+      ['remote-b', 'd', Buffer.from('bytes-remote-a').toString('base64'), true, sourceId],
+      ['remote-a', '   ', Buffer.from('bytes-master').toString('base64'), false, sourceId],
     ]);
+    assert.equal(reads[2][1], '  a  ');
     assert.equal(JSON.stringify([first, second]).includes('bytes-'), false);
     assert.deepEqual(Object.keys(first).sort(), ['overwritten', 'sha256', 'sizeBytes', 'sourceNode', 'sourcePath', 'targetNode', 'targetPath']);
     (nodesManager as any).writeFileToNode = async () => ({ sha256: 'bad', overwritten: false });
     await assert.rejects(() => nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'master', sourcePath: 'a', targetNode: 'remote-a', targetPath: 'b' }),
       { code: 'NODE_EXECUTION_INVALID_RESPONSE' });
-    (nodesManager as any).readFileFromNode = async () => ({ dataBase64: '', sizeBytes: -1, sha256: 'source' });
-    (nodesManager as any).writeFileToNode = async () => ({ sha256, overwritten: false });
-    await assert.rejects(() => nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'master', sourcePath: 'a', targetNode: 'remote-a', targetPath: 'b' }),
-      { code: 'NODE_EXECUTION_INVALID_RESPONSE' });
+    const writesBeforeInvalidSource = writes.length;
+    for (const invalid of [
+      { dataBase64: '***', sizeBytes: 1, sha256: 'a'.repeat(64) },
+      { dataBase64: 'YQ==', sizeBytes: 2, sha256: createHash('sha256').update('a').digest('hex') },
+      { dataBase64: 'YQ==', sizeBytes: 1, sha256: 'a'.repeat(64) },
+    ]) {
+      (nodesManager as any).readFileFromNode = async () => invalid;
+      (nodesManager as any).writeFileToNode = async (...args: any[]) => { writes.push(args); return { sha256, overwritten: false }; };
+      await assert.rejects(() => nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'master', sourcePath: 'a', targetNode: 'remote-a', targetPath: 'b' }),
+        { code: 'NODE_EXECUTION_INVALID_RESPONSE' });
+      assert.equal(writes.length, writesBeforeInvalidSource);
+    }
   } finally {
     (nodesManager as any).readFileFromNode = originals.read; (nodesManager as any).writeFileToNode = originals.write;
     await cleanup(sourceId);
@@ -83,8 +98,17 @@ test('Node topology bounds schemas without invoking capability accessors', async
   let accessorCalls = 0;
   const accessorTool: any = { name: 'accessor', description: 'safe' };
   Object.defineProperty(accessorTool, 'parameters', { enumerable: true, get() { accessorCalls += 1; return { type: 'object' }; } });
+  const specialSchema: any = { type: 'object' };
+  Object.defineProperty(specialSchema, '__proto__', { enumerable: true, writable: true, configurable: true,
+    value: { nested: 'proto-data' } });
+  Object.defineProperty(specialSchema, 'constructor', { enumerable: true, writable: true, configurable: true,
+    value: { nested: 'constructor-data' } });
+  specialSchema.prototype = { nested: 'prototype-data' };
+  specialSchema.nested = {};
+  Object.defineProperty(specialSchema.nested, '__proto__', { enumerable: true, writable: true, configurable: true, value: 'nested-proto' });
+  specialSchema.nested.constructor = 'nested-constructor'; specialSchema.nested.prototype = 'nested-prototype';
   (nodesManager as any).listNodesWithTools = () => [{ id: 'bounded', type: 'node', tools: [
-    { name: 'valid', description: 'd'.repeat(3000), parameters: { type: 'object', finite: 1 } },
+    { name: 'valid', description: 'd'.repeat(3000), parameters: specialSchema },
     { name: 'oversize', parameters: { value: 'x'.repeat(20 * 1024) } }, accessorTool,
   ] }];
   (nodesManager as any).listNodes = () => [{ id: 'bounded', lastActivity: 1 }];
@@ -92,7 +116,15 @@ test('Node topology bounds schemas without invoking capability accessors', async
     const [node] = await nodeExecution.listNodeTopology(sourceId);
     assert.equal(accessorCalls, 0); assert.equal(node.tools.length, 3);
     assert.equal(node.tools[0].description?.length, 2000);
-    assert.deepEqual(node.tools[0].parameters, { type: 'object', finite: 1 });
+    const schema: any = node.tools[0].parameters;
+    assert.equal(Object.getPrototypeOf(schema), Object.prototype);
+    assert.equal(Object.prototype.hasOwnProperty.call(schema, '__proto__'), true);
+    assert.deepEqual(schema.__proto__, { nested: 'proto-data' });
+    assert.deepEqual(schema.constructor, { nested: 'constructor-data' });
+    assert.deepEqual(schema.prototype, { nested: 'prototype-data' });
+    assert.equal(Object.getPrototypeOf(schema.nested), Object.prototype);
+    assert.deepEqual({ proto: schema.nested.__proto__, constructor: schema.nested.constructor, prototype: schema.nested.prototype },
+      { proto: 'nested-proto', constructor: 'nested-constructor', prototype: 'nested-prototype' });
     assert.equal(node.tools[1].parameters, undefined); assert.equal(node.tools[2].parameters, undefined);
     assert.ok(Buffer.byteLength(JSON.stringify(node), 'utf8') < 256 * 1024);
   } finally {
@@ -246,7 +278,8 @@ test('Node execution rejects master, stale, offline, unadvertised, and isolated-
     (nodesManager as any).listNodesWithTools = () => [{ id: 'bound-node', type: 'node', tools: [{ name: 'read' }] },
       { id: 'other-node', type: 'node', tools: [{ name: 'read' }] }];
     (nodesManager as any).setCurrentNode = () => {};
-    (nodesManager as any).readFileFromNode = async () => ({ dataBase64: 'Ynl0ZXM=', sizeBytes: 5, sha256: 'a'.repeat(64) });
+    (nodesManager as any).readFileFromNode = async () => ({ dataBase64: 'Ynl0ZXM=', sizeBytes: 5,
+      sha256: createHash('sha256').update('bytes').digest('hex') });
     (nodesManager as any).writeFileToNode = async () => ({ sha256: 'b'.repeat(64), overwritten: false });
     assert.deepEqual(await nodeExecution.executeRemoteNodeTool(sourceId, 'bound-node', 'read', {}), { ok: true });
     assert.deepEqual((await nodeExecution.listNodeTopology(sourceId)).map(node => node.id), ['bound-node']);

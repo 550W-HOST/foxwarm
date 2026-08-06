@@ -86,6 +86,10 @@ Catalog projection delivery and main-owned lifecycle handoff are deliberately de
 
 [2026-08-04] Optional workers target fault containment and parallel throughput, with on-demand session resource release. They do not claim security isolation. Session workers may hold provider credentials and connect directly to providers; simple session-local tool steps should remain inside the session worker when possible.
 
+### D-process-topology-trusted-session-worker-boundary
+
+[2026-08-06] Session workers, authoritative Session state, and Session-control credentials stay inside Main's trusted host/deployment boundary and use only local process IPC or Unix-domain transport. Generic remote nodes must not host Session workers; they remain bounded tool/execution targets through fixed Node services. Future Docker or bwrap environments are execution placements driven by the trusted local Session worker or trusted host sandbox supervisor, not Session-worker placements. Never expose the Docker socket inside an untrusted sandbox. Remote Session-worker transport is not part of the roadmap.
+
 ### D-process-topology-worker-owned-session
 
 [2026-08-04] A future session worker owns its session's hydrated state and high-frequency turn work instead of routing full history serialization through the main process. Persisted waits and ToolScript snapshots count as idle. The initial release has no fixed maximum worker count, while leaving room for a later spawn-time resource check.

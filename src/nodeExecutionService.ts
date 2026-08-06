@@ -9,6 +9,7 @@ import { nodesManager } from './nodes/manager';
 import type { Session } from './types';
 import { getAgentDir } from './config';
 import { checkToolPermission } from './isolatedCheck';
+import { createHash } from 'node:crypto';
 
 export type NodeExecutionRoutingSnapshot = {
   currentNode: string;
@@ -58,6 +59,12 @@ function requireBoundedString(value: unknown, field: string, maxLength: number):
   return result;
 }
 
+function requireBoundedPath(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value === '') throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', `${field} must be a non-empty string.`);
+  if (value.length > 4096) throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', `${field} exceeds 4096 characters.`);
+  return value;
+}
+
 function plainJsonWithin(value: unknown, maxBytes: number): unknown | undefined {
   const seen = new WeakSet<object>();
   const copy = (item: unknown, depth: number): unknown => {
@@ -82,11 +89,11 @@ function plainJsonWithin(value: unknown, maxBytes: number): unknown | undefined 
     if (proto !== Object.prototype && proto !== null) throw new Error();
     if (Reflect.ownKeys(item).length > 2048) throw new Error();
     if (Object.getOwnPropertySymbols(item).some(symbol => Object.getOwnPropertyDescriptor(item, symbol)?.enumerable)) throw new Error();
-    const result: Record<string, unknown> = {};
+    const result: Record<string, unknown> = Object.create(proto);
     for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(item))) {
       if (!descriptor.enumerable) continue;
       if (!('value' in descriptor) || key.length > 256) throw new Error();
-      result[key] = copy(descriptor.value, depth + 1);
+      Object.defineProperty(result, key, { value: copy(descriptor.value, depth + 1), enumerable: true, writable: true, configurable: true });
     }
     seen.delete(item as object); return result;
   };
@@ -234,15 +241,24 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
     async copy(input) {
       const { sourceSessionId } = await requireSource(input,
         ['sourceSessionId', 'sourceNode', 'sourcePath', 'targetNode', 'targetPath', 'overwrite'], 'Node copy request');
-      const sourceNode = requireBoundedString(input.sourceNode, 'sourceNode', 128); const sourcePath = requireBoundedString(input.sourcePath, 'sourcePath', 4096);
-      const targetNode = requireBoundedString(input.targetNode, 'targetNode', 128); const targetPath = requireBoundedString(input.targetPath, 'targetPath', 4096);
+      const sourceNode = requireBoundedString(input.sourceNode, 'sourceNode', 128); const sourcePath = requireBoundedPath(input.sourcePath, 'sourcePath');
+      const targetNode = requireBoundedString(input.targetNode, 'targetNode', 128); const targetPath = requireBoundedPath(input.targetPath, 'targetPath');
       if (input.overwrite !== undefined && typeof input.overwrite !== 'boolean') throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'overwrite must be a boolean.');
       await checkToolPermission('copy_between_nodes', sourceSessionId, 'master', { sourceNode, sourcePath, targetNode, targetPath, overwrite: input.overwrite === true });
       if (sourceNode !== 'master') await requireNodeExecutionTarget(sourceSessionId, sourceNode);
       if (targetNode !== 'master') await requireNodeExecutionTarget(sourceSessionId, targetNode);
       const file = await nodesManager.readFileFromNode(sourceNode, sourcePath, sourceSessionId);
+      if (typeof file.dataBase64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(file.dataBase64)) {
+        invalidResponse('Node copy source returned invalid base64 data.');
+      }
+      const decoded = Buffer.from(file.dataBase64, 'base64');
+      if (decoded.toString('base64') !== file.dataBase64) invalidResponse('Node copy source returned non-canonical base64 data.');
+      if (!Number.isSafeInteger(file.sizeBytes) || file.sizeBytes < 0 || file.sizeBytes !== decoded.length) invalidResponse('Node copy source returned an invalid sizeBytes.');
+      if (typeof file.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(file.sha256)
+        || createHash('sha256').update(decoded).digest('hex').toLowerCase() !== file.sha256.toLowerCase()) {
+        invalidResponse('Node copy source returned an invalid sha256.');
+      }
       const written = await nodesManager.writeFileToNode(targetNode, targetPath, file.dataBase64, input.overwrite === true, sourceSessionId);
-      if (!Number.isSafeInteger(file.sizeBytes) || file.sizeBytes < 0) invalidResponse('Node copy returned an invalid sizeBytes.');
       if (typeof written.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(written.sha256)) invalidResponse('Node copy returned an invalid sha256.');
       if (typeof written.overwritten !== 'boolean') invalidResponse('Node copy returned an invalid overwritten flag.');
       if (written.absolutePath !== undefined && (typeof written.absolutePath !== 'string' || written.absolutePath.length > 4096)) invalidResponse('Node copy returned an invalid absolutePath.');
