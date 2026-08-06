@@ -291,7 +291,10 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   const projectionRegistry = new SessionWorkerProjectionRegistry();
   const publicationIdentity = { sessionId, generation: ownership.generation, incarnationId };
   projectionRegistry.establish(publicationIdentity);
-  const published: any[] = []; projectionRegistry.subscribe(entry => { published.push(entry); });
+  let failPublicationReply = false;
+  const published: any[] = []; projectionRegistry.subscribe(entry => {
+    published.push(entry); if (failPublicationReply) throw new Error('publication reply disconnected');
+  });
   reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ expectedSourceSessionId: sessionId }));
   reverseRegistry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: sessionId }));
   reverseRegistry.register(fileDeliveryServiceDescriptor, createFileDeliveryServiceHandler({ expectedSourceSessionId: sessionId }));
@@ -387,14 +390,18 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.match(afterWait.history.at(-1).parts[0].text, /"loadedLocalVectorOwner":false/);
     if (waitTimer) await timers.deleteTimer(waitTimer.id, sessionId);
 
-    const cursorBeforeInvalid = store.getOwnership(sessionId).mailboxCursor;
-    store.enqueueIntent(sessionId, 'invalid-item', 'enqueue', { type: 'obsolete-kind', parts: [{ text: 'bad' }] });
-    await assert.rejects(() => runtime.call('runPending', { limit: 8 }), assertRpcCode('SESSION_WORKER_INVALID_QUEUE_ITEM'));
-    assert.equal(store.getOwnership(sessionId).mailboxCursor, cursorBeforeInvalid);
-    assert.equal((await fs.readJson(statePath)).lastAppliedMailboxId, cursorBeforeInvalid);
     const accessor: Record<string, unknown> = { type: 'user' };
     Object.defineProperty(accessor, 'parts', { enumerable: true, get() { throw new Error('accessor ran'); } });
     assert.throws(() => store.enqueueIntent(sessionId, 'accessor', 'enqueue', accessor), /enumerable data properties/);
+
+    const ambiguous = store.enqueueIntent(sessionId, 'publication-disconnect', 'enqueue', { type: 'background', parts: [{ text: 'commit before lost reply' }] });
+    failPublicationReply = true;
+    await assert.rejects(() => runtime.call('runPending', { limit: 8 }), assertRpcCode('SESSION_WORKER_PUBLICATION_RESYNC_REQUIRED'));
+    const committedBeforeDisconnect = await fs.readJson(statePath);
+    assert.equal(committedBeforeDisconnect.lastAppliedMailboxId, ambiguous.id);
+    assert.equal(projectionRegistry.get(sessionId)?.stale, true);
+    child.disconnect();
+
   } finally {
     (nodesManager as any).getNode = externalOriginals.getNode;
     (nodesManager as any).executeTool = externalOriginals.executeTool;
