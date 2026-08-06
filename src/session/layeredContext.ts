@@ -1,14 +1,8 @@
-import fs from 'fs-extra';
-import path from 'path';
 import { Message, Session, ContextFrontierItem, ContextBlockMessageMeta } from '../types';
-import {
-  getSessionBlockArchiveLogPath,
-} from '../config';
 import { ArchiveMessageRecord, readArchiveMessagesBySeqRange } from './archive';
 import { formatLocalTimeRange } from '../utils/localTime';
 import {
   ensureSessionBranch,
-  refreshSessionArchiveImportState,
   readEffectiveArchiveBlocks,
   readLocalArchiveBlocks as readLocalArchiveBlocksFromStore,
   writeArchiveBlocks,
@@ -241,13 +235,9 @@ export async function appendBlocksToArchive(session: Session, blocks: CreateArch
     return [];
   }
 
-  const archivePath = getSessionBlockArchiveLogPath(session.id);
-  await fs.ensureDir(path.dirname(archivePath));
   await ensureSessionBranch(session.id);
   const records = await buildArchiveBlockRecords(session, blocks);
-  await fs.appendFile(archivePath, `${records.map(record => JSON.stringify(record)).join('\n')}\n`);
   await writeArchiveBlocks(records);
-  await refreshSessionArchiveImportState(session.id, 'blocks');
   return records;
 }
 

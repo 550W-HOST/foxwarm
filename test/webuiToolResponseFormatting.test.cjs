@@ -1,7 +1,8 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
-const ts = require('/home/ldmbot/git/foxwarm/packages/webui/node_modules/typescript')
+const path = require('node:path')
+const ts = require('typescript')
 
 require.extensions['.ts'] = function compileTypeScript(module, filename) {
   const source = fs.readFileSync(filename, 'utf8')
@@ -18,7 +19,7 @@ require.extensions['.ts'] = function compileTypeScript(module, filename) {
   module._compile(outputText, filename)
 }
 
-const sharedToolResponseFormatting = require('/home/ldmbot/git/foxwarm/packages/shared/src/toolResponseFormatting.ts')
+const sharedToolResponseFormatting = require(path.resolve(__dirname, '../packages/shared/src/toolResponseFormatting.ts'))
 const {
   formatCompactObjectPreview,
   formatToolResponsePayload: formatToolResponseText,

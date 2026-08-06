@@ -97,6 +97,7 @@ test('/btw command acks immediately and writes async result as display-only hist
   let tempHistoryAtCall: Message[] = [];
   let requestPartsAtCall: MessagePart[] | null = null;
   let tempPromptCacheKeyAtCall: string | undefined;
+  let requestPurposeAtCall: string | undefined;
 
   (vector as any).scheduleSessionArchiveIndex = async () => 0;
 
@@ -107,10 +108,11 @@ test('/btw command acks immediately and writes async result as display-only hist
     const broadcasts: string[] = [];
     session.broadcast = (text: string) => { broadcasts.push(String(text)); };
 
-    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration: number, options?: { appendMessage?: (message: Message) => Promise<void> }) => {
+    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration: number, options?: { appendMessage?: (message: Message) => Promise<void>; purpose?: string }) => {
       requestPartsAtCall = structuredClone(parts);
       tempHistoryAtCall = structuredClone(activeSession.history);
       tempPromptCacheKeyAtCall = activeSession.promptCacheKey;
+      requestPurposeAtCall = options?.purpose;
       chatStarted.resolve();
       await chatGate.promise;
       await appendTempConversation(parts, 'btw text answer', options);
@@ -139,6 +141,7 @@ test('/btw command acks immediately and writes async result as display-only hist
     assert.equal(tempHistoryAtCall.length, 1);
     assert.deepEqual(tempHistoryAtCall[0], originalFirstMessage);
     assert.equal(tempPromptCacheKeyAtCall, sourcePromptCacheKey);
+    assert.equal(requestPurposeAtCall, 'btw');
     assert.ok(requestPartsAtCall?.some(part => typeof part.system === 'string' && part.system.includes('Do not call tools in BTW mode')));
     assert.ok(requestPartsAtCall?.some(part => part.text === 'side question'));
 

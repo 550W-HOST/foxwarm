@@ -173,10 +173,18 @@ const CURRENT_VM_RUNTIME: ToolScriptVmRuntimeIdentity = {
 };
 
 let montyRuntimePromise: Promise<MontyRuntime> | null = null;
+let nativeMontyImportFailureForTests: Error | null = null;
 const activeBackgroundRuns = new Set<string>();
 
 function nativeImport<T = any>(specifier: string): Promise<T> {
   return Function('s', 'return import(s)')(specifier) as Promise<T>;
+}
+
+function importNativeMonty(): Promise<MontyModule> {
+  if (nativeMontyImportFailureForTests) {
+    return Promise.reject(nativeMontyImportFailureForTests);
+  }
+  return nativeImport<MontyModule>('@pydantic/monty');
 }
 
 function buildToolScriptSource(code: string): string {
@@ -251,7 +259,13 @@ function formatRuntimeContext(record: ToolScriptRunRecord, runtimeState: Runtime
 async function getMontyRuntime(): Promise<MontyRuntime> {
   if (!montyRuntimePromise) {
     montyRuntimePromise = (async () => {
-      const monty = await nativeImport<MontyModule>('@pydantic/monty');
+      let monty: MontyModule;
+      try {
+        monty = await importNativeMonty();
+      } catch (nativeError: any) {
+        logger.warn({ err: nativeError }, 'Monty native runtime unavailable; falling back to WASM runtime');
+        monty = await nativeImport<MontyModule>('@pydantic/monty/wasm');
+      }
       const pool = await monty.Monty.create();
       return { monty, pool };
     })();
@@ -771,6 +785,7 @@ async function requestModelWithoutContext(prompt: string, session: Session, mode
     toolDefinitions: [],
     notifySessionEvents: false,
     registerAbortController: false,
+    purpose: 'toolscript-one-shot',
   });
 
   return { text: result.text || '' };
@@ -1682,9 +1697,16 @@ export async function getToolScriptRunForTests(runId: string): Promise<ToolScrip
 
 export async function resetToolScriptMontyRuntimeForTests(): Promise<void> {
   await closeMontyRuntime();
+  nativeMontyImportFailureForTests = null;
+}
+
+export async function forceToolScriptNativeImportFailureForTests(error: Error): Promise<void> {
+  await closeMontyRuntime();
+  nativeMontyImportFailureForTests = error;
 }
 
 export async function resetToolScriptRunsForTests(): Promise<void> {
   await closeMontyRuntime();
+  nativeMontyImportFailureForTests = null;
   await fs.remove(TOOLSCRIPT_RUNS_DIR);
 }

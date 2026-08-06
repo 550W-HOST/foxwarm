@@ -412,7 +412,7 @@ test('identity move parent validation rejects cycles hidden behind historical al
   }
 });
 
-test('restart hydration remains valid and archive bootstrap rebuild still reserves deleted ids', () => {
+test('restart hydration remains valid and the SQLite archive still reserves deleted ids', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-session-id-reservation-'));
   const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');
   const parentId = 'restart_parent';
@@ -437,10 +437,6 @@ test('restart hydration remains valid and archive bootstrap rebuild still reserv
         process.exit(0);
       })().catch(error => { console.error(error); process.exit(1); });
     `);
-
-    fs.removeSync(path.join(tempRoot, 'state', 'archive-store.sqlite'));
-    fs.removeSync(path.join(tempRoot, 'state', 'archive-store.sqlite-wal'));
-    fs.removeSync(path.join(tempRoot, 'state', 'archive-store.sqlite-shm'));
 
     run(`
       const sm = require(${JSON.stringify(sessionManagerPath)});
@@ -561,12 +557,12 @@ test('known persistence failures roll back creation and allow the same requested
     await createParent(parentId);
     let failArchiveAppend = true;
     setArchiveWriteFaultInjectorForTests((phase, sessionId) => {
-      if (failArchiveAppend && phase === 'after-jsonl-append' && sessionId === forkId) {
+      if (failArchiveAppend && phase === 'before-sqlite-write' && sessionId === forkId) {
         failArchiveAppend = false;
-        throw new Error('injected fork archive append failure');
+        throw new Error('injected fork archive SQLite failure');
       }
     });
-    await assert.rejects(sessionManager.forkSession(parentId), /injected fork archive append failure/);
+    await assert.rejects(sessionManager.forkSession(parentId), /injected fork archive SQLite failure/);
     assert.equal(await hasArchivedSessionId(forkId), false);
     setArchiveWriteFaultInjectorForTests(null);
     assert.equal(await sessionManager.forkSession(parentId), forkId);
@@ -811,7 +807,7 @@ test('archive reservations preserve exact session ids including trailing whitesp
   await sessionManager.deleteSession(withoutSpace);
 });
 
-test('moved historical ids remain reserved and moved archives rebuild under the canonical id', () => {
+test('moved historical ids remain reserved while the ledger repairs and missing SQLite fails closed', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-moved-session-id-reservation-'));
   const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');
   const archiveStorePath = path.resolve(__dirname, 'archiveStore.js');
@@ -892,9 +888,6 @@ test('moved historical ids remain reserved and moved archives rebuild under the 
 
     const reservationLedgerPath = path.join(tempRoot, 'state', 'session-id-reservations.jsonl');
     fs.removeSync(reservationLedgerPath);
-    fs.removeSync(path.join(tempRoot, 'state', 'archive-store.sqlite'));
-    fs.removeSync(path.join(tempRoot, 'state', 'archive-store.sqlite-wal'));
-    fs.removeSync(path.join(tempRoot, 'state', 'archive-store.sqlite-shm'));
     backfillLiveAliasesThenDelete();
 
     fs.removeSync(reservationLedgerPath);
@@ -906,7 +899,16 @@ test('moved historical ids remain reserved and moved archives rebuild under the 
     fs.removeSync(path.join(tempRoot, 'state', 'archive-store.sqlite'));
     fs.removeSync(path.join(tempRoot, 'state', 'archive-store.sqlite-wal'));
     fs.removeSync(path.join(tempRoot, 'state', 'archive-store.sqlite-shm'));
-    verify();
+    run(`
+      const sm = require(${JSON.stringify(sessionManagerPath)});
+      (async () => {
+        try { await sm.loadSessions(); throw new Error('missing authoritative database unexpectedly rebuilt'); }
+        catch (error) {
+          if (!String(error).includes('authoritative archive database is missing')) throw error;
+        }
+        process.exit(0);
+      })().catch(error => { console.error(error); process.exit(1); });
+    `);
   } finally {
     fs.removeSync(tempRoot);
   }
@@ -915,38 +917,22 @@ test('moved historical ids remain reserved and moved archives rebuild under the 
 test('pre-ledger mismatched path and payload reserve both ids without inventing an alias', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-preledger-moved-deleted-'));
   const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');
-  const run = (source: string) => execFileSync(process.execPath, ['-e', source], {
-    env: { ...process.env, FOXWARM_DATA_DIR: tempRoot },
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const configPath = path.resolve(__dirname, '../config.js');
+  const migrationPath = path.resolve(__dirname, '../migrations/sqliteOnlyArchives.js');
   try {
-    run(`
+    execFileSync(process.execPath, ['-e', `
+      const fs = require('fs-extra');
+      const config = require(${JSON.stringify(configPath)});
+      const migration = require(${JSON.stringify(migrationPath)});
       const sm = require(${JSON.stringify(sessionManagerPath)});
+      const record = JSON.stringify({ v: 1, kind: 'message', sessionId: 'legacy_moved_old', agent: 'main', seq: 1,
+        timestamp: 1, role: 'user', message: { role: 'user', parts: [{ text: 'pre-ledger moved history' }], __meta: { seq: 1, timestamp: 1 } } }) + '\\n';
       (async () => {
-        await sm.loadSessions();
-        const original = await sm.createEmptySession('legacy_moved_old');
-        await sm.appendSessionMessage(original.session, { role: 'user', parts: [{ text: 'pre-ledger moved history' }], __meta: { timestamp: Date.now() } });
-        await sm.moveSessionToTarget({ sourceSessionId: 'legacy_moved_old', newSessionId: 'legacy_moved_new' });
-        await sm.deleteSession('legacy_moved_new');
-        process.exit(0);
-      })().catch(error => { console.error(error); process.exit(1); });
-    `);
-    fs.removeSync(path.join(tempRoot, 'state', 'session-id-reservations.jsonl'));
-    fs.removeSync(path.join(tempRoot, 'state', 'archive-store.sqlite'));
-    fs.removeSync(path.join(tempRoot, 'state', 'archive-store.sqlite-wal'));
-    fs.removeSync(path.join(tempRoot, 'state', 'archive-store.sqlite-shm'));
-    run(`
-      const sm = require(${JSON.stringify(sessionManagerPath)});
-      (async () => {
-        await sm.loadSessions();
+        await fs.outputFile(config.getSessionArchiveLogPath('legacy_moved_new'), record);
+        await migration.runSqliteOnlyArchivesMigration();
         for (const id of ['legacy_moved_old', 'legacy_moved_new']) {
-          try {
-            await sm.createEmptySession(id);
-            throw new Error('pre-ledger id reused: ' + id);
-          } catch (error) {
-            if (error?.code !== sm.ARCHIVED_SESSION_ID_ERROR_CODE) throw error;
-          }
+          try { await sm.createEmptySession(id); throw new Error('pre-ledger id reused: ' + id); }
+          catch (error) { if (error?.code !== sm.ARCHIVED_SESSION_ID_ERROR_CODE) throw error; }
         }
         const oldArchive = await sm.getArchivedMessages('legacy_moved_old');
         if (oldArchive.records[0]?.message?.parts?.[0]?.text !== 'pre-ledger moved history') throw new Error('payload archive missing');
@@ -954,7 +940,7 @@ test('pre-ledger mismatched path and payload reserve both ids without inventing 
         if (newArchive.records.length !== 0) throw new Error('uncertain history was merged into path identity');
         process.exit(0);
       })().catch(error => { console.error(error); process.exit(1); });
-    `);
+    `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } finally {
     fs.removeSync(tempRoot);
   }
@@ -965,11 +951,13 @@ test('inherited-only legacy child log does not redirect or merge its parent arch
   const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');
   const configPath = path.resolve(__dirname, '../config.js');
   const archiveStorePath = path.resolve(__dirname, 'archiveStore.js');
+  const migrationPath = path.resolve(__dirname, '../migrations/sqliteOnlyArchives.js');
   try {
     execFileSync(process.execPath, ['-e', `
       const fs = require('fs-extra');
       const config = require(${JSON.stringify(configPath)});
       const archiveStore = require(${JSON.stringify(archiveStorePath)});
+      const migration = require(${JSON.stringify(migrationPath)});
       const sm = require(${JSON.stringify(sessionManagerPath)});
       const record = (text) => JSON.stringify({
         v: 1, kind: 'message', sessionId: 'legacy_parent', agent: 'main', seq: 1,
@@ -977,8 +965,8 @@ test('inherited-only legacy child log does not redirect or merge its parent arch
       }) + '\\n';
       (async () => {
         await fs.outputFile(config.getSessionArchiveLogPath('legacy_parent'), record('parent canonical history'));
-        await fs.outputFile(config.getSessionArchiveLogPath('legacy_child'), record('copied parent history'));
-        await archiveStore.initArchiveStore();
+        await fs.outputFile(config.getSessionArchiveLogPath('legacy_child'), record('parent canonical history'));
+        await migration.runSqliteOnlyArchivesMigration();
         if (await archiveStore.resolveArchivedSessionId('legacy_parent') !== 'legacy_parent') throw new Error('parent redirected');
         if (await archiveStore.resolveArchivedSessionId('legacy_child') !== 'legacy_child') throw new Error('child redirected');
         if (!await archiveStore.hasArchivedSessionId('legacy_parent') || !await archiveStore.hasArchivedSessionId('legacy_child')) throw new Error('identities not reserved');
@@ -1106,6 +1094,19 @@ test('pending move recovery rejects traversal IDs before touching filesystem sta
     `], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     assert.equal(fs.readFileSync(markerPath, 'utf8'), 'keep');
     assert.equal(fs.pathExistsSync(path.join(tempRoot, 'state', 'session-id-move-pending.json')), true);
+  } finally {
+    fs.removeSync(tempRoot);
+  }
+});
+
+test('pre-migration pending move rollback restores active legacy archive paths', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-pending-legacy-archive-'));
+  const agentOpsPath = path.resolve(__dirname, 'agentOps.js');
+  const configPath = path.resolve(__dirname, '../config.js');
+  try {
+    execFileSync(process.execPath, ['-e', `
+      const fs=require('fs-extra');const c=require(${JSON.stringify(configPath)});const a=require(${JSON.stringify(agentOpsPath)});
+      (async()=>{await fs.outputJson(c.SESSION_ID_MOVE_JOURNAL_PATH,{v:1,phase:'rolling-back',oldSessionId:'legacy_move_old',newSessionId:'legacy_move_new',oldAliases:[],ownsTargetAgentDirectory:false,createdAt:Date.now()});await fs.outputFile(c.getSessionArchiveLogPath('legacy_move_new'),'legacy-message');await fs.outputFile(c.getSessionBlockArchiveLogPath('legacy_move_new'),'legacy-block');await a.recoverPendingSessionIdentityMove(async()=>{});if(!await fs.pathExists(c.getSessionArchiveLogPath('legacy_move_old'))||!await fs.pathExists(c.getSessionBlockArchiveLogPath('legacy_move_old')))throw new Error('legacy paths not restored');if(await fs.pathExists(c.getSessionArchiveLogPath('legacy_move_new'))||await fs.pathExists(c.getSessionBlockArchiveLogPath('legacy_move_new')))throw new Error('legacy target paths survived')})().catch(e=>{console.error(e.stack);process.exit(1)});`], { env: { ...process.env, FOXWARM_DATA_DIR: tempRoot, FOXWARM_SYNC_FILE_LOG: '1' }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } finally {
     fs.removeSync(tempRoot);
   }

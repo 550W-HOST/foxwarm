@@ -1,7 +1,7 @@
 # Unit: src-config
 
 Files: src/config.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts
-Secondary files: templates/models.example.yaml, README.md
+Secondary files: templates/models.example.yaml, README.md, docs/virtual-models.md
 
 ## Purpose
 

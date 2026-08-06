@@ -44,3 +44,31 @@ test('noAuth route can be called without bearer/cookie token and still validates
     assert.equal(bad.status, 401);
   });
 });
+
+test('authenticated routes accept the current cookie and bearer token but reject the removed cookie alias', async () => {
+  await withServer(async (server, baseUrl) => {
+    server.addRoute({
+      path: '/api/protected',
+      method: 'GET',
+      handler: async (_req, res) => {
+        res.json({ success: true });
+      },
+    });
+
+    const currentCookie = await fetch(`${baseUrl}/api/protected`, {
+      headers: { Cookie: 'foxwarm_token=secret-token' },
+    });
+    assert.equal(currentCookie.status, 200);
+
+    const removedCookieName = ['alpha', 'bot_token'].join('');
+    const removedCookie = await fetch(`${baseUrl}/api/protected`, {
+      headers: { Cookie: `${removedCookieName}=secret-token` },
+    });
+    assert.equal(removedCookie.status, 401);
+
+    const bearer = await fetch(`${baseUrl}/api/protected`, {
+      headers: { Authorization: 'Bearer secret-token' },
+    });
+    assert.equal(bearer.status, 200);
+  });
+});

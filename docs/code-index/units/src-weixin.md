@@ -1,6 +1,7 @@
 # Unit: src-weixin
 
 Files: src/weixin/api.ts, src/weixin/inbound.ts, src/weixin/types.ts
+Secondary files: THIRD_PARTY_NOTICES.md
 
 ## Purpose
 
@@ -67,3 +68,4 @@ Implements a Weixin (WeChat) messaging channel client, providing API communicati
 - `buildWeixinMessageParts` bridges Weixin's protocol into the shared `MessagePart` type used by the core message processing pipeline.
 - Context tokens allow the polling layer to resume from the correct offset after reconnection or restart.
 - QR login functions are exposed for CLI or admin commands (`/weixin login`, `/weixin wait`).
+- Adapted portions retain the full MIT notice for `@tencent-weixin/openclaw-weixin` v1.0.2 in the root third-party notices file, which is included by default in repository and npm source distributions.

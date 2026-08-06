@@ -1,6 +1,6 @@
 # Unit: src-migrations
 
-Files: src/migrations/index.ts, src/migrations/state.ts, src/migrations/embeddedContextFrontier.ts, src/migrations/embeddedContextFrontier.test.ts, src/migrations/legacyUndatedExecArtifacts.ts, src/migrations/legacyUndatedExecArtifacts.test.ts
+Files: src/migrations/index.ts, src/migrations/state.ts, src/migrations/embeddedContextFrontier.ts, src/migrations/embeddedContextFrontier.test.ts, src/migrations/legacyUndatedExecArtifacts.ts, src/migrations/legacyUndatedExecArtifacts.test.ts, src/migrations/sqliteOnlyArchives.ts, src/migrations/sqliteOnlyArchives.test.ts
 
 ## Purpose
 
@@ -13,6 +13,7 @@ Holds startup migration orchestration and migration-only data structures. Curren
 - `runLegacyUndatedExecArtifactMigration(options?)` — archives eligible legacy undated persistent-exec wrapper/user/paths artifacts per agent, removes only successfully archived sources, and retries until no strict matching top-level artifacts remain.
 - `EMBEDDED_CONTEXT_FRONTIER_MIGRATION_ID` — current migration id (`embedded-context-frontier-v1`).
 - `LEGACY_UNDATED_EXEC_ARTIFACT_MIGRATION_ID` — migration id for old root-level exec artifacts (`legacy-undated-exec-artifacts-v1`).
+- `SQLITE_ONLY_ARCHIVES_MIGRATION_ID` — fail-closed migration for legacy large archive JSONLs (`sqlite-only-large-archives-v1`).
 - `MIGRATION_VERSION_FILE` — `state/migrationVersion.json`.
 - `MIGRATION_BACKUP_DIR` — `state/migration-backup`.
 - `createMigrationVersionStore(filePath?)` / `readMigrationVersionState(store)` — lightweight DiskJsonData helpers for migration version state.
@@ -26,6 +27,10 @@ Holds startup migration orchestration and migration-only data structures. Curren
 - The legacy undated exec-artifact migration scans only top-level files in each agent's `.temp/exec/` directory. It recognizes only the historical wrapper, Windows user-command, and paths-metadata names with the exact `exec_<13-digit timestamp>_<8 lowercase hex>` prefix; logs, status/cwd files, subdirectories, and similarly named files remain untouched.
 - Eligible old exec artifacts must have `mtime <` the local start of yesterday. Eligible files are archived into a new time-prefixed `.tar.gz` under that agent's existing `.temp/exec/archives/` directory, then unlinked only after the archive command has completed and its temporary archive has been finalized. Existing archive rotation consequently owns retention of these dedicated migration archives.
 - The exec migration intentionally does not write `completed_with_failures`: it leaves its version absent until a post-pass finds no strict matching artifacts and can read the agents root plus every candidate exec root. Too-new files, archive failures, unlink failures, and unreadable scan roots therefore retry on a later startup. A later retry may create another archive for retained sources, which is safe because removal never precedes a successful archive.
+- The SQLite-only migration runs first, strictly imports/verifies both large JSONL archive domains, records data-root-relative paths plus hashes/counts in an fsynced manifest, and only then durably moves sources under a path-preserving migration backup. Partial movement is restored and retried; failures never record completion.
+- Canonical message/block structures are validated before bootstrap mutations. Migration locking waits behind a live owner for arbitrarily large supported migrations and recovers only a provably dead or grace-expired malformed owner.
+- Canonical legacy-message validation includes only proven migration-era writer variants: unscoped message-level provider-specific fields and defined JSON-valued tool responses are preserved without normalization. This compatibility does not change current message types or admit missing tool responses, malformed provider metadata, non-object function-call arguments, or relaxed record identity/role checks.
+- The manifest audits torn physical prefixes, unique recovered logical records, inserted missing SQLite rows, and per-source recovered identities/payload hashes. This audit does not rewrite the raw backup source.
 - Each legacy frontier file maps to a session id by stripping `.frontier.json` from its path relative to `state/sessions`.
 - For a matching session history JSON, the migration:
   1. reads legacy `{ frontier, nextBlockId }` from the standalone frontier file;

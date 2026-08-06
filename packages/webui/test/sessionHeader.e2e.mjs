@@ -67,7 +67,7 @@ test('desktop list hides cwd but search still finds it, and Chat shows it in the
   try {
     await authenticate(page, { width: 1440, height: 900, isMobile: false, hasTouch: false, deviceScaleFactor: 1 })
     await expectCwdSearchWithoutRowDisplay(page)
-    await page.evaluate((sessionId) => window.alphabotTest.switchToSession(sessionId), cwdSession.id)
+    await page.evaluate((sessionId) => window.foxwarmTest.switchToSession(sessionId), cwdSession.id)
     await expectHeaderSubtitle(page)
   } finally {
     await page.close()
@@ -79,7 +79,7 @@ test('mobile list hides cwd and Chat shows it from its per-session snapshot', as
   try {
     await authenticate(page, { width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 1 })
     await expectCwdSearchWithoutRowDisplay(page)
-    await page.evaluate((sessionId) => window.alphabotTest.switchToSession(sessionId), cwdSession.id)
+    await page.evaluate((sessionId) => window.foxwarmTest.switchToSession(sessionId), cwdSession.id)
     await expectHeaderSubtitle(page)
   } finally {
     await page.close()

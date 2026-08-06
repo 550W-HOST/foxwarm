@@ -55,6 +55,7 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 ## Behavior
 
 - The planning model uses the live prompt-cache key on a clone because the pre-commit prefix/schema lineage is unchanged; canonical ownership is [D-lifecycle-prefix-lineage](../threads/session-lifecycle.md#d-lifecycle-prefix-lineage).
+- Each transient compact-planning provider call is journaled with purpose `compact-plan`; its canonical prompt/messages and normalized result remain reconstructable without adding temporary planning rows to session history.
 - Async, awaited, and auto modes use one engine. A terminal provider error, exhausted plan loop, or stale prefix leaves live history/frontier unchanged.
 - Async planning may start from a compatible snapshot while the live session is busy. Planning itself is not queued; background completion enqueues only `compact-commit` for safe live application. Canonical scheduling: [D-context-compact-scheduling-boundary](../threads/context-compaction-and-recall.md#d-context-compact-scheduling-boundary).
 - Successful prefix replacement rotates `promptCacheKey`.
@@ -67,7 +68,7 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 ## Compatibility
 
 - `compactHistoryWithSummary` remains an exported manual façade over the current compact engine.
-- `getArchivedMessages` uses the current archive store while JSONL bootstrap/import compatibility remains owned by `archiveStore`.
+- `getArchivedMessages` uses the SQLite archive authority; legacy JSONL compatibility is owned only by the startup migration.
 - Compact completion follows [D-context-compact-completion](../threads/context-compaction-and-recall.md#d-context-compact-completion); this unit does not define a second wire contract.
 
 ## Design decisions

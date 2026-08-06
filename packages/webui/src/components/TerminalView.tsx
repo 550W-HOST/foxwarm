@@ -4,6 +4,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { API_BASE_PATH, makeWebSocketUrl } from '../config'
+import { buildTerminalCreateRequest, findTerminalForTarget, normalizeTerminalTarget } from '../terminalTarget'
 
 type TerminalStatus = 'connecting' | 'ready' | 'closed' | 'error'
 
@@ -20,6 +21,7 @@ type TerminalInfo = {
 
 interface TerminalViewProps {
   initialCwd?: string
+  initialNodeId?: string
   initialTerminalId?: string
   createMode?: 'new' | 'reuse'
   onBack?: () => void
@@ -28,7 +30,7 @@ interface TerminalViewProps {
   onTerminalClosed?: (terminalId: string) => void
 }
 
-export default function TerminalView({ initialCwd, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed }: TerminalViewProps) {
+export default function TerminalView({ initialCwd, initialNodeId, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -46,13 +48,8 @@ export default function TerminalView({ initialCwd, initialTerminalId, createMode
   const [error, setError] = useState<string | null>(null)
   const [terminalInfo, setTerminalInfo] = useState<TerminalInfo | null>(null)
 
-  const requestedCwd = useMemo(() => {
-    if (typeof initialCwd === 'string' && initialCwd.trim().length > 0) {
-      return initialCwd.trim()
-    }
-    return undefined
-  }, [initialCwd])
-  const requestedCwdRef = useRef<string | undefined>(requestedCwd)
+  const requestedTarget = useMemo(() => normalizeTerminalTarget({ nodeId: initialNodeId, cwd: initialCwd }), [initialCwd, initialNodeId])
+  const requestedTargetRef = useRef(requestedTarget)
   const initialTerminalIdRef = useRef<string | undefined>(initialTerminalId)
   const createModeRef = useRef<'new' | 'reuse'>(createMode)
 
@@ -193,9 +190,7 @@ export default function TerminalView({ initialCwd, initialTerminalId, createMode
           }
 
           const terminals: TerminalInfo[] = Array.isArray(listData.terminals) ? listData.terminals : []
-          const reused = requestedCwdRef.current
-            ? terminals.find((item) => item.cwd === requestedCwdRef.current)
-            : terminals[0]
+          const reused = findTerminalForTarget(terminals, requestedTargetRef.current)
 
           if (reused) {
             terminalId = reused.id
@@ -206,12 +201,7 @@ export default function TerminalView({ initialCwd, initialTerminalId, createMode
           const createRes = await fetch(`${API_BASE_PATH}/terminals`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              nodeId: 'master',
-              cwd: requestedCwdRef.current || '/',
-              cols,
-              rows,
-            }),
+            body: JSON.stringify(buildTerminalCreateRequest(requestedTargetRef.current, cols, rows)),
           })
           const createData = await createRes.json().catch(() => ({}))
           if (!createRes.ok) {

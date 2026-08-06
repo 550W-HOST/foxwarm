@@ -1,6 +1,7 @@
 # Unit: src-llm
 
 Files: src/llm.ts, src/llm.test.ts, src/llmRouting.test.ts, src/llmVirtualRouting.test.ts, src/llmVirtualMessageMeta.test.ts, src/parallelToolExecution.test.ts
+Secondary files: src/llmRequestJournal.ts
 
 ## Purpose
 
@@ -57,6 +58,8 @@ Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolRe
 - OpenAI Responses maps only its official `usage.output_tokens_details.reasoning_tokens`, and OpenAI Chat Completions maps only its official `usage.completion_tokens_details.reasoning_tokens`. When either field is exposed, it persists as the optional `TokenUsage.reasoningTokens` component while the provider's full output/completion count remains `outputTokens`; Anthropic Messages has no corresponding separately reported reasoning usage field. Cross-module accounting semantics are [D-pipeline-provider-usage-components](../threads/message-processing-pipeline.md#d-pipeline-provider-usage-components).
 - Provider usage remains optional: a usable response without a usage object succeeds and simply omits token accounting, including OpenAI-compatible Chat Completions streams which ignore `stream_options.include_usage`.
 - Display-only messages and internal `__meta` are excluded from provider input.
+- Before the first physical send, `requestLlmOnce` journals the repaired provider-neutral messages, system prompt, and exact tool schema through content-addressed objects and a bounded manifest. Every physical attempt records concrete routing and a semantic-payload digest; canonical ownership is [canonical LLM request journal](../threads/llm-request-journal.md).
+- Successful `ChatResult` values carry the durable request/attempt identity, and `chat` persists that link on assistant metadata. Post-response journal-result failures are logged without entering the provider retry loop.
 - Tool execution keeps per-call result/image/control state local. Adjacent direct `exec` calls use a bounded parallel segment; all other tools are barriers, and final parts are flattened in original call order. Canonical scheduling contract: [D-dispatch-exec-parallel-segments](../threads/tool-dispatch.md#d-dispatch-exec-parallel-segments).
 - The first persisted response in a tool batch may carry the successful preceding LLM request timing for serializer-owned model input; canonical contract: [D-pipeline-input-time](../threads/message-processing-pipeline.md#d-pipeline-input-time).
 - Tool-result internals fold explicit wait-token cleanup and successful handoff post-actions without exposing hidden sentinels to providers. The router owns post-append wait arming under [D-pipeline-handoff-wait](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait).

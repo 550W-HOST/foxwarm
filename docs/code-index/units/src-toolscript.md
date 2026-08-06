@@ -5,7 +5,7 @@ Secondary files: src/toolscriptSkills.test.ts, package.json, package-lock.json
 
 ## Purpose
 
-Implements persisted foreground/background ToolScript runs in the Monty 0.0.19 Python-subset VM. It owns a lazy subprocess pool, validates `main(args)`, enforces VM/slice limits, dispatches a small host API, stores version-identified snapshots/run records, resumes waits, and coordinates managed-session leases.
+Implements persisted foreground/background ToolScript runs in the Monty 0.0.19 Python-subset VM. It lazily prefers Monty's native crash-isolated subprocess pool and falls back to Monty's Node in-process WASM pool when the native package fails during import or evaluation. It validates `main(args)`, enforces VM/slice limits, dispatches a small host API, stores version-identified snapshots/run records, resumes waits, and coordinates managed-session leases.
 
 ## Actual exports
 
@@ -14,7 +14,7 @@ Implements persisted foreground/background ToolScript runs in the Monty 0.0.19 P
 - `tool_continue_script(args, ctx)` — resume an agent-input or timeout-checkpoint wait owned by the current session.
 - `tool_list_toolscript_runs`, `tool_get_toolscript_run`, `tool_cancel_toolscript_run` — hidden management handlers.
 - `resumeBackgroundToolScriptRunForManagedSession(args)` — internal managed-event continuation.
-- `getToolScriptRunForTests`, `resetToolScriptMontyRuntimeForTests`, `resetToolScriptRunsForTests`.
+- `forceToolScriptNativeImportFailureForTests`, `getToolScriptRunForTests`, `resetToolScriptMontyRuntimeForTests`, `resetToolScriptRunsForTests` — test-only runtime controls and record inspection.
 
 ToolScript result/run types are internal, not exported TypeScript API types.
 
@@ -42,16 +42,19 @@ Unknown external function names are returned to Monty as runtime exceptions that
 
 ## Behavior
 
+- Runtime loading is native-first. If the native Monty package cannot be imported or evaluated, Foxwarm logs the native error and loads `@pydantic/monty/wasm`; the direct `@bjorn3/browser_wasi_shim` dependency supplies the WASI host that Monty 0.0.19 does not publish as a runtime dependency.
+- On Node, the WASM fallback runs in-process rather than in the native subprocess pool, so it does not provide the native backend's subprocess crash isolation or hard watchdog. Monty's memory, recursion, and duration limits still apply, and Foxwarm continues to reject OS-function suspensions and mounts so host effects cannot bypass `call_tool`.
 - Default slice timeout is 30 seconds; memory, recursion, and duration limits are passed to Monty. Monty 0.0.19 has no allocation-count limit.
 - Timeout is checked at safe host-call boundaries and does not interrupt an in-progress host call. When exceeded, the run stores the pending return/exception plus snapshot and returns a continuable timeout state.
 - Foreground and background runs both execute the initial slice inside `run_script`. Automatic wake is limited to background managed-event waits; agent-input and timeout waits require `continue_script`.
 - `ask_agent` and managed-event waits persist snapshots together with the exact VM/snapshot-format identity; completed/current-runtime failed/cancelled runs clear resumable snapshots.
-- A snapshot is loaded into a fresh pool session when a run continues, so waiting runs survive a Foxwarm process restart. Old or unknown snapshot formats fail with a deterministic restart-the-run error while retaining the historical record and incompatible snapshot. Completed historical records remain readable without conversion.
+- A snapshot is loaded into a fresh pool session when a run continues, so waiting runs survive a Foxwarm process restart. Native and WASM pools share the same Monty 0.0.19 snapshot format and persisted runtime identity, so a waiting run can resume after the selected backend changes. Old or unknown snapshot formats fail with a deterministic restart-the-run error while retaining the historical record and incompatible snapshot. Completed historical records remain readable without conversion.
 - Monty OS functions and mounts are not exposed. Filesystem, environment, clock, and process effects remain behind normal `call_tool` permissions.
 - Run records live under the state data root and are accessible only from the owner session.
 - `activeBackgroundRuns` prevents concurrent execution/resume of one background run.
 - Managed leases acquired by a run are recorded. Controllers normally release them explicitly; cancellation and incompatible-snapshot terminalization perform best-effort cleanup. Failed releases remain recorded so calling `cancel_toolscript_run` on the terminal record retries cleanup.
 - `call_tool` subcalls publish ToolScript progress and are kept in the outer run result/record. They do not append each nested call as ordinary outer-session tool history.
+- `request_model_without_context` uses request-journal purpose `toolscript-one-shot`; its canonical prompt and normalized provider result are durable independently of the outer ToolScript history boundary.
 - `continue_script` returns stdout produced in that continuation slice; persisted status retains cumulative stdout.
 - `executedTools` is cumulative, while `subCalls`, `hostCallCount`, and `lastHostCall` describe the latest execution slice.
 - Inline image payloads from a final result are promoted to the outer tool result and replaced with compact placeholders inside the textual result.

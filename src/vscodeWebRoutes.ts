@@ -619,13 +619,7 @@ function getDefaultFolderUri(): string {
   if (configured) {
     return configured;
   }
-  if (fs.existsSync('/app/package.json')) {
-    return 'foxwarm://node+master/app/';
-  }
-  if (fs.existsSync('/home/ldmbot/git/foxwarm/package.json')) {
-    return 'foxwarm://node+master/home/ldmbot/git/foxwarm/';
-  }
-  return 'foxwarm://node+master/';
+  return buildMasterFoxwarmUri(BASE_DIR);
 }
 
 function getRequestOrigin(req: express.Request): string {

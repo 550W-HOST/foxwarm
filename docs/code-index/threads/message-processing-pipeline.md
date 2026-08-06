@@ -99,6 +99,10 @@ Model-visible inbound and lifecycle wrappers receive a stable local `time` attri
 
 `send_to_session` and `create_child_session` accept an exact optional `waitAfterHandoff` boolean; the former `waitForReply` name is not read as an alias. After a successful delivery (and, for child creation, a required non-empty initial message whose send is awaited), the handler emits only a hidden post-batch request. The router first appends the complete tool-result message and finishes tool progress, then reuses the existing persisted generic `startSessionWait` state once and stops LLM recursion. Replies are delivered normally whether the option is true or false; the option only controls whether the successful handoff ends the current turn in a generic any-event wait. The wait is not target-filtered and is not a completion promise. Fast replies already queued before arming are consumed immediately after the handoff turn stops. Multiple successful requests coalesce; a failed handoff requests no wait; a successful flagged handoff still waits when a sibling tool fails. The older explicit `wait` pattern remains supported. If an ordinary explicit wait loses its stop signal because a sibling tool failed, it clears only the wait token it created so no stale wait remains.
 
+### D-pipeline-event-driven-wait
+
+[2026-08-06] Model-facing guidance treats `wait` as event-driven completion of an otherwise-finished turn, not as a polling primitive. Supported inbound user/inter-agent messages and session/system wake events automatically wake an idle waiting session. Compatible work that arrives while the session is generating or executing tools queues and joins at normal provider/tool-loop safe points, subject to the existing source boundaries. Agents do not need short timeout waits to retrieve input; a positive timeout is only a one-shot wake fallback/deadline, while an omitted or zero timeout waits indefinitely.
+
 ## Canonical ownership
 
 Terminal provider/request error ownership: [D-llm-request-errors](../modules/llm.md#d-llm-request-errors).

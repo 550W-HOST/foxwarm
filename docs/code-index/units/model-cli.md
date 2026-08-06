@@ -1,11 +1,11 @@
 # Unit: model-cli
 
-Files: scripts/foxwarm.js, scripts/model.js, scripts/model.test.js
+Files: scripts/foxwarm.js, scripts/model.js, scripts/model.test.js, scripts/archive.js, scripts/archive.test.js
 Secondary files: package.json, package-lock.json, README.md
 
 ## Purpose
 
-Provides the installable `foxwarm` command and its `model` subcommand for one-shot LLM requests without starting the Foxwarm server. The command is intentionally a thin adapter over compiled production modules so provider routing, model configuration, retries, compression, sanitization, and response parsing do not drift from the server.
+Provides the installable `foxwarm` command, its `model` subcommand for one-shot LLM requests, and its `archive export-jsonl` compatibility exporter. Commands are thin adapters over compiled production modules so provider behavior and SQLite archive semantics do not drift from the server.
 
 ## Key Exports
 
@@ -15,6 +15,7 @@ Provides the installable `foxwarm` command and its `model` subcommand for one-sh
 - `parseArgs(argv)` — strict model-subcommand option parser
 - `loadProductionRuntime()` — loads `lib/config.js` and `lib/llm.js` after selecting CLI-safe logging
 - `CliUsageError` — distinguishes usage failures (exit 2) from runtime/provider failures (exit 1)
+- `runArchiveCli(argv, options?)` — completes the SQLite migration and exports session plus LLM archives as JSONL
 
 ## Function Index
 
@@ -30,6 +31,7 @@ Provides the installable `foxwarm` command and its `model` subcommand for one-sh
 | `writeModelList(config, stream)` | model.js ~125 | Displays resolved model keys without API keys |
 | `runModelCli(argv, options)` | model.js ~138 | Validates model/prompt, calls `requestLlmOnce`, and emits text or JSON |
 | `main(argv)` | model.js ~182 | Converts thrown usage/runtime errors into CLI exit codes |
+| `runArchiveCli(argv, options)` | archive.js | Exports both SQLite-authoritative archive domains to an explicit output directory |
 
 ## Dependencies
 
@@ -44,13 +46,14 @@ Provides the installable `foxwarm` command and its `model` subcommand for one-sh
 - Installed or linked packages expose `foxwarm`; source checkouts can call `node scripts/foxwarm.js` directly.
 - Unknown flags, positional arguments, missing option values, invalid timeouts, unknown model keys, absent prompts, and empty model responses fail instead of silently falling back.
 - The selected model is validated using `loadModelsConfig`; requests go through `requestLlmOnce` with no tools and a fresh prompt-cache key.
+- CLI requests use request-journal purpose `cli`; they are reconstructable even though no session history exists.
 - Model listing and request forwarding accept virtual keys without reimplementing their routing; result JSON continues to report the concrete `modelId`. Canonical contract: [model routing](../threads/model-routing.md).
 - The CLI suppresses console logs and selects synchronous file logging before importing the production runtime. This keeps stdout machine-readable and avoids pino worker shutdown hangs.
 - The top-level dispatcher runs the model handler in-process, so child signal codes cannot be converted accidentally into success.
 
 ## Tests
 
-`scripts/model.test.js` covers strict parsing, stdin, concrete/virtual model validation and listing, empty responses, top-level dispatch, and a built end-to-end mock HTTP test proving `providerType: openai` uses the production `/responses` route and streaming request format.
+`scripts/model.test.js` covers strict parsing, stdin, concrete/virtual model validation and listing, empty responses, top-level dispatch, and a built end-to-end mock HTTP test proving `providerType: openai` uses the production `/responses` route and streaming request format. `scripts/archive.test.js` covers migration-before-export dispatch and output routing.
 
 ## Integration
 

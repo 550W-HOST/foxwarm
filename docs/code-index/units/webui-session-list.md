@@ -23,7 +23,7 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 | `isSessionRuntimeActive(session)` (sessionRuntimeState.ts) | helper | Treats `requesting-model` and `running-tool` as active, falling back to legacy `busy`. |
 | `useSessionIdleNotifications(sessions)` (sessionIdleNotifications.ts) | hook | Owns browser-local idle-notification modes and observes accepted global session-list snapshots once per list-data root. |
 | `SessionIdleNotificationTracker` (sessionIdleNotifications.ts) | helper | Tracks a session's observed busy cycle until its later canonical idle state. |
-| `getStoredAuthToken()` | ~55–70 | Retrieves auth token from localStorage with legacy migration |
+| `getStoredAuthToken()` | ~160 | Retrieves the current auth token from localStorage |
 | `formatPromoteApiError(response)` | ~70–105 | Formats structured/non-JSON promote API errors for user-facing alerts |
 | `formatPromoteNetworkError(err, session?)` | ~107–120 | Formats fetch/network failures, including a busy-is-not-blocker note when relevant |
 | `findScrollableParent(element)` | ~72–90 | Walks DOM to find nearest scrollable ancestor |

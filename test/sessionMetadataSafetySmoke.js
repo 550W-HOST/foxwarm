@@ -74,7 +74,7 @@ async function writeHistorySession(sessionId, label, startTs, seqStart) {
     queue: [],
     persistentMemorySnapshot: '',
     currentNode: 'master',
-    agent: 'alphabot-dev',
+    agent: 'example-agent',
     busy: false,
     nextMessageSeq: seqStart + 2,
     displayName: label,
@@ -88,7 +88,7 @@ function makeMetadata(sessionId, lastMessageTime, messageCount, nextMessageSeq, 
     meta: { lastMessageTime, messageCount },
     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
     queue: [],
-    agent: 'alphabot-dev',
+    agent: 'example-agent',
     currentNode: 'master',
     nextMessageSeq,
     historyVersion: 0,
@@ -97,7 +97,7 @@ function makeMetadata(sessionId, lastMessageTime, messageCount, nextMessageSeq, 
 }
 
 (async () => {
-  const prefix = `alphabot-dev/zz_meta_safety_${Date.now()}`;
+  const prefix = `example-agent/zz_meta_safety_${Date.now()}`;
   const sessionA = `${prefix}_a`;
   const sessionB = `${prefix}_b`;
   const createdFiles = [sessionFilePath(sessionA), sessionFilePath(sessionB)];

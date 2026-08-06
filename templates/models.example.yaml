@@ -4,7 +4,7 @@
 # Recommended public setup: keep provider connection settings directly in this YAML.
 # App/channel configuration lives in state/config.yaml.
 
-default: openai/gpt-5.2-codex
+default: openai/gpt-5.6-sol
 providers:
   openai:
     providerType: openai-completions
@@ -22,14 +22,9 @@ providers:
     #   reasoning:
     #     effort: medium
     models:
-      - gpt-5.2-codex
-      - id: gpt-5.3-codex
-        contextLimit: 400000
-        extraFields:
-          reasoning:
-            effort: high
-      - gpt-5.4
-      - gpt-5.5
+      - gpt-5.6-sol
+      - gpt-5.6-terra
+      - gpt-5.6-luna
 
   # `openai` and `openai-responses` both use the newer Responses API.
   # Use `openai-completions` when you explicitly need the older /chat/completions API.
@@ -39,24 +34,7 @@ providers:
     baseUrl: https://api.anthropic.com
     apiKey: your-anthropic-key
     models:
-      - claude-sonnet-4-5
-      - claude-sonnet-4-6
-      - claude-sonnet-4-5-thinking
-      - claude-sonnet-4-6-thinking
+      - claude-opus-5
 
-  # Virtual models reference concrete model keys above. Uncomment and adjust
-  # one of these entries when stable session routing or ordered failover is
-  # desired. Virtual targets must be concrete (virtual-to-virtual nesting is
-  # rejected), and virtual entries do not contain endpoint or credential fields.
-  # sticky:
-  #   providerType: session-hash
-  #   targets:
-  #     - openai/gpt-5.4
-  #     - anthropic/claude-sonnet-4-6
-  # resilient:
-  #   providerType: failover
-  #   targets:
-  #     - openai/gpt-5.4
-  #     - anthropic/claude-sonnet-4-6
-  #   failureThreshold: 5
-  #   cooldownMs: 600000
+  # For session-hash and failover configuration, see the repository's
+  # docs/virtual-models.md guide.

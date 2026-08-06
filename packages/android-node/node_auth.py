@@ -25,12 +25,9 @@ class NodeConnectionConfig:
     credentials_file: Optional[str] = None
 
 
-def _env(env: Mapping[str, str], *names: str) -> Optional[str]:
-    for name in names:
-        value = env.get(name)
-        if value and value.strip():
-            return value.strip()
-    return None
+def _env(env: Mapping[str, str], name: str) -> Optional[str]:
+    value = env.get(name)
+    return value.strip() if value and value.strip() else None
 
 
 def _normalize_host(value: str) -> str:
@@ -60,13 +57,13 @@ def build_node_ws_url(host: str, pairing_token: Optional[str] = None, node_id: O
 def parse_connection_config(env: Optional[Mapping[str, str]] = None) -> Optional[NodeConnectionConfig]:
     source = env or os.environ
 
-    raw_url = _env(source, 'FOXWARM_URL', 'ALPHABOT_URL')
-    host = _env(source, 'FOXWARM_HOST', 'ALPHABOT_HOST')
-    requested_name = _env(source, 'FOXWARM_NODE_ID', 'ALPHABOT_NODE_ID')
-    pairing_token = _env(source, 'FOXWARM_NODE_TOKEN', 'ALPHABOT_NODE_TOKEN')
-    auth_token = _env(source, 'FOXWARM_NODE_AUTH_TOKEN', 'ALPHABOT_NODE_AUTH_TOKEN')
-    node_id = _env(source, 'FOXWARM_NODE_AUTH_ID', 'ALPHABOT_NODE_AUTH_ID')
-    credentials_file = _env(source, 'FOXWARM_NODE_CREDENTIALS_FILE', 'ALPHABOT_NODE_CREDENTIALS_FILE')
+    raw_url = _env(source, 'FOXWARM_URL')
+    host = _env(source, 'FOXWARM_HOST')
+    requested_name = _env(source, 'FOXWARM_NODE_ID')
+    pairing_token = _env(source, 'FOXWARM_NODE_TOKEN')
+    auth_token = _env(source, 'FOXWARM_NODE_AUTH_TOKEN')
+    node_id = _env(source, 'FOXWARM_NODE_AUTH_ID')
+    credentials_file = _env(source, 'FOXWARM_NODE_CREDENTIALS_FILE')
 
     if raw_url:
         parsed = urlparse(raw_url)

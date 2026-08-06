@@ -50,7 +50,7 @@ The helper script:
 - falls back to Gemini with `google_search` when OpenAI is not configured and Gemini is configured
 - uses a shared 240-second request timeout for both OpenAI and Gemini searches
 - can read existing Foxwarm model configuration to list GPT candidates or copy a selected GPT entry into local web-search secret files without exposing the API key
-- defaults to OpenAI model `gpt-5.5` and Gemini model `gemini-2.5-flash`
+- defaults to OpenAI model `gpt-5.6-sol` and Gemini model `gemini-2.5-flash`
 - prints only the answer/reference content on success
 - shows a friendly setup guide instead of a raw missing-key error on first use
 
@@ -60,7 +60,7 @@ Environment variables:
 
 ```bash
 export WEB_SEARCH_OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
-export WEB_SEARCH_OPENAI_MODEL="gpt-5.5"
+export WEB_SEARCH_OPENAI_MODEL="gpt-5.6-sol"
 export WEB_SEARCH_OPENAI_BASE_URL="https://api.openai.com/v1"  # optional/custom gateway
 ```
 
@@ -70,7 +70,7 @@ Or local secret files (do not commit these):
 mkdir -p ~/.secrets
 chmod 700 ~/.secrets
 printf '%s\n' 'YOUR_OPENAI_API_KEY' > ~/.secrets/web_search_openai_api_key
-printf '%s\n' 'gpt-5.5' > ~/.secrets/web_search_openai_model
+printf '%s\n' 'gpt-5.6-sol' > ~/.secrets/web_search_openai_model
 printf '%s\n' 'https://api.openai.com/v1' > ~/.secrets/web_search_openai_base_url
 chmod 600 ~/.secrets/web_search_openai_*
 ```
@@ -79,7 +79,7 @@ Supported OpenAI-related configuration names:
 
 - API key: `WEB_SEARCH_OPENAI_API_KEY`, then `OPENAI_API_KEY`, then `~/.secrets/web_search_openai_api_key`, then `~/.secrets/openai_api_key`
 - Base URL: `WEB_SEARCH_OPENAI_BASE_URL`, then `OPENAI_BASE_URL`, then `~/.secrets/web_search_openai_base_url`, then `~/.secrets/openai_base_url`, then `https://api.openai.com/v1`
-- Model: `WEB_SEARCH_OPENAI_MODEL`, then `OPENAI_WEB_SEARCH_MODEL`, then `~/.secrets/web_search_openai_model`, then `~/.secrets/openai_web_search_model`, then `gpt-5.5`
+- Model: `WEB_SEARCH_OPENAI_MODEL`, then `OPENAI_WEB_SEARCH_MODEL`, then `~/.secrets/web_search_openai_model`, then `~/.secrets/openai_web_search_model`, then `gpt-5.6-sol`
 - Tool type override: `WEB_SEARCH_OPENAI_TOOL_TYPE` (default `web_search`; use `web_search_preview` only for legacy gateways)
 - Tool choice override: `WEB_SEARCH_OPENAI_TOOL_CHOICE` or `--tool-choice` (default `required`; use `auto` if search should be optional)
 
@@ -88,7 +88,7 @@ If no OpenAI-specific key is configured, the script also checks Foxwarm `models.
 Per-run overrides:
 
 ```bash
-node skills/web-search/web-search.js --provider openai --model gpt-5.5 --base-url https://api.openai.com/v1 "What changed in the OpenAI web search API recently?"
+node skills/web-search/web-search.js --provider openai --model gpt-5.6-sol --base-url https://api.openai.com/v1 "What changed in the OpenAI web search API recently?"
 ```
 
 Initialize from an existing Foxwarm model config:
@@ -96,7 +96,7 @@ Initialize from an existing Foxwarm model config:
 ```bash
 node skills/web-search/web-search.js --init-from-models
 # or choose explicitly:
-node skills/web-search/web-search.js --init-from-models --provider-key openai --model gpt-5.5
+node skills/web-search/web-search.js --init-from-models --provider-key openai --model gpt-5.6-sol
 ```
 
 This writes `~/.secrets/web_search_openai_api_key`, `~/.secrets/web_search_openai_model`, and `~/.secrets/web_search_openai_base_url`. Existing files are not overwritten unless you add `--force`.

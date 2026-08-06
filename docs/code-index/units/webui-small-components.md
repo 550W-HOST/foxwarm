@@ -1,6 +1,6 @@
 # Unit: webui-small-components
 
-Files: packages/webui/src/components/ContentHeader.tsx, packages/webui/src/components/ContextMenu.tsx, packages/webui/src/components/AgentCreationMenu.tsx, packages/webui/src/agentCreation.ts, packages/webui/src/components/CreateTabButton.tsx, packages/webui/src/components/CodeLaunchButton.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/components/ReasoningCard.tsx, packages/webui/src/components/ReloadAppButton.tsx, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/SyntaxHighlightedText.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/utils/languages.ts, packages/webui/test/imageParts.e2e.mjs
+Files: packages/webui/src/components/ContentHeader.tsx, packages/webui/src/components/ContextMenu.tsx, packages/webui/src/components/AgentCreationMenu.tsx, packages/webui/src/agentCreation.ts, packages/webui/src/components/CreateTabButton.tsx, packages/webui/src/components/CodeLaunchButton.tsx, packages/webui/src/components/NodeTargetSelect.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/components/ReasoningCard.tsx, packages/webui/src/components/ReloadAppButton.tsx, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/SpecialBlock.tsx, packages/webui/src/components/SyntaxHighlightedText.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/utils/languages.ts, packages/webui/test/imageParts.e2e.mjs, packages/webui/test/specialBlocks.e2e.mjs
 Secondary files: packages/webui/src/components/CollapsedSidebar.tsx
 
 ## Purpose
@@ -15,7 +15,8 @@ A collection of small, reusable React UI components and utility functions for th
 - `AgentCreationMenu` — Shared Agents `+` dropdown and simple new-agent/new-session modals, including inline validation/loading/error states
 - `agentCreation` helpers — Client validation and request-body helpers that omit an empty session ID so the backend generates the existing random name
 - `CreateTabButton` — Split button for creating terminal tabs with custom node/path options
-- `CodeLaunchButton` — Sidebar split button for opening Code at a remembered master path and controlling the global new-browser-tab default
+- `CodeLaunchButton` — Sidebar split button for opening Code at a remembered node/path and controlling the global new-browser-tab default
+- `NodeTargetSelect` — Shared capability-aware Code/terminal node selector
 - `ImageParts` — Renders safe image attachments from legacy inline data or current authenticated blob URLs
 - `ProcessingStatus` — Animated status indicators for busy/queued/loading states
 - `ReasoningCard` — Collapsible card displaying AI reasoning/thinking content with markdown rendering
@@ -23,6 +24,7 @@ A collection of small, reusable React UI components and utility functions for th
 - `Sidebar` — Main application sidebar with session list, navigation, and settings
 - `SyntaxHighlightedText` — Lightweight regex-based syntax highlighter for code snippets
 - `ThreadLineButton` — Vertical thread-line toggle button for expand/collapse interactions
+- `SpecialBlock` / `MermaidDiagram` — per-block rendered/raw/copy UI shared by display LaTeX and lazy strict Mermaid rendering
 - `inferSimpleLanguage` — Maps file paths to a simplified language enum
 - `getMonacoLanguage` — Maps file paths to Monaco editor language identifiers
 - `SimpleLanguage` (type) — Union type of supported language identifiers
@@ -51,6 +53,8 @@ A collection of small, reusable React UI components and utility functions for th
 | `classifyToken(language, value)` | ~77–90 | Determines token kind (keyword, string, comment, etc.) from matched text |
 | `SyntaxHighlightedText({ text, filePath })` | ~92–115 | Tokenizes and wraps code text in colored spans |
 | `ThreadLineButton({ ... })` | ~10–30 | Accessible toggle button rendering a vertical thread line |
+| `SpecialBlock({ kind, label, raw, children })` | `SpecialBlock.tsx` | Reusable special-rendering surface with exact raw view/copy feedback |
+| `MermaidDiagram({ source })` | `SpecialBlock.tsx` | Lazy static Mermaid rendering with pre-render network/interaction rejection, dedicated SVG sanitization, theme refresh, and bounded error recovery |
 | `inferSimpleLanguage(filePath)` | ~30–95 | Maps file extension/name to a SimpleLanguage value |
 | `getMonacoLanguage(filePath)` | ~97–110 | Converts SimpleLanguage to Monaco editor language string |
 | `basename(filePath)` | ~25 | Extracts lowercase filename from a path |
@@ -76,9 +80,11 @@ A collection of small, reusable React UI components and utility functions for th
 - In 550A, both finished and processing Reasoning cards use the neutral panel/input/hover/border/text grammar; processing may use the stronger neutral hover surface but does not claim the blue semantic allocation reserved for System cards. The canonical color allocation is [D-webui-thread-card-color-allocation](./webui-chat-timeline.md#d-webui-thread-card-color-allocation).
 - `hardReloadApp` performs a destructive cache/service-worker purge before triggering `window.location.reload()`.
 - `SyntaxHighlightedText` performs client-side regex tokenization without external highlighting libraries; classification is heuristic-based per language.
+- `SpecialBlock` owns only per-block disclosure, copy state, and format-specific compact chrome, while its rendered child owns the format-specific work. `MermaidDiagram` dynamically imports Mermaid on demand and keeps malformed model output recoverable through the parent block's exact Raw view. The canonical parser, security, header, and control-visibility contract is [D-webui-assistant-special-blocks](./webui-chat-shared.md#d-webui-assistant-special-blocks).
 - `CreateTabButton` manages local dropdown state with click-outside detection and syncs terminal defaults from props via effects; it no longer displays a session/default-context hint because terminal creation is cwd/node-based.
 - Its fixed 20rem dropdown also has a viewport-relative maximum width so the same split button remains usable inside the narrow Code-embedded sidebar.
-- `CodeLaunchButton` validates absolute POSIX paths before opening, shows inline errors for invalid input, fixes node selection to `master`, and exposes controlled path/open-mode callbacks so `App` owns global persistence.
+- Main `CreateTabButton` and `CodeLaunchButton` selectors show approved offline/incompatible nodes disabled, preserve a stale selected node as unavailable, and apply service-specific requirements through `NodeTargetSelect`. The Code-embedded leaf does not receive the selectable node list because its fixed host message has no target fields.
+- `CodeLaunchButton` validates absolute POSIX paths before opening, shows inline errors for invalid input, and exposes controlled node/path/open-mode callbacks so `App` owns global persistence.
 
 ## Integration
 

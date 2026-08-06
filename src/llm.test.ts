@@ -12,6 +12,7 @@ import * as sessionManager from './sessionManager';
 import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot } from './session/metadataStore';
 import { putImageBlob, resolveImageBlobPath } from './imageBlobs';
 import fs from 'fs-extra';
+import { reconstructLlmRequest, setLlmRequestJournalFaultInjectorForTests } from './llmRequestJournal';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -156,6 +157,27 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
       cachedTokens: 1,
     });
   } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('a post-response journal failure never retries a successful provider generation', async () => {
+  const originalPost = axios.post;
+  let callCount = 0;
+  (axios as any).post = async () => {
+    callCount += 1;
+    return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'one generation' }] } };
+  };
+  setLlmRequestJournalFaultInjectorForTests((phase, record: any) => {
+    if (phase === 'after-jsonl-append' && record.kind === 'attempt-result' && record.outcome === 'success') throw new Error('injected result journal failure');
+  });
+  try {
+    const result = await requestLlmOnce({ contents: [{ role: 'user', parts: [{ text: 'once' }] }], systemPrompt: '', model: 'anthropic/claude-sonnet-4-5', toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    assert.equal(result.text, 'one generation');
+    assert.equal(callCount, 1);
+    assert.equal(typeof result.llmRequestId, 'string');
+  } finally {
+    setLlmRequestJournalFaultInjectorForTests(null);
     (axios as any).post = originalPost;
   }
 });
@@ -953,6 +975,16 @@ test('chat stores each model request usage and model id on its assistant message
     assert.equal(assistantMessages[1].__meta?.modelId, 'anthropic/claude-sonnet-4-5');
     assert.equal(assistantMessages[0].__meta?.virtualModelKey, undefined);
     assert.equal(assistantMessages[1].__meta?.virtualModelKey, undefined);
+    assert.equal(typeof assistantMessages[0].__meta?.llmRequestId, 'string');
+    assert.equal(typeof assistantMessages[1].__meta?.llmRequestId, 'string');
+    assert.notEqual(assistantMessages[0].__meta?.llmRequestId, assistantMessages[1].__meta?.llmRequestId);
+    assert.equal(assistantMessages[0].__meta?.llmAttempt, 1);
+    const reconstructed = await reconstructLlmRequest(assistantMessages[1].__meta?.llmRequestId as string);
+    assert.equal(reconstructed.completeness, 'complete');
+    if (reconstructed.completeness === 'complete') {
+      assert.equal(reconstructed.messages.at(-1)?.role, 'tool');
+      assert.equal(reconstructed.attempts[0]?.result?.outcome, 'success');
+    }
     assert.deepEqual(assistantMessages[0].__meta?.usage, {
       inputTokens: 12,
       outputTokens: 5,

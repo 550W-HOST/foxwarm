@@ -1,6 +1,7 @@
 export const VSCODE_WEB_TAB_ID = 'vscode-web'
 export const CODE_OPEN_NEW_WINDOW_STORAGE_KEY = 'foxwarm_code_open_new_window_v1'
 export const CODE_WORKSPACE_PATH_STORAGE_KEY = 'foxwarm_code_workspace_path_v1'
+export const CODE_WORKSPACE_NODE_STORAGE_KEY = 'foxwarm_code_workspace_node_v1'
 export const CODE_BRIDGE_CHANNEL = 'foxwarm-code-bridge'
 export const CODE_BRIDGE_VERSION = 1
 
@@ -119,6 +120,23 @@ export function readCodeWorkspacePathPreference(storage: CodePreferenceStorage):
   } catch {
     return '/'
   }
+}
+
+export function readCodeWorkspaceNodePreference(storage: CodePreferenceStorage): string {
+  try {
+    const value = storage.getItem(CODE_WORKSPACE_NODE_STORAGE_KEY)
+    return typeof value === 'string' && /^[A-Za-z0-9._-]+$/.test(value.trim()) ? value.trim() : 'master'
+  } catch {
+    return 'master'
+  }
+}
+
+export function writeCodeWorkspaceNodePreference(storage: CodePreferenceStorage, nodeId: string): string {
+  const normalized = /^[A-Za-z0-9._-]+$/.test(nodeId.trim()) ? nodeId.trim() : 'master'
+  try {
+    storage.setItem(CODE_WORKSPACE_NODE_STORAGE_KEY, normalized)
+  } catch {}
+  return normalized
 }
 
 export function writeCodeWorkspacePathPreference(storage: CodePreferenceStorage, path: string): string {

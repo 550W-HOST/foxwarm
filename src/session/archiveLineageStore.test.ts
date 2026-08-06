@@ -7,6 +7,7 @@ import path from 'path';
 test('archive store reads inherited and local messages/blocks without copying parent archives', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-archive-lineage-'));
   process.env.FOXWARM_DATA_DIR = tempRoot;
+  process.env.FOXWARM_SYNC_FILE_LOG = '1';
 
   const archive = await import('./archive');
   const layeredContext = await import('./layeredContext');
@@ -119,15 +120,20 @@ test('archive store reads inherited and local messages/blocks without copying pa
   assert.match(String(frontierPreview), /gamma child local block/);
 
   assert.deepEqual(archivedBlocks[0].memoryFacts, [{ kind: 'convention', text: 'Archive block facts stay with their block.', attributedTo: 'assistant' }]);
-  const parentBlockLog = await fs.readFile(config.getSessionBlockArchiveLogPath('parent'), 'utf8');
+  assert.equal(await fs.pathExists(config.getSessionArchiveLogPath('child')), false, 'normal runtime should not create active archive JSONL');
+  assert.equal(await fs.pathExists(config.getSessionBlockArchiveLogPath('parent')), false, 'normal runtime should not create active block JSONL');
+
+  const exportRoot = path.join(tempRoot, 'export');
+  await archiveStore.exportSessionArchivesJsonl(exportRoot);
+  const parentBlockLog = await fs.readFile(path.join(exportRoot, 'parent.blocks.jsonl'), 'utf8');
   assert.deepEqual(JSON.parse(parentBlockLog.trim()).memoryFacts, [{ kind: 'convention', text: 'Archive block facts stay with their block.', attributedTo: 'assistant' }]);
 
-  const childArchiveLog = await fs.readFile(config.getSessionArchiveLogPath('child'), 'utf8');
+  const childArchiveLog = await fs.readFile(path.join(exportRoot, 'child.jsonl'), 'utf8');
   assert.equal(childArchiveLog.trim().split('\n').length, 1, 'child raw archive should contain only local messages');
   assert.match(childArchiveLog, /gamma child local/);
   assert.doesNotMatch(childArchiveLog, /alpha parent one/);
 
-  const childBlockLog = await fs.readFile(config.getSessionBlockArchiveLogPath('child'), 'utf8');
+  const childBlockLog = await fs.readFile(path.join(exportRoot, 'child.blocks.jsonl'), 'utf8');
   assert.equal(childBlockLog.trim().split('\n').length, 1, 'child block archive should contain only local blocks');
   assert.match(childBlockLog, /gamma child local block/);
   assert.doesNotMatch(childBlockLog, /alpha summary block/);

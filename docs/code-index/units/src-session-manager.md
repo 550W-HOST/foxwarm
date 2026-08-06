@@ -68,7 +68,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 
 - `src/session/agentOps.ts`, `agentMetadata.ts`, `relations.ts`, `channels.ts`, `history.ts`, `metadataStore.ts`, `archive.ts`, `archiveStore.ts`, `layeredContext.ts`, and `managedState.ts` own their respective domains.
 - `src/sessionRuntimeState.ts` owns the canonical runtime-state model.
-- `src/migrations/` runs before normal lazy hydration.
+- `src/migrations/` runs before normal lazy hydration. Throwing data-integrity migrations fail startup instead of entering the ordinary best-effort session-load catch.
 - `src/vector.ts` is used for archive-index lifecycle operations, not agent-memory-file CRUD.
 - `src/imageBlobs.ts` owns canonical image materialization and provider-compatible blob references.
 - `src/llm.ts` is used only for prompt/cache helpers required by lifecycle operations; the router owns the live LLM loop.

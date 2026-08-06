@@ -156,10 +156,12 @@ test('VS Code Web filesystem API rejects unavailable nodes and non-absolute path
 
 test('VS Code Web workbench bootstrap is emitted when official static assets are prepared and assets remain authenticated', async () => {
   const previousAssetDir = process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
+  const previousDefaultFolderUri = process.env.FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI;
   const previousWorkspacePath = process.env.FOXWARM_VSCODE_WEB_WORKSPACE_PATH;
   try {
     await withTempDir(async (dirPath) => {
       process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = dirPath;
+      delete process.env.FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI;
       process.env.FOXWARM_VSCODE_WEB_WORKSPACE_PATH = path.join(dirPath, 'foxwarm.code-workspace');
       await fs.outputFile(path.join(dirPath, 'out/nls.messages.js'), '');
       await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.css'), 'body{}');
@@ -185,6 +187,12 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
 
         const staticWithCookie = await fetch(`${baseUrl}/vscode-web/static/out/nls.messages.js`, { headers: cookieHeaders() });
         assert.equal(staticWithCookie.status, 200);
+
+        const defaultWorkbench = await fetch(`${baseUrl}/vscode-web`, { headers: cookieHeaders() });
+        assert.equal(defaultWorkbench.status, 200);
+        const defaultHtml = await defaultWorkbench.text();
+        const defaultPath = BASE_DIR.split(path.sep).map((segment, index) => index === 0 ? '' : encodeURIComponent(segment)).join('/');
+        assert.ok(defaultHtml.includes(`&quot;path&quot;:&quot;${defaultPath}&quot;`));
 
         const folderUri = 'foxwarm://node+master/tmp/hello%20world';
         const workbench = await fetch(`${baseUrl}/vscode-web?folderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
@@ -261,6 +269,11 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
       });
     });
   } finally {
+    if (previousDefaultFolderUri === undefined) {
+      delete process.env.FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI;
+    } else {
+      process.env.FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI = previousDefaultFolderUri;
+    }
     if (previousWorkspacePath === undefined) {
       delete process.env.FOXWARM_VSCODE_WEB_WORKSPACE_PATH;
     } else {

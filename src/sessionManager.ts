@@ -1810,18 +1810,20 @@ export async function loadSessions(): Promise<void> {
   if (identityMoveRecovery !== 'none') {
     logger.warn({ identityMoveRecovery }, 'Recovered pending session identity move');
   }
+  // A throwing startup migration is authoritative data-integrity state. Do
+  // not enter the legacy best-effort session-load catch with an unverified
+  // archive migration.
+  const migrationResults = await runStartupMigrations();
+  for (const migrationResult of migrationResults) {
+    if (!migrationResult.skippedByVersion && (migrationResult.migratedFiles > 0 || migrationResult.failedFiles > 0)) {
+      const { failures: _failures, ...migrationSummary } = migrationResult;
+      logger.info({ migrationSummary }, 'Startup migration finished');
+    }
+  }
   try {
     // Load agent metadata first
     await sessionAgentMetadata.loadAgentMetadata();
     await loadChannels();
-
-    const migrationResults = await runStartupMigrations();
-    for (const migrationResult of migrationResults) {
-      if (!migrationResult.skippedByVersion && (migrationResult.migratedFiles > 0 || migrationResult.failedFiles > 0)) {
-        const { failures: _failures, ...migrationSummary } = migrationResult;
-        logger.info({ migrationSummary }, 'Startup migration finished');
-      }
-    }
 
     const { data, source } = await loadSessionsMetadataSnapshot();
     if (source !== SESSIONS_FILE) {

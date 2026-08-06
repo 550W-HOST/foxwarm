@@ -8,7 +8,7 @@ Cross-module lifecycle for image bytes from transient ingress through canonical 
 
 1. Channels, MCP/node tools, and tool results may carry base64 as transient ingress or wire data.
 2. Before a message or queue item is durably written, `src/imageBlobs.ts` validates supported raster bytes, writes a content-addressed blob under the data directory, and replaces top-level `inlineData`, structured function-response `inlineData`/`inlineDataItems`, or a legacy archive path with sibling `inlineDataRef.blobId` parts plus stable tool association metadata.
-3. Session history, queue/managed inbox, archive JSONL/SQLite, forks, and compacted archive lineage keep references rather than duplicate base64.
+3. Session history, queue/managed inbox, SQLite archive rows, forks, and compacted archive lineage keep references rather than duplicate base64.
 4. Provider requests clone canonical messages and hydrate referenced bytes only while building OpenAI Responses, OpenAI Chat Completions, or Anthropic payloads. Request diagnostics redact those hydrated payloads.
 5. WebUI history, message SSE, CTX-BLOCK expansion, and explicit Debug responses recursively remove inline bytes and legacy image paths, exposing only transport-safe references with deployment-relative authenticated blob API paths. Unmaterializable legacy images carry explicit unavailable metadata. The browser renders only safe raster MIME types inline.
 6. `image_crop` and `image_write_to_file` resolve current blob references while retaining old inline/path readers.
