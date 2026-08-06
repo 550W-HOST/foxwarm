@@ -6,10 +6,9 @@ Foxwarm is a lightweight, extensible AI assistant framework for development-orie
 
 - **WebUI + Channels**: WebUI, Telegram, Matrix, WeChat Work, Weixin, and external trigger support
 - **Agents, Sessions, and Skills**: Separate long-lived memory/workspaces from runnable conversation threads
-- **Tool Calling**: File operations, shell commands, browser/node tools, session management, and more
 - **Persistent Memory**: Agent memory files plus LanceDB-based searchable history
 - **Nodes**: Optional remote/browser/CLI/sandbox tool hosts
-- **Queue + Compaction**: Serialized session work and context compaction for long-running conversations
+- **Layered-context Compaction**: Automatic multi-level, traceable, archive-backed compaction and recall keep long conversations usable
 
 ## Quick Start: one-line install
 
@@ -240,17 +239,16 @@ The WebUI OOBE page can create a basic model config. You can also edit `state/mo
 Preferred schema:
 
 ```yaml
-default: openai/gpt-5.2-codex
+default: openai/gpt-5.6-sol
 providers:
   openai:
     providerType: openai-completions
     baseUrl: https://api.openai.com/v1
     apiKey: your-openai-key
     models:
-      - gpt-5.2-codex
-      - gpt-5.3-codex
-      - gpt-5.4
-      - gpt-5.5
+      - gpt-5.6-sol
+      - gpt-5.6-terra
+      - gpt-5.6-luna
 ```
 
 Provider notes:
@@ -260,43 +258,8 @@ Provider notes:
 - `anthropic` uses Anthropic-compatible requests
 - OpenAI-compatible local gateways can be configured by changing `baseUrl` and model ids. `apiKey` may be left empty if your gateway does not require one.
 
-Virtual models reference concrete model keys from the same file. `session-hash`
-uses prompt-cache prefix lineage for stable rendezvous routing; `failover` tries
-targets in order and keeps short-lived process-local health state:
-
-```yaml
-default: sticky
-providers:
-  # Define concrete providers first (the order in the file is not significant).
-  openai:
-    providerType: openai-completions
-    baseUrl: https://api.openai.com/v1
-    apiKey: your-openai-key
-    models: [gpt-5.4]
-  backup:
-    providerType: anthropic
-    baseUrl: https://api.anthropic.com
-    apiKey: your-anthropic-key
-    models: [claude-sonnet-4-6]
-
-  sticky:
-    providerType: session-hash
-    targets: [openai/gpt-5.4, backup/claude-sonnet-4-6]
-
-  resilient:
-    providerType: failover
-    targets: [openai/gpt-5.4, backup/claude-sonnet-4-6]
-    failureThreshold: 5  # optional default
-    cooldownMs: 600000   # optional default: 10 minutes
-```
-
-Virtual targets must be concrete leaves; nested virtual models and duplicate
-aliases of the same concrete leaf are rejected. Virtual entries do not carry
-provider credentials, endpoint fields, model lists, request compression, or
-extra request fields/headers, and they do not override context or async-compact
-values. `session-hash` does not accept failover settings; failover thresholds
-and cooldown milliseconds must be positive integers. Concrete entries do not
-accept virtual routing fields.
+For stable session routing and ordered failover, see
+[Virtual models](docs/virtual-models.md).
 
 The runtime resolves model definitions from `state/models.yaml` under the active Foxwarm data directory. If that file is missing, `templates/models.example.yaml` is a read-only fallback; Setup still edits the data-directory file and treats its absence as OOBE.
 
@@ -309,7 +272,7 @@ After building Foxwarm, the repository includes a one-shot CLI that uses the sam
 ```bash
 npm run build
 node scripts/foxwarm.js model --list
-echo "Summarize this text" | node scripts/foxwarm.js model --model openai/gpt-5.5
+echo "Summarize this text" | node scripts/foxwarm.js model --model openai/gpt-5.6-sol
 ```
 
 The package declares `foxwarm` as its executable, so an installed or `npm link`ed checkout can use `foxwarm model ...` directly. The command does not start the Foxwarm server, but it does require `lib/` build output and the normal runtime dependencies. It honors the normal data-root and model-config resolution, provider routing, retries, request compression, sanitization, and provider-specific response handling. Use `foxwarm model --help` for options.
