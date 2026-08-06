@@ -71,9 +71,14 @@ test('Main submitAndRun owns exact activated-worker ingress without Main semanti
   });
   try {
     await supervisor.reconcileStartupOwnerships();
-    let invalidRunCalls = 0;
+    let invalidRunCalls = 0; let invalidOwnershipLookups = 0; let invalidEnqueueCalls = 0; let invalidRegistryCalls = 0;
     const originalPrecheckRun = supervisor.runPendingActivated.bind(supervisor);
+    const originalFindOwnership = store.findOwnership.bind(store); const originalEnqueueIntent = store.enqueueIntent.bind(store);
+    const originalRegisterSource = sourceContexts.register.bind(sourceContexts);
     (supervisor as any).runPendingActivated = async (...args: any[]) => { invalidRunCalls += 1; return originalPrecheckRun(args[0], args[1], args[2]); };
+    (store as any).findOwnership = (...args: any[]) => { invalidOwnershipLookups += 1; return originalFindOwnership(args[0]); };
+    (store as any).enqueueIntent = (...args: any[]) => { invalidEnqueueCalls += 1; return originalEnqueueIntent(args[0], args[1], args[2], args[3]); };
+    (sourceContexts as any).register = (...args: any[]) => { invalidRegistryCalls += 1; return originalRegisterSource(args[0], args[1], args[2]); };
     const validRef = { imageId: 'image-ref', blobId: 'blob-ref', mimeType: 'image/png', byteLength: 12, sha256: 'a'.repeat(64), width: 2, height: 3 };
     const validMeta = { imageId: 'image-ref', mimeType: 'image/png', width: 2, height: 3, sizeBytes: 12, sha256: 'a'.repeat(64) };
     const validPartsItem = itemFor('valid normalized parts', {
@@ -86,6 +91,10 @@ test('Main submitAndRun owns exact activated-worker ingress without Main semanti
       role: 'user' as const, parts: [{ system: 'canonical message' }], modelVisible: true, __meta: { timestamp: 1, seq: 2 },
     } };
     assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validMessageItem }), { sessionId, item: validMessageItem });
+    const validSystemPayloadItem = { type: 'intersession' as const, message: {
+      role: 'user' as const, parts: [{ text: 'payload', systemPayload: true }, { system: 'ordinary system', systemPayload: false }],
+    } };
+    assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validSystemPayloadItem }), { sessionId, item: validSystemPayloadItem });
 
     const accessorPart: any = {}; Object.defineProperty(accessorPart, 'text', { enumerable: true, get() { throw new Error('accessor executed'); } });
     const cyclicRef: any = { ...validRef }; cyclicRef.path = cyclicRef;
@@ -94,6 +103,7 @@ test('Main submitAndRun owns exact activated-worker ingress without Main semanti
       { ...itemFor('extra', { platform: 'test', channelUserId: 'room' }, 'extra'), extra: true },
       { type: 'user', parts: [{}] }, { type: 'intersession', message: {} },
       { type: 'intersession', message: { role: 'user', parts: [{ text: 'x' }], extra: true } },
+      { type: 'intersession', message: { role: 'user', parts: [{ system: 'inverted payload', systemPayload: true }] } },
       { type: 'user', parts: [{ text: 'x' }], message: { role: 'user', parts: [{ text: 'x' }] } },
       { type: 'user', parts: [{ text: 'x' }], clientMessageId: 7 },
       { type: 'user', parts: [{ text: 'x' }], clientMessageId: 'x'.repeat(513) },
@@ -114,6 +124,21 @@ test('Main submitAndRun owns exact activated-worker ingress without Main semanti
     }
     await assert.rejects(() => submitAndRun('x'.repeat(257), validPartsItem), (error: any) => error?.code === 'SESSION_WORKER_INGRESS_INVALID');
     await assert.rejects(() => submitAndRun(` ${sessionId}`, validPartsItem), (error: any) => error?.code === 'SESSION_WORKER_INGRESS_INVALID');
+
+    let sourceGetterCalls = 0;
+    const getterSource: any = { channelUserId: 'room' };
+    Object.defineProperty(getterSource, 'platform', { enumerable: true, get() { sourceGetterCalls += 1; return 'test'; } });
+    const symbolSource: any = { platform: 'test', channelUserId: 'room' }; symbolSource[Symbol('extra')] = true;
+    const nonEnumerableSource: any = { platform: 'test', channelUserId: 'room' };
+    Object.defineProperty(nonEnumerableSource, 'hidden', { enumerable: false, value: true });
+    const probeContext = sourceContext({ platform: 'test', channelUserId: 'room', preferDirectReply: true }, replies);
+    for (const source of [getterSource, symbolSource, nonEnumerableSource]) {
+      await assert.rejects(
+        () => submitAndRun(sessionId, { type: 'user', parts: [{ text: 'source probe' }], source } as any, probeContext),
+        (error: any) => error?.code === 'SESSION_WORKER_INGRESS_INVALID',
+      );
+    }
+    assert.equal(sourceGetterCalls, 0);
     const requestRegistry = new RpcServiceRegistry();
     requestRegistry.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler({ worker: { store, registry: supervisor.projectionRegistry, ingress } }));
     const requestTransport = new LocalRpcTransport(requestRegistry); const requestClient = new RpcClient(sessionRuntimeServiceDescriptor, requestTransport);
@@ -124,8 +149,11 @@ test('Main submitAndRun owns exact activated-worker ingress without Main semanti
       );
     } finally { requestTransport.close(); }
     assert.equal(store.countMailboxIntents(), 0); assert.equal(sourceContexts.size, 0);
-    assert.equal(invalidRunCalls, 0); assert.equal(mainSemanticCalls, 0);
+    assert.equal(invalidRunCalls, 0); assert.equal(invalidOwnershipLookups, 0); assert.equal(invalidEnqueueCalls, 0); assert.equal(invalidRegistryCalls, 0);
+    assert.equal(mainSemanticCalls, 0);
     (supervisor as any).runPendingActivated = originalPrecheckRun;
+    (store as any).findOwnership = originalFindOwnership; (store as any).enqueueIntent = originalEnqueueIntent;
+    (sourceContexts as any).register = originalRegisterSource;
     await initializeSessionRuntime({ worker: { store, registry: supervisor.projectionRegistry, ingress } });
     const unavailableSource: QueueSource = { platform: 'test', channelUserId: 'missing', preferDirectReply: true };
     await assert.rejects(

@@ -7,10 +7,12 @@ import type { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { stableSessionWorkerJson } from './sessionWorkerStableJson';
 import type { ImageMeta, InlineDataRef, Message, MessagePart, QueueItem } from './types';
+import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 
 const MAX_INGRESS_BYTES = 1024 * 1024;
 const ITEM_KEYS = ['type', 'source', 'sourceSessionId', 'clientMessageId', 'parts', 'message', 'waitTimeoutId'];
 const PART_KEYS = ['text', 'system', 'systemPayload', 'inlineDataRef', 'imageMeta'];
+const SOURCE_KEYS = ['platform', 'channelId', 'channelType', 'channelUserId', 'conversationId', 'username', 'senderId', 'weworkStreamId', 'qqbotMessageId', 'preferDirectReply'];
 
 function invalid(message: string): never { throw new RpcError('SESSION_WORKER_INGRESS_INVALID', message); }
 function plain(value: unknown, label: string): asserts value is Record<string, unknown> {
@@ -45,6 +47,7 @@ function optionalText(object: Record<string, unknown>, key: string, label: strin
   return Object.prototype.hasOwnProperty.call(object, key) ? stringValue(object[key], `${label}.${key}`, max) : undefined;
 }
 function normalizeIngressSource(value: unknown) {
+  plain(value, 'item.source'); exact(value, SOURCE_KEYS, 'item.source');
   try { return normalizeSessionTurnDeliverySource(value); }
   catch (error: any) { invalid(error?.message || 'item.source is invalid.'); }
 }
@@ -76,7 +79,7 @@ function normalizePart(value: unknown, index: number): MessagePart {
   if (Object.prototype.hasOwnProperty.call(value, 'systemPayload')) { if (typeof value.systemPayload !== 'boolean') invalid(`${label}.systemPayload must be boolean.`); result.systemPayload = value.systemPayload; }
   if (Object.prototype.hasOwnProperty.call(value, 'inlineDataRef')) result.inlineDataRef = normalizeInlineDataRef(value.inlineDataRef, `${label}.inlineDataRef`);
   if (Object.prototype.hasOwnProperty.call(value, 'imageMeta')) result.imageMeta = normalizeImageMeta(value.imageMeta, `${label}.imageMeta`);
-  if (result.systemPayload !== undefined && result.system === undefined) invalid(`${label}.systemPayload requires system text.`);
+  if (result.systemPayload === true && !isSystemPayloadTextPart(result)) invalid(`${label}.systemPayload:true requires text.`);
   if (!result.text?.length && !result.system?.length && !result.inlineDataRef) invalid(`${label} must contain text, system text, or an image reference.`);
   return result;
 }
