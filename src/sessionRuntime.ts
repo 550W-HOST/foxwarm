@@ -19,6 +19,8 @@ import {
   sessionRuntimeServiceDescriptor,
 } from './sessionRuntimeService';
 import type { QueueItem } from './types';
+import type { ChannelContext } from './channel';
+import type { SessionWorkerIngressCoordinator, SessionWorkerIngressResult } from './sessionWorkerIngress';
 
 export type SessionRuntimeEventListener = RpcEventListener<typeof sessionRuntimeServiceDescriptor>;
 
@@ -26,6 +28,7 @@ let transport: LocalRpcTransport | undefined;
 let client: RpcClient<typeof sessionRuntimeServiceDescriptor> | undefined;
 let initializing: Promise<void> | undefined;
 let eventsStarted = false;
+let workerIngress: SessionWorkerIngressCoordinator | undefined;
 
 export function assertSessionWorkerPlacementSupported(enabled = SESSION_WORKERS_ENABLED): void {
   if (!enabled) return;
@@ -42,6 +45,7 @@ export async function initializeSessionRuntime(options?: { worker?: SessionRunti
     initializing = Promise.resolve().then(() => {
       const registry = new RpcServiceRegistry();
       registry.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler(options));
+      workerIngress = options?.worker?.ingress;
       transport = new LocalRpcTransport(registry, { maxPendingEvents: 4096 });
       client = new RpcClient(sessionRuntimeServiceDescriptor, transport);
     }).catch((error) => {
@@ -72,6 +76,18 @@ export async function getHistory(sessionId: string): Promise<SessionRuntimeHisto
 
 export async function enqueue(sessionId: string, item: QueueItem): Promise<void> {
   await (await getClient()).call('enqueue', { sessionId, item });
+}
+
+export async function submitAndRun(
+  sessionId: string,
+  item: QueueItem,
+  sourceContext?: ChannelContext,
+): Promise<SessionWorkerIngressResult> {
+  const runtimeClient = await getClient();
+  if (!workerIngress) throw new RpcError('SESSION_WORKER_INGRESS_UNAVAILABLE', 'Session-worker ingress is unavailable.', true);
+  const cleanup = workerIngress.registerSourceContext(sessionId, item, sourceContext);
+  try { return await runtimeClient.call('submitAndRun', { sessionId, item }); }
+  finally { cleanup(); }
 }
 
 export async function queueEvent(
@@ -146,6 +162,7 @@ export async function shutdownSessionRuntime(timeoutMs = 10_000): Promise<void> 
     client = undefined;
     transport = undefined;
     initializing = undefined;
+    workerIngress = undefined;
   }
   if (shutdownError) throw shutdownError;
 }
@@ -158,4 +175,5 @@ export type {
   SessionRuntimeSessionDto,
   SessionRuntimeSettingsPatchDto,
   SessionRuntimeSettingsResultDto,
+  SessionWorkerIngressResult,
 };

@@ -2,6 +2,8 @@
 
 Files: src/sessionRuntime.ts, src/sessionRuntimeService.ts, src/sessionWorkerSnapshot.ts, src/sessionRuntimeService.test.ts
 
+Secondary files: src/sessionWorkerIngress.ts, src/sessionWorkerSourceContextRegistry.ts, src/sessionWorkerIngress.test.ts
+
 ## Purpose
 
 Defines the high-level asynchronous SessionRuntime service contract used at external session boundaries. Local placement delegates to `sessionManager`, but requests, replies, errors, and events cross the same cloned DTO boundary expected by a future child placement. It never returns a live `Session` reference.
@@ -13,6 +15,7 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 - `initializeSessionRuntime()` / `shutdownSessionRuntime()` — local service lifecycle and bounded drain.
 - `listSessions()`, `getSession()`, `getHistory()` — immutable local or exact current-Worker projections/snapshots.
 - `enqueue()`, `queueEvent()`, `updateSettings()`, `control()` — high-level mutation commands.
+- `submitAndRun()` — exact already-activated Worker ingress; registers one ephemeral full-source context, submits one durable mailbox item, and returns bounded committed completion.
 - `startEvents()`, `subscribe()` — cloned history/list/state event publication.
 - `assertSessionWorkerPlacementSupported()` / `getSessionRuntimeStatus()` — explicit current placement capability/status.
 
@@ -34,7 +37,8 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 - Requested IDs and aliases are first resolved to a canonical ID from already-loaded catalog identity only; cache-only, removed, or duplicate aliases remain unresolved and cannot select a Worker or trigger semantic hydration through the Worker-aware view. When exact noninactive Worker store ownership and a populated current registry generation/incarnation agree, get/list overlay only projection-owned committed fields onto the Main catalog/presentation DTO without mutating its Session or writing `sessions.json`. A stale current-generation projection remains last-known presentation; an inactive/released ownership ignores the old registry entry. Exact get/history fails retryably when noninactive ownership has no matching populated registry entry, while bounded list presentation retains the catalog-only stub without claiming Worker authority.
 - Worker-owned history reads one atomic per-session JSON file directly, replaces a detached read-only owner with the current state format, renders/annotates its frontier, and externalizes the returned snapshot. Missing, malformed, legacy, or unsupported authority fails retryably without backup recovery, catalog fallback, migration, or authority rewrite.
 - Current Worker projection publication emits the existing state event and emits a list event only when list-visible projected fields change. No history body enters projection/SSE; WebUI uses message-count state changes to coalesce an exact history refresh.
-- `sessionWorkers:false` uses this local service. `sessionWorkers:true` throws `SESSION_WORKERS_NOT_IMPLEMENTED`; child process, mailbox, snapshot generation, ownership fencing, wake, and idle release are not simulated by the local facade.
+- `sessionWorkers:false` uses this local service. `sessionWorkers:true` still throws `SESSION_WORKERS_NOT_IMPLEMENTED`; the new `submitAndRun` operation is available only when an explicit Worker ingress coordinator is injected and does not activate, spawn, choose placement, or fall back locally.
+- Worker ingress accepts only an exact canonical ID and current ordinary QueueItem, preserves its cloned message/source/image/client identities in one mailbox intent, requires one already-ready durable/live generation before append, and calls only that generation's existing `runPending`. Post-append failure stays durable/ambiguous. Its source-context registry is Main-memory-only, full-QueueSource-keyed, ambiguity rejecting, and cleaned in `finally`.
 - Shutdown first stops event publication, then drains the local RPC transport so no new command is accepted during process teardown.
 
 ## Integration

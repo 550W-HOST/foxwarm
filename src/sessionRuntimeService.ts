@@ -14,6 +14,7 @@ import type { SessionRuntimeState } from './sessionRuntimeState';
 import type { SessionWorkerProjection } from './sessionWorkerPersistence';
 import type { SessionWorkerProjectionEntry, SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
+import type { SessionWorkerIngressCoordinator, SessionWorkerIngressResult } from './sessionWorkerIngress';
 import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 
 export type SessionRuntimeTokenTotalsDto = {
@@ -92,6 +93,7 @@ export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime
   listSessions: rpcMethod<Record<string, never>, { sessions: SessionRuntimeSessionDto[] }>(),
   getHistory: rpcMethod<{ sessionId: string }, SessionRuntimeHistoryDto | null>(),
   enqueue: rpcMethod<{ sessionId: string; item: QueueItem }, { accepted: true }>(),
+  submitAndRun: rpcMethod<{ sessionId: string; item: QueueItem }, SessionWorkerIngressResult>(),
   queueEvent: rpcMethod<{
     sessionId: string;
     text: string;
@@ -217,6 +219,7 @@ export function overlaySessionWorkerProjection(
 export type SessionRuntimeWorkerProjectionOptions = {
   store: SessionWorkerStore;
   registry: SessionWorkerProjectionRegistry;
+  ingress?: SessionWorkerIngressCoordinator;
 };
 
 function requireSession(sessionId: string): Promise<Session> {
@@ -377,6 +380,12 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       }
       await sessionManager.enqueueSessionItem(sessionId, input.item);
       return { accepted: true };
+    },
+    async submitAndRun(input) {
+      if (!options?.worker?.ingress) {
+        throw new RpcError('SESSION_WORKER_INGRESS_UNAVAILABLE', 'Session-worker ingress is unavailable.', true);
+      }
+      return options.worker.ingress.submitQueuedInput(input.sessionId, input.item);
     },
     async queueEvent(input) {
       const sessionId = normalizeSessionId(input.sessionId);

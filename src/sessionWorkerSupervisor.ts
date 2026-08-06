@@ -10,6 +10,7 @@ import { ProcessRpcClientTransport, ProcessRpcServer, RpcClient, RpcError, RpcSe
 import { SessionWorkerIdentity, sessionWorkerControlServiceDescriptor } from './sessionWorkerControlService';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { SessionWorkerOwnershipRecord, SessionWorkerStore } from './sessionWorkerStore';
+import { sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
 import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
 import { vectorServiceDescriptor } from './vectorServiceDescriptor';
 import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationServiceDescriptor,
@@ -124,6 +125,33 @@ export class SessionWorkerSupervisor {
     entry.activeCalls += 1; this.clearIdleTimer(entry);
     try { return await entry.client.call('status', {}); }
     finally { entry.activeCalls -= 1; if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry); }
+  }
+
+  assertActivatedOwnership(sessionId: string, expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>): void {
+    const durable = this.options.store.findOwnership(sessionId);
+    const entry = this.entries.get(sessionId);
+    if (!durable || durable.state !== 'ready' || !durable.incarnationId
+      || durable.generation !== expected.generation || durable.incarnationId !== expected.incarnationId
+      || !entry?.ready || !entry.client || entry.generation !== expected.generation || entry.incarnationId !== expected.incarnationId) {
+      throw new RpcError('SESSION_WORKER_INGRESS_UNAVAILABLE', `Session worker ${sessionId} is not the exact activated owner.`, true);
+    }
+  }
+
+  async runPendingActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+    limit = 4096,
+  ) {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      return await runtime.call('runPending', { limit });
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
   }
 
   touch(sessionId: string): void { const entry = this.entries.get(sessionId); if (entry?.ready) this.touchEntry(entry); }

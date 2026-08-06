@@ -24,7 +24,7 @@ function text(value: unknown, label: string, max: number, allowEmpty = false): s
   return value;
 }
 const SOURCE_KEYS = ['platform', 'channelId', 'channelType', 'channelUserId', 'conversationId', 'username', 'senderId', 'weworkStreamId', 'qqbotMessageId', 'preferDirectReply'] as const;
-function normalizeSource(value: unknown): QueueSource {
+export function normalizeSessionTurnDeliverySource(value: unknown): QueueSource {
   plain(value, 'source');
   exactKeys(value, [...SOURCE_KEYS], 'source');
   const result: any = {
@@ -85,7 +85,7 @@ export function createSessionTurnDeliveryServiceHandler(options: {
       const outcome = input.outcome as SessionTurnFinalKind;
       const finalText = text(input.text, 'text', 1024 * 1024, outcome === 'empty-final');
       if (outcome === 'empty-final' && finalText !== '') throw new RpcError('SESSION_TURN_DELIVERY_INVALID', 'empty-final text must be empty.');
-      const source = normalizeSource(input.source);
+      const source = normalizeSessionTurnDeliverySource(input.source);
       const deliveryOptions = finalOptions(source, outcome);
       if (source.preferDirectReply && options.resolveExactSourceContext) {
         let ctx: ChannelContext | undefined;
