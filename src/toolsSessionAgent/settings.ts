@@ -8,7 +8,7 @@ import { ToolArgs, ToolContext, normalizeToolModelKey } from './helpers';
 
 function getTrustedCurrentSession(targetId: string, ctx: ToolContext): Session | undefined {
   if (!ctx.persistCurrentSession || !ctx.session || typeof ctx.session.id !== 'string') return undefined;
-  if (!ctx.sessionId || ctx.sessionId !== targetId || ctx.session.id !== targetId) return undefined;
+  if (!ctx.sessionId || ctx.sessionId !== ctx.session.id || (ctx.session.id !== targetId && !ctx.session.aliases?.includes(targetId))) return undefined;
   return ctx.session;
 }
 

@@ -20,6 +20,7 @@ import { SessionWorkerStore } from './sessionWorkerStore';
 import { tool_set_goal } from './toolsSessionAgent/settings';
 import { tool_wait } from './toolsSessionAgent/interSession';
 import * as vector from './vector';
+import { tool_call_tool } from './tools/unifiedSearch';
 
 async function start(): Promise<void> {
   const sessionId = process.env.FOXWARM_SESSION_WORKER_SESSION_ID!;
@@ -55,8 +56,8 @@ async function start(): Promise<void> {
         catch (error: any) { fenceErrors.push(error?.code); }
         try { await listMcpServers('wrong-source'); }
         catch (error: any) { fenceErrors.push(error?.code); }
-        const nodeResult = await executeRemoteNodeTool(session.id, 'reverse-node', 'read', { filePath: 'reverse.txt' },
-          { currentNode: 'reverse-node', cwd: '/worker-cwd' });
+        const nodeResult = await tool_call_tool({ source: 'node', nodeId: 'reverse-node', name: 'read', args: { filePath: 'reverse.txt' } },
+          { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: () => options.currentSessionEffects.persistSession(session) } as any);
         const servers = await listMcpServers(session.id);
         const mcpResult = await callMcpTool(session.id, 'reverse-mcp', 'echo', { value: 7 });
         const vectorResult = await vector.search('reverse vector query', 2, false, { sessionIds: [session.id] });

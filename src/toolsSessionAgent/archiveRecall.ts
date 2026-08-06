@@ -669,8 +669,8 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
   const { sessionId, start, count } = args;
   const trustedSession = ctx?.persistCurrentSession
     && ctx.session
-    && ctx.sessionId === sessionId
-    && ctx.session.id === sessionId
+    && ctx.sessionId === ctx.session.id
+    && (ctx.session.id === sessionId || ctx.session.aliases?.includes(sessionId))
     ? ctx.session
     : undefined;
   if (trustedSession) requireNotIsolatedForSession(trustedSession, 'get_session_messages');
@@ -748,7 +748,10 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
 
 export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolContext) {
   const targetSessionId = args.sessionId || ctx?.sessionId;
-  await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_messages');
+  const exactOwner = ctx?.sessionPlacement === 'session-worker' && ctx.session
+    && (targetSessionId === ctx.session.id || ctx.session.aliases?.includes(targetSessionId));
+  if (exactOwner) checkArchivedReadPermissionForSession(ctx!.session, targetSessionId, 'get_archived_messages');
+  else await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_messages');
 
   if (!targetSessionId) {
     throw new Error('sessionId is required when there is no current session context.');
@@ -782,7 +785,10 @@ export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolConte
 
 export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext) {
   const targetSessionId = args.sessionId || ctx?.sessionId;
-  await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_blocks');
+  const exactOwner = ctx?.sessionPlacement === 'session-worker' && ctx.session
+    && (targetSessionId === ctx.session.id || ctx.session.aliases?.includes(targetSessionId));
+  if (exactOwner) checkArchivedReadPermissionForSession(ctx!.session, targetSessionId, 'get_archived_blocks');
+  else await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_blocks');
 
   if (!targetSessionId) {
     throw new Error('sessionId is required when there is no current session context.');

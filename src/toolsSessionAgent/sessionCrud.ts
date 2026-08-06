@@ -28,7 +28,7 @@ export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
     throw new Error('Cannot show session status without current session context.');
   }
 
-  return formatSessionStatus(await buildSessionStatusInfo(targetSessionId, ctx?.session));
+  return formatSessionStatus(await buildSessionStatusInfo(targetSessionId, ctx?.session, ctx?.sessionPlacement === 'session-worker'));
 }
 
 export async function tool_delete_session(args: ToolArgs, ctx: ToolContext) {
@@ -75,6 +75,15 @@ async function updateSessionDisplayName(args: ToolArgs, ctx?: ToolContext) {
     throw new Error('session.name is required for action="update-display-name".');
   }
 
+  if (ctx?.sessionPlacement === 'session-worker' && ctx.session && (ctx.session.id === targetId || ctx.session.aliases?.includes(targetId)) && ctx.persistCurrentSession) {
+    const previousName = ctx.session.displayName || undefined;
+    const nextName = name.trim() || undefined;
+    if (previousName === nextName) return `Session \`${targetId}\` display name unchanged (from ${formatDisplayName(previousName)} to ${formatDisplayName(nextName)}).`;
+    ctx.session.displayName = nextName;
+    await ctx.persistCurrentSession();
+    return `Session \`${targetId}\` display name changed from ${formatDisplayName(previousName)} to ${formatDisplayName(nextName)}.`;
+  }
+
   const session = await sessionRuntime.getSession(targetId);
   if (!session) {
     throw new Error(`Session \`${targetId}\` not found.`);
@@ -92,8 +101,14 @@ async function updateSessionDisplayName(args: ToolArgs, ctx?: ToolContext) {
   return `Session \`${session.id}\` display name changed from ${formatDisplayName(previousName)} to ${formatDisplayName(nextName)}.`;
 }
 
-export async function tool_stop_session(args: ToolArgs) {
+export async function tool_stop_session(args: ToolArgs, ctx?: ToolContext) {
   const { sessionId } = args;
+
+  if (ctx?.sessionPlacement === 'session-worker' && ctx.session && (ctx.session.id === sessionId || ctx.session.aliases?.includes(sessionId)) && ctx.persistCurrentSession) {
+    ctx.session.stopping = true;
+    await ctx.persistCurrentSession();
+    return `Stop signal set for session \`${sessionId}\`. It will stop after the current tool call completes.`;
+  }
 
   const session = await sessionRuntime.getSession(sessionId);
   if (!session) {

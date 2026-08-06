@@ -10,6 +10,7 @@ import * as sessionManager from './sessionManager';
 import { checkPathAccess } from './isolatedCheck';
 import { resolveObjectArgWithJsonFallback } from './jsonObjectArgs';
 import type { Message, MessagePart, Session, ToolScriptSubCall } from './types';
+import { RpcError } from './rpc';
 
 type ToolArgs = Record<string, any>;
 
@@ -20,7 +21,14 @@ type ToolContext = {
   runtimeNodeId?: string;
   toolScriptRunId?: string;
   toolUseId?: string;
+  sessionPlacement?: 'local' | 'session-worker';
 };
+
+function assertManagedPlacement(ctx: ToolContext): void {
+  if (ctx.sessionPlacement === 'session-worker') {
+    throw new RpcError('SESSION_WORKER_TOOL_UNAVAILABLE', 'ToolScript managed-session operations are not available in Session-worker placement yet.', true);
+  }
+}
 
 type ToolScriptRunMode = 'foreground' | 'background';
 type ToolScriptRunStatus = 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled';
@@ -1056,6 +1064,7 @@ async function executeScriptHostCall(
   }
 
   if (functionName === 'open_managed_session') {
+    assertManagedPlacement(ctx);
     const ownerSession = getToolScriptSession(ctx, functionName);
     const targetSessionId = requireStringArg(
       getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
@@ -1077,6 +1086,7 @@ async function executeScriptHostCall(
   }
 
   if (functionName === 'session_step') {
+    assertManagedPlacement(ctx);
     const ownerSession = getToolScriptSession(ctx, functionName);
     const targetSessionId = requireStringArg(
       getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
@@ -1128,6 +1138,7 @@ async function executeScriptHostCall(
   }
 
   if (functionName === 'release_managed_session') {
+    assertManagedPlacement(ctx);
     const ownerSession = getToolScriptSession(ctx, functionName);
     const targetSessionId = requireStringArg(
       getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
@@ -1158,6 +1169,7 @@ async function executeScriptHostCall(
   }
 
   if (functionName === 'wait_for_managed_event') {
+    assertManagedPlacement(ctx);
     const targetSessionId = requireStringArg(
       getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
       'session_id',
@@ -1559,6 +1571,7 @@ export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Pr
     throw new Error(`ToolScript run \`${runId}\` not found.`);
   }
   ensureRunOwnedBySession(record, sessionId);
+  if (record.relatedManagedSessions?.length) assertManagedPlacement(ctx);
   if (record.status !== 'waiting' || !record.snapshotBase64 || !record.waiting || (record.waiting.reason !== 'agent' && record.waiting.reason !== 'timeout')) {
     throw new Error(`ToolScript run \`${runId}\` is not waiting for continue_script.`);
   }
@@ -1631,6 +1644,7 @@ export async function tool_cancel_toolscript_run(args: ToolArgs, ctx: ToolContex
     throw new Error(`ToolScript run \`${runId}\` not found.`);
   }
   ensureRunOwnedBySession(record, sessionId);
+  if (record.relatedManagedSessions?.length) assertManagedPlacement(ctx);
   if (record.status === 'completed' || record.status === 'failed' || record.status === 'cancelled') {
     if (record.relatedManagedSessions?.length) {
       await releaseRelatedManagedSessionLeases(record, 'Failed to retry managed-session cleanup for terminal ToolScript run');

@@ -382,6 +382,7 @@ test('LocalSessionTurnHost runs detached normal chat through explicit current-se
   };
   const unexpectedGlobalEffect = () => { throw new Error('detached chat touched global current-session hot state'); };
   class StatefulEffects implements CurrentSessionEffects {
+    placement = 'local' as const;
     async appendMessage(target: Session, message: Message) {
       assert.equal(this, effects);
       assert.equal(target, session);
@@ -451,6 +452,7 @@ test('LocalSessionTurnHost uses one caller effects owner while explicit append r
   const callerAppends: Message[] = [];
   const explicitAppends: Message[] = [];
   const makeEffects = (target: Message[]): CurrentSessionEffects => ({
+    placement: 'local',
     appendMessage: async (_session, message) => { target.push(message); },
     persistSession: async () => {},
     notifySessionEvent: () => {},

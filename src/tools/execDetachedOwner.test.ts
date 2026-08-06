@@ -155,6 +155,7 @@ test('parallel detached exec replays cwd in model order through the same owner',
   (sessionManager as any).saveSession = async () => { throw new Error('global save forbidden'); };
   (sessionRuntime as any).updateSettings = async () => { throw new Error('global cwd update forbidden'); };
   const effects: llm.CurrentSessionEffects = {
+    placement: 'local',
     appendMessage: async () => {},
     persistSession: async owner => { assert.strictEqual(owner, session); persistCount += 1; },
     notifySessionEvent: () => {},

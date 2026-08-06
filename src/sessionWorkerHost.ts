@@ -154,6 +154,7 @@ export class SessionWorkerHost {
     });
     let activeAbort: AbortController | undefined;
     return {
+      placement: 'session-worker',
       appendMessage: (owner, message) => appendMessages(owner, [message]),
       appendMessages,
       persistSession: owner => { this.assertOwner(owner); return persist(); },

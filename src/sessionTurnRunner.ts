@@ -105,6 +105,7 @@ export class LocalSessionTurnHost implements SessionTurnHost {
     const notifyHistoryUpdate = turnEffects.notifyHistoryUpdate ? bind(turnEffects.notifyHistoryUpdate) : defaults.notifyHistoryUpdate;
     this.currentSessionEffects = {
       ...defaults,
+      placement: effects.placement || 'local',
       appendMessage: bind(effects.appendMessage),
       persistSession: bind(effects.persistSession),
       notifySessionEvent: bind(effects.notifySessionEvent),

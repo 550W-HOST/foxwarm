@@ -16,6 +16,7 @@ export interface ToolContext {
   runtimeNodeId?: string;
   /** In-process owner hook for persisting ctx.session; never serialized as a tool/RPC DTO. */
   persistCurrentSession?: () => Promise<void>;
+  sessionPlacement?: 'local' | 'session-worker';
 }
 
 export type ToolArgs = Record<string, any>;

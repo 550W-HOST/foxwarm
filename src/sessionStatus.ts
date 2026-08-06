@@ -140,7 +140,7 @@ export async function buildSessionListOutput(args: Record<string, any> = {}, cur
   return result;
 }
 
-export async function buildSessionStatusInfo(sessionId: string, suppliedSession?: Session): Promise<SessionStatusInfo> {
+export async function buildSessionStatusInfo(sessionId: string, suppliedSession?: Session, exactOwner = false): Promise<SessionStatusInfo> {
   const session = suppliedSession || await sessionManager.getSession(sessionId);
   const realSessionId = session.id || sessionId;
   const agentName = session.agent || 'main';
@@ -148,7 +148,7 @@ export async function buildSessionStatusInfo(sessionId: string, suppliedSession?
   const sessionSummary = estimateSessionSummary(session);
   const { currentKey, contextLimit } = resolveModelConfig(session.model);
   const currentNodeId = session.currentNode || 'master';
-  const allSessions = sessionManager.listSessions();
+  const allSessions = exactOwner ? [] : sessionManager.listSessions();
   const childSessions = allSessions
     .filter(s => s.parentSessionId === realSessionId)
     .slice(0, 10);
@@ -177,7 +177,7 @@ export async function buildSessionStatusInfo(sessionId: string, suppliedSession?
     lastUsage,
     lastUsageTotalTokens: getUsageTotalTokens(lastUsage),
     lastMessageTime: session.meta?.lastMessageTime,
-    currentNode: getNodeInfo(currentNodeId),
+    currentNode: exactOwner ? { id: currentNodeId, connected: currentNodeId === 'master', ...(currentNodeId === 'master' ? { type: 'master' } : {}) } : getNodeInfo(currentNodeId),
     cwd,
     defaultCwdDescription,
     isolated: sessionManager.isSessionEffectivelyIsolated(session),

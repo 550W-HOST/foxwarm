@@ -1,7 +1,7 @@
 # Unit: src-tools
 
 Files: src/tools.ts (facade), src/tools/placement.ts, src/tools/helpers.ts, src/tools/fileTools.ts, src/tools/memoryTools.ts, src/tools/execTools.ts, src/tools/imageTools.ts, src/tools/browserTools.ts, src/tools/mcpTools.ts, src/tools/nodeTools.ts, src/tools/vectorTools.ts, src/tools/unifiedSearch.ts, src/tools/definitions.ts, src/tools/placement.test.ts, src/tools/applyPatchOutput.test.ts, src/utils/pathResolve.ts
-Secondary files: src/tools/unifiedTools.test.ts
+Secondary files: src/tools/unifiedTools.test.ts, src/sessionWorkerToolPlacement.test.ts
 
 ## Purpose
 
@@ -12,6 +12,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - `definitions` — Array of all tool definition objects (from `tools/definitions.ts`)
 - `modelFacingDefinitions` — Subset of definitions directly exposed to the model
 - `callTool(toolName, args, context)` — Main dispatcher that routes tool calls to implementations
+- `assertToolAvailableForPlacement(toolName, args, context)` — trusted-placement pre-handler fence; Worker-unsupported operations fail retryably before raw singleton/lifecycle code.
 - The closed Main Management wrappers for `send_to_session`, `send_to_channel`, `list_agents`, and timer CRUD delegate through `src/mainManagementTools.ts` rather than calling raw handlers directly.
 - `BUILTIN_TOOL_PLACEMENTS` — Exhaustive ownership metadata for every registered builtin, independent of schemas and permission rules.
 - `NODE_ENVIRONMENT_BUILTIN_NAMES` — Intentional current-node environment primitive names.
@@ -106,7 +107,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 |----------|-------------|
 | `tool_search_tools` | Unified search across builtin, MCP, and node tool sources |
 | `tool_call_tool` | Unified tool call dispatcher for builtin, MCP, and node targets |
-| `setDefinitionsRef` | Wires definitions reference for builtin search |
+| `setDefinitionsRef` | Wires definitions, exposure/permission metadata, and the canonical builtin dispatcher for unified calls |
 | `buildUnifiedToolId` | Constructs a unified tool identifier string |
 
 ### tools/definitions.ts — Tool definition array
@@ -155,7 +156,8 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - **Command execution**: `tool_exec` delegates to `execManager` for persistent processes with configurable timeouts, foreground/background modes, and working-directory tracking. Its schema has no hard maximum so finite requests above 60 seconds reach the shared resolver, clamp to 60, and produce a warning in the immediate result footer; minimum/finite validation remains strict. Inline display is already bounded, so model guidance tells agents not to add `head`/`tail` merely for context control: a filtering pipeline changes the captured command output. The master description also reminds agents that a timed-out process remains outstanding while they continue other work; this stays aligned with node guidance under [D-persistent-exec-background-timeout-footer-tree](./shared-persistent-exec.md#d-persistent-exec-background-timeout-footer-tree). Canonical capture/excerpt semantics: [D-persistent-exec-bounded-log-excerpts](./shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts).
 - **Exec cwd sync notice**: When a command changes the session cwd, the `exec` tool appends a `SESSION CWD CHANGED` notice at the end of the tool output and states that the new cwd becomes the default for later `exec/read/edit/write/apply_patch` calls. Parallel segments defer this mutation/notice until every segment member settles, then replay it in model order before the next barrier under [D-dispatch-exec-parallel-segments](../threads/tool-dispatch.md#d-dispatch-exec-parallel-segments).
 - **Placement versus permissions**: Process-placement ownership is exhaustive metadata in `tools/placement.ts`; isolation remains independently enforced by `checkToolPermission` plus tool-local guards.
-- **Unified tool dispatch**: `search_tools` and `call_tool` provide a single interface across builtin, MCP, and remote-node tool sources. The resolved target still passes its normal isolation and tool-local checks.
+- **Unified tool dispatch**: `search_tools` and `call_tool` provide a single interface across builtin, MCP, and remote-node tool sources. Local unified and ToolScript-nested builtins call the canonical dispatcher with the exact existing ToolContext; they never rebuild context through `nodesManager` or load a same-ID global Session. Worker remote Node calls retain exact passed-owner permission checks before the reverse facade. Worker Node discovery remains explicitly unavailable until Main topology closure rather than reading a child-local catalog.
+- **Worker placement fences**: Current-session effects carry a trusted internal local/Session-worker marker into direct and nested ToolContexts. Reachable operations that still need Main topology, cross-session coordination, managed ToolScript, compaction, or destructive lifecycle fail with retryable `SESSION_WORKER_TOOL_UNAVAILABLE` before handler initialization. Exact current status/display/stop/archive/settings and master-local safe operations remain enabled.
 - **Context retrieval**: `recall` is the single model-facing entry point for exact archive drill-down (`target`) and semantic vector retrieval (`vector_query`). `search_vector` / `search_memory` are removed rather than compatibility-wrapped. `recall` and `get_session_messages` share a context preview renderer with total-budget `previewLength`, tool folding, and staged `contentFilter`/regex result post-filtering. `get_session_messages` additionally reports the target session's canonical execution-state summary on every successful response. Their old literal `query` field is absent from model-facing schemas and explicitly rejected at runtime.
 - **Consolidated resource tools**: `session` owns status/list/update-display-name, `skill` owns list/load, and `node` owns list/select. Removed internal names and superseded action aliases are absent from definitions/runtime exports; the canonical consolidation decision is [D-tools-resource-action-consolidation](../modules/tools-and-permissions.md#d-tools-resource-action-consolidation).
 - **Wait runtime metadata**: `wait` supports `waitExecIds?: string[]` as advisory metadata for runtime-state display (`waiting:exec`). Generic `wait({})` remains valid and is rendered as `idle` by status/UI; the schema must not make wait targets required.

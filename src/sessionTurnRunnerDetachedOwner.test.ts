@@ -43,6 +43,7 @@ function createEffects(session: Session, events: string[]): llm.CurrentSessionTu
     notifyHistoryUpdate,
   );
   return {
+    placement: 'local',
     appendMessage: (owner, message) => appendMessages(owner, [message]),
     appendMessages,
     persistSession,
@@ -489,6 +490,7 @@ test('base effects fallback persists both busy transitions with one notification
   const originalNotify = sessionManager.notifySessionStateUpdated;
   (sessionManager as any).notifySessionStateUpdated = (sessionId: string) => { notified.push(sessionId); };
   const effects: llm.CurrentSessionEffects = {
+    placement: 'local',
     appendMessage: async () => {},
     persistSession: async owner => { persistedBusy.push(owner.busy); },
     notifySessionEvent: () => {},

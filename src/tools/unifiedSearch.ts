@@ -1,21 +1,23 @@
 import { ToolArgs, ToolContext, UnifiedToolSource } from './helpers';
-import { checkToolPermission } from '../isolatedCheck';
+import { checkToolPermission, checkToolPermissionForSession } from '../isolatedCheck';
 import * as mcpExternal from '../mcpExternalService';
 import { nodesManager } from '../nodes/manager';
 import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
 import { tool_remote_node } from './nodeTools';
-import { resolveBuiltinToolPlacement } from './placement';
+import { NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './placement';
 import { executeRemoteNodeTool } from '../nodeExecution';
 
 // Forward reference - will be set by the main tools module after definitions are created
 let _definitions: any[] = [];
 let _isToolDirectlyExposedToModel: (toolName: string) => boolean = () => false;
 let _getToolPermissionNode: (toolName: string, executionNode: string, targetNode: string) => string = (_t, e) => e;
+let _dispatchBuiltin: (name: string, args: ToolArgs, ctx: ToolContext) => Promise<any> = async () => { throw new Error('Builtin dispatcher not initialized.'); };
 
-export function setDefinitionsRef(defs: any[], isExposed: (n: string) => boolean, getPermNode: (t: string, e: string, tn: string) => string) {
+export function setDefinitionsRef(defs: any[], isExposed: (n: string) => boolean, getPermNode: (t: string, e: string, tn: string) => string, dispatchBuiltin?: typeof _dispatchBuiltin) {
     _definitions = defs;
     _isToolDirectlyExposedToModel = isExposed;
     _getToolPermissionNode = getPermNode;
+    if (dispatchBuiltin) _dispatchBuiltin = dispatchBuiltin;
 }
 
 export function buildUnifiedToolId(source: UnifiedToolSource, name: string, options: { server?: string; nodeId?: string } = {}): string {
@@ -199,9 +201,9 @@ async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolA
     }
 
     const sessionId = ctx.sessionId || 'main';
-    const currentNode = ctx.sessionId
-        ? (await nodesManager.getCurrentNode(sessionId) || 'master')
-        : (ctx.session?.currentNode || 'master');
+    const currentNode = typeof ctx.session?.currentNode === 'string' && ctx.session.currentNode.trim()
+        ? ctx.session.currentNode.trim()
+        : (ctx.sessionPlacement === 'session-worker' ? 'master' : (await nodesManager.getCurrentNode(sessionId) || 'master'));
     const targetNode = supportsExplicitNode
         ? normalizeRequestedNodeForToolCall(rawArgs?.node, currentNode)
         : currentNode;
@@ -211,7 +213,9 @@ async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolA
     const executionNode = resolveBuiltinToolPlacement(toolName, toolArgs, targetNode).executionNode;
     const permissionNode = _getToolPermissionNode(toolName, executionNode, targetNode);
 
-    if (ctx.sessionId) {
+    if (ctx.session?.id === sessionId) {
+        await checkToolPermissionForSession(ctx.session, toolName, permissionNode, toolArgs);
+    } else if (ctx.sessionId) {
         await checkToolPermission(toolName, sessionId, permissionNode, toolArgs);
     }
 
@@ -219,11 +223,10 @@ async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolA
         return await executeRemoteNodeTool(sessionId, executionNode, toolName, toolArgs);
     }
 
-    if (toolName === 'send_file' || toolName === 'image_write_to_file') {
-        return await nodesManager.executeToolLocally(toolName, { ...toolArgs, __runtimeNodeId: targetNode }, sessionId);
-    }
-
-    return await nodesManager.executeToolLocally(toolName, toolArgs, sessionId);
+    return await _dispatchBuiltin(toolName, toolArgs, {
+        ...ctx,
+        ...(toolName === 'send_file' || toolName === 'image_write_to_file' ? { runtimeNodeId: targetNode } : {}),
+    });
 }
 
 async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: boolean) {
@@ -340,7 +343,9 @@ export async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
     }
 
     if (sources.includes('node')) {
-        try {
+        if (ctx?.sessionPlacement === 'session-worker') {
+            warnings.push('Node discovery is unavailable in Session-worker placement until the Main topology service is connected.');
+        } else try {
             collected.push(...await collectNodeUnifiedSearchResults(query, includeSchema, nodeId, ctx));
         } catch (e: any) {
             warnings.push(e?.message || String(e));
@@ -416,11 +421,17 @@ export async function tool_call_tool(args: ToolArgs, ctx: ToolContext) {
     if (!ref.nodeId) {
         throw new Error('call_tool for node source requires nodeId.');
     }
-
-    return await tool_remote_node({
-        action: 'call',
-        nodeId: ref.nodeId,
-        tool: ref.name,
-        args: toolArgs,
-    }, ctx);
+    if (ctx.sessionPlacement !== 'session-worker') {
+        return await tool_remote_node({ action: 'call', nodeId: ref.nodeId, tool: ref.name, args: toolArgs }, ctx);
+    }
+    if (!ctx?.sessionId || ctx.session?.id !== ctx.sessionId) throw new Error('call_tool for node source requires exact session context.');
+    if (ref.nodeId === 'master') {
+        if (!NODE_ENVIRONMENT_BUILTIN_NAMES.includes(ref.name as any)) {
+            throw new Error(`Tool \`${ref.name}\` not available on node \`master\``);
+        }
+        await checkToolPermissionForSession(ctx.session, ref.name, 'master', toolArgs);
+        return await _dispatchBuiltin(ref.name, toolArgs, { ...ctx, runtimeNodeId: 'master' });
+    }
+    await checkToolPermissionForSession(ctx.session, ref.name, ref.nodeId, toolArgs);
+    return await executeRemoteNodeTool(ctx.sessionId, ref.nodeId, ref.name, toolArgs);
 }

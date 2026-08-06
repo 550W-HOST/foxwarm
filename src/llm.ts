@@ -184,6 +184,7 @@ type RequestLlmOnceOptions = {
 
 /** In-process current-session effects used by the normal turn path. Not an RPC contract. */
 export interface CurrentSessionEffects {
+    placement: 'local' | 'session-worker';
     appendMessage(session: Session, message: Message): Promise<void>;
     persistSession(session: Session): Promise<void>;
     notifySessionEvent(sessionId: string, event: import('./types').SessionStreamEvent): void;
@@ -210,6 +211,7 @@ export function createDefaultCurrentSessionEffects(): CurrentSessionTurnEffects 
         }
     };
     return {
+        placement: 'local',
         appendMessage: (session, message) => sessionManager.appendSessionMessage(session, message),
         appendMessages: (session, messages) => sessionManager.appendSessionMessages(session, messages),
         persistSession,
@@ -1393,6 +1395,10 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
 
     try {
         if (!result?.error) {
+            tools.assertToolAvailableForPlacement(prepared.call.name, prepared.toolArgs,
+                prepared.call.name === 'send_file' || prepared.call.name === 'image_write_to_file'
+                    ? { ...toolContext, runtimeNodeId: prepared.targetNode }
+                    : toolContext);
             await checkToolPermissionForSession(prepared.sourceSession, prepared.call.name, prepared.permissionNode, prepared.toolArgs);
         }
         if (!result?.error && prepared.executionNode !== 'master') {
@@ -1559,6 +1565,7 @@ export async function executeTools(
         persistCurrentSession: options?.currentSessionEffects
             ? () => options.currentSessionEffects!.persistSession(sourceSession)
             : undefined,
+        sessionPlacement: options?.currentSessionEffects?.placement || 'local',
         ...(options?.currentSessionEffects?.execRuntime ? { execRuntime: options.currentSessionEffects.execRuntime } : {}),
     };
     const executions: ExecutedToolCall[] = [];

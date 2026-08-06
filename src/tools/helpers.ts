@@ -34,6 +34,8 @@ export interface ToolContext {
     execRuntime?: ExecRuntime;
     /** Captured owner routing/cwd for one local parallel tool segment. */
     toolExecutionSnapshot?: { currentNode: string; cwd?: string };
+    /** Trusted in-process placement, supplied by turn effects and never tool arguments. */
+    sessionPlacement?: 'local' | 'session-worker';
 }
 
 // Tool function type
