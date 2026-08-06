@@ -13,6 +13,7 @@ Speech recognition is integrated as an external service boundary: Foxwarm sends 
 - [src-index](../units/src-index.md) — application bootstrap and subsystem wiring.
 - [src-rpc](../units/src-rpc.md) — typed local/child service contracts, cloning, lifecycle, cancellation, and events.
 - [src-session-worker-runtime](../units/src-session-worker-runtime.md) — per-session process supervision and durable ownership/mailbox foundation.
+- [src-session-worker-publication](../units/src-session-worker-publication.md) — awaited complete committed projection publication and Main lifecycle staleness coordinator.
 - [src-http-server](../units/src-http-server.md) — authenticated HTTP and WebSocket server.
 - [src-config](../units/src-config.md) — YAML configuration loading, validation, paths, and migrations.
 - [src-misc](../units/src-misc.md) — logging, retries, ASR client, JSON arguments, and node transfer helpers.

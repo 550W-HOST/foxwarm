@@ -31,7 +31,7 @@ export type SessionWorkerPersistenceDependencies = {
 
 export function buildSessionWorkerProjection(session: Session): SessionWorkerProjection {
   const lastMessage = session.history[session.history.length - 1];
-  return structuredClone({
+  return JSON.parse(JSON.stringify({
     sessionId: session.id,
     lastAppliedMailboxId: session.lastAppliedMailboxId || 0,
     busy: !!session.busy,
@@ -47,7 +47,7 @@ export function buildSessionWorkerProjection(session: Session): SessionWorkerPro
     model: session.model || null,
     childModelDefault: session.childModelDefault || null,
     compactThresholdTokens: typeof session.compactThresholdTokens === 'number' ? session.compactThresholdTokens : null,
-  });
+  }));
 }
 
 /** Authoritative per-session JSON save-before-ack coordinator. */

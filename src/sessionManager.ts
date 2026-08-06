@@ -973,6 +973,7 @@ export async function updateSessionBusyStateForSession(
   persistSession: () => Promise<void>,
   clearRuntimeState: (sessionId: string) => void = clearActiveSessionRuntimeState,
   notifySession?: (sessionId: string) => void,
+  shouldRollbackPersistFailure: (error: unknown) => boolean = () => true,
 ): Promise<void> {
   const previousBusy = session.busy;
   const hadBusyStartedAt = Object.prototype.hasOwnProperty.call(session, 'busyStartedAt');
@@ -999,9 +1000,11 @@ export async function updateSessionBusyStateForSession(
   try {
     await persistSession();
   } catch (error) {
-    session.busy = previousBusy;
-    if (hadBusyStartedAt) session.busyStartedAt = previousBusyStartedAt;
-    else delete session.busyStartedAt;
+    if (shouldRollbackPersistFailure(error)) {
+      session.busy = previousBusy;
+      if (hadBusyStartedAt) session.busyStartedAt = previousBusyStartedAt;
+      else delete session.busyStartedAt;
+    }
     throw error;
   }
   if (!busy) clearRuntimeState(session.id);

@@ -28,6 +28,7 @@ export type SessionWorkerHostDependencies = {
   persistence?: SessionWorkerPersistenceDependencies;
   initialize?: () => Promise<void>;
   createTurnHost?: (effects: CurrentSessionTurnEffects, session: Session) => SessionTurnHost;
+  publishCommitted?: (projection: SessionWorkerProjection) => Promise<void>;
 };
 
 export class SessionWorkerHost {
@@ -37,6 +38,7 @@ export class SessionWorkerHost {
   private session?: Session;
   private runner?: SessionTurnRunner;
   private poison?: { original: unknown; resync: unknown };
+  private publicationPoison?: unknown;
 
   constructor(
     private readonly identity: SessionWorkerIdentity,
@@ -81,6 +83,7 @@ export class SessionWorkerHost {
           }
         },
       );
+      await this.publishCurrent();
       await this.runner!.processSessionQueue(session.id);
     } catch (error) {
       await this.resyncAfterFailure(error);
@@ -115,11 +118,9 @@ export class SessionWorkerHost {
         this.assertId(sessionId);
         const before = captureSessionSemanticState(owner);
         try {
-          return await refreshSessionSnapshotForSession(owner, () => this.persistence.persistActivated(
-            owner, this.identity.generation, this.identity.incarnationId,
-          ).then(() => {}));
+          return await refreshSessionSnapshotForSession(owner, () => this.persistOwner());
         } catch (error) {
-          restoreSessionSemanticState(owner, before);
+          if (!this.isResyncError(error)) restoreSessionSemanticState(owner, before);
           throw error;
         }
         },
@@ -136,6 +137,7 @@ export class SessionWorkerHost {
         },
       },
     )))(effects, session));
+    await this.publishCurrent();
   }
 
   private createEffects(session: Session, execRuntime: ExecRuntime): CurrentSessionTurnEffects {
@@ -158,7 +160,10 @@ export class SessionWorkerHost {
       appendMessage: (owner, message) => appendMessages(owner, [message]),
       appendMessages,
       persistSession: owner => { this.assertOwner(owner); return persist(); },
-      updateBusy: (owner, busy) => { this.assertOwner(owner); return updateSessionBusyStateForSession(owner, busy, persist, clearActiveSessionRuntimeState); },
+      updateBusy: (owner, busy) => { this.assertOwner(owner); return transactional(() => updateSessionBusyStateForSession(
+        owner, busy, persist, clearActiveSessionRuntimeState, undefined,
+        error => String((error as any)?.code || '') !== 'SESSION_WORKER_PUBLICATION_RESYNC_REQUIRED',
+      )); },
       startWait: (owner, options) => {
         this.assertOwner(owner);
         let result: Awaited<ReturnType<typeof startSessionWaitForSession>>;
@@ -224,6 +229,10 @@ export class SessionWorkerHost {
   }
 
   private async persistOwner(): Promise<void> {
+    if (this.publicationPoison) {
+      await this.persistence.reloadActivated(this.session!, this.identity.generation, this.identity.incarnationId);
+      throw this.publicationError(this.publicationPoison);
+    }
     if (this.poison) {
       const prior = this.poison;
       await this.ensureHealthy();
@@ -240,9 +249,22 @@ export class SessionWorkerHost {
         original: this.errorSummary(error), resynced: true,
       });
     }
+    await this.publishCurrent();
+  }
+
+  private async publishCurrent(): Promise<void> {
+    if (!this.dependencies.publishCommitted) return;
+    try { await this.dependencies.publishCommitted(buildSessionWorkerProjection(this.session!)); }
+    catch (error) { logger.error({ err: error, sessionId: this.identity.sessionId }, 'Committed Session projection publication failed'); this.publicationPoison = error; throw this.publicationError(error); }
+  }
+
+  private publicationError(error: unknown): RpcError {
+    return new RpcError('SESSION_WORKER_PUBLICATION_RESYNC_REQUIRED', 'Committed Session state publication failed; worker restart/full resync is required.', true,
+      { publication: this.errorSummary(error) });
   }
 
   private async ensureHealthy(): Promise<void> {
+    if (this.publicationPoison) throw this.publicationError(this.publicationPoison);
     if (!this.poison) return;
     const prior = this.poison;
     try {
@@ -269,7 +291,8 @@ export class SessionWorkerHost {
     return { ...((error as any)?.code ? { code: String((error as any).code) } : {}), message: String((error as any)?.message || error) };
   }
   private isResyncError(error: unknown): boolean {
-    return ['SESSION_WORKER_PERSIST_FAILED', 'SESSION_WORKER_RESYNCED_RETRY', 'SESSION_WORKER_RESYNC_REQUIRED'].includes(String((error as any)?.code || ''));
+    return ['SESSION_WORKER_PERSIST_FAILED', 'SESSION_WORKER_RESYNCED_RETRY', 'SESSION_WORKER_RESYNC_REQUIRED',
+      'SESSION_WORKER_PUBLICATION_RESYNC_REQUIRED'].includes(String((error as any)?.code || ''));
   }
 
   private baseSession(): Session {

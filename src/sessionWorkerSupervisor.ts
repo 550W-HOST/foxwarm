@@ -12,6 +12,8 @@ import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity
 import { SessionWorkerOwnershipRecord, SessionWorkerStore } from './sessionWorkerStore';
 import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
 import { vectorServiceDescriptor } from './vectorServiceDescriptor';
+import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationServiceDescriptor,
+  SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
 
 export type SessionWorkerSupervisorOptions = {
   store: SessionWorkerStore;
@@ -22,6 +24,7 @@ export type SessionWorkerSupervisorOptions = {
   restartMaxDelayMs?: number;
   shouldRestart?: (sessionId: string) => boolean | Promise<boolean>;
   readProcessIdentity?: (pid: number) => string | null;
+  projectionRegistry?: SessionWorkerProjectionRegistry;
 };
 
 type ProvisionalChild = {
@@ -61,6 +64,7 @@ export class SessionWorkerSupervisor {
   private readonly lifecycleFailures = new Map<string, unknown>();
   private readonly restartBaseDelayMs: number;
   private readonly restartMaxDelayMs: number;
+  readonly projectionRegistry: SessionWorkerProjectionRegistry;
   private shuttingDown = false;
   private reconciled = false;
 
@@ -68,6 +72,7 @@ export class SessionWorkerSupervisor {
     if (!Number.isFinite(options.idleMs) || options.idleMs < 1) throw new RpcError('SESSION_WORKER_INVALID_IDLE', 'Session worker idle timeout must be positive.');
     this.restartBaseDelayMs = options.restartBaseDelayMs ?? 250;
     this.restartMaxDelayMs = options.restartMaxDelayMs ?? 5_000;
+    this.projectionRegistry = options.projectionRegistry || new SessionWorkerProjectionRegistry();
   }
 
   async reconcileStartupOwnerships(timeoutMs = 5_000): Promise<number> {
@@ -174,6 +179,8 @@ export class SessionWorkerSupervisor {
     const incarnationId = crypto.randomUUID();
     const ownership = this.options.store.beginGeneration(sessionId, incarnationId);
     const generation = ownership.generation;
+    const publicationIdentity = { sessionId, generation, incarnationId };
+    this.projectionRegistry.establish(publicationIdentity);
     let child: ChildProcess;
     try {
       child = fork(this.options.workerScriptPath || path.join(__dirname, 'sessionWorker.js'), [], {
@@ -199,6 +206,9 @@ export class SessionWorkerSupervisor {
       reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ expectedSourceSessionId: sessionId }));
       reverseRegistry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: sessionId }));
       reverseRegistry.register(fileDeliveryServiceDescriptor, createFileDeliveryServiceHandler({ expectedSourceSessionId: sessionId }));
+      reverseRegistry.register(sessionWorkerPublicationServiceDescriptor, createSessionWorkerPublicationServiceHandler({
+        expected: publicationIdentity, registry: this.projectionRegistry,
+      }));
       reverseRegistry.register(mcpExternalServiceDescriptor, createMcpExternalServiceHandler({ expectedSourceSessionId: sessionId }));
       reverseRegistry.register(vectorServiceDescriptor, createVectorFacadeProxyHandler());
       reverseServer = new ProcessRpcServer(reverseRegistry, {
@@ -263,6 +273,7 @@ export class SessionWorkerSupervisor {
     if (this.entries.get(entry.sessionId) !== entry) return;
     entry.ready = false; entry.client = undefined; entry.transport.close(); this.clearIdleTimer(entry);
     entry.reverseServer.close();
+    this.projectionRegistry.markStale(entry);
     if (!entry.intentionalStop && !this.shuttingDown) logger.warn({ sessionId: entry.sessionId, generation: entry.generation, pid: entry.child.pid }, 'Session worker IPC disconnected; waiting for process exit');
   }
 
@@ -270,6 +281,7 @@ export class SessionWorkerSupervisor {
     if (this.entries.get(entry.sessionId) !== entry) { entry.resolveExit(); return; }
     entry.ready = false; entry.client = undefined; entry.transport.close(); this.clearIdleTimer(entry); this.entries.delete(entry.sessionId);
     entry.reverseServer.close();
+    this.projectionRegistry.markStale(entry);
     const reason = `${entry.intentionalStop ? 'stopped' : 'unexpected'}:${code ?? signal ?? 'unknown'}`;
     try { this.options.store.markExitObserved(entry.sessionId, entry.generation, entry.incarnationId, reason); }
     catch (error) {

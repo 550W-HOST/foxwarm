@@ -27,6 +27,7 @@ import * as timers from './timers';
 import * as vector from './vector';
 import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
 import { vectorServiceDescriptor } from './vectorServiceDescriptor';
+import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationServiceDescriptor, SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
 
 function baseSession(id: string): Session {
   return {
@@ -53,6 +54,7 @@ async function withLocalHost(
   initial: Session,
   testBody: (fixture: { host: SessionWorkerHost; store: SessionWorkerStore; session: Session; turnHost: any; readDurable: () => Record<string, any> }) => Promise<void>,
   keepRunner = false,
+  publishCommitted?: (projection: any) => Promise<void>,
 ): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-local-worker-host-'));
   const store = new SessionWorkerStore(path.join(root, 'runtime.sqlite')); store.open();
@@ -70,6 +72,7 @@ async function withLocalHost(
       readState: async () => structuredClone(durable),
       writeState: async session => { durable = structuredClone(serializeSessionHistoryPayload(session)); },
     },
+    publishCommitted,
   });
   try {
     await (host as any).ensureLoaded();
@@ -225,6 +228,17 @@ test('bound worker host closes reminder and compaction exact-owner escapes', asy
   assert.deepEqual(sessionsFileAfter, sessionsFileBefore);
 });
 
+test('postcommit publication failure preserves authority and poisons later mutation', async () => {
+  const initial = baseSession('publication-postcommit'); let publishes = 0;
+  await withLocalHost(initial, async ({ host, session, turnHost, readDurable }) => {
+    await assert.rejects(() => turnHost.currentSessionEffects.updateBusy(session, true), assertRpcCode('SESSION_WORKER_PUBLICATION_RESYNC_REQUIRED'));
+    assert.equal(readDurable().busy, true); assert.equal(session.busy, true);
+    session.model = 'uncommitted-later';
+    await assert.rejects(() => (host as any).persistOwner(), assertRpcCode('SESSION_WORKER_PUBLICATION_RESYNC_REQUIRED'));
+    assert.equal(session.model, undefined); assert.equal(session.busy, true);
+  }, false, async () => { publishes += 1; if (publishes > 1) throw new Error('publication reply lost'); });
+});
+
 test('real activated child runs durable mailbox through canonical SessionTurnRunner', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-host-'));
   const sessionId = 'worker-host-real-child';
@@ -274,9 +288,14 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   });
   const transport = new ProcessRpcClientTransport(child, { generation: ownership.generation });
   const reverseRegistry = new RpcServiceRegistry();
+  const projectionRegistry = new SessionWorkerProjectionRegistry();
+  const publicationIdentity = { sessionId, generation: ownership.generation, incarnationId };
+  projectionRegistry.establish(publicationIdentity);
+  const published: any[] = []; projectionRegistry.subscribe(entry => { published.push(entry); });
   reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ expectedSourceSessionId: sessionId }));
   reverseRegistry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: sessionId }));
   reverseRegistry.register(fileDeliveryServiceDescriptor, createFileDeliveryServiceHandler({ expectedSourceSessionId: sessionId }));
+  reverseRegistry.register(sessionWorkerPublicationServiceDescriptor, createSessionWorkerPublicationServiceHandler({ expected: publicationIdentity, registry: projectionRegistry }));
   reverseRegistry.register(mcpExternalServiceDescriptor, createMcpExternalServiceHandler({ expectedSourceSessionId: sessionId }));
   reverseRegistry.register(vectorServiceDescriptor, createVectorFacadeProxyHandler());
   const reverseServer = new ProcessRpcServer(reverseRegistry, {
@@ -309,6 +328,13 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.equal(afterFailedClaim.history.length, 0);
 
     const projection = await runtime.call('runPending', { limit: 8 });
+    assert.ok(published.length >= 2);
+    assert.equal(published[0].projection.messageCount, 0);
+    assert.equal(published[0].projection.queueLength, 0);
+    assert.equal(published.some(entry => entry.projection.busy === true), true);
+    assert.equal(published.at(-1).projection.busy, false);
+    assert.equal(projectionRegistry.get(sessionId)?.stale, false);
+    assert.equal(Object.prototype.hasOwnProperty.call(projectionRegistry.get(sessionId)?.projection || {}, 'stateRevision'), false);
     assert.equal(projection.lastAppliedMailboxId, intent.id);
     assert.equal(projection.busy, false);
     assert.equal(projection.queueLength, 0);
@@ -352,6 +378,10 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.match(afterWait.history.at(-1).parts[0].text, /ready for WebUI target/);
     assert.match(afterWait.history.at(-1).parts[0].text, /Delivered: 1/);
     assert.match(afterWait.history.at(-1).parts[0].text, /telegram:room/);
+    assert.equal(projectionRegistry.get(sessionId)?.projection?.currentNode, 'reverse-node');
+    assert.equal(projectionRegistry.get(sessionId)?.projection?.lastAppliedMailboxId, afterWait.lastAppliedMailboxId);
+    assert.equal(projectionRegistry.get(sessionId)?.projection?.queueLength, afterWait.queue.length);
+    assert.deepEqual(projectionRegistry.get(sessionId)?.projection?.stats, afterWait.stats);
     assert.doesNotMatch(afterWait.history.at(-1).parts[0].text, /c2VjcmV0LWJ5dGVz/);
     assert.match(afterWait.history.at(-1).parts[0].text, /reverse-hit/);
     assert.match(afterWait.history.at(-1).parts[0].text, /"loadedLocalVectorOwner":false/);

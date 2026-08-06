@@ -8,6 +8,7 @@ import { RpcError } from './rpc';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { SessionWorkerStore, SessionWorkerStoreOperation } from './sessionWorkerStore';
 import { SessionWorkerLifecycleError, SessionWorkerSupervisor } from './sessionWorkerSupervisor';
+import { buildSessionWorkerProjection } from './sessionWorkerPersistence';
 
 async function waitFor(check: () => boolean, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -37,10 +38,17 @@ test('supervisor durably activates one incarnation and confirms idle exit before
     assert.equal(identity.active, true); assert.equal(identity.incarnationId, first.incarnationId);
     const owned = fixture.store.getOwnership('idle-session');
     assert.equal(owned.state, 'ready'); assert.equal(owned.incarnationId, first.incarnationId); assert.ok(owned.activatedAt);
+    await fixture.supervisor.projectionRegistry.apply({ sessionId: 'idle-session', generation: first.generation, incarnationId: first.incarnationId },
+      buildSessionWorkerProjection({ id: 'idle-session', history: [], queue: [], meta: {},
+        stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null } } as any));
+    assert.equal(fixture.supervisor.projectionRegistry.get('idle-session')?.stale, false);
     await waitFor(() => fixture.supervisor.getStatus('idle-session') === undefined, 4_000);
+    assert.equal(fixture.supervisor.projectionRegistry.get('idle-session')?.stale, true);
     assert.equal(fixture.store.getOwnership('idle-session').state, 'inactive');
     const replacement = await fixture.supervisor.ensureWorker('idle-session');
     assert.equal(replacement.generation, 2); assert.notEqual(replacement.incarnationId, first.incarnationId);
+    assert.equal(fixture.supervisor.projectionRegistry.get('idle-session')?.generation, 2);
+    assert.equal(fixture.supervisor.projectionRegistry.get('idle-session')?.stale, true);
     await fixture.supervisor.stopWorker('idle-session', 2_000);
   } finally { await fixture.close(); }
 });

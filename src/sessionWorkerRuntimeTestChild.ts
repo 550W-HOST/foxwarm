@@ -3,6 +3,7 @@ import { initializeMainManagementTools, shutdownMainManagementTools } from './ma
 import { callMcpTool, initializeMcpExternalService, listMcpServers, shutdownMcpExternalService } from './mcpExternalService';
 import { copyBetweenNodes, executeRemoteNodeTool, initializeNodeExecution, listNodeTopology, shutdownNodeExecution, validateNodeSelection } from './nodeExecution';
 import { deliverFile, initializeFileDelivery, shutdownFileDelivery } from './fileDelivery';
+import { initializeSessionWorkerPublication, publishCommitted, shutdownSessionWorkerPublication } from './sessionWorkerPublication';
 import * as llm from './llm';
 import { initLlmRequestJournal } from './llmRequestJournal';
 import { ProcessRpcClientTransport, ProcessRpcServer, RpcServiceRegistry } from './rpc';
@@ -70,11 +71,12 @@ async function start(): Promise<void> {
         const sendWebui = await tool_call_tool({ source: 'builtin', name: 'send_file', args: { filePath: 'worker-send.txt', channelTargetId: 'webui:room' } }, workerCtx);
         const sendSession = await tool_call_tool({ source: 'builtin', name: 'send_file', args: { filePath: 'remote.txt', node: 'reverse-node', sessionId: session.id } }, workerCtx);
         const sendChannel = await tool_call_tool({ source: 'builtin', name: 'send_file', args: { filePath: 'worker-send.txt', channelTargetId: 'telegram:room' } }, workerCtx);
+        const selectedTool = await tool_call_tool({ source: 'builtin', name: 'node', args: { action: 'select', nodeId: 'reverse-node' } }, workerCtx);
         const servers = await listMcpServers(session.id);
         const mcpResult = await callMcpTool(session.id, 'reverse-mcp', 'echo', { value: 7 });
         const vectorResult = await vector.search('reverse vector query', 2, false, { sessionIds: [session.id] });
         const loadedLocalVectorOwner = Object.keys(require.cache).some(file => /vector(Runtime|ServiceManager)\.js$/.test(file));
-        await options.appendMessage({ role: 'model', parts: [{ text: JSON.stringify({ fenceErrors, nodeResult, topology, selected, copied, sendWebui, sendSession, sendChannel, servers, mcpResult, vectorResult, loadedLocalVectorOwner }) }] });
+        await options.appendMessage({ role: 'model', parts: [{ text: JSON.stringify({ fenceErrors, nodeResult, topology, selected, copied, sendWebui, sendSession, sendChannel, selectedTool, servers, mcpResult, vectorResult, loadedLocalVectorOwner }) }] });
         return { text: 'reverse external services complete' };
       }
       await options.appendMessage({ role: 'model', parts: [{ text: 'reverse wait scheduled' }] });
@@ -92,9 +94,11 @@ async function start(): Promise<void> {
   await initializeMainManagementTools({ transport: reverseTransport, placement: 'child-reverse' });
   await initializeNodeExecution({ transport: reverseTransport, placement: 'child-reverse' });
   await initializeFileDelivery({ transport: reverseTransport, placement: 'child-reverse' });
+  await initializeSessionWorkerPublication({ transport: reverseTransport, identity });
   await initializeMcpExternalService({ transport: reverseTransport, placement: 'child-reverse' });
   await vector.init({ transport: reverseTransport, placement: 'child-reverse' });
   const host = new SessionWorkerHost(identity, store, {
+    publishCommitted: projection => publishCommitted(identity, projection),
     persistence: {
       readState: async id => {
         readCount += 1;
@@ -125,7 +129,7 @@ async function start(): Promise<void> {
   ));
   registry.register(sessionWorkerRuntimeServiceDescriptor, createSessionWorkerRuntimeServiceHandler(gate, host));
   new ProcessRpcServer(registry, { generation, exitOnDrain: true, onDrain: async () => {
-    await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownMcpExternalService(), vector.shutdown()]);
+    await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownSessionWorkerPublication(), shutdownMcpExternalService(), vector.shutdown()]);
     await reverseTransport.drain(); reverseTransport.close(); store.close();
   } }).start();
 }
