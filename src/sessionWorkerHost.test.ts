@@ -13,6 +13,9 @@ import { SessionWorkerHost } from './sessionWorkerHost';
 import { sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import type { Session } from './types';
+import * as llm from './llm';
+import * as sessionManager from './sessionManager';
+import { SESSIONS_FILE } from './config';
 
 function baseSession(id: string): Session {
   return {
@@ -37,7 +40,8 @@ function assertRpcCode(code: string) {
 
 async function withLocalHost(
   initial: Session,
-  testBody: (fixture: { host: SessionWorkerHost; store: SessionWorkerStore; session: Session; readDurable: () => Record<string, any> }) => Promise<void>,
+  testBody: (fixture: { host: SessionWorkerHost; store: SessionWorkerStore; session: Session; turnHost: any; readDurable: () => Record<string, any> }) => Promise<void>,
+  keepRunner = false,
 ): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-local-worker-host-'));
   const store = new SessionWorkerStore(path.join(root, 'runtime.sqlite')); store.open();
@@ -58,8 +62,9 @@ async function withLocalHost(
   });
   try {
     await (host as any).ensureLoaded();
-    (host as any).runner = { processSessionQueue: async () => {} };
-    await testBody({ host, store, session: (host as any).session, readDurable: () => structuredClone(durable) });
+    const turnHost = (host as any).runner.host;
+    if (!keepRunner) (host as any).runner = { processSessionQueue: async () => {} };
+    await testBody({ host, store, session: (host as any).session, turnHost, readDurable: () => structuredClone(durable) });
   } finally { store.close(); await fs.remove(root); }
 }
 
@@ -169,6 +174,46 @@ test('exec completion is serialized after a failed turn and remains one durable 
   });
 });
 
+test('bound worker host closes reminder and compaction exact-owner escapes', async () => {
+  const compactSession = baseSession('exact-worker-compact'); compactSession.compactThresholdTokens = 10;
+  await withLocalHost(compactSession, async ({ turnHost, session, readDurable }) => {
+    await turnHost.checkAndCompactIfNeeded(session.id, undefined);
+    await turnHost.checkAndCompactIfNeeded(session.id, { inputTokens: 10 });
+    await assert.rejects(() => turnHost.checkAndCompactIfNeeded(session.id, { inputTokens: 11 }), assertRpcCode('SESSION_WORKER_COMPACTION_UNSUPPORTED'));
+    await assert.rejects(() => turnHost.processSessionCompactionRequest(session.id, {}), assertRpcCode('SESSION_WORKER_COMPACTION_UNSUPPORTED'));
+    await assert.rejects(() => turnHost.applyCompletedCompactJob(session.id), assertRpcCode('SESSION_WORKER_COMPACTION_UNSUPPORTED'));
+    assert.equal(readDurable().history.length, 0);
+  });
+
+  const initial = baseSession('exact-worker-child'); initial.parentSessionId = 'parent-session';
+  const sessionsFileBefore = await fs.pathExists(SESSIONS_FILE) ? await fs.readFile(SESSIONS_FILE) : null;
+  const originalChat = llm.chat;
+  let calls = 0;
+  (llm as any).chat = async (parts: any, session: Session, _iteration: number, options: any) => {
+    calls += 1;
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    const reminderTurn = JSON.stringify(parts ?? session.history.at(-1)?.parts).includes('child-reminder');
+    await options.appendMessage({ role: 'model', parts: [{ text: reminderTurn ? '[NO_ACTION]' : 'ordinary child answer' }] });
+    if (!reminderTurn) await options.currentSessionEffects.startWait(session, {});
+    return { text: reminderTurn ? '[NO_ACTION]' : 'ordinary child answer' };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, session }) => {
+      store.enqueueIntent(initial.id, 'ordinary', 'enqueue', { type: 'user', parts: [{ text: 'work' }] });
+      await host.runPending(8);
+      for (let index = 0; index < 40 && calls < 2; index += 1) await new Promise(resolve => setTimeout(resolve, 5));
+      const reminders = session.history.filter(message => JSON.stringify(message.parts).includes('kind=\\"child-reminder\\"'));
+      assert.equal(calls, 2);
+      assert.equal(reminders.length, 1);
+      assert.equal(session.queue.length, 0);
+      assert.equal(session.meta.wait, undefined);
+      assert.equal(await sessionManager.getExistingSession(session.id), null);
+    }, true);
+  } finally { (llm as any).chat = originalChat; }
+  const sessionsFileAfter = await fs.pathExists(SESSIONS_FILE) ? await fs.readFile(SESSIONS_FILE) : null;
+  assert.deepEqual(sessionsFileAfter, sessionsFileBefore);
+});
+
 test('real activated child runs durable mailbox through canonical SessionTurnRunner', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-host-'));
   const sessionId = 'worker-host-real-child';
@@ -241,7 +286,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     await runtime.call('runPending', { limit: 8 });
     const afterGoalFault = await fs.readJson(statePath);
     assert.equal(afterGoalFault.goalState, undefined);
-    assert.match(afterGoalFault.history.at(-1).parts[0].text, /Error: test goal persistence failure/);
+    assert.match(afterGoalFault.history.at(-1).parts[0].text, /reported tool failure: test goal persistence failure/);
 
     const cursorBeforeInvalid = store.getOwnership(sessionId).mailboxCursor;
     store.enqueueIntent(sessionId, 'invalid-item', 'enqueue', { type: 'obsolete-kind', parts: [{ text: 'bad' }] });

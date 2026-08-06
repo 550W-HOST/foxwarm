@@ -7,6 +7,7 @@ import type { CurrentSessionTurnEffects } from './llm';
 import { RpcError } from './rpc';
 import { initArchiveStore } from './session/archiveStore';
 import { refreshSessionSnapshotForSession } from './session/agentMetadata';
+import { getEffectiveCompactThresholdTokens, getUsageTotalTokens } from './session/history';
 import { getManagedSessionState } from './session/managedState';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './session/metadataStore';
 import { applyQueuedItemToWaitState, appendSessionMessagesForSession, startSessionWaitForSession, updateSessionBusyStateForSession } from './sessionManager';
@@ -20,7 +21,7 @@ import {
 } from './sessionWorkerPersistence';
 import type { SessionWorkerIdentity } from './sessionWorkerControlService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
-import { isQueueItem, type Message, type Session } from './types';
+import { isQueueItem, type Message, type QueueItem, type Session } from './types';
 import { buildTimestampedSystemMessageParts } from './utils/systemMessageParts';
 
 export type SessionWorkerHostDependencies = {
@@ -109,9 +110,8 @@ export class SessionWorkerHost {
     catch (error) { throw new RpcError('SESSION_WORKER_INITIALIZATION_FAILED', `Session worker ExecRuntime initialization failed: ${(error as any)?.message || error}`, true); }
     const effects = this.createEffects(session, execRuntime);
     this.runner = new SessionTurnRunner((this.dependencies.createTurnHost || ((ownerEffects, owner) => new LocalSessionTurnHost(
-      ownerEffects,
-      owner,
-      async sessionId => {
+      ownerEffects, owner, {
+        refreshSessionSnapshot: async sessionId => {
         this.assertId(sessionId);
         const before = captureSessionSemanticState(owner);
         try {
@@ -122,6 +122,18 @@ export class SessionWorkerHost {
           restoreSessionSemanticState(owner, before);
           throw error;
         }
+        },
+        queueSessionSystemEvent: (sessionId, message, type = 'background') => {
+          this.assertId(sessionId);
+          return this.applyAndPersistQueueItem({ type, parts: buildTimestampedSystemMessageParts(message) });
+        },
+        applyCompletedCompactJob: async sessionId => { this.assertId(sessionId); throw this.compactionUnsupported(); },
+        processSessionCompactionRequest: async sessionId => { this.assertId(sessionId); throw this.compactionUnsupported(); },
+        checkAndCompactIfNeeded: async (sessionId, usage) => {
+          this.assertId(sessionId);
+          const total = getUsageTotalTokens(usage);
+          if (total > 0 && total > getEffectiveCompactThresholdTokens(owner)) throw this.compactionUnsupported();
+        },
       },
     )))(effects, session));
   }
@@ -185,22 +197,29 @@ export class SessionWorkerHost {
     await this.serialize(async () => {
       await this.ensureLoaded();
       await this.ensureHealthy();
-      const session = this.session!;
-      this.assertSupportedQueue(session);
-      const before = captureSessionSemanticState(session);
-      try {
-        const item = { type: 'background' as const, parts: buildTimestampedSystemMessageParts(message) };
-        const transition = applyQueuedItemToWaitState(session, item);
-        if (transition.action === 'enqueue') session.queue.push(...transition.items);
-        await this.persistOwner();
-      } catch (error) {
-        if (!this.isResyncError(error)) restoreSessionSemanticState(session, before);
-        throw error;
-      }
+      await this.applyAndPersistQueueItem({ type: 'background', parts: buildTimestampedSystemMessageParts(message) });
     });
     void this.runPending(256).catch(error => {
       logger.error({ err: error, sessionId: this.identity.sessionId }, 'Durable exec completion queue processing failed');
     });
+  }
+
+  private async applyAndPersistQueueItem(item: QueueItem): Promise<void> {
+    const session = this.session!;
+    this.assertSupportedQueue(session);
+    const before = captureSessionSemanticState(session);
+    try {
+      const transition = applyQueuedItemToWaitState(session, item);
+      if (transition.action === 'enqueue') session.queue.push(...transition.items);
+      await this.persistOwner();
+    } catch (error) {
+      if (!this.isResyncError(error)) restoreSessionSemanticState(session, before);
+      throw error;
+    }
+  }
+
+  private compactionUnsupported(): RpcError {
+    return new RpcError('SESSION_WORKER_COMPACTION_UNSUPPORTED', 'Session worker compaction is not implemented yet.', true);
   }
 
   private async persistOwner(): Promise<void> {

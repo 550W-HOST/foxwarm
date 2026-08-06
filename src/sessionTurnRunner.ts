@@ -85,6 +85,10 @@ export interface SessionTurnHost {
   sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any, preferDirectReply?: boolean): Promise<void>;
 }
 
+export type LocalSessionTurnHostOverrides = Partial<Pick<SessionTurnHost,
+  'applyCompletedCompactJob' | 'processSessionCompactionRequest' | 'checkAndCompactIfNeeded'
+  | 'queueSessionSystemEvent' | 'refreshSessionSnapshot'>>;
+
 /** Existing in-process effects, exposed without changing their behavior. */
 export class LocalSessionTurnHost implements SessionTurnHost {
   private readonly currentSessionEffects: llm.CurrentSessionTurnEffects;
@@ -92,7 +96,7 @@ export class LocalSessionTurnHost implements SessionTurnHost {
   constructor(
     effects?: llm.CurrentSessionEffects,
     private readonly ownerSession?: Session,
-    private readonly refreshSnapshot?: typeof sessionManager.refreshSessionSnapshot,
+    private readonly overrides: LocalSessionTurnHostOverrides = {},
   ) {
     const defaults = llm.createDefaultCurrentSessionEffects();
     effects ||= defaults;
@@ -158,14 +162,14 @@ export class LocalSessionTurnHost implements SessionTurnHost {
   appendSessionMessage(session: Session, message: Message): Promise<void> { this.assertOwnerSession(session); return this.currentSessionEffects.appendMessage(session, message); }
   appendSessionMessages(session: Session, messages: Message[]): Promise<void> { this.assertOwnerSession(session); return this.currentSessionEffects.appendMessages(session, messages); }
   notifyHistoryUpdate(sessionId: string, message: Message): void { this.assertOwnerId(sessionId); this.currentSessionEffects.notifyHistoryUpdate(sessionId, message); }
-  get applyCompletedCompactJob(): typeof sessionManager.applyCompletedCompactJob { return sessionManager.applyCompletedCompactJob; }
-  get processSessionCompactionRequest(): typeof sessionManager.processSessionCompactionRequest { return sessionManager.processSessionCompactionRequest; }
-  get checkAndCompactIfNeeded(): typeof sessionManager.checkAndCompactIfNeeded { return sessionManager.checkAndCompactIfNeeded; }
+  get applyCompletedCompactJob(): typeof sessionManager.applyCompletedCompactJob { return this.overrides.applyCompletedCompactJob || sessionManager.applyCompletedCompactJob; }
+  get processSessionCompactionRequest(): typeof sessionManager.processSessionCompactionRequest { return this.overrides.processSessionCompactionRequest || sessionManager.processSessionCompactionRequest; }
+  get checkAndCompactIfNeeded(): typeof sessionManager.checkAndCompactIfNeeded { return this.overrides.checkAndCompactIfNeeded || sessionManager.checkAndCompactIfNeeded; }
   startSessionWait(session: Session, options?: Parameters<typeof sessionManager.startSessionWaitForSession>[1]): Promise<sessionManager.SessionWaitState> { this.assertOwnerSession(session); return this.currentSessionEffects.startWait(session, options); }
-  get queueSessionSystemEvent(): typeof sessionManager.queueSessionSystemEvent { return sessionManager.queueSessionSystemEvent; }
+  get queueSessionSystemEvent(): typeof sessionManager.queueSessionSystemEvent { return this.overrides.queueSessionSystemEvent || sessionManager.queueSessionSystemEvent; }
   setActiveSessionRuntimeState(sessionId: string, state: Parameters<typeof sessionManager.setActiveSessionRuntimeState>[1]): void { this.assertOwnerId(sessionId); this.currentSessionEffects.setRuntimeState(sessionId, state); }
   clearActiveSessionRuntimeState(sessionId: string): void { this.assertOwnerId(sessionId); this.currentSessionEffects.clearRuntimeState(sessionId); }
-  get refreshSessionSnapshot(): typeof sessionManager.refreshSessionSnapshot { return this.refreshSnapshot || sessionManager.refreshSessionSnapshot; }
+  get refreshSessionSnapshot(): typeof sessionManager.refreshSessionSnapshot { return this.overrides.refreshSessionSnapshot || sessionManager.refreshSessionSnapshot; }
   get chat(): typeof llm.chat {
     return (parts, session, iteration, options) => {
       this.assertOwnerSession(session);

@@ -32,7 +32,7 @@ async function start(): Promise<void> {
       try {
         await tool_set_goal(
           { goal: 'must-not-commit', remindEvery: 2 },
-          { sessionId: session.id, session, persistCurrentSession: () => options.persistSession(session) } as any,
+          { sessionId: session.id, session, persistCurrentSession: () => options.currentSessionEffects.persistSession(session) } as any,
         );
       } catch (error: any) {
         await options.appendMessage({ role: 'model', parts: [{ text: `reported tool failure: ${error.message}` }] });

@@ -13,7 +13,7 @@ This extraction is behavior-preserving and local-only. One turn-specific `Sessio
 
 - `SessionTurnRunner` — stateful local runner with one per-session reentrancy set.
 - `SessionTurnHost` — non-RPC interface for the runner's current persistence, compact, provider/tool, runtime-event, and channel-delivery effects.
-- `LocalSessionTurnHost` — in-process implementation shared by Main-local turns and the first child host; it binds one effects owner, can use one explicit exact Session owner plus exact snapshot refresh, and preserves legacy module-backed behavior when no owner is supplied. A bound host rejects every other ID and every different same-ID Session object before invoking effects.
+- `LocalSessionTurnHost` — in-process implementation shared by Main-local turns and the first child host; it binds one effects owner and accepts a small coherent override object for exact snapshot, system-queue, and compaction behavior. Unbound hosts preserve legacy module-backed behavior. A bound host rejects every other ID and every different same-ID Session object before invoking effects.
 - `SessionTurnRunner.processSessionQueue(sessionId, options)` — canonical queue claim through final trailing-work recheck.
 - `SessionTurnRunner.processSessionRetry(sessionId)` — direct retry entry into the ordinary turn loop without queue control state.
 - `shouldBroadcastChannelText(text)` — shared final-response visibility predicate.
