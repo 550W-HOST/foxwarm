@@ -15,6 +15,7 @@ import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity
 import { SessionWorkerStore } from './sessionWorkerStore';
 import * as vector from './vector';
 import { initializeSessionWorkerPublication, publishCommitted, shutdownSessionWorkerPublication } from './sessionWorkerPublication';
+import { deliverCommittedFinal, initializeSessionTurnDelivery, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
 
 async function start(): Promise<void> {
   const sessionId = process.env.FOXWARM_SESSION_WORKER_SESSION_ID || '';
@@ -31,18 +32,22 @@ async function start(): Promise<void> {
   store.open();
   const identity = { sessionId, generation, incarnationId, pid: process.pid, processIdentity };
   const gate = new SessionWorkerActivationGate();
-  const host = new SessionWorkerHost(identity, store, { publishCommitted: projection => publishCommitted(identity, projection) });
+  const host = new SessionWorkerHost(identity, store, {
+    publishCommitted: projection => publishCommitted(identity, projection),
+    deliverCommittedFinal: (source, text, outcome) => deliverCommittedFinal({ sourceSessionId: sessionId, source, text, outcome }).then(() => {}),
+  });
   const reverseTransport = new ProcessRpcClientTransport(process, { generation, direction: 'reverse' });
   await reverseTransport.waitUntilReady();
   try {
     await initializeMainManagementTools({ transport: reverseTransport, placement: 'child-reverse' });
     await initializeNodeExecution({ transport: reverseTransport, placement: 'child-reverse' });
     await initializeFileDelivery({ transport: reverseTransport, placement: 'child-reverse' });
+    await initializeSessionTurnDelivery(reverseTransport);
     await initializeSessionWorkerPublication({ transport: reverseTransport, identity });
     await initializeMcpExternalService({ transport: reverseTransport, placement: 'child-reverse' });
     await vector.init({ transport: reverseTransport, placement: 'child-reverse' });
   } catch (error) {
-    await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownSessionWorkerPublication(), shutdownMcpExternalService(), vector.shutdown()]);
+    await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownSessionTurnDelivery(), shutdownSessionWorkerPublication(), shutdownMcpExternalService(), vector.shutdown()]);
     reverseTransport.close(); store.close(); throw error;
   }
   const registry = new RpcServiceRegistry();
@@ -57,7 +62,7 @@ async function start(): Promise<void> {
     generation,
     exitOnDrain: true,
     onDrain: async () => {
-      await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownSessionWorkerPublication(), shutdownMcpExternalService(), vector.shutdown()]);
+      await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownSessionTurnDelivery(), shutdownSessionWorkerPublication(), shutdownMcpExternalService(), vector.shutdown()]);
       await reverseTransport.drain(); reverseTransport.close(); store.close();
     },
   }).start();

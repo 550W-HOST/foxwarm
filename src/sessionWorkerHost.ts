@@ -13,6 +13,7 @@ import { captureSessionSemanticState, restoreSessionSemanticState } from './sess
 import { applyQueuedItemToWaitState, appendSessionMessagesForSession, startSessionWaitForSession, updateSessionBusyStateForSession } from './sessionManager';
 import { clearActiveSessionRuntimeState, setActiveSessionRuntimeState } from './sessionRuntimeState';
 import { LocalSessionTurnHost, SessionTurnRunner, type SessionTurnHost } from './sessionTurnRunner';
+import type { SessionTurnFinalKind } from './sessionTurnDelivery';
 import {
   buildSessionWorkerProjection,
   SessionWorkerPersistence,
@@ -29,6 +30,7 @@ export type SessionWorkerHostDependencies = {
   initialize?: () => Promise<void>;
   createTurnHost?: (effects: CurrentSessionTurnEffects, session: Session) => SessionTurnHost;
   publishCommitted?: (projection: SessionWorkerProjection) => Promise<void>;
+  deliverCommittedFinal?: (source: NonNullable<QueueItem['source']>, text: string, outcome: SessionTurnFinalKind) => Promise<void>;
 };
 
 export class SessionWorkerHost {
@@ -137,6 +139,12 @@ export class SessionWorkerHost {
           const total = getUsageTotalTokens(usage);
           if (total > 0 && total > getEffectiveCompactThresholdTokens(owner)) throw this.compactionUnsupported();
         },
+        ...(this.dependencies.deliverCommittedFinal ? {
+          deliverCommittedFinal: async (_session, source, text, outcome) => {
+            try { await this.dependencies.deliverCommittedFinal!(source, text, outcome); }
+            catch (error) { logger.error({ err: error, sessionId: owner.id, outcome }, 'Committed final reverse delivery failed'); }
+          },
+        } : {}),
       },
     )))(effects, session));
     await this.publishCurrent();

@@ -16,7 +16,7 @@ The interactive turn flow from channel input through authorization, queueing, pr
 8. When function calls exist, router publishes structured progress and calls `llm.executeTools`; normal dispatch resolves builtin, MCP, or node tools through permission-aware tool infrastructure.
 9. Tool results append to history and the loop returns to the provider. Mergeable queued follow-ups may join before the next call only when turn/source boundaries permit.
    A successful `waitAfterHandoff` handoff instead appends the complete tool result, arms the existing generic wait once, and stops recursion before another provider request.
-10. A result with no further tool calls is sent through direct source reply/session broadcast with `turnFinal:true`.
+10. A result with no further tool calls is sent through direct source reply/session broadcast with `turnFinal:true`. A Session Worker uses the fixed Main committed-final service only after the canonical response append and full projection acknowledgement; transient progress remains separate.
 11. The same runner releases active state, may continue queued work, and calls `checkAndCompactIfNeeded` with final usage.
 
 `src/sessionManager.ts` stores/queues/triggers work but does not implement this loop. The implementation owner is `src/sessionTurnRunner.ts`; `MessageRouter` owns channel ingress and delegates the real local execution path.

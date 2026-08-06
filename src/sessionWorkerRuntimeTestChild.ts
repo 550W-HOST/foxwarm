@@ -4,6 +4,7 @@ import { callMcpTool, initializeMcpExternalService, listMcpServers, shutdownMcpE
 import { copyBetweenNodes, executeRemoteNodeTool, initializeNodeExecution, listNodeTopology, shutdownNodeExecution, validateNodeSelection } from './nodeExecution';
 import { deliverFile, initializeFileDelivery, shutdownFileDelivery } from './fileDelivery';
 import { initializeSessionWorkerPublication, publishCommitted, shutdownSessionWorkerPublication } from './sessionWorkerPublication';
+import { deliverCommittedFinal, initializeSessionTurnDelivery, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
 import * as llm from './llm';
 import { initLlmRequestJournal } from './llmRequestJournal';
 import { ProcessRpcClientTransport, ProcessRpcServer, RpcServiceRegistry } from './rpc';
@@ -60,6 +61,8 @@ async function start(): Promise<void> {
         catch (error: any) { fenceErrors.push(error?.code); }
         try { await deliverFile({ sourceSessionId: 'wrong-source', intent: { filePath: 'x' }, routing: { runtimeNodeId: 'master', currentNode: 'master' } }); }
         catch (error: any) { fenceErrors.push(error?.code); }
+        try { await deliverCommittedFinal({ sourceSessionId: 'wrong-source', source: { platform: 'test', channelUserId: 'conversation' }, outcome: 'response', text: 'wrong' }); }
+        catch (error: any) { fenceErrors.push(error?.code); }
         try { await listMcpServers('wrong-source'); }
         catch (error: any) { fenceErrors.push(error?.code); }
         const nodeResult = await tool_call_tool({ source: 'node', nodeId: 'reverse-node', name: 'read', args: { filePath: 'reverse.txt' } },
@@ -102,11 +105,13 @@ async function start(): Promise<void> {
   await initializeMainManagementTools({ transport: reverseTransport, placement: 'child-reverse' });
   await initializeNodeExecution({ transport: reverseTransport, placement: 'child-reverse' });
   await initializeFileDelivery({ transport: reverseTransport, placement: 'child-reverse' });
+  await initializeSessionTurnDelivery(reverseTransport);
   await initializeSessionWorkerPublication({ transport: reverseTransport, identity });
   await initializeMcpExternalService({ transport: reverseTransport, placement: 'child-reverse' });
   await vector.init({ transport: reverseTransport, placement: 'child-reverse' });
   const host = new SessionWorkerHost(identity, store, {
     publishCommitted: projection => publishCommitted(identity, projection),
+    deliverCommittedFinal: (source, text, outcome) => deliverCommittedFinal({ sourceSessionId: sessionId, source, text, outcome }).then(() => {}),
     persistence: {
       readState: async id => {
         readCount += 1;
@@ -137,7 +142,7 @@ async function start(): Promise<void> {
   ));
   registry.register(sessionWorkerRuntimeServiceDescriptor, createSessionWorkerRuntimeServiceHandler(gate, host));
   new ProcessRpcServer(registry, { generation, exitOnDrain: true, onDrain: async () => {
-    await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownSessionWorkerPublication(), shutdownMcpExternalService(), vector.shutdown()]);
+    await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownSessionTurnDelivery(), shutdownSessionWorkerPublication(), shutdownMcpExternalService(), vector.shutdown()]);
     await reverseTransport.drain(); reverseTransport.close(); store.close();
   } }).start();
 }

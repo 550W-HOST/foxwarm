@@ -436,6 +436,28 @@ export function createSessionBroadcast(sessionId: string): SessionBroadcast {
   };
 }
 
+export async function deliverCommittedFinalToAttachments(
+  sessionId: string,
+  text: string,
+  options: any,
+): Promise<{ attempted: number; delivered: number; failures: string[] }> {
+  const result = { attempted: 0, delivered: 0, failures: [] as string[] };
+  const excludePlatforms = options?.excludePlatforms || [];
+  const targetChannel = options?.targetChannel;
+  const isEmpty = !text.trim();
+  for (const target of getChannelsBySession(sessionId)) {
+    if (targetChannel && (targetChannel.channelId !== target.channelId || targetChannel.conversationId !== target.conversationId)) continue;
+    if ((isEmpty && !options?.allowEmptyBroadcast) || excludePlatforms.includes(target.channelId)) continue;
+    if (getChannelConfig(target.channelId, target.conversationId)?.mode === 'send-only') continue;
+    const channel = getChannelInstance(target.channelId);
+    if (!channel) continue;
+    result.attempted += 1;
+    try { await channel.sendMessage(target.conversationId, text, options); result.delivered += 1; }
+    catch (error: any) { result.failures.push(`${target.channelId}:${target.conversationId}: ${error?.message || error}`); }
+  }
+  return result;
+}
+
 export function detachChannelsForSession(sessionId: string): void {
   let changed = false;
   for (const [key, info] of channelAttachments.entries()) {

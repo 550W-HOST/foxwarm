@@ -7,6 +7,7 @@ import { getManagedSessionState, setManagedSessionState } from './session/manage
 import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
 import { maybeBuildGoalReminderMessage } from './session/goal';
+import type { SessionTurnFinalKind } from './sessionTurnDelivery';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
@@ -83,15 +84,17 @@ export interface SessionTurnHost {
   hasBroadcast(session: Session): boolean;
   broadcast(session: Session, text: string, options?: any): void;
   sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any, preferDirectReply?: boolean): Promise<void>;
+  deliverCommittedFinal?(session: Session, source: QueueSource, text: string, outcome: SessionTurnFinalKind): Promise<void>;
 }
 
 export type LocalSessionTurnHostOverrides = Partial<Pick<SessionTurnHost,
   'applyCompletedCompactJob' | 'processSessionCompactionRequest' | 'checkAndCompactIfNeeded'
-  | 'queueSessionSystemEvent' | 'refreshSessionSnapshot'>>;
+  | 'queueSessionSystemEvent' | 'refreshSessionSnapshot' | 'deliverCommittedFinal'>>;
 
 /** Existing in-process effects, exposed without changing their behavior. */
 export class LocalSessionTurnHost implements SessionTurnHost {
   private readonly currentSessionEffects: llm.CurrentSessionTurnEffects;
+  readonly deliverCommittedFinal?: SessionTurnHost['deliverCommittedFinal'];
 
   constructor(
     effects?: llm.CurrentSessionEffects,
@@ -134,6 +137,7 @@ export class LocalSessionTurnHost implements SessionTurnHost {
       setRuntimeState: turnEffects.setRuntimeState ? bind(turnEffects.setRuntimeState) : defaults.setRuntimeState,
       clearRuntimeState: turnEffects.clearRuntimeState ? bind(turnEffects.clearRuntimeState) : defaults.clearRuntimeState,
     };
+    this.deliverCommittedFinal = overrides.deliverCommittedFinal;
   }
 
   private assertOwnerId(sessionId: string): void {
@@ -1105,7 +1109,11 @@ export class SessionTurnRunner {
       }
 
       await this.maybeQueueChildReminder(session);
-      const finalSent = await this.sendFinalResponse(session, options.sourceCtx, turnSource, response, lastTextBroadcasted, turnChannelOptions);
+      const workerFinal = this.host.deliverCommittedFinal && turnSource
+        ? (shouldBroadcastChannelText(response) ? 'response' : (turnSource.weworkStreamId ? 'empty-final' : undefined))
+        : undefined;
+      if (workerFinal) await this.host.deliverCommittedFinal!(session, turnSource!, workerFinal === 'empty-final' ? '' : response, workerFinal);
+      const finalSent = workerFinal ? true : await this.sendFinalResponse(session, options.sourceCtx, turnSource, response, lastTextBroadcasted, turnChannelOptions);
       if (!finalSent) {
         this.sendEmptyTurnFinal(broadcast, turnChannelOptions);
       }
@@ -1117,6 +1125,11 @@ export class SessionTurnRunner {
       const errorText = `Error: ${e?.message || 'Unknown error'}`;
       if (!llm.isLlmRequestError(e)) {
         await this.appendTerminalModelMessage(session, errorText);
+      }
+      if (this.host.deliverCommittedFinal && turnSource) {
+        await this.maybeQueueChildReminder(session);
+        await this.host.deliverCommittedFinal(session, turnSource, errorText, 'error');
+        return;
       }
       if (llm.isLlmRequestError(e)) {
         await this.maybeQueueChildReminder(session);

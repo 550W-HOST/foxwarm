@@ -28,6 +28,7 @@ import * as vector from './vector';
 import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
 import { vectorServiceDescriptor } from './vectorServiceDescriptor';
 import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationServiceDescriptor, SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
+import { createSessionTurnDeliveryServiceHandler, sessionTurnDeliveryServiceDescriptor } from './sessionTurnDelivery';
 
 function baseSession(id: string): Session {
   return {
@@ -55,6 +56,7 @@ async function withLocalHost(
   testBody: (fixture: { host: SessionWorkerHost; store: SessionWorkerStore; session: Session; turnHost: any; readDurable: () => Record<string, any> }) => Promise<void>,
   keepRunner = false,
   publishCommitted?: (projection: any) => Promise<void>,
+  deliverCommittedFinal?: (source: any, text: string, outcome: any) => Promise<void>,
 ): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-local-worker-host-'));
   const store = new SessionWorkerStore(path.join(root, 'runtime.sqlite')); store.open();
@@ -73,6 +75,7 @@ async function withLocalHost(
       writeState: async session => { durable = structuredClone(serializeSessionHistoryPayload(session)); },
     },
     publishCommitted,
+    deliverCommittedFinal,
   });
   try {
     await (host as any).ensureLoaded();
@@ -81,6 +84,46 @@ async function withLocalHost(
     await testBody({ host, store, session: (host as any).session, turnHost, readDurable: () => structuredClone(durable) });
   } finally { store.close(); await fs.remove(root); }
 }
+
+test('worker swallows one ambiguous final-delivery failure after committed response and error finals', async () => {
+  const initial = baseSession('worker-final-ambiguity'); let deliveryCalls = 0; let chatCalls = 0; const outcomes: string[] = [];
+  const originalChat = llm.chat;
+  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    chatCalls += 1;
+    if (chatCalls === 2) throw new Error('committed final error');
+    if (chatCalls === 3) {
+      await options.appendMessage({ role: 'model', parts: [{ text: '' }] });
+      return { text: '' };
+    }
+    await options.appendMessage({ role: 'model', parts: [{ text: 'committed before ambiguous delivery' }] });
+    return { text: 'committed before ambiguous delivery' };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      store.enqueueIntent(initial.id, 'final', 'enqueue', {
+        type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'run' }],
+      });
+      await host.runPending(8);
+      assert.equal(deliveryCalls, 1);
+      assert.equal(readDurable().history.at(-1).parts[0].text, 'committed before ambiguous delivery');
+      assert.equal(readDurable().busy, false);
+      store.enqueueIntent(initial.id, 'error-final', 'enqueue', {
+        type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'fail' }],
+      });
+      await host.runPending(8);
+      assert.equal(deliveryCalls, 2);
+      assert.equal(readDurable().history.at(-1).parts[0].text, 'Error: committed final error');
+      assert.equal(readDurable().busy, false);
+      store.enqueueIntent(initial.id, 'empty-final', 'enqueue', {
+        type: 'user', source: { platform: 'wework', channelUserId: 'room', weworkStreamId: 'stream' }, parts: [{ text: 'empty' }],
+      });
+      await host.runPending(8);
+      assert.equal(deliveryCalls, 3);
+      assert.deepEqual(outcomes, ['response', 'error', 'empty-final']);
+    }, true, undefined, async (_source, _text, outcome) => { deliveryCalls += 1; outcomes.push(outcome); throw new Error('ambiguous reverse transport'); });
+  } finally { (llm as any).chat = originalChat; }
+});
 
 test('worker mailbox reuses canonical wait and waitAll transitions', async () => {
   const scenarios: Array<{ name: string; wait?: any; items: any[]; queueTypes: string[]; waitPresent: boolean }> = [
@@ -300,6 +343,18 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ expectedSourceSessionId: sessionId }));
   reverseRegistry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: sessionId }));
   reverseRegistry.register(fileDeliveryServiceDescriptor, createFileDeliveryServiceHandler({ expectedSourceSessionId: sessionId }));
+  const committedFinals: any[] = [];
+  reverseRegistry.register(sessionTurnDeliveryServiceDescriptor, createSessionTurnDeliveryServiceHandler({
+    expectedSourceSessionId: sessionId,
+    resolveExactSourceContext: async () => ({
+      platform: 'test', channelId: 'test', channelType: 'test', channelUserId: 'conversation', conversationId: 'conversation',
+      preferDirectReply: true, username: undefined, senderId: undefined,
+      reply: async (text: string, options?: any) => {
+        committedFinals.push({ text, options, authority: await fs.readJson(statePath), projection: projectionRegistry.get(sessionId)?.projection });
+      },
+      sendTyping: async () => {},
+    }),
+  }));
   reverseRegistry.register(sessionWorkerPublicationServiceDescriptor, createSessionWorkerPublicationServiceHandler({ expected: publicationIdentity, registry: projectionRegistry }));
   reverseRegistry.register(mcpExternalServiceDescriptor, createMcpExternalServiceHandler({ expectedSourceSessionId: sessionId }));
   reverseRegistry.register(vectorServiceDescriptor, createVectorFacadeProxyHandler());
@@ -321,7 +376,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
 
     const intent = store.enqueueIntent(sessionId, 'first-input', 'enqueue', {
       type: 'user',
-      source: { platform: 'test', channelUserId: 'conversation', preferDirectReply: true },
+      source: { platform: 'test', channelId: 'test', channelType: 'test', channelUserId: 'conversation', conversationId: 'conversation', preferDirectReply: true },
       parts: [{ text: 'child input' }],
     });
     await assert.rejects(() => runtime.call('runPending', { limit: 8 }), /test write failure 2/);
@@ -344,6 +399,12 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.equal(projection.busy, false);
     assert.equal(projection.queueLength, 0);
     assert.equal(projection.messageCount, 2);
+    assert.equal(committedFinals[0].text, 'deterministic child answer');
+    assert.equal(committedFinals[0].authority.history.at(-1).parts[0].text, 'deterministic child answer');
+    assert.equal(committedFinals[0].projection.messageCount, 2);
+    assert.equal(committedFinals[0].authority.busy, true);
+    assert.equal(committedFinals[0].projection.busy, true);
+    assert.equal(committedFinals[0].options.turnFinal, true);
     const durable = await fs.readJson(statePath);
     assert.deepEqual(durable.history.map((message: any) => message.role), ['user', 'model']);
     assert.equal(durable.contextFrontier.length, 2);
@@ -380,7 +441,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.deepEqual(externalCalls[0].slice(1, 5), ['reverse-node', 'read', { filePath: 'reverse.txt' }, sessionId]);
     assert.equal(externalCalls[1][1], 'reverse-mcp');
     assert.equal(externalCalls[2][1], 'reverse vector query');
-    assert.match(afterWait.history.at(-1).parts[0].text, /"fenceErrors":\["NODE_EXECUTION_SOURCE_MISMATCH","NODE_EXECUTION_SOURCE_MISMATCH","FILE_DELIVERY_SOURCE_MISMATCH","MCP_EXTERNAL_SOURCE_MISMATCH"\]/);
+    assert.match(afterWait.history.at(-1).parts[0].text, /"fenceErrors":\["NODE_EXECUTION_SOURCE_MISMATCH","NODE_EXECUTION_SOURCE_MISMATCH","FILE_DELIVERY_SOURCE_MISMATCH","SESSION_TURN_DELIVERY_SOURCE_MISMATCH","MCP_EXTERNAL_SOURCE_MISMATCH"\]/);
     assert.match(afterWait.history.at(-1).parts[0].text, /"defaultCwd":"node process cwd/);
     assert.match(afterWait.history.at(-1).parts[0].text, new RegExp(`"sha256":"${'a'.repeat(64)}"`));
     assert.match(afterWait.history.at(-1).parts[0].text, /ready for WebUI target/);

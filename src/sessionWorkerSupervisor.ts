@@ -14,6 +14,8 @@ import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
 import { vectorServiceDescriptor } from './vectorServiceDescriptor';
 import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationServiceDescriptor,
   SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
+import { createSessionTurnDeliveryServiceHandler, sessionTurnDeliveryServiceDescriptor,
+  type ExactFinalSourceContextResolver } from './sessionTurnDelivery';
 
 export type SessionWorkerSupervisorOptions = {
   store: SessionWorkerStore;
@@ -25,6 +27,7 @@ export type SessionWorkerSupervisorOptions = {
   shouldRestart?: (sessionId: string) => boolean | Promise<boolean>;
   readProcessIdentity?: (pid: number) => string | null;
   projectionRegistry?: SessionWorkerProjectionRegistry;
+  resolveExactFinalSourceContext?: ExactFinalSourceContextResolver;
 };
 
 type ProvisionalChild = {
@@ -206,6 +209,10 @@ export class SessionWorkerSupervisor {
       reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ expectedSourceSessionId: sessionId }));
       reverseRegistry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: sessionId }));
       reverseRegistry.register(fileDeliveryServiceDescriptor, createFileDeliveryServiceHandler({ expectedSourceSessionId: sessionId }));
+      reverseRegistry.register(sessionTurnDeliveryServiceDescriptor, createSessionTurnDeliveryServiceHandler({
+        expectedSourceSessionId: sessionId,
+        resolveExactSourceContext: this.options.resolveExactFinalSourceContext,
+      }));
       reverseRegistry.register(sessionWorkerPublicationServiceDescriptor, createSessionWorkerPublicationServiceHandler({
         expected: publicationIdentity, registry: this.projectionRegistry,
       }));
