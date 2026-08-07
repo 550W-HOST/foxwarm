@@ -72,7 +72,60 @@ test('shouldBroadcastChannelText accepts non-empty trimmed text', () => {
   assert.equal(shouldBroadcastChannelText('\nhello\n'), true);
 });
 
-test('MessageRouter keeps QQ Bot passive reply identifiers bound to their source turn', () => {
+test('MessageRouter materializes deferred channel media only after canonical authorization', async () => {
+  const originalEnqueue = sessionManager.enqueueSessionItem;
+  const router = new MessageRouter() as any;
+  const session = { id: 'guest-media-session', busy: false, queue: [], meta: {} } as any;
+  const ctx = {
+    channelId: 'qq-media-auth', channelType: 'qqbot', platform: 'qqbot',
+    channelUserId: 'c2c:user-1', conversationId: 'c2c:user-1', senderId: 'user-1', username: 'user-1',
+    reply: async () => {}, sendTyping: async () => {},
+  } as any;
+  const queued: any[] = [];
+  (sessionManager as any).enqueueSessionItem = async (_sessionId: string, item: any) => queued.push(item);
+  router.processSessionQueue = async () => {};
+  router.handleCommandIfNeeded = async () => false;
+
+  try {
+    let materializeCount = 0;
+    router.isAuthorized = () => false;
+    router.maybeCreateGuestSessionForUnauthorizedMessage = async (): Promise<null> => null;
+    let unauthorizedReplyCount = 0;
+    ctx.reply = async (): Promise<void> => { unauthorizedReplyCount += 1; };
+    const deferred = {
+      parts: [{ text: '[QQ file attachment: private.txt]' }],
+      channelUserId: ctx.channelUserId, conversationId: ctx.conversationId,
+      materializeParts: async () => { materializeCount += 1; return [{ text: 'downloaded file' }]; },
+    };
+    await router.handleMessage(ctx, deferred);
+    assert.equal(unauthorizedReplyCount, 1);
+    assert.equal(materializeCount, 0, 'unauthorized media must remain metadata-only');
+
+    router.maybeCreateGuestSessionForUnauthorizedMessage = async () => ({ sessionId: session.id, session });
+    await router.handleMessage(ctx, deferred);
+    assert.equal(materializeCount, 0, 'first guest media must remain metadata-only');
+    assert.equal(queued.length, 1);
+
+    queued.length = 0;
+    router.isAuthorized = () => true;
+    router.resolveSessionForIncomingMessage = async () => ({ sessionId: session.id, session });
+    await router.handleMessage(ctx, {
+      ...deferred,
+      materializeParts: async (sessionId: string) => {
+        materializeCount += 1;
+        assert.equal(sessionId, session.id);
+        return [{ text: 'downloaded image' }];
+      },
+    });
+    assert.equal(materializeCount, 1);
+    assert.equal(queued[0].parts.length, 1);
+    assert.match(queued[0].parts[0].system || '', /downloaded image/);
+  } finally {
+    (sessionManager as any).enqueueSessionItem = originalEnqueue;
+  }
+});
+
+test('MessageRouter uses QQ Bot conversation identity as the passive reply merge boundary', () => {
   const router = new MessageRouter() as any;
   const runner = router.turnRunner as any;
   const source = {
@@ -86,7 +139,7 @@ test('MessageRouter keeps QQ Bot passive reply identifiers bound to their source
 
   assert.equal(
     runner.getSourceStreamKey(source),
-    'qqbot:qq-primary:c2c:user-openid:incoming-message-id',
+    'qqbot:qq-primary:c2c:user-openid',
   );
   assert.deepEqual(runner.getTurnChannelOptions(undefined, source), {
     qqbotMessageId: 'incoming-message-id',
@@ -272,7 +325,7 @@ test('MessageRouter in-turn queue consumption drains same-stream WeWork inputs b
     const consumed = await router.turnRunner.consumeLeadingQueuedTurnInputs(
       session,
       [{ text: 'pending' }],
-      { streamKey: 'wework-a:chat-a:stream-a', preferDirectReply: false },
+      { streamKey: 'wework:wework-a:chat-a', preferDirectReply: false },
     );
 
     assert.equal(consumed.parts, null);
@@ -287,9 +340,11 @@ test('MessageRouter in-turn queue consumption drains same-stream WeWork inputs b
   }
 });
 
-test('MessageRouter in-turn queue consumption leaves different WeWork stream cards for their own turn', async () => {
+test('MessageRouter in-turn queue consumption merges a newer WeWork card in the same conversation', async () => {
   const router = new MessageRouter() as any;
   const session: any = {
+    id: 'queue-consumption-new-card',
+    history: [],
     queue: [
       {
         type: 'user',
@@ -299,14 +354,24 @@ test('MessageRouter in-turn queue consumption leaves different WeWork stream car
     ],
   };
 
-  const consumed = await router.turnRunner.consumeLeadingQueuedTurnInputs(
-    session,
-    [{ text: 'pending' }],
-    { streamKey: 'wework-a:chat-a:stream-a', preferDirectReply: false },
-  );
+  const originalAppend = sessionManager.appendSessionMessage;
+  (sessionManager as any).appendSessionMessage = async (target: any, message: Message) => target.history.push(message);
+  try {
+    const consumed = await router.turnRunner.consumeLeadingQueuedTurnInputs(
+      session,
+      [{ text: 'pending' }],
+      { streamKey: 'wework:wework-a:chat-a', preferDirectReply: false },
+    );
 
-  assert.equal(consumed.parts.some((part: any) => part.text === 'next card input'), false);
-  assert.equal(session.queue.length, 1);
+    assert.equal(consumed.parts, null);
+    assert.deepEqual(session.history.map((message: Message) => message.parts), [
+      [{ text: 'pending' }],
+      [{ text: 'next card input' }],
+    ]);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (sessionManager as any).appendSessionMessage = originalAppend;
+  }
 });
 
 test('MessageRouter does not inject source prefix twice for drained queued parts', () => {
@@ -384,7 +449,7 @@ test('MessageRouter turn metadata no longer injects an idle-gap time marker', ()
   assert.ok(!sessionPart?.system.includes(' hint='));
 });
 
-test('MessageRouter queue draining keeps different WeWork stream ids separate', () => {
+test('MessageRouter queue draining merges different WeWork stream ids in one conversation', () => {
   const router = new MessageRouter() as any;
   const session: any = {
     queue: [
@@ -403,8 +468,123 @@ test('MessageRouter queue draining keeps different WeWork stream ids separate', 
 
   const drained = router.turnRunner.drainLeadingQueuedTurnInputs(session);
   assert.equal(drained.items[0].parts?.some((part: any) => part.text === 'first stream'), true);
-  assert.equal(drained.items.some((item: any) => item.parts?.some((part: any) => part.text === 'second stream')), false);
-  assert.equal(session.queue.length, 1);
+  assert.equal(drained.items.some((item: any) => item.parts?.some((part: any) => part.text === 'second stream')), true);
+  assert.equal(session.queue.length, 0);
+});
+
+test('MessageRouter keeps different QQ and WeWork conversations as hard merge boundaries', () => {
+  const router = new MessageRouter() as any;
+  for (const sources of [
+    [
+      { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a', qqbotMessageId: 'qq-1' },
+      { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-b', qqbotMessageId: 'qq-2' },
+    ],
+    [
+      { platform: 'wework', channelId: 'wework-a', conversationId: 'chat-a', weworkStreamId: 'stream-1' },
+      { platform: 'wework', channelId: 'wework-b', conversationId: 'chat-a', weworkStreamId: 'stream-2' },
+    ],
+  ]) {
+    const session: any = { queue: sources.map((source, index) => ({ type: 'user', source, parts: [{ text: `input-${index}` }] })) };
+    const drained = router.turnRunner.drainLeadingQueuedTurnInputs(session);
+    assert.equal(drained.items.length, 1);
+    assert.equal(session.queue.length, 1);
+  }
+});
+
+test('MessageRouter leaves a different QQ conversation for provider call three after an active tool loop', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('qq_conversation_boundary_call_three');
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  let chatCalls = 0;
+
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+    chatCalls += 1;
+    if (parts) await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    if (chatCalls === 1) {
+      const toolCall = { id: 'call-1', name: 'read', args: { filePath: 'README.md' } };
+      await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    }
+    const text = chatCalls === 2 ? 'first conversation final' : 'second conversation final';
+    await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text }] });
+    return { text, allParts: [{ text }] };
+  };
+  (llm as any).executeTools = async () => {
+    await sessionManager.enqueueSessionItem(session.id, {
+      type: 'user',
+      source: { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-b', channelUserId: 'c2c:user-b', qqbotMessageId: 'qq-2' },
+      parts: [{ text: 'different conversation input' }],
+    });
+    return { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'call-1', name: 'read', response: { output: 'ok' } } }] };
+  };
+
+  try {
+    await router.turnRunner.runSessionTurn(session.id, {
+      session, preclaimed: true, parts: [{ text: 'first conversation input' }],
+      source: { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a', channelUserId: 'c2c:user-a', qqbotMessageId: 'qq-1' },
+    });
+    assert.equal(chatCalls, 3);
+    assert.equal(userTextOccurrences(session, 'different conversation input'), 1);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('MessageRouter applies pending auto-compaction before a late compatible follow-up provider call', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('late_followup_compaction_gate');
+  const originalChat = llm.chat;
+  const originalProcessSessionCompactionRequest = sessionManager.processSessionCompactionRequest;
+  const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
+  const source = { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a', channelUserId: 'c2c:user-a', qqbotMessageId: 'qq-1' };
+  let chatCalls = 0;
+  let compactRequests = 0;
+  let compactApplies = 0;
+  session.compactThresholdTokens = 10;
+
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+    chatCalls += 1;
+    if (parts) await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    if (chatCalls === 1) {
+      await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'intermediate answer' }] });
+      await sessionManager.enqueueSessionItem(session.id, {
+        type: 'user', source: { ...source, qqbotMessageId: 'qq-2' }, parts: [{ text: 'late compacted follow-up' }],
+      });
+      return { text: 'intermediate answer', allParts: [{ text: 'intermediate answer' }], usage: { cachedTokens: 0, inputTokens: 100, outputTokens: 10 } };
+    }
+    assert.equal(parts, null);
+    assert.equal(compactApplies, 1, 'pending compact must apply before provider call two');
+    assert.equal(userTextOccurrences(activeSession, 'late compacted follow-up'), 1);
+    await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'final after compact' }] });
+    return { text: 'final after compact', allParts: [{ text: 'final after compact' }] };
+  };
+  (sessionManager as any).processSessionCompactionRequest = async (_sessionId: string, _item: any, mode: string) => {
+    assert.equal(mode, 'auto');
+    compactRequests += 1;
+    session.queue.push({ type: 'compact-commit' });
+  };
+  (sessionManager as any).applyCompletedCompactJob = async () => { compactApplies += 1; return true; };
+
+  try {
+    await router.turnRunner.runSessionTurn(session.id, { session, preclaimed: true, parts: [{ text: 'first compacted input' }], source });
+    assert.equal(chatCalls, 2);
+    assert.equal(compactRequests, 1);
+    assert.equal(compactApplies, 1);
+    assert.equal(userTextOccurrences(session, 'first compacted input'), 1);
+    assert.equal(userTextOccurrences(session, 'late compacted follow-up'), 1);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (llm as any).chat = originalChat;
+    (sessionManager as any).processSessionCompactionRequest = originalProcessSessionCompactionRequest;
+    (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
 });
 
 test('MessageRouter snapshots and serializes direct-reply routing intent', () => {

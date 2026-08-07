@@ -170,17 +170,38 @@ export async function executeSendFileMain(args: ToolArgs, ctx?: ToolContext) {
   }
 
   const file = await prepareChannelFile(filePath.trim(), ctx);
+  const turnReplyMetadata = ctx?.channelReplyMetadata;
+  const sendOptions = {
+    caption,
+    ...(turnReplyMetadata?.qqbotMessageId && turnReplyMetadata.qqbotChannelId && turnReplyMetadata.qqbotConversationId
+      ? {
+        qqbotMessageId: turnReplyMetadata.qqbotMessageId,
+        qqbotChannelId: turnReplyMetadata.qqbotChannelId,
+        qqbotConversationId: turnReplyMetadata.qqbotConversationId,
+      }
+      : {}),
+  };
 
   if (normalizedChannelTargetId) {
     if (normalizedChannelTargetId.startsWith('webui:')) {
       return buildSendFileResult(`File \`${file.name}\` is ready for WebUI target \`${normalizedChannelTargetId}\`.`, file);
     }
 
-    await sessionManager.sendFileToChannelTargetId(normalizedChannelTargetId, file, { caption });
+    const matchesTurnSource = Boolean(
+      turnReplyMetadata?.qqbotMessageId
+      && turnReplyMetadata.qqbotChannelId
+      && turnReplyMetadata.qqbotConversationId
+      && normalizedChannelTargetId === `${turnReplyMetadata.qqbotChannelId}:${turnReplyMetadata.qqbotConversationId}`,
+    );
+    await sessionManager.sendFileToChannelTargetId(
+      normalizedChannelTargetId,
+      file,
+      matchesTurnSource ? sendOptions : { caption },
+    );
     return buildSendFileResult(`File \`${file.name}\` sent to channel target \`${normalizedChannelTargetId}\``, file);
   }
 
-  const result = await sessionManager.sendFileToSession(normalizedSessionId, file, { caption });
+  const result = await sessionManager.sendFileToSession(normalizedSessionId, file, sendOptions);
   const hasWebUiDownloadFallback = result.skippedChannels.some((item) => isWebUiUnsupportedFileDelivery(item.channelId, item.reason));
   const output = formatSendFileSessionResult(normalizedSessionId, file, result);
 

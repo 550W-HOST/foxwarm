@@ -36,6 +36,12 @@ export interface ToolContext {
     toolExecutionSnapshot?: { currentNode: string; cwd?: string };
     /** Trusted in-process placement, supplied by turn effects and never tool arguments. */
     sessionPlacement?: 'local' | 'session-worker';
+    /** Current in-process turn reply metadata for source-bound channel tools. */
+    channelReplyMetadata?: {
+        qqbotMessageId?: string;
+        qqbotChannelId?: string;
+        qqbotConversationId?: string;
+    };
 }
 
 // Tool function type

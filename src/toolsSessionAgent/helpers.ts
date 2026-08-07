@@ -17,6 +17,12 @@ export interface ToolContext {
   /** In-process owner hook for persisting ctx.session; never serialized as a tool/RPC DTO. */
   persistCurrentSession?: () => Promise<void>;
   sessionPlacement?: 'local' | 'session-worker';
+  /** Current in-process turn reply metadata; never persisted or sent to remote tools. */
+  channelReplyMetadata?: {
+    qqbotMessageId?: string;
+    qqbotChannelId?: string;
+    qqbotConversationId?: string;
+  };
 }
 
 export type ToolArgs = Record<string, any>;

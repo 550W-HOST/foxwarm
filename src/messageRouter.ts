@@ -336,8 +336,9 @@ export class MessageRouter {
 
   async handleMessage(ctx: ChannelContext, message: ChannelMessage): Promise<void> {
     let resolvedSession: { sessionId: string; session: Session } | null = null;
+    const authorizedAtIngress = this.isAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId);
 
-    if (!this.isAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId)) {
+    if (!authorizedAtIngress) {
       try {
         resolvedSession = await this.maybeCreateGuestSessionForUnauthorizedMessage(ctx);
       } catch (e: any) {
@@ -357,6 +358,15 @@ export class MessageRouter {
 
     const { sessionId, session } = resolvedSession || await this.resolveSessionForIncomingMessage(ctx);
 
+    let routedMessage = message;
+    if (authorizedAtIngress && message.materializeParts) {
+      try {
+        routedMessage = { ...message, parts: await message.materializeParts(sessionId) };
+      } catch (error) {
+        logger.error({ err: error, channelId: getChannelId(ctx), conversationId: getConversationId(ctx) }, 'Authorized channel media materialization failed');
+      }
+    }
+
     if (getChannelType(ctx) !== 'internal') {
       session.meta.lastChannel = {
         channelId: getChannelId(ctx),
@@ -366,7 +376,7 @@ export class MessageRouter {
       };
     }
 
-    const queueItem = this.buildChannelUserQueueItem(ctx, message);
+    const queueItem = this.buildChannelUserQueueItem(ctx, routedMessage);
 
     if (isManagedSessionActive(session)) {
       await sessionRuntime.enqueue(sessionId, queueItem);

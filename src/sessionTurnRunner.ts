@@ -10,7 +10,7 @@ import { maybeBuildGoalReminderMessage } from './session/goal';
 import type { SessionTurnFinalKind } from './sessionTurnDelivery';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
-import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
+import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, QueueItem, QueueSource, Session, TokenUsage } from './types';
 import { formatFoxwarmSystemTag, parseFoxwarmOpeningTag } from './utils/promptWrappers';
 
 export function shouldBroadcastChannelText(text: string | undefined | null): boolean {
@@ -241,8 +241,8 @@ export class SessionTurnRunner {
   }
 
   private getSourceStreamKey(source?: QueueSource): string | undefined {
-    if (source?.weworkStreamId) return `${source.channelId || source.platform}:${source.conversationId || source.channelUserId}:${source.weworkStreamId}`;
-    if (source?.qqbotMessageId) return `qqbot:${source.channelId || source.platform}:${source.conversationId || source.channelUserId}:${source.qqbotMessageId}`;
+    if (source?.weworkStreamId) return `wework:${source.channelId || source.platform}:${source.conversationId || source.channelUserId}`;
+    if (source?.qqbotMessageId) return `qqbot:${source.channelId || source.platform}:${source.conversationId || source.channelUserId}`;
     return undefined;
   }
 
@@ -456,8 +456,8 @@ export class SessionTurnRunner {
         break;
       }
       const queuedBoundary = this.getSourceMergeBoundary(session.queue[0].source);
-      // A different WeWork stream or final-delivery intent owns a separate
-      // turn. Leave it queued so its progress/final routing remains coherent.
+      // A different passive-source conversation or final-delivery intent owns
+      // a separate turn. Message/card IDs within one conversation do not.
       if (queuedBoundary.preferDirectReply !== turnBoundary.preferDirectReply
         || (queuedBoundary.streamKey && queuedBoundary.streamKey !== turnBoundary.streamKey)) {
         break;
@@ -657,6 +657,22 @@ export class SessionTurnRunner {
     }
 
     return 'continued';
+  }
+
+  private async maybeRequestAutoCompactionBeforeContinuation(
+    session: Session,
+    usage: TokenUsage | undefined,
+    iteration: number,
+  ): Promise<void> {
+    if (!usage) return;
+    const currentSize = sessionManager.getUsageTotalTokens(usage);
+    const compactThreshold = sessionManager.getEffectiveCompactThresholdTokens(session);
+    if (currentSize <= compactThreshold) return;
+    logger.info({ currentSize, compactThreshold, sessionThresholdOverride: session.compactThresholdTokens, iteration }, 'Context size exceeded threshold before turn continuation, triggering compact');
+    await this.host.processSessionCompactionRequest(session.id, {
+      completionMarker: 'Compaction completed. You can continue working now.',
+    }, 'auto');
+    logger.info('Compact requested, continuing with current history');
   }
 
   private async runQueuedCompaction(sessionId: string, session: Session): Promise<void> {
@@ -964,6 +980,12 @@ export class SessionTurnRunner {
         }
 
         if (!result.toolCalls?.length) {
+          const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(session, null, turnBoundary);
+          if (queuedAfterLlm.consumedInput) {
+            await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration);
+            iteration++;
+            continue;
+          }
           lastTextBroadcasted = false;
           break;
         }
@@ -1007,6 +1029,13 @@ export class SessionTurnRunner {
           session,
           previousLlmRequest: result.previousLlmRequest,
           broadcast: this.buildToolBroadcast(broadcast, turnChannelOptions),
+          ...(turnChannelOptions.qqbotMessageId && turnChannelOptions.qqbotChannelId && turnChannelOptions.qqbotConversationId
+            ? { channelReplyMetadata: {
+              qqbotMessageId: turnChannelOptions.qqbotMessageId,
+              qqbotChannelId: turnChannelOptions.qqbotChannelId,
+              qqbotConversationId: turnChannelOptions.qqbotConversationId,
+            } }
+            : {}),
           onToolStart: (tool: { id?: string; name: string; index?: number; total?: number; executionNode?: string; argsPreview?: string; startedAt?: number }) => {
             this.host.setActiveSessionRuntimeState(session.id, {
               state: 'running-tool',
@@ -1082,17 +1111,7 @@ export class SessionTurnRunner {
         const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, turnBoundary);
         parts = queuedAfterTools.parts;
 
-        if (result.usage) {
-          const currentSize = sessionManager.getUsageTotalTokens(result.usage);
-          const compactThreshold = sessionManager.getEffectiveCompactThresholdTokens(session);
-          if (currentSize > compactThreshold) {
-            logger.info({ currentSize, compactThreshold, sessionThresholdOverride: session.compactThresholdTokens, iteration }, 'Context size exceeded threshold during tool calls, triggering compact');
-            await this.host.processSessionCompactionRequest(session.id, {
-              completionMarker: 'Compaction completed. You can continue working now.',
-            }, 'auto');
-            logger.info('Compact requested, continuing with current history');
-          }
-        }
+        await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration);
 
         iteration++;
       }

@@ -25,7 +25,7 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 | `MessageRouter.createGuestSession(config)` | Creates single/inherited guest sessions with current isolation semantics. |
 | `MessageRouter.handleCommandIfNeeded(ctx, text)` | Parses and dispatches slash commands with raw multiline arguments. |
 | `MessageRouter.resolveSessionForIncomingMessage(ctx)` | Uses the serialized channel get-or-create boundary. |
-| `MessageRouter.handleMessage(ctx, message)` | Authorizes, handles commands, resolves a session, enqueues ordinary input, and triggers the local runner. |
+| `MessageRouter.handleMessage(ctx, message)` | Authorizes and handles commands, then materializes deferred channel media only for canonically authorized ingress before enqueueing and triggering the local runner. |
 | `MessageRouter.processSessionQueue(sessionId, options)` | Delegates directly to `SessionTurnRunner.processSessionQueue`. |
 | `MessageRouter.processSessionRetry(sessionId)` | Delegates directly to `SessionTurnRunner.processSessionRetry`. |
 
@@ -38,9 +38,9 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 
 ## Behavior and invariants
 
-- Authorization and command dispatch complete before ordinary session queue insertion.
+- Authorization and command dispatch complete before ordinary session queue insertion. Deferred channel media is materialized only after the original ingress is canonically authorized and its session is resolved; unauthorized and first-message guest fallback paths remain metadata-only and perform no media fetch/write.
 - Source wrappers are created once at ingress. Queue processing receives prompt-ready parts and does not reconstruct channel metadata.
-- QueueSource snapshots persist `preferDirectReply` only when true and retain current platform turn identities including WeWork stream ID and QQ Bot inbound `msg_id`; queue JSON round trips retain them for merge and exact final-routing decisions.
+- QueueSource snapshots persist `preferDirectReply` only when true and retain current platform turn identities including WeWork stream ID and QQ Bot inbound `msg_id`; queue JSON round trips retain those IDs as restart/fallback delivery metadata, while the canonical runner uses channel instance plus scoped conversation rather than message/card ID as the passive-source merge boundary.
 - WebUI `clientMessageId` remains queue/transport metadata and is copied to canonical history by the turn runner.
 - Active managed sessions route input through the existing SessionRuntime enqueue path and receive the existing manager-facing acknowledgement.
 - Busy input is enqueued silently. Idle input is enqueued and then invokes the same local turn runner.

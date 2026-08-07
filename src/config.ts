@@ -59,6 +59,15 @@ export type WeixinConfig = {
   guestAgent?: GuestAgentConfig;
 };
 
+export type QQBotMediaConfig = {
+  /** Safe inline-image threshold; larger images fall back to generic files. */
+  imageMaxBytes?: number;
+  /** Bounded generic-file cap for inbound/fallback files; local QQ sends are additionally capped at 100 MiB. */
+  fileMaxBytes?: number;
+  maxTotalBytes?: number;
+  maxAttachments?: number;
+};
+
 export type QQBotConfig = {
   enabled?: boolean;
   appId?: string;
@@ -66,6 +75,7 @@ export type QQBotConfig = {
   allowedUsers?: string[];
   allowAllUsers?: boolean;
   guestAgent?: GuestAgentConfig;
+  media?: QQBotMediaConfig;
 };
 
 

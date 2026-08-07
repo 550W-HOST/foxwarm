@@ -150,6 +150,20 @@ export class WeWorkStreamAggregator {
     return this.toSnapshot(state);
   }
 
+  supersedeActive(conversationId: string): WeWorkStreamSnapshot | undefined {
+    this.cleanupExpired();
+    const state = this.byConversation.get(String(conversationId || '').trim());
+    if (!state || state.finish) {
+      return undefined;
+    }
+
+    state.blocks = state.blocks.filter(block => block.type === 'text');
+    state.finish = true;
+    state.content = this.renderContent(state);
+    state.updatedAt = Date.now();
+    return this.toSnapshot(state);
+  }
+
   append(conversationId: string, text: string, options: WeWorkStreamAppendOptions = {}): WeWorkStreamSnapshot | undefined {
     this.cleanupExpired();
     const state = this.byConversation.get(String(conversationId || '').trim());

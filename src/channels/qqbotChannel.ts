@@ -1,13 +1,15 @@
 import WebSocket, { RawData } from 'ws';
-import { Channel, ChannelContext, ChannelMessage } from '../channel';
+import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { logger } from '../common';
 import type { QQBotConfig } from '../config';
+import { buildQQBotAttachmentPreviewParts, materializeQQBotAttachments } from './qqbotMedia';
+import { uploadQQBotFile } from './qqbotMediaUpload';
 
 const QQBOT_TOKEN_URL = 'https://bots.qq.com/app/getAppAccessToken';
 const QQBOT_API_BASE_URL = 'https://api.sgroup.qq.com';
 const QQBOT_INTENTS = 1_073_741_824 + 4_096 + 33_554_432 + 67_108_864;
 const RECONNECT_DELAY_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
-const MAX_C2C_TYPING_CONTEXTS = 1_000;
+const MAX_LATEST_MESSAGE_CONTEXTS = 1_000;
 const MAX_RECONNECT_ATTEMPTS = 100;
 const MAX_RECENT_INBOUND_EVENTS = 10_000;
 const MAX_REPLY_SEQUENCES = 10_000;
@@ -18,6 +20,7 @@ const MAX_PASSIVE_REPLY_CONTEXTS = 10_000;
 const MAX_PASSIVE_REPLY_CHAINS = 10_000;
 const MAX_MESSAGE_SCENE_EXT_ITEMS = 32;
 const MAX_MESSAGE_SCENE_EXT_ITEM_LENGTH = 256;
+const QQBOT_MAX_TEXT_LENGTH = 2_000;
 
 type QQBotConversationKind = 'c2c' | 'group' | 'guild' | 'dm';
 
@@ -30,6 +33,7 @@ type QQBotSocket = Pick<WebSocket, 'on' | 'once' | 'send' | 'close' | 'readyStat
 
 type QQBotChannelDeps = {
   fetch?: typeof fetch;
+  saveInboundSessionFileFromPath?: typeof import('../channelFiles').saveInboundSessionFileFromPath;
   createWebSocket?: (url: string) => QQBotSocket;
   reconnectDelaysMs?: number[];
   invalidSessionReconnectDelayMs?: number;
@@ -53,7 +57,7 @@ type QQBotSendOptions = {
 
 type PassiveReplyContext = {
   firstSeenAt: number;
-  successfulTextReplies: number;
+  successfulReplies: number;
 };
 
 type PassiveReplyChain = {
@@ -80,6 +84,39 @@ function requireText(value: unknown, label: string): string {
     throw new Error(`QQ Bot ${label} is required`);
   }
   return text;
+}
+
+function normalizeQQBotCaption(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const caption = value.trim().slice(0, QQBOT_MAX_TEXT_LENGTH);
+  return caption || undefined;
+}
+
+async function readResponseTextBounded(response: Response, maxBytes: number): Promise<string> {
+  const contentLength = response.headers.get('content-length');
+  if (contentLength && /^\d+$/u.test(contentLength) && Number(contentLength) > maxBytes) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error('QQ Bot API response exceeded the bounded media-upload response limit');
+  }
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error('QQ Bot API response exceeded the bounded media-upload response limit');
+      }
+      chunks.push(Buffer.from(next.value));
+    }
+    return Buffer.concat(chunks, total).toString('utf8');
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function normalizeBusinessScalar(value: unknown): string | undefined {
@@ -136,16 +173,15 @@ export function isQQBotChannelConfigReady(config: QQBotConfig | Record<string, a
   return Boolean(config.appId?.trim() && config.clientSecret?.trim());
 }
 
-/**
- * Official QQ Bot gateway adapter. It deliberately supports text-only
- * C2C/group/guild/direct-message events; QQ media is not guessed or fetched.
- */
+/** Official QQ Bot gateway adapter for text and bounded C2C/group inbound media. */
 export class QQBotChannel implements Channel {
   readonly name: string;
   readonly platform = 'qqbot';
   private readonly channelId: string;
   private readonly appId: string;
   private readonly clientSecret: string;
+  private readonly mediaConfig: QQBotConfig['media'];
+  private readonly saveInboundSessionFileFromPath?: QQBotChannelDeps['saveInboundSessionFileFromPath'];
   private readonly fetchFn: typeof fetch;
   private readonly createWebSocket: (url: string) => QQBotSocket;
   private readonly reconnectDelaysMs: number[];
@@ -164,7 +200,7 @@ export class QQBotChannel implements Channel {
   private heartbeatAwaitingAck = false;
   private accessToken?: { value: string; expiresAt: number };
   private accessTokenRequest?: Promise<string>;
-  private latestC2CMessageIds = new Map<string, string>();
+  private latestMessageIds = new Map<string, string>();
   private recentInboundEvents = new Map<string, true>();
   private replySequences = new Map<string, number>();
   private passiveReplyContexts = new Map<string, PassiveReplyContext>();
@@ -175,7 +211,9 @@ export class QQBotChannel implements Channel {
     this.channelId = name;
     this.appId = config.appId?.trim() || '';
     this.clientSecret = config.clientSecret?.trim() || '';
+    this.mediaConfig = config.media;
     this.fetchFn = deps.fetch || globalThis.fetch;
+    this.saveInboundSessionFileFromPath = deps.saveInboundSessionFileFromPath;
     this.createWebSocket = deps.createWebSocket || ((url) => new WebSocket(url));
     this.reconnectDelaysMs = deps.reconnectDelaysMs || RECONNECT_DELAY_MS;
     this.invalidSessionReconnectDelayMs = deps.invalidSessionReconnectDelayMs ?? 3_000;
@@ -205,7 +243,7 @@ export class QQBotChannel implements Channel {
       this.reconnectTimer = undefined;
     }
     this.stopHeartbeat();
-    this.latestC2CMessageIds.clear();
+    this.latestMessageIds.clear();
     this.recentInboundEvents.clear();
     this.replySequences.clear();
     this.passiveReplyContexts.clear();
@@ -228,11 +266,14 @@ export class QQBotChannel implements Channel {
     const directReplyId = typeof options?.replyToId === 'string' && options.replyToId.trim()
       ? options.replyToId.trim()
       : undefined;
-    const boundReplyId = options?.qqbotChannelId === this.channelId
+    const persistedBoundReplyId = options?.qqbotChannelId === this.channelId
       && options?.qqbotConversationId === conversationId
       && typeof options.qqbotMessageId === 'string'
       && options.qqbotMessageId.trim()
       ? options.qqbotMessageId.trim()
+      : undefined;
+    const boundReplyId = persistedBoundReplyId
+      ? this.latestMessageIds.get(conversationId) || persistedBoundReplyId
       : undefined;
     const replyToId = directReplyId || boundReplyId;
     const sourceBoundPassiveReply = Boolean(replyToId && (options?.qqbotSourceBound || boundReplyId));
@@ -272,7 +313,7 @@ export class QQBotChannel implements Channel {
         throw error;
       }
       if (sourceBoundPassiveReply && passiveReplyId && this.isCurrentReplyGeneration(replyGeneration)) {
-        this.recordPassiveTextReply(passiveReplyId);
+        this.recordPassiveSuccessfulReply(passiveReplyId);
       }
       if (replyToId && options?.turnFinal && this.isCurrentReplyGeneration(replyGeneration)) {
         this.replySequences.delete(replyToId);
@@ -294,12 +335,75 @@ export class QQBotChannel implements Channel {
     }
   }
 
+  async sendFile(conversationId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
+    const target = parseQQBotConversationId(conversationId);
+    if (target.kind !== 'c2c' && target.kind !== 'group') {
+      throw new Error('QQ Bot media sending is unsupported for guild and DM destinations');
+    }
+    const mediaTarget: 'c2c' | 'group' = target.kind;
+
+    const persistedReplyId = options?.qqbotChannelId === this.channelId
+      && options?.qqbotConversationId === conversationId
+      && typeof options.qqbotMessageId === 'string'
+      && options.qqbotMessageId.trim()
+      ? options.qqbotMessageId.trim()
+      : undefined;
+    const replyToId = this.latestMessageIds.get(conversationId) || persistedReplyId;
+    const sourceBoundPassiveReply = Boolean(replyToId);
+    const replyGeneration = this.connectionGeneration;
+    const caption = normalizeQQBotCaption(options?.caption);
+    const messagePath = target.kind === 'c2c'
+      ? `/v2/users/${encodeURIComponent(target.id)}/messages`
+      : `/v2/groups/${encodeURIComponent(target.id)}/messages`;
+
+    const send = async (): Promise<void> => {
+      if (!this.isCurrentReplyGeneration(replyGeneration)) {
+        throw new Error('QQ Bot media send was invalidated before upload');
+      }
+      const useProactiveFallback = sourceBoundPassiveReply && this.shouldUseProactiveReply(replyToId!);
+      const passiveReplyId = useProactiveFallback ? undefined : replyToId;
+      const uploaded = await uploadQQBotFile(
+        mediaTarget,
+        target.id,
+        file,
+        this.mediaConfig,
+        {
+          request: (requestPath, body, maxResponseBytes) => this.apiRequest(requestPath, 'POST', body, maxResponseBytes),
+          fetch: this.fetchFn,
+          isCurrent: () => this.isCurrentReplyGeneration(replyGeneration),
+        },
+      );
+      if (!this.isCurrentReplyGeneration(replyGeneration)) {
+        throw new Error('QQ Bot media send was invalidated before final delivery');
+      }
+      const messageSequence = passiveReplyId ? this.allocateReplySequence(passiveReplyId) : undefined;
+      await this.apiRequest(messagePath, 'POST', {
+        ...(caption ? { content: caption } : {}),
+        msg_type: 7,
+        media: { file_info: uploaded.fileInfo },
+        ...(passiveReplyId ? { msg_id: passiveReplyId, msg_seq: messageSequence } : { msg_seq: 1 }),
+      });
+      if (sourceBoundPassiveReply && passiveReplyId && this.isCurrentReplyGeneration(replyGeneration)) {
+        this.recordPassiveSuccessfulReply(passiveReplyId);
+      }
+      if (replyToId && options?.turnFinal && this.isCurrentReplyGeneration(replyGeneration)) {
+        this.replySequences.delete(replyToId);
+      }
+    };
+
+    if (!sourceBoundPassiveReply) {
+      await send();
+      return;
+    }
+    await this.enqueuePassiveReply(replyToId!, replyGeneration, send);
+  }
+
   async sendTyping(conversationId: string): Promise<void> {
     const target = parseQQBotConversationId(conversationId);
     if (target.kind !== 'c2c') {
       return;
     }
-    const messageId = this.latestC2CMessageIds.get(conversationId);
+    const messageId = this.latestMessageIds.get(conversationId);
     if (!messageId) {
       return;
     }
@@ -567,14 +671,17 @@ export class QQBotChannel implements Channel {
 
   private async routeInboundMessage(eventType: string, event: any, sequence?: number): Promise<void> {
     const content = typeof event?.content === 'string' ? event.content : '';
-    if (!content.trim()) {
-      logger.info({ channelId: this.channelId, eventType, messageId: event?.id }, 'Ignoring QQ Bot non-text message');
-      return;
-    }
 
     const inbound = this.normalizeInboundEvent(eventType, event);
     if (!inbound) {
       logger.warn({ channelId: this.channelId, eventType, messageId: event?.id }, 'Ignoring QQ Bot event without a stable identity');
+      return;
+    }
+
+    const attachments = Array.isArray(event?.attachments) ? event.attachments : [];
+    const supportsInboundMedia = inbound.kind === 'c2c' || inbound.kind === 'group';
+    if (!content.trim() && (!supportsInboundMedia || attachments.length === 0)) {
+      logger.info({ channelId: this.channelId, eventType, messageId: event?.id }, 'Ignoring QQ Bot non-text message');
       return;
     }
 
@@ -583,16 +690,7 @@ export class QQBotChannel implements Channel {
       return;
     }
     this.rememberPassiveReplyContext(inbound.messageId);
-
-    if (inbound.kind === 'c2c') {
-      if (!this.latestC2CMessageIds.has(inbound.conversationId) && this.latestC2CMessageIds.size >= MAX_C2C_TYPING_CONTEXTS) {
-        const oldestConversationId = this.latestC2CMessageIds.keys().next().value;
-        if (oldestConversationId) {
-          this.latestC2CMessageIds.delete(oldestConversationId);
-        }
-      }
-      this.latestC2CMessageIds.set(inbound.conversationId, inbound.messageId);
-    }
+    this.rememberLatestMessageId(inbound.conversationId, inbound.messageId);
 
     const context: ChannelContext = {
       channelId: this.channelId,
@@ -610,15 +708,30 @@ export class QQBotChannel implements Channel {
         await this.sendMessage(inbound.conversationId, text, { ...options, replyToId: inbound.messageId, qqbotSourceBound: true });
       },
       sendTyping: async () => {
-        await this.sendC2CTyping(inbound.conversationId, inbound.messageId);
+        await this.sendTyping(inbound.conversationId);
       },
     };
     const message: ChannelMessage = {
-      parts: [{ text: content }],
+      parts: attachments.length > 0 && supportsInboundMedia
+        ? buildQQBotAttachmentPreviewParts(content, attachments, this.mediaConfig)
+        : [{ text: content }],
       channelUserId: inbound.conversationId,
       conversationId: inbound.conversationId,
       username: inbound.username,
     };
+    if (attachments.length > 0 && supportsInboundMedia) {
+      message.materializeParts = (sessionId: string) => materializeQQBotAttachments({
+        attachments,
+        content,
+        eventId: inbound.messageId,
+        sessionId,
+        config: this.mediaConfig,
+        deps: {
+          fetch: this.fetchFn,
+          saveInboundSessionFileFromPath: this.saveInboundSessionFileFromPath,
+        },
+      });
+    }
 
     try {
       await this.messageHandler?.(context, message);
@@ -674,6 +787,16 @@ export class QQBotChannel implements Channel {
     return false;
   }
 
+  private rememberLatestMessageId(conversationId: string, messageId: string): void {
+    if (!this.latestMessageIds.has(conversationId) && this.latestMessageIds.size >= MAX_LATEST_MESSAGE_CONTEXTS) {
+      const oldestConversationId = this.latestMessageIds.keys().next().value;
+      if (oldestConversationId) {
+        this.latestMessageIds.delete(oldestConversationId);
+      }
+    }
+    this.latestMessageIds.set(conversationId, messageId);
+  }
+
   private allocateReplySequence(messageId: string): number {
     const previous = this.replySequences.get(messageId) || 0;
     if (!this.replySequences.has(messageId) && this.replySequences.size >= MAX_REPLY_SEQUENCES) {
@@ -704,7 +827,7 @@ export class QQBotChannel implements Channel {
         this.passiveReplyContexts.delete(oldest);
       }
     }
-    const context = { firstSeenAt: now, successfulTextReplies: 0 };
+    const context = { firstSeenAt: now, successfulReplies: 0 };
     this.passiveReplyContexts.set(messageId, context);
     return context;
   }
@@ -712,12 +835,12 @@ export class QQBotChannel implements Channel {
   private shouldUseProactiveReply(messageId: string): boolean {
     const context = this.rememberPassiveReplyContext(messageId);
     return Date.now() - context.firstSeenAt >= PASSIVE_REPLY_TTL_MS
-      || context.successfulTextReplies >= MAX_PASSIVE_TEXT_REPLIES;
+      || context.successfulReplies >= MAX_PASSIVE_TEXT_REPLIES;
   }
 
-  private recordPassiveTextReply(messageId: string): void {
+  private recordPassiveSuccessfulReply(messageId: string): void {
     const context = this.rememberPassiveReplyContext(messageId);
-    context.successfulTextReplies += 1;
+    context.successfulReplies += 1;
   }
 
   private isCurrentReplyGeneration(generation: number): boolean {
@@ -749,11 +872,11 @@ export class QQBotChannel implements Channel {
     return result;
   }
 
-  private async apiRequest<T = any>(path: string, method: 'GET' | 'POST', body?: Record<string, any>): Promise<T> {
-    return this.requestWithToken<T>(path, method, body, false);
+  private async apiRequest<T = any>(path: string, method: 'GET' | 'POST', body?: Record<string, any>, maxResponseBytes?: number): Promise<T> {
+    return this.requestWithToken<T>(path, method, body, false, maxResponseBytes);
   }
 
-  private async requestWithToken<T>(path: string, method: 'GET' | 'POST', body: Record<string, any> | undefined, retried: boolean): Promise<T> {
+  private async requestWithToken<T>(path: string, method: 'GET' | 'POST', body: Record<string, any> | undefined, retried: boolean, maxResponseBytes?: number): Promise<T> {
     const token = await this.getAccessToken();
     const response = await this.fetchFn(`${QQBOT_API_BASE_URL}${path}`, {
       method,
@@ -765,9 +888,11 @@ export class QQBotChannel implements Channel {
     });
     if (response.status === 401 && !retried) {
       this.accessToken = undefined;
-      return this.requestWithToken(path, method, body, true);
+      return this.requestWithToken(path, method, body, true, maxResponseBytes);
     }
-    const responseText = await response.text();
+    const responseText = maxResponseBytes === undefined
+      ? await response.text()
+      : await readResponseTextBounded(response, maxResponseBytes);
     if (!response.ok) {
       throw new Error(`QQ Bot API ${method} ${path} failed (${response.status}): ${responseText.slice(0, 300)}`);
     }
