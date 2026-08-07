@@ -1,7 +1,7 @@
 # Unit: src-session-turn-runner
 
 Files: src/sessionTurnRunner.ts
-Secondary files: src/sessionTurnRunnerDetachedOwner.test.ts, src/messageRouter.test.ts, src/toolsSessionAgent/handoffWait.test.ts, src/toolsSessionAgent/waitTool.test.ts, src/selftest/queueDrainSelfTest.ts, src/selftest/goalReminderSelfTest.ts, src/selftest/toolLoopStallSelfTest.ts
+Secondary files: src/sessionTurnRunnerDetachedOwner.test.ts, src/sessionWorkerHost.test.ts, src/messageRouter.test.ts, src/toolsSessionAgent/handoffWait.test.ts, src/toolsSessionAgent/waitTool.test.ts, src/selftest/queueDrainSelfTest.ts, src/selftest/goalReminderSelfTest.ts, src/selftest/toolLoopStallSelfTest.ts
 
 ## Purpose
 
@@ -24,7 +24,7 @@ This extraction is behavior-preserving and local-only. One turn-specific `Sessio
 2. `continueWithQueuedWork` validates leading queue records, respects ready compact commits, drains one compatible source batch, and calls `runSessionTurn`. Serialized direct-reply intent participates in the compatibility key alongside platform stream identity.
 3. `runSessionTurn` clears direct-turn waits, refreshes stale snapshots, persists queued input as separate canonical messages, and applies pre-provider compact/goal safe points.
 4. `llm.chat` performs provider retries/journaling and appends its assistant result. Tool calls enter the existing `llm.executeTools` path; the complete tool result is appended before wait/compact/follow-up decisions.
-5. Final delivery, child reminders, automatic compaction, terminal provider/runtime error presentation, Stop finalization, busy clearing, and queued continuation all stay in the same `try/catch/finally` owner. Every terminal busy release uses the same awaited effects transition, so simultaneous Stop/queue mutations share its full persistence commit.
+5. Final delivery, child reminders, automatic compaction, terminal provider/runtime error presentation, Stop finalization, busy clearing, and queued continuation all stay in the same `try/catch/finally` owner. A fixed Worker pre-final maintenance fatal bypasses generic semantic-error/reminder/send branches: exact direct sources receive the one presentation-only final, while source-less turns surface the original fatal after their release attempt. Every terminal busy release uses the same awaited effects transition, so simultaneous Stop/queue mutations share its full persistence commit.
 6. After a successful invocation releases the in-process reentrancy set, the runner checks for newly visible queued work and starts a fresh processor so a finish-window enqueue is not stranded. Any claimed turn or release failure suppresses this handoff even if a custom effect left the owner marked idle. Failure from the intentionally spawned trailing processor is logged once with the session ID; it is not retried or broadcast, and the durable queue remains available to a later explicit trigger.
 
 ## Main collaborators
@@ -41,11 +41,11 @@ This extraction is behavior-preserving and local-only. One turn-specific `Sessio
 - Platform stream identifiers, differing direct-reply intents, ready compact commits, and Stop are hard turn/safe-point boundaries.
 - Goal reminders are appended only at the pre-provider safe point after complete input/tool persistence.
 - Non-null provider `parts` are cleared only after `llm.chat` returns and has appended them.
-- Only `LlmRequestError` uses terminal provider presentation; other runtime errors retain the existing terminal runtime path.
+- Only `LlmRequestError` uses terminal provider presentation; other runtime errors retain the existing terminal runtime path except the fixed mutation-fenced Worker maintenance fatal described above.
 - The `finally` path owns Stop handling, managed yield, queued continuation, runtime-state clearing, busy clearing, and final persistence.
 - Main-local mode remains the only production-routed caller. `SessionWorkerHost.runPending` is the first activated real-child caller, but production placement remains gated.
 - The host is an in-process implementation boundary only: no method is an RPC descriptor, serialized DTO, capability negotiation, or future-only worker operation.
-- Current-session effects are also in-process only and carry no Session/history/queue DTO across a boundary. The remaining worker host, delivery, compaction, and tool-placement work stays deferred.
+- Current-session effects are also in-process only and carry no Session/history/queue DTO across a boundary. Production Worker routing and remaining service/tool closure stay deferred.
 
 ## Tests
 

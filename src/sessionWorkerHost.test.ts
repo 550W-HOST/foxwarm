@@ -164,6 +164,36 @@ test('automatic compact maintenance failure after a delivered success resyncs wi
   } finally { (llm as any).chat = originalChat; (sessionHistory as any).processSessionCompactionRequest = originalCompact; }
 });
 
+test('post-final transient compact poison releases busy with one resynced retry and remains usable', async () => {
+  const initial = baseSession('worker-post-final-compact-recovery'); initial.compactThresholdTokens = 1;
+  const originalChat = llm.chat; const originalCompact = sessionHistory.processSessionCompactionRequest;
+  let deliveries = 0; let compactCalls = 0; let failFirstResync = true;
+  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    await options.appendMessage({ role: 'model', parts: [{ text: 'usable response' }] });
+    return { text: 'usable response', usage: { inputTokens: 2, outputTokens: 0, cachedTokens: 0 } };
+  };
+  (sessionHistory as any).processSessionCompactionRequest = async () => { compactCalls += 1; throw new Error('post-final compact failed'); };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      const realResync = (host as any).resyncAfterFailure.bind(host);
+      (host as any).resyncAfterFailure = async (error: any) => {
+        if (!failFirstResync) return realResync(error);
+        failFirstResync = false;
+        (host as any).poison = { original: error, resync: new Error('one transient reload failure') };
+        throw new Error('one transient reload failure');
+      };
+      store.enqueueIntent(initial.id, 'post-final-recover', 'enqueue', { type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'first' }] });
+      await host.runPending(8);
+      assert.equal(deliveries, 1); assert.equal(compactCalls, 1); assert.equal(readDurable().busy, false); assert.equal((host as any).poison, undefined);
+      (sessionHistory as any).processSessionCompactionRequest = originalCompact; (host as any).session.compactThresholdTokens = 999999;
+      store.enqueueIntent(initial.id, 'post-final-usable', 'enqueue', { type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'second' }] });
+      await host.runPending(8);
+      assert.equal(deliveries, 2); assert.equal(readDurable().busy, false);
+    }, true, undefined, async () => { deliveries += 1; });
+  } finally { (llm as any).chat = originalChat; (sessionHistory as any).processSessionCompactionRequest = originalCompact; }
+});
+
 test('pre-final automatic compact poison stops before a second provider call and emits one error final', async () => {
   const initial = baseSession('worker-pre-final-compact-failure'); initial.compactThresholdTokens = 1; let chatCalls = 0; let deliveries = 0;
   const originalChat = llm.chat; const originalCompact = sessionHistory.processSessionCompactionRequest;
@@ -183,9 +213,36 @@ test('pre-final automatic compact poison stops before a second provider call and
         throw new Error('reload failed');
       };
       store.enqueueIntent(initial.id, 'pre-final-fail', 'enqueue', { type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'work' }] });
-      await assert.rejects(() => host.runPending(8), /resync|reload|compaction/i);
-      assert.equal(chatCalls, 1); assert.equal(deliveries, 1);
+      store.enqueueIntent(initial.id, 'pre-final-deferred', 'enqueue', { type: 'user', source: { platform: 'test', channelUserId: 'other-room', preferDirectReply: true }, parts: [{ text: 'must remain queued' }] });
+      await host.runPending(8);
+      assert.equal(chatCalls, 1); assert.equal(deliveries, 1); assert.equal((host as any).session.queue.length, 1);
     }, true, undefined, async (_source, text, outcome) => { deliveries += 1; assert.equal(outcome, 'error'); assert.match(text, /Automatic Worker compaction failed/); });
+  } finally { (llm as any).chat = originalChat; (sessionHistory as any).processSessionCompactionRequest = originalCompact; }
+});
+
+test('source-less pre-final compact fatal skips history reminder and delivery branches without masking', async () => {
+  const initial = baseSession('worker-source-less-compact-fatal'); initial.compactThresholdTokens = 1; initial.parentSessionId = 'parent';
+  const originalChat = llm.chat; const originalCompact = sessionHistory.processSessionCompactionRequest;
+  let chatCalls = 0; let reminderEffects = 0; let deliveries = 0;
+  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+    chatCalls += 1; if (parts) await options.appendMessage({ role: 'user', parts });
+    const toolCall = { id: 'source-less-status', name: 'session', args: { action: 'status' } };
+    await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+    return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }], usage: { inputTokens: 2, outputTokens: 0, cachedTokens: 0 } };
+  };
+  (sessionHistory as any).processSessionCompactionRequest = async () => { throw new Error('source-less compact failed'); };
+  try {
+    await withLocalHost(initial, async ({ host, store, session }) => {
+      (host as any).runner.maybeQueueChildReminder = async () => { reminderEffects += 1; };
+      (host as any).resyncAfterFailure = async () => {
+        (host as any).poison = { original: new Error('source-less compact failed'), resync: new Error('source-less reload failed') };
+        throw new Error('source-less reload failed');
+      };
+      store.enqueueIntent(initial.id, 'source-less-fatal', 'enqueue', { type: 'background', parts: [{ system: 'background maintenance turn' }] });
+      await assert.rejects(() => host.runPending(8), (error: any) => error?.code === 'SESSION_WORKER_AUTO_COMPACTION_FATAL');
+      assert.equal(chatCalls, 1); assert.equal(reminderEffects, 0); assert.equal(deliveries, 0);
+      assert.equal(session.history.some(message => JSON.stringify(message.parts).includes('Automatic Worker compaction failed')), false);
+    }, true, undefined, async () => { deliveries += 1; });
   } finally { (llm as any).chat = originalChat; (sessionHistory as any).processSessionCompactionRequest = originalCompact; }
 });
 

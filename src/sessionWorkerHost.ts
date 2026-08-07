@@ -102,7 +102,7 @@ export class SessionWorkerHost {
       if ((session.lastAppliedMailboxId || 0) !== mailboxCursorBefore) await this.publishCurrent();
       await this.runner!.processSessionQueue(session.id);
     } catch (error) {
-      await this.resyncAfterFailure(error);
+      if (String((error as any)?.code || '') !== 'SESSION_WORKER_AUTO_COMPACTION_FATAL') await this.resyncAfterFailure(error);
       throw error;
     }
     return buildSessionWorkerProjection(session);
@@ -186,10 +186,18 @@ export class SessionWorkerHost {
       appendMessage: (owner, message) => appendMessages(owner, [message]),
       appendMessages,
       persistSession: owner => { this.assertOwner(owner); return persist(); },
-      updateBusy: (owner, busy) => { this.assertOwner(owner); return transactional(() => updateSessionBusyStateForSession(
-        owner, busy, persist, clearActiveSessionRuntimeState, undefined,
-        error => String((error as any)?.code || '') !== 'SESSION_WORKER_PUBLICATION_RESYNC_REQUIRED',
-      )); },
+      updateBusy: async (owner, busy) => {
+        this.assertOwner(owner);
+        const update = () => transactional(() => updateSessionBusyStateForSession(
+          owner, busy, persist, clearActiveSessionRuntimeState, undefined,
+          error => String((error as any)?.code || '') !== 'SESSION_WORKER_PUBLICATION_RESYNC_REQUIRED',
+        ));
+        try { await update(); }
+        catch (error) {
+          if (busy || String((error as any)?.code || '') !== 'SESSION_WORKER_RESYNCED_RETRY') throw error;
+          await update();
+        }
+      },
       startWait: (owner, options) => {
         this.assertOwner(owner);
         let result: Awaited<ReturnType<typeof startSessionWaitForSession>>;

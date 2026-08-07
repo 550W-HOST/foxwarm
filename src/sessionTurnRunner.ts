@@ -864,6 +864,8 @@ export class SessionTurnRunner {
     logger.info({ sessionId, source: options.sourceCtx ? `${getChannelId(options.sourceCtx)}:${getConversationId(options.sourceCtx)}` : (options.source ? `${options.source.channelId || options.source.platform}:${options.source.conversationId || options.source.channelUserId}` : 'session-event'), partCount: options.message?.parts?.length ?? options.parts?.length ?? queuedItemPartCount ?? 0 }, 'Session turn processing');
 
     let stoppedByUser = false;
+    let fencedMaintenanceError: unknown;
+    let fencedMaintenanceDirect = false;
     try {
       if (options.sendTyping && options.sourceCtx) {
         await this.host.sendTyping(options.sourceCtx);
@@ -1132,15 +1134,25 @@ export class SessionTurnRunner {
       logger.error(e, 'Error handling message');
       const errorText = formatTerminalSessionError(e);
       const mutationFencedMaintenance = e?.code === 'SESSION_WORKER_AUTO_COMPACTION_FATAL';
-      if (!llm.isLlmRequestError(e) && !mutationFencedMaintenance) {
+      if (mutationFencedMaintenance) {
+        fencedMaintenanceError = e;
+        if (this.host.deliverCommittedFinal && turnSource) {
+          fencedMaintenanceDirect = true;
+          await this.host.deliverCommittedFinal(session, turnSource, errorText, 'error');
+          return;
+        }
+      } else if (!llm.isLlmRequestError(e)) {
         await this.appendTerminalModelMessage(session, errorText);
       }
-      if (this.host.deliverCommittedFinal && turnSource) {
-        if (!mutationFencedMaintenance) await this.maybeQueueChildReminder(session);
+      if (!mutationFencedMaintenance && this.host.deliverCommittedFinal && turnSource) {
+        await this.maybeQueueChildReminder(session);
         await this.host.deliverCommittedFinal(session, turnSource, errorText, 'error');
         return;
       }
-      if (llm.isLlmRequestError(e)) {
+      if (mutationFencedMaintenance) {
+        // Source-less fenced maintenance must surface after the exact release
+        // attempt without entering any generic history/reminder/send branch.
+      } else if (llm.isLlmRequestError(e)) {
         await this.maybeQueueChildReminder(session);
         if (this.host.hasBroadcast(session)) {
           this.sendEmptyTurnFinal(broadcast, turnChannelOptions);
@@ -1152,6 +1164,12 @@ export class SessionTurnRunner {
         await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions, turnSource);
       }
     } finally {
+      if (fencedMaintenanceError) {
+        try { await this.host.updateSessionBusyState(session, false); }
+        catch (releaseError) { if (fencedMaintenanceDirect) throw releaseError; throw fencedMaintenanceError; }
+        if (!fencedMaintenanceDirect) throw fencedMaintenanceError;
+        return;
+      }
       const runQueuedAfterStop = !!session.meta?.runQueuedAfterStop;
       if (session.meta?.runQueuedAfterStop) {
         delete session.meta.runQueuedAfterStop;
