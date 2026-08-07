@@ -7,7 +7,7 @@ import type { CurrentSessionTurnEffects } from './llm';
 import { RpcError } from './rpc';
 import { initArchiveStore } from './session/archiveStore';
 import { refreshSessionSnapshotForSession } from './session/agentMetadata';
-import { getEffectiveCompactThresholdTokens, getUsageTotalTokens } from './session/history';
+import { getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSessionCompactionRequest, type SessionHistoryDeps } from './session/history';
 import { getManagedSessionState } from './session/managedState';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './session/metadataStore';
 import { applyQueuedItemToWaitState, appendSessionMessagesForSession, startSessionWaitForSession, updateSessionBusyStateForSession } from './sessionManager';
@@ -22,7 +22,7 @@ import {
 } from './sessionWorkerPersistence';
 import type { SessionWorkerIdentity } from './sessionWorkerControlService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
-import { isQueueItem, type Message, type QueueItem, type Session } from './types';
+import { isQueueItem, type CompactionRequest, type Message, type QueueItem, type Session } from './types';
 import { buildTimestampedSystemMessageParts } from './utils/systemMessageParts';
 
 export type SessionWorkerHostDependencies = {
@@ -37,6 +37,7 @@ export class SessionWorkerHost {
   private readonly persistence: SessionWorkerPersistence;
   private loadPromise?: Promise<void>;
   private runTail: Promise<void> = Promise.resolve();
+  private serializedPending = 0;
   private session?: Session;
   private runner?: SessionTurnRunner;
   private poison?: { original: unknown; resync: unknown };
@@ -55,8 +56,20 @@ export class SessionWorkerHost {
     return run;
   }
 
+  async compactAwaited(request: CompactionRequest): Promise<{ compacted: boolean; projection: SessionWorkerProjection }> {
+    if (this.serializedPending > 0) throw new RpcError('SESSION_WORKER_COMPACTION_BUSY', 'Session worker is not idle for awaited compaction.', true);
+    return this.serialize(async () => {
+      await this.ensureLoaded(); await this.ensureHealthy();
+      const owner = this.session!;
+      if (owner.busy || owner.queue.length || getManagedSessionState(owner)) throw new RpcError('SESSION_WORKER_COMPACTION_BUSY', 'Session worker is not idle for awaited compaction.', true);
+      const compacted = await this.runExactCompaction(request, false);
+      return { compacted, projection: buildSessionWorkerProjection(owner) };
+    });
+  }
+
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
-    const run = this.runTail.then(operation);
+    this.serializedPending += 1;
+    const run = this.runTail.then(operation).finally(() => { this.serializedPending -= 1; });
     this.runTail = run.then(() => {}, () => {});
     return run;
   }
@@ -133,11 +146,13 @@ export class SessionWorkerHost {
           return this.applyAndPersistQueueItem({ type, parts: buildTimestampedSystemMessageParts(message) });
         },
         applyCompletedCompactJob: async sessionId => { this.assertId(sessionId); throw this.compactionUnsupported(); },
-        processSessionCompactionRequest: async sessionId => { this.assertId(sessionId); throw this.compactionUnsupported(); },
+        processSessionCompactionRequest: async (sessionId, request) => {
+          this.assertId(sessionId); await this.runAutomaticCompaction(request);
+        },
         checkAndCompactIfNeeded: async (sessionId, usage) => {
           this.assertId(sessionId);
           const total = getUsageTotalTokens(usage);
-          if (total > 0 && total > getEffectiveCompactThresholdTokens(owner)) throw this.compactionUnsupported();
+          if (total > 0 && total > getEffectiveCompactThresholdTokens(owner)) await this.runAutomaticCompaction({ completionMarker: 'Compaction completed.' });
         },
         ...(this.dependencies.deliverCommittedFinal ? {
           deliverCommittedFinal: async (_session, source, text, outcome) => {
@@ -237,18 +252,39 @@ export class SessionWorkerHost {
   }
 
   private compactionUnsupported(): RpcError {
-    return new RpcError('SESSION_WORKER_COMPACTION_UNSUPPORTED', 'Session worker compaction is not implemented yet.', true);
+    return new RpcError('SESSION_WORKER_COMPACTION_UNSUPPORTED', 'Background compact commits are not supported by synchronous Session-worker placement.', true);
+  }
+
+  private historyDeps(): SessionHistoryDeps {
+    return {
+      getSessionById: id => { this.assertId(id); return this.session; },
+      getExistingSession: async id => { this.assertId(id); return this.session || null; },
+      saveSession: async id => { this.assertId(id); await this.persistOwner(); },
+      notifyHistoryUpdate: () => {},
+    };
+  }
+
+  private async runExactCompaction(request: CompactionRequest, automatic: boolean): Promise<boolean> {
+    await this.fenceMutation();
+    const beforeVersion = this.session!.historyVersion || 0;
+    try {
+      await processSessionCompactionRequest(this.historyDeps(), this.identity.sessionId, request, 'await');
+      return (this.session!.historyVersion || 0) !== beforeVersion;
+    } catch (error) {
+      try { await this.resyncAfterFailure(error); }
+      catch (resync) { if (!automatic) throw resync; logger.error({ err: resync, sessionId: this.identity.sessionId }, 'Automatic Worker compaction failed and authority resync is unavailable'); return false; }
+      if (!automatic) throw error;
+      logger.warn({ err: error, sessionId: this.identity.sessionId }, 'Automatic Worker compaction failed without affecting the delivered turn');
+      return false;
+    }
+  }
+
+  private runAutomaticCompaction(request: CompactionRequest): Promise<boolean> {
+    return this.runExactCompaction(request, true);
   }
 
   private async persistOwner(): Promise<void> {
     await this.fenceMutation();
-    if (this.poison) {
-      const prior = this.poison;
-      await this.ensureHealthy();
-      throw new RpcError('SESSION_WORKER_RESYNCED_RETRY', 'Session worker resynchronized before a later mutation; retry that mutation.', true, {
-        original: this.errorSummary(prior.original), resync: this.errorSummary(prior.resync),
-      });
-    }
     try {
       await this.persistence.persistActivated(this.session!, this.identity.generation, this.identity.incarnationId);
     } catch (error) {
@@ -262,9 +298,17 @@ export class SessionWorkerHost {
   }
 
   private async fenceMutation(): Promise<void> {
-    if (!this.publicationPoison) return;
-    await this.persistence.reloadActivated(this.session!, this.identity.generation, this.identity.incarnationId);
-    throw this.publicationError(this.publicationPoison);
+    if (this.publicationPoison) {
+      await this.persistence.reloadActivated(this.session!, this.identity.generation, this.identity.incarnationId);
+      throw this.publicationError(this.publicationPoison);
+    }
+    if (this.poison) {
+      const prior = this.poison;
+      await this.ensureHealthy();
+      throw new RpcError('SESSION_WORKER_RESYNCED_RETRY', 'Session worker resynchronized before a later mutation; retry that mutation.', true, {
+        original: this.errorSummary(prior.original), resync: this.errorSummary(prior.resync),
+      });
+    }
   }
 
   private async publishCurrent(): Promise<void> {

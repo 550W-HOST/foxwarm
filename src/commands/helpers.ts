@@ -3,6 +3,7 @@ import { getManagedChannelIds, getChannelRuntimeStatus, listChannelRuntimeStatus
 import { nodesManager } from '../nodes/manager';
 import { listApprovedNodes, listPendingPairings } from '../nodes/registry';
 import * as sessionManager from '../sessionManager';
+import * as sessionRuntime from '../sessionRuntime';
 import { COMPACT_PERCENT, HTTP_PORT, resolveModelConfig } from '../config';
 import { Session } from '../types';
 
@@ -331,10 +332,6 @@ export async function buildNodeListReply(currentNode: string, boundNode?: string
 
 export async function handleCompactCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: Session) {
   if (!sessionId || !session) return
-  if (session.history.length === 0) {
-    ctx.reply('History is empty.')
-    return
-  }
 
   if (args[0] === 'tools') {
     let keepPercent = COMPACT_PERCENT
@@ -345,7 +342,10 @@ export async function handleCompactCommand(ctx: ChannelContext, args: string[], 
       }
     }
 
-    const result = await sessionManager.compactSessionToolMessages(sessionId, keepPercent)
+    const compact = await sessionRuntime.requestCompaction(sessionId, keepPercent, true)
+    if (compact.kind === 'unsupported') { ctx.reply(`⚠️ ${compact.message}`); return }
+    if (compact.kind !== 'tool-noise') throw new Error('Unexpected tool-noise compaction result.')
+    const result = compact.result
     ctx.reply(
       `🧹 Tool-noise compaction finished. Replaced ${result.replacedFunctionCalls} tool call(s) and ${result.replacedFunctionResponses} tool response(s) across ${result.touchedMessages} message(s). `
       + `Inspected ${result.inspectedMessages} older message(s); kept the most recent ${Math.max(0, session.history.length - result.keepStartIndex)} message(s) untouched.`
@@ -361,7 +361,13 @@ export async function handleCompactCommand(ctx: ChannelContext, args: string[], 
     }
   }
 
-  const result = await sessionManager.requestSessionCompaction(sessionId, { keepPercent })
+  const result = await sessionRuntime.requestCompaction(sessionId, keepPercent)
+
+  if (result.kind === 'worker') {
+    ctx.reply(result.compacted ? '🗜️ Compaction completed.' : 'ℹ️ No compactable history was found.')
+    return
+  }
+  if (result.kind !== 'local') throw new Error('Unexpected compaction result.')
 
   if (result.alreadyQueued) {
     ctx.reply('ℹ️ Compaction is already pending for this session.')

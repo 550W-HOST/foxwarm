@@ -25,6 +25,7 @@ import * as sessionManager from './sessionManager';
 import { getAgentDir, SESSIONS_FILE, TIMERS_FILE } from './config';
 import * as timers from './timers';
 import * as vector from './vector';
+import * as sessionHistory from './session/history';
 import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
 import { vectorServiceDescriptor } from './vectorServiceDescriptor';
 import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationServiceDescriptor, SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
@@ -142,6 +143,36 @@ test('worker swallows one ambiguous final-delivery failure after committed respo
   } finally { (llm as any).chat = originalChat; }
 });
 
+test('automatic compact maintenance failure after a delivered success resyncs without a second final', async () => {
+  const initial = baseSession('worker-auto-compact-failure'); initial.compactThresholdTokens = 1;
+  const originalChat = llm.chat; const originalCompact = sessionHistory.processSessionCompactionRequest;
+  let deliveries = 0; let compactCalls = 0;
+  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    await options.appendMessage({ role: 'model', parts: [{ text: 'delivered success' }] });
+    return { text: 'delivered success', usage: { inputTokens: 2, outputTokens: 0, cachedTokens: 0 } };
+  };
+  (sessionHistory as any).processSessionCompactionRequest = async () => { compactCalls += 1; throw new Error('automatic maintenance failed'); };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      store.enqueueIntent(initial.id, 'auto-fail', 'enqueue', { type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'work' }] });
+      await host.runPending(8);
+      assert.equal(compactCalls, 1); assert.equal(deliveries, 1); assert.equal(readDurable().busy, false);
+      assert.equal(readDurable().history.at(-1).parts[0].text, 'delivered success');
+    }, true, undefined, async () => { deliveries += 1; });
+  } finally { (llm as any).chat = originalChat; (sessionHistory as any).processSessionCompactionRequest = originalCompact; }
+});
+
+test('explicit awaited compact rejects busy or queued exact owners instead of waiting', async () => {
+  const initial = baseSession('worker-explicit-compact-admission');
+  await withLocalHost(initial, async ({ host, session }) => {
+    session.busy = true;
+    await assert.rejects(() => host.compactAwaited({ keepPercent: 0.3 }), assertRpcCode('SESSION_WORKER_COMPACTION_BUSY'));
+    session.busy = false; session.queue.push({ type: 'background', parts: [{ system: 'pending' }] });
+    await assert.rejects(() => host.compactAwaited({ keepPercent: 0.3 }), assertRpcCode('SESSION_WORKER_COMPACTION_BUSY'));
+  });
+});
+
 test('worker mailbox reuses canonical wait and waitAll transitions', async () => {
   const scenarios: Array<{ name: string; wait?: any; items: any[]; queueTypes: string[]; waitPresent: boolean }> = [
     { name: 'ordinary wait wakes', wait: { id: 'w', startedAt: 1 }, items: [{ type: 'user', parts: [{ text: 'wake' }] }], queueTypes: ['user'], waitPresent: false },
@@ -248,13 +279,13 @@ test('exec completion is serialized after a failed turn and remains one durable 
   });
 });
 
-test('bound worker host closes reminder and compaction exact-owner escapes', async () => {
+test('bound worker host closes reminders, awaits automatic compaction, and rejects background commits', async () => {
   const compactSession = baseSession('exact-worker-compact'); compactSession.compactThresholdTokens = 10;
   await withLocalHost(compactSession, async ({ turnHost, session, readDurable }) => {
     await turnHost.checkAndCompactIfNeeded(session.id, undefined);
     await turnHost.checkAndCompactIfNeeded(session.id, { inputTokens: 10 });
-    await assert.rejects(() => turnHost.checkAndCompactIfNeeded(session.id, { inputTokens: 11 }), assertRpcCode('SESSION_WORKER_COMPACTION_UNSUPPORTED'));
-    await assert.rejects(() => turnHost.processSessionCompactionRequest(session.id, {}), assertRpcCode('SESSION_WORKER_COMPACTION_UNSUPPORTED'));
+    await turnHost.checkAndCompactIfNeeded(session.id, { inputTokens: 11 });
+    await turnHost.processSessionCompactionRequest(session.id, {});
     await assert.rejects(() => turnHost.applyCompletedCompactJob(session.id), assertRpcCode('SESSION_WORKER_COMPACTION_UNSUPPORTED'));
     assert.equal(readDurable().history.length, 0);
   });

@@ -87,7 +87,7 @@ export function getToolPermissionNode(toolName: string, executionNode: string, t
 setDefinitionsRef(definitions, isToolDirectlyExposedToModel, getToolPermissionNode, callTool, assertToolAvailableForPlacement);
 
 const WORKER_UNSUPPORTED_TOOLS = new Set([
-    'create_child_session', 'delete_session', 'compact_session',
+    'create_child_session', 'delete_session',
     'node_bootstrap_info', 'node_pair_approve', 'node_pair_list',
     'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
     'get_memory_context',

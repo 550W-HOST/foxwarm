@@ -151,6 +151,13 @@ export async function tool_compact_session(args: ToolArgs, ctx: ToolContext) {
     : undefined;
   const keepPercent = normalizeKeepPercent(args.keepPercent);
 
+  if (ctx.sessionPlacement === 'session-worker') {
+    if (!ctx.session || targetSessionId !== ctx.sessionId || ctx.session.id !== ctx.sessionId) {
+      throw new Error('Session-worker compact_session may target only the exact current session.');
+    }
+    return `Compaction was not started for session \`${ctx.sessionId}\`: synchronous Session-worker placement cannot start background compaction from a busy model tool call. Request /compact when the session is idle.`;
+  }
+
   if (!targetSessionId) {
     throw new Error('sessionId is required when there is no current session context.');
   }

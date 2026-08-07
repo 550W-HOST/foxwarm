@@ -2,9 +2,11 @@ import { defineRpcService, rpcMethod, RpcError, type RpcServiceHandler } from '.
 import type { SessionWorkerProjection } from './sessionWorkerPersistence';
 import type { SessionWorkerActivationGate } from './sessionWorkerControlService';
 import type { SessionWorkerHost } from './sessionWorkerHost';
+import type { CompactionRequest } from './types';
 
-export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 1, {
+export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 2, {
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
+  compactAwaited: rpcMethod<{ request: CompactionRequest }, { compacted: boolean; projection: SessionWorkerProjection }>(),
 });
 
 export function createSessionWorkerRuntimeServiceHandler(
@@ -20,6 +22,21 @@ export function createSessionWorkerRuntimeServiceHandler(
         throw new RpcError('SESSION_WORKER_MAILBOX_LIMIT', 'Mailbox prefix limit must be an integer from 1 through 4096.');
       }
       return host.runPending(input.limit);
+    },
+    async compactAwaited(input) {
+      gate.assertActive();
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 1
+        || !input.request || typeof input.request !== 'object' || Array.isArray(input.request)) {
+        throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', 'Compaction request must be a plain bounded object.');
+      }
+      const keys = Object.keys(input.request); const allowed = new Set(['keepPercent', 'compactGuidance', 'completionMarker']);
+      if (keys.some(key => !allowed.has(key))) throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', 'Compaction request contains unsupported fields.');
+      const request = input.request;
+      if (request.keepPercent !== undefined && (!Number.isFinite(request.keepPercent) || request.keepPercent! <= 0 || request.keepPercent! > 1)) throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', 'keepPercent must be greater than zero and at most one.');
+      for (const key of ['compactGuidance', 'completionMarker'] as const) {
+        const value = request[key]; if (value !== undefined && (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 16_384)) throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', `${key} must be a bounded string.`);
+      }
+      return host.compactAwaited(structuredClone(request));
     },
   };
 }

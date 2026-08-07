@@ -6,7 +6,7 @@ import type { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { stableSessionWorkerJson } from './sessionWorkerStableJson';
-import type { ImageMeta, InlineDataRef, Message, MessagePart, QueueItem } from './types';
+import type { CompactionRequest, ImageMeta, InlineDataRef, Message, MessagePart, QueueItem } from './types';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 
 const MAX_INGRESS_BYTES = 1024 * 1024;
@@ -130,6 +130,7 @@ export type SessionWorkerIngressResult = {
   messageCount: number;
   busy: boolean;
 };
+export type SessionWorkerCompactionResult = { completed: true; compacted: boolean; generation: number; messageCount: number };
 
 export class SessionWorkerIngressCoordinator {
   constructor(
@@ -171,5 +172,20 @@ export class SessionWorkerIngressCoordinator {
       messageCount: projection.messageCount,
       busy: projection.busy,
     };
+  }
+
+  async compactAwaited(requestedSessionId: string, request: CompactionRequest): Promise<SessionWorkerCompactionResult> {
+    const sessionId = this.resolveCanonicalSessionId(requestedSessionId);
+    if (sessionId !== requestedSessionId) throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', 'Awaited compaction requires an exact canonical session ID.');
+    const ownership = this.store.findOwnership(sessionId);
+    const entry = this.supervisor.projectionRegistry.get(sessionId);
+    if (!ownership || ownership.state !== 'ready' || !ownership.incarnationId || !entry?.projection
+      || entry.generation !== ownership.generation || entry.incarnationId !== ownership.incarnationId) {
+      throw new RpcError('SESSION_WORKER_COMPACTION_UNAVAILABLE', `Session worker ${sessionId} has no exact committed owner.`, true);
+    }
+    if (entry.projection.busy || entry.projection.queueLength !== 0) throw new RpcError('SESSION_WORKER_COMPACTION_BUSY', 'Session worker must be idle with an empty queue.', true);
+    const expected = { generation: ownership.generation, incarnationId: ownership.incarnationId };
+    const result = await this.supervisor.compactAwaitedActivated(sessionId, expected, request);
+    return { completed: true, compacted: result.compacted, generation: ownership.generation, messageCount: result.projection.messageCount };
   }
 }

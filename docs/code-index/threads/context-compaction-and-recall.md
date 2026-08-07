@@ -102,6 +102,8 @@ Async and awaited compaction share one snapshot/job/commit engine. Planning neve
 
 [2026-08-01] Compact planning is not ordinary queued session work. An async-capable explicit request snapshots and starts planning immediately, including while a normal turn is active; only the resulting `compact-commit` is queued so live prefix replacement occurs at a router safe point. `asyncCompact:false` remains a provider boundary: idle explicit compaction and normal end-of-turn awaited compaction may block that owner, but a busy explicit request fails clearly rather than enqueueing or persisting a deferred plan. No planning-control queue type or migration exists; generic queue validation discards unrecognized records, and automatic threshold checks can request planning again on a later turn.
 
+Session-worker placement starts with synchronous compaction only. Automatic runner safe points and an idle explicit runtime request force the shared engine's awaited mode inside the exact Worker owner; they never create pending compact jobs or `compact-commit` records. A busy model `compact_session` call reports that background compaction is unavailable instead of changing the frontier inside a tool batch. Main may select/admit the exact idle generation and await its fixed forward operation, but it never hydrates or mutates the Worker Session. Transient planning progress and background planning remain deferred.
+
 ### D-context-compact-runtime-gate
 
 During the dedicated compact phase, runtime accepts only `submit_compact_plan` and returns bounded feedback for other calls. Shared schema stability is canonical in [D-llm-stable-tool-schema](../modules/llm.md#d-llm-stable-tool-schema).

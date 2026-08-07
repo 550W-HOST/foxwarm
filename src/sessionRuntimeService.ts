@@ -81,6 +81,11 @@ export type SessionRuntimeControlResultDto = {
   queuedItems?: number;
   stoppedCurrent?: boolean;
 };
+export type SessionRuntimeCompactionResultDto =
+  | { kind: 'worker'; completed: true; compacted: boolean; messageCount: number }
+  | { kind: 'local'; alreadyQueued: boolean; startedImmediately: boolean; runsInBackground?: boolean; backgroundUnavailable?: boolean; queueLength: number }
+  | { kind: 'tool-noise'; result: Awaited<ReturnType<typeof sessionManager.compactSessionToolMessages>> }
+  | { kind: 'unsupported'; message: string };
 
 export type SessionRuntimeEventPayloads = {
   history: { sessionId: string; message: Message };
@@ -95,6 +100,7 @@ export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime
   getHistory: rpcMethod<{ sessionId: string }, SessionRuntimeHistoryDto | null>(),
   enqueue: rpcMethod<{ sessionId: string; item: QueueItem }, { accepted: true }>(),
   submitAndRun: rpcMethod<{ sessionId: string; item: QueueItem }, SessionWorkerIngressResult>(),
+  requestCompaction: rpcMethod<{ sessionId: string; keepPercent?: number; toolNoise?: boolean }, SessionRuntimeCompactionResultDto>(),
   queueEvent: rpcMethod<{
     sessionId: string;
     text: string;
@@ -388,6 +394,25 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         throw new RpcError('SESSION_WORKER_INGRESS_UNAVAILABLE', 'Session-worker ingress is unavailable.', true);
       }
       return options.worker.ingress.submitQueuedInput(normalized.sessionId, normalized.item);
+    },
+    async requestCompaction(input) {
+      if (!input || typeof input !== 'object' || Array.isArray(input)) throw new RpcError('SESSION_RUNTIME_INVALID_COMPACTION', 'Compaction request must be an object.');
+      const unknown = Object.keys(input).find(key => !['sessionId', 'keepPercent', 'toolNoise'].includes(key));
+      if (unknown || (input.keepPercent !== undefined && (!Number.isFinite(input.keepPercent) || input.keepPercent! <= 0 || input.keepPercent! > 1))
+        || (input.toolNoise !== undefined && typeof input.toolNoise !== 'boolean')) throw new RpcError('SESSION_RUNTIME_INVALID_COMPACTION', 'Compaction request is invalid.');
+      const requestedId = normalizeSessionId(input.sessionId); const selection = workerSelection(requestedId);
+      if (selection.kind === 'unavailable') throw new RpcError('SESSION_WORKER_COMPACTION_UNAVAILABLE', 'Committed Worker state is unavailable.', true);
+      if (selection.kind === 'worker') {
+        if (input.toolNoise) return { kind: 'unsupported', message: 'Tool-noise compaction is not supported by Session-worker placement yet.' };
+        if (!options?.worker?.ingress) throw new RpcError('SESSION_WORKER_COMPACTION_UNAVAILABLE', 'Session-worker compaction is unavailable.', true);
+        const result = await options.worker.ingress.compactAwaited(selection.canonicalId, { keepPercent: input.keepPercent });
+        return { kind: 'worker', completed: true, compacted: result.compacted, messageCount: result.messageCount };
+      }
+      if (input.toolNoise) {
+        await requireSession(selection.canonicalId);
+        return { kind: 'tool-noise', result: await sessionManager.compactSessionToolMessages(selection.canonicalId, input.keepPercent) };
+      }
+      return { kind: 'local', ...await sessionManager.requestSessionCompaction(selection.canonicalId, { keepPercent: input.keepPercent }) };
     },
     async queueEvent(input) {
       const sessionId = normalizeSessionId(input.sessionId);

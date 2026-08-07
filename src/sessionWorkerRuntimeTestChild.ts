@@ -11,6 +11,8 @@ import { ProcessRpcClientTransport, ProcessRpcServer, RpcServiceRegistry } from 
 import { writeAuthoritativeSessionState } from './session/stateFile';
 import { readSessionHistorySnapshot } from './session/metadataStore';
 import { initArchiveStore } from './session/archiveStore';
+import { appendMessagesToArchive } from './session/archive';
+import { COMPACT_PLAN_TOOL_NAME } from './session/compactPlan';
 import {
   createSessionWorkerControlServiceHandler,
   SessionWorkerActivationGate,
@@ -37,6 +39,9 @@ async function start(): Promise<void> {
   (llm as any).chat = async (parts: any, session: any, _iteration: number, options: any) => {
     chatCount += 1;
     if (parts) await options.appendMessage({ role: 'user', parts });
+    if (options?.purpose === 'compact-plan' && process.env.FOXWARM_TEST_COMPACT_PLAN) {
+      return { toolCalls: [{ name: COMPACT_PLAN_TOOL_NAME, args: JSON.parse(process.env.FOXWARM_TEST_COMPACT_PLAN) }] };
+    }
     if (process.env.FOXWARM_TEST_FAIL_GOAL === '1' && chatCount === 2) {
       try {
         await tool_set_goal(
@@ -132,6 +137,10 @@ async function start(): Promise<void> {
       initializeCount += 1;
       if (process.env.FOXWARM_TEST_INIT_FAIL_ONCE === '1' && initializeCount === 1) throw new Error('test transient init failure');
       await Promise.all([initArchiveStore(), initLlmRequestJournal()]);
+      if (process.env.FOXWARM_TEST_SEED_ARCHIVE === '1') {
+        const seed = await readSessionHistorySnapshot(sessionId);
+        if (seed?.history?.length) { seed.id = sessionId; seed.agent ||= 'main'; await appendMessagesToArchive(seed as any, seed.history); }
+      }
     },
   });
   const registry = new RpcServiceRegistry();

@@ -71,7 +71,7 @@ test('worker guards run before unsupported handlers and exact current state tool
   (sessionManager as any).getArchivedBlocks = async () => ({ records: [] as any[], totalMatched: 0, requestedRange: {} });
   try {
   for (const [name, args, extra] of [
-    ['create_child_session', { suffix: 'x' }], ['compact_session', {}],
+    ['create_child_session', { suffix: 'x' }],
     ['session', { action: 'list' }],
     ['session', { action: ' list ' }], ['get_memory_context', { timestamp: 1 }],
     ['remote_node', { action: ' list ' }], ['node_tools', { action: 'List' }],
@@ -84,6 +84,8 @@ test('worker guards run before unsupported handlers and exact current state tool
   ] as any[]) {
     await assert.rejects(() => callTool(name, args, { ...ctx, ...(extra || {}) }), { code: 'SESSION_WORKER_TOOL_UNAVAILABLE', retryable: true });
   }
+  assert.match(String(await callTool('compact_session', {}, ctx)), /cannot start background compaction from a busy model tool call/);
+  await assert.rejects(() => callTool('compact_session', { sessionId: 'other/session' }, ctx), /exact current session/);
   await assert.rejects(() => tool_call_tool({ source: 'builtin', name: 'remote_node', args: { action: 'List' } }, ctx),
     { code: 'SESSION_WORKER_TOOL_UNAVAILABLE', retryable: true });
   const crafted = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="remote_node", args={"action":" list "})' }, ctx);
@@ -137,16 +139,16 @@ test('worker guarded errors precede direct notifications, permissions, and recur
   const originalIsolated = agentMetadata.isSessionEffectivelyIsolated;
   (agentMetadata as any).isSessionEffectivelyIsolated = () => { throw new Error('concrete permission reached before guard'); };
   try {
-    const direct = await executeTools([{ id: 'guarded', name: 'compact_session', args: {}, argsParseError: 'malformed', rawArgsText: '{' } as any],
+    const direct = await executeTools([{ id: 'guarded', name: 'create_child_session', args: {}, argsParseError: 'malformed', rawArgsText: '{' } as any],
       { sessionId: session.id, broadcast: async () => { broadcasts += 1; }, onToolStart: () => { starts += 1; } }, session,
       { currentSessionEffects: effects });
     assert.match(JSON.stringify(direct), /SESSION_WORKER_TOOL_UNAVAILABLE/);
     assert.match(JSON.stringify(direct), /"retryable":true/);
     assert.equal(broadcasts, 0); assert.equal(starts, 0);
-    await assert.rejects(() => tool_call_tool({ source: 'builtin', name: 'compact_session', args: {} }, ctx),
+    await assert.rejects(() => tool_call_tool({ source: 'builtin', name: 'create_child_session', args: {} }, ctx),
       { code: 'SESSION_WORKER_TOOL_UNAVAILABLE', retryable: true });
   } finally { (agentMetadata as any).isSessionEffectivelyIsolated = originalIsolated; }
-  const nested = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="compact_session", args={})' }, ctx);
+  const nested = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="create_child_session", args={})' }, ctx);
   assert.equal(nested.status, 'failed');
   assert.match(String(nested.error), /SESSION_WORKER_TOOL_UNAVAILABLE/);
 });
@@ -163,7 +165,7 @@ test('recursive Worker ToolScript guards drop transient progress while Main loca
   const workerCtx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', toolUseId: 'outer-worker',
     persistCurrentSession: async () => {} };
   try {
-    const recursive = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="call_tool", args={"source":"builtin", "name":"compact_session", "args":{}})' }, workerCtx);
+    const recursive = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="call_tool", args={"source":"builtin", "name":"create_child_session", "args":{}})' }, workerCtx);
     assert.equal(recursive.status, 'failed');
     assert.match(String(recursive.error), /SESSION_WORKER_TOOL_UNAVAILABLE/);
     assert.equal(progressEvents, 0);

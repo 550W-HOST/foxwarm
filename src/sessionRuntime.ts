@@ -10,6 +10,7 @@ import {
   createSessionRuntimeServiceHandler,
   SessionRuntimeControlAction,
   SessionRuntimeControlResultDto,
+  SessionRuntimeCompactionResultDto,
   SessionRuntimeEventPayloads,
   SessionRuntimeHistoryDto,
   SessionRuntimeSessionDto,
@@ -101,6 +102,10 @@ export async function queueEvent(
   await (await getClient()).call('queueEvent', { sessionId, text, type });
 }
 
+export async function requestCompaction(sessionId: string, keepPercent?: number, toolNoise = false): Promise<SessionRuntimeCompactionResultDto> {
+  return (await getClient()).call('requestCompaction', { sessionId, keepPercent, toolNoise: toolNoise || undefined });
+}
+
 export async function updateSettings(
   sessionId: string,
   patch: SessionRuntimeSettingsPatchDto,
@@ -173,6 +178,7 @@ export async function shutdownSessionRuntime(timeoutMs = 10_000): Promise<void> 
 export type {
   SessionRuntimeControlAction,
   SessionRuntimeControlResultDto,
+  SessionRuntimeCompactionResultDto,
   SessionRuntimeEventPayloads,
   SessionRuntimeHistoryDto,
   SessionRuntimeSessionDto,

@@ -16,6 +16,7 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 - `listSessions()`, `getSession()`, `getHistory()` — immutable local or exact current-Worker projections/snapshots.
 - `enqueue()`, `queueEvent()`, `updateSettings()`, `control()` — high-level mutation commands.
 - `submitAndRun()` — exact already-activated Worker ingress; registers one ephemeral full-source context, submits one durable mailbox item, and returns bounded committed completion.
+- `requestCompaction()` — placement-aware compaction request; local placement keeps SessionManager behavior, while an exact idle Worker uses one awaited fixed forward operation and never a mailbox item.
 - `normalizeSessionWorkerIngressRequest()` — fixed exact-key/plain-data request and QueueItem normalizer with a 1 MiB serialized bound; only its rebuilt clone may reach coordination/storage.
 - `startEvents()`, `subscribe()` — cloned history/list/state event publication.
 - `assertSessionWorkerPlacementSupported()` / `getSessionRuntimeStatus()` — explicit current placement capability/status.
@@ -40,6 +41,7 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 - Current Worker projection publication emits the existing state event and emits a list event only when list-visible projected fields change. No history body enters projection/SSE; WebUI uses message-count state changes to coalesce an exact history refresh.
 - `sessionWorkers:false` uses this local service. `sessionWorkers:true` still throws `SESSION_WORKERS_NOT_IMPLEMENTED`; the new `submitAndRun` operation is available only when an explicit Worker ingress coordinator is injected and does not activate, spawn, choose placement, or fall back locally.
 - Worker ingress accepts only an exact canonical ID and current ordinary QueueItem, preserves its normalized message/source/blob-reference/image/client identities in one mailbox intent, requires one already-ready durable/live generation before append, and calls only that generation's existing `runPending`. A fixed descriptor-aware exact-key plain-data validator runs before Stage 2 source normalization, registry, coordinator, or store use and caps the normalized UTF-8 item at 1 MiB; malformed, accessor, cyclic, nonfinite, unknown, and overbound input never reaches the mailbox. Current `systemPayload:true` retains the shared predicate semantics and requires a text part, while false/absent does not reclassify ordinary system parts. Post-append failure stays durable/ambiguous. Its source-context registry is Main-memory-only, full-QueueSource-keyed, ambiguity rejecting, and cleaned in `finally`.
+- Worker compaction selection requires a current committed projection, exact ready ownership, idle/empty state, and zero prior active Supervisor calls. The Worker repeats the idle check after serialized admission and returns only after authoritative JSON plus full projection; tool-noise compaction is explicitly unavailable rather than falling back to Main.
 - Shutdown first stops event publication, then drains the local RPC transport so no new command is accepted during process teardown.
 
 ## Integration

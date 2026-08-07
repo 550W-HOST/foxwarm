@@ -6,6 +6,8 @@ import path from 'path';
 
 import type { ChatResult, Message, MessagePart, Session } from '../types';
 
+process.env.FOXWARM_SYNC_FILE_LOG = '1';
+
 const SAVE_GENERATED_SESSION_LOGS = process.env.FOXWARM_SAVE_GENERATED_COMPACT_RETRY_TEST_LOGS === '1';
 
 type LoadedDeps = {
