@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { loadYamlMonacoSupport } from '../yamlMonacoSupport'
 
 interface SimpleCodeEditorProps {
@@ -137,14 +137,17 @@ export default function SimpleCodeEditor({
     monaco.editor.setModelLanguage(model, language)
   }, [language])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const editor = editorRef.current
     if (!editor) return
     if (editor.getValue() !== value) {
-      // Keep each anchor as well as its active cursor so reverse selections survive controlled resets.
+      // Apply the controlled replacement and its complete cursor state atomically. A separate
+      // setValue/setSelections pair can leave Monaco's hidden input one update behind the visible
+      // reverse selection, causing the first typed character to be consumed.
       const selections = editor.getSelections()
-      editor.setValue(value)
-      if (selections) editor.setSelections(selections)
+      const edits = [{ range: editor.getModel().getFullModelRange(), text: value, forceMoveMarkers: true }]
+      if (selections) editor.executeEdits('foxwarm-controlled-value-sync', edits, selections)
+      else editor.executeEdits('foxwarm-controlled-value-sync', edits)
     }
   }, [value])
 

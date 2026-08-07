@@ -30,6 +30,7 @@ The server retains structured `/setup/models` request handling and `/setup/model
 - Models always render as a raw YAML editor. If the active file is missing or empty, Setup initializes editable text from a generated current-shape example rather than turning the packaged template into a write target.
 - The generated initial YAML defaults to `openai/gpt-5.6-sol` and lists `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
 - Raw model and app-config saves preserve user text after canonical backend validation. Comments, key order, quoting, custom fields, and formatting survive.
+- Each Models or Config save reports its success or validation error beside (or immediately below on narrow layouts) that section's own Save button using an announced status. Load and Weixin errors remain in the page-level error area.
 - The two editors use distinct model URIs and static frontend schemas. Suggestions/markers are advisory and never disable Save; canonical behavior is [D-editor-local-yaml-assistance](./webui-editor.md#d-editor-local-yaml-assistance).
 - Both YAML editor wrappers use the exact responsive height `calc(min(600px, 80vh))`; the same wrapper height applies to Monaco and the plain-text fallback without widening the mobile layout.
 - Model suggestions are derived from current unsaved YAML: defaults include concrete and virtual keys, while virtual targets include concrete keys only.
@@ -72,6 +73,10 @@ The visible Models workflow is raw YAML only. Keep structured request parsing/he
 ### D-setup-editor-height
 
 The Models YAML and app-config YAML areas both use the exact CSS height `calc(min(600px, 80vh))`. Keep that contract for desktop, mobile, and the controlled plain-text fallback.
+
+### D-setup-save-feedback
+
+Models save success/errors belong beside or immediately below the Models Save button, and Config save success/errors belong beside or immediately below the Config Save button. Each result belongs to the exact submitted document revision: editing that section or hydrating a new status clears it, and an older save/status response must neither publish stale feedback nor overwrite a newer edit. Keep the two results independent, responsive, and accessibly announced rather than placing them in the page-top notice area; unrelated load and Weixin failures remain page-level.
 
 ## Canonical ownership
 
