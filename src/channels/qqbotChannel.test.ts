@@ -413,6 +413,87 @@ test('QQ Bot busy follow-up joins the active tool loop and one final uses its la
   }
 });
 
+test('QQ Bot follow-up arriving during the final provider request is absorbed before delivery', async () => {
+  const channelId = `qq-final-safe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const sessionId = `session-${channelId}`;
+  const outbound: any[] = [];
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret' },
+    channelId,
+    {
+      fetch: async (url: string | URL | Request, init?: RequestInit) => {
+        if (String(url).includes('getAppAccessToken')) {
+          return response({ access_token: 'token', expires_in: 7200 });
+        }
+        outbound.push(JSON.parse(String(init?.body || '{}')));
+        return response({ id: `outbound-${outbound.length}` });
+      },
+    },
+  );
+  const router = new MessageRouter([{ platform: 'qqbot', userId: 'openid-1' }]);
+  const originalChat = llm.chat;
+  let firstRequestStarted!: () => void;
+  let releaseFirstRequest!: () => void;
+  const firstRequestStartedPromise = new Promise<void>(resolve => { firstRequestStarted = resolve; });
+  const releaseFirstRequestPromise = new Promise<void>(resolve => { releaseFirstRequest = resolve; });
+  let chatCalls = 0;
+
+  activateForDirectSend(channel);
+  registerChannel(channelId, channel);
+  channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
+
+  try {
+    const session = await sessionManager.getSession(sessionId);
+    sessionManager.attachChannel(channelId, 'c2c:openid-1', sessionId);
+    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+      chatCalls += 1;
+      if (parts) {
+        await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+      }
+      if (chatCalls === 1) {
+        firstRequestStarted();
+        await releaseFirstRequestPromise;
+        await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'intermediate answer' }] });
+        return { text: 'intermediate answer', allParts: [{ text: 'intermediate answer' }] };
+      }
+      assert.equal(activeSession.history.some(message => message.parts.some(part => part.system?.includes('late steering'))), true);
+      await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'answer to late steering' }] });
+      return { text: 'answer to late steering', allParts: [{ text: 'answer to late steering' }] };
+    };
+
+    const firstRun = (channel as any).routeInboundMessage('C2C_MESSAGE_CREATE', {
+      id: 'qq-final-1', content: 'first input', author: { user_openid: 'openid-1' },
+    }, 1);
+    await firstRequestStartedPromise;
+    await (channel as any).routeInboundMessage('C2C_MESSAGE_CREATE', {
+      id: 'qq-final-2', content: 'late steering', author: { user_openid: 'openid-1' },
+    }, 2);
+    assert.equal(session.queue.length, 1);
+
+    releaseFirstRequest();
+    await firstRun;
+    await waitFor(() => outbound.some(body => body.content === 'answer to late steering'));
+
+    assert.equal(chatCalls, 2);
+    assert.equal(session.history.filter(message => message.role === 'user').length, 2);
+    assert.equal(outbound.some(body => body.content === 'intermediate answer'), false);
+    const finals = outbound.filter(body => body.content === 'answer to late steering');
+    assert.equal(finals.length, 1);
+    assert.equal(finals[0].msg_id, 'qq-final-2');
+  } finally {
+    releaseFirstRequest?.();
+    (llm as any).chat = originalChat;
+    unregisterChannel(channelId);
+    await channel.stop();
+    const cleanupSession = await sessionManager.getSession(sessionId).catch((): null => null);
+    if (cleanupSession) {
+      cleanupSession.busy = false;
+      await sessionManager.saveSession(sessionId).catch(() => {});
+      await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+  }
+});
+
 test('QQ Bot uses the persisted bound message id when no live conversation context exists', async () => {
   const outbound: any[] = [];
   const channel = new QQBotChannel(

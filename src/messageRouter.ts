@@ -451,9 +451,8 @@ export class MessageRouter {
         break;
       }
       const queuedStreamKey = this.getSourceStreamKey(session.queue[0].source);
-      // A different WeWork stream id already has its own passive card. Leave it
-      // queued so the next turn's broadcasts update/finish that card instead
-      // of merging its text into the current stream card.
+      // A different source conversation owns its own passive context. Leave it
+      // queued so the next turn delivers there instead of merging it here.
       if (queuedStreamKey && queuedStreamKey !== turnStreamKey) {
         break;
       }
@@ -1096,6 +1095,11 @@ export class MessageRouter {
         }
 
         if (!result.toolCalls?.length) {
+          const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(session, null, turnStreamKey);
+          if (queuedAfterLlm.consumedInput) {
+            iteration++;
+            continue;
+          }
           lastTextBroadcasted = false;
           break;
         }

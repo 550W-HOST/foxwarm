@@ -73,6 +73,9 @@ image/file attachments through a deferred, authorization-gated materializer.
   message ID per scoped conversation; normal source-bound typing/progress/final
   delivery uses that live ID for the matching configured instance and
   conversation, while other session attachments retain ordinary delivery.
+  When a compatible follow-up arrives during a no-tool provider request, the
+  Router's pre-final safe point continues the turn before this latest ID is
+  used for the one visible final.
 - The gateway retains the latest dispatch sequence and READY session ID in
   memory. HELLO resumes only when both are present; RECONNECT, resumable and
   non-resumable INVALID_SESSION frames, documented close classes, heartbeat
