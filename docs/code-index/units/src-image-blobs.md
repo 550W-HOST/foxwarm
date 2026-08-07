@@ -15,6 +15,10 @@ Owns content-addressed image blob storage, inline/legacy-reference materializati
 - `externalizeQueueItemImages`, `externalizeQueueItems` — apply the same boundary to queued and managed-inbox work.
 - `hydrateMessagesForProvider` — clones canonical messages and attaches inline base64 only for provider serialization.
 
+QQ Bot C2C/group image ingress uses the same transient `inlineData` path after
+its authorization-gated media materializer validates the declared MIME and
+bytes; it must not introduce a QQ-specific durable image format.
+
 ## Behavior
 
 - Blob IDs are `<sha256>.<extension>` and live under a hash-prefix shard in `state/image-blobs` (or the configured data directory).

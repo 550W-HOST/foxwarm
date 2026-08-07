@@ -11,7 +11,8 @@ Owns pure, public-safe Draft-07 schema objects for Foxwarm Models and App config
 
 - `MODELS_CONFIG_SCHEMA` — advisory models/provider/virtual-routing structure aligned with tolerant backend readers.
 - `APP_CONFIG_SCHEMA` — advisory bot, LLM, paths, channels (including managed
-  `qqbot` plus QQ credential key suggestions), and ASR structure.
+  `qqbot` plus QQ credential and bounded inbound-media limit key suggestions),
+  and ASR structure.
 - `KNOWN_PROVIDER_TYPES` — known concrete protocol and virtual-routing values while custom provider types remain permitted.
 
 The package exports these through `@foxwarm/shared/configSchemas`; browser bundles may consume the same source directly at build time.
@@ -28,6 +29,6 @@ The package exports these through `@foxwarm/shared/configSchemas`; browser bundl
 - WebUI config-editor tests assert shared-import parity and validate representative current, legacy, custom, and backend-tolerant fixtures with Ajv.
 - WebUI config-editor tests keep the managed channel type completion list in
   parity with backend adapters while retaining custom string types and QQ
-  credential key suggestions.
+  credential/inbound-media key suggestions.
 - The Code filesystem extension tests exact positive/negative URI association and bundled schema content; optional official Code E2E proves diagnostics/completion without external schema fetches.
 - Canonical cross-module behavior: [D-code-config-schema-assistance](../threads/code-integration.md#d-code-config-schema-assistance).

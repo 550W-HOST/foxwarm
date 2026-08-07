@@ -2,6 +2,7 @@ import WebSocket, { RawData } from 'ws';
 import { Channel, ChannelContext, ChannelMessage } from '../channel';
 import { logger } from '../common';
 import type { QQBotConfig } from '../config';
+import { buildQQBotAttachmentPreviewParts, materializeQQBotAttachments } from './qqbotMedia';
 
 const QQBOT_TOKEN_URL = 'https://bots.qq.com/app/getAppAccessToken';
 const QQBOT_API_BASE_URL = 'https://api.sgroup.qq.com';
@@ -30,6 +31,7 @@ type QQBotSocket = Pick<WebSocket, 'on' | 'once' | 'send' | 'close' | 'readyStat
 
 type QQBotChannelDeps = {
   fetch?: typeof fetch;
+  saveInboundSessionFile?: typeof import('../channelFiles').saveInboundSessionFile;
   createWebSocket?: (url: string) => QQBotSocket;
   reconnectDelaysMs?: number[];
   invalidSessionReconnectDelayMs?: number;
@@ -136,16 +138,15 @@ export function isQQBotChannelConfigReady(config: QQBotConfig | Record<string, a
   return Boolean(config.appId?.trim() && config.clientSecret?.trim());
 }
 
-/**
- * Official QQ Bot gateway adapter. It deliberately supports text-only
- * C2C/group/guild/direct-message events; QQ media is not guessed or fetched.
- */
+/** Official QQ Bot gateway adapter for text and bounded C2C/group inbound media. */
 export class QQBotChannel implements Channel {
   readonly name: string;
   readonly platform = 'qqbot';
   private readonly channelId: string;
   private readonly appId: string;
   private readonly clientSecret: string;
+  private readonly mediaConfig: QQBotConfig['media'];
+  private readonly saveInboundSessionFile?: QQBotChannelDeps['saveInboundSessionFile'];
   private readonly fetchFn: typeof fetch;
   private readonly createWebSocket: (url: string) => QQBotSocket;
   private readonly reconnectDelaysMs: number[];
@@ -175,7 +176,9 @@ export class QQBotChannel implements Channel {
     this.channelId = name;
     this.appId = config.appId?.trim() || '';
     this.clientSecret = config.clientSecret?.trim() || '';
+    this.mediaConfig = config.media;
     this.fetchFn = deps.fetch || globalThis.fetch;
+    this.saveInboundSessionFile = deps.saveInboundSessionFile;
     this.createWebSocket = deps.createWebSocket || ((url) => new WebSocket(url));
     this.reconnectDelaysMs = deps.reconnectDelaysMs || RECONNECT_DELAY_MS;
     this.invalidSessionReconnectDelayMs = deps.invalidSessionReconnectDelayMs ?? 3_000;
@@ -567,14 +570,17 @@ export class QQBotChannel implements Channel {
 
   private async routeInboundMessage(eventType: string, event: any, sequence?: number): Promise<void> {
     const content = typeof event?.content === 'string' ? event.content : '';
-    if (!content.trim()) {
-      logger.info({ channelId: this.channelId, eventType, messageId: event?.id }, 'Ignoring QQ Bot non-text message');
-      return;
-    }
 
     const inbound = this.normalizeInboundEvent(eventType, event);
     if (!inbound) {
       logger.warn({ channelId: this.channelId, eventType, messageId: event?.id }, 'Ignoring QQ Bot event without a stable identity');
+      return;
+    }
+
+    const attachments = Array.isArray(event?.attachments) ? event.attachments : [];
+    const supportsInboundMedia = inbound.kind === 'c2c' || inbound.kind === 'group';
+    if (!content.trim() && (!supportsInboundMedia || attachments.length === 0)) {
+      logger.info({ channelId: this.channelId, eventType, messageId: event?.id }, 'Ignoring QQ Bot non-text message');
       return;
     }
 
@@ -614,11 +620,26 @@ export class QQBotChannel implements Channel {
       },
     };
     const message: ChannelMessage = {
-      parts: [{ text: content }],
+      parts: attachments.length > 0 && supportsInboundMedia
+        ? buildQQBotAttachmentPreviewParts(content, attachments, this.mediaConfig)
+        : [{ text: content }],
       channelUserId: inbound.conversationId,
       conversationId: inbound.conversationId,
       username: inbound.username,
     };
+    if (attachments.length > 0 && supportsInboundMedia) {
+      message.materializeParts = (sessionId: string) => materializeQQBotAttachments({
+        attachments,
+        content,
+        eventId: inbound.messageId,
+        sessionId,
+        config: this.mediaConfig,
+        deps: {
+          fetch: this.fetchFn,
+          saveInboundSessionFile: this.saveInboundSessionFile,
+        },
+      });
+    }
 
     try {
       await this.messageHandler?.(context, message);

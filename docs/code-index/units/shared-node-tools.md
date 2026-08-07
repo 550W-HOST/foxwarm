@@ -60,7 +60,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `resolveNodeTransferPath(filePath, agentName, restrictToAgentDir)` | ~38 | Resolves transfer path with optional traversal guard |
 | `detectTransferMimeType(filePath)` | ~45 | Detects MIME type and image flag from extension |
 | `readNodeTransferFile(filePath, agentName, restrictToAgentDir)` | ~50 | Reads a file and returns base64 transfer payload |
-| `writeNodeTransferFile(filePath, agentName, dataBase64, overwrite, restrictToAgentDir)` | ~60 | Writes a base64-encoded file to disk |
+| `writeNodeTransferFile(filePath, agentName, dataBase64, overwrite, restrictToAgentDir)` | ~60 | Writes a base64-encoded file to disk through a temporary path and atomic rename |
 | `expandHomePath(filePath)` (execCwd) | ~22 | Expands ~ to home directory |
 | `resolveExecCwd(options)` | ~28 | Resolves exec cwd from explicit/session/default sources |
 | `buildInvalidExecCwdMessage(resolved, reason, nodeId)` | ~44 | Builds a descriptive error message for invalid cwd |
@@ -98,7 +98,9 @@ Non-image file reads above 1 MiB must not full-read or decode their source befor
 - Shared browser screenshots write current structured inline data. Old remote-node screenshot shapes are read only under [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
 - Directory reads are paginated (50 items default) with navigation hints
 - File and directory read `startLine`/`endLine` values of `0` are treated as omitted, matching master-side read compatibility for optional numeric placeholders
-- File transfer functions enforce path traversal restrictions by default
+- File transfer functions enforce path traversal restrictions by default and
+  write through unique temporary files with atomic rename/cleanup so remote
+  inbound descriptors cannot point at a partially written destination.
 - Exec cwd validation produces detailed error messages distinguishing cwd issues from missing shell errors
 - Output exceeding `INLINE_OUTPUT_LIMIT` (10K chars) is truncated with a pointer to the log file
 - Node `apply_patch` success and partial-failure summaries use the shared per-operation formatter, including per-file add/update counts; the count contract is canonical in [D-apply-patch-change-counts](./shared-apply-patch.md#d-apply-patch-change-counts).

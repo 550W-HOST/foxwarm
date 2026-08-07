@@ -39,6 +39,8 @@ test('saveInboundSessionFile reports a master absolute Path that remains readabl
 
     const readResult = await read({ filePath: saved.promptPath }, { session } as any);
     assert.equal(readResult, 'hello from upload');
+    const siblingNames = await fs.readdir(path.dirname(saved.promptPath));
+    assert.equal(siblingNames.some(name => name.endsWith('.tmp')), false);
   } finally {
     if (savedPath) await fs.remove(savedPath);
     await fs.remove(cwd);

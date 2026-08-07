@@ -161,6 +161,16 @@ const channelEntry = {
     enabled: { type: 'boolean' },
     appId: { type: 'string' },
     clientSecret: { type: 'string' },
+    media: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        imageMaxBytes: { type: 'integer', minimum: 1, maximum: 209715200 },
+        fileMaxBytes: { type: 'integer', minimum: 1, maximum: 209715200 },
+        maxTotalBytes: { type: 'integer', minimum: 1, maximum: 209715200 },
+        maxAttachments: { type: 'integer', minimum: 1, maximum: 16 },
+      },
+    },
     allowedUsers: { type: 'array', items: { type: 'string' } },
     guestAgent,
     botToken: { type: 'string' },

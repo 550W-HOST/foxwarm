@@ -12,6 +12,15 @@ export interface ChannelMessage {
   username?: string;
   /** Browser-generated identity used to reconcile one optimistic WebUI row. */
   clientMessageId?: string;
+  /**
+   * Ephemeral pre-queue materialization hook for channel media.
+   *
+   * The router invokes this only after the source has passed canonical
+   * authorization and a session has been resolved. The callback is never
+   * copied into a queue item or persisted; it exists to keep untrusted media
+   * URLs out of the network/storage path for unauthorized inbound messages.
+   */
+  materializeParts?: (sessionId: string) => Promise<MessagePart[]>;
 }
 
 export interface ChannelContext {

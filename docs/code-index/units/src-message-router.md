@@ -48,7 +48,7 @@ Routes incoming channel messages to the appropriate session, handles authorizati
 | `MessageRouter.handleCommandIfNeeded(ctx, text)` | ~515 | Delegates slash-command handling with both tokenized args and the raw multiline argument tail |
 | `MessageRouter.stripConfiguredSelfMention(ctx, text)` | ~mid | Removes a configured leading `@selfName` mention plus whitespace before command parsing |
 | `MessageRouter.appendUserMessage(session, parts, clientMessageId?)` | ~525 | Wraps parts plus optional transport identity into a user Message and appends to session history |
-| `MessageRouter.handleIncomingMessage(ctx, message)` | ~535 | Top-level entry point: authorizes, resolves session, enqueues, triggers processing |
+| `MessageRouter.handleMessage(ctx, message)` | ~1337 | Top-level entry point: authorizes, resolves session, optionally materializes authorized deferred media, enqueues, and triggers processing |
 | `MessageRouter.processSessionQueue(sessionId)` | ~590 | Public entry to process a session's queue by ID with re-entrancy guard |
 
 ## Dependencies
@@ -87,6 +87,12 @@ Routes incoming channel messages to the appropriate session, handles authorizati
 - `prepareTurnParts` injects only turn-level context such as current time and session id, not channel source metadata. The generated time tag keeps only `kind="time"` plus `localTime`; the generated session tag keeps `kind="session"` plus `currentSessionId`, without redundant `hint` copies of the same values.
 - Supports managed sessions: when active, incoming messages are queued for the manager rather than processed directly.
 - Guest agent provisioning creates sessions for unauthorized users when channel config permits. `guestAgent.isolated` defaults true and uses `guestAgent.node` as the isolation node; when `isolated:false`, `guestAgent.node` is instead used as the new session's initial `currentNode` without enabling legacy isolated restrictions.
+- Channel media materialization is authorization-gated at ingress: the router
+  records whether the source was already authorized before guest provisioning,
+  and invokes an ephemeral `ChannelMessage.materializeParts(sessionId)` hook
+  only for that already-authorized path. Unauthorized and first-guest inputs
+  retain adapter-provided safe metadata and perform no deferred fetch/write;
+  the hook is not copied into the queue or persisted.
 - Concurrent first messages for one unbound channel/conversation use the session manager's keyed get-or-create boundary and converge on one attachment without orphan lifetimes. The guest factory explicitly reports its new-lifetime ownership so race cleanup cannot delete a pre-existing session. Random single-session guest names allocate inside the identity lock; inherited guest-agent generation retries directory, live-ID, and archived-main collisions. Canonical semantics: [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 - Queues messages silently when a session is already busy; the older user-facing `Request queued, currently processing another message` notice is intentionally no longer sent.
 - Final busy clearing still persists the full session after queue mutations so compact/queued-item removals are not resurrected from per-session history files on the next lazy load.

@@ -50,6 +50,9 @@ Persisted conversation attachments and broadcast selection are owned by [session
 - WeWork stream aggregation is opt-in and keyed by explicit turn `weworkStreamId`; concurrent queued turns cannot steal another card. WebSocket mode is separately configured.
 - Weixin context tokens are in-memory per user; a new inbound message is required after token loss. QR login sessions expire after five minutes.
 - WebUI `sendFile` is intentionally a no-op because the browser uses authenticated downloads/tool metadata.
+- QQ Bot C2C/group attachments use an authorization-gated, bounded inbound
+  materializer; guild/DM media and outbound media remain outside the adapter's
+  current supported surface.
 
 ## Compatibility
 

@@ -26,6 +26,11 @@ Defines the platform-neutral channel contract/registry, authorization inspection
 - `reloadManagedChannels`.
 - `getChannelRuntimeStatus`, `listChannelRuntimeStatuses`.
 
+`ChannelMessage.materializeParts(sessionId)` is an ephemeral ingress hook for
+authorization-gated media. It is not a persisted queue field; adapters use it
+only when a router can defer network/storage work until after canonical source
+authorization.
+
 ## Registry and authorization
 
 - The registry is one in-memory map keyed by channel instance ID.
@@ -35,7 +40,7 @@ Defines the platform-neutral channel contract/registry, authorization inspection
 ## Inbound file behavior
 
 - The current session/agent determines whether storage occurs on master or the isolated agent's node.
-- Stored names use sanitized path segments and unique timestamps under the agent's temporary channel-files area.
+- Stored names use sanitized path segments and unique timestamps under the agent's temporary channel-files area. Master writes use a unique temporary file followed by atomic rename and cleanup; isolated remote-node writes continue through the node transfer contract.
 - The model-facing descriptor gives node/path facts without prescribing a particular file tool.
 
 ## Runtime behavior

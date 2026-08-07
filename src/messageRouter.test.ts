@@ -72,6 +72,88 @@ test('shouldBroadcastChannelText accepts non-empty trimmed text', () => {
   assert.equal(shouldBroadcastChannelText('\nhello\n'), true);
 });
 
+test('MessageRouter materializes deferred channel media only after canonical authorization', async () => {
+  const originalEnqueue = sessionManager.enqueueSessionItem;
+  const router = new MessageRouter() as any;
+  const session = { id: 'guest-media-session', busy: false, queue: [], meta: {} } as any;
+  const ctx = {
+    channelId: 'qq-media-auth',
+    channelType: 'qqbot',
+    platform: 'qqbot',
+    channelUserId: 'c2c:user-1',
+    conversationId: 'c2c:user-1',
+    senderId: 'user-1',
+    username: 'user-1',
+    reply: async () => {},
+    sendTyping: async () => {},
+  } as any;
+  const queued: any[] = [];
+  (sessionManager as any).enqueueSessionItem = async (_sessionId: string, item: any) => queued.push(item);
+  router.processSessionQueue = async () => {};
+  router.handleCommandIfNeeded = async () => false;
+
+  try {
+    let materializeCount = 0;
+    let mediaFetchCount = 0;
+    let mediaWriteCount = 0;
+    router.isAuthorized = () => false;
+    router.maybeCreateGuestSessionForUnauthorizedMessage = async (): Promise<null> => null;
+    let unauthorizedReplyCount = 0;
+    ctx.reply = async (): Promise<void> => { unauthorizedReplyCount += 1; };
+    await router.handleMessage(ctx, {
+      parts: [{ text: '[QQ file attachment: private.txt]' }],
+      channelUserId: ctx.channelUserId,
+      conversationId: ctx.conversationId,
+      materializeParts: async () => {
+        materializeCount += 1;
+        mediaFetchCount += 1;
+        mediaWriteCount += 1;
+        return [{ text: 'downloaded file' }];
+      },
+    });
+    assert.equal(unauthorizedReplyCount, 1);
+    assert.equal(materializeCount, 0, 'unauthorized media must remain metadata-only');
+    assert.equal(mediaFetchCount, 0);
+    assert.equal(mediaWriteCount, 0);
+
+    router.maybeCreateGuestSessionForUnauthorizedMessage = async () => ({ sessionId: session.id, session });
+    await router.handleMessage(ctx, {
+      parts: [{ text: '[QQ image attachment: photo.png]' }],
+      channelUserId: ctx.channelUserId,
+      conversationId: ctx.conversationId,
+      materializeParts: async () => {
+        materializeCount += 1;
+        mediaFetchCount += 1;
+        mediaWriteCount += 1;
+        return [{ text: 'downloaded image' }];
+      },
+    });
+    assert.equal(materializeCount, 0, 'first guest media must remain metadata-only');
+    assert.equal(mediaFetchCount, 0);
+    assert.equal(mediaWriteCount, 0);
+    assert.equal(queued.length, 1);
+
+    queued.length = 0;
+    router.isAuthorized = () => true;
+    router.resolveSessionForIncomingMessage = async () => ({ sessionId: session.id, session });
+    await router.handleMessage(ctx, {
+      parts: [{ text: '[QQ image attachment: photo.png]' }],
+      channelUserId: ctx.channelUserId,
+      conversationId: ctx.conversationId,
+      materializeParts: async (sessionId: string) => {
+        materializeCount += 1;
+        assert.equal(sessionId, session.id);
+        return [{ text: 'downloaded image' }];
+      },
+    });
+    assert.equal(materializeCount, 1);
+    assert.equal(queued[0].parts.length, 1);
+    assert.match(queued[0].parts[0].system || '', /downloaded image/);
+  } finally {
+    (sessionManager as any).enqueueSessionItem = originalEnqueue;
+  }
+});
+
 test('MessageRouter keeps QQ Bot passive reply identifiers bound to their source turn', () => {
   const router = new MessageRouter() as any;
   const source = {

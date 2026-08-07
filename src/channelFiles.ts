@@ -146,7 +146,13 @@ async function saveInboundFile(options: {
 
   if (nodeId === 'master') {
     await fs.ensureDir(path.dirname(paths.writePath));
-    await fs.writeFile(paths.writePath, options.buffer);
+    const tempPath = `${paths.writePath}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    try {
+      await fs.writeFile(tempPath, options.buffer, { flag: 'wx' });
+      await fs.rename(tempPath, paths.writePath);
+    } finally {
+      await fs.remove(tempPath).catch(() => {});
+    }
   } else {
     if (!options.session?.id) {
       throw new Error('Session context is required when saving inbound files to a remote node.');

@@ -59,6 +59,13 @@ export type WeixinConfig = {
   guestAgent?: GuestAgentConfig;
 };
 
+export type QQBotMediaConfig = {
+  imageMaxBytes?: number;
+  fileMaxBytes?: number;
+  maxTotalBytes?: number;
+  maxAttachments?: number;
+};
+
 export type QQBotConfig = {
   enabled?: boolean;
   appId?: string;
@@ -66,6 +73,7 @@ export type QQBotConfig = {
   allowedUsers?: string[];
   allowAllUsers?: boolean;
   guestAgent?: GuestAgentConfig;
+  media?: QQBotMediaConfig;
 };
 
 

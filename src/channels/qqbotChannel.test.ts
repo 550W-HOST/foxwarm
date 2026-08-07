@@ -94,6 +94,77 @@ test('QQ Bot deduplicates by business message sequence/index, not gateway sequen
   assert.deepEqual(received, ['c2c first', 'c2c next business message', 'group first', 'group next business message', 'malformed ext still uses msg seq', 'malformed ext next msg seq', 'ambiguous ext id fallback']);
 });
 
+test('QQ Bot accepts C2C/group attachment-only turns with safe metadata and keeps attachment order', async () => {
+  const received: any[] = [];
+  const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-media-preview');
+  channel.onMessage(async (ctx, message) => { received.push({ ctx, message }); });
+
+  await (channel as any).routeInboundMessage('C2C_MESSAGE_CREATE', {
+    id: 'c2c-media-only',
+    content: '',
+    author: { user_openid: 'openid-1' },
+    attachments: [
+      { filename: 'first.png', content_type: 'image/png', size: 10, url: 'https://qpic.cn/first' },
+      { filename: 'second.txt', content_type: 'file', size: 20, url: 'https://qpic.cn/second' },
+    ],
+  });
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+    id: 'group-media-only',
+    content: '',
+    group_openid: 'group-1',
+    author: { member_openid: 'member-1' },
+    attachments: [{ filename: 'group.bin', content_type: 'file', url: 'https://qpic.cn/group' }],
+  });
+
+  assert.equal(received.length, 2);
+  assert.equal(received[0].ctx.conversationId, 'c2c:openid-1');
+  assert.match(received[0].message.parts[0].text || '', /first\.png/);
+  assert.match(received[0].message.parts[1].text || '', /second\.txt/);
+  assert.equal(typeof received[0].message.materializeParts, 'function');
+  assert.equal(received[1].ctx.conversationId, 'group:group-1');
+  assert.match(received[1].message.parts[0].text || '', /group\.bin/);
+});
+
+test('QQ Bot deduplication happens before media download and duplicate delivery materializes once', async () => {
+  let fetchCount = 0;
+  let saveCount = 0;
+  let capturedMessage: any;
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret' },
+    'qq-media-dedup',
+    {
+      fetch: async () => {
+        fetchCount += 1;
+        return new Response('file bytes', { status: 200 });
+      },
+      saveInboundSessionFile: async (options: any) => {
+        saveCount += 1;
+        return {
+          agentName: 'main', nodeId: 'master', absolutePath: '/tmp/qq-file', promptPath: '/tmp/qq-file',
+          fileName: options.fileName, mimeType: options.mimeType, sizeBytes: options.buffer.length, isImage: false,
+        };
+      },
+    },
+  );
+  channel.onMessage(async (_ctx, message) => { capturedMessage = message; });
+
+  const event = {
+    id: 'same-media-id',
+    content: 'file',
+    group_openid: 'group-1',
+    author: { member_openid: 'member-1' },
+    message_scene: { ext: ['msg_idx=media-1'] },
+    attachments: [{ filename: 'file.txt', content_type: 'file', url: 'https://qpic.cn/file' }],
+  };
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', event, 1);
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', { ...event, content: 'duplicate' }, 2);
+
+  assert.equal(typeof capturedMessage.materializeParts, 'function');
+  await capturedMessage.materializeParts('session-1');
+  assert.equal(fetchCount, 1);
+  assert.equal(saveCount, 1);
+});
+
 test('QQ Bot gateway identifies, resumes, reconnects, and fences stop races', async (t) => {
   const sockets: FakeSocket[] = [];
   const channel = new QQBotChannel(
@@ -411,7 +482,7 @@ test('QQ Bot source-bound final failure completes through MessageRouter without 
   assert.equal(JSON.parse(String(outbound[0].init?.body)).msg_id, 'router-failure-id');
 });
 
-test('QQ Bot maps group, guild, and guild-DM sends and ignores non-text ingress', async (t) => {
+test('QQ Bot maps group, guild, and guild-DM sends while keeping guild media unsupported', async (t) => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const socket = new FakeSocket();
   const channel = new QQBotChannel(
@@ -435,7 +506,7 @@ test('QQ Bot maps group, guild, and guild-DM sends and ignores non-text ingress'
   await flush();
   socket.open();
   await starting;
-  socket.emit('message', Buffer.from(JSON.stringify({ op: 0, t: 'GROUP_AT_MESSAGE_CREATE', d: { id: 'media-only', content: '', group_openid: 'group-1', author: { member_openid: 'member-1' } } })));
+  socket.emit('message', Buffer.from(JSON.stringify({ op: 0, t: 'AT_MESSAGE_CREATE', d: { id: 'guild-media-only', content: '', channel_id: 'channel-1', guild_id: 'guild-1', author: { id: 'member-1' }, attachments: [{ url: 'https://qpic.cn/image', content_type: 'image/png' }] } })));
   await flush();
   assert.equal(received.length, 0);
   socket.emit('message', Buffer.from(JSON.stringify({ op: 0, t: 'GROUP_AT_MESSAGE_CREATE', d: { id: 'group-incoming', content: 'group hello', group_openid: 'group-1', author: { member_openid: 'member-1', username: 'Member' } } })));
