@@ -85,6 +85,7 @@ export type SessionRuntimeCompactionResultDto =
   | { kind: 'worker'; completed: true; compacted: boolean; messageCount: number }
   | { kind: 'local'; alreadyQueued: boolean; startedImmediately: boolean; runsInBackground?: boolean; backgroundUnavailable?: boolean; queueLength: number }
   | { kind: 'tool-noise'; result: Awaited<ReturnType<typeof sessionManager.compactSessionToolMessages>> }
+  | { kind: 'empty' }
   | { kind: 'unsupported'; message: string };
 
 export type SessionRuntimeEventPayloads = {
@@ -408,8 +409,9 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         const result = await options.worker.ingress.compactAwaited(selection.canonicalId, { keepPercent: input.keepPercent });
         return { kind: 'worker', completed: true, compacted: result.compacted, messageCount: result.messageCount };
       }
+      const localSession = await requireSession(selection.canonicalId);
+      if (localSession.history.length === 0) return { kind: 'empty' };
       if (input.toolNoise) {
-        await requireSession(selection.canonicalId);
         return { kind: 'tool-noise', result: await sessionManager.compactSessionToolMessages(selection.canonicalId, input.keepPercent) };
       }
       return { kind: 'local', ...await sessionManager.requestSessionCompaction(selection.canonicalId, { keepPercent: input.keepPercent }) };

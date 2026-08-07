@@ -62,7 +62,7 @@ export class SessionWorkerHost {
       await this.ensureLoaded(); await this.ensureHealthy();
       const owner = this.session!;
       if (owner.busy || owner.queue.length || getManagedSessionState(owner)) throw new RpcError('SESSION_WORKER_COMPACTION_BUSY', 'Session worker is not idle for awaited compaction.', true);
-      const compacted = await this.runExactCompaction(request, false);
+      const compacted = await this.runExactCompaction(request, 'explicit');
       return { compacted, projection: buildSessionWorkerProjection(owner) };
     });
   }
@@ -147,12 +147,12 @@ export class SessionWorkerHost {
         },
         applyCompletedCompactJob: async sessionId => { this.assertId(sessionId); throw this.compactionUnsupported(); },
         processSessionCompactionRequest: async (sessionId, request) => {
-          this.assertId(sessionId); await this.runAutomaticCompaction(request);
+          this.assertId(sessionId); await this.runAutomaticCompaction(request, 'pre-final');
         },
         checkAndCompactIfNeeded: async (sessionId, usage) => {
           this.assertId(sessionId);
           const total = getUsageTotalTokens(usage);
-          if (total > 0 && total > getEffectiveCompactThresholdTokens(owner)) await this.runAutomaticCompaction({ completionMarker: 'Compaction completed.' });
+          if (total > 0 && total > getEffectiveCompactThresholdTokens(owner)) await this.runAutomaticCompaction({ completionMarker: 'Compaction completed.' }, 'post-final');
         },
         ...(this.dependencies.deliverCommittedFinal ? {
           deliverCommittedFinal: async (_session, source, text, outcome) => {
@@ -264,7 +264,7 @@ export class SessionWorkerHost {
     };
   }
 
-  private async runExactCompaction(request: CompactionRequest, automatic: boolean): Promise<boolean> {
+  private async runExactCompaction(request: CompactionRequest, failurePolicy: 'explicit' | 'pre-final' | 'post-final'): Promise<boolean> {
     await this.fenceMutation();
     const beforeVersion = this.session!.historyVersion || 0;
     try {
@@ -272,15 +272,24 @@ export class SessionWorkerHost {
       return (this.session!.historyVersion || 0) !== beforeVersion;
     } catch (error) {
       try { await this.resyncAfterFailure(error); }
-      catch (resync) { if (!automatic) throw resync; logger.error({ err: resync, sessionId: this.identity.sessionId }, 'Automatic Worker compaction failed and authority resync is unavailable'); return false; }
-      if (!automatic) throw error;
+      catch (resync) {
+        if (failurePolicy === 'post-final') { logger.error({ err: resync, sessionId: this.identity.sessionId }, 'Post-final Worker compaction failed and authority resync is unavailable'); return false; }
+        if (failurePolicy === 'explicit') throw resync;
+        throw new RpcError('SESSION_WORKER_AUTO_COMPACTION_FATAL', 'Automatic Worker compaction failed before final delivery and authority could not be safely resynchronized.', true,
+          { original: this.errorSummary(error), resync: this.errorSummary(resync) });
+      }
+      if (failurePolicy === 'explicit') throw error;
+      if (failurePolicy === 'pre-final' && (this.poison || this.publicationPoison)) {
+        throw new RpcError('SESSION_WORKER_AUTO_COMPACTION_FATAL', 'Automatic Worker compaction failed before final delivery and the owner remains mutation-fenced.', true,
+          { original: this.errorSummary(error) });
+      }
       logger.warn({ err: error, sessionId: this.identity.sessionId }, 'Automatic Worker compaction failed without affecting the delivered turn');
       return false;
     }
   }
 
-  private runAutomaticCompaction(request: CompactionRequest): Promise<boolean> {
-    return this.runExactCompaction(request, true);
+  private runAutomaticCompaction(request: CompactionRequest, failurePolicy: 'pre-final' | 'post-final'): Promise<boolean> {
+    return this.runExactCompaction(request, failurePolicy);
   }
 
   private async persistOwner(): Promise<void> {

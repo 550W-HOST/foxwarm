@@ -343,6 +343,7 @@ export async function handleCompactCommand(ctx: ChannelContext, args: string[], 
     }
 
     const compact = await sessionRuntime.requestCompaction(sessionId, keepPercent, true)
+    if (compact.kind === 'empty') { ctx.reply('History is empty.'); return }
     if (compact.kind === 'unsupported') { ctx.reply(`⚠️ ${compact.message}`); return }
     if (compact.kind !== 'tool-noise') throw new Error('Unexpected tool-noise compaction result.')
     const result = compact.result
@@ -363,6 +364,7 @@ export async function handleCompactCommand(ctx: ChannelContext, args: string[], 
 
   const result = await sessionRuntime.requestCompaction(sessionId, keepPercent)
 
+  if (result.kind === 'empty') { ctx.reply('History is empty.'); return }
   if (result.kind === 'worker') {
     ctx.reply(result.compacted ? '🗜️ Compaction completed.' : 'ℹ️ No compactable history was found.')
     return

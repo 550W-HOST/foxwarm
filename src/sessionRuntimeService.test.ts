@@ -56,6 +56,26 @@ test('session worker placement fails explicitly until child placement exists', (
   );
 });
 
+test('local empty-history compaction classifies normal and tool-noise requests without persistence', async () => {
+  const sessionId = makeSessionId('session_runtime_empty_compact');
+  const session: Session = { id: sessionId, agent: 'main', history: [], persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null }, busy: false, queue: [], meta: { lastMessageTime: 0 } };
+  sessionManager.getAllSessions().set(sessionId, session);
+  const { transport, client } = createLocalClient(); const sessionsBefore = await fs.pathExists(SESSIONS_FILE) ? await fs.readFile(SESSIONS_FILE) : null;
+  const originals = { save: sessionManager.saveSession, schedule: vector.scheduleSessionArchiveIndex }; let saves = 0; let indexes = 0;
+  (sessionManager as any).saveSession = async () => { saves += 1; };
+  (vector as any).scheduleSessionArchiveIndex = async () => { indexes += 1; };
+  try {
+    assert.deepEqual(await client.call('requestCompaction', { sessionId, keepPercent: 0.3 }), { kind: 'empty' });
+    assert.deepEqual(await client.call('requestCompaction', { sessionId, keepPercent: 0.3, toolNoise: true }), { kind: 'empty' });
+    assert.equal(session.promptCacheKey, undefined); assert.equal(saves, 0); assert.equal(indexes, 0);
+    const sessionsAfter = await fs.pathExists(SESSIONS_FILE) ? await fs.readFile(SESSIONS_FILE) : null; assert.deepEqual(sessionsAfter, sessionsBefore);
+  } finally {
+    (sessionManager as any).saveSession = originals.save; (vector as any).scheduleSessionArchiveIndex = originals.schedule;
+    transport.close(); sessionManager.getAllSessions().delete(sessionId);
+  }
+});
+
 test('local SessionRuntime DTO seam clones projections and preserves event order', async () => {
   const originalScheduleIndex = vector.scheduleSessionArchiveIndex;
   (vector as any).scheduleSessionArchiveIndex = async (): Promise<void> => {};

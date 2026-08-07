@@ -1131,11 +1131,12 @@ export class SessionTurnRunner {
     } catch (e: any) {
       logger.error(e, 'Error handling message');
       const errorText = formatTerminalSessionError(e);
-      if (!llm.isLlmRequestError(e)) {
+      const mutationFencedMaintenance = e?.code === 'SESSION_WORKER_AUTO_COMPACTION_FATAL';
+      if (!llm.isLlmRequestError(e) && !mutationFencedMaintenance) {
         await this.appendTerminalModelMessage(session, errorText);
       }
       if (this.host.deliverCommittedFinal && turnSource) {
-        await this.maybeQueueChildReminder(session);
+        if (!mutationFencedMaintenance) await this.maybeQueueChildReminder(session);
         await this.host.deliverCommittedFinal(session, turnSource, errorText, 'error');
         return;
       }
