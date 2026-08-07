@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import WebSocket from 'ws';
+import { registerChannel, unregisterChannel } from '../channel';
+import * as llm from '../llm';
 import { MessageRouter } from '../messageRouter';
+import * as sessionManager from '../sessionManager';
+import type { MessagePart, Session } from '../types';
 import { parseQQBotConversationId, QQBotChannel } from './qqbotChannel';
 
 class FakeSocket extends EventEmitter {
@@ -236,7 +240,7 @@ test('QQ Bot gateway identifies, resumes, reconnects, and fences stop races', as
   assert.equal(sockets.length, 5);
 });
 
-test('QQ Bot routes C2C text with scoped identity and uses its passive reply id', async (t) => {
+test('QQ Bot routes C2C text and uses the latest conversation-local passive reply id', async (t) => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const socket = new FakeSocket();
   const channel = new QQBotChannel(
@@ -283,8 +287,9 @@ test('QQ Bot routes C2C text with scoped identity and uses its passive reply id'
   assert.deepEqual(received[0].message.parts, [{ text: 'hello' }]);
   emitGateway(socket, { op: 0, s: 5, t: 'C2C_MESSAGE_CREATE', d: { id: 'incoming-1', content: 'duplicate', author: { user_openid: 'openid-1' } } });
   emitGateway(socket, { op: 0, s: 6, t: 'C2C_MESSAGE_CREATE', d: { id: 'incoming-2', content: 'new message', author: { user_openid: 'openid-1' } } });
+  emitGateway(socket, { op: 0, s: 7, t: 'C2C_MESSAGE_CREATE', d: { id: 'incoming-3', content: 'newest message', author: { user_openid: 'openid-1' } } });
   await flush();
-  assert.equal(received.length, 2);
+  assert.equal(received.length, 3);
 
   await received[0].ctx.sendTyping();
   await received[0].ctx.reply('reply text');
@@ -296,20 +301,143 @@ test('QQ Bot routes C2C text with scoped identity and uses its passive reply id'
   const typing = calls.find(call => String(call.init?.body).includes('input_notify'));
   const reply = calls.find(call => String(call.init?.body).includes('reply text'));
   assert.equal(typing?.url, 'https://api.sgroup.qq.com/v2/users/openid-1/messages');
-  assert.match(String(typing?.init?.body), /"msg_id":"incoming-1"/);
+  assert.match(String(typing?.init?.body), /"msg_id":"incoming-3"/);
   assert.match(String(typing?.init?.body), /"msg_seq":1/);
   assert.equal(reply?.url, 'https://api.sgroup.qq.com/v2/users/openid-1/messages');
   assert.match(String(reply?.init?.body), /"msg_id":"incoming-1"/);
-  assert.match(String(reply?.init?.body), /"msg_seq":2/);
+  assert.match(String(reply?.init?.body), /"msg_seq":1/);
   const queuedFinal = calls.find(call => String(call.init?.body).includes('queued final'));
-  assert.match(String(queuedFinal?.init?.body), /"msg_id":"incoming-1"/);
-  assert.match(String(queuedFinal?.init?.body), /"msg_seq":3/);
+  assert.match(String(queuedFinal?.init?.body), /"msg_id":"incoming-3"/);
+  assert.match(String(queuedFinal?.init?.body), /"msg_seq":2/);
   await channel.sendMessage('c2c:openid-1', 'second-message reply', { replyToId: 'incoming-2' });
   const secondMessageReply = calls.find(call => String(call.init?.body).includes('second-message reply'));
   assert.match(String(secondMessageReply?.init?.body), /"msg_seq":1/);
 
   await channel.stop();
   assert.equal(socket.closed, true);
+});
+
+test('QQ Bot busy follow-up joins the active tool loop and one final uses its latest message id', async () => {
+  const channelId = `qq-latest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const sessionId = `session-${channelId}`;
+  const outbound: Array<{ url: string; body: any }> = [];
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret' },
+    channelId,
+    {
+      fetch: async (url: string | URL | Request, init?: RequestInit) => {
+        const resolvedUrl = String(url);
+        if (resolvedUrl.includes('getAppAccessToken')) {
+          return response({ access_token: 'token', expires_in: 7200 });
+        }
+        outbound.push({ url: resolvedUrl, body: JSON.parse(String(init?.body || '{}')) });
+        return response({ id: `outbound-${outbound.length}` });
+      },
+    },
+  );
+  const router = new MessageRouter([{ platform: 'qqbot', userId: 'openid-1' }]);
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  let toolStarted!: () => void;
+  let releaseTool!: () => void;
+  const toolStartedPromise = new Promise<void>(resolve => { toolStarted = resolve; });
+  const releaseToolPromise = new Promise<void>(resolve => { releaseTool = resolve; });
+  let chatCalls = 0;
+
+  activateForDirectSend(channel);
+  registerChannel(channelId, channel);
+  channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
+
+  try {
+    const session = await sessionManager.getSession(sessionId);
+    sessionManager.attachChannel(channelId, 'c2c:openid-1', sessionId);
+
+    (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+      chatCalls += 1;
+      if (parts) {
+        await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+      }
+      if (chatCalls === 1) {
+        const toolCall = { id: 'call-1', name: 'read', args: { filePath: 'README.md' } };
+        await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ functionCall: toolCall }] });
+        return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+      }
+      await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'combined final' }] });
+      return { text: 'combined final', allParts: [{ text: 'combined final' }] };
+    };
+    (llm as any).executeTools = async () => {
+      toolStarted();
+      await releaseToolPromise;
+      return {
+        role: 'tool',
+        parts: [{ functionResponse: { tool_use_id: 'call-1', name: 'read', response: { output: 'ok' } } }],
+      };
+    };
+
+    const firstRun = (channel as any).routeInboundMessage('C2C_MESSAGE_CREATE', {
+      id: 'qq-1', content: 'first input', author: { user_openid: 'openid-1' },
+    }, 1);
+    await toolStartedPromise;
+    await (channel as any).routeInboundMessage('C2C_MESSAGE_CREATE', {
+      id: 'qq-2', content: 'second steering', author: { user_openid: 'openid-1' },
+    }, 2);
+
+    assert.equal(session.queue.length, 1);
+    releaseTool();
+    await firstRun;
+    await waitFor(() => outbound.some(call => call.body.content === 'combined final'));
+
+    assert.equal(chatCalls, 2);
+    assert.equal(session.queue.length, 0);
+    const userMessages = session.history.filter(message => message.role === 'user');
+    assert.equal(userMessages.length, 2);
+    assert.equal(userMessages.some(message => message.parts.some(part => part.system?.includes('second steering'))), true);
+    const finals = outbound.filter(call => call.body.content === 'combined final');
+    assert.equal(finals.length, 1);
+    assert.equal(finals[0].body.msg_id, 'qq-2');
+    assert.equal((channel as any).latestMessageIds.size, 1);
+    await channel.stop();
+    assert.equal((channel as any).latestMessageIds.size, 0);
+  } finally {
+    releaseTool?.();
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    unregisterChannel(channelId);
+    await channel.stop();
+    const cleanupSession = await sessionManager.getSession(sessionId).catch((): null => null);
+    if (cleanupSession) {
+      cleanupSession.busy = false;
+      await sessionManager.saveSession(sessionId).catch(() => {});
+      await sessionManager.deleteSession(sessionId).catch(() => {});
+    }
+  }
+});
+
+test('QQ Bot uses the persisted bound message id when no live conversation context exists', async () => {
+  const outbound: any[] = [];
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret' },
+    'qq-restart-fallback',
+    {
+      fetch: async (url: string | URL | Request, init?: RequestInit) => {
+        if (String(url).includes('getAppAccessToken')) {
+          return response({ access_token: 'token', expires_in: 7200 });
+        }
+        outbound.push(JSON.parse(String(init?.body || '{}')));
+        return response({ id: 'outbound-1' });
+      },
+    },
+  );
+  activateForDirectSend(channel);
+
+  await channel.sendMessage('group:group-1', 'restart fallback', {
+    qqbotMessageId: 'persisted-msg-id',
+    qqbotChannelId: 'qq-restart-fallback',
+    qqbotConversationId: 'group:group-1',
+  });
+
+  assert.equal(outbound[0].msg_id, 'persisted-msg-id');
+  await channel.stop();
 });
 
 test('QQ Bot uses the bounded local passive-reply policy without inferring server errors', async () => {

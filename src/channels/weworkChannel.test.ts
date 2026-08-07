@@ -159,7 +159,7 @@ test('WeWork channel skips stream-bound broadcasts for non-matching conversation
   assert.equal(refresh.passiveResponse.stream.finish, false);
 });
 
-test('WeWork channel binds stream updates by stream id instead of latest conversation card', async () => {
+test('WeWork channel supersedes the old webhook card and routes old turn options to the latest card', async () => {
   const channel = new WeWorkWebhookChannel({
     name: 'wework-test',
     aibot: { stream: true },
@@ -170,21 +170,65 @@ test('WeWork channel binds stream updates by stream id instead of latest convers
     mode: 'webhook',
     responseUrl: aibotTextBody.response_url,
   }, true);
+  await channel.sendMessage('chat-1', 'model text before tools', { weworkStreamId: first.passiveResponse.stream.id });
+  await channel.sendMessage('chat-1', '', {
+    weworkStreamId: first.passiveResponse.stream.id,
+    channelTurnProgress: { type: 'tool-calls-start', calls: [{ id: 'call-1', name: 'read' }] },
+  });
   const second = await (channel as any).processInboundBody(cloneBody('turn-2'), {
     mode: 'webhook',
     responseUrl: aibotTextBody.response_url,
   }, true);
 
-  await channel.sendMessage('chat-1', 'old final', { weworkStreamId: first.passiveResponse.stream.id, turnFinal: true });
-  await channel.sendMessage('chat-1', 'new queued notice', { weworkStreamId: second.passiveResponse.stream.id });
+  await channel.sendMessage('chat-1', 'latest final', { weworkStreamId: first.passiveResponse.stream.id, turnFinal: true });
+  await channel.sendMessage('chat-1', 'must not resurrect old card', { weworkStreamId: first.passiveResponse.stream.id });
 
   const firstRefresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: first.passiveResponse.stream.id } }, { mode: 'webhook' }, true);
   const secondRefresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: second.passiveResponse.stream.id } }, { mode: 'webhook' }, true);
 
-  assert.equal(firstRefresh.passiveResponse.stream.content, 'old final');
+  assert.equal(firstRefresh.passiveResponse.stream.content, 'model text before tools');
   assert.equal(firstRefresh.passiveResponse.stream.finish, true);
-  assert.equal(secondRefresh.passiveResponse.stream.content, 'new queued notice');
-  assert.equal(secondRefresh.passiveResponse.stream.finish, false);
+  assert.equal(firstRefresh.passiveResponse.stream.content.includes('read'), false);
+  assert.equal(firstRefresh.passiveResponse.stream.content.includes('thinking'), false);
+  assert.equal(secondRefresh.passiveResponse.stream.content, 'latest final');
+  assert.equal(secondRefresh.passiveResponse.stream.finish, true);
+});
+
+test('WeWork channel best-effort pushes a clean old WebSocket final and continues on the latest card', async () => {
+  const channel = new WeWorkWebhookChannel({
+    name: 'wework-test',
+    aibot: { stream: true },
+  });
+  const pushed: any[] = [];
+  (channel as any).pushWebSocketStream = async (snapshot: any) => {
+    pushed.push(structuredClone(snapshot));
+  };
+  channel.onMessage(async () => {});
+
+  await (channel as any).processInboundBody(cloneBody('ws-turn-1'), { mode: 'websocket', reqId: 'req-1' }, true);
+  const first = pushed.find(snapshot => snapshot.delivery.reqId === 'req-1');
+  await (channel as any).processInboundBody(cloneBody('ws-turn-2'), { mode: 'websocket', reqId: 'req-2' }, true);
+  await new Promise(resolve => setImmediate(resolve));
+
+  const oldFinal = [...pushed].reverse().find(snapshot => snapshot.streamId === first.streamId && snapshot.finish);
+  const latest = [...pushed].reverse().find(snapshot => snapshot.delivery.reqId === 'req-2');
+  assert.equal(oldFinal.content, '处理完成。');
+  assert.equal(oldFinal.finish, true);
+
+  await channel.sendMessage('chat-1', '', {
+    weworkStreamId: first.streamId,
+    channelTurnProgress: { type: 'tool-calls-start', calls: [{ id: 'call-1', name: 'read' }] },
+  });
+  await channel.sendMessage('chat-1', 'latest answer', {
+    weworkStreamId: first.streamId,
+    turnFinal: true,
+  });
+
+  const latestPushes = pushed.filter(snapshot => snapshot.streamId === latest.streamId);
+  assert.equal(latestPushes.some(snapshot => snapshot.content.includes('read') && !snapshot.finish), true);
+  assert.equal(latestPushes.at(-1).content.endsWith('latest answer'), true);
+  assert.equal(latestPushes.at(-1).finish, true);
+  assert.equal(pushed.filter(snapshot => snapshot.streamId === first.streamId && snapshot.content.includes('read')).length, 0);
 });
 
 test('WeWork channel applies structured turn progress to the bound stream card', async () => {
@@ -390,7 +434,7 @@ test('busy queued WeWork stream card is updated when its queued turn runs', asyn
   }
 });
 
-test('busy queued WeWork stream card waits for next turn while previous card is finalized', async () => {
+test('busy WeWork follow-up joins the active tool loop and moves delivery to the latest card', async () => {
   const channelId = makeTestId('wework-card-switch');
   const sessionId = makeTestId('session-wework-card-switch');
   const channel = new WeWorkWebhookChannel({
@@ -399,10 +443,11 @@ test('busy queued WeWork stream card waits for next turn while previous card is 
   });
   const router = new MessageRouter([{ platform: 'wework', userId: 'user-1' }]);
   const originalChat = llm.chat;
-  let firstStarted!: () => void;
-  let releaseFirst!: () => void;
-  const firstStartedPromise = new Promise<void>(resolve => { firstStarted = resolve; });
-  const releaseFirstPromise = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const originalExecuteTools = llm.executeTools;
+  let toolStarted!: () => void;
+  let releaseTool!: () => void;
+  const toolStartedPromise = new Promise<void>(resolve => { toolStarted = resolve; });
+  const releaseToolPromise = new Promise<void>(resolve => { releaseTool = resolve; });
   let callIndex = 0;
   const handlerRuns: Array<Promise<void>> = [];
 
@@ -417,20 +462,30 @@ test('busy queued WeWork stream card waits for next turn while previous card is 
     (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
       assert.equal(activeSession.id, sessionId);
       callIndex += 1;
-      const responseText = callIndex === 1 ? 'first answer' : 'second answer';
-      await sessionManager.appendSessionMessage(activeSession, {
-        role: 'user',
-        parts: parts || [],
-      });
+      if (parts) {
+        await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+      }
       if (callIndex === 1) {
-        firstStarted();
-        await releaseFirstPromise;
+        const toolCall = { id: 'call-1', name: 'read', args: { filePath: 'README.md' } };
+        await sessionManager.appendSessionMessage(activeSession, {
+          role: 'model',
+          parts: [{ functionCall: toolCall }],
+        });
+        return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
       }
       await sessionManager.appendSessionMessage(activeSession, {
         role: 'model',
-        parts: [{ text: responseText }],
+        parts: [{ text: 'combined answer' }],
       });
-      return { text: responseText };
+      return { text: 'combined answer' };
+    };
+    (llm as any).executeTools = async () => {
+      toolStarted();
+      await releaseToolPromise;
+      return {
+        role: 'tool',
+        parts: [{ functionResponse: { tool_use_id: 'call-1', name: 'read', response: { output: 'ok' } } }],
+      };
     };
 
     await sessionManager.getSession(sessionId);
@@ -443,9 +498,12 @@ test('busy queued WeWork stream card waits for next turn while previous card is 
     const firstStreamId = firstInbound.passiveResponse.stream.id;
     assert.equal(firstInbound.passiveResponse.stream.content, '> 🤔 thinking');
 
-    await firstStartedPromise;
+    await toolStartedPromise;
 
-    const secondInbound = await (channel as any).processInboundBody(cloneBody('card-switch-turn-2'), {
+    const secondInbound = await (channel as any).processInboundBody({
+      ...cloneBody('card-switch-turn-2'),
+      text: { content: 'second steering' },
+    }, {
       mode: 'webhook',
       responseUrl: aibotTextBody.response_url,
     }, true);
@@ -460,7 +518,7 @@ test('busy queued WeWork stream card waits for next turn while previous card is 
     assert.equal(queuedSession.queue.length, 1);
     assert.equal(queuedSession.queue[0]?.source?.weworkStreamId, secondStreamId);
 
-    releaseFirst();
+    releaseTool();
     await handlerRuns[0];
 
     let firstRefresh: any;
@@ -469,18 +527,22 @@ test('busy queued WeWork stream card waits for next turn while previous card is 
       firstRefresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: firstStreamId } }, { mode: 'webhook' }, true);
       secondRefresh = await (channel as any).processInboundBody({ msgtype: 'stream', stream: { id: secondStreamId } }, { mode: 'webhook' }, true);
       return firstRefresh.passiveResponse.stream.finish === true
-        && firstRefresh.passiveResponse.stream.content === 'first answer'
         && secondRefresh.passiveResponse.stream.finish === true
-        && secondRefresh.passiveResponse.stream.content === 'second answer';
+        && secondRefresh.passiveResponse.stream.content.endsWith('combined answer');
     });
 
     assert.equal(firstRefresh.passiveResponse.stream.content.includes('thinking'), false);
+    assert.equal(firstRefresh.passiveResponse.stream.content, '处理完成。');
     assert.equal(firstRefresh.passiveResponse.stream.finish, true);
-    assert.equal(secondRefresh.passiveResponse.stream.content, 'second answer');
+    assert.equal(secondRefresh.passiveResponse.stream.content.endsWith('combined answer'), true);
     assert.equal(secondRefresh.passiveResponse.stream.finish, true);
     assert.equal(callIndex, 2);
+    const userMessages = queuedSession.history.filter(message => message.role === 'user');
+    assert.equal(userMessages.length, 2);
+    assert.equal(userMessages.some(message => message.parts.some(part => part.system?.includes('second steering'))), true);
   } finally {
     (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
     unregisterChannel(channelId);
     const cleanupSession = await sessionManager.getSession(sessionId).catch((_err: unknown): null => null);
     if (cleanupSession) {

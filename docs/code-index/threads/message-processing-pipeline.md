@@ -34,7 +34,7 @@ The interactive turn flow from channel input through authorization, queueing, pr
 
 - Busy-time ordinary input is queued without an obsolete automatic queue acknowledgement.
 - Follow-ups can merge into an active tool loop only when the router's queue-item/source policy allows it.
-- Platform turn identifiers such as WeWork stream IDs are hard merge/final-delivery boundaries.
+- For QQ Bot and WeWork sources carrying passive-delivery IDs, configured channel instance plus scoped conversation is the merge boundary; the platform message/card ID is not.
 - `/stop` cancels the current run, then commits all queued message/event inputs to canonical history without running another provider turn. A ready `compact-commit` is applied at the Stop safe point; unrecognized queue records are discarded generically.
 - `/dequeue` stops current work if needed and immediately resumes queued items.
 - `/retry` atomically claims an idle session and enters the ordinary turn loop directly with `parts:null`; it does not persist queue state, regenerate a completed answer, or add a model-facing retry marker. Compatible input arriving after the claim joins at normal pre-provider and post-tool safe points.
@@ -65,11 +65,18 @@ Persist the canonical provider-qualified model key on model messages so mixed-mo
 
 ### D-pipeline-source-boundary
 
-Queued follow-up merge and progress/final delivery respect explicit platform turn/source identifiers. Different or unbound sources remain separate turns. QQ Bot snapshots its official inbound `msg_id` together with the configured instance and scoped conversation: different IDs are hard merge boundaries, and only the matching QQ adapter consumes that ID as a passive-reply reference while other session attachments retain ordinary delivery.
+Queued QQ Bot and WeWork follow-ups carrying passive-delivery IDs are compatible
+when their configured channel instance and scoped conversation match. Different
+instances or conversations remain hard boundaries, while ordinary unbound
+source behavior is unchanged. Platform `msg_id`/stream-card IDs remain in the
+serializable source as restart/fallback delivery metadata but do not split an
+otherwise compatible provider turn. Adapter ownership of the latest passive
+context is canonical in
+[D-channel-conversation-latest-passive-context](../modules/channels.md#d-channel-conversation-latest-passive-context).
 
 ### D-pipeline-canonical-queue-item-boundaries
 
-Each logical queued input or event is appended as its own canonical `Message` in queue order, including `parts` items and structured `message` items. A compatible batch may still be consumed before one provider request so tool-loop follow-ups affect that request, but router storage never concatenates queue-item parts. Ready compact commits and platform stream/source boundaries remain queue boundaries. Provider-specific serializers, not persisted history, normalize adjacent same-role messages when a protocol requires it.
+Each logical queued input or event is appended as its own canonical `Message` in queue order, including `parts` items and structured `message` items. A compatible batch may still be consumed before one provider request so tool-loop follow-ups affect that request, but router storage never concatenates queue-item parts. Ready compact commits and channel instance/conversation source boundaries remain queue boundaries. Provider-specific serializers, not persisted history, normalize adjacent same-role messages when a protocol requires it.
 
 ### D-pipeline-busy-queue-silence
 

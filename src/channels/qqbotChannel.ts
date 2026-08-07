@@ -8,7 +8,7 @@ const QQBOT_TOKEN_URL = 'https://bots.qq.com/app/getAppAccessToken';
 const QQBOT_API_BASE_URL = 'https://api.sgroup.qq.com';
 const QQBOT_INTENTS = 1_073_741_824 + 4_096 + 33_554_432 + 67_108_864;
 const RECONNECT_DELAY_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
-const MAX_C2C_TYPING_CONTEXTS = 1_000;
+const MAX_LATEST_MESSAGE_CONTEXTS = 1_000;
 const MAX_RECONNECT_ATTEMPTS = 100;
 const MAX_RECENT_INBOUND_EVENTS = 10_000;
 const MAX_REPLY_SEQUENCES = 10_000;
@@ -165,7 +165,7 @@ export class QQBotChannel implements Channel {
   private heartbeatAwaitingAck = false;
   private accessToken?: { value: string; expiresAt: number };
   private accessTokenRequest?: Promise<string>;
-  private latestC2CMessageIds = new Map<string, string>();
+  private latestMessageIds = new Map<string, string>();
   private recentInboundEvents = new Map<string, true>();
   private replySequences = new Map<string, number>();
   private passiveReplyContexts = new Map<string, PassiveReplyContext>();
@@ -208,7 +208,7 @@ export class QQBotChannel implements Channel {
       this.reconnectTimer = undefined;
     }
     this.stopHeartbeat();
-    this.latestC2CMessageIds.clear();
+    this.latestMessageIds.clear();
     this.recentInboundEvents.clear();
     this.replySequences.clear();
     this.passiveReplyContexts.clear();
@@ -231,11 +231,14 @@ export class QQBotChannel implements Channel {
     const directReplyId = typeof options?.replyToId === 'string' && options.replyToId.trim()
       ? options.replyToId.trim()
       : undefined;
-    const boundReplyId = options?.qqbotChannelId === this.channelId
+    const persistedBoundReplyId = options?.qqbotChannelId === this.channelId
       && options?.qqbotConversationId === conversationId
       && typeof options.qqbotMessageId === 'string'
       && options.qqbotMessageId.trim()
       ? options.qqbotMessageId.trim()
+      : undefined;
+    const boundReplyId = persistedBoundReplyId
+      ? this.latestMessageIds.get(conversationId) || persistedBoundReplyId
       : undefined;
     const replyToId = directReplyId || boundReplyId;
     const sourceBoundPassiveReply = Boolean(replyToId && (options?.qqbotSourceBound || boundReplyId));
@@ -302,7 +305,7 @@ export class QQBotChannel implements Channel {
     if (target.kind !== 'c2c') {
       return;
     }
-    const messageId = this.latestC2CMessageIds.get(conversationId);
+    const messageId = this.latestMessageIds.get(conversationId);
     if (!messageId) {
       return;
     }
@@ -589,16 +592,7 @@ export class QQBotChannel implements Channel {
       return;
     }
     this.rememberPassiveReplyContext(inbound.messageId);
-
-    if (inbound.kind === 'c2c') {
-      if (!this.latestC2CMessageIds.has(inbound.conversationId) && this.latestC2CMessageIds.size >= MAX_C2C_TYPING_CONTEXTS) {
-        const oldestConversationId = this.latestC2CMessageIds.keys().next().value;
-        if (oldestConversationId) {
-          this.latestC2CMessageIds.delete(oldestConversationId);
-        }
-      }
-      this.latestC2CMessageIds.set(inbound.conversationId, inbound.messageId);
-    }
+    this.rememberLatestMessageId(inbound.conversationId, inbound.messageId);
 
     const context: ChannelContext = {
       channelId: this.channelId,
@@ -616,7 +610,7 @@ export class QQBotChannel implements Channel {
         await this.sendMessage(inbound.conversationId, text, { ...options, replyToId: inbound.messageId, qqbotSourceBound: true });
       },
       sendTyping: async () => {
-        await this.sendC2CTyping(inbound.conversationId, inbound.messageId);
+        await this.sendTyping(inbound.conversationId);
       },
     };
     const message: ChannelMessage = {
@@ -693,6 +687,16 @@ export class QQBotChannel implements Channel {
     }
     this.recentInboundEvents.set(key, true);
     return false;
+  }
+
+  private rememberLatestMessageId(conversationId: string, messageId: string): void {
+    if (!this.latestMessageIds.has(conversationId) && this.latestMessageIds.size >= MAX_LATEST_MESSAGE_CONTEXTS) {
+      const oldestConversationId = this.latestMessageIds.keys().next().value;
+      if (oldestConversationId) {
+        this.latestMessageIds.delete(oldestConversationId);
+      }
+    }
+    this.latestMessageIds.set(conversationId, messageId);
   }
 
   private allocateReplySequence(messageId: string): number {

@@ -154,7 +154,7 @@ test('MessageRouter materializes deferred channel media only after canonical aut
   }
 });
 
-test('MessageRouter keeps QQ Bot passive reply identifiers bound to their source turn', () => {
+test('MessageRouter uses QQ Bot conversation identity as the passive reply merge boundary', () => {
   const router = new MessageRouter() as any;
   const source = {
     platform: 'qqbot',
@@ -167,7 +167,7 @@ test('MessageRouter keeps QQ Bot passive reply identifiers bound to their source
 
   assert.equal(
     router.getSourceStreamKey(source),
-    'qqbot:qq-primary:c2c:user-openid:incoming-message-id',
+    'qqbot:qq-primary:c2c:user-openid',
   );
   assert.deepEqual(router.getTurnChannelOptions(undefined, source), {
     qqbotMessageId: 'incoming-message-id',
@@ -353,7 +353,7 @@ test('MessageRouter in-turn queue consumption drains same-stream WeWork inputs b
     const consumed = await router.consumeLeadingQueuedTurnInputs(
       session,
       [{ text: 'pending' }],
-      'wework-a:chat-a:stream-a',
+      'wework:wework-a:chat-a',
     );
 
     assert.equal(consumed.parts, null);
@@ -368,9 +368,11 @@ test('MessageRouter in-turn queue consumption drains same-stream WeWork inputs b
   }
 });
 
-test('MessageRouter in-turn queue consumption leaves different WeWork stream cards for their own turn', async () => {
+test('MessageRouter in-turn queue consumption merges a newer WeWork card in the same conversation', async () => {
   const router = new MessageRouter() as any;
   const session: any = {
+    id: 'queue-consumption-new-card',
+    history: [],
     queue: [
       {
         type: 'user',
@@ -380,14 +382,24 @@ test('MessageRouter in-turn queue consumption leaves different WeWork stream car
     ],
   };
 
-  const consumed = await router.consumeLeadingQueuedTurnInputs(
-    session,
-    [{ text: 'pending' }],
-    'wework-a:chat-a:stream-a',
-  );
+  const originalAppend = sessionManager.appendSessionMessage;
+  (sessionManager as any).appendSessionMessage = async (target: any, message: Message) => target.history.push(message);
+  try {
+    const consumed = await router.consumeLeadingQueuedTurnInputs(
+      session,
+      [{ text: 'pending' }],
+      'wework:wework-a:chat-a',
+    );
 
-  assert.equal(consumed.parts.some((part: any) => part.text === 'next card input'), false);
-  assert.equal(session.queue.length, 1);
+    assert.equal(consumed.parts, null);
+    assert.deepEqual(session.history.map((message: Message) => message.parts), [
+      [{ text: 'pending' }],
+      [{ text: 'next card input' }],
+    ]);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (sessionManager as any).appendSessionMessage = originalAppend;
+  }
 });
 
 test('MessageRouter does not inject source prefix twice for drained queued parts', () => {
@@ -465,7 +477,7 @@ test('MessageRouter turn metadata no longer injects an idle-gap time marker', ()
   assert.ok(!sessionPart?.system.includes(' hint='));
 });
 
-test('MessageRouter queue draining keeps different WeWork stream ids separate', () => {
+test('MessageRouter queue draining merges different WeWork stream ids in one conversation', () => {
   const router = new MessageRouter() as any;
   const session: any = {
     queue: [
@@ -484,8 +496,87 @@ test('MessageRouter queue draining keeps different WeWork stream ids separate', 
 
   const drained = router.drainLeadingQueuedTurnInputs(session);
   assert.equal(drained.items[0].parts?.some((part: any) => part.text === 'first stream'), true);
-  assert.equal(drained.items.some((item: any) => item.parts?.some((part: any) => part.text === 'second stream')), false);
-  assert.equal(session.queue.length, 1);
+  assert.equal(drained.items.some((item: any) => item.parts?.some((part: any) => part.text === 'second stream')), true);
+  assert.equal(session.queue.length, 0);
+});
+
+test('MessageRouter keeps different QQ and WeWork conversations as hard merge boundaries', () => {
+  const router = new MessageRouter() as any;
+  for (const sources of [
+    [
+      { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a', qqbotMessageId: 'qq-1' },
+      { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-b', qqbotMessageId: 'qq-2' },
+    ],
+    [
+      { platform: 'wework', channelId: 'wework-a', conversationId: 'chat-a', weworkStreamId: 'stream-1' },
+      { platform: 'wework', channelId: 'wework-b', conversationId: 'chat-a', weworkStreamId: 'stream-2' },
+    ],
+  ]) {
+    const session: any = {
+      queue: sources.map((source, index) => ({ type: 'user', source, parts: [{ text: `input-${index}` }] })),
+    };
+    const drained = router.drainLeadingQueuedTurnInputs(session);
+    assert.equal(drained.items.length, 1);
+    assert.equal(session.queue.length, 1);
+  }
+});
+
+test('MessageRouter leaves a different QQ conversation for provider call three after an active tool loop', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('qq_conversation_boundary_call_three');
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  let chatCalls = 0;
+
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+    chatCalls += 1;
+    if (parts) {
+      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    }
+    if (chatCalls === 1) {
+      const toolCall = { id: 'call-1', name: 'read', args: { filePath: 'README.md' } };
+      await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    }
+    const text = chatCalls === 2 ? 'first conversation final' : 'second conversation final';
+    await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text }] });
+    return { text, allParts: [{ text }] };
+  };
+  (llm as any).executeTools = async () => {
+    await sessionManager.enqueueSessionItem(session.id, {
+      type: 'user',
+      source: {
+        platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-b',
+        channelUserId: 'c2c:user-b', qqbotMessageId: 'qq-2',
+      },
+      parts: [{ text: 'different conversation input' }],
+    });
+    return {
+      role: 'tool',
+      parts: [{ functionResponse: { tool_use_id: 'call-1', name: 'read', response: { output: 'ok' } } }],
+    };
+  };
+
+  try {
+    await router.runSessionTurn(session.id, {
+      session,
+      preclaimed: true,
+      parts: [{ text: 'first conversation input' }],
+      source: {
+        platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a',
+        channelUserId: 'c2c:user-a', qqbotMessageId: 'qq-1',
+      },
+    });
+
+    assert.equal(chatCalls, 3);
+    assert.equal(userTextOccurrences(session, 'different conversation input'), 1);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
 });
 
 test('MessageRouter emits turn progress as an empty targeted channel broadcast', () => {

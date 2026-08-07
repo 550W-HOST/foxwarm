@@ -10,7 +10,7 @@ Owns the platform-neutral channel contract/registry/authorization/runtime plus M
 - [src-channels-misc](../units/src-channels-misc.md) — Matrix, Telegram, and Weixin adapter classes.
 - [src-channels-tui](../units/src-channels-tui.md) — blessed terminal channel.
 - [src-channels-webui](../units/src-channels-webui.md) — authenticated HTTP/SSE/upload/setup/terminal WebUI surface.
-- [src-channels-wework](../units/src-channels-wework.md) — WeChat Work webhook/callback/WebSocket modes and opt-in turn-bound stream cards.
+- [src-channels-wework](../units/src-channels-wework.md) — WeChat Work webhook/callback/WebSocket modes and opt-in conversation-latest stream cards.
 - [src-channels-qqbot](../units/src-channels-qqbot.md) — official QQ Bot gateway text ingress and REST delivery.
 - [src-weixin](../units/src-weixin.md) — Weixin polling/send/QR-login protocol helpers.
 
@@ -47,7 +47,7 @@ Persisted conversation attachments and broadcast selection are owned by [session
 
 ## Adapter-specific invariants
 
-- WeWork stream aggregation is opt-in and keyed by explicit turn `weworkStreamId`; concurrent queued turns cannot steal another card. WebSocket mode is separately configured.
+- WeWork stream aggregation is opt-in and routes ongoing progress/final delivery to the latest card in one configured instance and conversation. WebSocket mode is separately configured.
 - Weixin context tokens are in-memory per user; a new inbound message is required after token loss. QR login sessions expire after five minutes.
 - WebUI `sendFile` is intentionally a no-op because the browser uses authenticated downloads/tool metadata.
 - QQ Bot C2C/group attachments use an authorization-gated, bounded inbound
@@ -80,9 +80,18 @@ Configuration reload restarts the complete managed channel set; it is not a fiel
 
 Session broadcast has no aggregate failure promise. It dispatches to eligible channels, logs asynchronous errors, and carries generic turn metadata.
 
-### D-channel-turn-bound-wework-stream
+### D-channel-conversation-latest-passive-context
 
-WeWork progress/final updates require the explicit inbound turn stream ID. Latest-conversation state is advisory and never authority for a concurrent turn.
+QQ Bot message IDs and WeWork stream-card IDs are adapter-local passive-delivery
+context, not Router turn boundaries. Within one configured channel instance and
+scoped conversation, the latest inbound context owns subsequent typing,
+progress, and final delivery. QQ Bot keeps a bounded in-memory latest-message
+map and uses the serialized source ID only when that live context is missing.
+WeWork supersedes the previous active card, preserves its substantive model
+text while removing transient thinking/tool status, and finishes it before
+routing ongoing updates to the latest card. Different instances or
+conversations never share passive context. This policy adds no delivery ledger,
+outbox, or persisted adapter state.
 
 ### D-channel-file-descriptor
 

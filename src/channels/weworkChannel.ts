@@ -765,9 +765,19 @@ export class WeWorkWebhookChannel implements Channel {
       // 使用 chatId 作为 channelUserId，这样每个会话（群聊/私聊）都有独立的 channel
       // 如果没有 chatId，fallback 到 userId
       const channelUserId = chatId || userId;
-      const streamSnapshot = this.shouldUseAIBotStream(messageIsAIBot, delivery)
+      const useAIBotStream = this.shouldUseAIBotStream(messageIsAIBot, delivery);
+      const supersededStream = useAIBotStream
+        ? this.streamAggregator.supersedeActive(channelUserId)
+        : undefined;
+      const streamSnapshot = useAIBotStream
         ? this.beginAIBotStream(channelUserId, delivery.mode === 'webhook' ? { mode: 'webhook', responseUrl } : delivery)
         : undefined;
+
+      if (supersededStream?.delivery.mode === 'websocket') {
+        void this.pushWebSocketStream(supersededStream).catch(err => {
+          logger.error({ err, channelUserId, streamId: supersededStream.streamId }, 'Failed to finalize superseded WeWork WebSocket stream response');
+        });
+      }
 
       if (streamSnapshot?.delivery.mode === 'websocket') {
         void this.pushWebSocketStream(streamSnapshot).catch(err => {
@@ -1156,7 +1166,8 @@ export class WeWorkWebhookChannel implements Channel {
       return false;
     }
 
-    const existing = this.streamAggregator.getByStreamId(streamId);
+    const existing = this.streamAggregator.getByConversation(userId)
+      || this.streamAggregator.getByStreamId(streamId);
     if (!existing) {
       logger.warn({ streamId, userId }, 'Skipping WeWork stream-bound message because stream id is unknown or expired');
       return true;
@@ -1168,8 +1179,8 @@ export class WeWorkWebhookChannel implements Channel {
 
     const progress = this.normalizeChannelTurnProgress(options?.channelTurnProgress);
     const snapshot = progress
-      ? this.streamAggregator.applyProgressByStreamId(streamId, progress)
-      : this.streamAggregator.appendByStreamId(streamId, text, { finish: !!options?.turnFinal });
+      ? this.streamAggregator.applyProgressByStreamId(existing.streamId, progress)
+      : this.streamAggregator.appendByStreamId(existing.streamId, text, { finish: !!options?.turnFinal });
     if (!snapshot) {
       return false;
     }

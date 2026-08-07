@@ -211,10 +211,10 @@ export class MessageRouter {
 
   private getSourceStreamKey(source?: QueueSource): string | undefined {
     if (source?.weworkStreamId) {
-      return `${source.channelId || source.platform}:${source.conversationId || source.channelUserId}:${source.weworkStreamId}`;
+      return `wework:${source.channelId || source.platform}:${source.conversationId || source.channelUserId}`;
     }
     if (source?.qqbotMessageId) {
-      return `qqbot:${source.channelId || source.platform}:${source.conversationId || source.channelUserId}:${source.qqbotMessageId}`;
+      return `qqbot:${source.channelId || source.platform}:${source.conversationId || source.channelUserId}`;
     }
     return undefined;
   }

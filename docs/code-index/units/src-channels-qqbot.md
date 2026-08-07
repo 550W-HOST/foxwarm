@@ -32,7 +32,7 @@ image/file attachments through a deferred, authorization-gated materializer.
 | `QQBotChannel.handleGatewayMessage()` | Identifies or resumes after `HELLO`, retains dispatch sequence/session state, handles gateway control frames, and accepts supported message events. |
 | `QQBotChannel.routeInboundMessage()` | Deduplicates supported events, creates scoped identity, keeps C2C/group attachment metadata URL-free, and attaches an ephemeral media materializer. |
 | `QQBotChannel.sendMessage()` | Routes C2C, group, guild-channel, and guild-DM text to their official REST endpoint. |
-| `QQBotChannel.sendTyping()` | Uses the official C2C input-notify message only when an inbound C2C message ID is available. |
+| `QQBotChannel.sendTyping()` | Uses the official C2C input-notify message with the latest conversation-local inbound message ID when available. |
 | `QQBotChannel.apiRequest()` / `getAccessToken()` | Performs authenticated API requests with a bounded 401 token refresh. |
 
 ## Identity and supported surface
@@ -68,9 +68,11 @@ image/file attachments through a deferred, authorization-gated materializer.
   `MessageRouter` only when authorization was true at ingress; unauthorized
   and first guest messages therefore perform zero media fetch/write operations.
   The hook is never persisted or copied to a queue item.
-- An inbound context preserves its QQ `msg_id` in the serializable queue source.
-  The matching configured instance consumes that ID as a passive reply for the
-  source turn, while other session attachments retain ordinary delivery.
+- An inbound context preserves its QQ `msg_id` in the serializable queue source
+  as a restart/missing-map fallback. The adapter also retains a bounded latest
+  message ID per scoped conversation; normal source-bound typing/progress/final
+  delivery uses that live ID for the matching configured instance and
+  conversation, while other session attachments retain ordinary delivery.
 - The gateway retains the latest dispatch sequence and READY session ID in
   memory. HELLO resumes only when both are present; RECONNECT, resumable and
   non-resumable INVALID_SESSION frames, documented close classes, heartbeat
@@ -86,7 +88,7 @@ image/file attachments through a deferred, authorization-gated materializer.
   counter allocates C2C/group outbound `msg_seq` values monotonically across
   typing and passive replies.
 - QQ offers typing through C2C input-notify messages, so this adapter sends
-  typing only for a C2C conversation with a current inbound message ID.
+  typing only for a C2C conversation with a current latest inbound message ID.
 
 ## Runtime and configuration
 
@@ -157,3 +159,5 @@ the current whole-buffer node API supports the configured Main-host caps.
 
 Shared channel type/instance/conversation identity and managed reload rules
 remain canonical in [channels module](../modules/channels.md#design-decisions).
+Conversation-local passive-delivery ownership is canonical in
+[D-channel-conversation-latest-passive-context](../modules/channels.md#d-channel-conversation-latest-passive-context).
