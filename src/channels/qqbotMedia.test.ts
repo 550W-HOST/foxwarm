@@ -412,6 +412,55 @@ test('QQ media cancels a 2xx body when spool open fails', async () => {
   assert.equal(cancelCount, 1);
 });
 
+test('QQ media handles timeout while spool open is pending without losing abort cleanup', async () => {
+  const originalOpen = fs.open;
+  const spoolEntriesBefore = (await fs.readdir(os.tmpdir())).filter(name => name.startsWith('foxwarm-qqbot-media-'));
+  let openStartedResolve!: () => void;
+  const openStarted = new Promise<void>(resolve => { openStartedResolve = resolve; });
+  let releaseOpen!: () => void;
+  const openGate = new Promise<void>(resolve => { releaseOpen = resolve; });
+  let cancelCount = 0;
+  (fs as any).open = async (filePath: Parameters<typeof fs.open>[0], flags: Parameters<typeof fs.open>[1]) => {
+    openStartedResolve();
+    await openGate;
+    return originalOpen(filePath, flags);
+  };
+
+  const startedAt = Date.now();
+  try {
+    const materializePromise = materializeQQBotAttachments({
+      content: 'delayed spool open',
+      eventId: 'message-delayed-spool-open',
+      sessionId: 'session-delayed-spool-open',
+      attachments: [{ url: 'https://qq.com/hang', filename: 'hang.bin', content_type: 'file' }],
+      deps: {
+        timeoutMs: 5,
+        fetch: async () => new Response(new ReadableStream<Uint8Array>({
+          pull() {
+            return new Promise<void>(() => {});
+          },
+          cancel() {
+            cancelCount += 1;
+          },
+        })),
+      },
+    });
+    await openStarted;
+    await new Promise(resolve => setTimeout(resolve, 25));
+    releaseOpen();
+    const parts = await materializePromise;
+    assert.ok(Date.now() - startedAt < 500);
+    assert.equal(cancelCount, 1);
+    assert.match(parts[1].text || '', /media download timed out/);
+  } finally {
+    if (releaseOpen) releaseOpen();
+    (fs as any).open = originalOpen;
+  }
+
+  const spoolEntriesAfter = (await fs.readdir(os.tmpdir())).filter(name => name.startsWith('foxwarm-qqbot-media-'));
+  assert.deepEqual(spoolEntriesAfter, spoolEntriesBefore);
+});
+
 test('QQ media cancels a stalled 2xx body on timeout and does not leak a spool', async () => {
   let cancelCount = 0;
   const parts = await materializeQQBotAttachments({

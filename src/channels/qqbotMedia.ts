@@ -262,12 +262,16 @@ function validateMediaUrl(value: string): URL {
 }
 
 async function cancelResponseBody(response: Response): Promise<void> {
+  if (cancelledResponseBodies.has(response)) return;
+  cancelledResponseBodies.add(response);
   try {
     await response.body?.cancel();
   } catch {
     // A redirect body is disposable; do not mask the URL validation error.
   }
 }
+
+const cancelledResponseBodies = new WeakSet<Response>();
 
 async function withTimeout<T>(promise: Promise<T>, controller: AbortController, timeoutMs = QQBOT_MEDIA_TIMEOUT_MS): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -304,21 +308,65 @@ async function writeResponseBodyToSpool(
     }
   }
 
-  let file: Awaited<ReturnType<typeof fs.open>>;
+  let file: Awaited<ReturnType<typeof fs.open>> | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let bodyCancelPromise: Promise<void> | undefined;
+  let closePromise: Promise<void> | undefined;
+  let abortRequested = false;
+  const cancelBodyOnce = (): Promise<void> => {
+    if (bodyCancelPromise) return bodyCancelPromise;
+    if (cancelledResponseBodies.has(response)) {
+      bodyCancelPromise = Promise.resolve();
+    } else {
+      cancelledResponseBodies.add(response);
+      bodyCancelPromise = (reader
+        ? reader.cancel()
+        : response.body?.cancel())?.catch(() => {}) || Promise.resolve();
+    }
+    return bodyCancelPromise;
+  };
+  const closeFileOnce = (): Promise<void> => {
+    if (closePromise) return closePromise;
+    closePromise = file?.close().catch(() => {
+      throw mediaError('storage-failed');
+    }) || Promise.resolve();
+    return closePromise;
+  };
+  const cancelOnAbort = () => {
+    abortRequested = true;
+    void cancelBodyOnce();
+  };
+  signal.addEventListener('abort', cancelOnAbort, { once: true });
+  if (signal.aborted) cancelOnAbort();
   try {
-    file = await fs.open(spoolPath, 'wx');
-  } catch {
-    throw mediaError('storage-failed');
+    try {
+      file = await fs.open(spoolPath, 'wx');
+    } catch {
+      if (abortRequested || signal.aborted) throw mediaError('download-timeout');
+      throw mediaError('storage-failed');
+    }
+    if (abortRequested || signal.aborted) {
+      await closeFileOnce();
+      throw mediaError('download-timeout');
+    }
+  } catch (error) {
+    signal.removeEventListener('abort', cancelOnAbort);
+    await closeFileOnce();
+    throw asMediaError(error, 'storage-failed');
   }
-  let reader: ReadableStreamDefaultReader<Uint8Array>;
   try {
     reader = response.body.getReader();
   } catch {
-    await file.close().catch(() => {});
+    await closeFileOnce();
     throw mediaError('invalid-media');
   }
-  const cancelOnAbort = () => { void reader.cancel().catch(() => {}); };
-  signal.addEventListener('abort', cancelOnAbort, { once: true });
+  if (abortRequested || signal.aborted) {
+    await cancelBodyOnce();
+    await closeFileOnce();
+    signal.removeEventListener('abort', cancelOnAbort);
+    reader.releaseLock();
+    throw mediaError('download-timeout');
+  }
   let receivedBytes = 0;
   try {
     while (true) {
@@ -341,14 +389,12 @@ async function writeResponseBodyToSpool(
     if (signal.aborted) throw mediaError('download-timeout');
     return receivedBytes;
   } catch (error) {
-    await reader.cancel().catch(() => {});
+    await cancelBodyOnce();
     throw asMediaError(error, 'download-failed');
   } finally {
     signal.removeEventListener('abort', cancelOnAbort);
     reader.releaseLock();
-    await file.close().catch(() => {
-      throw mediaError('storage-failed');
-    });
+    await closeFileOnce();
   }
 }
 
