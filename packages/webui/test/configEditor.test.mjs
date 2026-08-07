@@ -48,7 +48,7 @@ test('app config schema suggests all managed channel types and QQ credential key
   assert.deepEqual(channel.properties.type.anyOf[0].enum, ['telegram', 'matrix', 'wework', 'weixin', 'qqbot'])
   assert.equal(channel.properties.appId.type, 'string')
   assert.equal(channel.properties.clientSecret.type, 'string')
-  assert.equal(channel.properties.media.properties.imageMaxBytes.maximum, 209715200)
+  assert.equal(channel.properties.media.properties.imageMaxBytes.maximum, 20971520)
   assert.equal(channel.properties.media.properties.fileMaxBytes.maximum, 209715200)
   assert.equal(channel.properties.media.properties.maxTotalBytes.maximum, 209715200)
   assert.equal(channel.properties.media.properties.maxAttachments.maximum, 16)

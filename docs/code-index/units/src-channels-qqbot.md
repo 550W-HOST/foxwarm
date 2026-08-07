@@ -53,12 +53,15 @@ image/file attachments through a deferred, authorization-gated materializer.
   ignored. The adapter does not infer unmentioned group traffic or an
   unsupported media contract.
 - Attachment materialization uses HTTPS-only allowlisted hosts, manually
-  revalidates each redirect, forwards no bot authorization/cookies, streams
-  with a timeout, enforces per-file/total/count bounds, sanitizes names, and
-  validates supported raster MIME/magic pairs. Default local limits are 20 MiB
-  per image, 50 MiB per generic file, 200 MiB total, and eight attachments;
-  config values are capped at 200 MiB and 16 attachments. Master inbound file
-  writes use a unique temporary path followed by atomic rename and cleanup.
+  revalidates each redirect, forwards no bot authorization/cookies, streams to
+  a bounded temporary file with a timeout, enforces per-file/total/count
+  bounds, sanitizes names, and validates supported raster MIME/magic pairs.
+  Default local limits are 20 MiB safe inline-image cap, 50 MiB generic-file
+  cap, 200 MiB total, and eight attachments; the image setting cannot exceed
+  the safe 20 MiB inline cap while the generic-file setting cannot exceed 200
+  MiB. Images above the inline cap become generic file descriptors without
+  inline bytes. Master inbound file writes use a unique temporary path
+  followed by atomic rename and cleanup.
 - Attachment metadata is built before any media fetch. A message's ephemeral
   `ChannelMessage.materializeParts(sessionId)` hook is invoked by
   `MessageRouter` only when authorization was true at ingress; unauthorized
@@ -88,7 +91,10 @@ image/file attachments through a deferred, authorization-gated materializer.
 
 - `QQBotConfig` in `src/config.ts` accepts `appId`, `clientSecret`, `enabled`,
   `allowedUsers`, `allowAllUsers`, and bounded `media` limits
-  (`imageMaxBytes`, `fileMaxBytes`, `maxTotalBytes`, `maxAttachments`).
+  (`imageMaxBytes` safe inline-image cap, `fileMaxBytes`, `maxTotalBytes`,
+  `maxAttachments`). Isolated-node QQ media currently returns a bounded
+  unsupported descriptor because the existing node transfer is whole-buffer,
+  not a streaming boundary.
 - `src/channelRuntime.ts` constructs, starts, stops, reloads, and reports each
   configured `qqbot` instance alongside the other managed adapters.
 - Startup uses the managed runtime after normal router authorization is
@@ -103,9 +109,10 @@ identity and attachment ordering, deduplication before media fetch, passive
 reply and C2C typing identifiers, gateway identify and resume control flow,
 guild/DM media rejection, group/guild/DM outbound routes, and
 shutdown/reconnect fencing. `src/channels/qqbotMedia.test.ts` covers safe
-previews, streamed/total/timeout bounds, allowlisted redirect validation,
-safe generic-file storage, raster MIME/magic validation, and transient image
-data crossing into a canonical blob reference.
+previews, official video/voice/nested deferral, streamed spool/total/timeout
+bounds and cleanup, allowlisted redirect validation, safe generic-file storage,
+safe-inline-cap image fallback, raster MIME/magic validation, and transient
+image data crossing into a canonical blob reference.
 
 ## Design Decisions
 
@@ -136,9 +143,12 @@ to fetch and save media. First guest and unauthorized messages remain
 metadata-only, while later authorized messages may materialize. Images are
 validated supported raster bytes and remain transient until the shared
 content-addressed image-blob conversion runs before durable queue/history
-storage; generic files remain saved node/path descriptors. Guild/DM media,
+storage; generic files remain saved node/path descriptors. Images above the
+safe inline cap are generic file descriptors, not inline data. Guild/DM media,
 outbound media, video/voice, nested attachments, retries/outbox, and remote URL
-send are deferred.
+send are deferred. Isolated-node media is rejected with a bounded descriptor
+until a genuinely streaming node transfer boundary exists; Stage 1 does not
+pretend the current whole-buffer node API supports the configured master caps.
 
 ## Canonical ownership
 

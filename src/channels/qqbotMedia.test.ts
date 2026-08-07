@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import test from 'node:test';
 import sharp from 'sharp';
 import type { SavedChannelFile } from '../channelFiles';
@@ -26,6 +28,13 @@ function savedFile(name: string, mimeType: string, sizeBytes: number, isImage: b
   };
 }
 
+function pathSaver(onSave: (options: any) => void): (options: any) => Promise<SavedChannelFile> {
+  return async options => {
+    onSave(options);
+    return savedFile(options.fileName || 'file', options.mimeType || 'application/octet-stream', options.sizeBytes, options.isImage === true);
+  };
+}
+
 test('QQ media preview is safe metadata and keeps attachment order without fetching', () => {
   const parts = buildQQBotAttachmentPreviewParts('caption', [
     { filename: '../../photo.png', content_type: 'image/png', size: 12, url: 'https://multimedia.nt.qq.com.cn/signed?secret=1' },
@@ -37,6 +46,37 @@ test('QQ media preview is safe metadata and keeps attachment order without fetch
   assert.match(parts[1].text || '', /photo\.png/);
   assert.match(parts[2].text || '', /report\.txt/);
   assert.doesNotMatch(parts[1].text || '', /signed|secret/);
+});
+
+test('QQ official video, voice, and nested attachments stay deferred with zero fetch/write', async () => {
+  let fetchCount = 0;
+  let saveCount = 0;
+  const parts = await materializeQQBotAttachments({
+    content: 'official attachment fixture',
+    eventId: 'official-message-1',
+    sessionId: 'session-official-1',
+    attachments: [
+      { url: 'https://multimedia.nt.qq.com.cn/video', filename: 'clip.mp4', content_type: 'video/mp4', size: 100 },
+      { url: 'https://multimedia.nt.qq.com.cn/voice', filename: 'voice.silk', content_type: 'voice', size: 80 },
+      {
+        url: 'https://multimedia.nt.qq.com.cn/nested', filename: 'nested.bin', content_type: 'file',
+        attachments: [{ url: 'https://multimedia.nt.qq.com.cn/child', filename: 'child.png', content_type: 'image/png' }],
+      },
+    ],
+    deps: {
+      fetch: async () => {
+        fetchCount += 1;
+        return response('must not fetch');
+      },
+      saveInboundSessionFileFromPath: pathSaver(() => { saveCount += 1; }),
+    },
+  });
+
+  assert.equal(fetchCount, 0);
+  assert.equal(saveCount, 0);
+  assert.match(parts[1].text || '', /video media is deferred/);
+  assert.match(parts[2].text || '', /voice media is deferred/);
+  assert.match(parts[3].text || '', /nested QQ media is deferred/);
 });
 
 test('QQ media materialization downloads a raster image, saves a safe descriptor, and emits transient inline data', async () => {
@@ -61,10 +101,9 @@ test('QQ media materialization downloads a raster image, saves a safe descriptor
         fetchCalls.push({ url: String(url), init });
         return response(image, 200, { 'content-type': 'image/png', 'content-length': String(image.length) });
       },
-      saveInboundSessionFile: async options => {
+      saveInboundSessionFileFromPath: pathSaver(options => {
         saves.push({ fileName: options.fileName, isImage: options.isImage, sessionId: options.sessionId });
-        return savedFile(options.fileName || 'image.png', options.mimeType || 'image/png', options.buffer.length, true);
-      },
+      }),
     },
   });
 
@@ -115,10 +154,9 @@ test('QQ media materialization downloads generic files as saved descriptors and 
     ],
     deps: {
       fetch: async url => response(Buffer.from(String(url).endsWith('first') ? 'one' : 'two')),
-      saveInboundSessionFile: async options => {
+      saveInboundSessionFileFromPath: pathSaver(options => {
         saves.push({ fileName: options.fileName, isImage: options.isImage });
-        return savedFile(options.fileName || 'file', options.mimeType || 'application/octet-stream', options.buffer.length, false);
-      },
+      }),
     },
   });
 
@@ -130,6 +168,60 @@ test('QQ media materialization downloads generic files as saved descriptors and 
   assert.equal(parts.some(part => part.inlineData), false);
 });
 
+test('QQ generic near-limit streams into a spool file, publishes from the path, and cleans the spool', async () => {
+  const chunk = new Uint8Array(1024);
+  const sourceChunks = [chunk, chunk, chunk];
+  let chunkIndex = 0;
+  let spoolPath = '';
+  let publishedSize = 0;
+  const parts = await materializeQQBotAttachments({
+    content: 'streamed file',
+    eventId: 'message-stream',
+    sessionId: 'session-stream',
+    attachments: [{ url: 'https://qpic.cn/streamed', filename: 'near-limit.bin', content_type: 'file' }],
+    config: { fileMaxBytes: 3 * 1024, maxTotalBytes: 3 * 1024 },
+    deps: {
+      fetch: async () => response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (chunkIndex < sourceChunks.length) controller.enqueue(sourceChunks[chunkIndex++]);
+          else controller.close();
+        },
+      })),
+      saveInboundSessionFileFromPath: async options => {
+        spoolPath = options.sourcePath;
+        publishedSize = (await fs.stat(options.sourcePath)).size;
+        return savedFile(options.fileName || 'near-limit.bin', options.mimeType || 'application/octet-stream', options.sizeBytes, false);
+      },
+    },
+  });
+
+  assert.equal(publishedSize, 3 * 1024);
+  assert.equal(parts.some(part => part.inlineData), false);
+  await assert.rejects(fs.access(spoolPath), /ENOENT/);
+});
+
+test('QQ images above the safe inline cap become generic file descriptors without inline bytes', async () => {
+  const saves: Array<{ isImage?: boolean; sizeBytes?: number }> = [];
+  const parts = await materializeQQBotAttachments({
+    content: 'large image fallback',
+    eventId: 'message-large-image',
+    sessionId: 'session-large-image',
+    attachments: [{ url: 'https://qpic.cn/large-image', filename: 'large.png', content_type: 'image/png' }],
+    config: { imageMaxBytes: 4, fileMaxBytes: 8 },
+    deps: {
+      fetch: async () => response(new Uint8Array([1, 2, 3, 4, 5, 6])),
+      saveInboundSessionFileFromPath: pathSaver(options => {
+        saves.push({ isImage: options.isImage, sizeBytes: options.sizeBytes });
+      }),
+    },
+  });
+
+  assert.deepEqual(saves, [{ isImage: false, sizeBytes: 6 }]);
+  assert.equal(parts.some(part => part.inlineData), false);
+  assert.match(parts[1].text || '', /kept as a generic file/);
+  assert.match(parts[1].text || '', /no image bytes were sent inline/);
+});
+
 test('QQ media rejects image MIME/magic mismatch without saving inline bytes', async () => {
   let saveCount = 0;
   const parts = await materializeQQBotAttachments({
@@ -139,10 +231,9 @@ test('QQ media rejects image MIME/magic mismatch without saving inline bytes', a
     attachments: [{ url: 'https://qq.com/not-image', filename: 'bad.png', content_type: 'image/png' }],
     deps: {
       fetch: async () => response(Buffer.from('not a png')),
-      saveInboundSessionFile: async options => {
+      saveInboundSessionFileFromPath: pathSaver(() => {
         saveCount += 1;
-        return savedFile(options.fileName || 'bad.png', options.mimeType || 'image/png', options.buffer.length, true);
-      },
+      }),
     },
   });
 
@@ -163,15 +254,15 @@ test('QQ media bounds header and streamed bytes before saving', async () => {
       fetch: async () => {
         throw new Error('header limit should reject before fetch');
       },
-      saveInboundSessionFile: async options => {
+      saveInboundSessionFileFromPath: pathSaver(() => {
         saveCount += 1;
-        return savedFile(options.fileName || 'large.txt', options.mimeType || 'application/octet-stream', options.buffer.length, false);
-      },
+      }),
     },
   });
   assert.equal(saveCount, 0);
   assert.match(oversizedHeader[1].text || '', /exceeds 50 bytes/);
 
+  const spoolEntriesBefore = (await fs.readdir(os.tmpdir())).filter(name => name.startsWith('foxwarm-qqbot-media-'));
   const oversizedStream = await materializeQQBotAttachments({
     content: 'large stream',
     eventId: 'message-5',
@@ -180,14 +271,15 @@ test('QQ media bounds header and streamed bytes before saving', async () => {
     config: { fileMaxBytes: 4 },
     deps: {
       fetch: async () => response(new Uint8Array([1, 2, 3, 4, 5])),
-      saveInboundSessionFile: async options => {
+      saveInboundSessionFileFromPath: pathSaver(() => {
         saveCount += 1;
-        return savedFile(options.fileName || 'stream.txt', options.mimeType || 'application/octet-stream', options.buffer.length, false);
-      },
+      }),
     },
   });
   assert.equal(saveCount, 0);
   assert.match(oversizedStream[1].text || '', /exceeds 4 bytes/);
+  const spoolEntriesAfter = (await fs.readdir(os.tmpdir())).filter(name => name.startsWith('foxwarm-qqbot-media-'));
+  assert.deepEqual(spoolEntriesAfter, spoolEntriesBefore);
 });
 
 test('QQ media validates allowlisted HTTPS redirects and private hosts before fetch', async () => {
@@ -232,10 +324,9 @@ test('QQ media timeout is bounded and never saves a hanging response', async () 
       fetch: async (_url, init) => new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
       }),
-      saveInboundSessionFile: async options => {
+      saveInboundSessionFileFromPath: pathSaver(() => {
         saveCount += 1;
-        return savedFile(options.fileName || 'x.txt', options.mimeType || 'application/octet-stream', options.buffer.length, false);
-      },
+      }),
     },
   });
   assert.ok(Date.now() - started < 500);

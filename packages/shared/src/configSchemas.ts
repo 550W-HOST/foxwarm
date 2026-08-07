@@ -165,8 +165,8 @@ const channelEntry = {
       type: 'object',
       additionalProperties: true,
       properties: {
-        imageMaxBytes: { type: 'integer', minimum: 1, maximum: 209715200 },
-        fileMaxBytes: { type: 'integer', minimum: 1, maximum: 209715200 },
+        imageMaxBytes: { type: 'integer', minimum: 1, maximum: 20971520, description: 'Safe inline-image threshold; larger images fall back to generic files.' },
+        fileMaxBytes: { type: 'integer', minimum: 1, maximum: 209715200, description: 'Bounded generic-file cap, also used for image fallback files.' },
         maxTotalBytes: { type: 'integer', minimum: 1, maximum: 209715200 },
         maxAttachments: { type: 'integer', minimum: 1, maximum: 16 },
       },

@@ -1,14 +1,17 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
-import { buildSavedFileText, saveInboundSessionFile, SavedChannelFile } from '../channelFiles';
+import { buildSavedFileText, saveInboundSessionFileFromPath, SavedChannelFile } from '../channelFiles';
 import type { QQBotMediaConfig } from '../config';
 import type { MessagePart } from '../types';
 
 const MIB = 1024 * 1024;
 
 export const QQBOT_MEDIA_HARD_MAX_BYTES = 200 * MIB;
-export const QQBOT_MEDIA_DEFAULT_IMAGE_MAX_BYTES = 20 * MIB;
+export const QQBOT_MEDIA_SAFE_INLINE_IMAGE_MAX_BYTES = 20 * MIB;
+export const QQBOT_MEDIA_DEFAULT_IMAGE_MAX_BYTES = QQBOT_MEDIA_SAFE_INLINE_IMAGE_MAX_BYTES;
 export const QQBOT_MEDIA_DEFAULT_FILE_MAX_BYTES = 50 * MIB;
 export const QQBOT_MEDIA_DEFAULT_TOTAL_MAX_BYTES = QQBOT_MEDIA_HARD_MAX_BYTES;
 export const QQBOT_MEDIA_DEFAULT_MAX_ATTACHMENTS = 8;
@@ -46,16 +49,18 @@ const EXT_BY_MIME: Record<string, string> = {
 type RawAttachment = Record<string, unknown>;
 
 type NormalizedAttachment = {
+  mediaKind: 'image' | 'file' | 'unsupported';
   index: number;
   url?: string;
   fileName: string;
   mimeType: string;
   declaredSize?: number;
+  unsupportedReason?: string;
 };
 
 export type QQBotMediaDeps = {
   fetch?: typeof fetch;
-  saveInboundSessionFile?: typeof saveInboundSessionFile;
+  saveInboundSessionFileFromPath?: typeof saveInboundSessionFileFromPath;
   timeoutMs?: number;
 };
 
@@ -69,7 +74,7 @@ export type QQBotMediaMaterializeOptions = {
 };
 
 type QQBotMediaLimits = {
-  imageMaxBytes: number;
+  imageInlineMaxBytes: number;
   fileMaxBytes: number;
   totalMaxBytes: number;
   maxAttachments: number;
@@ -83,7 +88,7 @@ function clampPositiveBytes(value: unknown, fallback: number): number {
 }
 
 function resolveLimits(config?: QQBotMediaConfig): QQBotMediaLimits {
-  const imageMaxBytes = clampPositiveBytes(config?.imageMaxBytes, QQBOT_MEDIA_DEFAULT_IMAGE_MAX_BYTES);
+  const requestedImageMaxBytes = clampPositiveBytes(config?.imageMaxBytes, QQBOT_MEDIA_DEFAULT_IMAGE_MAX_BYTES);
   const fileMaxBytes = clampPositiveBytes(config?.fileMaxBytes, QQBOT_MEDIA_DEFAULT_FILE_MAX_BYTES);
   const totalMaxBytes = clampPositiveBytes(config?.maxTotalBytes, QQBOT_MEDIA_DEFAULT_TOTAL_MAX_BYTES);
   const requestedCount = typeof config?.maxAttachments === 'number' && Number.isFinite(config.maxAttachments)
@@ -91,7 +96,7 @@ function resolveLimits(config?: QQBotMediaConfig): QQBotMediaLimits {
     : QQBOT_MEDIA_DEFAULT_MAX_ATTACHMENTS;
 
   return {
-    imageMaxBytes,
+    imageInlineMaxBytes: Math.min(requestedImageMaxBytes, QQBOT_MEDIA_SAFE_INLINE_IMAGE_MAX_BYTES),
     fileMaxBytes,
     totalMaxBytes,
     maxAttachments: Math.max(1, Math.min(requestedCount, QQBOT_MEDIA_MAX_ATTACHMENTS)),
@@ -112,6 +117,23 @@ function normalizeMimeType(value: unknown): string {
     return 'application/octet-stream';
   }
   return normalized;
+}
+
+function classifyMediaKind(value: RawAttachment, mimeType: string): { mediaKind: NormalizedAttachment['mediaKind']; unsupportedReason?: string } {
+  const declaredType = cleanText(value.content_type ?? value.mimeType ?? value.type, 128).toLowerCase();
+  const fileType = value.file_type ?? value.fileType;
+  const hasNestedMedia = [value.attachments, value.children]
+    .some(nested => nested !== undefined && nested !== null);
+  if (hasNestedMedia) {
+    return { mediaKind: 'unsupported', unsupportedReason: 'nested QQ media is deferred in Stage 1' };
+  }
+  if (fileType === 2 || fileType === '2' || declaredType === 'video' || declaredType.startsWith('video/') || mimeType.startsWith('video/')) {
+    return { mediaKind: 'unsupported', unsupportedReason: 'QQ video media is deferred in Stage 1' };
+  }
+  if (fileType === 3 || fileType === '3' || declaredType === 'voice' || declaredType === 'audio' || declaredType.startsWith('audio/') || mimeType.startsWith('audio/') || value.voice_wav_url || value.voiceWavUrl) {
+    return { mediaKind: 'unsupported', unsupportedReason: 'QQ voice media is deferred in Stage 1' };
+  }
+  return { mediaKind: mimeType.startsWith('image/') ? 'image' : 'file' };
 }
 
 function safeFileName(value: unknown, index: number, mimeType: string): string {
@@ -138,14 +160,17 @@ function normalizeAttachment(raw: unknown, index: number): NormalizedAttachment 
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const value = raw as RawAttachment;
   const mimeType = normalizeMimeType(value.content_type ?? value.mimeType);
+  const classification = classifyMediaKind(value, mimeType);
   const fileName = safeFileName(value.filename ?? value.fileName, index, mimeType);
   const url = cleanText(value.url, MAX_ATTACHMENT_URL_LENGTH) || undefined;
   return {
+    mediaKind: classification.mediaKind,
     index,
     url,
     fileName,
     mimeType,
     declaredSize: normalizeDeclaredSize(value.size ?? value.sizeBytes),
+    unsupportedReason: classification.unsupportedReason,
   };
 }
 
@@ -156,10 +181,13 @@ function formatByteCount(bytes: number | undefined): string {
 }
 
 function attachmentKind(attachment: NormalizedAttachment): 'image' | 'file' {
-  return attachment.mimeType.startsWith('image/') ? 'image' : 'file';
+  return attachment.mediaKind === 'image' ? 'image' : 'file';
 }
 
 function attachmentPreview(attachment: NormalizedAttachment): string {
+  if (attachment.mediaKind === 'unsupported') {
+    return `[QQ unsupported attachment deferred: ${attachment.fileName}; MIME: ${attachment.mimeType}; size: ${formatByteCount(attachment.declaredSize)}; reason: ${attachment.unsupportedReason || 'unsupported media'}]`;
+  }
   return `[QQ ${attachmentKind(attachment)} attachment: ${attachment.fileName}; MIME: ${attachment.mimeType}; size: ${formatByteCount(attachment.declaredSize)}]`;
 }
 
@@ -221,30 +249,57 @@ async function withTimeout<T>(promise: Promise<T>, controller: AbortController, 
   }
 }
 
-async function readBoundedBody(body: ReadableStream<Uint8Array> | null, maxBytes: number): Promise<Buffer> {
-  if (!body) throw new Error('media response has no body');
-  const reader = body.getReader();
-  const chunks: Buffer[] = [];
-  let total = 0;
+async function writeResponseBodyToSpool(
+  response: Response,
+  spoolPath: string,
+  maxFileBytes: number,
+  totalUsedBytes: number,
+  totalMaxBytes: number,
+): Promise<number> {
+  if (!response.body) throw new Error('media response has no body');
+  const contentLength = response.headers.get('content-length');
+  if (contentLength && /^\d+$/u.test(contentLength)) {
+    const declaredBytes = Number(contentLength);
+    if (declaredBytes > maxFileBytes) throw new Error(`media exceeds ${formatByteCount(maxFileBytes)} limit`);
+    if (totalUsedBytes + declaredBytes > totalMaxBytes) throw new Error(`media exceeds ${formatByteCount(totalMaxBytes)} total limit`);
+  }
+
+  const file = await fs.open(spoolPath, 'wx');
+  const reader = response.body.getReader();
+  let receivedBytes = 0;
   try {
     while (true) {
       const next = await reader.read();
       if (next.done) break;
       const chunk = Buffer.from(next.value);
-      total += chunk.length;
-      if (total > maxBytes) throw new Error(`media exceeds ${formatByteCount(maxBytes)} limit`);
-      chunks.push(chunk);
+      if (receivedBytes + chunk.length > maxFileBytes) {
+        throw new Error(`media exceeds ${formatByteCount(maxFileBytes)} limit`);
+      }
+      if (totalUsedBytes + receivedBytes + chunk.length > totalMaxBytes) {
+        throw new Error(`media exceeds ${formatByteCount(totalMaxBytes)} total limit`);
+      }
+      await file.write(chunk);
+      receivedBytes += chunk.length;
     }
-    return Buffer.concat(chunks, total);
+    return receivedBytes;
   } catch (error) {
     await reader.cancel().catch(() => {});
     throw error;
   } finally {
     reader.releaseLock();
+    await file.close();
   }
 }
 
-async function fetchBoundedMedia(url: string, maxBytes: number, fetchFn: typeof fetch, timeoutMs = QQBOT_MEDIA_TIMEOUT_MS): Promise<Buffer> {
+async function downloadBoundedMediaToFile(
+  url: string,
+  spoolPath: string,
+  maxFileBytes: number,
+  totalUsedBytes: number,
+  totalMaxBytes: number,
+  fetchFn: typeof fetch,
+  timeoutMs = QQBOT_MEDIA_TIMEOUT_MS,
+): Promise<number> {
   let currentUrl = url;
   for (let redirect = 0; redirect <= QQBOT_MEDIA_MAX_REDIRECTS; redirect += 1) {
     const parsed = validateMediaUrl(currentUrl);
@@ -271,20 +326,19 @@ async function fetchBoundedMedia(url: string, maxBytes: number, fetchFn: typeof 
       throw new Error(`media download returned HTTP ${response.status}`);
     }
 
-    const contentLength = response.headers.get('content-length');
-    if (contentLength && /^\d+$/u.test(contentLength) && Number(contentLength) > maxBytes) {
-      await cancelResponseBody(response);
-      throw new Error(`media exceeds ${formatByteCount(maxBytes)} limit`);
-    }
-    return await withTimeout(readBoundedBody(response.body, maxBytes), controller, timeoutMs);
+    return await withTimeout(
+      writeResponseBodyToSpool(response, spoolPath, maxFileBytes, totalUsedBytes, totalMaxBytes),
+      controller,
+      timeoutMs,
+    );
   }
   throw new Error('too many media redirects');
 }
 
-async function probeRaster(buffer: Buffer, mimeType: string): Promise<{ width?: number; height?: number }> {
+async function probeRaster(spoolPath: string, mimeType: string): Promise<{ width?: number; height?: number }> {
   const expected = RASTER_MIME_FORMATS[mimeType];
   if (!expected) throw new Error(`unsupported inline image MIME ${mimeType}`);
-  const metadata = await sharp(buffer, { limitInputPixels: 64 * 1024 * 1024 }).metadata();
+  const metadata = await sharp(spoolPath, { limitInputPixels: 64 * 1024 * 1024 }).metadata();
   if (metadata.format !== expected) {
     throw new Error(`image bytes do not match declared MIME ${mimeType}`);
   }
@@ -319,9 +373,9 @@ function makeImageId(eventId: string, attachmentIndex: number, buffer: Buffer): 
 
 async function saveInbound(
   deps: QQBotMediaDeps | undefined,
-  options: Parameters<typeof saveInboundSessionFile>[0],
+  options: Parameters<typeof saveInboundSessionFileFromPath>[0],
 ): Promise<SavedChannelFile> {
-  return (deps?.saveInboundSessionFile || saveInboundSessionFile)(options);
+  return (deps?.saveInboundSessionFileFromPath || saveInboundSessionFileFromPath)(options);
 }
 
 export async function materializeQQBotAttachments(options: QQBotMediaMaterializeOptions): Promise<MessagePart[]> {
@@ -348,8 +402,12 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
     }
 
     const label = attachmentPreview(attachment);
-    const kind = attachmentKind(attachment);
-    const perFileLimit = kind === 'image' ? limits.imageMaxBytes : limits.fileMaxBytes;
+    if (attachment.mediaKind === 'unsupported') {
+      parts.push(mediaErrorPart(label, attachment.unsupportedReason || 'unsupported QQ media is deferred in Stage 1'));
+      continue;
+    }
+
+    const perFileLimit = limits.fileMaxBytes;
     if (!attachment.url) {
       parts.push(mediaErrorPart(label, 'attachment URL is missing'));
       continue;
@@ -366,21 +424,38 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
 
     const remainingTotal = limits.totalMaxBytes - totalDownloaded;
     const fetchLimit = Math.min(perFileLimit, remainingTotal, QQBOT_MEDIA_HARD_MAX_BYTES);
+    let spoolDir: string | undefined;
     try {
-      const buffer = await fetchBoundedMedia(attachment.url, fetchLimit, fetchFn, options.deps?.timeoutMs);
-      if (buffer.length > perFileLimit) throw new Error(`media exceeds ${formatByteCount(perFileLimit)} limit`);
-      totalDownloaded += buffer.length;
+      spoolDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-qqbot-media-'));
+      const spoolPath = path.join(spoolDir, 'attachment.bin');
+      const sizeBytes = await downloadBoundedMediaToFile(
+        attachment.url,
+        spoolPath,
+        fetchLimit,
+        totalDownloaded,
+        limits.totalMaxBytes,
+        fetchFn,
+        options.deps?.timeoutMs,
+      );
+      totalDownloaded += sizeBytes;
 
-      if (kind === 'image' && RASTER_MIME_FORMATS[attachment.mimeType]) {
-        const imageMeta = await probeRaster(buffer, attachment.mimeType);
+      const canInlineImage = attachment.mediaKind === 'image'
+        && sizeBytes <= limits.imageInlineMaxBytes
+        && Boolean(RASTER_MIME_FORMATS[attachment.mimeType]);
+      if (canInlineImage) {
+        const imageMeta = await probeRaster(spoolPath, attachment.mimeType);
         const saved = await saveInbound(options.deps, {
           sessionId: options.sessionId,
           platform: 'qqbot',
-          buffer,
+          sourcePath: spoolPath,
+          sizeBytes,
           fileName: attachment.fileName,
           mimeType: attachment.mimeType,
           isImage: true,
         });
+        // The only full-buffer media read is after the safe inline-image cap
+        // and raster validation have both passed.
+        const buffer = await fs.readFile(spoolPath);
         parts.push({
           text: buildSavedFileText(saved, 'image'),
           inlineData: { mimeType: attachment.mimeType, data: buffer.toString('base64') },
@@ -396,18 +471,26 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
         const saved = await saveInbound(options.deps, {
           sessionId: options.sessionId,
           platform: 'qqbot',
-          buffer,
+          sourcePath: spoolPath,
+          sizeBytes,
           fileName: attachment.fileName,
           mimeType: attachment.mimeType,
           isImage: false,
         });
-        parts.push({ text: buildSavedFileText(saved, 'file') });
+        const imageFallbackNote = attachment.mediaKind === 'image'
+          ? `\n[QQ image kept as a generic file; inline image limit is ${formatByteCount(limits.imageInlineMaxBytes)} and no image bytes were sent inline]`
+          : '';
+        parts.push({ text: `${buildSavedFileText(saved, 'file')}${imageFallbackNote}` });
       }
     } catch (error) {
       if (error instanceof Error && /exceeds .*limit/u.test(error.message)) {
         totalBoundReached = true;
       }
       parts.push(mediaErrorPart(label, boundedError(error)));
+    } finally {
+      if (spoolDir) {
+        await fs.rm(spoolDir, { recursive: true, force: true }).catch(() => {});
+      }
     }
   }
 

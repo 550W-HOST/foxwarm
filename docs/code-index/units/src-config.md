@@ -11,7 +11,8 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 
 ### Application configuration
 
-- Channel (including `QQBotConfig` and bounded QQ media limits), guest-agent,
+- Channel (including `QQBotConfig`, the safe inline-image threshold and bounded
+  QQ generic-file media limits), guest-agent,
   ASR, and `AppConfig` types.
 - `readAppConfigFile`, `writeAppConfigFile`.
 - `getNormalizedChannelConfigs`, `getChannelConfigById`, `getChannelConfigsByType`, `getDefaultChannelConfigByType`, `getDefaultChannelIdByType`.

@@ -137,11 +137,11 @@ test('QQ Bot deduplication happens before media download and duplicate delivery 
         fetchCount += 1;
         return new Response('file bytes', { status: 200 });
       },
-      saveInboundSessionFile: async (options: any) => {
+      saveInboundSessionFileFromPath: async (options: any) => {
         saveCount += 1;
         return {
           agentName: 'main', nodeId: 'master', absolutePath: '/tmp/qq-file', promptPath: '/tmp/qq-file',
-          fileName: options.fileName, mimeType: options.mimeType, sizeBytes: options.buffer.length, isImage: false,
+          fileName: options.fileName, mimeType: options.mimeType, sizeBytes: options.sizeBytes, isImage: false,
         };
       },
     },

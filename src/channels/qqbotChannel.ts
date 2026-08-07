@@ -31,7 +31,7 @@ type QQBotSocket = Pick<WebSocket, 'on' | 'once' | 'send' | 'close' | 'readyStat
 
 type QQBotChannelDeps = {
   fetch?: typeof fetch;
-  saveInboundSessionFile?: typeof import('../channelFiles').saveInboundSessionFile;
+  saveInboundSessionFileFromPath?: typeof import('../channelFiles').saveInboundSessionFileFromPath;
   createWebSocket?: (url: string) => QQBotSocket;
   reconnectDelaysMs?: number[];
   invalidSessionReconnectDelayMs?: number;
@@ -146,7 +146,7 @@ export class QQBotChannel implements Channel {
   private readonly appId: string;
   private readonly clientSecret: string;
   private readonly mediaConfig: QQBotConfig['media'];
-  private readonly saveInboundSessionFile?: QQBotChannelDeps['saveInboundSessionFile'];
+  private readonly saveInboundSessionFileFromPath?: QQBotChannelDeps['saveInboundSessionFileFromPath'];
   private readonly fetchFn: typeof fetch;
   private readonly createWebSocket: (url: string) => QQBotSocket;
   private readonly reconnectDelaysMs: number[];
@@ -178,7 +178,7 @@ export class QQBotChannel implements Channel {
     this.clientSecret = config.clientSecret?.trim() || '';
     this.mediaConfig = config.media;
     this.fetchFn = deps.fetch || globalThis.fetch;
-    this.saveInboundSessionFile = deps.saveInboundSessionFile;
+    this.saveInboundSessionFileFromPath = deps.saveInboundSessionFileFromPath;
     this.createWebSocket = deps.createWebSocket || ((url) => new WebSocket(url));
     this.reconnectDelaysMs = deps.reconnectDelaysMs || RECONNECT_DELAY_MS;
     this.invalidSessionReconnectDelayMs = deps.invalidSessionReconnectDelayMs ?? 3_000;
@@ -636,7 +636,7 @@ export class QQBotChannel implements Channel {
         config: this.mediaConfig,
         deps: {
           fetch: this.fetchFn,
-          saveInboundSessionFile: this.saveInboundSessionFile,
+          saveInboundSessionFileFromPath: this.saveInboundSessionFileFromPath,
         },
       });
     }
