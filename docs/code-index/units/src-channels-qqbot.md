@@ -19,9 +19,10 @@ image/file attachments through a deferred, authorization-gated materializer.
   runtime factory/status handling.
 - `buildQQBotAttachmentPreviewParts()` — creates URL-free metadata parts for
   attachment ingress before authorization and materialization.
-- `materializeQQBotAttachments()` — streams allowlisted HTTPS media, validates
-  bounded files/raster bytes, saves descriptors, and emits transient image
-  parts for the canonical image-blob boundary.
+- `materializeQQBotAttachments()` — on Main-hosted sessions, streams allowlisted
+  HTTPS media, validates bounded files/raster bytes, saves descriptors, and
+  emits transient image parts for the canonical image-blob boundary. Isolated
+  or bound-node media is deferred with a controlled bounded error.
 
 ## Function Index
 
@@ -92,9 +93,9 @@ image/file attachments through a deferred, authorization-gated materializer.
 - `QQBotConfig` in `src/config.ts` accepts `appId`, `clientSecret`, `enabled`,
   `allowedUsers`, `allowAllUsers`, and bounded `media` limits
   (`imageMaxBytes` safe inline-image cap, `fileMaxBytes`, `maxTotalBytes`,
-  `maxAttachments`). Isolated-node QQ media currently returns a bounded
-  unsupported descriptor because the existing node transfer is whole-buffer,
-  not a streaming boundary.
+  `maxAttachments`). Stage 1 materialization is Main-hosted only; isolated or
+  bound-node QQ media currently returns a controlled bounded error because the
+  existing node transfer is whole-buffer, not a streaming boundary.
 - `src/channelRuntime.ts` constructs, starts, stops, reloads, and reports each
   configured `qqbot` instance alongside the other managed adapters.
 - Startup uses the managed runtime after normal router authorization is
@@ -109,10 +110,11 @@ identity and attachment ordering, deduplication before media fetch, passive
 reply and C2C typing identifiers, gateway identify and resume control flow,
 guild/DM media rejection, group/guild/DM outbound routes, and
 shutdown/reconnect fencing. `src/channels/qqbotMedia.test.ts` covers safe
-previews, official video/voice/nested deferral, streamed spool/total/timeout
-bounds and cleanup, allowlisted redirect validation, safe generic-file storage,
-safe-inline-cap image fallback, raster MIME/magic validation, and transient
-image data crossing into a canonical blob reference.
+previews, official video/voice/nested deferral, Main-hosted preflight,
+streamed spool/total/timeout bounds and cleanup, allowlisted redirect
+validation, safe generic-file storage, safe-inline-cap image fallback, raster
+MIME/magic validation, controlled error categories/path scrubbing, and
+transient image data crossing into a canonical blob reference.
 
 ## Design Decisions
 
@@ -146,9 +148,10 @@ content-addressed image-blob conversion runs before durable queue/history
 storage; generic files remain saved node/path descriptors. Images above the
 safe inline cap are generic file descriptors, not inline data. Guild/DM media,
 outbound media, video/voice, nested attachments, retries/outbox, and remote URL
-send are deferred. Isolated-node media is rejected with a bounded descriptor
-until a genuinely streaming node transfer boundary exists; Stage 1 does not
-pretend the current whole-buffer node API supports the configured master caps.
+send are deferred. Materialization is intentionally Main-hosted only in Stage
+1; isolated/bound-node media is rejected with a controlled bounded error until
+a genuinely streaming node transfer boundary exists. Stage 1 does not pretend
+the current whole-buffer node API supports the configured Main-host caps.
 
 ## Canonical ownership
 

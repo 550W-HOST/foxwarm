@@ -17,7 +17,7 @@ Defines the platform-neutral channel contract/registry, authorization inspection
 ### Authorization and files
 
 - `inspectChannelAuthorization`, context wrapper, result formatter/type.
-- `saveInboundChannelFile`, `saveInboundSessionFile`, `saveInboundSessionFileFromPath`, `buildSavedFileText`, `resolveChannelAgentName`.
+- `saveInboundChannelFile`, `saveInboundSessionFile`, `saveInboundSessionFileFromPath`, `isInboundSessionMainHosted`, `buildSavedFileText`, `resolveChannelAgentName`.
 
 ### Managed runtime
 
@@ -40,7 +40,7 @@ authorization.
 ## Inbound file behavior
 
 - The current session/agent determines whether storage occurs on master or the isolated agent's node.
-- Stored names use sanitized path segments and unique timestamps under the agent's temporary channel-files area. Master buffer/path writes use a unique temporary file followed by atomic rename and cleanup; isolated remote-node writes continue through the node transfer contract, while path-based QQ media rejects when that contract would require whole-buffer transfer.
+- Stored names use sanitized path segments and unique timestamps under the agent's temporary channel-files area. Master buffer/path writes use a unique temporary file followed by atomic rename and cleanup; ordinary isolated remote-node buffer writes continue through the node transfer contract, while path-based QQ media is intentionally Main-hosted only and rejects when that contract would require whole-buffer transfer.
 - The model-facing descriptor gives node/path facts without prescribing a particular file tool.
 
 ## Runtime behavior

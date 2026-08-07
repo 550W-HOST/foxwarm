@@ -74,6 +74,12 @@ async function resolveInboundSession(platform: string, channelUserId?: string, s
   return await sessionManager.getExistingSession(resolvedSessionId);
 }
 
+export async function isInboundSessionMainHosted(sessionId: string, platform = 'qqbot'): Promise<boolean> {
+  const session = await resolveInboundSession(platform, undefined, sessionId);
+  if (!session) return true;
+  return resolveInboundTargetNode(session, session.agent || 'main') === 'master';
+}
+
 function resolveInboundTargetNode(session: any, agentName: string): string {
   if (!sessionManager.isSessionEffectivelyIsolated(session)) {
     return 'master';

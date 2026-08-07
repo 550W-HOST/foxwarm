@@ -3,7 +3,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
-import { buildSavedFileText, saveInboundSessionFileFromPath, SavedChannelFile } from '../channelFiles';
+import {
+  buildSavedFileText,
+  isInboundSessionMainHosted,
+  saveInboundSessionFileFromPath,
+  SavedChannelFile,
+} from '../channelFiles';
 import type { QQBotMediaConfig } from '../config';
 import type { MessagePart } from '../types';
 
@@ -48,6 +53,43 @@ const EXT_BY_MIME: Record<string, string> = {
 
 type RawAttachment = Record<string, unknown>;
 
+type QQBotMediaErrorCategory =
+  | 'download-failed'
+  | 'download-too-large'
+  | 'download-timeout'
+  | 'invalid-media'
+  | 'storage-failed'
+  | 'isolated-unavailable'
+  | 'unsupported-media';
+
+const QQBOT_MEDIA_ERROR_MESSAGES: Record<QQBotMediaErrorCategory, string> = {
+  'download-failed': 'media download failed',
+  'download-too-large': 'media download exceeded the configured size limit',
+  'download-timeout': 'media download timed out',
+  'invalid-media': 'media metadata or bytes were invalid',
+  'storage-failed': 'media storage failed',
+  'isolated-unavailable': 'media storage is unavailable for isolated sessions',
+  'unsupported-media': 'this QQ media type is deferred in Stage 1',
+};
+
+class QQBotMediaError extends Error {
+  readonly category: QQBotMediaErrorCategory;
+
+  constructor(category: QQBotMediaErrorCategory) {
+    super(QQBOT_MEDIA_ERROR_MESSAGES[category]);
+    this.name = 'QQBotMediaError';
+    this.category = category;
+  }
+}
+
+function mediaError(category: QQBotMediaErrorCategory): QQBotMediaError {
+  return new QQBotMediaError(category);
+}
+
+function asMediaError(value: unknown, fallback: QQBotMediaErrorCategory): QQBotMediaError {
+  return value instanceof QQBotMediaError ? value : mediaError(fallback);
+}
+
 type NormalizedAttachment = {
   mediaKind: 'image' | 'file' | 'unsupported';
   index: number;
@@ -61,6 +103,7 @@ type NormalizedAttachment = {
 export type QQBotMediaDeps = {
   fetch?: typeof fetch;
   saveInboundSessionFileFromPath?: typeof saveInboundSessionFileFromPath;
+  isMainHostedSession?: typeof isInboundSessionMainHosted;
   timeoutMs?: number;
 };
 
@@ -195,13 +238,8 @@ function malformedPreview(index: number): string {
   return `[QQ attachment ${index + 1}: malformed attachment metadata]`;
 }
 
-function boundedError(value: unknown): string {
-  const message = value instanceof Error ? value.message : String(value || 'unknown media error');
-  return message.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/https?:\/\/[^\s)]+/gi, '[URL]').slice(0, 180);
-}
-
-function mediaErrorPart(label: string, reason: string): MessagePart {
-  return { text: `${label}\n[QQ media unavailable: ${boundedError(reason)}]` };
+function mediaErrorPart(label: string, error: QQBotMediaError): MessagePart {
+  return { text: `${label}\n[QQ media unavailable: ${QQBOT_MEDIA_ERROR_MESSAGES[error.category]}]` };
 }
 
 function isAllowedMediaHost(hostname: string): boolean {
@@ -214,12 +252,12 @@ function validateMediaUrl(value: string): URL {
   try {
     parsed = new URL(value);
   } catch {
-    throw new Error('invalid media URL');
+    throw mediaError('invalid-media');
   }
-  if (parsed.protocol !== 'https:') throw new Error('media URL must use HTTPS');
-  if (parsed.username || parsed.password) throw new Error('media URL userinfo is not allowed');
-  if (parsed.port && parsed.port !== '443') throw new Error('media URL port is not allowed');
-  if (!isAllowedMediaHost(parsed.hostname)) throw new Error('media URL host is not allowlisted');
+  if (parsed.protocol !== 'https:') throw mediaError('invalid-media');
+  if (parsed.username || parsed.password) throw mediaError('invalid-media');
+  if (parsed.port && parsed.port !== '443') throw mediaError('invalid-media');
+  if (!isAllowedMediaHost(parsed.hostname)) throw mediaError('invalid-media');
   return parsed;
 }
 
@@ -238,7 +276,7 @@ async function withTimeout<T>(promise: Promise<T>, controller: AbortController, 
     timer = setTimeout(() => {
       timedOut = true;
       controller.abort();
-      reject(new Error('media download timed out'));
+      reject(mediaError('download-timeout'));
     }, timeoutMs);
   });
   try {
@@ -255,17 +293,32 @@ async function writeResponseBodyToSpool(
   maxFileBytes: number,
   totalUsedBytes: number,
   totalMaxBytes: number,
+  signal: AbortSignal,
 ): Promise<number> {
-  if (!response.body) throw new Error('media response has no body');
+  if (!response.body) throw mediaError('invalid-media');
   const contentLength = response.headers.get('content-length');
   if (contentLength && /^\d+$/u.test(contentLength)) {
     const declaredBytes = Number(contentLength);
-    if (declaredBytes > maxFileBytes) throw new Error(`media exceeds ${formatByteCount(maxFileBytes)} limit`);
-    if (totalUsedBytes + declaredBytes > totalMaxBytes) throw new Error(`media exceeds ${formatByteCount(totalMaxBytes)} total limit`);
+    if (declaredBytes > maxFileBytes || totalUsedBytes + declaredBytes > totalMaxBytes) {
+      throw mediaError('download-too-large');
+    }
   }
 
-  const file = await fs.open(spoolPath, 'wx');
-  const reader = response.body.getReader();
+  let file: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    file = await fs.open(spoolPath, 'wx');
+  } catch {
+    throw mediaError('storage-failed');
+  }
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  try {
+    reader = response.body.getReader();
+  } catch {
+    await file.close().catch(() => {});
+    throw mediaError('invalid-media');
+  }
+  const cancelOnAbort = () => { void reader.cancel().catch(() => {}); };
+  signal.addEventListener('abort', cancelOnAbort, { once: true });
   let receivedBytes = 0;
   try {
     while (true) {
@@ -273,21 +326,29 @@ async function writeResponseBodyToSpool(
       if (next.done) break;
       const chunk = Buffer.from(next.value);
       if (receivedBytes + chunk.length > maxFileBytes) {
-        throw new Error(`media exceeds ${formatByteCount(maxFileBytes)} limit`);
+        throw mediaError('download-too-large');
       }
       if (totalUsedBytes + receivedBytes + chunk.length > totalMaxBytes) {
-        throw new Error(`media exceeds ${formatByteCount(totalMaxBytes)} total limit`);
+        throw mediaError('download-too-large');
       }
-      await file.write(chunk);
+      try {
+        await file.write(chunk);
+      } catch {
+        throw mediaError('storage-failed');
+      }
       receivedBytes += chunk.length;
     }
+    if (signal.aborted) throw mediaError('download-timeout');
     return receivedBytes;
   } catch (error) {
     await reader.cancel().catch(() => {});
-    throw error;
+    throw asMediaError(error, 'download-failed');
   } finally {
+    signal.removeEventListener('abort', cancelOnAbort);
     reader.releaseLock();
-    await file.close();
+    await file.close().catch(() => {
+      throw mediaError('storage-failed');
+    });
   }
 }
 
@@ -304,48 +365,72 @@ async function downloadBoundedMediaToFile(
   for (let redirect = 0; redirect <= QQBOT_MEDIA_MAX_REDIRECTS; redirect += 1) {
     const parsed = validateMediaUrl(currentUrl);
     const controller = new AbortController();
-    const response = await withTimeout(fetchFn(parsed.toString(), {
-      method: 'GET',
-      redirect: 'manual',
-      signal: controller.signal,
-      // Never forward the bot API Authorization token or user cookies.
-      headers: { accept: '*/*' },
-    }), controller, timeoutMs);
+    let response: Response | undefined;
+    let bodyPromise: Promise<number> | undefined;
+    try {
+      const fetchPromise = fetchFn(parsed.toString(), {
+        method: 'GET',
+        redirect: 'manual',
+        signal: controller.signal,
+        // Never forward the bot API Authorization token or user cookies.
+        headers: { accept: '*/*' },
+      });
+      void fetchPromise.then(lateResponse => {
+        if (controller.signal.aborted) void cancelResponseBody(lateResponse);
+      }).catch(() => {});
+      response = await withTimeout(fetchPromise, controller, timeoutMs);
 
-    if ([301, 302, 303, 307, 308].includes(response.status)) {
-      const location = response.headers.get('location');
-      await cancelResponseBody(response);
-      if (!location) throw new Error('media redirect has no location');
-      if (redirect === QQBOT_MEDIA_MAX_REDIRECTS) throw new Error('too many media redirects');
-      currentUrl = new URL(location, parsed).toString();
-      continue;
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get('location');
+        if (!location) throw mediaError('invalid-media');
+        if (redirect === QQBOT_MEDIA_MAX_REDIRECTS) throw mediaError('invalid-media');
+        try {
+          currentUrl = new URL(location, parsed).toString();
+        } catch {
+          throw mediaError('invalid-media');
+        }
+        await cancelResponseBody(response);
+        continue;
+      }
+
+      if (!response.ok) {
+        throw mediaError('download-failed');
+      }
+
+      bodyPromise = writeResponseBodyToSpool(
+        response,
+        spoolPath,
+        maxFileBytes,
+        totalUsedBytes,
+        totalMaxBytes,
+        controller.signal,
+      );
+      return await withTimeout(bodyPromise, controller, timeoutMs);
+    } catch (error) {
+      controller.abort();
+      if (bodyPromise) await bodyPromise.catch(() => {});
+      if (response) await cancelResponseBody(response);
+      throw asMediaError(error, 'download-failed');
     }
-
-    if (!response.ok) {
-      await cancelResponseBody(response);
-      throw new Error(`media download returned HTTP ${response.status}`);
-    }
-
-    return await withTimeout(
-      writeResponseBodyToSpool(response, spoolPath, maxFileBytes, totalUsedBytes, totalMaxBytes),
-      controller,
-      timeoutMs,
-    );
   }
-  throw new Error('too many media redirects');
+  throw mediaError('invalid-media');
 }
 
 async function probeRaster(spoolPath: string, mimeType: string): Promise<{ width?: number; height?: number }> {
   const expected = RASTER_MIME_FORMATS[mimeType];
-  if (!expected) throw new Error(`unsupported inline image MIME ${mimeType}`);
-  const metadata = await sharp(spoolPath, { limitInputPixels: 64 * 1024 * 1024 }).metadata();
-  if (metadata.format !== expected) {
-    throw new Error(`image bytes do not match declared MIME ${mimeType}`);
+  if (!expected) throw mediaError('invalid-media');
+  try {
+    const metadata = await sharp(spoolPath, { limitInputPixels: 64 * 1024 * 1024 }).metadata();
+    if (metadata.format !== expected) {
+      throw mediaError('invalid-media');
+    }
+    return {
+      width: typeof metadata.width === 'number' ? metadata.width : undefined,
+      height: typeof metadata.height === 'number' ? metadata.height : undefined,
+    };
+  } catch (error) {
+    throw asMediaError(error, 'invalid-media');
   }
-  return {
-    width: typeof metadata.width === 'number' ? metadata.width : undefined,
-    height: typeof metadata.height === 'number' ? metadata.height : undefined,
-  };
 }
 
 function buildPreviewParts(content: string, attachments: unknown[], limits: QQBotMediaLimits): MessagePart[] {
@@ -354,6 +439,30 @@ function buildPreviewParts(content: string, attachments: unknown[], limits: QQBo
   for (let index = 0; index < attachments.length && index < limits.maxAttachments; index += 1) {
     const attachment = normalizeAttachment(attachments[index], index);
     parts.push({ text: attachment ? attachmentPreview(attachment) : malformedPreview(index) });
+  }
+  if (attachments.length > limits.maxAttachments) {
+    parts.push({ text: `[QQ media: ${attachments.length - limits.maxAttachments} additional attachments omitted by the inbound bound]` });
+  }
+  return parts.length > 0 ? parts : [{ text: '[QQ message contained no readable text or media]' }];
+}
+
+function buildMainHostedOnlyErrorParts(
+  content: string,
+  attachments: unknown[],
+  limits: QQBotMediaLimits,
+  error = mediaError('isolated-unavailable'),
+): MessagePart[] {
+  const parts: MessagePart[] = [];
+  if (content.trim()) parts.push({ text: content });
+  for (let index = 0; index < attachments.length && index < limits.maxAttachments; index += 1) {
+    const attachment = normalizeAttachment(attachments[index], index);
+    if (!attachment) {
+      parts.push({ text: malformedPreview(index) });
+    } else if (attachment.mediaKind === 'unsupported') {
+      parts.push(mediaErrorPart(attachmentPreview(attachment), mediaError('unsupported-media')));
+    } else {
+      parts.push(mediaErrorPart(attachmentPreview(attachment), error));
+    }
   }
   if (attachments.length > limits.maxAttachments) {
     parts.push({ text: `[QQ media: ${attachments.length - limits.maxAttachments} additional attachments omitted by the inbound bound]` });
@@ -375,7 +484,14 @@ async function saveInbound(
   deps: QQBotMediaDeps | undefined,
   options: Parameters<typeof saveInboundSessionFileFromPath>[0],
 ): Promise<SavedChannelFile> {
-  return (deps?.saveInboundSessionFileFromPath || saveInboundSessionFileFromPath)(options);
+  try {
+    return await (deps?.saveInboundSessionFileFromPath || saveInboundSessionFileFromPath)(options);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('whole-buffer only')) {
+      throw mediaError('isolated-unavailable');
+    }
+    throw mediaError('storage-failed');
+  }
 }
 
 export async function materializeQQBotAttachments(options: QQBotMediaMaterializeOptions): Promise<MessagePart[]> {
@@ -386,6 +502,14 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
 
   let totalDownloaded = 0;
   let totalBoundReached = false;
+  if (!options.deps?.saveInboundSessionFileFromPath) {
+    try {
+      const mainHosted = await (options.deps?.isMainHostedSession || isInboundSessionMainHosted)(options.sessionId);
+      if (!mainHosted) return buildMainHostedOnlyErrorParts(options.content, attachments, limits);
+    } catch {
+      return buildMainHostedOnlyErrorParts(options.content, attachments, limits, mediaError('storage-failed'));
+    }
+  }
   const fetchFn = options.deps?.fetch || globalThis.fetch;
   if (!fetchFn) {
     return buildPreviewParts(options.content, attachments, limits).map(part => ({
@@ -403,30 +527,38 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
 
     const label = attachmentPreview(attachment);
     if (attachment.mediaKind === 'unsupported') {
-      parts.push(mediaErrorPart(label, attachment.unsupportedReason || 'unsupported QQ media is deferred in Stage 1'));
+      parts.push(mediaErrorPart(label, mediaError('unsupported-media')));
       continue;
     }
 
-    const perFileLimit = limits.fileMaxBytes;
+    const canPotentiallyInlineImage = attachment.mediaKind === 'image'
+      && Boolean(RASTER_MIME_FORMATS[attachment.mimeType]);
+    const downloadLimit = canPotentiallyInlineImage
+      ? Math.max(limits.fileMaxBytes, limits.imageInlineMaxBytes)
+      : limits.fileMaxBytes;
     if (!attachment.url) {
-      parts.push(mediaErrorPart(label, 'attachment URL is missing'));
+      parts.push(mediaErrorPart(label, mediaError('invalid-media')));
       continue;
     }
-    if (attachment.declaredSize !== undefined && attachment.declaredSize > perFileLimit) {
-      parts.push(mediaErrorPart(label, `declared size exceeds ${formatByteCount(perFileLimit)} limit`));
+    if (attachment.declaredSize !== undefined && attachment.declaredSize > downloadLimit) {
+      parts.push(mediaErrorPart(label, mediaError('download-too-large')));
       totalBoundReached = totalBoundReached || attachment.declaredSize > limits.totalMaxBytes;
       continue;
     }
     if (totalBoundReached || totalDownloaded >= limits.totalMaxBytes) {
-      parts.push(mediaErrorPart(label, `total inbound media exceeds ${formatByteCount(limits.totalMaxBytes)} limit`));
+      parts.push(mediaErrorPart(label, mediaError('download-too-large')));
       continue;
     }
 
     const remainingTotal = limits.totalMaxBytes - totalDownloaded;
-    const fetchLimit = Math.min(perFileLimit, remainingTotal, QQBOT_MEDIA_HARD_MAX_BYTES);
+    const fetchLimit = Math.min(downloadLimit, remainingTotal, QQBOT_MEDIA_HARD_MAX_BYTES);
     let spoolDir: string | undefined;
     try {
-      spoolDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-qqbot-media-'));
+      try {
+        spoolDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-qqbot-media-'));
+      } catch {
+        throw mediaError('storage-failed');
+      }
       const spoolPath = path.join(spoolDir, 'attachment.bin');
       const sizeBytes = await downloadBoundedMediaToFile(
         attachment.url,
@@ -442,6 +574,9 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
       const canInlineImage = attachment.mediaKind === 'image'
         && sizeBytes <= limits.imageInlineMaxBytes
         && Boolean(RASTER_MIME_FORMATS[attachment.mimeType]);
+      if (!canInlineImage && attachment.mediaKind === 'image' && sizeBytes > limits.fileMaxBytes) {
+        throw mediaError('download-too-large');
+      }
       if (canInlineImage) {
         const imageMeta = await probeRaster(spoolPath, attachment.mimeType);
         const saved = await saveInbound(options.deps, {
@@ -455,7 +590,12 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
         });
         // The only full-buffer media read is after the safe inline-image cap
         // and raster validation have both passed.
-        const buffer = await fs.readFile(spoolPath);
+        let buffer: Buffer;
+        try {
+          buffer = await fs.readFile(spoolPath);
+        } catch {
+          throw mediaError('storage-failed');
+        }
         parts.push({
           text: buildSavedFileText(saved, 'image'),
           inlineData: { mimeType: attachment.mimeType, data: buffer.toString('base64') },
@@ -483,10 +623,11 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
         parts.push({ text: `${buildSavedFileText(saved, 'file')}${imageFallbackNote}` });
       }
     } catch (error) {
-      if (error instanceof Error && /exceeds .*limit/u.test(error.message)) {
+      const controlledError = asMediaError(error, 'download-failed');
+      if (controlledError.category === 'download-too-large') {
         totalBoundReached = true;
       }
-      parts.push(mediaErrorPart(label, boundedError(error)));
+      parts.push(mediaErrorPart(label, controlledError));
     } finally {
       if (spoolDir) {
         await fs.rm(spoolDir, { recursive: true, force: true }).catch(() => {});

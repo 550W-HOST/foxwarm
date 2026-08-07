@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import fsExtra from 'fs-extra';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import test from 'node:test';
 import sharp from 'sharp';
 import type { SavedChannelFile } from '../channelFiles';
 import { externalizeQueueItemImages } from '../imageBlobs';
+import * as sessionManager from '../sessionManager';
 import {
   buildQQBotAttachmentPreviewParts,
   materializeQQBotAttachments,
@@ -13,6 +15,31 @@ import {
 
 function response(body: any, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(body, { status, headers });
+}
+
+function cancellableResponse(onCancel: () => void, body: string = 'media', headers: Record<string, string> = {}): Response {
+  const bytes = new TextEncoder().encode(String(body));
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+    },
+    cancel() {
+      onCancel();
+    },
+  }), { status: 200, headers });
+}
+
+function completeCancellableResponse(onCancel: () => void, body: string = 'media'): Response {
+  const bytes = new TextEncoder().encode(body);
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+    cancel() {
+      onCancel();
+    },
+  }));
 }
 
 function savedFile(name: string, mimeType: string, sizeBytes: number, isImage: boolean): SavedChannelFile {
@@ -222,6 +249,58 @@ test('QQ images above the safe inline cap become generic file descriptors withou
   assert.match(parts[1].text || '', /no image bytes were sent inline/);
 });
 
+test('QQ image inline threshold is independent from generic file cap, while downgrade still honors file cap', async () => {
+  const image = await sharp({
+    create: { width: 2, height: 1, channels: 3, background: { r: 20, g: 40, b: 60 } },
+  }).png().toBuffer();
+  let inlineSaveCount = 0;
+  const inlineParts = await materializeQQBotAttachments({
+    content: 'inline boundary',
+    eventId: 'message-inline-boundary',
+    sessionId: 'session-inline-boundary',
+    attachments: [{ url: 'https://qpic.cn/inline', filename: 'inline.png', content_type: 'image/png', size: image.length }],
+    config: { imageMaxBytes: image.length, fileMaxBytes: 1 },
+    deps: {
+      fetch: async () => response(image, 200, { 'content-length': String(image.length) }),
+      saveInboundSessionFileFromPath: pathSaver(options => {
+        if (options.isImage) inlineSaveCount += 1;
+      }),
+    },
+  });
+  assert.equal(inlineSaveCount, 1);
+  assert.equal(inlineParts[1].inlineData?.mimeType, 'image/png');
+
+  let downgradeSaveCount = 0;
+  const downgradeParts = await materializeQQBotAttachments({
+    content: 'downgrade boundary',
+    eventId: 'message-downgrade-boundary',
+    sessionId: 'session-downgrade-boundary',
+    attachments: [{ url: 'https://qpic.cn/downgrade', filename: 'downgrade.png', content_type: 'image/png' }],
+    config: { imageMaxBytes: 4, fileMaxBytes: 6 },
+    deps: {
+      fetch: async () => response(new Uint8Array([1, 2, 3, 4, 5, 6])),
+      saveInboundSessionFileFromPath: pathSaver(() => { downgradeSaveCount += 1; }),
+    },
+  });
+  assert.equal(downgradeSaveCount, 1);
+  assert.match(downgradeParts[1].text || '', /kept as a generic file/);
+
+  let rejectedSaveCount = 0;
+  const rejectedParts = await materializeQQBotAttachments({
+    content: 'reject boundary',
+    eventId: 'message-reject-boundary',
+    sessionId: 'session-reject-boundary',
+    attachments: [{ url: 'https://qpic.cn/reject', filename: 'reject.png', content_type: 'image/png' }],
+    config: { imageMaxBytes: 4, fileMaxBytes: 5 },
+    deps: {
+      fetch: async () => response(new Uint8Array([1, 2, 3, 4, 5, 6])),
+      saveInboundSessionFileFromPath: pathSaver(() => { rejectedSaveCount += 1; }),
+    },
+  });
+  assert.equal(rejectedSaveCount, 0);
+  assert.match(rejectedParts[1].text || '', /configured size limit/);
+});
+
 test('QQ media rejects image MIME/magic mismatch without saving inline bytes', async () => {
   let saveCount = 0;
   const parts = await materializeQQBotAttachments({
@@ -239,7 +318,7 @@ test('QQ media rejects image MIME/magic mismatch without saving inline bytes', a
 
   assert.equal(saveCount, 0);
   assert.equal(parts.some(part => part.inlineData), false);
-  assert.match(parts[1].text || '', /do not match declared MIME|unsupported|Input buffer/i);
+  assert.match(parts[1].text || '', /media metadata or bytes were invalid/);
 });
 
 test('QQ media bounds header and streamed bytes before saving', async () => {
@@ -260,7 +339,7 @@ test('QQ media bounds header and streamed bytes before saving', async () => {
     },
   });
   assert.equal(saveCount, 0);
-  assert.match(oversizedHeader[1].text || '', /exceeds 50 bytes/);
+  assert.match(oversizedHeader[1].text || '', /configured size limit/);
 
   const spoolEntriesBefore = (await fs.readdir(os.tmpdir())).filter(name => name.startsWith('foxwarm-qqbot-media-'));
   const oversizedStream = await materializeQQBotAttachments({
@@ -277,9 +356,180 @@ test('QQ media bounds header and streamed bytes before saving', async () => {
     },
   });
   assert.equal(saveCount, 0);
-  assert.match(oversizedStream[1].text || '', /exceeds 4 bytes/);
+  assert.match(oversizedStream[1].text || '', /configured size limit/);
   const spoolEntriesAfter = (await fs.readdir(os.tmpdir())).filter(name => name.startsWith('foxwarm-qqbot-media-'));
   assert.deepEqual(spoolEntriesAfter, spoolEntriesBefore);
+});
+
+test('QQ media cancels a 2xx body on content-length rejection', async () => {
+  let cancelCount = 0;
+  const parts = await materializeQQBotAttachments({
+    content: 'content length',
+    eventId: 'message-content-length',
+    sessionId: 'session-content-length',
+    attachments: [{ url: 'https://qq.com/large', filename: 'large.bin', content_type: 'file' }],
+    config: { fileMaxBytes: 4 },
+    deps: { fetch: async () => cancellableResponse(() => { cancelCount += 1; }, '12345', { 'content-length': '5' }) },
+  });
+
+  assert.equal(cancelCount, 1);
+  assert.match(parts[1].text || '', /configured size limit/);
+});
+
+test('QQ media does not cancel a successfully consumed 2xx body', async () => {
+  let cancelCount = 0;
+  const parts = await materializeQQBotAttachments({
+    content: 'complete body',
+    eventId: 'message-complete-body',
+    sessionId: 'session-complete-body',
+    attachments: [{ url: 'https://qq.com/file', filename: 'file.bin', content_type: 'file' }],
+    deps: {
+      fetch: async () => completeCancellableResponse(() => { cancelCount += 1; }),
+      saveInboundSessionFileFromPath: pathSaver(() => {}),
+    },
+  });
+
+  assert.equal(cancelCount, 0);
+  assert.match(parts[1].text || '', /file\.bin/);
+});
+
+test('QQ media cancels a 2xx body when spool open fails', async () => {
+  const originalOpen = fs.open;
+  let cancelCount = 0;
+  (fs as any).open = async () => { throw new Error('EACCES /private/spool-path'); };
+  try {
+    const parts = await materializeQQBotAttachments({
+      content: 'spool open',
+      eventId: 'message-spool-open',
+      sessionId: 'session-spool-open',
+      attachments: [{ url: 'https://qq.com/file', filename: 'file.bin', content_type: 'file' }],
+      deps: { fetch: async () => cancellableResponse(() => { cancelCount += 1; }) },
+    });
+    assert.match(parts[1].text || '', /media storage failed/);
+  } finally {
+    (fs as any).open = originalOpen;
+  }
+  assert.equal(cancelCount, 1);
+});
+
+test('QQ media cancels a stalled 2xx body on timeout and does not leak a spool', async () => {
+  let cancelCount = 0;
+  const parts = await materializeQQBotAttachments({
+    content: 'body timeout',
+    eventId: 'message-body-timeout',
+    sessionId: 'session-body-timeout',
+    attachments: [{ url: 'https://qq.com/hang', filename: 'hang.bin', content_type: 'file' }],
+    deps: {
+      timeoutMs: 5,
+      fetch: async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1]));
+        },
+        pull() {
+          return new Promise<void>(() => {});
+        },
+        cancel() {
+          cancelCount += 1;
+        },
+      })),
+    },
+  });
+
+  assert.equal(cancelCount, 1);
+  assert.match(parts[1].text || '', /media download timed out/);
+});
+
+test('QQ media errors expose only controlled categories, not spool/final paths or signed URLs', async () => {
+  const signedUrl = 'https://qpic.cn/file?token=secret-token';
+  const privateSourcePath = '/tmp/foxwarm-qqbot-media-private-source';
+  const privateFinalPath = '/private/qqbot/final.bin';
+  const parts = await materializeQQBotAttachments({
+    content: 'storage error',
+    eventId: 'message-storage-error',
+    sessionId: 'session-storage-error',
+    attachments: [{ url: signedUrl, filename: 'file.bin', content_type: 'file' }],
+    deps: {
+      fetch: async () => response('small'),
+      saveInboundSessionFileFromPath: async () => {
+        throw new Error(`ENOSPC source=${privateSourcePath} final=${privateFinalPath} url=${signedUrl}`);
+      },
+    },
+  });
+
+  assert.match(parts[1].text || '', /media storage failed/);
+  assert.doesNotMatch(parts[1].text || '', /foxwarm-qqbot-media-private-source|\/private\/qqbot|secret-token|qpic\.cn/);
+});
+
+test('QQ isolated media is a controlled non-goal without exposing the node transfer error', async () => {
+  const sourcePath = '/tmp/foxwarm-qqbot-media-isolated-source';
+  const parts = await materializeQQBotAttachments({
+    content: 'isolated media',
+    eventId: 'message-isolated-media',
+    sessionId: 'session-isolated-media',
+    attachments: [{ url: 'https://qpic.cn/isolated', filename: 'file.bin', content_type: 'file' }],
+    deps: {
+      fetch: async () => response('small'),
+      saveInboundSessionFileFromPath: async () => {
+        throw new Error(`Inbound media cannot be saved to an isolated node: the existing node file transfer is whole-buffer only and has no bounded streaming boundary. source=${sourcePath}`);
+      },
+    },
+  });
+
+  assert.match(parts[1].text || '', /media storage is unavailable for isolated sessions/);
+  assert.doesNotMatch(parts[1].text || '', /whole-buffer|isolated-source|qpic\.cn/);
+});
+
+test('QQ isolated media is rejected before download when the default master saver is used', async () => {
+  const originalGetExistingSession = sessionManager.getExistingSession;
+  const originalIsSessionEffectivelyIsolated = sessionManager.isSessionEffectivelyIsolated;
+  const originalGetAgentIsolationNode = sessionManager.getAgentIsolationNode;
+  let fetchCount = 0;
+  try {
+    (sessionManager as any).getExistingSession = async () => ({ id: 'isolated/preflight', agent: 'isolated-agent', currentNode: 'sandbox-node' });
+    (sessionManager as any).isSessionEffectivelyIsolated = () => true;
+    (sessionManager as any).getAgentIsolationNode = () => 'sandbox-node';
+    const parts = await materializeQQBotAttachments({
+      content: 'isolated preflight',
+      eventId: 'message-isolated-preflight',
+      sessionId: 'isolated/preflight',
+      attachments: [{ url: 'https://qpic.cn/preflight', filename: 'file.bin', content_type: 'file' }],
+      deps: {
+        fetch: async () => {
+          fetchCount += 1;
+          return response('must not fetch');
+        },
+      },
+    });
+    assert.equal(fetchCount, 0);
+    assert.match(parts[1].text || '', /media storage is unavailable for isolated sessions/);
+  } finally {
+    (sessionManager as any).getExistingSession = originalGetExistingSession;
+    (sessionManager as any).isSessionEffectivelyIsolated = originalIsSessionEffectivelyIsolated;
+    (sessionManager as any).getAgentIsolationNode = originalGetAgentIsolationNode;
+  }
+});
+
+test('QQ real master save copy errors become controlled storage errors without path leakage', async () => {
+  const originalCopyFile = fsExtra.copyFile;
+  const signedUrl = 'https://qpic.cn/real-save?token=copy-secret';
+  const sessionId = `main/qq-real-save-error-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  await sessionManager.getSession(sessionId);
+  (fsExtra as any).copyFile = async (sourcePath: string, finalPath: string) => {
+    throw new Error(`ENOSPC source=${sourcePath} final=${finalPath} url=${signedUrl}`);
+  };
+  try {
+    const parts = await materializeQQBotAttachments({
+      content: 'real save error',
+      eventId: 'message-real-save-error',
+      sessionId,
+      attachments: [{ url: signedUrl, filename: 'real.bin', content_type: 'file' }],
+      deps: { fetch: async () => response('small') },
+    });
+    assert.match(parts[1].text || '', /media storage failed/);
+    assert.doesNotMatch(parts[1].text || '', /foxwarm-qqbot-media-|copy-secret|qpic\.cn|channel-files/);
+  } finally {
+    (fsExtra as any).copyFile = originalCopyFile;
+  }
 });
 
 test('QQ media validates allowlisted HTTPS redirects and private hosts before fetch', async () => {
@@ -292,7 +542,7 @@ test('QQ media validates allowlisted HTTPS redirects and private hosts before fe
     deps: { fetch: async () => { calls += 1; return response('unexpected'); } },
   });
   assert.equal(calls, 0);
-  assert.match(privateHost[1].text || '', /allowlisted|HTTPS/);
+  assert.match(privateHost[1].text || '', /media metadata or bytes were invalid/);
 
   const redirectCalls: string[] = [];
   const redirected = await materializeQQBotAttachments({
@@ -308,7 +558,7 @@ test('QQ media validates allowlisted HTTPS redirects and private hosts before fe
     },
   });
   assert.deepEqual(redirectCalls, ['https://qq.com/redirect']);
-  assert.match(redirected[1].text || '', /allowlisted|HTTPS/);
+  assert.match(redirected[1].text || '', /media metadata or bytes were invalid/);
 });
 
 test('QQ media timeout is bounded and never saves a hanging response', async () => {
@@ -331,7 +581,7 @@ test('QQ media timeout is bounded and never saves a hanging response', async () 
   });
   assert.ok(Date.now() - started < 500);
   assert.equal(saveCount, 0);
-  assert.match(parts[1].text || '', /timed out|aborted/);
+  assert.match(parts[1].text || '', /media download timed out/);
 });
 
 test('QQ media config cannot exceed the 200 MiB hard cap', async () => {
@@ -350,5 +600,5 @@ test('QQ media config cannot exceed the 200 MiB hard cap', async () => {
     },
   });
   assert.equal(fetchCount, 0);
-  assert.match(parts[1].text || '', /200 MiB/);
+  assert.match(parts[1].text || '', /configured size limit/);
 });
