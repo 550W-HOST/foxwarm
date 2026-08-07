@@ -558,8 +558,8 @@ test('QQ Bot uses the bounded local passive-reply policy without inferring serve
   const independent = calls.find(call => String(call.init?.body).includes('independent'));
   assert.equal(JSON.parse(String(independent?.init?.body)).msg_id, 'independent-id');
 
-  const contexts = (channel as any).passiveReplyContexts as Map<string, { firstSeenAt: number; successfulTextReplies: number }>;
-  contexts.set('expired-id', { firstSeenAt: Date.now() - 3_600_001, successfulTextReplies: 0 });
+  const contexts = (channel as any).passiveReplyContexts as Map<string, { firstSeenAt: number; successfulReplies: number }>;
+  contexts.set('expired-id', { firstSeenAt: Date.now() - 3_600_001, successfulReplies: 0 });
   await sendBound('expired-id', 'expired proactive', true);
   const expired = calls.find(call => String(call.init?.body).includes('expired proactive'));
   assert.equal(JSON.parse(String(expired?.init?.body)).msg_id, undefined);
@@ -570,7 +570,7 @@ test('QQ Bot uses the bounded local passive-reply policy without inferring serve
   assert.equal(calls.length, beforeUnknownFailure + 1);
   assert.equal(JSON.parse(String(calls[calls.length - 1].init?.body)).msg_id, 'unknown-failure');
 
-  contexts.set('proactive-failure', { firstSeenAt: Date.now(), successfulTextReplies: 4 });
+  contexts.set('proactive-failure', { firstSeenAt: Date.now(), successfulReplies: 4 });
   failPassive = false;
   failProactive = true;
   const beforeProactiveFailure = calls.length;

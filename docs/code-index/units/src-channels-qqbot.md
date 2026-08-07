@@ -1,6 +1,6 @@
 # Unit: src-channels-qqbot
 
-Files: src/channels/qqbotChannel.ts, src/channels/qqbotChannel.test.ts, src/channels/qqbotMedia.ts, src/channels/qqbotMedia.test.ts
+Files: src/channels/qqbotChannel.ts, src/channels/qqbotChannel.test.ts, src/channels/qqbotChannelMediaSend.test.ts, src/channels/qqbotMedia.ts, src/channels/qqbotMedia.test.ts, src/channels/qqbotMediaUpload.ts, src/channels/qqbotMediaUpload.test.ts
 
 ## Purpose
 
@@ -8,7 +8,8 @@ Implements the official QQ Bot gateway adapter with direct AppID/client-secret
 configuration. It uses the QQ access-token endpoint, gateway WebSocket, and
 official REST message endpoints without depending on an unlicensed QR
 credential-provisioning package. C2C and group ingress also accepts bounded
-image/file attachments through a deferred, authorization-gated materializer.
+image/file attachments through a deferred, authorization-gated materializer,
+and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
 
 ## Key exports
 
@@ -23,6 +24,9 @@ image/file attachments through a deferred, authorization-gated materializer.
   HTTPS media, validates bounded files/raster bytes, saves descriptors, and
   emits transient image parts for the canonical image-blob boundary. Isolated
   or bound-node media is deferred with a controlled bounded error.
+- `uploadQQBotFile()` — validates a prepared local `ChannelFile`, streams hashes
+  and bounded part bodies through the C2C/group upload flow, and returns one
+  opaque `file_info` token without caching it.
 
 ## Function Index
 
@@ -32,6 +36,7 @@ image/file attachments through a deferred, authorization-gated materializer.
 | `QQBotChannel.handleGatewayMessage()` | Identifies or resumes after `HELLO`, retains dispatch sequence/session state, handles gateway control frames, and accepts supported message events. |
 | `QQBotChannel.routeInboundMessage()` | Deduplicates supported events, creates scoped identity, keeps C2C/group attachment metadata URL-free, and attaches an ephemeral media materializer. |
 | `QQBotChannel.sendMessage()` | Routes C2C, group, guild-channel, and guild-DM text to their official REST endpoint. |
+| `QQBotChannel.sendFile()` | Sends C2C/group images or generic files through destination-specific chunk upload and one rich-media message; rejects guild/DM media. |
 | `QQBotChannel.sendTyping()` | Uses the official C2C input-notify message with the latest conversation-local inbound message ID when available. |
 | `QQBotChannel.apiRequest()` / `getAccessToken()` | Performs authenticated API requests with a bounded 401 token refresh. |
 
@@ -92,6 +97,12 @@ image/file attachments through a deferred, authorization-gated materializer.
   typing and passive replies.
 - QQ offers typing through C2C input-notify messages, so this adapter sends
   typing only for a C2C conversation with a current latest inbound message ID.
+- C2C/group `sendFile` reuses a latest conversation-local message ID when
+  available, or a matching persisted ID supplied by the generic file-delivery
+  boundary after restart. It uploads locally prepared files through the
+  destination-specific official chunk flow, sends images only for validated
+  PNG/JPEG bytes within the image cap, and downgrades other images to generic
+  files within the file cap.
 
 ## Runtime and configuration
 
@@ -100,7 +111,9 @@ image/file attachments through a deferred, authorization-gated materializer.
   (`imageMaxBytes` safe inline-image cap, `fileMaxBytes`, `maxTotalBytes`,
   `maxAttachments`). Stage 1 materialization is Main-hosted only; isolated or
   bound-node QQ media currently returns a controlled bounded error because the
-  existing node transfer is whole-buffer, not a streaming boundary.
+  existing node transfer is whole-buffer, not a streaming boundary. Outbound
+  C2C/group media uses the same image/file caps and the official local upload
+  flow.
 - `src/channelRuntime.ts` constructs, starts, stops, reloads, and reports each
   configured `qqbot` instance alongside the other managed adapters.
 - Startup uses the managed runtime after normal router authorization is
@@ -109,12 +122,18 @@ image/file attachments through a deferred, authorization-gated materializer.
 
 ## Tests
 
-`src/channels/qqbotChannel.test.ts` uses mocked token/gateway/REST calls and
+`src/channels/qqbotChannel.test.ts` and `src/channels/qqbotChannelMediaSend.test.ts` use mocked token/gateway/REST/COS calls and
 a fake WebSocket. It covers scoped target validation, C2C/group inbound
 identity and attachment ordering, deduplication before media fetch, passive
 reply and C2C typing identifiers, gateway identify and resume control flow,
 guild/DM media rejection, group/guild/DM outbound routes, and
-shutdown/reconnect fencing. `src/channels/qqbotMedia.test.ts` covers safe
+shutdown/reconnect fencing. Outbound tests cover destination-specific
+upload routes, streamed hash/chunk order, passive IDs/counts/sequences,
+caption/cap handling, permission failures, generation fences, and the
+`send_file` target path. `src/channels/qqbotMediaUpload.test.ts` covers safe
+regular-file validation, Tencent/COS URL checks, bounded prepare responses,
+part hashing, no whole-file buffering, and opaque completion tokens.
+`src/channels/qqbotMedia.test.ts` covers safe
 previews, official video/voice/nested deferral, Main-hosted preflight,
 streamed spool/total/timeout bounds and cleanup, allowlisted redirect
 validation, safe generic-file storage, safe-inline-cap image fallback, raster
@@ -127,15 +146,15 @@ transient image data crossing into a canonical blob reference.
 
 For a source-bound QQ reply, Foxwarm follows the Tencent/OpenClaw local policy
 instead of inferring a server error: from the inbound/first-seen `msg_id`, at
-most four **successful passive text replies** are sent in one hour. The next
-reply after that count or age boundary makes exactly one proactive text attempt
-to the same scoped conversation. A per-`msg_id` in-process chain serializes the
-decision, HTTP result, and successful-count update, so concurrent replies do
-not spend speculative quota; unrelated IDs remain concurrent. Each queued
-operation is fenced to the adapter run generation before it begins I/O; stop or
-reload clears state, and stale old-generation chains cannot affect a new run.
-Typing receives
-its own monotonic `msg_seq` but does not consume the four text replies. The
+most four **successful passive text/image/file replies** are sent in one hour.
+The next reply after that count or age boundary makes exactly one proactive
+attempt to the same scoped conversation. A per-`msg_id` in-process chain
+serializes the decision, HTTP result, and successful-count update, so concurrent
+replies do not spend speculative quota; unrelated IDs remain concurrent. Each
+queued operation is fenced to the adapter run generation before it begins I/O;
+stop or reload clears state, and stale old-generation chains cannot affect a new
+run. Typing receives
+its own monotonic `msg_seq` but does not consume the four passive replies. The
 limiter is per adapter instance, bounded and in-memory only. Unknown API failures, generic HTTP failures,
 network/auth/rate-limit failures, and a failed proactive attempt never trigger
 a fallback or retry; a source-bound final delivery logs and completes rather
@@ -152,11 +171,29 @@ validated supported raster bytes and remain transient until the shared
 content-addressed image-blob conversion runs before durable queue/history
 storage; generic files remain saved node/path descriptors. Images above the
 safe inline cap are generic file descriptors, not inline data. Guild/DM media,
-outbound media, video/voice, nested attachments, retries/outbox, and remote URL
-send are deferred. Materialization is intentionally Main-hosted only in Stage
-1; isolated/bound-node media is rejected with a controlled bounded error until
-a genuinely streaming node transfer boundary exists. Stage 1 does not pretend
+video/voice, nested attachments, retries/outbox, and remote URL send are
+deferred. Materialization is intentionally Main-hosted only in Stage 1;
+isolated/bound-node media is rejected with a controlled bounded error until a
+genuinely streaming node transfer boundary exists. Stage 1 does not pretend
 the current whole-buffer node API supports the configured Main-host caps.
+
+### D-qqbot-outbound-media
+
+[2026-08-08] QQ outbound media is limited to C2C and Group `Channel.sendFile`
+using an already prepared safe local file. Supported PNG/JPEG files within the
+configured image threshold use QQ `file_type=1`; other or oversized images use
+`file_type=4` when within the generic-file cap. The adapter performs the
+destination-specific `upload_prepare` → presigned COS part PUT →
+`upload_part_finish` → `/files` flow and sends one `msg_type=7` message with
+opaque `media.file_info`. Hashes and part bodies are streamed, upload URLs are
+validated Tencent/COS HTTPS targets, and bot credentials are never sent to the
+presigned host. The file-info token is never cached or reused across target or
+adapter instances. Latest conversation-local QQ message IDs share the existing
+four-success passive limiter and monotonic `msg_seq`; after the limit one
+proactive attempt is made, while upload/final failures do not infer fallback or
+retry. Generation checks occur before reading, each upload stage, and final
+delivery. Guild/DM, video/voice, remote URL send, and general upload-service
+abstractions remain unsupported.
 
 ## Canonical ownership
 

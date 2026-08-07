@@ -1,8 +1,9 @@
 import WebSocket, { RawData } from 'ws';
-import { Channel, ChannelContext, ChannelMessage } from '../channel';
+import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { logger } from '../common';
 import type { QQBotConfig } from '../config';
 import { buildQQBotAttachmentPreviewParts, materializeQQBotAttachments } from './qqbotMedia';
+import { uploadQQBotFile } from './qqbotMediaUpload';
 
 const QQBOT_TOKEN_URL = 'https://bots.qq.com/app/getAppAccessToken';
 const QQBOT_API_BASE_URL = 'https://api.sgroup.qq.com';
@@ -19,6 +20,7 @@ const MAX_PASSIVE_REPLY_CONTEXTS = 10_000;
 const MAX_PASSIVE_REPLY_CHAINS = 10_000;
 const MAX_MESSAGE_SCENE_EXT_ITEMS = 32;
 const MAX_MESSAGE_SCENE_EXT_ITEM_LENGTH = 256;
+const QQBOT_MAX_TEXT_LENGTH = 2_000;
 
 type QQBotConversationKind = 'c2c' | 'group' | 'guild' | 'dm';
 
@@ -55,7 +57,7 @@ type QQBotSendOptions = {
 
 type PassiveReplyContext = {
   firstSeenAt: number;
-  successfulTextReplies: number;
+  successfulReplies: number;
 };
 
 type PassiveReplyChain = {
@@ -82,6 +84,39 @@ function requireText(value: unknown, label: string): string {
     throw new Error(`QQ Bot ${label} is required`);
   }
   return text;
+}
+
+function normalizeQQBotCaption(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const caption = value.trim().slice(0, QQBOT_MAX_TEXT_LENGTH);
+  return caption || undefined;
+}
+
+async function readResponseTextBounded(response: Response, maxBytes: number): Promise<string> {
+  const contentLength = response.headers.get('content-length');
+  if (contentLength && /^\d+$/u.test(contentLength) && Number(contentLength) > maxBytes) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error('QQ Bot API response exceeded the bounded media-upload response limit');
+  }
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error('QQ Bot API response exceeded the bounded media-upload response limit');
+      }
+      chunks.push(Buffer.from(next.value));
+    }
+    return Buffer.concat(chunks, total).toString('utf8');
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function normalizeBusinessScalar(value: unknown): string | undefined {
@@ -278,7 +313,7 @@ export class QQBotChannel implements Channel {
         throw error;
       }
       if (sourceBoundPassiveReply && passiveReplyId && this.isCurrentReplyGeneration(replyGeneration)) {
-        this.recordPassiveTextReply(passiveReplyId);
+        this.recordPassiveSuccessfulReply(passiveReplyId);
       }
       if (replyToId && options?.turnFinal && this.isCurrentReplyGeneration(replyGeneration)) {
         this.replySequences.delete(replyToId);
@@ -298,6 +333,69 @@ export class QQBotChannel implements Channel {
       }
       throw error;
     }
+  }
+
+  async sendFile(conversationId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
+    const target = parseQQBotConversationId(conversationId);
+    if (target.kind !== 'c2c' && target.kind !== 'group') {
+      throw new Error('QQ Bot media sending is unsupported for guild and DM destinations');
+    }
+    const mediaTarget: 'c2c' | 'group' = target.kind;
+
+    const persistedReplyId = options?.qqbotChannelId === this.channelId
+      && options?.qqbotConversationId === conversationId
+      && typeof options.qqbotMessageId === 'string'
+      && options.qqbotMessageId.trim()
+      ? options.qqbotMessageId.trim()
+      : undefined;
+    const replyToId = this.latestMessageIds.get(conversationId) || persistedReplyId;
+    const sourceBoundPassiveReply = Boolean(replyToId);
+    const replyGeneration = this.connectionGeneration;
+    const caption = normalizeQQBotCaption(options?.caption);
+    const messagePath = target.kind === 'c2c'
+      ? `/v2/users/${encodeURIComponent(target.id)}/messages`
+      : `/v2/groups/${encodeURIComponent(target.id)}/messages`;
+
+    const send = async (): Promise<void> => {
+      if (!this.isCurrentReplyGeneration(replyGeneration)) {
+        throw new Error('QQ Bot media send was invalidated before upload');
+      }
+      const useProactiveFallback = sourceBoundPassiveReply && this.shouldUseProactiveReply(replyToId!);
+      const passiveReplyId = useProactiveFallback ? undefined : replyToId;
+      const uploaded = await uploadQQBotFile(
+        mediaTarget,
+        target.id,
+        file,
+        this.mediaConfig,
+        {
+          request: (requestPath, body, maxResponseBytes) => this.apiRequest(requestPath, 'POST', body, maxResponseBytes),
+          fetch: this.fetchFn,
+          isCurrent: () => this.isCurrentReplyGeneration(replyGeneration),
+        },
+      );
+      if (!this.isCurrentReplyGeneration(replyGeneration)) {
+        throw new Error('QQ Bot media send was invalidated before final delivery');
+      }
+      const messageSequence = passiveReplyId ? this.allocateReplySequence(passiveReplyId) : undefined;
+      await this.apiRequest(messagePath, 'POST', {
+        ...(caption ? { content: caption } : {}),
+        msg_type: 7,
+        media: { file_info: uploaded.fileInfo },
+        ...(passiveReplyId ? { msg_id: passiveReplyId, msg_seq: messageSequence } : {}),
+      });
+      if (sourceBoundPassiveReply && passiveReplyId && this.isCurrentReplyGeneration(replyGeneration)) {
+        this.recordPassiveSuccessfulReply(passiveReplyId);
+      }
+      if (replyToId && options?.turnFinal && this.isCurrentReplyGeneration(replyGeneration)) {
+        this.replySequences.delete(replyToId);
+      }
+    };
+
+    if (!sourceBoundPassiveReply) {
+      await send();
+      return;
+    }
+    await this.enqueuePassiveReply(replyToId!, replyGeneration, send);
   }
 
   async sendTyping(conversationId: string): Promise<void> {
@@ -729,7 +827,7 @@ export class QQBotChannel implements Channel {
         this.passiveReplyContexts.delete(oldest);
       }
     }
-    const context = { firstSeenAt: now, successfulTextReplies: 0 };
+    const context = { firstSeenAt: now, successfulReplies: 0 };
     this.passiveReplyContexts.set(messageId, context);
     return context;
   }
@@ -737,12 +835,12 @@ export class QQBotChannel implements Channel {
   private shouldUseProactiveReply(messageId: string): boolean {
     const context = this.rememberPassiveReplyContext(messageId);
     return Date.now() - context.firstSeenAt >= PASSIVE_REPLY_TTL_MS
-      || context.successfulTextReplies >= MAX_PASSIVE_TEXT_REPLIES;
+      || context.successfulReplies >= MAX_PASSIVE_TEXT_REPLIES;
   }
 
-  private recordPassiveTextReply(messageId: string): void {
+  private recordPassiveSuccessfulReply(messageId: string): void {
     const context = this.rememberPassiveReplyContext(messageId);
-    context.successfulTextReplies += 1;
+    context.successfulReplies += 1;
   }
 
   private isCurrentReplyGeneration(generation: number): boolean {
@@ -774,11 +872,11 @@ export class QQBotChannel implements Channel {
     return result;
   }
 
-  private async apiRequest<T = any>(path: string, method: 'GET' | 'POST', body?: Record<string, any>): Promise<T> {
-    return this.requestWithToken<T>(path, method, body, false);
+  private async apiRequest<T = any>(path: string, method: 'GET' | 'POST', body?: Record<string, any>, maxResponseBytes?: number): Promise<T> {
+    return this.requestWithToken<T>(path, method, body, false, maxResponseBytes);
   }
 
-  private async requestWithToken<T>(path: string, method: 'GET' | 'POST', body: Record<string, any> | undefined, retried: boolean): Promise<T> {
+  private async requestWithToken<T>(path: string, method: 'GET' | 'POST', body: Record<string, any> | undefined, retried: boolean, maxResponseBytes?: number): Promise<T> {
     const token = await this.getAccessToken();
     const response = await this.fetchFn(`${QQBOT_API_BASE_URL}${path}`, {
       method,
@@ -790,9 +888,11 @@ export class QQBotChannel implements Channel {
     });
     if (response.status === 401 && !retried) {
       this.accessToken = undefined;
-      return this.requestWithToken(path, method, body, true);
+      return this.requestWithToken(path, method, body, true, maxResponseBytes);
     }
-    const responseText = await response.text();
+    const responseText = maxResponseBytes === undefined
+      ? await response.text()
+      : await readResponseTextBounded(response, maxResponseBytes);
     if (!response.ok) {
       throw new Error(`QQ Bot API ${method} ${path} failed (${response.status}): ${responseText.slice(0, 300)}`);
     }
