@@ -579,6 +579,79 @@ test('MessageRouter leaves a different QQ conversation for provider call three a
   }
 });
 
+test('MessageRouter applies pending auto-compaction before a late compatible follow-up provider call', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('late_followup_compaction_gate');
+  const originalChat = llm.chat;
+  const originalProcessSessionCompactionRequest = sessionManager.processSessionCompactionRequest;
+  const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
+  const source = {
+    platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a',
+    channelUserId: 'c2c:user-a', qqbotMessageId: 'qq-1',
+  };
+  let chatCalls = 0;
+  let compactRequests = 0;
+  let compactApplies = 0;
+  session.compactThresholdTokens = 10;
+
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+    chatCalls += 1;
+    if (parts) {
+      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    }
+    if (chatCalls === 1) {
+      await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'intermediate answer' }] });
+      await sessionManager.enqueueSessionItem(session.id, {
+        type: 'user',
+        source: { ...source, qqbotMessageId: 'qq-2' },
+        parts: [{ text: 'late compacted follow-up' }],
+      });
+      return {
+        text: 'intermediate answer',
+        allParts: [{ text: 'intermediate answer' }],
+        usage: { cachedTokens: 0, inputTokens: 100, outputTokens: 10 },
+      };
+    }
+
+    assert.equal(parts, null);
+    assert.equal(compactApplies, 1, 'pending compact must apply before provider call two');
+    assert.equal(userTextOccurrences(activeSession, 'late compacted follow-up'), 1);
+    await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'final after compact' }] });
+    return { text: 'final after compact', allParts: [{ text: 'final after compact' }] };
+  };
+  (sessionManager as any).processSessionCompactionRequest = async (_sessionId: string, _item: any, mode: string) => {
+    assert.equal(mode, 'auto');
+    compactRequests += 1;
+    session.queue.push({ type: 'compact-commit' });
+  };
+  (sessionManager as any).applyCompletedCompactJob = async () => {
+    compactApplies += 1;
+    return true;
+  };
+
+  try {
+    await router.runSessionTurn(session.id, {
+      session,
+      preclaimed: true,
+      parts: [{ text: 'first compacted input' }],
+      source,
+    });
+
+    assert.equal(chatCalls, 2);
+    assert.equal(compactRequests, 1);
+    assert.equal(compactApplies, 1);
+    assert.equal(userTextOccurrences(session, 'first compacted input'), 1);
+    assert.equal(userTextOccurrences(session, 'late compacted follow-up'), 1);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (llm as any).chat = originalChat;
+    (sessionManager as any).processSessionCompactionRequest = originalProcessSessionCompactionRequest;
+    (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
 test('MessageRouter emits turn progress as an empty targeted channel broadcast', () => {
   const router = new MessageRouter() as any;
   const events: Array<{ text: string; options: any }> = [];

@@ -14,7 +14,7 @@ import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
 import { maybeBuildGoalReminderMessage } from './session/goal';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
-import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
+import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, QueueItem, QueueSource, Session, TokenUsage } from './types';
 import { formatLocalTimestamp } from './utils/localTime';
 import { formatFoxwarmMessage, formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemTag, parseFoxwarmOpeningTag } from './utils/promptWrappers';
 
@@ -656,6 +656,26 @@ export class MessageRouter {
     return 'continued';
   }
 
+  private async maybeRequestAutoCompactionBeforeContinuation(
+    session: Session,
+    usage: TokenUsage | undefined,
+    iteration: number,
+  ): Promise<void> {
+    if (!usage) {
+      return;
+    }
+    const currentSize = sessionManager.getUsageTotalTokens(usage);
+    const compactThreshold = sessionManager.getEffectiveCompactThresholdTokens(session);
+    if (currentSize <= compactThreshold) {
+      return;
+    }
+    logger.info({ currentSize, compactThreshold, sessionThresholdOverride: session.compactThresholdTokens, iteration }, 'Context size exceeded threshold before turn continuation, triggering compact');
+    await sessionManager.processSessionCompactionRequest(session.id, {
+      completionMarker: 'Compaction completed. You can continue working now.',
+    }, 'auto');
+    logger.info('Compact requested, continuing with current history');
+  }
+
   private async runQueuedCompaction(sessionId: string, session: Session): Promise<void> {
     try {
       sessionManager.setActiveSessionRuntimeState(sessionId, {
@@ -1097,6 +1117,7 @@ export class MessageRouter {
         if (!result.toolCalls?.length) {
           const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(session, null, turnStreamKey);
           if (queuedAfterLlm.consumedInput) {
+            await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration);
             iteration++;
             continue;
           }
@@ -1218,17 +1239,7 @@ export class MessageRouter {
         const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, turnStreamKey);
         parts = queuedAfterTools.parts;
 
-        if (result.usage) {
-          const currentSize = sessionManager.getUsageTotalTokens(result.usage);
-          const compactThreshold = sessionManager.getEffectiveCompactThresholdTokens(session);
-          if (currentSize > compactThreshold) {
-            logger.info({ currentSize, compactThreshold, sessionThresholdOverride: session.compactThresholdTokens, iteration }, 'Context size exceeded threshold during tool calls, triggering compact');
-            await sessionManager.processSessionCompactionRequest(session.id, {
-              completionMarker: 'Compaction completed. You can continue working now.',
-            }, 'auto');
-            logger.info('Compact requested, continuing with current history');
-          }
-        }
+        await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration);
 
         iteration++;
       }

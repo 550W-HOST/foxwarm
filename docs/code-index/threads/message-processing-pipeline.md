@@ -74,7 +74,10 @@ otherwise compatible provider turn. The same compatibility check runs after a
 no-tool provider result but before final delivery, so matching input that
 arrived during that request continues the provider loop without publishing the
 intermediate result; a different boundary stays queued and the current final
-proceeds. Adapter ownership of the latest passive context is canonical in
+proceeds. Before a consumed input continues the loop, the same effective
+usage-threshold guard used after tool calls may request auto-compaction; the
+loop-top compact safe point applies it before the next provider request.
+Adapter ownership of the latest passive context is canonical in
 [D-channel-conversation-latest-passive-context](../modules/channels.md#d-channel-conversation-latest-passive-context).
 
 ### D-pipeline-canonical-queue-item-boundaries
