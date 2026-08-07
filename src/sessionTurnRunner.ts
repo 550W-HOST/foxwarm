@@ -598,7 +598,7 @@ export class SessionTurnRunner {
     return true;
   }
 
-  private async continueWithQueuedWork(session: Session): Promise<boolean> {
+  private async continueWithQueuedWork(session: Session): Promise<false | 'processed' | 'suppress-trailing-handoff'> {
     while (session.queue[0] && !isQueueItem(session.queue[0])) {
       session.queue.shift();
     }
@@ -615,7 +615,7 @@ export class SessionTurnRunner {
       }
 
       await this.processQueuedItem(session.id, session, nextItem);
-      return true;
+      return 'processed';
     }
 
     const queuedTurn = this.drainLeadingQueuedTurnInputs(session);
@@ -623,14 +623,14 @@ export class SessionTurnRunner {
       return false;
     }
 
-    await this.runSessionTurn(session.id, {
+    const outcome = await this.runSessionTurn(session.id, {
       parts: null,
       queuedItems: queuedTurn.items,
       session,
       preclaimed: true,
       source: queuedTurn.broadcastSource,
     });
-    return true;
+    return outcome === 'suppress-trailing-handoff' ? outcome : 'processed';
   }
 
   private async runPendingCompactionIfNeeded(sessionId: string, session: Session): Promise<'continued' | false> {
@@ -839,7 +839,7 @@ export class SessionTurnRunner {
       session?: Session;
       preclaimed?: boolean;
     }
-  ): Promise<void> {
+  ): Promise<'suppress-trailing-handoff' | void> {
     const session = options.session ?? await this.host.getSession(sessionId);
     if (options.parts?.length || options.message || options.queuedItems?.length) {
       sessionManager.clearSessionWaitForDirectTurn(session, options.message || options.queuedItems?.some(item => item.message) ? 'direct-message-turn' : 'direct-parts-turn');
@@ -1168,7 +1168,7 @@ export class SessionTurnRunner {
         try { await this.host.updateSessionBusyState(session, false); }
         catch (releaseError) { if (fencedMaintenanceDirect) throw releaseError; throw fencedMaintenanceError; }
         if (!fencedMaintenanceDirect) throw fencedMaintenanceError;
-        return;
+        return 'suppress-trailing-handoff';
       }
       const runQueuedAfterStop = !!session.meta?.runQueuedAfterStop;
       if (session.meta?.runQueuedAfterStop) {
@@ -1184,8 +1184,9 @@ export class SessionTurnRunner {
         session.stopping = false;
       }
 
-      if ((!stopCompleted || runQueuedAfterStop) && !getManagedSessionState(session)?.currentStep && await this.continueWithQueuedWork(session)) {
-        return;
+      if ((!stopCompleted || runQueuedAfterStop) && !getManagedSessionState(session)?.currentStep) {
+        const continued = await this.continueWithQueuedWork(session);
+        if (continued) return continued === 'suppress-trailing-handoff' ? continued : undefined;
       }
 
       await this.host.updateSessionBusyState(session, false);
@@ -1207,6 +1208,7 @@ export class SessionTurnRunner {
     this.processingSessions.add(sessionId);
     let claimed = false;
     let failed = false;
+    let suppressTrailingHandoff = false;
     try {
       const session = await this.host.getExistingSession(sessionId);
       if (!session) {
@@ -1221,15 +1223,18 @@ export class SessionTurnRunner {
       claimed = true;
 
       if (options.retry) {
-        await this.runSessionTurn(sessionId, {
+        const outcome = await this.runSessionTurn(sessionId, {
           parts: null,
           session,
           preclaimed: true,
         });
+        suppressTrailingHandoff = outcome === 'suppress-trailing-handoff';
         return;
       }
 
-      if (await this.continueWithQueuedWork(session)) {
+      const continued = await this.continueWithQueuedWork(session);
+      suppressTrailingHandoff = continued === 'suppress-trailing-handoff';
+      if (continued) {
         return;
       }
 
@@ -1246,6 +1251,7 @@ export class SessionTurnRunner {
       const session = await this.host.getExistingSession(sessionId);
       if (claimed
         && !failed
+        && !suppressTrailingHandoff
         && session
         && !session.busy
         && !this.host.isSessionDestructiveLifecycleClaimed(session.id)

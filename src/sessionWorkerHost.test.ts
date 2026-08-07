@@ -195,19 +195,20 @@ test('post-final transient compact poison releases busy with one resynced retry 
 });
 
 test('pre-final automatic compact poison stops before a second provider call and emits one error final', async () => {
-  const initial = baseSession('worker-pre-final-compact-failure'); initial.compactThresholdTokens = 1; let chatCalls = 0; let deliveries = 0;
+  const initial = baseSession('worker-pre-final-compact-failure'); initial.compactThresholdTokens = 1; let chatCalls = 0; let deliveries = 0; let compactCalls = 0;
   const originalChat = llm.chat; const originalCompact = sessionHistory.processSessionCompactionRequest;
   (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
     chatCalls += 1; if (parts) await options.appendMessage({ role: 'user', parts });
+    if (chatCalls > 1) { await options.appendMessage({ role: 'model', parts: [{ text: 'recovered turn' }] }); return { text: 'recovered turn', usage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 } }; }
     const toolCall = { id: 'status-before-compact', name: 'session', args: { action: 'status' } };
     await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
     return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }], usage: { inputTokens: 2, outputTokens: 0, cachedTokens: 0 } };
   };
   (sessionHistory as any).processSessionCompactionRequest = async (deps: any, id: string, _request: any) => {
-    deps.getSessionById(id).displayName = 'partial compact mutation'; throw new Error('pre-final compact failed');
+    compactCalls += 1; deps.getSessionById(id).displayName = 'partial compact mutation'; throw new Error('pre-final compact failed');
   };
   try {
-    await withLocalHost(initial, async ({ host, store }) => {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
       (host as any).resyncAfterFailure = async () => {
         (host as any).poison = { original: new Error('pre-final compact failed'), resync: new Error('reload failed') };
         throw new Error('reload failed');
@@ -215,7 +216,12 @@ test('pre-final automatic compact poison stops before a second provider call and
       store.enqueueIntent(initial.id, 'pre-final-fail', 'enqueue', { type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'work' }] });
       store.enqueueIntent(initial.id, 'pre-final-deferred', 'enqueue', { type: 'user', source: { platform: 'test', channelUserId: 'other-room', preferDirectReply: true }, parts: [{ text: 'must remain queued' }] });
       await host.runPending(8);
-      assert.equal(chatCalls, 1); assert.equal(deliveries, 1); assert.equal((host as any).session.queue.length, 1);
+      await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve));
+      assert.equal(chatCalls, 1); assert.equal(deliveries, 1); assert.equal(compactCalls, 1);
+      assert.equal(readDurable().queue.length, 1); assert.equal(readDurable().busy, false);
+      (sessionHistory as any).processSessionCompactionRequest = originalCompact; (host as any).session.compactThresholdTokens = 999999;
+      await host.runPending(8);
+      assert.equal(chatCalls, 2); assert.equal(deliveries, 2); assert.equal(readDurable().queue.length, 0); assert.equal(readDurable().busy, false);
     }, true, undefined, async (_source, text, outcome) => { deliveries += 1; assert.equal(outcome, 'error'); assert.match(text, /Automatic Worker compaction failed/); });
   } finally { (llm as any).chat = originalChat; (sessionHistory as any).processSessionCompactionRequest = originalCompact; }
 });
