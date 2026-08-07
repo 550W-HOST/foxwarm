@@ -14,6 +14,12 @@ export interface ToolContext {
   session?: any;
   broadcast?: (text: string, options?: any) => Promise<void>;
   runtimeNodeId?: string;
+  /** Current in-process turn reply metadata; never persisted or sent to remote tools. */
+  channelReplyMetadata?: {
+    qqbotMessageId?: string;
+    qqbotChannelId?: string;
+    qqbotConversationId?: string;
+  };
 }
 
 export type ToolArgs = Record<string, any>;

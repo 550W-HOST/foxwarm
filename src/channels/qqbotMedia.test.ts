@@ -75,35 +75,74 @@ test('QQ media preview is safe metadata and keeps attachment order without fetch
   assert.doesNotMatch(parts[1].text || '', /signed|secret/);
 });
 
-test('QQ official video, voice, and nested attachments stay deferred with zero fetch/write', async () => {
-  let fetchCount = 0;
-  let saveCount = 0;
+test('QQ direct video and voice are bounded generic files while nested attachments stay deferred', async () => {
+  const fetchUrls: string[] = [];
+  const saves: Array<{ mimeType?: string; isImage?: boolean }> = [];
   const parts = await materializeQQBotAttachments({
     content: 'official attachment fixture',
     eventId: 'official-message-1',
     sessionId: 'session-official-1',
     attachments: [
       { url: 'https://multimedia.nt.qq.com.cn/video', filename: 'clip.mp4', content_type: 'video/mp4', size: 100 },
-      { url: 'https://multimedia.nt.qq.com.cn/voice', filename: 'voice.silk', content_type: 'voice', size: 80 },
+      {
+        url: 'https://multimedia.nt.qq.com.cn/voice',
+        voice_wav_url: 'https://multimedia.nt.qq.com.cn/voice.wav',
+        filename: 'voice.silk', content_type: 'voice', size: 80,
+        asr_refer_text: 'bounded ASR hint',
+      },
       {
         url: 'https://multimedia.nt.qq.com.cn/nested', filename: 'nested.bin', content_type: 'file',
         attachments: [{ url: 'https://multimedia.nt.qq.com.cn/child', filename: 'child.png', content_type: 'image/png' }],
       },
     ],
     deps: {
-      fetch: async () => {
-        fetchCount += 1;
-        return response('must not fetch');
+      fetch: async url => {
+        fetchUrls.push(String(url));
+        return response('generic media bytes');
       },
-      saveInboundSessionFileFromPath: pathSaver(() => { saveCount += 1; }),
+      saveInboundSessionFileFromPath: pathSaver(options => {
+        saves.push({ mimeType: options.mimeType, isImage: options.isImage });
+      }),
     },
   });
 
-  assert.equal(fetchCount, 0);
-  assert.equal(saveCount, 0);
-  assert.match(parts[1].text || '', /video media is deferred/);
-  assert.match(parts[2].text || '', /voice media is deferred/);
+  assert.deepEqual(fetchUrls, [
+    'https://multimedia.nt.qq.com.cn/video',
+    'https://multimedia.nt.qq.com.cn/voice.wav',
+  ]);
+  assert.equal(saves.length, 2);
+  assert.equal(saves[0].mimeType, 'video/mp4');
+  assert.equal(saves[0].isImage, false);
+  assert.equal(saves[1].mimeType, 'audio/wav');
+  assert.equal(saves[1].isImage, false);
+  assert.match(parts[1].text || '', /File:/);
+  assert.match(parts[2].text || '', /ASR hint/);
   assert.match(parts[3].text || '', /nested QQ media is deferred/);
+});
+
+test('QQ voice falls back to its primary URL when voice_wav_url is not allowlisted', async () => {
+  const fetchUrls: string[] = [];
+  const parts = await materializeQQBotAttachments({
+    content: 'voice fallback',
+    eventId: 'voice-fallback',
+    sessionId: 'session-voice-fallback',
+    attachments: [{
+      url: 'https://multimedia.nt.qq.com.cn/voice.silk',
+      voice_wav_url: 'https://untrusted.example/voice.wav',
+      filename: 'voice.silk',
+      content_type: 'voice',
+      asr_refer_text: 'fallback hint',
+    }],
+    deps: {
+      fetch: async url => {
+        fetchUrls.push(String(url));
+        return response('voice bytes');
+      },
+      saveInboundSessionFileFromPath: pathSaver(() => {}),
+    },
+  });
+  assert.deepEqual(fetchUrls, ['https://multimedia.nt.qq.com.cn/voice.silk']);
+  assert.match(parts[1].text || '', /fallback hint/);
 });
 
 test('QQ media materialization downloads a raster image, saves a safe descriptor, and emits transient inline data', async () => {
@@ -301,7 +340,7 @@ test('QQ image inline threshold is independent from generic file cap, while down
   assert.match(rejectedParts[1].text || '', /configured size limit/);
 });
 
-test('QQ media rejects image MIME/magic mismatch without saving inline bytes', async () => {
+test('QQ media treats an image hint whose bytes do not decode as a generic saved file', async () => {
   let saveCount = 0;
   const parts = await materializeQQBotAttachments({
     content: 'bad image',
@@ -316,9 +355,9 @@ test('QQ media rejects image MIME/magic mismatch without saving inline bytes', a
     },
   });
 
-  assert.equal(saveCount, 0);
+  assert.equal(saveCount, 1);
   assert.equal(parts.some(part => part.inlineData), false);
-  assert.match(parts[1].text || '', /media metadata or bytes were invalid/);
+  assert.match(parts[1].text || '', /File:/);
 });
 
 test('QQ media bounds header and streamed bytes before saving', async () => {

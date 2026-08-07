@@ -37,11 +37,11 @@ const QQBOT_MEDIA_HOST_SUFFIXES = [
   'tencentcos.com',
 ];
 
-const RASTER_MIME_FORMATS: Record<string, 'jpeg' | 'png' | 'gif' | 'webp'> = {
-  'image/jpeg': 'jpeg',
-  'image/png': 'png',
-  'image/gif': 'gif',
-  'image/webp': 'webp',
+const RASTER_MIME_BY_FORMAT: Record<string, string> = {
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
 };
 
 const EXT_BY_MIME: Record<string, string> = {
@@ -69,7 +69,7 @@ const QQBOT_MEDIA_ERROR_MESSAGES: Record<QQBotMediaErrorCategory, string> = {
   'invalid-media': 'media metadata or bytes were invalid',
   'storage-failed': 'media storage failed',
   'isolated-unavailable': 'media storage is unavailable for isolated sessions',
-  'unsupported-media': 'this QQ media type is deferred in Stage 1',
+  'unsupported-media': 'nested QQ media is deferred',
 };
 
 class QQBotMediaError extends Error {
@@ -94,9 +94,11 @@ type NormalizedAttachment = {
   mediaKind: 'image' | 'file' | 'unsupported';
   index: number;
   url?: string;
+  voiceWavUrl?: string;
   fileName: string;
   mimeType: string;
   declaredSize?: number;
+  asrReferText?: string;
   unsupportedReason?: string;
 };
 
@@ -163,19 +165,14 @@ function normalizeMimeType(value: unknown): string {
 }
 
 function classifyMediaKind(value: RawAttachment, mimeType: string): { mediaKind: NormalizedAttachment['mediaKind']; unsupportedReason?: string } {
-  const declaredType = cleanText(value.content_type ?? value.mimeType ?? value.type, 128).toLowerCase();
-  const fileType = value.file_type ?? value.fileType;
   const hasNestedMedia = [value.attachments, value.children]
     .some(nested => nested !== undefined && nested !== null);
   if (hasNestedMedia) {
-    return { mediaKind: 'unsupported', unsupportedReason: 'nested QQ media is deferred in Stage 1' };
+    return { mediaKind: 'unsupported', unsupportedReason: 'nested QQ media is deferred' };
   }
-  if (fileType === 2 || fileType === '2' || declaredType === 'video' || declaredType.startsWith('video/') || mimeType.startsWith('video/')) {
-    return { mediaKind: 'unsupported', unsupportedReason: 'QQ video media is deferred in Stage 1' };
-  }
-  if (fileType === 3 || fileType === '3' || declaredType === 'voice' || declaredType === 'audio' || declaredType.startsWith('audio/') || mimeType.startsWith('audio/') || value.voice_wav_url || value.voiceWavUrl) {
-    return { mediaKind: 'unsupported', unsupportedReason: 'QQ voice media is deferred in Stage 1' };
-  }
+  // Direct QQ video/audio/voice is intentionally treated as an ordinary file
+  // descriptor. Native playback, transcoding, and nested media remain out of
+  // scope; the model/tools can inspect the bounded saved bytes instead.
   return { mediaKind: mimeType.startsWith('image/') ? 'image' : 'file' };
 }
 
@@ -204,15 +201,30 @@ function normalizeAttachment(raw: unknown, index: number): NormalizedAttachment 
   const value = raw as RawAttachment;
   const mimeType = normalizeMimeType(value.content_type ?? value.mimeType);
   const classification = classifyMediaKind(value, mimeType);
-  const fileName = safeFileName(value.filename ?? value.fileName, index, mimeType);
+  const isVoice = value.file_type === 3 || value.fileType === 3
+    || value.file_type === '3' || value.fileType === '3'
+    || cleanText(value.content_type ?? value.mimeType ?? value.type, 128).toLowerCase() === 'voice'
+    || value.voice_wav_url !== undefined || value.voiceWavUrl !== undefined;
+  const voiceWavUrl = isVoice
+    ? cleanText(value.voice_wav_url ?? value.voiceWavUrl, MAX_ATTACHMENT_URL_LENGTH) || undefined
+    : undefined;
+  const normalizedMimeType = isVoice && mimeType === 'application/octet-stream' && voiceWavUrl
+    ? 'audio/wav'
+    : mimeType;
+  const fileName = safeFileName(value.filename ?? value.fileName, index, normalizedMimeType);
   const url = cleanText(value.url, MAX_ATTACHMENT_URL_LENGTH) || undefined;
+  const asrReferText = isVoice
+    ? cleanText(value.asr_refer_text ?? value.asrReferText, 512) || undefined
+    : undefined;
   return {
     mediaKind: classification.mediaKind,
     index,
     url,
+    voiceWavUrl,
     fileName,
-    mimeType,
+    mimeType: normalizedMimeType,
     declaredSize: normalizeDeclaredSize(value.size ?? value.sizeBytes),
+    asrReferText,
     unsupportedReason: classification.unsupportedReason,
   };
 }
@@ -231,7 +243,8 @@ function attachmentPreview(attachment: NormalizedAttachment): string {
   if (attachment.mediaKind === 'unsupported') {
     return `[QQ unsupported attachment deferred: ${attachment.fileName}; MIME: ${attachment.mimeType}; size: ${formatByteCount(attachment.declaredSize)}; reason: ${attachment.unsupportedReason || 'unsupported media'}]`;
   }
-  return `[QQ ${attachmentKind(attachment)} attachment: ${attachment.fileName}; MIME: ${attachment.mimeType}; size: ${formatByteCount(attachment.declaredSize)}]`;
+  const asr = attachment.asrReferText ? `; ASR reference: ${attachment.asrReferText}` : '';
+  return `[QQ ${attachmentKind(attachment)} attachment: ${attachment.fileName}; MIME: ${attachment.mimeType}; size: ${formatByteCount(attachment.declaredSize)}${asr}]`;
 }
 
 function malformedPreview(index: number): string {
@@ -259,6 +272,19 @@ function validateMediaUrl(value: string): URL {
   if (parsed.port && parsed.port !== '443') throw mediaError('invalid-media');
   if (!isAllowedMediaHost(parsed.hostname)) throw mediaError('invalid-media');
   return parsed;
+}
+
+function selectAttachmentUrl(attachment: NormalizedAttachment): string | undefined {
+  if (attachment.voiceWavUrl) {
+    try {
+      validateMediaUrl(attachment.voiceWavUrl);
+      return attachment.voiceWavUrl;
+    } catch {
+      // A malformed/unallowlisted WAV helper URL must not block a valid
+      // primary attachment URL.
+    }
+  }
+  return attachment.url;
 }
 
 async function cancelResponseBody(response: Response): Promise<void> {
@@ -462,20 +488,18 @@ async function downloadBoundedMediaToFile(
   throw mediaError('invalid-media');
 }
 
-async function probeRaster(spoolPath: string, mimeType: string): Promise<{ width?: number; height?: number }> {
-  const expected = RASTER_MIME_FORMATS[mimeType];
-  if (!expected) throw mediaError('invalid-media');
+async function probeRaster(spoolPath: string): Promise<{ mimeType: string; width?: number; height?: number } | undefined> {
   try {
     const metadata = await sharp(spoolPath, { limitInputPixels: 64 * 1024 * 1024 }).metadata();
-    if (metadata.format !== expected) {
-      throw mediaError('invalid-media');
-    }
+    const mimeType = metadata.format ? RASTER_MIME_BY_FORMAT[metadata.format] : undefined;
+    if (!mimeType) return undefined;
     return {
+      mimeType,
       width: typeof metadata.width === 'number' ? metadata.width : undefined,
       height: typeof metadata.height === 'number' ? metadata.height : undefined,
     };
-  } catch (error) {
-    throw asMediaError(error, 'invalid-media');
+  } catch {
+    return undefined;
   }
 }
 
@@ -577,12 +601,12 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
       continue;
     }
 
-    const canPotentiallyInlineImage = attachment.mediaKind === 'image'
-      && Boolean(RASTER_MIME_FORMATS[attachment.mimeType]);
+    const canPotentiallyInlineImage = attachment.mediaKind === 'image';
     const downloadLimit = canPotentiallyInlineImage
       ? Math.max(limits.fileMaxBytes, limits.imageInlineMaxBytes)
       : limits.fileMaxBytes;
-    if (!attachment.url) {
+    const selectedUrl = selectAttachmentUrl(attachment);
+    if (!selectedUrl) {
       parts.push(mediaErrorPart(label, mediaError('invalid-media')));
       continue;
     }
@@ -607,7 +631,7 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
       }
       const spoolPath = path.join(spoolDir, 'attachment.bin');
       const sizeBytes = await downloadBoundedMediaToFile(
-        attachment.url,
+        selectedUrl,
         spoolPath,
         fetchLimit,
         totalDownloaded,
@@ -617,21 +641,22 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
       );
       totalDownloaded += sizeBytes;
 
-      const canInlineImage = attachment.mediaKind === 'image'
-        && sizeBytes <= limits.imageInlineMaxBytes
-        && Boolean(RASTER_MIME_FORMATS[attachment.mimeType]);
-      if (!canInlineImage && attachment.mediaKind === 'image' && sizeBytes > limits.fileMaxBytes) {
+      const raster = sizeBytes <= limits.imageInlineMaxBytes
+        ? await probeRaster(spoolPath)
+        : undefined;
+      const canInlineImage = Boolean(raster);
+      if (!canInlineImage && sizeBytes > limits.fileMaxBytes) {
         throw mediaError('download-too-large');
       }
       if (canInlineImage) {
-        const imageMeta = await probeRaster(spoolPath, attachment.mimeType);
+        const imageMeta = raster!;
         const saved = await saveInbound(options.deps, {
           sessionId: options.sessionId,
           platform: 'qqbot',
           sourcePath: spoolPath,
           sizeBytes,
           fileName: attachment.fileName,
-          mimeType: attachment.mimeType,
+          mimeType: imageMeta.mimeType,
           isImage: true,
         });
         // The only full-buffer media read is after the safe inline-image cap
@@ -644,10 +669,10 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
         }
         parts.push({
           text: buildSavedFileText(saved, 'image'),
-          inlineData: { mimeType: attachment.mimeType, data: buffer.toString('base64') },
+          inlineData: { mimeType: imageMeta.mimeType, data: buffer.toString('base64') },
           imageMeta: {
             imageId: makeImageId(options.eventId, attachment.index, buffer),
-            mimeType: attachment.mimeType,
+            mimeType: imageMeta.mimeType,
             width: imageMeta.width,
             height: imageMeta.height,
             sizeBytes: buffer.length,
@@ -666,7 +691,10 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
         const imageFallbackNote = attachment.mediaKind === 'image'
           ? `\n[QQ image kept as a generic file; inline image limit is ${formatByteCount(limits.imageInlineMaxBytes)} and no image bytes were sent inline]`
           : '';
-        parts.push({ text: `${buildSavedFileText(saved, 'file')}${imageFallbackNote}` });
+        const asrNote = attachment.asrReferText
+          ? `\n[QQ voice ASR reference: ${attachment.asrReferText}]`
+          : '';
+        parts.push({ text: `${buildSavedFileText(saved, 'file')}${imageFallbackNote}${asrNote}` });
       }
     } catch (error) {
       const controlledError = asMediaError(error, 'download-failed');

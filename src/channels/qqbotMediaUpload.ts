@@ -1,29 +1,25 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import sharp from 'sharp';
 import type { ChannelFile } from '../channel';
 import {
   QQBOT_MEDIA_DEFAULT_FILE_MAX_BYTES,
   QQBOT_MEDIA_DEFAULT_IMAGE_MAX_BYTES,
-  QQBOT_MEDIA_HARD_MAX_BYTES,
   QQBOT_MEDIA_SAFE_INLINE_IMAGE_MAX_BYTES,
 } from './qqbotMedia';
 
 const HASH_READ_CHUNK_BYTES = 64 * 1024;
 const MD5_10M_BYTES = 10_002_432;
 const MAX_UPLOAD_PARTS = 4_096;
-const MAX_UPLOAD_BLOCK_BYTES = QQBOT_MEDIA_HARD_MAX_BYTES;
+export const QQBOT_MEDIA_OUTBOUND_HARD_MAX_BYTES = 100 * 1024 * 1024;
+const MAX_UPLOAD_BLOCK_BYTES = QQBOT_MEDIA_OUTBOUND_HARD_MAX_BYTES;
 const MAX_UPLOAD_ID_LENGTH = 256;
 const MAX_FILE_INFO_LENGTH = 8_192;
 const MAX_FILE_NAME_LENGTH = 160;
 const MAX_UPLOAD_URL_LENGTH = 8_192;
 const QQBOT_MEDIA_UPLOAD_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
-
-const QQBOT_UPLOAD_HOST_SUFFIXES = [
-  'myqcloud.com',
-  'tencentcos.com',
-  'tencentcos.cn',
-];
+const QQBOT_MEDIA_PART_TIMEOUT_MS = 20_000;
 
 type QQBotMediaTarget = 'c2c' | 'group';
 
@@ -33,6 +29,7 @@ type QQBotMediaUploadDeps = {
   request: UploadRequest;
   fetch?: typeof fetch;
   isCurrent?: () => boolean;
+  partTimeoutMs?: number;
 };
 
 type FileHashes = {
@@ -44,10 +41,7 @@ type FileHashes = {
 type LocalFileSnapshot = {
   path: string;
   sizeBytes: number;
-  dev: number;
-  ino: number;
-  hashes: FileHashes;
-  header: Buffer;
+  hashes?: FileHashes;
 };
 
 type PreparedPart = {
@@ -74,7 +68,7 @@ export type QQBotMediaUploadConfig = {
   fileMaxBytes?: number;
 };
 
-function normalizeLimit(value: unknown, fallback: number, hardMax = QQBOT_MEDIA_HARD_MAX_BYTES): number {
+function normalizeLimit(value: unknown, fallback: number, hardMax = QQBOT_MEDIA_OUTBOUND_HARD_MAX_BYTES): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return fallback;
   return Math.min(Math.floor(value), hardMax);
 }
@@ -85,7 +79,7 @@ function resolveUploadLimits(config?: QQBotMediaUploadConfig): { imageMaxBytes: 
       normalizeLimit(config?.imageMaxBytes, QQBOT_MEDIA_DEFAULT_IMAGE_MAX_BYTES),
       QQBOT_MEDIA_SAFE_INLINE_IMAGE_MAX_BYTES,
     ),
-    fileMaxBytes: normalizeLimit(config?.fileMaxBytes, QQBOT_MEDIA_DEFAULT_FILE_MAX_BYTES),
+    fileMaxBytes: normalizeLimit(config?.fileMaxBytes, QQBOT_MEDIA_DEFAULT_FILE_MAX_BYTES, QQBOT_MEDIA_OUTBOUND_HARD_MAX_BYTES),
   };
 }
 
@@ -107,11 +101,6 @@ function assertUploadCurrent(deps: QQBotMediaUploadDeps): void {
   }
 }
 
-function isTencentUploadHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/\.$/u, '');
-  return QQBOT_UPLOAD_HOST_SUFFIXES.some(suffix => host === suffix || host.endsWith(`.${suffix}`));
-}
-
 function validatePresignedUploadUrl(value: unknown): string {
   const raw = boundedString(value, MAX_UPLOAD_URL_LENGTH);
   if (!raw) throw new Error('QQ Bot upload response has an invalid part URL');
@@ -124,20 +113,12 @@ function validatePresignedUploadUrl(value: unknown): string {
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password || (parsed.port && parsed.port !== '443')) {
     throw new Error('QQ Bot upload response has an unsafe part URL');
   }
-  if (!isTencentUploadHost(parsed.hostname)) {
-    throw new Error('QQ Bot upload response has an untrusted part URL host');
-  }
   return raw;
 }
 
-function assertRegularSnapshot(linkStats: any, fileStats: any): void {
-  if (!linkStats.isFile() || !fileStats.isFile()) {
+function assertRegularFile(fileStats: any): void {
+  if (!fileStats.isFile()) {
     throw new Error('QQ Bot file source must be a regular file');
-  }
-  if (typeof linkStats.dev === 'number' && typeof fileStats.dev === 'number'
-    && typeof linkStats.ino === 'number' && typeof fileStats.ino === 'number'
-    && (linkStats.dev !== fileStats.dev || linkStats.ino !== fileStats.ino)) {
-    throw new Error('QQ Bot file source changed while it was being opened');
   }
 }
 
@@ -148,18 +129,24 @@ async function inspectLocalFile(file: ChannelFile): Promise<LocalFileSnapshot> {
   const handle = await fs.open(sourcePath, 'r');
   try {
     const fileStats = await handle.stat();
-    assertRegularSnapshot(linkStats, fileStats);
+    assertRegularFile(fileStats);
     if (fileStats.size <= 0) throw new Error('QQ Bot cannot upload an empty file');
+    return { path: sourcePath, sizeBytes: fileStats.size };
+  } finally {
+    await handle.close();
+  }
+}
 
+async function hashFile(snapshot: LocalFileSnapshot): Promise<FileHashes> {
+  const handle = await fs.open(snapshot.path, 'r');
+  try {
     const md5 = crypto.createHash('md5');
     const sha1 = crypto.createHash('sha1');
     const md5_10m = crypto.createHash('md5');
-    const header = Buffer.alloc(16);
-    let headerBytes = 0;
     let offset = 0;
     let firstTenMb = 0;
-    while (offset < fileStats.size) {
-      const length = Math.min(HASH_READ_CHUNK_BYTES, fileStats.size - offset);
+    while (offset < snapshot.sizeBytes) {
+      const length = Math.min(HASH_READ_CHUNK_BYTES, snapshot.sizeBytes - offset);
       const buffer = Buffer.alloc(length);
       const result = await handle.read(buffer, 0, length, offset);
       if (result.bytesRead !== length) throw new Error('QQ Bot file changed while it was being read');
@@ -171,34 +158,21 @@ async function inspectLocalFile(file: ChannelFile): Promise<LocalFileSnapshot> {
         md5_10m.update(chunk.subarray(0, hashLength));
         firstTenMb += hashLength;
       }
-      if (headerBytes < header.length) {
-        const headerLength = Math.min(chunk.length, header.length - headerBytes);
-        chunk.copy(header, headerBytes, 0, headerLength);
-        headerBytes += headerLength;
-      }
       offset += result.bytesRead;
     }
-    return {
-      path: sourcePath,
-      sizeBytes: fileStats.size,
-      dev: fileStats.dev,
-      ino: fileStats.ino,
-      hashes: { md5: md5.digest('hex'), sha1: sha1.digest('hex'), md5_10m: md5_10m.digest('hex') },
-      header,
-    };
+    return { md5: md5.digest('hex'), sha1: sha1.digest('hex'), md5_10m: md5_10m.digest('hex') };
   } finally {
     await handle.close();
   }
 }
 
-function isSafeRasterImage(file: ChannelFile, snapshot: LocalFileSnapshot): boolean {
-  if (!file.isImage) return false;
-  const mimeType = String(file.mimeType || '').toLowerCase();
-  const png = mimeType === 'image/png'
-    && snapshot.header.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-  const jpeg = mimeType === 'image/jpeg'
-    && snapshot.header[0] === 0xff && snapshot.header[1] === 0xd8 && snapshot.header[2] === 0xff;
-  return png || jpeg;
+async function probeOfficialRasterImage(snapshot: LocalFileSnapshot): Promise<boolean> {
+  try {
+    const metadata = await sharp(snapshot.path, { limitInputPixels: 64 * 1024 * 1024 }).metadata();
+    return metadata.format === 'png' || metadata.format === 'jpeg';
+  } catch {
+    return false;
+  }
 }
 
 function buildPath(target: QQBotMediaTarget, targetId: string, suffix: string): string {
@@ -263,11 +237,11 @@ async function hashPart(snapshot: LocalFileSnapshot, offset: number, length: num
 
 async function openPartBody(snapshot: LocalFileSnapshot, offset: number, length: number): Promise<{ body: ReadableStream<Uint8Array>; close: () => Promise<void> }> {
   const linkStats = await fs.lstat(snapshot.path);
+  if (!linkStats.isFile()) throw new Error('QQ Bot file source must be a regular file');
   const handle = await fs.open(snapshot.path, 'r');
   try {
     const fileStats = await handle.stat();
-    assertRegularSnapshot(linkStats, fileStats);
-    if (fileStats.size !== snapshot.sizeBytes) throw new Error('QQ Bot file changed while it was being uploaded');
+    assertRegularFile(fileStats);
   } catch (error) {
     await handle.close();
     throw error;
@@ -312,6 +286,15 @@ async function openPartBody(snapshot: LocalFileSnapshot, offset: number, length:
   return { body, close };
 }
 
+function disposeResponseBody(response: Response): void {
+  try {
+    const cancellation = response.body?.cancel();
+    if (cancellation) void cancellation.catch(() => {});
+  } catch {
+    // The response body is not part of the rich-media payload.
+  }
+}
+
 async function uploadPart(
   snapshot: LocalFileSnapshot,
   part: PreparedPart,
@@ -319,6 +302,7 @@ async function uploadPart(
   blockSize: number,
   fetchFn: typeof fetch,
   isCurrent?: () => boolean,
+  timeoutMs = QQBOT_MEDIA_PART_TIMEOUT_MS,
 ): Promise<string> {
   if (isCurrent && !isCurrent()) throw new Error('QQ Bot media send was invalidated before final delivery');
   const offset = (part.index - 1) * blockSize;
@@ -329,26 +313,54 @@ async function uploadPart(
   const md5 = await hashPart(snapshot, offset, length);
   if (isCurrent && !isCurrent()) throw new Error('QQ Bot media send was invalidated before final delivery');
   const partBody = await openPartBody(snapshot, offset, length);
+  const controller = new AbortController();
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  let timedOut = false;
+  let fetchPromise: Promise<Response>;
+  if (isCurrent && !isCurrent()) {
+    await partBody.close().catch(() => {});
+    throw new Error('QQ Bot media send was invalidated before final delivery');
+  }
   try {
-    if (isCurrent && !isCurrent()) throw new Error('QQ Bot media send was invalidated before final delivery');
-    const response = await fetchFn(part.url, {
+    fetchPromise = Promise.resolve(fetchFn(part.url, {
       method: 'PUT',
       redirect: 'error',
+      signal: controller.signal,
       headers: {
         'Content-Length': String(length),
       },
       body: partBody.body as any,
       duplex: 'half',
-    } as any);
+    } as any));
+  } catch (error) {
+    await partBody.close().catch(() => {});
+    throw new Error('QQ Bot media part upload failed');
+  }
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      void partBody.close().catch(() => {});
+      reject(new Error('QQ Bot media part upload timed out'));
+    }, timeoutMs);
+  });
+  void fetchPromise.then(lateResponse => {
+    if (timedOut) disposeResponseBody(lateResponse);
+  }).catch(() => {});
+  try {
+    const response = await Promise.race([fetchPromise, timeoutPromise]);
+    disposeResponseBody(response);
     if (!response.ok || response.status >= 300) {
-      await response.body?.cancel().catch(() => {});
       throw new Error(`QQ Bot media part upload failed (${response.status})`);
     }
   } catch (error) {
     await partBody.close().catch(() => {});
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (timedOut) throw new Error('QQ Bot media part upload timed out');
     if (error instanceof Error && error.message.startsWith('QQ Bot media part upload failed')) throw error;
     throw new Error('QQ Bot media part upload failed');
   }
+  if (timeoutHandle) clearTimeout(timeoutHandle);
   await partBody.close();
 
   // The caller sends upload_part_finish only after the PUT has completed. The
@@ -370,14 +382,18 @@ export async function uploadQQBotFile(
   const snapshot = await inspectLocalFile(file);
   assertUploadCurrent(deps);
   const limits = resolveUploadLimits(config);
-  const safeImage = isSafeRasterImage(file, snapshot);
+  if (snapshot.sizeBytes > QQBOT_MEDIA_OUTBOUND_HARD_MAX_BYTES) {
+    throw new Error('QQ Bot file exceeds the configured media limit');
+  }
+  const safeImage = snapshot.sizeBytes <= limits.imageMaxBytes
+    && await probeOfficialRasterImage(snapshot);
   const sendAsImage = safeImage && snapshot.sizeBytes <= limits.imageMaxBytes;
   const fileType: 1 | 4 = sendAsImage ? 1 : 4;
-  if ((!sendAsImage && snapshot.sizeBytes > limits.fileMaxBytes)
-    || snapshot.sizeBytes > QQBOT_MEDIA_HARD_MAX_BYTES) {
+  if (!sendAsImage && snapshot.sizeBytes > limits.fileMaxBytes) {
     throw new Error('QQ Bot file exceeds the configured media limit');
   }
 
+  snapshot.hashes = await hashFile(snapshot);
   const fileName = safeFileName(file.name);
   assertUploadCurrent(deps);
   const prepareRaw = await deps.request(buildPath(target, targetId, 'upload_prepare'), {
@@ -389,7 +405,7 @@ export async function uploadQQBotFile(
   const prepared = parsePrepareResponse(prepareRaw, snapshot.sizeBytes);
   for (const part of prepared.parts) {
     assertUploadCurrent(deps);
-    const md5 = await uploadPart(snapshot, part, snapshot.sizeBytes, prepared.blockSize, fetchFn, deps.isCurrent);
+    const md5 = await uploadPart(snapshot, part, snapshot.sizeBytes, prepared.blockSize, fetchFn, deps.isCurrent, deps.partTimeoutMs);
     assertUploadCurrent(deps);
     await deps.request(buildPath(target, targetId, 'upload_part_finish'), {
       upload_id: prepared.uploadId,

@@ -62,7 +62,7 @@ export type WeixinConfig = {
 export type QQBotMediaConfig = {
   /** Safe inline-image threshold; larger images fall back to generic files. */
   imageMaxBytes?: number;
-  /** Bounded generic-file cap, also used for image fallback files. */
+  /** Bounded generic-file cap for inbound/fallback files; local QQ sends are additionally capped at 100 MiB. */
   fileMaxBytes?: number;
   maxTotalBytes?: number;
   maxAttachments?: number;

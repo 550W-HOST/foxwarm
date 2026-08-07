@@ -50,6 +50,7 @@ test('app config schema suggests all managed channel types and QQ credential key
   assert.equal(channel.properties.clientSecret.type, 'string')
   assert.equal(channel.properties.media.properties.imageMaxBytes.maximum, 20971520)
   assert.equal(channel.properties.media.properties.fileMaxBytes.maximum, 209715200)
+  assert.match(channel.properties.media.properties.fileMaxBytes.description, /100 MiB/)
   assert.equal(channel.properties.media.properties.maxTotalBytes.maximum, 209715200)
   assert.equal(channel.properties.media.properties.maxAttachments.maximum, 16)
   assert.equal(channel.properties.allowedUsers.items.type, 'string')

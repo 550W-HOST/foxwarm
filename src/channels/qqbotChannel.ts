@@ -381,7 +381,7 @@ export class QQBotChannel implements Channel {
         ...(caption ? { content: caption } : {}),
         msg_type: 7,
         media: { file_info: uploaded.fileInfo },
-        ...(passiveReplyId ? { msg_id: passiveReplyId, msg_seq: messageSequence } : {}),
+        ...(passiveReplyId ? { msg_id: passiveReplyId, msg_seq: messageSequence } : { msg_seq: 1 }),
       });
       if (sourceBoundPassiveReply && passiveReplyId && this.isCurrentReplyGeneration(replyGeneration)) {
         this.recordPassiveSuccessfulReply(passiveReplyId);

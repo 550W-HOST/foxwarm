@@ -8,7 +8,7 @@ Implements the official QQ Bot gateway adapter with direct AppID/client-secret
 configuration. It uses the QQ access-token endpoint, gateway WebSocket, and
 official REST message endpoints without depending on an unlicensed QR
 credential-provisioning package. C2C and group ingress also accepts bounded
-image/file attachments through a deferred, authorization-gated materializer,
+image/file/video/voice attachments through a deferred, authorization-gated materializer,
 and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
 
 ## Key exports
@@ -21,12 +21,13 @@ and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
 - `buildQQBotAttachmentPreviewParts()` — creates URL-free metadata parts for
   attachment ingress before authorization and materialization.
 - `materializeQQBotAttachments()` — on Main-hosted sessions, streams allowlisted
-  HTTPS media, validates bounded files/raster bytes, saves descriptors, and
-  emits transient image parts for the canonical image-blob boundary. Isolated
-  or bound-node media is deferred with a controlled bounded error.
+  HTTPS media, saves bounded generic descriptors, and emits transient image
+  parts after a best-effort supported-raster format probe. Isolated or
+  bound-node media is deferred with a controlled bounded error.
 - `uploadQQBotFile()` — validates a prepared local `ChannelFile`, streams hashes
-  and bounded part bodies through the C2C/group upload flow, and returns one
-  opaque `file_info` token without caching it.
+  and bounded part bodies through the C2C/group upload flow, enforces the
+  Tencent-compatible 100 MiB local-send cap, and returns one opaque `file_info`
+  token without caching it.
 
 ## Function Index
 
@@ -53,15 +54,16 @@ and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
   `GROUP_AT_MESSAGE_CREATE`. Attachment-only C2C/group events are retained as
   safe filename/MIME/size metadata and can be materialized only after the
   canonical router has already authorized the sender. Supported raster images
-  become transient inline parts and generic files become saved descriptors;
-  the router's durable image boundary replaces image bytes with references.
-  Guild channel/DM media remains unsupported, and empty guild/DM events are
-  ignored. The adapter does not infer unmentioned group traffic or an
-  unsupported media contract.
+  become transient inline parts and other direct files (including video/voice)
+  become saved descriptors; the router's durable image boundary replaces image
+  bytes with references. Voice prefers an allowlisted WAV URL and preserves
+  bounded ASR reference text. Guild channel/DM media remains unsupported, and
+  empty guild/DM events are ignored; nested attachments remain deferred.
 - Attachment materialization uses HTTPS-only allowlisted hosts, manually
   revalidates each redirect, forwards no bot authorization/cookies, streams to
   a bounded temporary file with a timeout, enforces per-file/total/count
-  bounds, sanitizes names, and validates supported raster MIME/magic pairs.
+  bounds, sanitizes names, and uses a best-effort supported-raster format probe;
+  declared MIME and filenames remain hints and non-raster bytes stay generic.
   Default local limits are 20 MiB safe inline-image cap, 50 MiB generic-file
   cap, 200 MiB total, and eight attachments; the image setting cannot exceed
   the safe 20 MiB inline cap while the generic-file setting cannot exceed 200
@@ -100,9 +102,15 @@ and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
 - C2C/group `sendFile` reuses a latest conversation-local message ID when
   available, or a matching persisted ID supplied by the generic file-delivery
   boundary after restart. It uploads locally prepared files through the
-  destination-specific official chunk flow, sends images only for validated
+  destination-specific official chunk flow, sends images only for format-probed
   PNG/JPEG bytes within the image cap, and downgrades other images to generic
-  files within the file cap.
+  files within the file cap. Outbound local files are hard-capped at 100 MiB;
+  this is lower than the 200 MiB inbound configuration hard cap.
+- `MessageRouter` carries only the current turn's QQ source metadata through
+  the in-process tool context to `send_file`. An explicit target receives that
+  fallback metadata only when its exact instance/conversation matches; a
+  mismatched target is therefore proactive, while session broadcast still
+  relies on the adapter's exact-match check.
 
 ## Runtime and configuration
 
@@ -112,8 +120,8 @@ and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
   `maxAttachments`). Stage 1 materialization is Main-hosted only; isolated or
   bound-node QQ media currently returns a controlled bounded error because the
   existing node transfer is whole-buffer, not a streaming boundary. Outbound
-  C2C/group media uses the same image/file caps and the official local upload
-  flow.
+  C2C/group media uses the image/file settings subject to the separate 100 MiB
+  local-send hard cap and the official local upload flow.
 - `src/channelRuntime.ts` constructs, starts, stops, reloads, and reports each
   configured `qqbot` instance alongside the other managed adapters.
 - Startup uses the managed runtime after normal router authorization is
@@ -130,14 +138,16 @@ guild/DM media rejection, group/guild/DM outbound routes, and
 shutdown/reconnect fencing. Outbound tests cover destination-specific
 upload routes, streamed hash/chunk order, passive IDs/counts/sequences,
 caption/cap handling, permission failures, generation fences, and the
-`send_file` target path. `src/channels/qqbotMediaUpload.test.ts` covers safe
-regular-file validation, Tencent/COS URL checks, bounded prepare responses,
-part hashing, no whole-file buffering, and opaque completion tokens.
+`send_file` target path, including current-turn restart fallback metadata and
+mismatched-target proactive delivery. `src/channels/qqbotMediaUpload.test.ts` covers safe
+regular-file validation, the 100 MiB sparse-file preflight, HTTPS/userinfo/port
+checks, bounded prepare responses, part hashing, bounded PUT
+cancellation/timeouts, no whole-file buffering, and opaque completion tokens.
 `src/channels/qqbotMedia.test.ts` covers safe
-previews, official video/voice/nested deferral, Main-hosted preflight,
+previews, direct video/voice generic saves and nested deferral, Main-hosted preflight,
 streamed spool/total/timeout bounds and cleanup, allowlisted redirect
-validation, safe generic-file storage, safe-inline-cap image fallback, raster
-MIME/magic validation, controlled error categories/path scrubbing, and
+validation, safe generic-file storage, safe-inline-cap image fallback, best-effort
+raster format probing, controlled error categories/path scrubbing, and
 transient image data crossing into a canonical blob reference.
 
 ## Design Decisions
@@ -162,17 +172,21 @@ than making Router send another error through the same passive context.
 
 ### D-qqbot-inbound-media-boundary
 
-[2026-08-08] Stage 1 supports only inbound C2C/group images and generic files.
-The adapter exposes URL-free metadata first; only a source that passed
+[2026-08-08] Stage 1 supports inbound C2C/group direct attachments. The adapter
+exposes URL-free metadata first; only a source that passed
 canonical Router authorization at ingress may invoke the ephemeral materializer
 to fetch and save media. First guest and unauthorized messages remain
-metadata-only, while later authorized messages may materialize. Images are
-validated supported raster bytes and remain transient until the shared
+metadata-only, while later authorized messages may materialize. Direct video and
+voice are saved as generic bounded files; voice prefers an allowlisted
+`voice_wav_url` and includes bounded `asr_refer_text` metadata. Declared MIME
+and filename are hints only. A best-effort Sharp probe detects PNG/JPEG/GIF/WebP
+for optional inline image data under the safe cap; all other bytes stay generic.
+Inline image bytes remain transient until the shared
 content-addressed image-blob conversion runs before durable queue/history
 storage; generic files remain saved node/path descriptors. Images above the
 safe inline cap are generic file descriptors, not inline data. Guild/DM media,
-video/voice, nested attachments, retries/outbox, and remote URL send are
-deferred. Materialization is intentionally Main-hosted only in Stage 1;
+nested attachments, retries/outbox, and remote URL send are deferred.
+Materialization is intentionally Main-hosted only in Stage 1;
 isolated/bound-node media is rejected with a controlled bounded error until a
 genuinely streaming node transfer boundary exists. Stage 1 does not pretend
 the current whole-buffer node API supports the configured Main-host caps.
@@ -185,15 +199,18 @@ configured image threshold use QQ `file_type=1`; other or oversized images use
 `file_type=4` when within the generic-file cap. The adapter performs the
 destination-specific `upload_prepare` → presigned COS part PUT →
 `upload_part_finish` → `/files` flow and sends one `msg_type=7` message with
-opaque `media.file_info`. Hashes and part bodies are streamed, upload URLs are
-validated Tencent/COS HTTPS targets, and bot credentials are never sent to the
-presigned host. The file-info token is never cached or reused across target or
-adapter instances. Latest conversation-local QQ message IDs share the existing
-four-success passive limiter and monotonic `msg_seq`; after the limit one
-proactive attempt is made, while upload/final failures do not infer fallback or
-retry. Generation checks occur before reading, each upload stage, and final
-delivery. Guild/DM, video/voice, remote URL send, and general upload-service
-abstractions remain unsupported.
+opaque `media.file_info`. Hashes and part bodies are streamed, upload URLs use
+HTTPS with no userinfo and normal ports, and the QQ API response is the trust
+boundary; bot credentials are never sent to the presigned host. The local send path is hard-capped at 100 MiB even when inbound
+`fileMaxBytes` is set to the 200 MiB inbound maximum. The file-info token is
+never cached or reused across target or adapter instances. Latest
+conversation-local QQ message IDs share the existing four-success passive
+limiter and monotonic `msg_seq`; after the limit one proactive attempt is made
+with `msg_seq: 1`, while upload/final failures do not infer fallback or retry.
+Generation checks occur before reading, each upload stage, and final delivery.
+Guild/DM native media, remote URL send, and general upload-service abstractions
+remain unsupported; video/audio files use ordinary generic `file_type=4` when
+within the local cap.
 
 ## Canonical ownership
 

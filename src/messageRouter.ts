@@ -1164,6 +1164,15 @@ export class MessageRouter {
           session,
           previousLlmRequest: result.previousLlmRequest,
           broadcast: this.buildToolBroadcast(broadcast, turnChannelOptions),
+          ...(turnChannelOptions.qqbotMessageId && turnChannelOptions.qqbotChannelId && turnChannelOptions.qqbotConversationId
+            ? {
+              channelReplyMetadata: {
+                qqbotMessageId: turnChannelOptions.qqbotMessageId,
+                qqbotChannelId: turnChannelOptions.qqbotChannelId,
+                qqbotConversationId: turnChannelOptions.qqbotConversationId,
+              },
+            }
+            : {}),
           onToolStart: (tool: { id?: string; name: string; index?: number; total?: number; executionNode?: string; argsPreview?: string; startedAt?: number }) => {
             sessionManager.setActiveSessionRuntimeState(session.id, {
               state: 'running-tool',

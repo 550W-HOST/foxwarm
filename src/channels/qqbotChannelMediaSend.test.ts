@@ -3,12 +3,13 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import sharp from 'sharp';
 import { registerChannel, unregisterChannel } from '../channel';
 import { sendFileToChannelTargetId } from '../session/channels';
+import { tool_send_file } from '../toolsSessionAgent/interSession';
 import type { ChannelFile } from '../channel';
 import { QQBotChannel } from './qqbotChannel';
 
-const PNG_HEADER = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const API_PREFIX = 'https://api.sgroup.qq.com';
 const COS_PREFIX = 'https://cos.ap-guangzhou.myqcloud.com';
 
@@ -18,7 +19,8 @@ async function withTempFiles(callback: (paths: { png: string; generic: string })
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-qqbot-channel-send-test-'));
   const png = path.join(dir, 'photo.png');
   const generic = path.join(dir, 'report.txt');
-  await fs.writeFile(png, Buffer.concat([PNG_HEADER, Buffer.from('png-payload')]));
+  const pngBytes = await sharp({ create: { width: 2, height: 1, channels: 3, background: { r: 10, g: 20, b: 30 } } }).png().toBuffer();
+  await fs.writeFile(png, pngBytes);
   await fs.writeFile(generic, Buffer.from('generic-payload'));
   try {
     await callback({ png, generic });
@@ -139,7 +141,7 @@ test('QQ Bot sendFile uses Group upload/message routes and a persisted passive I
     const transport = createFetchTransport();
     const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-send-group', { fetch: transport.fetch });
     activate(channel);
-    await channel.sendFile('group:group-openid', file(paths.generic, 'report.txt', 'text/plain', false), {
+    await channel.sendFile('group:group-openid', file(paths.generic, 'clip.mp4', 'video/mp4', false), {
       qqbotChannelId: 'qq-send-group',
       qqbotConversationId: 'group:group-openid',
       qqbotMessageId: 'persisted-group-message',
@@ -147,6 +149,7 @@ test('QQ Bot sendFile uses Group upload/message routes and a persisted passive I
     const prepare = apiCalls(transport, '/upload_prepare')[0];
     const message = apiCalls(transport, '/messages')[0];
     assert.equal(prepare.url, `${API_PREFIX}/v2/groups/group-openid/upload_prepare`);
+    assert.equal(body(prepare).file_type, 4);
     assert.equal(message.url, `${API_PREFIX}/v2/groups/group-openid/messages`);
     assert.equal(body(message).msg_id, 'persisted-group-message');
     assert.equal(body(message).msg_seq, 1);
@@ -198,7 +201,7 @@ test('QQ Bot media counts toward passive quota and the fifth operation makes exa
     assert.equal(messages.slice(0, 4).map(item => item.msg_seq).join(','), '1,2,3,4');
     assert.equal(messages[4].msg_type, 7);
     assert.equal(messages[4].msg_id, undefined);
-    assert.equal(messages[4].msg_seq, undefined);
+    assert.equal(messages[4].msg_seq, 1);
   });
 });
 
@@ -249,5 +252,43 @@ test('send_file channel-target integration invokes QQ Bot sendFile', async () =>
     const message = apiCalls(transport, '/messages')[0];
     assert.equal(body(message).msg_id, 'tool-latest-message');
     assert.equal(body(message).content, 'tool caption');
+  });
+});
+
+test('tool_send_file carries only matching current-turn QQ metadata for restart fallback', async () => {
+  await withTempFiles(async paths => {
+    const transport = createFetchTransport();
+    const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-send-tool-context', { fetch: transport.fetch });
+    activate(channel);
+    registerChannel('qq-send-tool-context', channel);
+    try {
+      const currentTurnMetadata = {
+        channelReplyMetadata: {
+          qqbotChannelId: 'qq-send-tool-context',
+          qqbotConversationId: 'c2c:openid-restart',
+          qqbotMessageId: 'persisted-tool-message',
+        },
+      };
+      await tool_send_file({
+        channelTargetId: 'qq-send-tool-context:c2c:openid-restart',
+        filePath: paths.generic,
+        caption: 'restart fallback',
+      }, currentTurnMetadata);
+      await tool_send_file({
+        channelTargetId: 'qq-send-tool-context:group:other-group',
+        filePath: paths.generic,
+        caption: 'mismatched target',
+      }, currentTurnMetadata);
+    } finally {
+      unregisterChannel('qq-send-tool-context');
+    }
+    const messages = apiCalls(transport, '/messages').map(body);
+    assert.equal(messages.length, 2);
+    assert.equal(messages[0].msg_id, 'persisted-tool-message');
+    assert.equal(messages[0].msg_seq, 1);
+    assert.equal(messages[0].content, 'restart fallback');
+    assert.equal(messages[1].msg_id, undefined);
+    assert.equal(messages[1].msg_seq, 1);
+    assert.equal(messages[1].content, 'mismatched target');
   });
 });
