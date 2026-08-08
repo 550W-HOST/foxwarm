@@ -360,7 +360,10 @@ export class SessionWorkerSupervisor {
     if (this.options.handbackWorker) {
       try {
         const ownership = this.options.store.findOwnership(entry.sessionId);
-        if (ownership && ownership.generation === entry.generation && ownership.incarnationId === entry.incarnationId) {
+        // A candidate never activated and never touched the authority, so its
+        // exit needs no handback; releasing its fence directly keeps the
+        // activation-window exit retryable instead of wedging the session.
+        if (ownership && ownership.generation === entry.generation && ownership.incarnationId === entry.incarnationId && ownership.state !== 'candidate') {
           if (ownership.state === 'ready') this.options.store.markDraining(entry.sessionId, entry.generation, entry.incarnationId);
           await this.options.handbackWorker({ sessionId: entry.sessionId, generation: entry.generation, incarnationId: entry.incarnationId });
         }

@@ -63,7 +63,14 @@ export async function performSessionWorkerHandback(
   } as Session);
   if (typeof raw.agent === 'string' && raw.agent) stub.agent = raw.agent;
   if (raw.stats && typeof raw.stats === 'object' && !Array.isArray(raw.stats)) stub.stats = raw.stats;
+  // meta.lastChannel is catalog-only presentation state (the authority payload
+  // strips it); preserve the Main-owned value across the authority mirror.
+  const catalogLastChannel = stub.meta?.lastChannel === undefined ? undefined : structuredClone(stub.meta.lastChannel);
   if (raw.meta && typeof raw.meta === 'object' && !Array.isArray(raw.meta)) stub.meta = raw.meta;
+  if (stub.meta) {
+    if (catalogLastChannel === undefined) delete stub.meta.lastChannel;
+    else stub.meta.lastChannel = catalogLastChannel;
+  }
   // Legacy compatibility display fields mirror the authority exactly.
   stub.busy = raw.busy === true;
   stub.busyStartedAt = typeof raw.busyStartedAt === 'number' ? raw.busyStartedAt : undefined;

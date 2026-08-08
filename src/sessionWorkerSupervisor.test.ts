@@ -23,10 +23,14 @@ async function createFixture(idleMs: number, options: {
 } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-session-worker-supervisor-'));
   const store = new SessionWorkerStore(path.join(root, 'runtime.sqlite'), { faultInjector: options.faultInjector }); store.open();
+  const handbackCalls: Array<{ sessionId: string; generation: number; stateAtCall: string }> = [];
   const supervisor = new SessionWorkerSupervisor({ store, idleMs, restartBaseDelayMs: 20, restartMaxDelayMs: 50,
-    shouldRestart: options.shouldRestart, readProcessIdentity: options.readProcessIdentity });
+    shouldRestart: options.shouldRestart, readProcessIdentity: options.readProcessIdentity,
+    handbackWorker: async identity => {
+      handbackCalls.push({ sessionId: identity.sessionId, generation: identity.generation, stateAtCall: store.getOwnership(identity.sessionId).state });
+    } });
   await supervisor.reconcileStartupOwnerships();
-  return { root, store, supervisor, async close() { await supervisor.shutdown(2_000).catch(() => {}); store.close(); await fs.remove(root); } };
+  return { root, store, supervisor, handbackCalls, async close() { await supervisor.shutdown(2_000).catch(() => {}); store.close(); await fs.remove(root); } };
 }
 
 test('supervisor durably activates one incarnation and confirms idle exit before replacement', async () => {
@@ -45,6 +49,8 @@ test('supervisor durably activates one incarnation and confirms idle exit before
     await waitFor(() => fixture.supervisor.getStatus('idle-session') === undefined, 4_000);
     assert.equal(fixture.supervisor.projectionRegistry.get('idle-session')?.stale, true);
     assert.equal(fixture.store.getOwnership('idle-session').state, 'inactive');
+    assert.deepEqual(fixture.handbackCalls, [{ sessionId: 'idle-session', generation: 1, stateAtCall: 'draining' }],
+      'the handback step runs exactly once, while the fence is still draining');
     const replacement = await fixture.supervisor.ensureWorker('idle-session');
     assert.equal(replacement.generation, 2); assert.notEqual(replacement.incarnationId, first.incarnationId);
     assert.equal(fixture.supervisor.projectionRegistry.get('idle-session')?.generation, 2);

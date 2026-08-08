@@ -32,6 +32,14 @@ async function start(): Promise<void> {
   const incarnationId = process.env.FOXWARM_SESSION_WORKER_INCARNATION_ID!;
   const storePath = process.env.FOXWARM_SESSION_WORKER_STORE_PATH!;
   const generation = Number(process.env.FOXWARM_SESSION_WORKER_GENERATION);
+  // Simulate a child that dies inside the activation window, before it can
+  // answer the candidate status RPC (ownership still 'candidate' in Main).
+  if (process.env.FOXWARM_TEST_CRASH_GENERATION === String(generation)) {
+    // Stay alive long enough for Main's process-identity read, then die before
+    // the RPC server starts so the candidate status RPC is never answered.
+    await new Promise(resolve => setTimeout(resolve, 150));
+    process.exit(1);
+  }
   const processIdentity = readSessionWorkerProcessIdentity(process.pid)!;
   const failWrites = new Set(String(process.env.FOXWARM_TEST_FAIL_WRITE_AT || '').split(',').map(Number).filter(Boolean));
   const failReads = new Set(String(process.env.FOXWARM_TEST_FAIL_READ_AT || '').split(',').map(Number).filter(Boolean));

@@ -71,7 +71,7 @@ test('idle release hands back authority before fence release and refreshes the M
   const fixture = await createFixture(sessionId, { idleMs: 200 });
   fixture.catalog.set(sessionId, {
     ...baseSession(sessionId), pinned: true, displayName: 'old-name',
-    meta: { lastMessageTime: 1 }, model: 'stale-model',
+    meta: { lastMessageTime: 1, lastChannel: { channelType: 'webui', conversationId: 'c1' } as any }, model: 'stale-model',
   });
   try {
     await fixture.supervisor.reconcileStartupOwnerships();
@@ -96,6 +96,8 @@ test('idle release hands back authority before fence release and refreshes the M
     const stub = fixture.catalog.get(sessionId)!;
     const authority = await fs.readJson(fixture.statePath);
     assert.ok(stub.meta!.lastMessageTime! > 1, 'stub meta mirrors the authority');
+    assert.deepEqual((stub.meta as any)!.lastChannel, { channelType: 'webui', conversationId: 'c1' },
+      'catalog-only meta.lastChannel survives the authority mirror');
     assert.equal(stub.pinned, true, 'Main-owned presentation fields are never derived from the authority');
     assert.equal(stub.displayName, 'old-name', 'an authority payload without displayName never erases the Main-owned name');
     assert.equal(stub.busy, false); assert.deepEqual(stub.queue, []);
@@ -139,6 +141,25 @@ test('a failing handback retains the fence fail-closed on both stop and crash pa
     assert.equal(crashFixture.store.getOwnership(crashSession).state, 'draining', 'the failed crash handback keeps the fence');
     assert.equal(crashFixture.supervisor.getStatus(crashSession), undefined, 'no replacement spawns after a failed handback');
   } finally { await stopFixture.close(); await crashFixture.close(); }
+});
+
+test('an exit inside the activation window releases the candidate fence without handback', async () => {
+  const sessionId = 'worker-handback-activation-exit';
+  const fixture = await createFixture(sessionId, { workerEnv: { FOXWARM_TEST_CRASH_GENERATION: '1' } });
+  try {
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await assert.rejects(
+      () => fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'crash inside activation' }] }),
+      (error: any) => !(error instanceof SessionWorkerLifecycleError),
+    );
+    await waitFor(() => {
+      const ownership = fixture.store.findOwnership(sessionId);
+      return !ownership || ownership.state === 'inactive';
+    });
+    assert.equal(fixture.catalogSaves, 0, 'a candidate never touched the authority and needs no handback');
+    const retry = await fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'retry after activation crash' }] });
+    assert.ok(retry.busy === false, 'the session is retryable, not wedged');
+  } finally { await fixture.close(); }
 });
 
 test('active background exec blocks idle release until its durable completion', async () => {
