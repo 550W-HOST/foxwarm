@@ -146,18 +146,42 @@ export class SessionWorkerIngressCoordinator {
   }
 
   async submitQueuedInput(requestedSessionId: string, item: QueueItem): Promise<SessionWorkerIngressResult> {
-    const normalized = normalizeSessionWorkerIngressRequest({ sessionId: requestedSessionId, item });
-    requestedSessionId = normalized.sessionId; item = normalized.item;
-    const sessionId = this.resolveCanonicalSessionId(requestedSessionId);
-    if (sessionId !== requestedSessionId) {
-      throw new RpcError('SESSION_WORKER_INGRESS_INVALID_SESSION', 'submitAndRun does not accept a session alias.');
-    }
-    const payload = item;
+    const { sessionId, item: payload } = this.resolveExact(requestedSessionId, item);
     const ownership = this.store.findOwnership(sessionId);
     if (!ownership || ownership.state !== 'ready' || !ownership.incarnationId) {
       throw new RpcError('SESSION_WORKER_INGRESS_UNAVAILABLE', `Session worker ${sessionId} has no activated durable owner.`, true);
     }
-    const expected = { generation: ownership.generation, incarnationId: ownership.incarnationId };
+    return this.appendAndRun(sessionId, payload, { generation: ownership.generation, incarnationId: ownership.incarnationId });
+  }
+
+  async submitEnsuringWorker(requestedSessionId: string, item: QueueItem): Promise<SessionWorkerIngressResult> {
+    const { sessionId, item: payload } = this.resolveExact(requestedSessionId, item);
+    let ownership = this.store.findOwnership(sessionId);
+    if (!ownership || ownership.state !== 'ready' || !ownership.incarnationId) {
+      const status = await this.supervisor.ensureWorker(sessionId);
+      ownership = this.store.findOwnership(sessionId);
+      if (!ownership || ownership.state !== 'ready' || !ownership.incarnationId
+        || ownership.generation !== status.generation || ownership.incarnationId !== status.incarnationId) {
+        throw new RpcError('SESSION_WORKER_INGRESS_UNAVAILABLE', `Session worker ${sessionId} did not reach its exact durable ready owner.`, true);
+      }
+    }
+    return this.appendAndRun(sessionId, payload, { generation: ownership.generation, incarnationId: ownership.incarnationId });
+  }
+
+  private resolveExact(requestedSessionId: string, item: QueueItem): { sessionId: string; item: QueueItem } {
+    const normalized = normalizeSessionWorkerIngressRequest({ sessionId: requestedSessionId, item });
+    const sessionId = this.resolveCanonicalSessionId(normalized.sessionId);
+    if (sessionId !== normalized.sessionId) {
+      throw new RpcError('SESSION_WORKER_INGRESS_INVALID_SESSION', 'submitAndRun does not accept a session alias.');
+    }
+    return { sessionId, item: normalized.item };
+  }
+
+  private async appendAndRun(
+    sessionId: string,
+    payload: QueueItem,
+    expected: { generation: number; incarnationId: string },
+  ): Promise<SessionWorkerIngressResult> {
     this.supervisor.assertActivatedOwnership(sessionId, expected);
     const intent = this.store.enqueueIntent(sessionId, crypto.randomUUID(), 'enqueue', payload);
     const projection = await this.supervisor.runPendingActivated(sessionId, expected);
