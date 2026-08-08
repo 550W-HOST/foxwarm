@@ -1,5 +1,6 @@
 /** Canonical per-session queue and turn state machine. */
 
+import { randomUUID } from 'crypto';
 import { logger } from './common';
 import { ChannelContext, getChannelId, getChannelType, getConversationId } from './channel';
 import { buildChildReminder, isModelNoActionSignal } from './session/childSessionReminder';
@@ -867,6 +868,10 @@ export class SessionTurnRunner {
     await maybeRefreshStaleSessionSnapshot(session, this.host.refreshSessionSnapshot);
 
     const turnSource = options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined);
+    // One ephemeral identity covers the complete provider/tool loop for this
+    // invocation. A queued item consumed by this loop stays in the same turn;
+    // a later runSessionTurn invocation receives a new identity.
+    const turnId = randomUUID();
     const turnChannelOptions = this.getTurnChannelOptions(undefined, turnSource);
     const turnBoundary = this.getSourceMergeBoundary(turnSource);
     const broadcast = this.host.hasBroadcast(session)
@@ -952,6 +957,7 @@ export class SessionTurnRunner {
         try {
           result = await this.host.chat(parts, session, iteration, {
             onRetry: this.createLlmRetryNotifier(session, broadcast),
+            turnId,
           });
         } catch (e: any) {
           if (session.stopping && llm.isAbortError(e)) {

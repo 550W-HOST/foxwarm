@@ -133,8 +133,10 @@ test('detached exact owner completes one real local-tool iteration', async () =>
   const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
   const originalChat = llm.chat;
   let iteration = 0;
+  const turnIds: string[] = [];
   (llm as any).chat = async (parts: any, owner: Session, _iteration: number, options: any) => {
     assert.strictEqual(owner, session);
+    turnIds.push(options.turnId);
     if (parts) await options.appendMessage({ role: 'user', parts });
     if (iteration++ === 0) {
       await options.appendMessage({ role: 'model', parts: [{ functionCall: { id: 'goal-call', name: 'set_goal', args: { goal: 'detached goal' } } }] });
@@ -152,6 +154,14 @@ test('detached exact owner completes one real local-tool iteration', async () =>
     assert.equal(session.busy, false);
     assert.equal(session.queue.length, 0);
     assert.deepEqual((await readArchiveMessages(session.id)).map(record => record.message.role), ['user', 'model', 'tool', 'model']);
+    assert.equal(turnIds.length, 2);
+    assert.match(turnIds[0], /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    assert.equal(turnIds[0], turnIds[1], 'one session turn keeps one TURN_ID across its tool loop');
+
+    session.queue.push({ type: 'background', parts: [{ text: 'second turn' }] });
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+    assert.equal(turnIds.length, 3);
+    assert.notEqual(turnIds[0], turnIds[2], 'a later runSessionTurn receives a new TURN_ID');
   } finally {
     (llm as any).chat = originalChat;
   }
