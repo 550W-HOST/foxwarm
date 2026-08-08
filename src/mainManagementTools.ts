@@ -12,6 +12,7 @@ import {
   ScheduleWaitTimeoutResponse,
   mainManagementToolServiceDescriptor,
 } from './mainManagementToolService';
+import type { SessionWorkerStore } from './sessionWorkerStore';
 import type { ToolArgs, ToolContext } from './tools/helpers';
 
 let transport: RpcTransport | undefined;
@@ -32,6 +33,7 @@ function assertNotTerminallyShutDown(): void {
 export async function initializeMainManagementTools(options: {
   transport?: RpcTransport;
   placement?: 'child-reverse';
+  workerStore?: SessionWorkerStore;
 } = {}): Promise<void> {
   assertNotTerminallyShutDown();
   const requestedPlacement = options.transport ? (options.placement || 'child-reverse') : 'local';
@@ -61,7 +63,7 @@ export async function initializeMainManagementTools(options: {
         return;
       }
       const registry = new RpcServiceRegistry();
-      registry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler());
+      registry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ workerStore: options.workerStore }));
       const nextTransport = new LocalRpcTransport(registry, { maxPendingRequests: 128 });
       if (terminalShutdown) {
         nextTransport.close();
@@ -111,6 +113,7 @@ export async function scheduleMainWaitTimeout(request: ScheduleWaitTimeoutReques
 }
 
 export const tool_send_to_session = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('send_to_session', args, ctx);
+export const tool_create_child_session = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('create_child_session', args, ctx);
 export const tool_send_to_channel = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('send_to_channel', args, ctx);
 export const tool_list_agents = (args: ToolArgs = {}, ctx?: ToolContext) => executeMainManagementTool('list_agents', args, ctx);
 export const tool_create_timer = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('create_timer', args, ctx);

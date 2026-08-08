@@ -32,7 +32,8 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
   }
 
   const currentSessionId = ctx.sessionId;
-  const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork, { node });
+  const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork,
+    { node, sourceOverride: (ctx as any).sourceOverride });
 
   if (message) {
     if (waitAfterHandoff === true) {

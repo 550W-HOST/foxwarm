@@ -10,7 +10,6 @@ import {
     tool_cancel_toolscript_run,
 } from './toolscript';
 import {
-    tool_create_child_session,
     tool_wait,
     tool_submit_compact_plan,
     tool_send_file,
@@ -36,6 +35,7 @@ import {
 import {
     tool_send_to_session,
     tool_send_to_channel,
+    tool_create_child_session,
     tool_list_agents,
     tool_create_timer,
     tool_list_timers,
@@ -87,7 +87,7 @@ export function getToolPermissionNode(toolName: string, executionNode: string, t
 setDefinitionsRef(definitions, isToolDirectlyExposedToModel, getToolPermissionNode, callTool, assertToolAvailableForPlacement);
 
 const WORKER_UNSUPPORTED_TOOLS = new Set([
-    'create_child_session', 'delete_session',
+    'delete_session',
     'node_bootstrap_info', 'node_pair_approve', 'node_pair_list',
     'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
     'get_memory_context',
@@ -109,14 +109,13 @@ export function assertToolAvailableForPlacement(toolName: string, args: any, ctx
     const literalTarget = args?.sessionId;
     if (toolName === 'session') {
         const action = typeof args?.action === 'string' && args.action.trim() ? args.action.trim().toLowerCase() : 'status';
-        if (action === 'list') workerUnavailable(toolName);
         if (action === 'update-display-name' && !isCurrent(fallbackTarget)) workerUnavailable(toolName);
     }
     if (toolName === 'remote_node' || toolName === 'node_tools') {
         const action = args?.action;
         if (action !== 'list') workerUnavailable(toolName);
     }
-    if (['get_session_messages', 'stop_session'].includes(toolName) && !isCurrent(literalTarget)) workerUnavailable(toolName);
+    if (toolName === 'stop_session' && !isCurrent(literalTarget)) workerUnavailable(toolName);
     if (['get_archived_messages', 'get_archived_blocks', 'set_session_child_model',
         'set_session_compact_threshold', 'update_session_snapshot'].includes(toolName) && !isCurrent(fallbackTarget)) workerUnavailable(toolName);
     if (toolName === 'recall') {

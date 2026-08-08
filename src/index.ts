@@ -245,7 +245,7 @@ async function start() {
             ? { worker: { store: sessionWorkerStore, registry: sessionWorkerSupervisor.projectionRegistry, ingress: sessionWorkerIngress } }
             : undefined,
     );
-    await mainManagementTools.initializeMainManagementTools();
+    await mainManagementTools.initializeMainManagementTools({ workerStore: sessionWorkerStore });
     await nodeExecution.initializeNodeExecution();
     await mcpExternal.initializeMcpExternalService();
 

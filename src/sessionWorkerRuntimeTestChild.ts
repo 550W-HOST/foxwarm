@@ -1,5 +1,5 @@
 import { logger } from './common';
-import { initializeMainManagementTools, shutdownMainManagementTools } from './mainManagementTools';
+import { executeMainManagementTool, initializeMainManagementTools, shutdownMainManagementTools, tool_create_child_session, tool_send_to_session } from './mainManagementTools';
 import { callMcpTool, initializeMcpExternalService, listMcpServers, shutdownMcpExternalService } from './mcpExternalService';
 import { copyBetweenNodes, executeRemoteNodeTool, initializeNodeExecution, listNodeTopology, shutdownNodeExecution, validateNodeSelection } from './nodeExecution';
 import { deliverFile, initializeFileDelivery, shutdownFileDelivery } from './fileDelivery';
@@ -53,6 +53,24 @@ async function start(): Promise<void> {
         command: 'sleep 3', sessionId: session.id, agentName: session.agent,
       });
       await options.currentSessionEffects.execRuntime.markExecForBackgroundNotification(entry.id);
+    }
+    // Cross-session hooks key on chatCount/session shape because the canonical
+    // queue processor appends the user message itself; llm.chat receives no parts.
+    const crossSession = String(process.env.FOXWARM_TEST_CROSS_SESSION || '');
+    if (crossSession.includes('create-child') && chatCount === 1 && !session.id.endsWith('_mp-child')) {
+      const result: any = await tool_create_child_session({ suffix: 'mp-child', message: 'hello child' }, { sessionId: session.id });
+      await options.appendMessage({ role: 'model', parts: [{ text: `create-child-result: ${typeof result === 'string' ? result : result?.output}` }] });
+    }
+    if (crossSession.includes('reply') && chatCount === 1 && session.id.endsWith('_mp-child') && !session.id.endsWith('_mp-child_mp-child')) {
+      const parentId = session.id.slice(0, -'_mp-child'.length);
+      const result: any = await tool_send_to_session({ sessionId: parentId, message: 'child reply to parent' }, { sessionId: session.id });
+      await options.appendMessage({ role: 'model', parts: [{ text: `reply-result: ${typeof result === 'string' ? result : result?.output}` }] });
+    }
+    if (crossSession.includes('query') && chatCount === 2 && !session.id.endsWith('_mp-child')) {
+      const listOut = await executeMainManagementTool('session_list', {}, { sessionId: session.id });
+      const childId = `${session.id}_mp-child`;
+      const msgsOut = await executeMainManagementTool('get_session_messages', { sessionId: childId, count: 20 }, { sessionId: session.id });
+      await options.appendMessage({ role: 'model', parts: [{ text: `list-output: ${listOut}\nmessages-output: ${msgsOut}` }] });
     }
     if (options?.purpose === 'compact-plan' && process.env.FOXWARM_TEST_COMPACT_PLAN) {
       return { toolCalls: [{ name: COMPACT_PLAN_TOOL_NAME, args: JSON.parse(process.env.FOXWARM_TEST_COMPACT_PLAN) }] };

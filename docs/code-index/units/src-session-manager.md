@@ -38,7 +38,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 
 ### Relations, agents, and inter-session delivery
 
-- `forkSession`, `createChildSession`, `setSessionParent`, `updateChildSessionParentIds`, `getChildSessionIds`, `getCanonicalChildSessionIds`, `collectSessionDescendants` — lineage, explicit parent links, and canonical lifecycle traversal.
+- `forkSession`, `createChildSession`, `setSessionParent`, `updateChildSessionParentIds`, `getChildSessionIds`, `getCanonicalChildSessionIds`, `collectSessionDescendants` — lineage, explicit parent links, and canonical lifecycle traversal. `forkSession`/`createChildSession` accept a trusted `sourceOverride` snapshot so the Main management facade can fork a worker-fenced parent from a strictly read-only detached authority read without hydrating or persisting it.
 - `sendToSession`, `notifyManualForkCreated` — inter-session and manual-fork events.
 - `createAgentWithMainSession`, `createSessionInAgent`, `moveSessionToTarget`, `setAgentInherit`, `setAgentIsolation`, `refreshSessionSnapshot` — façade over agent operations.
 - `getAgentMetadata`, `getAgentInheritanceChain`, `getAgentIsolationNode`, `isAgentIsolated`, `isSessionEffectivelyIsolated` — agent metadata access.

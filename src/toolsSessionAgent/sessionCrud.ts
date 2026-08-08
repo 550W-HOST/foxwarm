@@ -2,6 +2,7 @@ import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
 import { COMPACT_PERCENT } from '../config';
 import { requireNotIsolated } from '../isolatedCheck';
+import { executeMainManagementTool } from '../mainManagementTools';
 import { ToolArgs, ToolContext } from './helpers';
 import { buildSessionListOutput, buildSessionStatusInfo, formatSessionStatus } from '../sessionStatus';
 
@@ -11,6 +12,9 @@ export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
     : 'status';
 
   if (action === 'list') {
+    // The session catalog is Main-owned; a worker reads it through the
+    // fixed main-management facade instead of its own empty module state.
+    if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('session_list', args, ctx);
     await requireNotIsolated(ctx, 'session list');
     return buildSessionListOutput(args, ctx?.sessionId);
   }

@@ -1,4 +1,5 @@
 import * as sessionManager from '../sessionManager';
+import { executeMainManagementTool } from '../mainManagementTools';
 import { formatArchiveBlockContextText, formatArchiveBlockTimeRange, getArchiveBlockEndTimestamp, getArchiveBlockStartTimestamp, renderBlockMessage, type ArchiveBlockRecord } from '../session/layeredContext';
 import type { ArchiveMessageRecord } from '../session/archive';
 import type { Message, Session } from '../types';
@@ -673,6 +674,11 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
     && (ctx.session.id === sessionId || ctx.session.aliases?.includes(sessionId))
     ? ctx.session
     : undefined;
+  // Cross-session reads are Main-owned (detached authority read for fenced
+  // targets); a worker reaches them through the fixed main-management facade.
+  if (!trustedSession && ctx?.sessionPlacement === 'session-worker') {
+    return executeMainManagementTool('get_session_messages', args, ctx);
+  }
   if (trustedSession) requireNotIsolatedForSession(trustedSession, 'get_session_messages');
   else await requireNotIsolated(ctx as any, 'get_session_messages');
 

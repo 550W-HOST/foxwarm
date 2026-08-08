@@ -40,7 +40,7 @@ The implementation has a substantial real-child foundation, but normal productio
 | Publication | Full bounded committed projections are awaited after authoritative writes. There is no persisted `stateRevision`. |
 | History and compaction | Detached authoritative history reads and synchronous awaited Worker compaction are implemented and tested. Background compact jobs remain unsupported. |
 | Final delivery | Main-owned committed-final delivery carries a serialized QueueSource and makes one delivery attempt after commit/publication. There is no outbox or automatic retry. |
-| Tool placement | Fixed Main reverse services cover the implemented Worker paths for management, Node execution, file delivery, final delivery, MCP, vector, and publication. Unsupported paths fail explicitly before effects. |
+| Tool placement | Fixed Main reverse services cover the implemented Worker paths for management, Node execution, file delivery, final delivery, MCP, vector, and publication. Child creation (including fork via read-only detached authority read), the catalog session list, and cross-session message reads route through the main-management facade with stale-generation fencing. Unsupported paths fail explicitly before effects. |
 | Normal ingress | `MessageRouter` routes ordinary busy/idle channel/WebUI input through the closed ensure/spawn/append/run ingress operation (`submitEnsuringWorker`), and all Main-side enqueue producers (timer, wait-timeout, ONBOOT, node events, RPC enqueue, inter-session delivery) share the same durable boundary through the session-manager sink. Managed sessions fail closed retryably at that boundary; worker-fenced stop/dequeue/retry and settings updates are explicitly unsupported. Startup resumes durable pending mailbox intents non-fatally. |
 | Lifecycle handback | Idle/crash/shutdown release runs one closed supervisor-owned flow: the supervisor's single injected Main handback step reconciles the mailbox cursor against the authoritative JSON and refreshes the Main catalog stub read-only before the fence is released; handback failure retains the fence fail-closed. Idle release postpones while the worker reports a busy owner, queued work, or running background exec processes via the exact `idleStatus` runtime method. |
 
@@ -109,9 +109,11 @@ Keep this as one closed flow. Do not introduce a reusable claim, lease, callback
 
 Implemented: the supervisor owns the flow; its one injected `handbackWorker` step (Main-side `performSessionWorkerHandback`, not a generic callback API — it has exactly one caller, exit/stop handback) runs after exact exit observation and before `markExitObserved`, reconciling the cursor via `SessionWorkerStore.reconcileDrainedMailboxCursor` (draining-state variant of the inactive reconcile) and refreshing the Main catalog stub strictly read-only from the authority JSON (never the projection). Handback failure retains the fence on both stop and crash paths and blocks restart/replacement; an exit inside the activation window (candidate state) skips the handback entirely so the fence releases and the session stays retryable. Idle release queries the worker's exact `idleStatus` and postpones while busy/queued/running background exec; shutdown and explicit stop do not wait for background exec (their completion is durably recovered at the next spawn).
 
-### M-C — close normal cross-session and topology callers
+### M-C — close normal cross-session and topology callers ✅ completed
 
 Provide fixed services only for reachable normal callers that are still unavailable in Worker placement. Start with child creation and its required reply/wait behavior, then query/control/settings paths that genuinely need Main-owned state. Keep unsupported admin and managed paths explicit until their concrete product callers are defined.
+
+Implemented: the main-management facade gains bounded `create_child_session` (suffix/fork/message/handoff flags only), `session_list`, and `get_session_messages` operations. Reverse handlers bound to a worker also fence the expected generation/incarnation against the durable store and reject stale generations retryably. `fork=true` derives from the parent authority through a strictly read-only detached read passed as a never-persisted source override; Main never hydrates or writes the fenced parent. Cross-session message reads for fenced targets likewise use detached reads without rehydrating the Main catalog session. Cross-session control/settings (other-session stop/dequeue/retry/settings), `stop_session` beyond the current session, recall beyond the current session, and unscoped `get_memory_context` remain explicitly retryable-unsupported until concrete product callers exist. Real-child tests cover worker child creation plus reply delivery through each session's own worker, facade queries, read-only fork (parent bytes and cursor unchanged), stale-generation rejection, and bounded-arg validation.
 
 ### M-D — close concrete destructive lifecycle operations
 
@@ -171,6 +173,7 @@ FOXWARM_SYNC_FILE_LOG=1 node --test --test-concurrency=1 \
   lib/sessionWorkerRouterIngress.test.js \
   lib/sessionWorkerTriggerIngress.test.js \
   lib/sessionWorkerHandback.test.js \
+  lib/sessionWorkerCrossSession.test.js \
   lib/sessionWorkerSupervisor.test.js \
   lib/sessionWorkerHost.test.js \
   lib/sessionRuntimeService.test.js \

@@ -270,7 +270,10 @@ export class SessionWorkerSupervisor {
     let transport: ProcessRpcClientTransport;
     try {
       const reverseRegistry = new RpcServiceRegistry();
-      reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ expectedSourceSessionId: sessionId }));
+      reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({
+        expectedSourceSessionId: sessionId, expectedGeneration: generation, expectedIncarnationId: incarnationId,
+        workerStore: this.options.store,
+      }));
       reverseRegistry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: sessionId }));
       reverseRegistry.register(fileDeliveryServiceDescriptor, createFileDeliveryServiceHandler({ expectedSourceSessionId: sessionId }));
       reverseRegistry.register(sessionTurnDeliveryServiceDescriptor, createSessionTurnDeliveryServiceHandler({

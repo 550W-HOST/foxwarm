@@ -40,7 +40,7 @@ test('named wait-timeout method validates exact DTO and does not expand model op
   (timers as any).createWaitTimeoutTimer = async (args: any) => { calls.push(structuredClone(args)); return { id: 'timer' }; };
 
   try {
-    assert.equal(MAIN_MANAGEMENT_TOOL_OPERATIONS.length, 7);
+    assert.equal(MAIN_MANAGEMENT_TOOL_OPERATIONS.length, 10);
     assert.equal((MAIN_MANAGEMENT_TOOL_OPERATIONS as readonly string[]).includes('scheduleWaitTimeout'), false);
     const response = await scheduleMainWaitTimeout({ sourceSessionId: ` ${sourceId} `, waitId: ' wait-1 ', timeoutSeconds: 2.5 });
     assert.deepEqual(response, { scheduled: true, waitId: 'wait-1' });

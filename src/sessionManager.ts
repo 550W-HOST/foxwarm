@@ -1448,17 +1448,20 @@ export function getChannelBySession(sessionId: string): { channelId: string; con
  * @param isChildSession Whether this is a child session (for multi-agent)
  * @returns New session ID
  */
-export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
+export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string; sourceOverride?: Session }): Promise<string> {
   return withSessionIdentityLock(() => forkSessionUnlocked(sourceSessionId, suffix, isChildSession, options));
 }
 
-async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
-  const sourceSession = await getSessionUnlocked(sourceSessionId);
+async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string; sourceOverride?: Session }): Promise<string> {
+  // sourceOverride lets a trusted caller (e.g. the Main management facade)
+  // supply a detached read-only snapshot of a worker-owned authority instead
+  // of hydrating it into Main. Overrides are never persisted back.
+  const sourceSession = options?.sourceOverride || await getSessionUnlocked(sourceSessionId);
   const realSourceSessionId = sourceSession.id || sourceSessionId;
   const newSessionId = await allocateForkSessionId(realSourceSessionId, suffix, isChildSession);
   const sourcePreviousPromptCacheKey = sourceSession.promptCacheKey;
   const promptCacheKey = llm.ensurePromptCacheKey(sourceSession);
-  if (sourceSession.promptCacheKey !== sourcePreviousPromptCacheKey) {
+  if (sourceSession.promptCacheKey !== sourcePreviousPromptCacheKey && !options?.sourceOverride) {
     await saveSession(sourceSession.id);
   }
 
@@ -1602,18 +1605,18 @@ export function resolveSpawnedSessionModel(
     : undefined;
 }
 
-export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
+export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string; sourceOverride?: Session }): Promise<string> {
   return withSessionIdentityLock(() => createChildSessionUnlocked(parentSessionId, suffix, fork, options));
 }
 
-async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string }): Promise<string> {
+async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string; sourceOverride?: Session }): Promise<string> {
   validateChildSessionSuffix(suffix);
   if (fork) {
     // Fork from parent (inherit context)
     return await forkSessionUnlocked(parentSessionId, suffix, true, options);
   } else {
     // Create new empty session
-    const parentSession = await getSessionUnlocked(parentSessionId);
+    const parentSession = options?.sourceOverride || await getSessionUnlocked(parentSessionId);
     const realParentSessionId = parentSession.id || parentSessionId;
     const childSessionId = await allocateChildSessionId(realParentSessionId, suffix);
 

@@ -71,12 +71,10 @@ test('worker guards run before unsupported handlers and exact current state tool
   (sessionManager as any).getArchivedBlocks = async () => ({ records: [] as any[], totalMatched: 0, requestedRange: {} });
   try {
   for (const [name, args, extra] of [
-    ['create_child_session', { suffix: 'x' }],
-    ['session', { action: 'list' }],
-    ['session', { action: ' list ' }], ['get_memory_context', { timestamp: 1 }],
+    ['delete_session', { sessionId: 'other/session' }],
+    ['get_memory_context', { timestamp: 1 }],
     ['remote_node', { action: ' list ' }], ['node_tools', { action: 'List' }],
-    ['get_session_messages', { sessionId: 'other/session' }], ['recall', { sessionId: 'other/session' }],
-    ['get_session_messages', { sessionId: '' }], ['get_session_messages', { sessionId: ' ' }],
+    ['recall', { sessionId: 'other/session' }],
     ['stop_session', { sessionId: '' }], ['stop_session', { sessionId: ' ' }],
     ['session', { action: 'update-display-name', sessionId: 'other/session', name: 'x' }],
     ['set_session_child_model', { sessionId: ' ', model: 'x' }],
@@ -139,16 +137,16 @@ test('worker guarded errors precede direct notifications, permissions, and recur
   const originalIsolated = agentMetadata.isSessionEffectivelyIsolated;
   (agentMetadata as any).isSessionEffectivelyIsolated = () => { throw new Error('concrete permission reached before guard'); };
   try {
-    const direct = await executeTools([{ id: 'guarded', name: 'create_child_session', args: {}, argsParseError: 'malformed', rawArgsText: '{' } as any],
+    const direct = await executeTools([{ id: 'guarded', name: 'delete_session', args: {}, argsParseError: 'malformed', rawArgsText: '{' } as any],
       { sessionId: session.id, broadcast: async () => { broadcasts += 1; }, onToolStart: () => { starts += 1; } }, session,
       { currentSessionEffects: effects });
     assert.match(JSON.stringify(direct), /SESSION_WORKER_TOOL_UNAVAILABLE/);
     assert.match(JSON.stringify(direct), /"retryable":true/);
     assert.equal(broadcasts, 0); assert.equal(starts, 0);
-    await assert.rejects(() => tool_call_tool({ source: 'builtin', name: 'create_child_session', args: {} }, ctx),
+    await assert.rejects(() => tool_call_tool({ source: 'builtin', name: 'delete_session', args: {} }, ctx),
       { code: 'SESSION_WORKER_TOOL_UNAVAILABLE', retryable: true });
   } finally { (agentMetadata as any).isSessionEffectivelyIsolated = originalIsolated; }
-  const nested = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="create_child_session", args={})' }, ctx);
+  const nested = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="delete_session", args={})' }, ctx);
   assert.equal(nested.status, 'failed');
   assert.match(String(nested.error), /SESSION_WORKER_TOOL_UNAVAILABLE/);
 });
@@ -165,7 +163,7 @@ test('recursive Worker ToolScript guards drop transient progress while Main loca
   const workerCtx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', toolUseId: 'outer-worker',
     persistCurrentSession: async () => {} };
   try {
-    const recursive = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="call_tool", args={"source":"builtin", "name":"create_child_session", "args":{}})' }, workerCtx);
+    const recursive = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="call_tool", args={"source":"builtin", "name":"delete_session", "args":{}})' }, workerCtx);
     assert.equal(recursive.status, 'failed');
     assert.match(String(recursive.error), /SESSION_WORKER_TOOL_UNAVAILABLE/);
     assert.equal(progressEvents, 0);
