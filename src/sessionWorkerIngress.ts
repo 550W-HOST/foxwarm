@@ -172,7 +172,7 @@ export class SessionWorkerIngressCoordinator {
     const normalized = normalizeSessionWorkerIngressRequest({ sessionId: requestedSessionId, item });
     const sessionId = this.resolveCanonicalSessionId(normalized.sessionId);
     if (sessionId !== normalized.sessionId) {
-      throw new RpcError('SESSION_WORKER_INGRESS_INVALID_SESSION', 'submitAndRun does not accept a session alias.');
+      throw new RpcError('SESSION_WORKER_INGRESS_INVALID_SESSION', 'Worker ingress does not accept a session alias.');
     }
     return { sessionId, item: normalized.item };
   }
