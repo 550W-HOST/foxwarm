@@ -71,19 +71,36 @@ test('WeWorkStreamAggregator can apply model text and running tools atomically',
   assert.equal(updated?.content, 'model text before tools\n\n> ⌛️ exec');
 });
 
-test('WeWorkStreamAggregator binds updates by stream id when a new inbound message starts', () => {
+test('WeWorkStreamAggregator supersedes an old card without transient tool status', () => {
   const aggregator = new WeWorkStreamAggregator();
   aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-1');
+  aggregator.appendByStreamId('stream-1', 'substantive model text');
+  aggregator.applyProgressByStreamId('stream-1', {
+    type: 'tool-calls-start',
+    calls: [{ id: 'call-1', name: 'read' }],
+  });
+  const oldFinal = aggregator.supersedeActive('chat-1');
   const second = aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-2');
 
-  const oldFinal = aggregator.appendByStreamId('stream-1', 'old final', { finish: true });
   const newQueued = aggregator.appendByStreamId('stream-2', 'queued notice');
 
   assert.equal(oldFinal?.finish, true);
-  assert.equal(oldFinal?.content, 'old final');
+  assert.equal(oldFinal?.content, 'substantive model text');
+  assert.equal(aggregator.getByStreamId('stream-1')?.content.includes('thinking'), false);
+  assert.equal(aggregator.getByStreamId('stream-1')?.content.includes('read'), false);
   assert.equal(newQueued?.finish, false);
   assert.equal(newQueued?.content, 'queued notice');
   assert.equal(second.streamId, 'stream-2');
+});
+
+test('WeWorkStreamAggregator gives an empty superseded card legal final content', () => {
+  const aggregator = new WeWorkStreamAggregator();
+  aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-1');
+
+  const oldFinal = aggregator.supersedeActive('chat-1');
+
+  assert.equal(oldFinal?.finish, true);
+  assert.equal(oldFinal?.content, '处理完成。');
 });
 
 test('WeWorkStreamAggregator cleans up expired stream states', () => {

@@ -9,14 +9,14 @@ The interactive turn flow from channel input through authorization, queueing, pr
 1. A platform adapter converts native input to `ChannelContext` plus `ChannelMessage` and calls `MessageRouter.handleIncomingMessage`.
 2. Router performs channel authorization, normalizes source metadata/mentions, handles slash commands where applicable, and resolves the attached session.
 3. Ordinary input enters the session queue through the session-manager façade.
-4. The registered trigger invokes `MessageRouter.processSessionQueue`. `tryClaimSession` provides per-session exclusion and `continueWithQueuedWork` selects/merges a legal turn source.
-5. `llm.chat(parts, session, iteration, options)` builds the current model-visible history/prompt/tool schema, resolves concrete or virtual routing, streams progress, records the actual concrete provider-qualified model ID, and appends the model result. Virtual attempt semantics are canonical in [model routing](./model-routing.md).
+4. The registered trigger invokes `MessageRouter.processSessionQueue`. `tryClaimSession` provides per-session exclusion and `continueWithQueuedWork` selects/merges a legal turn source. Each `runSessionTurn` invocation creates one ephemeral turn identity and carries it through every provider/tool iteration.
+5. `llm.chat(parts, session, iteration, options)` carries that identity into each request while building the current model-visible history/prompt/tool schema, resolving concrete or virtual routing, streaming progress, recording the actual concrete provider-qualified model ID, and appending the model result. Model `extraFields` and `extraHeaders` may expand `${TURN_ID}` alongside `${SESSION_CACHE_KEY}`. A queue item consumed inside the same `runSessionTurn` invocation keeps the identity; a later invocation gets a new one. Virtual attempt semantics are canonical in [model routing](./model-routing.md).
 6. Retry callbacks create/update display-only notices and broadcast concise progress; terminal request exhaustion throws `LlmRequestError`.
 7. Model stream deltas become `model-stream-update` events for WebUI/channel progress.
 8. When function calls exist, router publishes structured progress and calls `llm.executeTools`; normal dispatch resolves builtin, MCP, or node tools through permission-aware tool infrastructure.
 9. Tool results append to history and the loop returns to the provider. Mergeable queued follow-ups may join before the next call only when turn/source boundaries permit.
    A successful `waitAfterHandoff` handoff instead appends the complete tool result, arms the existing generic wait once, and stops recursion before another provider request.
-10. A result with no further tool calls is sent through direct source reply/session broadcast with `turnFinal:true`.
+10. After a no-tool result has been appended canonically, Router performs one existing compatible leading-queue consume before delivery. If input for the same source boundary arrived while that provider request was in flight, it is appended as its own canonical message and the provider loop continues; otherwise the result is sent through direct source reply/session broadcast with `turnFinal:true`.
 11. Router releases active state, may continue queued work, and calls `checkAndCompactIfNeeded` with final usage.
 
 `src/sessionManager.ts` stores/queues/triggers work but does not implement this loop.
@@ -34,7 +34,7 @@ The interactive turn flow from channel input through authorization, queueing, pr
 
 - Busy-time ordinary input is queued without an obsolete automatic queue acknowledgement.
 - Follow-ups can merge into an active tool loop only when the router's queue-item/source policy allows it.
-- Platform turn identifiers such as WeWork stream IDs are hard merge/final-delivery boundaries.
+- For QQ Bot and WeWork sources carrying passive-delivery IDs, configured channel instance plus scoped conversation is the merge boundary; the platform message/card ID is not.
 - `/stop` cancels the current run, then commits all queued message/event inputs to canonical history without running another provider turn. A ready `compact-commit` is applied at the Stop safe point; unrecognized queue records are discarded generically.
 - `/dequeue` stops current work if needed and immediately resumes queued items.
 - `/retry` atomically claims an idle session and enters the ordinary turn loop directly with `parts:null`; it does not persist queue state, regenerate a completed answer, or add a model-facing retry marker. Compatible input arriving after the claim joins at normal pre-provider and post-tool safe points.
@@ -51,6 +51,7 @@ The interactive turn flow from channel input through authorization, queueing, pr
 - Tool schemas remain stable across normal/side/compact requests when their prefix/schema contract is shared.
 - Display-only retry/progress messages never enter provider input, compaction candidates, or embeddings.
 - Persisted model messages record the actual provider-qualified model key used for the request.
+- `${TURN_ID}` is an ephemeral UUID created at the `runSessionTurn` boundary. It is not persisted as session state, remains stable across retries and tool-loop provider calls in that invocation, and changes when a later invocation starts.
 - Final broadcasts use generic turn metadata; router does not call platform-specific finish hooks.
 
 ## Design decisions
@@ -65,11 +66,24 @@ Persist the canonical provider-qualified model key on model messages so mixed-mo
 
 ### D-pipeline-source-boundary
 
-Queued follow-up merge and progress/final delivery respect explicit platform turn/source identifiers. Different or unbound sources remain separate turns.
+Queued QQ Bot and WeWork follow-ups carrying passive-delivery IDs are compatible
+when their configured channel instance and scoped conversation match. Different
+instances or conversations remain hard boundaries, while ordinary unbound
+source behavior is unchanged. Platform `msg_id`/stream-card IDs remain in the
+serializable source as restart/fallback delivery metadata but do not split an
+otherwise compatible provider turn. The same compatibility check runs after a
+no-tool provider result but before final delivery, so matching input that
+arrived during that request continues the provider loop without publishing the
+intermediate result; a different boundary stays queued and the current final
+proceeds. Before a consumed input continues the loop, the same effective
+usage-threshold guard used after tool calls may request auto-compaction; the
+loop-top compact safe point applies it before the next provider request.
+Adapter ownership of the latest passive context is canonical in
+[D-channel-conversation-latest-passive-context](../modules/channels.md#d-channel-conversation-latest-passive-context).
 
 ### D-pipeline-canonical-queue-item-boundaries
 
-Each logical queued input or event is appended as its own canonical `Message` in queue order, including `parts` items and structured `message` items. A compatible batch may still be consumed before one provider request so tool-loop follow-ups affect that request, but router storage never concatenates queue-item parts. Ready compact commits and platform stream/source boundaries remain queue boundaries. Provider-specific serializers, not persisted history, normalize adjacent same-role messages when a protocol requires it.
+Each logical queued input or event is appended as its own canonical `Message` in queue order, including `parts` items and structured `message` items. A compatible batch may still be consumed before one provider request so tool-loop follow-ups affect that request, but router storage never concatenates queue-item parts. Ready compact commits and channel instance/conversation source boundaries remain queue boundaries. Provider-specific serializers, not persisted history, normalize adjacent same-role messages when a protocol requires it.
 
 ### D-pipeline-busy-queue-silence
 

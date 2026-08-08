@@ -1,4 +1,4 @@
-import { createModelsYamlCompletionProvider } from './modelsYamlCompletions'
+import { createModelsYamlCompletionProvider, YAML_SCALAR_WORD_PATTERN } from './modelsYamlCompletions'
 import { MODELS_YAML_MODEL_URI, YAML_CONFIG_SCHEMAS } from './yamlConfigSchemas'
 
 type MonacoModule = typeof import('monaco-editor')
@@ -44,6 +44,7 @@ export function loadYamlMonacoSupport(): Promise<YamlMonacoSupport> {
       import('monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js'),
     ])
 
+    monaco.languages.setLanguageConfiguration('yaml', { wordPattern: YAML_SCALAR_WORD_PATTERN })
     monacoYaml.configureMonacoYaml(monaco, {
       completion: true,
       hover: true,

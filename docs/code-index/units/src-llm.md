@@ -42,6 +42,7 @@ Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolRe
 - Visible skills are listed as compact metadata; full skill docs remain on-demand.
 - Dynamic hints include agent folder and layered-context recall guidance.
 - Prompt-cache keys are random UUIDs tied to model-facing prefix lineage and persisted by normal session callers. Canonical lineage: [D-lifecycle-prefix-lineage](../threads/session-lifecycle.md#d-lifecycle-prefix-lineage).
+- Provider `extraFields` and `extraHeaders` expand `${SESSION_CACHE_KEY}` from the resolved prompt-cache key and `${TURN_ID}` from the request's ephemeral turn identity. A low-level request generates one fallback identity for its retry set; the normal MessageRouter turn loop supplies one identity for the whole session turn.
 
 ## Request behavior
 

@@ -153,12 +153,24 @@ const channelEntry = {
   properties: {
     type: {
       anyOf: [
-        { enum: ['telegram', 'matrix', 'wework', 'weixin'] },
+        { enum: ['telegram', 'matrix', 'wework', 'weixin', 'qqbot'] },
         { type: 'string' },
       ],
       description: 'Known managed channel type or a custom channel type.',
     },
     enabled: { type: 'boolean' },
+    appId: { type: 'string' },
+    clientSecret: { type: 'string' },
+    media: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        imageMaxBytes: { type: 'integer', minimum: 1, maximum: 20971520, description: 'Safe inline-image threshold; larger images fall back to generic files.' },
+        fileMaxBytes: { type: 'integer', minimum: 1, maximum: 209715200, description: 'Bounded inbound/fallback generic-file cap; local QQ sends are additionally capped at 100 MiB.' },
+        maxTotalBytes: { type: 'integer', minimum: 1, maximum: 209715200 },
+        maxAttachments: { type: 'integer', minimum: 1, maximum: 16 },
+      },
+    },
     allowedUsers: { type: 'array', items: { type: 'string' } },
     guestAgent,
     botToken: { type: 'string' },

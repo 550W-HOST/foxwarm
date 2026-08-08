@@ -59,6 +59,25 @@ export type WeixinConfig = {
   guestAgent?: GuestAgentConfig;
 };
 
+export type QQBotMediaConfig = {
+  /** Safe inline-image threshold; larger images fall back to generic files. */
+  imageMaxBytes?: number;
+  /** Bounded generic-file cap for inbound/fallback files; local QQ sends are additionally capped at 100 MiB. */
+  fileMaxBytes?: number;
+  maxTotalBytes?: number;
+  maxAttachments?: number;
+};
+
+export type QQBotConfig = {
+  enabled?: boolean;
+  appId?: string;
+  clientSecret?: string;
+  allowedUsers?: string[];
+  allowAllUsers?: boolean;
+  guestAgent?: GuestAgentConfig;
+  media?: QQBotMediaConfig;
+};
+
 
 export type GuestAgentConfig = {
   agentId: string;
@@ -74,7 +93,7 @@ export type GenericChannelConfig = Record<string, any> & {
   guestAgent?: GuestAgentConfig;
 };
 
-export type AnyChannelConfig = TelegramConfig | MatrixConfig | WeWorkConfig | WeixinConfig | GenericChannelConfig;
+export type AnyChannelConfig = TelegramConfig | MatrixConfig | WeWorkConfig | WeixinConfig | QQBotConfig | GenericChannelConfig;
 
 export type NormalizedChannelConfig<T extends AnyChannelConfig = AnyChannelConfig> = {
   id: string;
@@ -266,6 +285,7 @@ export const TELEGRAM_CONFIG: TelegramConfig = (getDefaultChannelConfigByType<Te
 export const MATRIX_CONFIG: MatrixConfig = (getDefaultChannelConfigByType<MatrixConfig>('matrix', APP_CONFIG)?.config || {}) as MatrixConfig;
 export const WEWORK_CONFIG: WeWorkConfig = (getDefaultChannelConfigByType<WeWorkConfig>('wework', APP_CONFIG)?.config || {}) as WeWorkConfig;
 export const WEIXIN_CONFIG: WeixinConfig = (getDefaultChannelConfigByType<WeixinConfig>('weixin', APP_CONFIG)?.config || {}) as WeixinConfig;
+export const QQBOT_CONFIG: QQBotConfig = (getDefaultChannelConfigByType<QQBotConfig>('qqbot', APP_CONFIG)?.config || {}) as QQBotConfig;
 export const ASR_SERVICE_CONFIG: AsrServiceConfig = APP_CONFIG.asrService || {};
 export const OLLAMA_BASE_URL = APP_CONFIG.llm?.ollamaBaseUrl || 'http://localhost:11434';
 

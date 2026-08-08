@@ -27,6 +27,12 @@ export interface ToolContext {
     queueSystemEvent?: (message: string, type?: 'background' | 'trigger' | 'onboot') => Promise<void>;
     runtimeNodeId?: string;
     deferSessionCwdSync?: boolean;
+    /** Current in-process turn reply metadata for source-bound channel tools. */
+    channelReplyMetadata?: {
+        qqbotMessageId?: string;
+        qqbotChannelId?: string;
+        qqbotConversationId?: string;
+    };
 }
 
 // Tool function type

@@ -243,6 +243,7 @@ export interface QueueSource {
   username?: string;
   senderId?: string;
   weworkStreamId?: string; // WeWork intelligent-bot stream id for binding channel broadcasts to the originating turn
+  qqbotMessageId?: string; // QQ Bot inbound msg_id for binding a passive reply to the originating turn
 }
 
 export interface QueueItem {

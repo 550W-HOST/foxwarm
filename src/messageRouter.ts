@@ -3,6 +3,7 @@
  */
 
 import fs from 'fs-extra';
+import { randomUUID } from 'crypto';
 import { logger } from './common';
 import { ChannelContext, ChannelMessage, getChannelId, getChannelType, getConversationId } from './channel';
 import { formatAuthorizationInspection, inspectChannelAuthorizationFromContext } from './channelAuth';
@@ -14,7 +15,7 @@ import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
 import { maybeBuildGoalReminderMessage } from './session/goal';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
-import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, QueueItem, QueueSource, Session } from './types';
+import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, QueueItem, QueueSource, Session, TokenUsage } from './types';
 import { formatLocalTimestamp } from './utils/localTime';
 import { formatFoxwarmMessage, formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemTag, parseFoxwarmOpeningTag } from './utils/promptWrappers';
 
@@ -205,31 +206,41 @@ export class MessageRouter {
       username: ctx.username,
       senderId: ctx.senderId,
       weworkStreamId: ctx.weworkStreamId,
+      qqbotMessageId: ctx.qqbotMessageId,
     };
   }
 
   private getSourceStreamKey(source?: QueueSource): string | undefined {
-    if (!source?.weworkStreamId) {
-      return undefined;
+    if (source?.weworkStreamId) {
+      return `wework:${source.channelId || source.platform}:${source.conversationId || source.channelUserId}`;
     }
-    return `${source.channelId || source.platform}:${source.conversationId || source.channelUserId}:${source.weworkStreamId}`;
+    if (source?.qqbotMessageId) {
+      return `qqbot:${source.channelId || source.platform}:${source.conversationId || source.channelUserId}`;
+    }
+    return undefined;
   }
 
   private getTurnChannelOptions(sourceCtx?: ChannelContext, source?: QueueSource): Record<string, any> {
     const streamId = sourceCtx?.weworkStreamId || source?.weworkStreamId;
-    if (!streamId) {
-      return {};
-    }
     const channelId = sourceCtx ? getChannelId(sourceCtx) : (source?.channelId || source?.platform);
     const conversationId = sourceCtx ? getConversationId(sourceCtx) : (source?.conversationId || source?.channelUserId);
-    if (!channelId || !conversationId) {
-      return { weworkStreamId: streamId };
+    const options: Record<string, any> = {};
+    if (streamId) {
+      if (!channelId || !conversationId) {
+        options.weworkStreamId = streamId;
+      } else {
+        options.weworkStreamId = streamId;
+        options.weworkStreamChannelId = channelId;
+        options.weworkStreamConversationId = conversationId;
+      }
     }
-    return {
-      weworkStreamId: streamId,
-      weworkStreamChannelId: channelId,
-      weworkStreamConversationId: conversationId,
-    };
+    const qqbotMessageId = sourceCtx?.qqbotMessageId || source?.qqbotMessageId;
+    if (qqbotMessageId && channelId && conversationId) {
+      options.qqbotMessageId = qqbotMessageId;
+      options.qqbotChannelId = channelId;
+      options.qqbotConversationId = conversationId;
+    }
+    return options;
   }
 
   private mergeTurnOptions(turnOptions: Record<string, any>, options?: any): any {
@@ -441,9 +452,8 @@ export class MessageRouter {
         break;
       }
       const queuedStreamKey = this.getSourceStreamKey(session.queue[0].source);
-      // A different WeWork stream id already has its own passive card. Leave it
-      // queued so the next turn's broadcasts update/finish that card instead
-      // of merging its text into the current stream card.
+      // A different source conversation owns its own passive context. Leave it
+      // queued so the next turn delivers there instead of merging it here.
       if (queuedStreamKey && queuedStreamKey !== turnStreamKey) {
         break;
       }
@@ -645,6 +655,26 @@ export class MessageRouter {
     }
 
     return 'continued';
+  }
+
+  private async maybeRequestAutoCompactionBeforeContinuation(
+    session: Session,
+    usage: TokenUsage | undefined,
+    iteration: number,
+  ): Promise<void> {
+    if (!usage) {
+      return;
+    }
+    const currentSize = sessionManager.getUsageTotalTokens(usage);
+    const compactThreshold = sessionManager.getEffectiveCompactThresholdTokens(session);
+    if (currentSize <= compactThreshold) {
+      return;
+    }
+    logger.info({ currentSize, compactThreshold, sessionThresholdOverride: session.compactThresholdTokens, iteration }, 'Context size exceeded threshold before turn continuation, triggering compact');
+    await sessionManager.processSessionCompactionRequest(session.id, {
+      completionMarker: 'Compaction completed. You can continue working now.',
+    }, 'auto');
+    logger.info('Compact requested, continuing with current history');
   }
 
   private async runQueuedCompaction(sessionId: string, session: Session): Promise<void> {
@@ -977,6 +1007,9 @@ export class MessageRouter {
 
     const turnChannelOptions = this.getTurnChannelOptions(options.sourceCtx, options.source);
     const turnStreamKey = this.getSourceStreamKey(options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined));
+    // One ephemeral identity covers the complete provider/tool loop for this
+    // invocation. A later runSessionTurn invocation receives a new identity.
+    const turnId = randomUUID();
     const broadcast = session.broadcast
       ? (text: string, broadcastOptions?: any) => session.broadcast!(text, this.mergeTurnOptions(turnChannelOptions, broadcastOptions))
       : undefined;
@@ -1058,6 +1091,7 @@ export class MessageRouter {
         try {
           result = await llm.chat(parts, session, iteration, {
             onRetry: this.createLlmRetryNotifier(session, broadcast),
+            turnId,
           });
         } catch (e: any) {
           if (session.stopping && llm.isAbortError(e)) {
@@ -1086,6 +1120,12 @@ export class MessageRouter {
         }
 
         if (!result.toolCalls?.length) {
+          const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(session, null, turnStreamKey);
+          if (queuedAfterLlm.consumedInput) {
+            await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration);
+            iteration++;
+            continue;
+          }
           lastTextBroadcasted = false;
           break;
         }
@@ -1129,6 +1169,15 @@ export class MessageRouter {
           session,
           previousLlmRequest: result.previousLlmRequest,
           broadcast: this.buildToolBroadcast(broadcast, turnChannelOptions),
+          ...(turnChannelOptions.qqbotMessageId && turnChannelOptions.qqbotChannelId && turnChannelOptions.qqbotConversationId
+            ? {
+              channelReplyMetadata: {
+                qqbotMessageId: turnChannelOptions.qqbotMessageId,
+                qqbotChannelId: turnChannelOptions.qqbotChannelId,
+                qqbotConversationId: turnChannelOptions.qqbotConversationId,
+              },
+            }
+            : {}),
           onToolStart: (tool: { id?: string; name: string; index?: number; total?: number; executionNode?: string; argsPreview?: string; startedAt?: number }) => {
             sessionManager.setActiveSessionRuntimeState(session.id, {
               state: 'running-tool',
@@ -1204,17 +1253,7 @@ export class MessageRouter {
         const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, turnStreamKey);
         parts = queuedAfterTools.parts;
 
-        if (result.usage) {
-          const currentSize = sessionManager.getUsageTotalTokens(result.usage);
-          const compactThreshold = sessionManager.getEffectiveCompactThresholdTokens(session);
-          if (currentSize > compactThreshold) {
-            logger.info({ currentSize, compactThreshold, sessionThresholdOverride: session.compactThresholdTokens, iteration }, 'Context size exceeded threshold during tool calls, triggering compact');
-            await sessionManager.processSessionCompactionRequest(session.id, {
-              completionMarker: 'Compaction completed. You can continue working now.',
-            }, 'auto');
-            logger.info('Compact requested, continuing with current history');
-          }
-        }
+        await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration);
 
         iteration++;
       }
@@ -1326,8 +1365,9 @@ export class MessageRouter {
 
   async handleMessage(ctx: ChannelContext, message: ChannelMessage): Promise<void> {
     let resolvedSession: { sessionId: string; session: Session } | null = null;
+    const authorizedAtIngress = this.isAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId);
 
-    if (!this.isAuthorized(getChannelId(ctx), getChannelType(ctx), getConversationId(ctx), ctx.senderId)) {
+    if (!authorizedAtIngress) {
       try {
         resolvedSession = await this.maybeCreateGuestSessionForUnauthorizedMessage(ctx);
       } catch (e: any) {
@@ -1347,6 +1387,18 @@ export class MessageRouter {
 
     const { sessionId, session } = resolvedSession || await this.resolveSessionForIncomingMessage(ctx);
 
+    let routedMessage = message;
+    if (authorizedAtIngress && message.materializeParts) {
+      try {
+        routedMessage = {
+          ...message,
+          parts: await message.materializeParts(sessionId),
+        };
+      } catch (error) {
+        logger.error({ err: error, channelId: getChannelId(ctx), conversationId: getConversationId(ctx) }, 'Authorized channel media materialization failed');
+      }
+    }
+
     if (getChannelType(ctx) !== 'internal') {
       session.meta.lastChannel = {
         channelId: getChannelId(ctx),
@@ -1356,7 +1408,7 @@ export class MessageRouter {
       };
     }
 
-    const queueItem = this.buildChannelUserQueueItem(ctx, message);
+    const queueItem = this.buildChannelUserQueueItem(ctx, routedMessage);
 
     if (isManagedSessionActive(session)) {
       await sessionManager.enqueueSessionItem(sessionId, queueItem);

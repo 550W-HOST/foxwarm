@@ -1,6 +1,11 @@
 import { parseDocument } from 'yaml'
 import { KNOWN_PROVIDER_TYPES, MODELS_YAML_MODEL_URI } from './yamlConfigSchemas'
 
+// Monaco and monaco-yaml both derive completion replacement ranges from the language's word
+// pattern. YAML scalar values commonly contain model punctuation such as `gpt-5.6-sol` or `/`;
+// keep that punctuation in the current word while excluding YAML delimiters and comments.
+export const YAML_SCALAR_WORD_PATTERN = /[^\s[\]{},:'"#]+/g
+
 export type ModelsYamlSuggestions = {
   modelKeys: string[]
   concreteKeys: string[]
@@ -105,7 +110,12 @@ export function createModelsYamlCompletionProvider(monaco: typeof import('monaco
       if (model.uri.toString() !== MODELS_YAML_MODEL_URI) return { suggestions: [] }
       const kind = getModelsCompletionKind(model.getLinesContent(), position.lineNumber - 1)
       if (!kind) return { suggestions: [] }
-      const values = suggestionsByModel.get(MODELS_YAML_MODEL_URI)
+      // A completion can be requested before the edit debounce fires. Parse the current valid
+      // document at that explicit interaction boundary; invalid partial YAML still falls back to
+      // the last valid debounced snapshot.
+      const currentValues = parseModelsYamlSuggestions(model.getValue())
+      if (currentValues) suggestionsByModel.set(MODELS_YAML_MODEL_URI, currentValues)
+      const values = currentValues ?? suggestionsByModel.get(MODELS_YAML_MODEL_URI)
       const keys = kind === 'targets' ? values?.concreteKeys : values?.modelKeys
       if (!keys?.length) return { suggestions: [] }
       const word = model.getWordUntilPosition(position)

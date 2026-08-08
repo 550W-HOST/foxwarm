@@ -308,6 +308,43 @@ channels:
 
 You can configure Weixin from WebUI Setup without manually editing the token: click **Start Weixin login**, scan the QR code or open the pairing link shown by Setup, then click **Check login**. On success, Setup writes the token to `state/config.yaml` and hot-reloads channels.
 
+Example QQ Bot channel using the official QQ Open Platform gateway:
+
+```yaml
+channels:
+  qq-primary:
+    type: qqbot
+    enabled: true
+    appId: "qq-bot-app-id"
+    clientSecret: "qq-bot-client-secret"
+    # QQ OpenIDs, not display names. Omit only when you intentionally use
+    # the normal per-attachment allow-all-users control.
+    allowedUsers:
+      - "qq-user-openid"
+```
+
+Create a QQ Bot application in the QQ Open Platform, obtain its **AppID** and
+**ClientSecret**, and enable the C2C, group @-message, guild @-message, and
+guild-DM event permissions/intents that the application is eligible to use.
+Add the bot to each target group or guild before expecting inbound events.
+Foxwarm accepts only text from `C2C_MESSAGE_CREATE`, `GROUP_AT_MESSAGE_CREATE`,
+`AT_MESSAGE_CREATE`, and `DIRECT_MESSAGE_CREATE`; media and unmentioned group
+traffic are intentionally ignored. Its attachment conversation IDs are scoped
+as `c2c:<openid>`, `group:<group-openid>`, `guild:<channel-id>`, or
+`dm:<guild-id>`, so use those exact values with channel attachment tools.
+For a source-bound message, Foxwarm follows the Tencent/OpenClaw local passive
+reply policy: up to four successful passive text replies within one hour use
+the inbound `msg_id`; later source replies make one proactive text send to the
+same conversation. Enable QQ's active-message capability and make sure its
+quota is suitable for that fallback. Unknown server failures never infer a
+proactive fallback, and a failed proactive send is not retried.
+
+The published `@openclaw/qqbot` package is a complete OpenClaw plugin and was
+investigated as a protocol reference, but is not a Foxwarm dependency: it
+bundles an `UNLICENSED` QR credential-provisioning connector. The native
+adapter avoids both OpenClaw plugin coupling and that dependency risk because
+official QQ credentials are configured directly.
+
 Example WeWork/企业微信 intelligent bot channel with opt-in streaming aggregation:
 
 ```yaml
@@ -352,6 +389,7 @@ Managed channel types currently include:
 - `matrix`
 - `wework`
 - `weixin`
+- `qqbot`
 
 Slash-command alternatives are available for runtime inspection and manual control:
 
