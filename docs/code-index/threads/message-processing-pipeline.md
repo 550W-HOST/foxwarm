@@ -21,7 +21,7 @@ The interactive turn flow from channel input through authorization, queueing, pr
 
 `src/sessionManager.ts` stores/queues/triggers work but does not implement this loop. The implementation owner is `src/sessionTurnRunner.ts`; `MessageRouter` owns channel ingress and delegates the real local execution path.
 
-An implemented but not yet production-selected Worker ingress alternative accepts one already-normalized ordinary QueueItem, registers its exact live source context only in Main memory, appends one durable mailbox intent for an already-activated exact Worker generation, and invokes that Worker's same canonical runner. It does not merge/provider-normalize at Main ingress or fall back to local execution after Worker selection; startup/config placement remains disabled.
+An implemented Worker ingress alternative accepts one already-normalized ordinary QueueItem, registers its exact live source context only in Main memory, ensures or spawns an inactive exact Worker generation, appends one durable mailbox intent, and invokes that Worker's same canonical runner. It does not merge/provider-normalize at Main ingress or fall back to local execution after Worker selection. `MessageRouter` selects it for ordinary busy/idle channel input only when Session-worker placement injects its submit handler; startup/config placement remains disabled (`SESSION_WORKERS_NOT_IMPLEMENTED`), and timer/event triggers still use the local gate until their audit milestone.
 
 ## Modules and units
 

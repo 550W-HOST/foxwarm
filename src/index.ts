@@ -34,6 +34,7 @@ import {
     MAIN_AGENT_MEMORY_DIR,
     NODE_TOKEN_FILE,
     ONBOOT_FILE,
+    SESSION_WORKERS_ENABLED,
     TELEGRAM_CONFIG,
     TOKEN_FILE,
 } from './config';
@@ -243,7 +244,12 @@ async function start() {
     authorizedUsers.push({ platform: 'webui', userId: 'webui' });
     authorizedUsers.push({ platform: 'tui', userId: 'tui' });
     
-    const router = new MessageRouter(authorizedUsers);
+    const router = new MessageRouter(
+        authorizedUsers,
+        SESSION_WORKERS_ENABLED
+            ? (sessionId, item, ctx) => sessionRuntime.submitAndRun(sessionId, item, ctx)
+            : undefined,
+    );
     const commandHandler = new CommandHandler(router);
     initializeChannelRuntime(
         (ctx, message) => router.handleMessage(ctx, message),

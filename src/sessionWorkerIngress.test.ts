@@ -104,7 +104,7 @@ test('idle Main runtime compacts a real Worker archive through the canonical awa
   }
 });
 
-test('Main submitAndRun owns exact activated-worker ingress without Main semantic fallback', async () => {
+test('Main submitAndRun ensures, spawns, and owns exact worker ingress without Main semantic fallback', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-ingress-'));
   const sessionId = 'worker-ingress-real';
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
@@ -217,18 +217,11 @@ test('Main submitAndRun owns exact activated-worker ingress without Main semanti
     (store as any).findOwnership = originalFindOwnership; (store as any).enqueueIntent = originalEnqueueIntent;
     (sourceContexts as any).register = originalRegisterSource;
     await initializeSessionRuntime({ worker: { store, registry: supervisor.projectionRegistry, ingress } });
-    const unavailableSource: QueueSource = { platform: 'test', channelUserId: 'missing', preferDirectReply: true };
-    await assert.rejects(
-      () => submitAndRun(sessionId, itemFor('must not fall back', unavailableSource, 'client-missing'), sourceContext(unavailableSource, replies)),
-      (error: any) => error?.code === 'SESSION_WORKER_INGRESS_UNAVAILABLE',
-    );
-    assert.equal(store.countMailboxIntents(), 0); assert.equal(sourceContexts.size, 0); assert.equal(mainSemanticCalls, 0);
-    const activated = await supervisor.ensureWorker(sessionId);
     await assert.rejects(
       () => submitAndRun(sessionId, { type: 'compact-commit', parts: [{ text: 'compact' }] } as any),
       (error: any) => error?.code === 'SESSION_WORKER_QUEUE_UNSUPPORTED',
     );
-    assert.equal(store.countMailboxIntents(), 0);
+    assert.equal(store.countMailboxIntents(), 0); assert.equal(mainSemanticCalls, 0);
     const qqSource: QueueSource = {
       platform: 'qqbot', channelId: 'qq-main', channelType: 'qqbot', channelUserId: 'c2c:user', conversationId: 'c2c:user',
       senderId: 'sender-qq', qqbotMessageId: 'qq-inbound-1', preferDirectReply: true,
@@ -242,7 +235,10 @@ test('Main submitAndRun owns exact activated-worker ingress without Main semanti
         projection: supervisor.projectionRegistry.get(sessionId)?.projection,
       };
     };
+    // The first ordinary submission ensures and spawns the inactive exact Worker itself.
     const first = await submitAndRun(sessionId, itemFor('first ingress', qqSource, 'client-1'), firstContext);
+    const activated = supervisor.getStatus(sessionId)!;
+    assert.equal(activated.ready, true); assert.equal(store.getOwnership(sessionId).state, 'ready');
     assert.equal(first.generation, activated.generation); assert.equal(first.busy, false); assert.equal(first.messageCount, 2);
     assert.equal(store.countMailboxIntents(), 1); assert.equal(store.listPendingIntents(sessionId).length, 0);
     assert.equal(replies.length, 1); assert.equal(replies[0].text, 'deterministic child answer');

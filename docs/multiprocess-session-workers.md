@@ -41,7 +41,7 @@ The implementation has a substantial real-child foundation, but normal productio
 | History and compaction | Detached authoritative history reads and synchronous awaited Worker compaction are implemented and tested. Background compact jobs remain unsupported. |
 | Final delivery | Main-owned committed-final delivery carries a serialized QueueSource and makes one delivery attempt after commit/publication. There is no outbox or automatic retry. |
 | Tool placement | Fixed Main reverse services cover the implemented Worker paths for management, Node execution, file delivery, final delivery, MCP, vector, and publication. Unsupported paths fail explicitly before effects. |
-| Normal ingress | A closed ingress operation (`SessionWorkerIngressCoordinator.submitEnsuringWorker`) now ensures/spawns an inactive exact Worker, appends its durable mailbox intent, and runs it as one supervisor-composed operation. The production MessageRouter/channel/timer/event path does not yet select it. |
+| Normal ingress | `MessageRouter` now routes ordinary busy/idle channel/WebUI input through the closed ensure/spawn/append/run ingress operation (`submitEnsuringWorker`) when Session-worker placement injects its submit handler. Startup still rejects `sessionWorkers:true`; timer, wait-timeout, ONBOOT, node, and other event triggers still use the local gate pending their audit. |
 | Lifecycle handback | Complete authority reload, Main-stub handback, idle/crash release, and background-exec-aware release are not yet an activated production flow. |
 
 The distinction is important: a passing real-child test proves a closed seam, not that `sessionWorkers:true` is ready for ordinary users.
@@ -92,9 +92,9 @@ Build one supervisor-owned production operation for ordinary inbound work:
 4. invoke that same Worker's existing `runPending` path;
 5. preserve ambiguous post-append outcomes as durable work without local fallback.
 
-Steps 1–5 exist as `SessionWorkerIngressCoordinator.submitEnsuringWorker`: the ingress coordinator composes resolve/ensure/append/run while the `SessionWorkerSupervisor` alone owns the spawn/candidate/activation lifecycle and fencing. Real-child tests cover spawn-to-ready, concurrent single-flight ensures, crash fencing until durably observed exit, and unprovable-identity fail-closed behavior.
+Steps 1–5 exist as `SessionWorkerIngressCoordinator.submitEnsuringWorker`: the ingress coordinator composes resolve/ensure/append/run while the `SessionWorkerSupervisor` alone owns the spawn/candidate/activation lifecycle and fencing. Real-child tests cover spawn-to-ready, concurrent single-flight ensures, crash fencing until durably observed exit, and unprovable-identity fail-closed behavior. `MessageRouter` now uses this operation for ordinary busy/idle channel/WebUI input when placement injects its submit handler, and worker-fenced sessions reject stop/dequeue/retry controls retryably.
 
-Remaining for M-A: the operation must be used by the normal MessageRouter path first. Then audit timer, wait-timeout, ONBOOT, node, and other event triggers so they cannot bypass the durable ingress boundary.
+Remaining for M-A: audit timer, wait-timeout, ONBOOT, node, and other event triggers so they cannot bypass the durable ingress boundary, then reconsider the startup gate.
 
 ### M-B — close lifecycle handback and release readiness
 

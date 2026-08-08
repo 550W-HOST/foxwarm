@@ -8,12 +8,19 @@ import { getAgentDir, getChannelConfigById, readAppConfigFile } from './config';
 import { isManagedSessionActive } from './session/managedState';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
+import type { SessionWorkerIngressResult } from './sessionWorkerIngress';
 import { LocalSessionTurnHost, SessionTurnRunner } from './sessionTurnRunner';
 import { MessagePart, QueueItem, QueueSource, Session } from './types';
 import { formatLocalTimestamp } from './utils/localTime';
 import { formatFoxwarmMessage, formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystemTag } from './utils/promptWrappers';
 
 export { shouldBroadcastChannelText } from './sessionTurnRunner';
+
+export type SessionWorkerSubmitHandler = (
+  sessionId: string,
+  item: QueueItem,
+  context: ChannelContext,
+) => Promise<SessionWorkerIngressResult>;
 
 function formatCurrentTimeForPrompt(date: Date): string {
   return formatLocalTimestamp(date);
@@ -79,7 +86,10 @@ export class MessageRouter {
   private commandHandler?: (ctx: ChannelContext, command: string, args: string[], rawArgs?: string) => Promise<boolean>;
   private readonly turnRunner = new SessionTurnRunner(new LocalSessionTurnHost());
 
-  constructor(authorizedUsers?: Array<{ platform: string; userId: string }>) {
+  constructor(
+    authorizedUsers?: Array<{ platform: string; userId: string }>,
+    private readonly workerSubmit?: SessionWorkerSubmitHandler,
+  ) {
     if (authorizedUsers) {
       for (const user of authorizedUsers) {
         this.authorizedUsers.set(`${user.platform}:${user.userId}`, true);
@@ -381,6 +391,14 @@ export class MessageRouter {
     if (isManagedSessionActive(session)) {
       await sessionRuntime.enqueue(sessionId, queueItem);
       await this.turnRunner.sendSessionReply(session, ctx, '🧭 Session is under managed control; your message was queued for its manager.');
+      return;
+    }
+
+    if (this.workerSubmit) {
+      // Session-worker placement: the durable mailbox owns busy/idle queuing.
+      // A failure here never falls back to the local runner; a post-append
+      // ambiguous outcome remains durable retryable work.
+      await this.workerSubmit(sessionId, queueItem, ctx);
       return;
     }
 

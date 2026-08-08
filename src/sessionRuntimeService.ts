@@ -394,7 +394,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       if (!options?.worker?.ingress) {
         throw new RpcError('SESSION_WORKER_INGRESS_UNAVAILABLE', 'Session-worker ingress is unavailable.', true);
       }
-      return options.worker.ingress.submitQueuedInput(normalized.sessionId, normalized.item);
+      return options.worker.ingress.submitEnsuringWorker(normalized.sessionId, normalized.item);
     },
     async requestCompaction(input) {
       if (!input || typeof input !== 'object' || Array.isArray(input)) throw new RpcError('SESSION_RUNTIME_INVALID_COMPACTION', 'Compaction request must be an object.');
@@ -479,6 +479,12 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
     },
     async control(input) {
       const sessionId = normalizeSessionId(input.sessionId);
+      if (options?.worker) {
+        const selection = workerSelection(sessionId);
+        if (selection.kind !== 'local') {
+          throw new RpcError('SESSION_WORKER_CONTROL_UNSUPPORTED', 'stop, dequeue, and retry are not supported by Session-worker placement yet.', true);
+        }
+      }
       if (input.action === 'stop') {
         return { action: 'stop', ...await sessionManager.requestSessionStop(sessionId) };
       }

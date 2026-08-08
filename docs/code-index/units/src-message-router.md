@@ -9,7 +9,8 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 
 ## Key exports
 
-- `MessageRouter` — receives normalized channel messages, resolves authorization/session routing, builds prompt-ready queued input, and delegates local queue/retry execution to one `SessionTurnRunner`.
+- `MessageRouter` — receives normalized channel messages, resolves authorization/session routing, builds prompt-ready queued input, and delegates local queue/retry execution to one `SessionTurnRunner`. An optional `SessionWorkerSubmitHandler` constructor parameter routes ordinary input to durable Session-worker ingress instead.
+- `SessionWorkerSubmitHandler` — injected worker-placement submit entry `(sessionId, item, context)` returning a bounded committed ingress result.
 - `shouldBroadcastChannelText(text)` — compatibility re-export of the turn runner's final-text predicate.
 
 ## Function index
@@ -44,6 +45,7 @@ Owns channel ingress around the canonical turn runner: authorization, slash-comm
 - WebUI `clientMessageId` remains queue/transport metadata and is copied to canonical history by the turn runner.
 - Active managed sessions route input through the existing SessionRuntime enqueue path and receive the existing manager-facing acknowledgement.
 - Busy input is enqueued silently. Idle input is enqueued and then invokes the same local turn runner.
+- With an injected `SessionWorkerSubmitHandler` (Session-worker placement), ordinary busy and idle input both go through one durable mailbox submission; the local enqueue/runner path is not used, a failure never falls back locally, and a post-append ambiguous outcome remains durable retryable work. Managed-session input keeps the existing local enqueue/ack path. Local placement (no handler injected) is unchanged.
 - Guest provisioning and concurrent first-message resolution retain the existing keyed session/channel creation contract.
 - `MessageRouter` owns one `SessionTurnRunner(new LocalSessionTurnHost())`; public queue/retry methods are thin real-path delegates rather than a second state machine.
 
