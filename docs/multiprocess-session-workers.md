@@ -151,6 +151,7 @@ These are current decisions, not suggestions for a new implementation:
 
 ## Open questions
 
+- Runtime verification found and fixed three activation-gate defects: (1) the session-manager enqueue sink awaited the target's full turn, so an awaited inter-session send (for example `waitAfterHandoff:true`) deadlocked when the target replied to its busy-mid-turn source — the sink now durably appends and triggers processing detached, with channel/WebUI ingress still awaiting its own reply; (2) an unconfirmed exit could leave a stale authoritative busy flag with no pending intent and no trigger — a fresh worker now clears the stale flag and enqueues one restart system event inside its own ownership on load, and startup resume eagerly scans authority JSON busy flags alongside pending intents; (3) `tools.ts` eagerly captured facade wrapper bindings that are undefined under worker process load order (dependency cycle), so the named re-exports are lazy call-throughs. Graceful drain of a legitimately mid-turn worker is bounded by design (drain timeout escalates to bounded termination; recovery semantics above handle the aftermath).
 - When a Worker submission fails at channel ingress (for example a transient spawn/ensure failure), the error propagates to the channel handler without a user-facing retry notice. Whether channels should surface or retry such failures is a product decision; the current behavior is intentional and unchanged.
 - Residual Main-local queue entries that survive a local-to-worker switch may contain `compact-commit` items; the worker's `assertSupportedQueue` fails those closed on every `runPending`. The behavior is safe (no semantic loss, explicit error); recorded here only as an observation.
 
@@ -174,6 +175,7 @@ FOXWARM_SYNC_FILE_LOG=1 node --test --test-concurrency=1 \
   lib/sessionWorkerTriggerIngress.test.js \
   lib/sessionWorkerHandback.test.js \
   lib/sessionWorkerCrossSession.test.js \
+  lib/sessionWorkerCrashRecovery.test.js \
   lib/sessionWorkerSupervisor.test.js \
   lib/sessionWorkerHost.test.js \
   lib/sessionRuntimeService.test.js \

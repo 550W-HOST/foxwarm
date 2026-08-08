@@ -190,6 +190,22 @@ export class SessionWorkerSupervisor {
     }
   }
 
+  async interruptActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+  ) {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      return await runtime.call('interrupt', {});
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
+  }
+
   touch(sessionId: string): void { const entry = this.entries.get(sessionId); if (entry?.ready) this.touchEntry(entry); }
 
   async stopWorker(sessionId: string, timeoutMs = 10_000): Promise<boolean> {

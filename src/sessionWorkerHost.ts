@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { logger } from './common';
 import { STATE_DIR, getAgentDir } from './config';
@@ -41,6 +42,7 @@ export class SessionWorkerHost {
   private session?: Session;
   private runner?: SessionTurnRunner;
   private execRuntime?: ExecRuntime;
+  private activeAbort?: AbortController;
   private poison?: { original: unknown; resync: unknown };
   private publicationPoison?: unknown;
 
@@ -80,6 +82,22 @@ export class SessionWorkerHost {
         runningExecCount: this.execRuntime?.listRunningExecs().length || 0,
       };
     });
+  }
+
+  async interrupt(): Promise<{ stopping: boolean; abortedInFlight: boolean }> {
+    // Two layers: the provider-request abort must be immediate, so it never
+    // waits on the serialized host chain; the stopping flag is a durable state
+    // mutation, so it is persisted transactionally on that same chain.
+    const controller = this.activeAbort;
+    const abortedInFlight = !!controller;
+    controller?.abort();
+    await this.serialize(async () => {
+      await this.ensureLoaded();
+      await this.fenceMutation();
+      this.session!.stopping = true;
+      await this.persistOwner();
+    });
+    return { stopping: true, abortedInFlight };
   }
 
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
@@ -123,6 +141,30 @@ export class SessionWorkerHost {
     return buildSessionWorkerProjection(session);
   }
 
+  /**
+   * A freshly spawned incarnation cannot have an in-flight turn, so a persisted
+   * busy flag at load is stale from a crashed predecessor. Recovery clears the
+   * stale flags and enqueues the restart system event for the canonical runner
+   * to consume — entirely inside this exact worker's ownership, mirroring the
+   * local resumeBusySessions semantics without a second recovery channel.
+   */
+  private async recoverStaleBusy(session: Session): Promise<void> {
+    if (!session.busy) return;
+    logger.warn({ sessionId: session.id, generation: this.identity.generation }, 'Session worker recovering stale busy state from an unconfirmed previous incarnation');
+    session.busy = false;
+    session.busyStartedAt = undefined;
+    session.stopping = false;
+    const restartMarker = 'Session worker restarted after an unconfirmed exit; resuming interrupted work.';
+    const alreadyQueued = (session.queue || []).some(item => JSON.stringify(item.parts || []).includes('Session worker restarted after an unconfirmed exit'));
+    if (!alreadyQueued) {
+      session.queue = [...(session.queue || []), {
+        id: crypto.randomUUID(), type: 'background',
+        parts: buildTimestampedSystemMessageParts(restartMarker), queuedAt: Date.now(),
+      } as QueueItem];
+    }
+    await this.persistOwner();
+  }
+
   private async ensureLoaded(): Promise<void> {
     if (!this.loadPromise) {
       const attempt = this.load();
@@ -139,6 +181,7 @@ export class SessionWorkerHost {
     else await Promise.all([initArchiveStore(), initLlmRequestJournal()]);
     const session = await this.persistence.loadActivated(this.baseSession(), this.identity.generation, this.identity.incarnationId);
     this.session = session;
+    await this.recoverStaleBusy(session);
     const execRuntime = this.createExecRuntime(session);
     try { await execRuntime.initialize(); }
     catch (error) { throw new RpcError('SESSION_WORKER_INITIALIZATION_FAILED', `Session worker ExecRuntime initialization failed: ${(error as any)?.message || error}`, true); }
@@ -223,8 +266,8 @@ export class SessionWorkerHost {
       notifySessionEvent: () => {},
       setRuntimeState: setActiveSessionRuntimeState,
       clearRuntimeState: clearActiveSessionRuntimeState,
-      registerAbortController: (sessionId, controller) => { this.assertId(sessionId); activeAbort = controller; },
-      clearAbortController: (sessionId, controller) => { this.assertId(sessionId); if (!controller || activeAbort === controller) activeAbort = undefined; },
+      registerAbortController: (sessionId, controller) => { this.assertId(sessionId); activeAbort = controller; this.activeAbort = controller; },
+      clearAbortController: (sessionId, controller) => { this.assertId(sessionId); if (!controller || activeAbort === controller) { activeAbort = undefined; this.activeAbort = undefined; } },
       clearWaitById: async (sessionId, waitId) => {
         this.assertId(sessionId);
         if (session.meta.wait?.id !== waitId) return false;

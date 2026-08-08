@@ -283,6 +283,19 @@ export class SessionWorkerStore {
       expectedCursor: current.mailboxCursor, upToId: stateCursor }, true, true);
   }
 
+  deleteSessionRows(sessionId: string): void {
+    sessionId = this.sessionId(sessionId);
+    this.transaction(() => {
+      const current = this.getOwnership(sessionId);
+      if (current.state !== 'inactive') {
+        throw new RpcError('SESSION_WORKER_OWNED', `Session ${sessionId} must be inactive before its worker rows can be deleted.`, true);
+      }
+      const db = this.getDb();
+      db.prepare('DELETE FROM session_worker_mailbox WHERE session_id=?').run(sessionId);
+      db.prepare('DELETE FROM session_worker_ownership WHERE session_id=?').run(sessionId);
+    });
+  }
+
   deleteAppliedMailboxThrough(sessionId: string, throughId: number): number {
     this.inject('cleanup', sessionId);
     sessionId = this.sessionId(sessionId);

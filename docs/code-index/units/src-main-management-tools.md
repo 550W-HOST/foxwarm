@@ -34,7 +34,7 @@ Production shutdown sets a terminal fence before awaiting initialization or drai
 
 ## Integration
 
-- `src/tools.ts` maps the public named exports and `callTool` entries to these wrappers rather than the raw handlers; worker `session(action=list)` and cross-session `get_session_messages` calls also route here from their raw handlers under Session-worker placement.
+- `src/tools.ts` maps the public named exports and `callTool` entries to these wrappers rather than the raw handlers; worker `session(action=list)` and cross-session `get_session_messages` calls also route here from their raw handlers under Session-worker placement. Those named re-exports are lazy call-throughs because this module's dependency chain can require `tools.ts` mid-evaluation in some process load orders (worker boot), which would otherwise capture undefined bindings.
 - `src/llm.ts` direct tool execution therefore enters this service through current named exports.
 - `src/tools/unifiedSearch.ts` executes builtin calls through `tools.callTool`, reaching the same service.
 - ToolScript nested calls continue through the existing unified `call_tool` wrapper and require no private registry.

@@ -220,19 +220,23 @@ export const image_crop = tool_image_crop;
 export const image_write_to_file = tool_image_write_to_file;
 export const exec = tool_exec;
 export const get_memory_context = tool_get_memory_context;
-export const create_child_session = tool_create_child_session;
+// Lazy wrappers: these facade functions live in mainManagementTools, whose
+// dependency chain can require this module before it finishes evaluating in
+// some process load orders (worker boot). Eagerly copying the binding would
+// capture undefined; deferring resolves the live export at call time.
+export const create_child_session: typeof tool_create_child_session = (args, ctx) => tool_create_child_session(args, ctx);
 export const create_agent = tool_create_agent;
 export const create_session = tool_create_session;
 export const set_agent_inherit = tool_set_agent_inherit;
 export const set_agent_isolated = tool_set_agent_isolated;
 export const move_session = tool_move_session;
-export const send_to_session = tool_send_to_session;
+export const send_to_session: typeof tool_send_to_session = (args, ctx) => tool_send_to_session(args, ctx);
 export const wait = tool_wait;
 export const submit_compact_plan = tool_submit_compact_plan;
-export const send_to_channel = tool_send_to_channel;
+export const send_to_channel: typeof tool_send_to_channel = (args, ctx) => tool_send_to_channel(args, ctx);
 export const send_file = tool_send_file;
 export const session = tool_session;
-export const list_agents = tool_list_agents;
+export const list_agents: typeof tool_list_agents = (args, ctx) => tool_list_agents(args, ctx);
 export const skill = tool_skill;
 export const get_session_messages = tool_get_session_messages;
 export const get_archived_messages = tool_get_archived_messages;
@@ -245,10 +249,10 @@ export const set_session_compact_threshold = tool_set_session_compact_threshold;
 export const update_session_snapshot = tool_update_session_snapshot;
 export const stop_session = tool_stop_session;
 export const compact_session = tool_compact_session;
-export const create_timer = tool_create_timer;
-export const list_timers = tool_list_timers;
-export const update_timer = tool_update_timer;
-export const delete_timer = tool_delete_timer;
+export const create_timer: typeof tool_create_timer = (args, ctx) => tool_create_timer(args, ctx);
+export const list_timers: typeof tool_list_timers = (args, ctx) => tool_list_timers(args, ctx);
+export const update_timer: typeof tool_update_timer = (args, ctx) => tool_update_timer(args, ctx);
+export const delete_timer: typeof tool_delete_timer = (args, ctx) => tool_delete_timer(args, ctx);
 export const browse_open = tool_browse_open;
 export const browse_list = tool_browse_list;
 export const browse_get = tool_browse_get;

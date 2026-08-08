@@ -51,6 +51,9 @@ test('worker child creation, reply delivery, and facade queries stay Main-owned 
     // The facade creates the child catalog + initial authority in Main; the test
     // mirrors that initial authority into the worker tree before the child's
     // first durable ingress (production Main and workers share one state root).
+    // Mirror production: the sink durably appends then triggers processing
+    // detached (queue-and-trigger semantics); an awaited variant would deadlock
+    // once a waitAfterHandoff target replies to a busy-mid-turn source.
     sessionManager.setSessionWorkerEnqueueSink(async (id, item) => {
       if (id === childId) {
         const workerTreeJson = path.join(root, 'state', 'sessions', `${childId}.json`);
@@ -58,7 +61,7 @@ test('worker child creation, reply delivery, and facade queries stay Main-owned 
         await fs.copy(getSessionHistoryFilePath(childId), workerTreeJson);
         createdRealSessions.push(childId);
       }
-      await ingress.submitEnsuringWorker(id, item);
+      await ingress.enqueueEnsuringWorker(id, item);
     });
 
     await ingress.submitEnsuringWorker(parentId, { type: 'user', parts: [{ text: 'create child' }] });
@@ -66,11 +69,19 @@ test('worker child creation, reply delivery, and facade queries stay Main-owned 
     const childStub = sessionManager.getAllSessions().get(childId);
     assert.ok(childStub, 'child session must be created in the Main-owned catalog');
     assert.equal(childStub!.parentSessionId, parentId);
-    // The child's initial message spawns its own worker, which replies to the parent.
+    // waitAfterHandoff:true armed the generic reply wait and ended the turn —
+    // the exact chain that previously deadlocked under worker placement.
+    const afterHandoff = JSON.parse(await parentAuthorityText());
+    assert.ok(afterHandoff.meta?.wait, 'handoff wait is armed after the successful awaited handoff');
+    assert.equal(afterHandoff.busy, false, 'the handoff turn ended instead of hanging');
+    // The child's initial message spawns its own worker, which replies to the parent;
+    // the reply wakes the armed wait through the durable mailbox.
     await waitFor(async () => (await parentAuthorityText()).includes('child reply to parent'));
+    const afterReply = JSON.parse(await parentAuthorityText());
+    assert.ok(!afterReply.meta?.wait, 'the reply wake cleared the armed wait');
     assert.ok(supervisor.getStatus(childId)?.ready, 'the child session runs in its own worker');
     const parentText = await parentAuthorityText();
-    assert.ok(parentText.includes('create-child-result'), 'facade create result is committed to the parent authority');
+    assert.ok(parentText.includes('Child session created'), 'facade create tool result is committed to the parent authority');
     assert.ok(!JSON.stringify(sessionManager.getAllSessions().get(childId)!.history).includes('hello child'),
       'Main never hydrates the child authority');
 

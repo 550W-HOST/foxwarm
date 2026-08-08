@@ -229,7 +229,7 @@ async function start() {
             (sessionId) => sessionManager.resolveLoadedSessionId(sessionId),
         );
         sessionManager.setSessionWorkerEnqueueSink(
-            (sessionId, item) => sessionWorkerIngress!.submitEnsuringWorker(sessionId, item).then(() => {}),
+            (sessionId, item) => sessionWorkerIngress!.enqueueEnsuringWorker(sessionId, item).then(() => {}),
         );
         shutdownSessionWorkers = async () => {
             sessionManager.setSessionWorkerEnqueueSink(undefined);
@@ -469,7 +469,8 @@ async function start() {
     // Durable Worker mailbox intents survive restarts; ensure their owners and
     // run the pending prefix. Per-session failures keep the work retryable.
     if (sessionWorkerStore && sessionWorkerSupervisor) {
-        void resumeSessionWorkerPendingIntents(sessionWorkerStore, sessionWorkerSupervisor);
+        void resumeSessionWorkerPendingIntents(sessionWorkerStore, sessionWorkerSupervisor,
+          () => [...sessionManager.getAllSessions().keys()]);
     }
 
     // Schedule log rotation (start immediately and every 10 hours)

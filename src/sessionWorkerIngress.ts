@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
+import fs from 'fs-extra';
 import type { ChannelContext } from './channel';
 import { logger } from './common';
 import { RpcError } from './rpc';
+import { getSessionHistoryFilePath } from './session/metadataStore';
 import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
 import type { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { SessionWorkerStore } from './sessionWorkerStore';
@@ -135,8 +137,23 @@ export type SessionWorkerIngressResult = {
 export async function resumeSessionWorkerPendingIntents(
   store: SessionWorkerStore,
   supervisor: SessionWorkerSupervisor,
+  busyCandidates?: () => string[],
 ): Promise<void> {
-  for (const sessionId of store.listSessionsWithPendingIntents()) {
+  const resumable = new Set(store.listSessionsWithPendingIntents());
+  // Eager crash recovery: an unconfirmed exit can leave an authority busy flag
+  // with no pending mailbox intent, so also resume sessions whose authoritative
+  // JSON still says busy. The worker clears the stale flag and re-triggers the
+  // canonical runner inside its own ownership on load.
+  if (busyCandidates) {
+    for (const candidateId of busyCandidates()) {
+      if (resumable.has(candidateId)) continue;
+      try {
+        const raw = await fs.readJson(getSessionHistoryFilePath(candidateId));
+        if (raw?.busy === true) resumable.add(candidateId);
+      } catch { /* missing or unreadable authority is not a resume candidate */ }
+    }
+  }
+  for (const sessionId of resumable) {
     try {
       await supervisor.ensureWorker(sessionId);
       const ownership = store.findOwnership(sessionId);
@@ -175,6 +192,31 @@ export class SessionWorkerIngressCoordinator {
 
   async submitEnsuringWorker(requestedSessionId: string, item: QueueItem): Promise<SessionWorkerIngressResult> {
     const { sessionId, item: payload } = this.resolveExact(requestedSessionId, item);
+    const expected = await this.ensureReadyOwner(sessionId);
+    return this.appendAndRun(sessionId, payload, expected);
+  }
+
+  /**
+   * The event-producer (sink) variant: resolves, ensures or spawns the exact
+   * owner, and durably appends one mailbox intent — all awaited — then triggers
+   * processing detached, matching local queue-and-trigger semantics. Producers
+   * must never await the target's turn: an awaited send/enqueue whose target
+   * replies to a busy-mid-turn source would otherwise deadlock (the source's
+   * runPending queues behind its own in-flight turn). A post-append processing
+   * failure leaves the durable intent retryable.
+   */
+  async enqueueEnsuringWorker(requestedSessionId: string, item: QueueItem): Promise<{ sessionId: string; mailboxIntentId: number }> {
+    const { sessionId, item: payload } = this.resolveExact(requestedSessionId, item);
+    const expected = await this.ensureReadyOwner(sessionId);
+    this.supervisor.assertActivatedOwnership(sessionId, expected);
+    const intent = this.store.enqueueIntent(sessionId, crypto.randomUUID(), 'enqueue', payload);
+    void this.supervisor.runPendingActivated(sessionId, expected).catch(error => {
+      logger.error({ err: error, sessionId }, 'Detached session worker runPending failed; durable mailbox work remains retryable');
+    });
+    return { sessionId, mailboxIntentId: intent.id };
+  }
+
+  private async ensureReadyOwner(sessionId: string): Promise<{ generation: number; incarnationId: string }> {
     let ownership = this.store.findOwnership(sessionId);
     if (!ownership || ownership.state !== 'ready' || !ownership.incarnationId) {
       const status = await this.supervisor.ensureWorker(sessionId);
@@ -184,7 +226,7 @@ export class SessionWorkerIngressCoordinator {
         throw new RpcError('SESSION_WORKER_INGRESS_UNAVAILABLE', `Session worker ${sessionId} did not reach its exact durable ready owner.`, true);
       }
     }
-    return this.appendAndRun(sessionId, payload, { generation: ownership.generation, incarnationId: ownership.incarnationId });
+    return { generation: ownership.generation, incarnationId: ownership.incarnationId };
   }
 
   private resolveExact(requestedSessionId: string, item: QueueItem): { sessionId: string; item: QueueItem } {

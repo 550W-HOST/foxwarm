@@ -5,11 +5,13 @@ import type { SessionWorkerHost } from './sessionWorkerHost';
 import type { CompactionRequest } from './types';
 
 export type SessionWorkerIdleStatus = { busy: boolean; queueLength: number; runningExecCount: number };
+export type SessionWorkerInterruptResult = { stopping: boolean; abortedInFlight: boolean };
 
 export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 2, {
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
   compactAwaited: rpcMethod<{ request: CompactionRequest }, { compacted: boolean; projection: SessionWorkerProjection }>(),
   idleStatus: rpcMethod<Record<string, never>, SessionWorkerIdleStatus>(),
+  interrupt: rpcMethod<Record<string, never>, SessionWorkerInterruptResult>(),
 });
 
 export function createSessionWorkerRuntimeServiceHandler(
@@ -23,6 +25,13 @@ export function createSessionWorkerRuntimeServiceHandler(
         throw new RpcError('SESSION_WORKER_IDLE_STATUS_INVALID', 'idleStatus takes an empty request object.');
       }
       return host.idleStatus();
+    },
+    async interrupt(input) {
+      gate.assertActive();
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 0) {
+        throw new RpcError('SESSION_WORKER_INTERRUPT_INVALID', 'interrupt takes an empty request object.');
+      }
+      return host.interrupt();
     },
     async runPending(input) {
       gate.assertActive();

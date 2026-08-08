@@ -767,6 +767,7 @@ export async function prepareSessionForDestructiveAction(sessionId: string): Pro
   abortedInFlight: boolean;
   droppedQueueItems: number;
 }> {
+  if (workerDeleteHandler) await workerDeleteHandler(sessionId);
   const session = await getExistingSession(sessionId);
   if (!session) {
     throw new Error(`Session \`${sessionId}\` not found.`);
@@ -2118,9 +2119,21 @@ async function enqueueSessionItemForLoadedSession(session: Session, item: QueueI
 }
 
 let workerEnqueueSink: ((sessionId: string, item: QueueItem) => Promise<void>) | undefined;
+let workerDeleteHandler: ((sessionId: string) => Promise<boolean>) | undefined;
 
 export function setSessionWorkerEnqueueSink(handler: ((sessionId: string, item: QueueItem) => Promise<void>) | undefined): void {
   workerEnqueueSink = handler;
+}
+
+/**
+ * Registers the Session-worker destructive-lifecycle hook. When set, delete
+ * entry points first let the hook tear down any worker fence (interrupt,
+ * graceful stop with handback, durable fence/mailbox removal); a hook failure
+ * fails the delete closed without touching the authority. Ordinary local
+ * delete semantics always run afterwards on the then-inactive session.
+ */
+export function setSessionWorkerDeleteHandler(handler: ((sessionId: string) => Promise<boolean>) | undefined): void {
+  workerDeleteHandler = handler;
 }
 
 export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
