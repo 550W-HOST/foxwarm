@@ -10,6 +10,7 @@ import { CompactionRequest, isQueueItem, Session, Message, MessagePart, QueueIte
 import { logger } from './common';
 import { ChannelFile, ChannelSendFileOptions } from './channel';
 import * as llm from './llm';
+import { RpcError } from './rpc';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import { cloneQueueItem, getManagedSessionState, isManagedSessionLeaseExpired, ManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
 import * as vector from './vector';
@@ -2113,7 +2114,24 @@ async function enqueueSessionItemForLoadedSession(session: Session, item: QueueI
   }
 }
 
+let workerEnqueueSink: ((sessionId: string, item: QueueItem) => Promise<void>) | undefined;
+
+export function setSessionWorkerEnqueueSink(handler: ((sessionId: string, item: QueueItem) => Promise<void>) | undefined): void {
+  workerEnqueueSink = handler;
+}
+
 export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
+  if (workerEnqueueSink) {
+    // Session-worker placement: all Main-side producers share one durable
+    // ingress boundary. Managed sessions remain explicitly unsupported there;
+    // fail closed instead of spawning a worker that must reject them.
+    const stub = sessions.get(resolveLoadedSessionId(sessionId));
+    if (stub && getManagedSessionState(stub as Session)) {
+      throw new RpcError('SESSION_WORKER_QUEUE_UNSUPPORTED', 'Managed sessions are not supported by Session-worker placement yet.', true);
+    }
+    await workerEnqueueSink(sessionId, item);
+    return;
+  }
   const session = await getSession(sessionId);
   await enqueueSessionItemForLoadedSession(session, item);
 }

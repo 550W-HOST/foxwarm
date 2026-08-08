@@ -32,17 +32,8 @@ let initializing: Promise<void> | undefined;
 let eventsStarted = false;
 let workerIngress: SessionWorkerIngressCoordinator | undefined;
 
-export function assertSessionWorkerPlacementSupported(enabled = SESSION_WORKERS_ENABLED): void {
-  if (!enabled) return;
-  throw new RpcError(
-    'SESSION_WORKERS_NOT_IMPLEMENTED',
-    'sessionWorkers is enabled, but child session placement is not implemented yet. Set sessionWorkers: false and restart.',
-  );
-}
-
 export async function initializeSessionRuntime(options?: { worker?: SessionRuntimeWorkerProjectionOptions }): Promise<void> {
   if (client) return;
-  assertSessionWorkerPlacementSupported();
   if (!initializing) {
     initializing = Promise.resolve().then(() => {
       const registry = new RpcServiceRegistry();
@@ -134,16 +125,14 @@ export async function startEvents(): Promise<void> {
 }
 
 export function getSessionRuntimeStatus(): {
-  placement: 'local';
+  placement: 'local' | 'worker';
   ready: boolean;
   eventsStarted: boolean;
-  childPlacementImplemented: false;
 } {
   return {
-    placement: 'local',
+    placement: SESSION_WORKERS_ENABLED ? 'worker' : 'local',
     ready: !!client,
     eventsStarted,
-    childPlacementImplemented: false,
   };
 }
 

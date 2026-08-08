@@ -24,7 +24,6 @@ import { writeAuthoritativeSessionState } from './session/stateFile';
 import { getSessionHistoryFilePath } from './session/metadataStore';
 import { SESSIONS_FILE } from './config';
 import {
-  assertSessionWorkerPlacementSupported,
   getSessionRuntimeStatus,
   initializeSessionRuntime,
   shutdownSessionRuntime,
@@ -47,14 +46,6 @@ function createLocalClient() {
 }
 
 const flushEvents = () => new Promise<void>(resolve => setImmediate(resolve));
-
-test('session worker placement fails explicitly until child placement exists', () => {
-  assert.doesNotThrow(() => assertSessionWorkerPlacementSupported(false));
-  assert.throws(
-    () => assertSessionWorkerPlacementSupported(true),
-    (error: any) => error instanceof RpcError && error.code === 'SESSION_WORKERS_NOT_IMPLEMENTED',
-  );
-});
 
 test('local empty-history compaction classifies normal and tool-noise requests without persistence', async () => {
   const sessionId = makeSessionId('session_runtime_empty_compact');
@@ -405,7 +396,6 @@ test('SessionRuntime facade starts event publication and drains locally', async 
       placement: 'local',
       ready: true,
       eventsStarted: true,
-      childPlacementImplemented: false,
     });
   } finally {
     unsubscribe();
@@ -415,6 +405,5 @@ test('SessionRuntime facade starts event publication and drains locally', async 
     placement: 'local',
     ready: false,
     eventsStarted: false,
-    childPlacementImplemented: false,
   });
 });

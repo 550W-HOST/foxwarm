@@ -219,6 +219,17 @@ export class SessionWorkerStore {
     return Number((this.getDb().prepare('SELECT COUNT(*) AS count FROM session_worker_mailbox').get() as any).count);
   }
 
+  listSessionsWithPendingIntents(): string[] {
+    const rows = this.getDb().prepare(`
+      SELECT DISTINCT m.session_id AS sessionId
+      FROM session_worker_mailbox m
+      LEFT JOIN session_worker_ownership o ON o.session_id = m.session_id
+      WHERE m.id > COALESCE(o.mailbox_cursor, 0) AND m.applied_at IS NULL
+      ORDER BY m.session_id
+    `).all() as Array<{ sessionId: string }>;
+    return rows.map(row => row.sessionId);
+  }
+
   listPendingIntents(sessionId: string, afterId?: number, limit = 256): SessionWorkerMailboxIntent[] {
     sessionId = this.sessionId(sessionId);
     const cursor = afterId === undefined ? this.getOwnership(sessionId).mailboxCursor : Math.max(0, Math.floor(afterId));

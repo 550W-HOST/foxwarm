@@ -31,7 +31,7 @@ The implementation has a substantial real-child foundation, but normal productio
 
 | Area | Current state |
 | --- | --- |
-| `sessionWorkers` | Defaults off. Production startup still rejects `sessionWorkers:true` with `SESSION_WORKERS_NOT_IMPLEMENTED`. |
+| `sessionWorkers` | Defaults off. When enabled, production bootstrap assembles the store/supervisor/ingress and routes the normal-ingress vertical slice through Workers. |
 | `dbWorkers` | Defaults on and currently means only the LanceDB/vector owner. Archive and LLM-request-journal SQLite are not moved behind this worker. |
 | Session authority | `state/sessions/<id>.json` is the full semantic authority. Main remains the sole shared `sessions.json` catalog writer. |
 | Ownership | One durable generation/incarnation owns one hot Session. Exact process identity, inert candidates, exit confirmation, and stale-generation fencing are implemented. |
@@ -41,7 +41,7 @@ The implementation has a substantial real-child foundation, but normal productio
 | History and compaction | Detached authoritative history reads and synchronous awaited Worker compaction are implemented and tested. Background compact jobs remain unsupported. |
 | Final delivery | Main-owned committed-final delivery carries a serialized QueueSource and makes one delivery attempt after commit/publication. There is no outbox or automatic retry. |
 | Tool placement | Fixed Main reverse services cover the implemented Worker paths for management, Node execution, file delivery, final delivery, MCP, vector, and publication. Unsupported paths fail explicitly before effects. |
-| Normal ingress | `MessageRouter` now routes ordinary busy/idle channel/WebUI input through the closed ensure/spawn/append/run ingress operation (`submitEnsuringWorker`) when Session-worker placement injects its submit handler. Startup still rejects `sessionWorkers:true`; timer, wait-timeout, ONBOOT, node, and other event triggers still use the local gate pending their audit. |
+| Normal ingress | `MessageRouter` routes ordinary busy/idle channel/WebUI input through the closed ensure/spawn/append/run ingress operation (`submitEnsuringWorker`), and all Main-side enqueue producers (timer, wait-timeout, ONBOOT, node events, RPC enqueue, inter-session delivery) share the same durable boundary through the session-manager sink. Managed sessions fail closed retryably at that boundary; worker-fenced stop/dequeue/retry and settings updates are explicitly unsupported. Startup resumes durable pending mailbox intents non-fatally. |
 | Lifecycle handback | Complete authority reload, Main-stub handback, idle/crash release, and background-exec-aware release are not yet an activated production flow. |
 
 The distinction is important: a passing real-child test proves a closed seam, not that `sessionWorkers:true` is ready for ordinary users.
@@ -82,7 +82,7 @@ Each service has a versioned serializable DTO/error boundary and exact Worker so
 
 Work through these milestones serially. Do not activate the next one by adding a generic coordinator or a second queue.
 
-### M-A — close normal ingress and inactive spawn
+### M-A — close normal ingress and inactive spawn ✅ completed
 
 Build one supervisor-owned production operation for ordinary inbound work:
 
@@ -92,9 +92,7 @@ Build one supervisor-owned production operation for ordinary inbound work:
 4. invoke that same Worker's existing `runPending` path;
 5. preserve ambiguous post-append outcomes as durable work without local fallback.
 
-Steps 1–5 exist as `SessionWorkerIngressCoordinator.submitEnsuringWorker`: the ingress coordinator composes resolve/ensure/append/run while the `SessionWorkerSupervisor` alone owns the spawn/candidate/activation lifecycle and fencing. Real-child tests cover spawn-to-ready, concurrent single-flight ensures, crash fencing until durably observed exit, and unprovable-identity fail-closed behavior. `MessageRouter` now uses this operation for ordinary busy/idle channel/WebUI input when placement injects its submit handler, and worker-fenced sessions reject stop/dequeue/retry controls retryably.
-
-Remaining for M-A: audit timer, wait-timeout, ONBOOT, node, and other event triggers so they cannot bypass the durable ingress boundary, then reconsider the startup gate.
+Steps 1–5 exist as `SessionWorkerIngressCoordinator.submitEnsuringWorker`: the ingress coordinator composes resolve/ensure/append/run while the `SessionWorkerSupervisor` alone owns the spawn/candidate/activation lifecycle and fencing. Real-child tests cover spawn-to-ready, concurrent single-flight ensures, crash fencing until durably observed exit, and unprovable-identity fail-closed behavior. `MessageRouter` uses this operation for ordinary busy/idle channel/WebUI input, the session-manager enqueue sink routes every Main-side event trigger (timer, wait-timeout, ONBOOT, node events, RPC enqueue, inter-session delivery) through the same durable boundary, and worker-fenced sessions reject stop/dequeue/retry controls and settings updates retryably. The startup gate is lifted: bootstrap assembles the worker foundation when `sessionWorkers` is enabled and non-fatally resumes durable pending mailbox intents. Managed sessions fail closed at the shared boundary and remain deferred to M-E.
 
 ### M-B — close lifecycle handback and release readiness
 
@@ -147,6 +145,10 @@ These are current decisions, not suggestions for a new implementation:
 - **No first-version delivery ledger:** final external delivery is one Main attempt after canonical commit/publication; there is no automatic retry or outbox in this release.
 - **No speculative hardening:** prioritize normal supported callers and real data-integrity/failure consequences over artificial hostile same-process scenarios.
 
+## Open questions
+
+- When a Worker submission fails at channel ingress (for example a transient spawn/ensure failure), the error propagates to the channel handler without a user-facing retry notice. Whether channels should surface or retry such failures is a product decision; the current behavior is intentional and unchanged.
+
 ## Build and test workflow
 
 From a clean checkout after source changes:
@@ -162,6 +164,10 @@ The focused Worker closure can be run after the build with synchronous file logg
 ```sh
 FOXWARM_SYNC_FILE_LOG=1 node --test --test-concurrency=1 \
   lib/sessionWorkerIngress.test.js \
+  lib/sessionWorkerEnsureIngress.test.js \
+  lib/sessionWorkerRouterIngress.test.js \
+  lib/sessionWorkerTriggerIngress.test.js \
+  lib/sessionWorkerSupervisor.test.js \
   lib/sessionWorkerHost.test.js \
   lib/sessionRuntimeService.test.js \
   lib/sessionWorkerToolPlacement.test.js \

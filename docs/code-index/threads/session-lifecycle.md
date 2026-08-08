@@ -31,7 +31,7 @@ Canonical data authority: [D-session-core-authoritative-history](../modules/sess
 
 - Queue insertion and persisted wait-state transitions live behind the session façade.
 - `MessageRouter.processSessionQueue()` claims the session and runs the provider/tool loop; session core does not own that loop.
-- `resumeBusySessions()` inspects metadata-only busy/queued/managed-inbox state. It clears stale busy fields and appends or deduplicates a restart event, retriggers queued work, and reclaims or wakes persisted managed inboxes/controllers.
+- `resumeBusySessions()` inspects metadata-only busy/queued/managed-inbox state. It clears stale busy fields and appends or deduplicates a restart event, retriggers queued work, and reclaims or wakes persisted managed inboxes/controllers. Under Session-worker placement this stays a no-op by construction because Main stubs never carry worker queue/busy state; durable mailbox intents instead resume through the non-fatal ensure/run path owned by [process topology and RPC](./process-topology-and-rpc.md).
 
 Canonical turn flow: [message processing pipeline](./message-processing-pipeline.md).
 

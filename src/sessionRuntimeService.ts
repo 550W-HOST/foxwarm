@@ -429,7 +429,14 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       return { accepted: true };
     },
     async updateSettings(input) {
-      const session = await requireSession(normalizeSessionId(input.sessionId));
+      const settingsSessionId = normalizeSessionId(input.sessionId);
+      if (options?.worker) {
+        const selection = workerSelection(settingsSessionId);
+        if (selection.kind !== 'local') {
+          throw new RpcError('SESSION_WORKER_CONTROL_UNSUPPORTED', 'Session settings updates are not supported by Session-worker placement yet.', true);
+        }
+      }
+      const session = await requireSession(settingsSessionId);
       if (!input.patch || typeof input.patch !== 'object' || Array.isArray(input.patch)) {
         throw new RpcError('SESSION_RUNTIME_INVALID_SETTING', 'patch must be an object.');
       }

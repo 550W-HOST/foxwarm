@@ -9,6 +9,10 @@ import { MessageRouter } from './messageRouter';
 import { CommandHandler } from './commandHandler';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
+import { resumeSessionWorkerPendingIntents, SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
+import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
+import { SessionWorkerStore } from './sessionWorkerStore';
+import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import * as mainManagementTools from './mainManagementTools';
 import * as nodeExecution from './nodeExecution';
 import * as mcpExternal from './mcpExternalService';
@@ -34,6 +38,7 @@ import {
     MAIN_AGENT_MEMORY_DIR,
     NODE_TOKEN_FILE,
     ONBOOT_FILE,
+    SESSION_WORKERS_CONFIG,
     SESSION_WORKERS_ENABLED,
     TELEGRAM_CONFIG,
     TOKEN_FILE,
@@ -123,6 +128,11 @@ async function ensureNodeToken(): Promise<string> {
     }
 }
 
+let sessionWorkerStore: SessionWorkerStore | undefined;
+let sessionWorkerSupervisor: SessionWorkerSupervisor | undefined;
+let sessionWorkerIngress: SessionWorkerIngressCoordinator | undefined;
+let shutdownSessionWorkers: (() => Promise<void>) | undefined;
+
 async function start() {
     const templatesDir = path.join(BASE_DIR, 'templates', 'main', 'memory');
     const legacyMainSystemPromptPath = path.join(MAIN_AGENT_MEMORY_DIR, '00_SYSTEM.md');
@@ -192,10 +202,42 @@ async function start() {
     // allowed to open archive checkpoints or LanceDB.
     await sessionManager.loadSessions();
 
-    // Session consumers use the placement-neutral DTO service even while the
-    // only supported placement is local. Enabling the future child placement
-    // fails clearly here instead of silently running in-process.
-    await sessionRuntime.initializeSessionRuntime();
+    // Session-worker placement: assemble the durable ownership/mailbox store,
+    // supervisor, and closed ingress coordinator before any consumer starts.
+    if (SESSION_WORKERS_ENABLED) {
+        sessionWorkerStore = new SessionWorkerStore();
+        sessionWorkerStore.open();
+        const sourceContexts = new SessionWorkerSourceContextRegistry();
+        sessionWorkerSupervisor = new SessionWorkerSupervisor({
+            store: sessionWorkerStore,
+            idleMs: SESSION_WORKERS_CONFIG.idleSeconds * 1000,
+            shouldRestart: () => true,
+            resolveExactFinalSourceContext: sourceContexts.resolve,
+        });
+        await sessionWorkerSupervisor.reconcileStartupOwnerships();
+        sessionWorkerIngress = new SessionWorkerIngressCoordinator(
+            sessionWorkerStore,
+            sessionWorkerSupervisor,
+            sourceContexts,
+            (sessionId) => sessionManager.resolveLoadedSessionId(sessionId),
+        );
+        sessionManager.setSessionWorkerEnqueueSink(
+            (sessionId, item) => sessionWorkerIngress!.submitEnsuringWorker(sessionId, item).then(() => {}),
+        );
+        shutdownSessionWorkers = async () => {
+            sessionManager.setSessionWorkerEnqueueSink(undefined);
+            await sessionWorkerSupervisor!.shutdown();
+            sessionWorkerStore!.close();
+        };
+    }
+
+    // Session consumers use the placement-neutral DTO service regardless of
+    // whether sessions execute locally or in supervised child workers.
+    await sessionRuntime.initializeSessionRuntime(
+        sessionWorkerStore && sessionWorkerSupervisor && sessionWorkerIngress
+            ? { worker: { store: sessionWorkerStore, registry: sessionWorkerSupervisor.projectionRegistry, ingress: sessionWorkerIngress } }
+            : undefined,
+    );
     await mainManagementTools.initializeMainManagementTools();
     await nodeExecution.initializeNodeExecution();
     await mcpExternal.initializeMcpExternalService();
@@ -417,6 +459,12 @@ async function start() {
     // Resume busy sessions after restart (must be after callback is set)
     await sessionManager.resumeBusySessions();
 
+    // Durable Worker mailbox intents survive restarts; ensure their owners and
+    // run the pending prefix. Per-session failures keep the work retryable.
+    if (sessionWorkerStore && sessionWorkerSupervisor) {
+        void resumeSessionWorkerPendingIntents(sessionWorkerStore, sessionWorkerSupervisor);
+    }
+
     // Schedule log rotation (start immediately and every 10 hours)
     scheduleLogRotation();
 
@@ -468,7 +516,10 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.once(signal, () => {
         if (shutdownStarted) return;
         shutdownStarted = true;
-        void nodeExecution.shutdownNodeExecution()
+        void Promise.resolve()
+            .then(() => shutdownSessionWorkers?.())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down session workers cleanly'))
+            .then(() => nodeExecution.shutdownNodeExecution())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down node execution cleanly'))
             .then(() => mcpExternal.shutdownMcpExternalService())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down MCP external service cleanly'))

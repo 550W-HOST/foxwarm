@@ -57,13 +57,13 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
     requestSessionDequeue: sessionManager.requestSessionDequeue,
     retrySession: sessionManager.retrySession,
   };
-  let mainSemanticCalls = 0;
+  let mainLocalMutationCalls = 0; // counts forbidden Main-local semantic mutation calls (enqueue/save/control)
   (sessionManager as any).getOrCreateSessionForChannel = async () => ({ sessionId, session: stubSession });
-  (sessionManager as any).enqueueSessionItem = async () => { mainSemanticCalls += 1; throw new Error('Main local enqueue forbidden'); };
-  (sessionManager as any).saveSession = async () => { mainSemanticCalls += 1; throw new Error('Main save forbidden'); };
-  (sessionManager as any).requestSessionStop = async () => { mainSemanticCalls += 1; throw new Error('Main stop forbidden'); };
-  (sessionManager as any).requestSessionDequeue = async () => { mainSemanticCalls += 1; throw new Error('Main dequeue forbidden'); };
-  (sessionManager as any).retrySession = async () => { mainSemanticCalls += 1; throw new Error('Main retry forbidden'); };
+  (sessionManager as any).enqueueSessionItem = async () => { mainLocalMutationCalls += 1; throw new Error('Main local enqueue forbidden'); };
+  (sessionManager as any).saveSession = async () => { mainLocalMutationCalls += 1; throw new Error('Main save forbidden'); };
+  (sessionManager as any).requestSessionStop = async () => { mainLocalMutationCalls += 1; throw new Error('Main stop forbidden'); };
+  (sessionManager as any).requestSessionDequeue = async () => { mainLocalMutationCalls += 1; throw new Error('Main dequeue forbidden'); };
+  (sessionManager as any).retrySession = async () => { mainLocalMutationCalls += 1; throw new Error('Main retry forbidden'); };
   setChannelsStoreForTests(createChannelsStore(path.join(root, 'channels.json'))); resetChannelsForTests();
   const router = new MessageRouter(
     [{ platform: 'test-channel', userId: 'sender-1' }],
@@ -86,7 +86,7 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
     assert.equal(authority.lastAppliedMailboxId, ownership.mailboxCursor);
     assert.equal(authority.history.length, 2);
     assert.equal(authority.history[0].__meta.clientMessageId, 'router-client-1');
-    assert.equal(localRuns, 0); assert.equal(mainSemanticCalls, 0);
+    assert.equal(localRuns, 0); assert.equal(mainLocalMutationCalls, 0);
     assert.deepEqual(await fs.readFile(SESSIONS_FILE), sessionsBefore);
 
     // Busy Main stubs must not divert input to a local queue: the mailbox owns queuing.
@@ -96,7 +96,7 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
     assert.equal(store.countMailboxIntents(), 2);
     authority = await fs.readJson(statePath);
     assert.equal(authority.history.length, 4);
-    assert.equal(localRuns, 0); assert.equal(mainSemanticCalls, 0);
+    assert.equal(localRuns, 0); assert.equal(mainLocalMutationCalls, 0);
 
     // Destructive local turn controls fail closed for a worker-fenced session.
     for (const action of ['stop', 'dequeue', 'retry'] as const) {
@@ -105,7 +105,7 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
         (error: any) => error?.code === 'SESSION_WORKER_CONTROL_UNSUPPORTED',
       );
     }
-    assert.equal(mainSemanticCalls, 0);
+    assert.equal(mainLocalMutationCalls, 0);
     assert.deepEqual(await fs.readFile(SESSIONS_FILE), sessionsBefore);
   } finally {
     (sessionManager as any).getOrCreateSessionForChannel = originals.getOrCreateSessionForChannel;

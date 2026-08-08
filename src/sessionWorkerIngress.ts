@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { ChannelContext } from './channel';
+import { logger } from './common';
 import { RpcError } from './rpc';
 import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
 import type { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
@@ -130,6 +131,24 @@ export type SessionWorkerIngressResult = {
   messageCount: number;
   busy: boolean;
 };
+
+export async function resumeSessionWorkerPendingIntents(
+  store: SessionWorkerStore,
+  supervisor: SessionWorkerSupervisor,
+): Promise<void> {
+  for (const sessionId of store.listSessionsWithPendingIntents()) {
+    try {
+      await supervisor.ensureWorker(sessionId);
+      const ownership = store.findOwnership(sessionId);
+      if (!ownership || ownership.state !== 'ready' || !ownership.incarnationId) {
+        throw new RpcError('SESSION_WORKER_INGRESS_UNAVAILABLE', `Session worker ${sessionId} did not reach its exact durable ready owner.`, true);
+      }
+      await supervisor.runPendingActivated(sessionId, { generation: ownership.generation, incarnationId: ownership.incarnationId });
+    } catch (error) {
+      logger.error({ err: error, sessionId }, 'Failed to resume session worker pending mailbox intents; durable work remains retryable');
+    }
+  }
+}
 export type SessionWorkerCompactionResult = { completed: true; compacted: boolean; generation: number; messageCount: number };
 
 export class SessionWorkerIngressCoordinator {
