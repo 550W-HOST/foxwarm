@@ -519,6 +519,7 @@ foxwarm/
 - [Multica Bridge POC](docs/multica-bridge.md)
 - [Vector Memory](docs/vector-memory.md)
 - [Development](docs/development.md)
+- [Multiprocess Session Workers](docs/multiprocess-session-workers.md)
 - [ToolScript examples](examples/toolscript/README.md)
 
 ## Development
