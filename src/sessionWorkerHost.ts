@@ -40,6 +40,7 @@ export class SessionWorkerHost {
   private serializedPending = 0;
   private session?: Session;
   private runner?: SessionTurnRunner;
+  private execRuntime?: ExecRuntime;
   private poison?: { original: unknown; resync: unknown };
   private publicationPoison?: unknown;
 
@@ -64,6 +65,20 @@ export class SessionWorkerHost {
       if (owner.busy || owner.queue.length || getManagedSessionState(owner)) throw new RpcError('SESSION_WORKER_COMPACTION_BUSY', 'Session worker is not idle for awaited compaction.', true);
       const compacted = await this.runExactCompaction(request, 'explicit');
       return { compacted, projection: buildSessionWorkerProjection(owner) };
+    });
+  }
+
+  async idleStatus(): Promise<{ busy: boolean; queueLength: number; runningExecCount: number }> {
+    // A worker that never loaded owns no hot state and has nothing to hand back.
+    if (!this.session && !this.loadPromise) return { busy: false, queueLength: 0, runningExecCount: 0 };
+    return this.serialize(async () => {
+      await this.ensureLoaded();
+      const session = this.session!;
+      return {
+        busy: !!session.busy,
+        queueLength: session.queue?.length || 0,
+        runningExecCount: this.execRuntime?.listRunningExecs().length || 0,
+      };
     });
   }
 
@@ -127,6 +142,7 @@ export class SessionWorkerHost {
     const execRuntime = this.createExecRuntime(session);
     try { await execRuntime.initialize(); }
     catch (error) { throw new RpcError('SESSION_WORKER_INITIALIZATION_FAILED', `Session worker ExecRuntime initialization failed: ${(error as any)?.message || error}`, true); }
+    this.execRuntime = execRuntime;
     const effects = this.createEffects(session, execRuntime);
     this.runner = new SessionTurnRunner((this.dependencies.createTurnHost || ((ownerEffects, owner) => new LocalSessionTurnHost(
       ownerEffects, owner, {

@@ -35,10 +35,17 @@ async function start(): Promise<void> {
   const processIdentity = readSessionWorkerProcessIdentity(process.pid)!;
   const failWrites = new Set(String(process.env.FOXWARM_TEST_FAIL_WRITE_AT || '').split(',').map(Number).filter(Boolean));
   const failReads = new Set(String(process.env.FOXWARM_TEST_FAIL_READ_AT || '').split(',').map(Number).filter(Boolean));
-  let writeCount = 0; let readCount = 0; let initializeCount = 0; let chatCount = 0; let failedGoal = false;
+  let writeCount = 0; let readCount = 0; let initializeCount = 0; let chatCount = 0; let failedGoal = false; let backgroundExecStarted = false;
   (llm as any).chat = async (parts: any, session: any, _iteration: number, options: any) => {
     chatCount += 1;
     if (parts) await options.appendMessage({ role: 'user', parts });
+    if (process.env.FOXWARM_TEST_BACKGROUND_EXEC === '1' && !backgroundExecStarted && options?.purpose !== 'compact-plan') {
+      backgroundExecStarted = true;
+      const entry = await options.currentSessionEffects.execRuntime.startPersistentExec({
+        command: 'sleep 3', sessionId: session.id, agentName: session.agent,
+      });
+      await options.currentSessionEffects.execRuntime.markExecForBackgroundNotification(entry.id);
+    }
     if (options?.purpose === 'compact-plan' && process.env.FOXWARM_TEST_COMPACT_PLAN) {
       return { toolCalls: [{ name: COMPACT_PLAN_TOOL_NAME, args: JSON.parse(process.env.FOXWARM_TEST_COMPACT_PLAN) }] };
     }

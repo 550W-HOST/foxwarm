@@ -42,7 +42,7 @@ The implementation has a substantial real-child foundation, but normal productio
 | Final delivery | Main-owned committed-final delivery carries a serialized QueueSource and makes one delivery attempt after commit/publication. There is no outbox or automatic retry. |
 | Tool placement | Fixed Main reverse services cover the implemented Worker paths for management, Node execution, file delivery, final delivery, MCP, vector, and publication. Unsupported paths fail explicitly before effects. |
 | Normal ingress | `MessageRouter` routes ordinary busy/idle channel/WebUI input through the closed ensure/spawn/append/run ingress operation (`submitEnsuringWorker`), and all Main-side enqueue producers (timer, wait-timeout, ONBOOT, node events, RPC enqueue, inter-session delivery) share the same durable boundary through the session-manager sink. Managed sessions fail closed retryably at that boundary; worker-fenced stop/dequeue/retry and settings updates are explicitly unsupported. Startup resumes durable pending mailbox intents non-fatally. |
-| Lifecycle handback | Complete authority reload, Main-stub handback, idle/crash release, and background-exec-aware release are not yet an activated production flow. |
+| Lifecycle handback | Idle/crash/shutdown release runs one closed supervisor-owned flow: the supervisor's single injected Main handback step reconciles the mailbox cursor against the authoritative JSON and refreshes the Main catalog stub read-only before the fence is released; handback failure retains the fence fail-closed. Idle release postpones while the worker reports a busy owner, queued work, or running background exec processes via the exact `idleStatus` runtime method. |
 
 The distinction is important: a passing real-child test proves a closed seam, not that `sessionWorkers:true` is ready for ordinary users.
 
@@ -94,7 +94,7 @@ Build one supervisor-owned production operation for ordinary inbound work:
 
 Steps 1–5 exist as `SessionWorkerIngressCoordinator.submitEnsuringWorker`: the ingress coordinator composes resolve/ensure/append/run while the `SessionWorkerSupervisor` alone owns the spawn/candidate/activation lifecycle and fencing. Real-child tests cover spawn-to-ready, concurrent single-flight ensures, crash fencing until durably observed exit, and unprovable-identity fail-closed behavior. `MessageRouter` uses this operation for ordinary busy/idle channel/WebUI input, the session-manager enqueue sink routes every Main-side event trigger (timer, wait-timeout, ONBOOT, node events, RPC enqueue, inter-session delivery) through the same durable boundary, and worker-fenced sessions reject stop/dequeue/retry controls and settings updates retryably. The startup gate is lifted: bootstrap assembles the worker foundation when `sessionWorkers` is enabled and non-fatally resumes durable pending mailbox intents. Managed sessions fail closed at the shared boundary and remain deferred to M-E.
 
-### M-B — close lifecycle handback and release readiness
+### M-B — close lifecycle handback and release readiness ✅ completed
 
 Add the concrete lifecycle flow for idle, crash, shutdown, and replacement:
 
@@ -106,6 +106,8 @@ Add the concrete lifecycle flow for idle, crash, shutdown, and replacement:
 - release the fence only after the handback/save boundary is complete.
 
 Keep this as one closed flow. Do not introduce a reusable claim, lease, callback, or opaque handoff capability API without a real caller.
+
+Implemented: the supervisor owns the flow; its one injected `handbackWorker` step (Main-side `performSessionWorkerHandback`, not a generic callback API — it has exactly one caller, exit/stop handback) runs after exact exit observation and before `markExitObserved`, reconciling the cursor via `SessionWorkerStore.reconcileDrainedMailboxCursor` (draining-state variant of the inactive reconcile) and refreshing the Main catalog stub strictly read-only from the authority JSON (never the projection). Handback failure retains the fence on both stop and crash paths and blocks restart/replacement. Idle release queries the worker's exact `idleStatus` and postpones while busy/queued/running background exec; shutdown and explicit stop do not wait for background exec (their completion is durably recovered at the next spawn).
 
 ### M-C — close normal cross-session and topology callers
 
@@ -148,6 +150,7 @@ These are current decisions, not suggestions for a new implementation:
 ## Open questions
 
 - When a Worker submission fails at channel ingress (for example a transient spawn/ensure failure), the error propagates to the channel handler without a user-facing retry notice. Whether channels should surface or retry such failures is a product decision; the current behavior is intentional and unchanged.
+- Residual Main-local queue entries that survive a local-to-worker switch may contain `compact-commit` items; the worker's `assertSupportedQueue` fails those closed on every `runPending`. The behavior is safe (no semantic loss, explicit error); recorded here only as an observation.
 
 ## Build and test workflow
 
@@ -167,6 +170,7 @@ FOXWARM_SYNC_FILE_LOG=1 node --test --test-concurrency=1 \
   lib/sessionWorkerEnsureIngress.test.js \
   lib/sessionWorkerRouterIngress.test.js \
   lib/sessionWorkerTriggerIngress.test.js \
+  lib/sessionWorkerHandback.test.js \
   lib/sessionWorkerSupervisor.test.js \
   lib/sessionWorkerHost.test.js \
   lib/sessionRuntimeService.test.js \

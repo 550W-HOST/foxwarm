@@ -10,6 +10,7 @@ import { CommandHandler } from './commandHandler';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
 import { resumeSessionWorkerPendingIntents, SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
+import { performSessionWorkerHandback } from './sessionWorkerHandback';
 import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
@@ -213,6 +214,12 @@ async function start() {
             idleMs: SESSION_WORKERS_CONFIG.idleSeconds * 1000,
             shouldRestart: () => true,
             resolveExactFinalSourceContext: sourceContexts.resolve,
+            handbackWorker: identity => performSessionWorkerHandback({
+                store: sessionWorkerStore!,
+                getCatalogSession: id => sessionManager.getAllSessions().get(id),
+                upsertCatalogSession: session => sessionManager.getAllSessions().set(session.id, session),
+                saveCatalog: () => sessionManager.saveSessionsMetadata(),
+            }, identity),
         });
         await sessionWorkerSupervisor.reconcileStartupOwnerships();
         sessionWorkerIngress = new SessionWorkerIngressCoordinator(

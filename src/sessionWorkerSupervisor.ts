@@ -30,6 +30,7 @@ export type SessionWorkerSupervisorOptions = {
   readProcessIdentity?: (pid: number) => string | null;
   projectionRegistry?: SessionWorkerProjectionRegistry;
   resolveExactFinalSourceContext?: ExactFinalSourceContextResolver;
+  handbackWorker?: (identity: Pick<SessionWorkerIdentity, 'sessionId' | 'generation' | 'incarnationId'>) => Promise<void>;
 };
 
 type ProvisionalChild = {
@@ -167,6 +168,22 @@ export class SessionWorkerSupervisor {
     try {
       const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
       return await runtime.call('compactAwaited', { request });
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
+  }
+
+  async idleStatusActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+  ) {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      return await runtime.call('idleStatus', {});
     } finally {
       entry.activeCalls -= 1;
       if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
@@ -337,13 +354,31 @@ export class SessionWorkerSupervisor {
     entry.reverseServer.close();
     this.projectionRegistry.markStale(entry);
     const reason = `${entry.intentionalStop ? 'stopped' : 'unexpected'}:${code ?? signal ?? 'unknown'}`;
-    try { this.options.store.markExitObserved(entry.sessionId, entry.generation, entry.incarnationId, reason); }
-    catch (error) {
-      entry.exitRecordError = error;
-      this.lifecycleFailures.set(entry.sessionId, error);
-      logger.error({ err: error, sessionId: entry.sessionId, generation: entry.generation }, 'Failed to record session worker exit; fence retained');
+    // The durable fence is released only after the handback/save boundary
+    // completes. A handback failure retains the fence and fails closed.
+    let handbackError: unknown;
+    if (this.options.handbackWorker) {
+      try {
+        const ownership = this.options.store.findOwnership(entry.sessionId);
+        if (ownership && ownership.generation === entry.generation && ownership.incarnationId === entry.incarnationId) {
+          if (ownership.state === 'ready') this.options.store.markDraining(entry.sessionId, entry.generation, entry.incarnationId);
+          await this.options.handbackWorker({ sessionId: entry.sessionId, generation: entry.generation, incarnationId: entry.incarnationId });
+        }
+      } catch (error) { handbackError = error; }
     }
-    finally { entry.resolveExit(); }
+    if (handbackError) {
+      entry.exitRecordError = handbackError;
+      this.lifecycleFailures.set(entry.sessionId, handbackError);
+      logger.error({ err: handbackError, sessionId: entry.sessionId, generation: entry.generation }, 'Session worker handback failed; fence retained');
+    } else {
+      try { this.options.store.markExitObserved(entry.sessionId, entry.generation, entry.incarnationId, reason); }
+      catch (error) {
+        entry.exitRecordError = error;
+        this.lifecycleFailures.set(entry.sessionId, error);
+        logger.error({ err: error, sessionId: entry.sessionId, generation: entry.generation }, 'Failed to record session worker exit; fence retained');
+      }
+    }
+    entry.resolveExit();
     if (!entry.intentionalStop && !this.shuttingDown && !entry.exitRecordError) {
       logger.error({ sessionId: entry.sessionId, generation: entry.generation, pid: entry.child.pid, code, signal }, 'Session worker exited unexpectedly');
       try { if (await this.options.shouldRestart?.(entry.sessionId)) this.scheduleRestart(entry.sessionId); }
@@ -467,8 +502,20 @@ export class SessionWorkerSupervisor {
     entry.idleTimer = setTimeout(() => {
       entry.idleTimer = undefined;
       if (entry.activeCalls > 0 || !entry.ready || this.entries.get(entry.sessionId) !== entry) { this.touchEntry(entry); return; }
-      void this.stopWorker(entry.sessionId).catch(error => logger.error({ err: error, sessionId: entry.sessionId }, 'Failed to release idle session worker'));
+      void this.releaseIdleWorker(entry);
     }, this.options.idleMs); entry.idleTimer.unref?.();
+  }
+  private async releaseIdleWorker(entry: WorkerEntry): Promise<void> {
+    try {
+      const status = await this.idleStatusActivated(entry.sessionId, { generation: entry.generation, incarnationId: entry.incarnationId });
+      if (this.entries.get(entry.sessionId) !== entry || !entry.ready) return;
+      // Active background exec processes, a busy owner, or queued work keep the
+      // worker alive; the next idle check retries the release.
+      if (status.busy || status.queueLength > 0 || status.runningExecCount > 0) { this.touchEntry(entry); return; }
+      await this.stopWorker(entry.sessionId);
+    } catch (error) {
+      logger.error({ err: error, sessionId: entry.sessionId }, 'Failed to release idle session worker');
+    }
   }
   private clearIdleTimer(entry: WorkerEntry): void { if (entry.idleTimer) clearTimeout(entry.idleTimer); entry.idleTimer = undefined; }
   private scheduleRestart(sessionId: string): void {

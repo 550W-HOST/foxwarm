@@ -270,6 +270,19 @@ export class SessionWorkerStore {
       expectedCursor: current.mailboxCursor, upToId: stateCursor }, true, true);
   }
 
+  reconcileDrainedMailboxCursor(sessionId: string, stateCursor: number): SessionWorkerOwnershipRecord {
+    const current = this.getOwnership(sessionId);
+    if (current.state !== 'draining') {
+      throw new RpcError('SESSION_WORKER_OWNED', `Session ${sessionId} must be draining before main cursor reconciliation.`, true);
+    }
+    if (current.mailboxCursor > stateCursor) {
+      throw new RpcError('SESSION_WORKER_CURSOR_AHEAD', `SQLite mailbox cursor ${current.mailboxCursor} is ahead of session JSON cursor ${stateCursor}.`);
+    }
+    if (current.mailboxCursor === stateCursor) return current;
+    return this.acknowledgePrefix({ sessionId, generation: current.generation, incarnationId: 'main-reconcile',
+      expectedCursor: current.mailboxCursor, upToId: stateCursor }, true, true);
+  }
+
   deleteAppliedMailboxThrough(sessionId: string, throughId: number): number {
     this.inject('cleanup', sessionId);
     sessionId = this.sessionId(sessionId);
