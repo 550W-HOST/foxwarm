@@ -171,6 +171,7 @@ type RequestLlmOnceOptions = {
     modelsConfigOverride?: ModelsConfig;
     sessionId?: string;
     promptCacheKey?: string;
+    turnId?: string;
     iteration?: number;
     toolDefinitions?: ToolDefinition[];
     notifySessionEvents?: boolean;
@@ -1582,6 +1583,7 @@ export async function chat(
         registerAbortController?: boolean;
         onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
         purpose?: LlmRequestPurpose;
+        turnId?: string;
     },
 ): Promise<ChatResult> {
     const appendMessage = async (message: Message) => {
@@ -1624,6 +1626,7 @@ export async function chat(
         model: session.model,
         sessionId: session.id,
         promptCacheKey,
+        turnId: options?.turnId,
         iteration,
         toolDefinitions: availableToolDefinitions,
         notifySessionEvents: options?.notifySessionEvents,
@@ -1782,9 +1785,10 @@ function buildConcreteRequestPlan(options: {
     modelEntry: ModelConfigEntry;
     modelKey: string;
     promptCacheKey: string;
+    turnId: string;
     attempt: number;
 }): ConcreteRequestPlan {
-    const { request, fixedContents, modelEntry, modelKey, promptCacheKey, attempt } = options;
+    const { request, fixedContents, modelEntry, modelKey, promptCacheKey, turnId, attempt } = options;
     const providerType = modelEntry?.providerType || 'openai';
     const baseUrl = modelEntry?.baseUrl;
     const apiKey = modelEntry?.apiKey || '';
@@ -1898,7 +1902,10 @@ function buildConcreteRequestPlan(options: {
         };
     }
 
-    const templateVars: Record<string, string> = { SESSION_CACHE_KEY: promptCacheKey };
+    const templateVars: Record<string, string> = {
+        SESSION_CACHE_KEY: promptCacheKey,
+        TURN_ID: turnId,
+    };
     const extraFields = expandTemplateVariables(modelEntry.extraFields || {}, templateVars);
     Object.assign(data, extraFields);
     if (useOpenAIResponsesApi && extraFields.reasoning && typeof extraFields.reasoning === 'object') {
@@ -2140,6 +2147,10 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     // Resolve once per outer request. Every retry attempt, including virtual
     // failover attempts, shares this prefix-lineage routing key.
     const promptCacheKey = await resolvePromptCacheKeyForRequest(options);
+    // A low-level caller may omit the turn identity. Keep one generated value
+    // for this whole request so retries expand `${TURN_ID}` consistently;
+    // normal session turns provide their own value from MessageRouter.
+    const turnId = options.turnId || randomUUID();
     // Completeness boundary: all content-addressed canonical inputs and the
     // request manifest are durable before any provider attempt can be sent.
     const { requestId } = await beginLlmRequestJournal({
@@ -2207,6 +2218,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                 modelEntry,
                 modelKey,
                 promptCacheKey,
+                turnId,
                 attempt,
             });
             await appendLlmAttemptStart({

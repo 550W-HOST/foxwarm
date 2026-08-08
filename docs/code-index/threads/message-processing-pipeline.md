@@ -9,8 +9,8 @@ The interactive turn flow from channel input through authorization, queueing, pr
 1. A platform adapter converts native input to `ChannelContext` plus `ChannelMessage` and calls `MessageRouter.handleIncomingMessage`.
 2. Router performs channel authorization, normalizes source metadata/mentions, handles slash commands where applicable, and resolves the attached session.
 3. Ordinary input enters the session queue through the session-manager façade.
-4. The registered trigger invokes `MessageRouter.processSessionQueue`. `tryClaimSession` provides per-session exclusion and `continueWithQueuedWork` selects/merges a legal turn source.
-5. `llm.chat(parts, session, iteration, options)` builds the current model-visible history/prompt/tool schema, resolves concrete or virtual routing, streams progress, records the actual concrete provider-qualified model ID, and appends the model result. Virtual attempt semantics are canonical in [model routing](./model-routing.md).
+4. The registered trigger invokes `MessageRouter.processSessionQueue`. `tryClaimSession` provides per-session exclusion and `continueWithQueuedWork` selects/merges a legal turn source. Each `runSessionTurn` invocation creates one ephemeral turn identity and carries it through every provider/tool iteration.
+5. `llm.chat(parts, session, iteration, options)` carries that identity into each request while building the current model-visible history/prompt/tool schema, resolving concrete or virtual routing, streaming progress, recording the actual concrete provider-qualified model ID, and appending the model result. Model `extraFields` and `extraHeaders` may expand `${TURN_ID}` alongside `${SESSION_CACHE_KEY}`. A queue item consumed inside the same `runSessionTurn` invocation keeps the identity; a later invocation gets a new one. Virtual attempt semantics are canonical in [model routing](./model-routing.md).
 6. Retry callbacks create/update display-only notices and broadcast concise progress; terminal request exhaustion throws `LlmRequestError`.
 7. Model stream deltas become `model-stream-update` events for WebUI/channel progress.
 8. When function calls exist, router publishes structured progress and calls `llm.executeTools`; normal dispatch resolves builtin, MCP, or node tools through permission-aware tool infrastructure.
@@ -51,6 +51,7 @@ The interactive turn flow from channel input through authorization, queueing, pr
 - Tool schemas remain stable across normal/side/compact requests when their prefix/schema contract is shared.
 - Display-only retry/progress messages never enter provider input, compaction candidates, or embeddings.
 - Persisted model messages record the actual provider-qualified model key used for the request.
+- `${TURN_ID}` is an ephemeral UUID created at the `runSessionTurn` boundary. It is not persisted as session state, remains stable across retries and tool-loop provider calls in that invocation, and changes when a later invocation starts.
 - Final broadcasts use generic turn metadata; router does not call platform-specific finish hooks.
 
 ## Design decisions

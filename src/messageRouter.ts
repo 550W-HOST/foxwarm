@@ -3,6 +3,7 @@
  */
 
 import fs from 'fs-extra';
+import { randomUUID } from 'crypto';
 import { logger } from './common';
 import { ChannelContext, ChannelMessage, getChannelId, getChannelType, getConversationId } from './channel';
 import { formatAuthorizationInspection, inspectChannelAuthorizationFromContext } from './channelAuth';
@@ -1006,6 +1007,9 @@ export class MessageRouter {
 
     const turnChannelOptions = this.getTurnChannelOptions(options.sourceCtx, options.source);
     const turnStreamKey = this.getSourceStreamKey(options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined));
+    // One ephemeral identity covers the complete provider/tool loop for this
+    // invocation. A later runSessionTurn invocation receives a new identity.
+    const turnId = randomUUID();
     const broadcast = session.broadcast
       ? (text: string, broadcastOptions?: any) => session.broadcast!(text, this.mergeTurnOptions(turnChannelOptions, broadcastOptions))
       : undefined;
@@ -1087,6 +1091,7 @@ export class MessageRouter {
         try {
           result = await llm.chat(parts, session, iteration, {
             onRetry: this.createLlmRetryNotifier(session, broadcast),
+            turnId,
           });
         } catch (e: any) {
           if (session.stopping && llm.isAbortError(e)) {

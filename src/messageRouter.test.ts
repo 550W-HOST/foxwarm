@@ -527,9 +527,11 @@ test('MessageRouter leaves a different QQ conversation for provider call three a
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
   let chatCalls = 0;
+  const turnIds: string[] = [];
 
-  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration: number, options: any) => {
     chatCalls += 1;
+    turnIds.push(options?.turnId);
     if (parts) {
       await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
     }
@@ -569,6 +571,10 @@ test('MessageRouter leaves a different QQ conversation for provider call three a
     });
 
     assert.equal(chatCalls, 3);
+    assert.equal(turnIds.length, 3);
+    assert.match(turnIds[0], /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    assert.equal(turnIds[0], turnIds[1], 'one session turn keeps one TURN_ID across its tool loop');
+    assert.notEqual(turnIds[0], turnIds[2], 'a later runSessionTurn receives a new TURN_ID');
     assert.equal(userTextOccurrences(session, 'different conversation input'), 1);
     assert.equal(session.queue.length, 0);
   } finally {

@@ -3,6 +3,11 @@
 #
 # Recommended public setup: keep provider connection settings directly in this YAML.
 # App/channel configuration lives in state/config.yaml.
+#
+# Provider `extraFields` and `extraHeaders` support these runtime placeholders:
+# `${SESSION_CACHE_KEY}` is stable for the session's prompt-cache prefix lineage.
+# `${TURN_ID}` is stable for one session turn, including its tool loop, and changes
+# when a later session turn starts.
 
 default: openai/gpt-5.6-sol
 providers:

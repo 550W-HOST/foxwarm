@@ -1023,6 +1023,60 @@ test('ensurePromptCacheKey assigns a stable low-sensitivity key per session', ()
   assert.notEqual(first, independent);
 });
 
+test('model templates expand TURN_ID alongside SESSION_CACHE_KEY', async () => {
+  const originalPost = axios.post;
+  let capturedData: any;
+  let capturedConfig: any;
+  const model = {
+    providerKey: 'fixture',
+    providerType: 'openai-completions',
+    baseUrl: 'https://fixture.example',
+    apiKey: '',
+    model: 'chat',
+    extraFields: {
+      foxwarm_metadata: {
+        session: '${SESSION_CACHE_KEY}',
+        turn: '${TURN_ID}',
+      },
+    },
+    extraHeaders: {
+      'x-foxwarm-session': '${SESSION_CACHE_KEY}',
+      'x-foxwarm-turn': '${TURN_ID}',
+    },
+  } as any;
+
+  (axios as any).post = async (_url: string, data: any, config: any) => {
+    capturedData = data;
+    capturedConfig = config;
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: makeChatCompletionStream(),
+    };
+  };
+
+  try {
+    await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'template expansion' }] }],
+      systemPrompt: '',
+      modelEntryOverride: model,
+      promptCacheKey: 'session-cache-key',
+      turnId: 'session-turn-id',
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.equal(capturedData.foxwarm_metadata.session, 'session-cache-key');
+    assert.equal(capturedData.foxwarm_metadata.turn, 'session-turn-id');
+    assert.equal(capturedConfig.headers['x-foxwarm-session'], 'session-cache-key');
+    assert.equal(capturedConfig.headers['x-foxwarm-turn'], 'session-turn-id');
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('chat uses the stored prompt cache key for OpenAI requests', async () => {
   const originalPost = axios.post;
   const capturedBodies: any[] = [];
