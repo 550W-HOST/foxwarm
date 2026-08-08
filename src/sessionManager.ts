@@ -2663,6 +2663,21 @@ export async function resumeBusySessions(): Promise<void> {
     }
   }
 
+  if (workerEnqueueSink && (busySessionIds.length > 0 || queuedSessionIds.length > 0 || managedPendingSessionIds.length > 0)) {
+    // Session-worker placement owns execution. Residual Main-local busy/queue
+    // state (for example left behind when switching from local placement) must
+    // never run through the local runner: the local resume path both bypasses
+    // the durable ingress boundary and risks double-writing the per-session
+    // authority a worker may own. Log loudly and leave execution to the next
+    // durable ingress or the pending mailbox resume.
+    logger.warn({
+      busySessions: busySessionIds,
+      queuedSessions: queuedSessionIds,
+      managedPendingSessions: managedPendingSessionIds,
+    }, 'Session-worker placement is enabled; skipping Main-local restart recovery for residual busy/queued/managed sessions. Their execution is left to the next durable Worker ingress.');
+    return;
+  }
+
   if (busySessionIds.length === 0 && queuedSessionIds.length === 0 && managedPendingSessionIds.length === 0) {
     logger.info({ busyCount: 0, queuedCount: 0, managedPendingCount: 0, busySessions: busySessionIds, queuedSessions: queuedSessionIds, managedPendingSessions: managedPendingSessionIds }, 'Resuming sessions after restart');
     return;

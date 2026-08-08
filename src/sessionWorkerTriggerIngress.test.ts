@@ -130,6 +130,32 @@ test('all Main-side enqueue producers route through the sink without local queue
   }
 });
 
+test('worker placement never runs residual Main-local busy/queue state through the local resume path', async () => {
+  const sessionId = `resume-local-residual-${Date.now()}`;
+  const submitted: string[] = [];
+  let localTriggerCalls = 0;
+  const session = await sessionManager.getSession(sessionId);
+  session.busy = true; session.busyStartedAt = Date.now();
+  session.queue.push({ type: 'background', parts: [{ system: 'residual local work' }] });
+  await sessionManager.saveSession(sessionId);
+  sessionManager.setSessionWorkerEnqueueSink(async id => { submitted.push(id); });
+  sessionManager.setSessionTriggerCallback(() => { localTriggerCalls += 1; });
+  try {
+    await sessionManager.resumeBusySessions();
+    // Fail-loud and skip: no local trigger, no sink submission, no authority mutation.
+    assert.equal(localTriggerCalls, 0);
+    assert.deepEqual(submitted, []);
+    const reloaded = await sessionManager.getExistingSession(sessionId);
+    assert.equal(reloaded?.busy, true);
+    assert.equal(reloaded?.queue.length, 1);
+  } finally {
+    sessionManager.setSessionWorkerEnqueueSink(undefined);
+    const residual = await sessionManager.getExistingSession(sessionId);
+    if (residual) { residual.busy = false; residual.busyStartedAt = undefined; residual.queue = []; }
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
 test('startup resume ensures owners and runs durable pending mailbox intents', async () => {
   const sessionId = 'resume-worker-session';
   const fixture = await createFixture(sessionId);

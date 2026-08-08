@@ -68,7 +68,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - **Child/fork creation:** copies or rebuilds prompt snapshots/cache lineage according to fork semantics, records archive lineage, and advances suffix counters past retained IDs.
 - **Managed wakeup:** routes active managed-session input to its inbox and wakes or resumes its owner/controller with cooldown and stale-lease recovery.
 - **Queue notification:** persists queue changes, emits state callbacks, and invokes the registered router trigger when work should run.
-- **Restart recovery:** clears stale busy fields, appends/deduplicates the restart system event, retriggers queued work, and reclaims or wakes persisted managed inbox/controller state.
+- **Restart recovery:** clears stale busy fields, appends/deduplicates the restart system event, retriggers queued work, and reclaims or wakes persisted managed inbox/controller state. Under Session-worker placement (enqueue sink registered), residual Main-local busy/queued/managed sessions are logged loudly and skipped rather than executed locally; their execution is left to the next durable Worker ingress.
 
 ## Dependencies
 
