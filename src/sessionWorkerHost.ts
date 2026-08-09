@@ -12,7 +12,7 @@ import { getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSession
 import { getManagedSessionState } from './session/managedState';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './session/metadataStore';
 import { applyQueuedItemToWaitState, appendSessionMessagesForSession, startSessionWaitForSession, updateSessionBusyStateForSession } from './sessionManager';
-import { clearActiveSessionRuntimeState, setActiveSessionRuntimeState } from './sessionRuntimeState';
+import { clearActiveSessionRuntimeState, setActiveSessionRuntimeState, setSessionRuntimeStateUpdateCallback } from './sessionRuntimeState';
 import { LocalSessionTurnHost, SessionTurnRunner, type SessionTurnHost } from './sessionTurnRunner';
 import type { SessionTurnFinalKind } from './sessionTurnDelivery';
 import {
@@ -52,6 +52,25 @@ export class SessionWorkerHost {
     private readonly dependencies: SessionWorkerHostDependencies = {},
   ) {
     this.persistence = new SessionWorkerPersistence(store, dependencies.persistence);
+    // Presentation-only publication: runtime phase transitions
+    // (requesting-model/running-tool/idle) are transient process-local state
+    // that is never written to authority. Without this wiring the updates only
+    // reached Main piggybacked on authoritative commits, leaving the served
+    // projection stuck on the last committed phase after a turn ended (local
+    // placement wires the same callback to notifySessionUpdated). Publish the
+    // current projection on every transition, ordered on the serialized chain;
+    // failures only log — the next authoritative commit republishes full state.
+    setSessionRuntimeStateUpdateCallback(sessionId => {
+      if (sessionId !== this.identity.sessionId) return;
+      void this.serialize(async () => {
+        if (!this.session || !this.dependencies.publishCommitted) return;
+        try {
+          await this.dependencies.publishCommitted(buildSessionWorkerProjection(this.session));
+        } catch (error) {
+          logger.warn({ err: error, sessionId: this.identity.sessionId }, 'Transient runtime-state projection publication failed');
+        }
+      }).catch(error => logger.error({ err: error, sessionId: this.identity.sessionId }, 'Transient runtime-state publication scheduling failed'));
+    });
   }
 
   async runPending(limit: number): Promise<SessionWorkerProjection> {

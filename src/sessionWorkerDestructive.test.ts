@@ -77,6 +77,9 @@ test('closed stop interrupts a fenced worker turn and mirrors stopping catalog-o
     const stoppedIdle: any = await fixture.runtime.call('control', { sessionId: sessionId2, action: 'stop' });
     assert.equal(stoppedIdle.action, 'stop');
     assert.equal(stoppedIdle.abortedInFlight, false);
+    // The transactional persist is detached (queued on the host chain behind
+    // the turn's own writes/publications), so poll for the final durable state.
+    await waitFor(async () => JSON.parse(await fs.readFile(path.join(root, 'state', 'sessions', `${sessionId2}.json`), 'utf8')).stopping === true);
     const idleAuthority = JSON.parse(await fs.readFile(path.join(root, 'state', 'sessions', `${sessionId2}.json`), 'utf8'));
     assert.equal(idleAuthority.stopping, true, 'idle interrupt still persists the stopping flag transactionally');
 
@@ -314,6 +317,42 @@ test('/messages serves a fenced session from the runtime DTO and a detached auth
     await fixture.supervisor.shutdown(3_000).catch(() => {});
     fixture.store.close();
     await sessionManager.deleteSession(sessionId).catch(() => {});
+    await fs.remove(root);
+  }
+});
+
+test('committed projections track turn phases and settle to idle while the worker stays alive', async () => {
+  const sessionId = `mc-phases-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-phases-'));
+  const fixture = makeFixture(root, { FOXWARM_TEST_SLOW_PROVIDER: '1', FOXWARM_TEST_SLOW_SESSION: sessionId });
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  try {
+    sessionManager.getAllSessions().set(sessionId, baseSession(sessionId));
+    await fixture.supervisor.reconcileStartupOwnerships();
+    const turn = fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'slow question' }] }).catch(error => error);
+    await waitFor(() => fs.pathExists(path.join(root, 'state', `slow-started-${sessionId}`)));
+
+    // Mid-turn: the transient runtime-state publication reaches the registry.
+    await waitFor(() => {
+      const projection = fixture.supervisor.projectionRegistry.get(sessionId)?.projection;
+      return projection?.busy === true && projection?.runtimeState?.state === 'requesting-model';
+    });
+
+    await fixture.runtime.call('control', { sessionId, action: 'stop' });
+    await turn;
+    // Turn end while the worker is still alive: the served projection settles
+    // to idle instead of sticking on the last committed phase until handback.
+    await waitFor(() => {
+      const projection = fixture.supervisor.projectionRegistry.get(sessionId)?.projection;
+      return projection?.busy === false && projection?.runtimeState?.state === 'idle';
+    });
+    assert.ok(fixture.supervisor.getStatus(sessionId)?.ready, 'the worker is still alive after the turn');
+  } finally {
+    fixture.transport.close();
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    sessionManager.getAllSessions().delete(sessionId);
     await fs.remove(root);
   }
 });
