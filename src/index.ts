@@ -241,10 +241,15 @@ async function start() {
             const catalog = sessionManager.getAllSessions().get(sessionId);
             return catalog ? readDetachedWorkerSession(sessionId, catalog) : undefined;
         });
+        sessionManager.setSessionWorkerFenceChecker(sessionId => {
+            const ownership = sessionWorkerStore!.findOwnership(sessionId);
+            return !!ownership && ownership.state !== 'inactive';
+        });
         shutdownSessionWorkers = async () => {
             sessionManager.setSessionWorkerEnqueueSink(undefined);
             sessionManager.setSessionWorkerDeleteHandler(undefined);
             sessionManager.setSessionWorkerForkSourceProvider(undefined);
+            sessionManager.setSessionWorkerFenceChecker(undefined);
             await sessionWorkerSupervisor!.shutdown();
             sessionWorkerStore!.close();
         };

@@ -1463,7 +1463,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
   const newSessionId = await allocateForkSessionId(realSourceSessionId, suffix, isChildSession);
   const sourcePreviousPromptCacheKey = sourceSession.promptCacheKey;
   const promptCacheKey = llm.ensurePromptCacheKey(sourceSession);
-  if (sourceSession.promptCacheKey !== sourcePreviousPromptCacheKey && !options?.sourceOverride) {
+  if (sourceSession.promptCacheKey !== sourcePreviousPromptCacheKey && !detachedSource) {
     await saveSession(sourceSession.id);
   }
 
@@ -1680,6 +1680,18 @@ export async function setSessionParent(childSessionId: string, parentSessionId?:
   parentSessionId?: string;
   previousParentSessionId?: string;
 }> {
+  // A worker-fenced child's authority is worker-owned: the parent link is
+  // Main-owned presentation metadata there, so update it catalog-only and
+  // never write the fenced authority (a stale stub write could corrupt it).
+  if (workerFenceChecker?.(childSessionId)) {
+    const child = sessions.get(childSessionId);
+    if (!child) throw new Error(`Session \`${childSessionId}\` not found.`);
+    const previousParentSessionId = child.parentSessionId;
+    child.parentSessionId = parentSessionId;
+    await saveSessionsMetadata();
+    notifySessionListUpdated();
+    return { childSessionId, parentSessionId, previousParentSessionId };
+  }
   return sessionRelations.setSessionParent({
     getExistingSession,
     saveSession,
@@ -1691,7 +1703,9 @@ export async function setSessionParent(childSessionId: string, parentSessionId?:
 
 export async function updateChildSessionParentIds(oldParentSessionId: string, newParentSessionId: string): Promise<string[]> {
   return sessionRelations.updateChildSessionParentIds({
-    saveSession,
+    // Worker-fenced children keep their authority worker-owned: skip the
+    // per-child authority write; the catalog metadata update still lands.
+    saveSession: sessionId => workerFenceChecker?.(sessionId) ? Promise.resolve() : saveSession(sessionId),
     saveSessionsMetadata,
     getSessionsMap: getAllSessions,
     notifySessionListUpdated,
@@ -2122,6 +2136,7 @@ async function enqueueSessionItemForLoadedSession(session: Session, item: QueueI
 let workerEnqueueSink: ((sessionId: string, item: QueueItem) => Promise<void>) | undefined;
 let workerDeleteHandler: ((sessionId: string) => Promise<boolean>) | undefined;
 let workerForkSourceProvider: ((sessionId: string) => Promise<Session | undefined>) | undefined;
+let workerFenceChecker: ((sessionId: string) => boolean) | undefined;
 
 export function setSessionWorkerEnqueueSink(handler: ((sessionId: string, item: QueueItem) => Promise<void>) | undefined): void {
   workerEnqueueSink = handler;
@@ -2146,6 +2161,16 @@ export function setSessionWorkerDeleteHandler(handler: ((sessionId: string) => P
  */
 export function setSessionWorkerForkSourceProvider(provider: ((sessionId: string) => Promise<Session | undefined>) | undefined): void {
   workerForkSourceProvider = provider;
+}
+
+/**
+ * Registers the Session-worker fence lookup used to keep Main-owned
+ * presentation operations (parent moves, relation updates) catalog-only for
+ * fenced sessions: their authority is worker-owned and must never be written
+ * from Main.
+ */
+export function setSessionWorkerFenceChecker(checker: ((sessionId: string) => boolean) | undefined): void {
+  workerFenceChecker = checker;
 }
 
 export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {

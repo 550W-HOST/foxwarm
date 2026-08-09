@@ -193,3 +193,37 @@ test('fenced fork derives from the detached authority and archive stays Main-own
     await fs.remove(root);
   }
 });
+
+test('parent moves on a fenced child stay catalog-only and never write the authority', async () => {
+  const sessionId = `mc-move-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-move-'));
+  const fixture = makeFixture(root);
+  try {
+    const session = await sessionManager.getSession(sessionId);
+    await sessionManager.appendSessionMessage(sessionId, { role: 'user', parts: [{ text: 'move guard message' }] } as any);
+    session.history = []; // production fenced stubs are unhydrated
+    fixture.store.beginGeneration(sessionId, 'inc-move');
+    fixture.store.registerCandidate(sessionId, 1, 'inc-move', 999_999, 'fake-identity');
+    fixture.store.activateCandidate(sessionId, 1, 'inc-move', 999_999, 'fake-identity');
+    sessionManager.setSessionWorkerFenceChecker(id => {
+      const ownership = fixture.store.findOwnership(id);
+      return !!ownership && ownership.state !== 'inactive';
+    });
+    const authorityBefore = await fs.readFile(getSessionHistoryFilePath(sessionId));
+
+    const moved = await sessionManager.setSessionParent(sessionId, 'some/parent');
+    assert.equal(moved.parentSessionId, 'some/parent');
+    assert.equal(sessionManager.getAllSessions().get(sessionId)!.parentSessionId, 'some/parent');
+    assert.deepEqual(await fs.readFile(getSessionHistoryFilePath(sessionId)), authorityBefore,
+      'the fenced authority is never written by a parent move');
+    const detached = await sessionManager.setSessionParent(sessionId, undefined);
+    assert.equal(detached.parentSessionId, undefined);
+  } finally {
+    sessionManager.setSessionWorkerFenceChecker(undefined);
+    fixture.transport.close();
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+    await fs.remove(root);
+  }
+});

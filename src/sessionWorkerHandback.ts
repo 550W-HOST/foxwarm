@@ -79,9 +79,11 @@ export async function performSessionWorkerHandback(
     if (raw[key] === undefined || raw[key] === null) delete (stub as any)[key];
     else (stub as any)[key] = raw[key];
   }
-  // displayName is presentation metadata: adopt the authority value when present,
-  // but never erase a Main-owned name the authority does not carry.
-  if (typeof raw.displayName === 'string' && raw.displayName) stub.displayName = raw.displayName;
+  // displayName is Main-owned presentation metadata: never overwrite a
+  // Main-set name (a WebUI rename is catalog-only and must survive release),
+  // but adopt the authority's name into a never-named stub so a worker-side
+  // self-rename stays visible.
+  if (stub.displayName === undefined && typeof raw.displayName === 'string' && raw.displayName) stub.displayName = raw.displayName;
   // The stub must never become a semantic source: any hydrated history (for
   // example from a past Main-side existence check) is cleared so later reads
   // lazily rehydrate the fresh authority instead of serving stale copies.

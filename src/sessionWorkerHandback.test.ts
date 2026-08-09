@@ -238,3 +238,34 @@ test('handback clears hydrated stub state so later reads rehydrate the fresh aut
     await fs.remove(root);
   }
 });
+
+test('handback never rolls back a Main-owned displayName rename but adopts one into an unnamed stub', async () => {
+  const renamedId = `mc-rename-${Date.now()}`;
+  const fixture = await createFixture(renamedId, { idleMs: 150 });
+  const unnamedId = `${renamedId}-unnamed`;
+  const fixture2 = await createFixture(unnamedId, { idleMs: 150 });
+  try {
+    // The authority carries an older name; Main renamed catalog-only while fenced.
+    const auth = await fs.readJson(fixture.statePath);
+    auth.displayName = 'authority-old-name';
+    await fs.writeJson(fixture.statePath, auth);
+    fixture.catalog.set(renamedId, { ...baseSession(renamedId), displayName: 'main-new-name' });
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await fixture.ingress.submitEnsuringWorker(renamedId, { type: 'user', parts: [{ text: 'work' }] });
+    await waitFor(() => fixture.store.getOwnership(renamedId).state === 'inactive');
+    assert.equal(fixture.catalog.get(renamedId)!.displayName, 'main-new-name', 'handback never rolls back the Main-owned rename');
+
+    // A never-named stub adopts the authority name so a worker self-rename stays visible.
+    const auth2 = await fs.readJson(fixture2.statePath);
+    auth2.displayName = 'worker-self-name';
+    await fs.writeJson(fixture2.statePath, auth2);
+    fixture2.catalog.set(unnamedId, baseSession(unnamedId));
+    await fixture2.supervisor.reconcileStartupOwnerships();
+    await fixture2.ingress.submitEnsuringWorker(unnamedId, { type: 'user', parts: [{ text: 'work' }] });
+    await waitFor(() => fixture2.store.getOwnership(unnamedId).state === 'inactive');
+    assert.equal(fixture2.catalog.get(unnamedId)!.displayName, 'worker-self-name', 'a never-named stub adopts the authority name');
+  } finally {
+    await fixture.close();
+    await fixture2.close();
+  }
+});

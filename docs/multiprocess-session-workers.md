@@ -121,9 +121,30 @@ For stop/delete/archive/fork or other destructive operations, define each suppor
 
 Implemented per operation: **stop** — control `stop` on a fenced session routes to the worker runtime `interrupt` through the exact supervisor fence; the interrupt signals immediately (in-memory stopping flag plus provider-request abort, never queued behind the serialized host chain) and persists `stopping=true` transactionally on that chain detached, so interrupting a wedged turn cannot hang the RPC; Main mirrors stopping with a catalog-only stub write. dequeue/retry stay explicitly retryable-unsupported. **delete** — sessionManager delete entry points route fenced sessions through the delete hook: interrupt any active turn, graceful supervisor stop with handback, durable fence/mailbox deletion requiring an inactive fence, then ordinary local authority/catalog/archive deletion; any lifecycle failure (for example a handback wedge or an unconfirmed exit) fails closed and never touches the authority, and a stopped worker never resurrects a deleted authority. **fork** — a fenced source derives from a read-only detached authority snapshot via the session-manager fork-source provider (parent bytes and cursor untouched, no hydration). **archive/displayName** — Main-owned presentation metadata stays open as catalog-only writes; other settings stay closed. Handback additionally clears any hydrated stub history so post-release reads lazily rehydrate the fresh authority (fixes the stale-presentation path where a stub hydrated during the fence became a wrong semantic source after release); the main-management facade existence checks are catalog-map-only and no longer hydrate fenced stubs.
 
-### M-E — optional managed/admin closure
+### M-E — optional managed/admin closure ✅ audited (no implementation)
 
 Only after normal UI/channel paths work should managed-session, pairing/bootstrap, destructive admin, or other low-frequency surfaces be reconsidered. A path may remain explicitly unavailable if it has no supported Worker caller in the first release.
+
+Audit result (worker placement, per surface):
+
+- **Managed sessions (ToolScript managed controller)** — explicitly unavailable: the enqueue sink fails managed sessions closed (`SESSION_WORKER_QUEUE_UNSUPPORTED`, never spawns a worker), managed ToolScript operations fail `SESSION_WORKER_TOOL_UNAVAILABLE` before effects, managed session state in a worker fails closed, and residual managed queue entries at startup are fail-loud skipped. Intentional: no supported Worker caller in the first release.
+- **Pairing/bootstrap** (`node_bootstrap_info`/`node_pair_approve`/`node_pair_list`) — explicitly unavailable inside workers (`SESSION_WORKER_TOOL_UNAVAILABLE`); Main/WebUI node management stays local and unchanged.
+- **Destructive admin inside workers** (`delete_session`, `create_agent`, `create_session`, `set_agent_inherit`, `set_agent_isolated`, `move_session`) — explicitly unavailable; Main/WebUI-side admin keeps local semantics plus the M-D closed operations (delete/fork/move).
+- **Cross-session control/settings** — other-session dequeue/retry and non-displayName settings fail `SESSION_WORKER_CONTROL_UNSUPPORTED` retryably (stop is closed via the worker interrupt); `stop_session` beyond the current session, cross-session recall, and unscoped `get_memory_context` stay fenced. Intentional: deferred until concrete product callers exist.
+- **Residual `compact-commit` queue entries** — fail closed on every `runPending` (safe, explicit; recorded in open questions).
+- **Parent-relation moves** (WebUI move/promote, delete-detach) — the audit found one quiet wrong behavior: `setSessionParent`/`updateChildSessionParentIds` wrote the fenced child's authority from Main (an unhydrated stub write could corrupt it). Fixed: fenced parent moves are Main-owned catalog-only writes guarded by the fence checker; authority bytes are untouched.
+- **Other Main low-frequency surfaces** — pin/sidebarOrder/archive/displayName are pure catalog writes (open); fenced cwd/model/childModel/compact-threshold settings are explicitly rejected (worker-authority semantics, no safe Main write path in the first release); WebUI state/history/context-blocks/debug-file are read-only DTO/projection/detached paths.
+
+Activation gate checklist status:
+
+- ordinary channel/WebUI ingress and all normal event triggers use the durable Worker path — **met** (A2/A3).
+- inactive spawn, crash recovery, idle release, shutdown, and replacement preserve one exact authority — **met** (A1/A3/M-B + stale-busy recovery).
+- Main projection/history presentation never hydrates semantic state as a fallback — **met** (detached reads; handback clears hydrated stubs; facade/catalog-map-only existence checks; fenced parent moves catalog-only).
+- all normal default-schema tools either execute through the exact Worker owner or have a clearly reachable fixed Main service — **met** (M-C facade set + placement fences; managed/admin surfaces explicitly unavailable).
+- final delivery, waits, ToolScript persistence, archive/journal writes, and background exec completion have one supported path — **met** (verified in the production test environment, including the waitAfterHandoff chain).
+- publication ambiguity and Worker restart resynchronize before later mutation — **met** (M-B; poison/resync rules).
+- the production test environment has exercised the real path with `sessionWorkers:true` enabled — **met** (runtime verification; defects found there are fixed and regression-covered).
+- no security-isolation claim, persisted `stateRevision`, outbox, generic claim/lease protocol, or second turn state machine has been added — **met**.
 
 ### Final activation gate
 
