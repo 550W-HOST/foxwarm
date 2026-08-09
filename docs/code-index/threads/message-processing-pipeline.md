@@ -16,7 +16,7 @@ The interactive turn flow from channel input through authorization, queueing, pr
 8. When function calls exist, router publishes structured progress and calls `llm.executeTools`; normal dispatch resolves builtin, MCP, or node tools through permission-aware tool infrastructure.
 9. Tool results append to history and the loop returns to the provider. Mergeable queued follow-ups may join before the next call only when turn/source boundaries permit.
    A successful `waitAfterHandoff` handoff instead appends the complete tool result, arms the existing generic wait once, and stops recursion before another provider request.
-10. After a no-tool result has been appended canonically, Router performs one existing compatible leading-queue consume before delivery. If input for the same source boundary arrived while that provider request was in flight, it is appended as its own canonical message and the provider loop continues; otherwise the result is sent through direct source reply/session broadcast with `turnFinal:true`.
+10. After a no-tool result has been appended canonically, Router performs one existing compatible leading-queue consume before final delivery. If input for the same source boundary arrived while that provider request was in flight, it is appended as its own canonical message, the non-empty result is broadcast once as non-final intermediate text to eligible external channels, and the provider loop continues. Otherwise the result is sent through direct source reply/session broadcast with `turnFinal:true`.
 11. Router releases active state, may continue queued work, and calls `checkAndCompactIfNeeded` with final usage.
 
 `src/sessionManager.ts` stores/queues/triggers work but does not implement this loop.
@@ -72,12 +72,17 @@ instances or conversations remain hard boundaries, while ordinary unbound
 source behavior is unchanged. Platform `msg_id`/stream-card IDs remain in the
 serializable source as restart/fallback delivery metadata but do not split an
 otherwise compatible provider turn. The same compatibility check runs after a
-no-tool provider result but before final delivery, so matching input that
-arrived during that request continues the provider loop without publishing the
-intermediate result; a different boundary stays queued and the current final
-proceeds. Before a consumed input continues the loop, the same effective
-usage-threshold guard used after tool calls may request auto-compaction; the
-loop-top compact safe point applies it before the next provider request.
+no-tool provider result but before final delivery. Matching input that arrived
+during that request continues the provider loop only after the non-empty
+canonical result is broadcast once as non-final intermediate text with the
+same local external-channel options as model text preceding tool calls:
+Markdown enabled, WebUI excluded, and the current WeWork stream excluded.
+QQ delivery resolves the latest matching conversation context. Empty text is
+not sent. A different boundary stays queued and the current result proceeds as
+the ordinary final. Before a consumed input continues the loop, the same
+effective usage-threshold guard used after tool calls may request
+auto-compaction; the loop-top compact safe point applies it before the next
+provider request.
 Adapter ownership of the latest passive context is canonical in
 [D-channel-conversation-latest-passive-context](../modules/channels.md#d-channel-conversation-latest-passive-context).
 

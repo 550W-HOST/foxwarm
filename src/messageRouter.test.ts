@@ -585,6 +585,63 @@ test('MessageRouter leaves a different QQ conversation for provider call three a
   }
 });
 
+test('MessageRouter keeps a different QQ conversation separate at the pre-final safe point', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('qq_conversation_boundary_pre_final');
+  const originalChat = llm.chat;
+  const broadcasts: Array<{ text: string; options?: any }> = [];
+  let chatCalls = 0;
+  session.broadcast = (text: string, options?: any) => broadcasts.push({ text, options });
+
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+    chatCalls += 1;
+    if (parts) {
+      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    }
+    if (chatCalls === 1) {
+      await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'first conversation final' }] });
+      await sessionManager.enqueueSessionItem(session.id, {
+        type: 'user',
+        source: {
+          platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-b',
+          channelUserId: 'c2c:user-b', qqbotMessageId: 'qq-2',
+        },
+        parts: [{ text: 'different conversation input' }],
+      });
+      return { text: 'first conversation final', allParts: [{ text: 'first conversation final' }] };
+    }
+
+    assert.equal(userTextOccurrences(activeSession, 'different conversation input'), 1);
+    await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'second conversation final' }] });
+    return { text: 'second conversation final', allParts: [{ text: 'second conversation final' }] };
+  };
+
+  try {
+    await router.runSessionTurn(session.id, {
+      session,
+      preclaimed: true,
+      parts: [{ text: 'first conversation input' }],
+      source: {
+        platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a',
+        channelUserId: 'c2c:user-a', qqbotMessageId: 'qq-1',
+      },
+    });
+
+    assert.equal(chatCalls, 2);
+    assert.deepEqual(broadcasts.map(entry => entry.text), [
+      'first conversation final',
+      'second conversation final',
+    ]);
+    assert.equal(broadcasts.every(entry => entry.options?.turnFinal === true), true);
+    assert.equal(broadcasts.some(entry => entry.options?.parse_mode === 'Markdown'), false);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (llm as any).chat = originalChat;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
 test('MessageRouter applies pending auto-compaction before a late compatible follow-up provider call', async () => {
   const router = new MessageRouter() as any;
   const session = await createRouterQueueTestSession('late_followup_compaction_gate');

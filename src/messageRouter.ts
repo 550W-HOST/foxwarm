@@ -301,6 +301,22 @@ export class MessageRouter {
     };
   }
 
+  private broadcastIntermediateModelText(
+    broadcast: Session['broadcast'] | undefined,
+    turnOptions: Record<string, any>,
+    text: string,
+  ): boolean {
+    if (!broadcast || !shouldBroadcastChannelText(text)) {
+      return false;
+    }
+    const excludePlatforms = Array.from(new Set([
+      'webui',
+      ...(turnOptions.weworkStreamChannelId ? [turnOptions.weworkStreamChannelId] : []),
+    ]));
+    broadcast(text, { parse_mode: 'Markdown', excludePlatforms });
+    return true;
+  }
+
   private createLlmRetryNotifier(session: Session, broadcast: Session['broadcast'] | undefined): (event: llm.LlmRetryEvent) => Promise<void> {
     let retryMessage: Message | null = null;
 
@@ -1122,6 +1138,7 @@ export class MessageRouter {
         if (!result.toolCalls?.length) {
           const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(session, null, turnStreamKey);
           if (queuedAfterLlm.consumedInput) {
+            this.broadcastIntermediateModelText(broadcast, turnChannelOptions, result.text);
             await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration);
             iteration++;
             continue;
@@ -1133,12 +1150,7 @@ export class MessageRouter {
         const turnToolCalls = this.getTurnToolCalls(result.toolCalls, iteration);
 
         const hasBroadcastableToolText = shouldBroadcastChannelText(result.text);
-        if (hasBroadcastableToolText && broadcast) {
-          const excludePlatforms = Array.from(new Set([
-            'webui',
-            ...(turnChannelOptions.weworkStreamChannelId ? [turnChannelOptions.weworkStreamChannelId] : []),
-          ]));
-          broadcast(result.text, { parse_mode: 'Markdown', excludePlatforms });
+        if (this.broadcastIntermediateModelText(broadcast, turnChannelOptions, result.text)) {
           lastTextBroadcasted = true;
         }
 
