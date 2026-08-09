@@ -205,10 +205,13 @@ test('node exec rejects missing cwd with a friendly cwd-focused error', async ()
         { sessionId: 'shared-node-test-bad-cwd', session: { agent: agentName, currentNode: 'test-node' }, runtimeNodeId: 'test-node' },
       ),
       (err: any) => {
-        assert.match(String(err?.message || err), /working directory is invalid/i);
-        assert.match(String(err?.message || err), /Raw cwd/i);
-        assert.match(String(err?.message || err), /Resolved cwd/i);
-        assert.match(String(err?.message || err), /not a missing `\/bin\/bash`/i);
+        const message = String(err?.message || err);
+        assert.equal(
+          message,
+          `Cannot start exec on node \`test-node\`: working directory is invalid (path does not exist). Source: explicit. Raw cwd: \`${missing}\`. Resolved cwd: \`${missing}\`.`,
+        );
+        assert.doesNotMatch(message, /\/bin\/bash/i);
+        assert.doesNotMatch(message, /spawn .*ENOENT/i);
         return true;
       },
     );

@@ -74,6 +74,7 @@ Manages persistent (background) command execution with lifecycle tracking, log c
 ## Behavior
 
 - Spawns commands inside a generated wrapper script (bash on POSIX, PowerShell on Windows) that handles log redirection, exit code capture, and cwd recording via atomic file writes.
+- Spawn failures report the original launcher error and the already validated working directory without appending shell-vs-cwd diagnostic guidance.
 - The child process writes a paths JSON file so the parent can discover log/status/cwd paths without race conditions.
 - Tracks running processes in an in-memory map backed by a JSON registry file on disk, enabling recovery after restarts. Start, notification-mark, and removal mutations share one mutation/persistence chain so concurrent exec lifecycle changes cannot overwrite newer registry snapshots; concurrent initialization calls also share one load/reconcile operation.
 - A periodic reconcile loop polls status files of background processes and dispatches completion notifications via the configured `completionDispatcher`.
