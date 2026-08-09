@@ -504,17 +504,23 @@ export class SessionTurnRunner {
     };
   }
 
-  private latestCompatibleQueuedSource(session: Session, turnBoundary: SourceMergeBoundary): QueueSource | undefined {
-    let latest: QueueSource | undefined;
+  private inspectLeadingCompatibleQueuedTurnInputs(
+    session: Session,
+    turnBoundary: SourceMergeBoundary,
+  ): { hasInput: boolean; latestSource?: QueueSource } {
+    let hasInput = false;
+    let latestSource: QueueSource | undefined;
     for (const item of session.queue) {
       if (!isQueueItem(item)) continue;
       if (item.type === 'compact-commit') break;
       const queuedBoundary = this.getSourceMergeBoundary(item.source);
       if (queuedBoundary.preferDirectReply !== turnBoundary.preferDirectReply
         || (queuedBoundary.streamKey && queuedBoundary.streamKey !== turnBoundary.streamKey)) break;
-      if (item.source) latest = item.source;
+      if (!item.message && !item.parts?.length) continue;
+      hasInput = true;
+      if (item.source) latestSource = item.source;
     }
-    return latest;
+    return { hasInput, latestSource };
   }
 
   private async appendQueuedTurnInputs(session: Session, sessionId: string, items: QueueItem[]): Promise<void> {
@@ -859,12 +865,53 @@ export class SessionTurnRunner {
     return true;
   }
 
-  private async sendFinalResponse(session: Session, sourceCtx: ChannelContext | undefined, source: QueueSource | undefined, response: string, alreadyBroadcasted: boolean, turnOptions?: Record<string, any>): Promise<boolean> {
-    if (!alreadyBroadcasted && shouldBroadcastChannelText(response)) {
-      await this.sendSessionReply(session, sourceCtx, response, this.mergeTurnOptions(turnOptions || {}, { excludePlatforms: ['webui'], turnFinal: true }), source);
+  private async deliverProviderResultText(
+    session: Session,
+    sourceCtx: ChannelContext | undefined,
+    source: QueueSource | undefined,
+    text: string,
+    willContinue: boolean,
+    broadcast: Session['broadcast'] | undefined,
+    turnOptions: Record<string, any>,
+  ): Promise<boolean> {
+    if (willContinue) {
+      return this.deliverIntermediateModelText(session, source, text, broadcast, turnOptions);
+    }
+    if (source && this.host.deliverCommittedFinal) {
+      if (shouldBroadcastChannelText(text)) {
+        await this.host.deliverCommittedFinal(session, source, text, 'response');
+        return true;
+      }
+      if (source.weworkStreamId) {
+        await this.host.deliverCommittedFinal(session, source, '', 'empty-final');
+      }
+      return false;
+    }
+    if (shouldBroadcastChannelText(text)) {
+      await this.sendSessionReply(
+        session,
+        sourceCtx,
+        text,
+        this.mergeTurnOptions(turnOptions, { excludePlatforms: ['webui'], turnFinal: true }),
+        source,
+      );
       return true;
     }
+    this.sendEmptyTurnFinal(broadcast, turnOptions);
     return false;
+  }
+
+  private async finishTurnAfterIntermediate(
+    session: Session,
+    source: QueueSource | undefined,
+    broadcast: Session['broadcast'] | undefined,
+    turnOptions: Record<string, any>,
+  ): Promise<void> {
+    if (source?.weworkStreamId && this.host.deliverCommittedFinal) {
+      await this.host.deliverCommittedFinal(session, source, '', 'empty-final');
+      return;
+    }
+    this.sendEmptyTurnFinal(broadcast, turnOptions);
   }
 
   private async sendSessionError(session: Session, sourceCtx: ChannelContext | undefined, error: any, turnOptions?: Record<string, any>, source?: QueueSource): Promise<void> {
@@ -946,9 +993,7 @@ export class SessionTurnRunner {
       }
       let queuedItems = options.queuedItems;
       let iteration = 0;
-      let finalResponse = '';
-      let finalUsage = null;
-      let lastTextBroadcasted = false;
+      let finalUsage: TokenUsage | undefined;
       while (iteration < 500) {
         const pendingCompaction = await this.runPendingCompactionIfNeeded(sessionId, session);
         if (pendingCompaction === 'continued') {
@@ -964,7 +1009,7 @@ export class SessionTurnRunner {
           parts = null;
         }
 
-        const queuedBeforeSource = this.latestCompatibleQueuedSource(session, turnBoundary);
+        const queuedBeforeSource = this.inspectLeadingCompatibleQueuedTurnInputs(session, turnBoundary).latestSource;
         const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, turnBoundary);
         parts = queuedBeforeLlm.parts;
         if (queuedBeforeSource) {
@@ -976,10 +1021,9 @@ export class SessionTurnRunner {
           logger.info({ sessionId: session.id }, 'Session stopping flag detected, halting tool call loop');
           stoppedByUser = true;
           await this.host.saveSession(session);
-
-          finalResponse = finalResponse
-            ? finalResponse + '\n\n_[Execution stopped by user]_'
-            : '_[Execution stopped by user]_';
+          await this.deliverProviderResultText(
+            session, options.sourceCtx, turnSource, '_[Execution stopped by user]_', false, broadcast, turnChannelOptions,
+          );
           break;
         }
 
@@ -1009,10 +1053,9 @@ export class SessionTurnRunner {
             logger.info({ sessionId: session.id }, 'In-flight LLM request aborted by stop signal');
             stoppedByUser = true;
             await this.host.saveSession(session);
-
-            finalResponse = finalResponse
-              ? finalResponse + '\n\n_[Execution stopped by user]_'
-              : '_[Execution stopped by user]_';
+            await this.deliverProviderResultText(
+              session, options.sourceCtx, turnSource, '_[Execution stopped by user]_', false, broadcast, turnChannelOptions,
+            );
             break;
           }
           throw e;
@@ -1023,7 +1066,6 @@ export class SessionTurnRunner {
         // compact commit between tool iterations would replay this turn's user
         // input in the next provider request.
         parts = null;
-        finalResponse = result.text;
         finalUsage = result.usage;
 
         if (result.usage) {
@@ -1035,32 +1077,42 @@ export class SessionTurnRunner {
         // point so compatible follow-ups received during the provider request
         // participate in the same canonical runner semantics as local queues.
         await this.host.ingestPendingQueue?.(session);
-        const providerTimeSource = this.latestCompatibleQueuedSource(session, turnBoundary);
-        if (providerTimeSource) {
-          turnSource = providerTimeSource;
+        const providerTimeQueue = this.inspectLeadingCompatibleQueuedTurnInputs(session, turnBoundary);
+        if (providerTimeQueue.latestSource) {
+          turnSource = providerTimeQueue.latestSource;
           turnChannelOptions = this.getTurnChannelOptions(undefined, turnSource);
         }
+        // Decide this result's finality from a non-mutating queue view. Queue
+        // rows append only after this text and, for tools, after the tool row.
+        const hasTools = !!result.toolCalls?.length;
+        const willContinue = hasTools || providerTimeQueue.hasInput;
+        const iterationTextHandled = await this.deliverProviderResultText(
+          session,
+          options.sourceCtx,
+          turnSource,
+          result.text,
+          willContinue,
+          broadcast,
+          turnChannelOptions,
+        );
 
-        if (!result.toolCalls?.length) {
-          const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(session, null, turnBoundary);
-          if (queuedAfterLlm.consumedInput) {
-            lastTextBroadcasted = await this.deliverIntermediateModelText(
-              session, turnSource, result.text, broadcast, turnChannelOptions,
-            ) || lastTextBroadcasted;
+        if (!hasTools) {
+          if (providerTimeQueue.hasInput) {
+            const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(session, null, turnBoundary);
+            if (!queuedAfterLlm.consumedInput) {
+              await this.finishTurnAfterIntermediate(session, turnSource, broadcast, turnChannelOptions);
+              break;
+            }
             await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration);
             iteration++;
             continue;
           }
-          lastTextBroadcasted = false;
           break;
         }
 
-        const turnToolCalls = this.getTurnToolCalls(result.toolCalls, iteration);
+        const turnToolCalls = this.getTurnToolCalls(result.toolCalls!, iteration);
 
         const hasBroadcastableToolText = shouldBroadcastChannelText(result.text);
-        lastTextBroadcasted = await this.deliverIntermediateModelText(
-          session, turnSource, result.text, broadcast, turnChannelOptions,
-        ) || lastTextBroadcasted;
 
         this.emitTurnProgress(broadcast, turnChannelOptions, {
           type: 'tool-calls-start',
@@ -1138,6 +1190,7 @@ export class SessionTurnRunner {
           };
           setManagedSessionState(session, managedStateAfterTools);
           managedStepYieldReason = 'tool';
+          await this.finishTurnAfterIntermediate(session, turnSource, broadcast, turnChannelOptions);
           break;
         }
 
@@ -1145,20 +1198,28 @@ export class SessionTurnRunner {
           logger.info({ sessionId: session.id, iteration }, 'Session stopping flag detected after tool execution, halting tool call loop');
           stoppedByUser = true;
           await this.host.saveSession(session);
-
-          finalResponse = finalResponse
-            ? finalResponse + '\n\n_[Execution stopped by user]_'
-            : '_[Execution stopped by user]_';
+          // Preserve the existing Stop annotation only when this iteration had
+          // no non-empty model text to handle. This flag is iteration-local;
+          // it never participates in ordinary final-response suppression.
+          if (iterationTextHandled) {
+            await this.finishTurnAfterIntermediate(session, turnSource, broadcast, turnChannelOptions);
+          } else {
+            await this.deliverProviderResultText(
+              session, options.sourceCtx, turnSource, '_[Execution stopped by user]_', false, broadcast, turnChannelOptions,
+            );
+          }
           break;
         }
 
         if ((toolResultMsg as any).__toolLoopControl?.stopCurrentTurn) {
           logger.info({ sessionId: session.id, iteration }, 'Tool requested immediate turn stop');
+          await this.finishTurnAfterIntermediate(session, turnSource, broadcast, turnChannelOptions);
           break;
         }
 
         if (waitForReply) {
           logger.info({ sessionId: session.id, iteration }, 'Successful handoff requested a generic reply wait');
+          await this.finishTurnAfterIntermediate(session, turnSource, broadcast, turnChannelOptions);
           break;
         }
 
@@ -1169,7 +1230,7 @@ export class SessionTurnRunner {
         }
 
         await this.host.ingestPendingQueue?.(session);
-        const toolTimeSource = this.latestCompatibleQueuedSource(session, turnBoundary);
+        const toolTimeSource = this.inspectLeadingCompatibleQueuedTurnInputs(session, turnBoundary).latestSource;
         if (toolTimeSource) {
           turnSource = toolTimeSource;
           turnChannelOptions = this.getTurnChannelOptions(undefined, turnSource);
@@ -1183,14 +1244,15 @@ export class SessionTurnRunner {
       }
 
       if (iteration >= 500) {
-        finalResponse = 'Error: Too many tool call iterations';
-      }
-
-      const response = finalResponse;
-      const usage = finalUsage;
-
-      if (usage) {
-        session.stats.lastUsage = usage;
+        await this.deliverProviderResultText(
+          session,
+          options.sourceCtx,
+          turnSource,
+          'Error: Too many tool call iterations',
+          false,
+          broadcast,
+          turnChannelOptions,
+        );
       }
 
       const managedStateAfterTurn = getManagedSessionState(session);
@@ -1203,19 +1265,17 @@ export class SessionTurnRunner {
         setManagedSessionState(session, managedStateAfterTurn);
       }
 
-      await this.maybeQueueChildReminder(session);
-      const workerFinal = this.host.deliverCommittedFinal && turnSource
-        ? (shouldBroadcastChannelText(response) && !lastTextBroadcasted
-          ? 'response'
-          : (turnSource.weworkStreamId ? 'empty-final' : undefined))
-        : undefined;
-      if (workerFinal) await this.host.deliverCommittedFinal!(session, turnSource!, workerFinal === 'empty-final' ? '' : response, workerFinal);
-      const finalSent = workerFinal ? true : await this.sendFinalResponse(session, options.sourceCtx, turnSource, response, lastTextBroadcasted, turnChannelOptions);
-      if (!finalSent) {
-        this.sendEmptyTurnFinal(broadcast, turnChannelOptions);
+      try {
+        await this.maybeQueueChildReminder(session);
+      } catch (error) {
+        // A terminal provider result has already made its one external final
+        // attempt. Child-reminder queueing is post-final maintenance: retain
+        // the underlying persistence/resync result, but never turn its failure
+        // into a synthetic model row or a second external final.
+        logger.error({ err: error, sessionId }, 'Post-final child reminder queueing failed');
       }
       if (!stoppedByUser) {
-        await this.host.checkAndCompactIfNeeded(sessionId, usage);
+        await this.host.checkAndCompactIfNeeded(sessionId, finalUsage);
       }
     } catch (e: any) {
       logger.error(e, 'Error handling message');

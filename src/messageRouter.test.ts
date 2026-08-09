@@ -748,7 +748,7 @@ test('MessageRouter active turns do not decode sentinel-like stream suffixes as 
   }
 });
 
-test('SessionTurnRunner uses snapshotted direct intent instead of a mutated live context flag', async () => {
+test('SessionTurnRunner terminal provider delivery uses snapshotted direct intent instead of a mutated live context flag', async () => {
   const router = new MessageRouter() as any;
   const directReplies: string[] = [];
   const broadcasts: string[] = [];
@@ -760,17 +760,17 @@ test('SessionTurnRunner uses snapshotted direct intent instead of a mutated live
   };
   const directSource = router.turnRunner.snapshotSource(ctx);
   ctx.preferDirectReply = false;
-  assert.equal(await router.turnRunner.sendFinalResponse(session, ctx, directSource, 'direct once', false, {}), true);
+  assert.equal(await router.turnRunner.deliverProviderResultText(session, ctx, directSource, 'direct once', false, session.broadcast, {}), true);
   assert.deepEqual(directReplies, ['direct once']);
   assert.deepEqual(broadcasts, []);
 
   ctx.preferDirectReply = true;
-  await router.turnRunner.sendFinalResponse(session, ctx, { platform: 'test', channelUserId: 'conversation-a' }, 'broadcast absent', false, {});
-  await router.turnRunner.sendFinalResponse(session, ctx, { platform: 'test', channelUserId: 'conversation-a', preferDirectReply: false }, 'broadcast false', false, {});
+  await router.turnRunner.deliverProviderResultText(session, ctx, { platform: 'test', channelUserId: 'conversation-a' }, 'broadcast absent', false, session.broadcast, {});
+  await router.turnRunner.deliverProviderResultText(session, ctx, { platform: 'test', channelUserId: 'conversation-a', preferDirectReply: false }, 'broadcast false', false, session.broadcast, {});
   assert.deepEqual(directReplies, ['direct once']);
   assert.deepEqual(broadcasts, ['broadcast absent', 'broadcast false']);
 
-  await router.turnRunner.sendFinalResponse(session, { ...ctx, reply: undefined }, directSource, 'fallback without callback', false, {});
+  await router.turnRunner.deliverProviderResultText(session, { ...ctx, reply: undefined }, directSource, 'fallback without callback', false, session.broadcast, {});
   assert.deepEqual(broadcasts, ['broadcast absent', 'broadcast false', 'fallback without callback']);
 });
 

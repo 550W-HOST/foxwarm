@@ -125,6 +125,41 @@ test('detached exact owner completes canonical foreground provider turn', async 
   }
 });
 
+test('local post-final child-reminder failure keeps one provider final and releases busy', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_runner_post_final_reminder_${Date.now()}`, 'provider input');
+  session.parentSessionId = 'parent-session';
+  const events: string[] = [];
+  const finals: Array<{ text: string; options?: any }> = [];
+  let postFinalCompactChecks = 0;
+  session.broadcast = (text, options) => { finals.push({ text, options }); };
+  const effects = createEffects(session, events);
+  const host = new LocalSessionTurnHost(effects, session, {
+    queueSessionSystemEvent: async () => { throw new Error('local reminder persistence failed'); },
+    checkAndCompactIfNeeded: async () => { postFinalCompactChecks += 1; },
+  });
+  const runner = new SessionTurnRunner(host);
+  const originalChat = llm.chat;
+  (llm as any).chat = async (parts: any, _owner: Session, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    await options.appendMessage({ role: 'model', parts: [{ text: 'provider success' }] });
+    return { text: 'provider success' };
+  };
+
+  try {
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+    assert.deepEqual(finals.map(item => [item.text, item.options?.turnFinal]), [['provider success', true]]);
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'model']);
+    assert.equal(session.history.some(message => JSON.stringify(message.parts).includes('local reminder persistence failed')), false);
+    assert.equal(session.queue.length, 0);
+    assert.equal(session.busy, false);
+    assert.equal(postFinalCompactChecks, 1);
+    assert.equal(events.filter(event => event.startsWith('persist:')).at(-1), 'persist:idle:2');
+  } finally {
+    (llm as any).chat = originalChat;
+  }
+});
+
 test('detached exact owner completes one real local-tool iteration', async () => {
   await initArchiveStore();
   const session = createSession(`detached_runner_tool_${Date.now()}`, 'set a goal');

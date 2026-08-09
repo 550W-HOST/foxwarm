@@ -195,6 +195,8 @@ test('worker publishes a no-tool result once when a compatible QQ follow-up arri
   };
   const latestSource = { ...firstSource, qqbotMessageId: 'qq-latest' };
   let storeRef: SessionWorkerStore | undefined;
+  let readDurableRef: (() => Record<string, any>) | undefined;
+  let latestProjection: any;
   let chatCalls = 0;
   (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
     if (parts) await options.appendMessage({ role: 'user', parts });
@@ -214,6 +216,7 @@ test('worker publishes a no-tool result once when a compatible QQ follow-up arri
   try {
     await withLocalHost(initial, async ({ host, store, readDurable }) => {
       storeRef = store;
+      readDurableRef = readDurable;
       store.enqueueIntent(initial.id, 'qq-initial', 'enqueue', {
         type: 'user', source: firstSource, parts: [{ text: 'initial request' }], queuedAt: Date.now(),
       });
@@ -228,10 +231,115 @@ test('worker publishes a no-tool result once when a compatible QQ follow-up arri
       }
       assert.equal(readDurable().lastAppliedMailboxId, 2);
       assert.equal(readDurable().busy, false);
-    }, true, undefined,
-      async (source, text, outcome) => { finals.push({ source, text, outcome }); },
-      async (source, text) => { intermediate.push({ source, text }); });
+    }, true, async projection => { latestProjection = structuredClone(projection); },
+      async (source, text, outcome) => {
+        assert.deepEqual(readDurableRef!().history.map((message: any) => message.role), ['user', 'model', 'user', 'model']);
+        finals.push({ source, text, outcome });
+      },
+      async (source, text) => {
+        assert.deepEqual(readDurableRef!().history.map((message: any) => message.role), ['user', 'model']);
+        assert.equal(readDurableRef!().queue.length, 1, 'compatible mailbox input remains queued until after intermediate delivery');
+        assert.equal(latestProjection.messageCount, 2, 'model publication precedes intermediate delivery');
+        intermediate.push({ source, text });
+      });
   } finally { (llm as any).chat = originalChat; }
+});
+
+test('worker keeps tool call/result adjacent while delivering text before appending a compatible follow-up', async () => {
+  const initial = baseSession('worker-tool-followup-adjacency');
+  const originalChat = llm.chat; const originalExecuteTools = llm.executeTools;
+  const source = {
+    platform: 'qqbot', channelId: 'qq-instance', channelType: 'qqbot',
+    channelUserId: 'c2c:openid', conversationId: 'c2c:openid', qqbotMessageId: 'qq-first',
+  };
+  let storeRef: SessionWorkerStore | undefined;
+  let readDurableRef: (() => Record<string, any>) | undefined;
+  const intermediate: string[] = []; const finals: string[] = [];
+  let chatCalls = 0;
+  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    chatCalls += 1;
+    if (chatCalls === 1) {
+      const toolCall = { id: 'adjacent-tool', name: 'session', args: { action: 'status' } };
+      await options.appendMessage({ role: 'model', parts: [{ text: 'tool text' }, { functionCall: toolCall }] });
+      storeRef!.enqueueIntent(initial.id, 'tool-followup', 'enqueue', {
+        type: 'user', source: { ...source, qqbotMessageId: 'qq-latest' }, parts: [{ text: 'after tool' }],
+      });
+      return { text: 'tool text', toolCalls: [toolCall], allParts: [{ text: 'tool text' }, { functionCall: toolCall }] };
+    }
+    assert.deepEqual(readDurableRef!().history.map((message: any) => message.role), ['user', 'model', 'tool', 'user']);
+    await options.appendMessage({ role: 'model', parts: [{ text: 'tool follow-up final' }] });
+    return { text: 'tool follow-up final' };
+  };
+  (llm as any).executeTools = async () => ({
+    role: 'tool',
+    parts: [{ functionResponse: { tool_use_id: 'adjacent-tool', name: 'session', response: { output: 'ok' } } }],
+  });
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      storeRef = store; readDurableRef = readDurable;
+      store.enqueueIntent(initial.id, 'tool-initial', 'enqueue', { type: 'user', source, parts: [{ text: 'run tool' }] });
+      await host.runPending(8);
+      assert.equal(chatCalls, 2);
+      assert.deepEqual(intermediate, ['tool text']);
+      assert.deepEqual(finals, ['tool follow-up final']);
+      assert.deepEqual(readDurable().history.map((message: any) => message.role), ['user', 'model', 'tool', 'user', 'model']);
+    }, true, undefined,
+      async (_source, text) => { finals.push(text); },
+      async (_source, text) => {
+        assert.deepEqual(readDurableRef!().history.map((message: any) => message.role), ['user', 'model']);
+        intermediate.push(text);
+      });
+  } finally { (llm as any).chat = originalChat; (llm as any).executeTools = originalExecuteTools; }
+});
+
+test('tool terminal paths never resend model text and close an active Worker WeWork stream', async t => {
+  const originalChat = llm.chat; const originalExecuteTools = llm.executeTools;
+  let mode: 'wait' | 'stop' | 'stop-empty' | 'managed' | 'tool-stop' = 'wait';
+  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    const toolCall = { id: `terminal-${mode}`, name: 'session', args: { action: 'status' } };
+    const text = mode === 'stop-empty' ? '' : `${mode} text`;
+    await options.appendMessage({ role: 'model', parts: [{ text }, { functionCall: toolCall }] });
+    return { text, toolCalls: [toolCall], allParts: [{ text }, { functionCall: toolCall }] };
+  };
+  (llm as any).executeTools = async (_calls: any, _context: any, session: Session) => {
+    if (mode === 'stop' || mode === 'stop-empty') session.stopping = true;
+    if (mode === 'managed') (session.meta as any).managedSession = {
+      ownerSessionId: 'owner', leaseId: 'lease', revision: 1, pendingInbox: [], openedAt: 1, leaseTouchedAt: 1,
+      currentStep: { stepId: 'step', runMode: 'tool' },
+    };
+    return {
+      role: 'tool',
+      parts: [{ functionResponse: { tool_use_id: `terminal-${mode}`, name: 'session', response: { output: 'ok' } } }],
+      ...(mode === 'wait' ? { __toolPostAction: { waitForReply: true } } : {}),
+      ...(mode === 'tool-stop' ? { __toolLoopControl: { stopCurrentTurn: true } } : {}),
+    };
+  };
+  try {
+    for (mode of ['wait', 'stop', 'stop-empty', 'managed', 'tool-stop'] as const) {
+      await t.test(mode, async () => {
+        const initial = baseSession(`worker-tool-terminal-${mode}`);
+        const intermediates: string[] = []; const finals: Array<{ text: string; outcome: string }> = [];
+        await withLocalHost(initial, async ({ host, store, readDurable }) => {
+          store.enqueueIntent(initial.id, `terminal-${mode}`, 'enqueue', {
+            type: 'user',
+            source: { platform: 'wework', channelId: 'wework', channelUserId: 'chat', conversationId: 'chat', weworkStreamId: `stream-${mode}` },
+            parts: [{ text: mode }],
+          });
+          await host.runPending(8);
+          assert.deepEqual(intermediates, mode === 'stop-empty' ? [] : [`${mode} text`]);
+          assert.deepEqual(finals, mode === 'stop-empty'
+            ? [{ text: '_[Execution stopped by user]_', outcome: 'response' }]
+            : [{ text: '', outcome: 'empty-final' }]);
+          assert.equal(readDurable().history.filter((message: any) => message.role === 'model').length, 1);
+          assert.equal(readDurable().busy, false);
+        }, true, undefined,
+          async (_source, text, outcome) => { finals.push({ text, outcome }); },
+          async (_source, text) => { intermediates.push(text); });
+      });
+    }
+  } finally { (llm as any).chat = originalChat; (llm as any).executeTools = originalExecuteTools; }
 });
 
 test('worker intermediate delivery failure is swallowed without poisoning later turns', async () => {
@@ -263,7 +371,7 @@ test('worker intermediate delivery failure is swallowed without poisoning later 
   } finally { (llm as any).chat = originalChat; }
 });
 
-test('worker suppresses a duplicate final after a tool stop when intermediate text was already delivered', async () => {
+test('worker tool-stop finalizes the iteration without a duplicate model-text delivery', async () => {
   const initial = baseSession('worker-intermediate-no-duplicate-final');
   const originalChat = llm.chat; const originalExecuteTools = llm.executeTools;
   let intermediateCalls = 0; let finalCalls = 0;
@@ -548,6 +656,48 @@ test('bound worker host closes reminders, awaits automatic compaction, and rejec
   } finally { (llm as any).chat = originalChat; }
   const sessionsFileAfter = await fs.pathExists(SESSIONS_FILE) ? await fs.readFile(SESSIONS_FILE) : null;
   assert.deepEqual(sessionsFileAfter, sessionsFileBefore);
+});
+
+test('Worker post-final child-reminder persistence failure resyncs authority without a second final', async () => {
+  const initial = baseSession('worker-post-final-reminder-failure');
+  initial.parentSessionId = 'parent-session';
+  const originalChat = llm.chat;
+  const finals: Array<{ text: string; outcome: string }> = [];
+  let latestProjection: any;
+  let reminderPersistFailed = false;
+  (llm as any).chat = async (parts: any, _session: Session, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    await options.appendMessage({ role: 'model', parts: [{ text: 'provider success' }] });
+    return { text: 'provider success' };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      const persistence = (host as any).persistence;
+      const persistActivated = persistence.persistActivated.bind(persistence);
+      persistence.persistActivated = async (session: Session, ...args: any[]) => {
+        if (!reminderPersistFailed && session.queue.some(item => JSON.stringify(item).includes('child-reminder'))) {
+          reminderPersistFailed = true;
+          throw new Error('reminder authority write failed');
+        }
+        return persistActivated(session, ...args);
+      };
+      store.enqueueIntent(initial.id, 'post-final-reminder', 'enqueue', {
+        type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'work' }],
+      });
+      await host.runPending(8);
+      assert.equal(reminderPersistFailed, true);
+      assert.deepEqual(finals, [{ text: 'provider success', outcome: 'response' }]);
+      assert.deepEqual(readDurable().history.map((message: any) => message.role), ['user', 'model']);
+      assert.equal(JSON.stringify(readDurable().history).includes('reminder authority write failed'), false);
+      assert.equal(readDurable().queue.length, 0);
+      assert.equal(readDurable().busy, false);
+      assert.equal(latestProjection.messageCount, 2);
+      assert.equal(latestProjection.queueLength, 0);
+      assert.equal(latestProjection.busy, false);
+    }, true,
+      async projection => { latestProjection = structuredClone(projection); },
+      async (_source, text, outcome) => { finals.push({ text, outcome }); });
+  } finally { (llm as any).chat = originalChat; }
 });
 
 test('postcommit publication failure preserves authority and poisons later mutation', async () => {

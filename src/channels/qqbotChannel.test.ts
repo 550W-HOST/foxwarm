@@ -852,8 +852,9 @@ test('QQ Bot source-bound final failure completes through MessageRouter without 
   const router = new MessageRouter() as any;
   const runner = router.turnRunner as any;
   const source = runner.snapshotSource(sourceCtx);
-  await runner.sendFinalResponse(
-    { broadcast: () => {} }, sourceCtx, source, 'model final', false,
+  const session = { broadcast: () => {} };
+  await runner.deliverProviderResultText(
+    session, sourceCtx, source, 'model final', false, session.broadcast,
     runner.getTurnChannelOptions(sourceCtx, source),
   );
   const outbound = calls.filter(call => String(call.url).includes('/v2/users/'));
