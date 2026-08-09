@@ -85,18 +85,24 @@ export class SessionWorkerHost {
   }
 
   async interrupt(): Promise<{ stopping: boolean; abortedInFlight: boolean }> {
-    // Two layers: the provider-request abort must be immediate, so it never
-    // waits on the serialized host chain; the stopping flag is a durable state
-    // mutation, so it is persisted transactionally on that same chain.
+    // Two layers. (1) The stop signal is immediate: abort the active provider
+    // request and set the in-memory stopping flag that the in-flight turn polls
+    // — neither may wait on the serialized host chain, or interrupting a wedged
+    // turn would hang behind that same turn (mirrors local requestSessionStop,
+    // which also signals through the shared in-memory flag). (2) Durability is
+    // serialized: the stopping flag is persisted transactionally on the host
+    // chain so it lands after the turn's own final writes; that persist is
+    // detached so a turn that ignores its abort can never block this RPC.
     const controller = this.activeAbort;
     const abortedInFlight = !!controller;
     controller?.abort();
-    await this.serialize(async () => {
-      await this.ensureLoaded();
+    await this.ensureLoaded();
+    this.session!.stopping = true;
+    void this.serialize(async () => {
       await this.fenceMutation();
       this.session!.stopping = true;
       await this.persistOwner();
-    });
+    }).catch(error => logger.error({ err: error, sessionId: this.identity.sessionId }, 'Session worker interrupt persistence failed'));
     return { stopping: true, abortedInFlight };
   }
 

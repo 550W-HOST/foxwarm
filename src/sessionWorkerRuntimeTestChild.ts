@@ -1,4 +1,7 @@
+import fs from 'fs-extra';
+import path from 'node:path';
 import { logger } from './common';
+import { STATE_DIR } from './config';
 import { executeMainManagementTool, initializeMainManagementTools, shutdownMainManagementTools } from './mainManagementTools';
 import { callMcpTool, initializeMcpExternalService, listMcpServers, shutdownMcpExternalService } from './mcpExternalService';
 import { copyBetweenNodes, executeRemoteNodeTool, initializeNodeExecution, listNodeTopology, shutdownNodeExecution, validateNodeSelection } from './nodeExecution';
@@ -72,9 +75,17 @@ async function start(): Promise<void> {
       const msgsOut = await executeMainManagementTool('get_session_messages', { sessionId: childId, count: 20 }, { sessionId: session.id });
       await options.appendMessage({ role: 'model', parts: [{ text: `list-output: ${listOut}\nmessages-output: ${msgsOut}` }] });
     }
-    // Simulates a wedged/mid-turn incarnation: generation 1's first turn never returns.
-    if (process.env.FOXWARM_TEST_HANG_TURN === '1' && process.env.FOXWARM_SESSION_WORKER_GENERATION === '1' && chatCount === 1) {
-      await new Promise(() => {});
+    // Simulates a wedged/mid-turn incarnation: generation 1's first turn
+    // registers an in-flight abort controller (like a real provider request)
+    // and never returns.
+    if (process.env.FOXWARM_TEST_HANG_TURN === '1' && session.id === String(process.env.FOXWARM_TEST_HANG_SESSION || '')
+      && process.env.FOXWARM_SESSION_WORKER_GENERATION === '1' && chatCount === 1) {
+      const controller = new AbortController();
+      options.currentSessionEffects.registerAbortController(session.id, controller);
+      try {
+        await fs.writeFile(path.join(STATE_DIR, `hang-started-${process.env.FOXWARM_SESSION_WORKER_SESSION_ID}`), '1');
+        await new Promise(() => {});
+      } finally { options.currentSessionEffects.clearAbortController(session.id, controller); }
     }
     if (options?.purpose === 'compact-plan' && process.env.FOXWARM_TEST_COMPACT_PLAN) {
       return { toolCalls: [{ name: COMPACT_PLAN_TOOL_NAME, args: JSON.parse(process.env.FOXWARM_TEST_COMPACT_PLAN) }] };

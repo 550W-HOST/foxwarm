@@ -137,7 +137,8 @@ export function createMainManagementToolServiceHandler(options: {
   const invokeGetSessionMessages = async (args: ToolArgs, sourceSessionId: string): Promise<unknown> => {
     const targetId = typeof args?.sessionId === 'string' ? args.sessionId : undefined;
     if (!targetId) throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'get_session_messages requires a sessionId.');
-    const target = await sessionManager.getExistingSession(targetId);
+    // Catalog-map-only: hydrating a worker-fenced stub would poison later local reads.
+    const target = sessionManager.getAllSessions().get(targetId);
     if (!target) return `Session \`${targetId}\` not found.`;
     // A worker-fenced target is served from its authoritative JSON via a
     // strictly read-only detached read; Main never hydrates it.
@@ -156,7 +157,7 @@ export function createMainManagementToolServiceHandler(options: {
         throw new RpcError('MAIN_MANAGEMENT_OPERATION_NOT_ALLOWED', `Main management operation is not allowed: ${String(operation)}`);
       }
       const args = normalizeArgs(input?.args);
-      const source = await sessionManager.getExistingSession(sourceSessionId);
+      const source = sessionManager.getAllSessions().get(sourceSessionId);
       if (!source) {
         throw new RpcError('MAIN_MANAGEMENT_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
       }
@@ -186,7 +187,7 @@ export function createMainManagementToolServiceHandler(options: {
       if (typeof input.timeoutSeconds !== 'number' || !Number.isFinite(input.timeoutSeconds) || input.timeoutSeconds <= 0) {
         throw new RpcError('MAIN_MANAGEMENT_INVALID_WAIT_TIMEOUT', 'timeoutSeconds must be a positive finite number.');
       }
-      const source = await sessionManager.getExistingSession(sourceSessionId);
+      const source = sessionManager.getAllSessions().get(sourceSessionId);
       if (!source) {
         throw new RpcError('MAIN_MANAGEMENT_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
       }

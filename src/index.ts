@@ -10,6 +10,8 @@ import { CommandHandler } from './commandHandler';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
 import { resumeSessionWorkerPendingIntents, SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
+import { teardownSessionWorkerForDelete } from './sessionWorkerDelete';
+import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 import { performSessionWorkerHandback } from './sessionWorkerHandback';
 import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { SessionWorkerStore } from './sessionWorkerStore';
@@ -231,8 +233,18 @@ async function start() {
         sessionManager.setSessionWorkerEnqueueSink(
             (sessionId, item) => sessionWorkerIngress!.enqueueEnsuringWorker(sessionId, item).then(() => {}),
         );
+        sessionManager.setSessionWorkerDeleteHandler(
+            sessionId => teardownSessionWorkerForDelete({ store: sessionWorkerStore!, supervisor: sessionWorkerSupervisor! }, sessionId),
+        );
+        sessionManager.setSessionWorkerForkSourceProvider(async sessionId => {
+            if (!sessionWorkerStore!.findOwnership(sessionId)) return undefined;
+            const catalog = sessionManager.getAllSessions().get(sessionId);
+            return catalog ? readDetachedWorkerSession(sessionId, catalog) : undefined;
+        });
         shutdownSessionWorkers = async () => {
             sessionManager.setSessionWorkerEnqueueSink(undefined);
+            sessionManager.setSessionWorkerDeleteHandler(undefined);
+            sessionManager.setSessionWorkerForkSourceProvider(undefined);
             await sessionWorkerSupervisor!.shutdown();
             sessionWorkerStore!.close();
         };
@@ -242,7 +254,7 @@ async function start() {
     // whether sessions execute locally or in supervised child workers.
     await sessionRuntime.initializeSessionRuntime(
         sessionWorkerStore && sessionWorkerSupervisor && sessionWorkerIngress
-            ? { worker: { store: sessionWorkerStore, registry: sessionWorkerSupervisor.projectionRegistry, ingress: sessionWorkerIngress } }
+            ? { worker: { store: sessionWorkerStore, registry: sessionWorkerSupervisor.projectionRegistry, ingress: sessionWorkerIngress, supervisor: sessionWorkerSupervisor } }
             : undefined,
     );
     await mainManagementTools.initializeMainManagementTools({ workerStore: sessionWorkerStore });

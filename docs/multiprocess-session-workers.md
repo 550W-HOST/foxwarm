@@ -115,9 +115,11 @@ Provide fixed services only for reachable normal callers that are still unavaila
 
 Implemented: the main-management facade gains bounded `create_child_session` (suffix/fork/message/handoff flags only), `session_list`, and `get_session_messages` operations. Reverse handlers bound to a worker also fence the expected generation/incarnation against the durable store and reject stale generations retryably. `fork=true` derives from the parent authority through a strictly read-only detached read passed as a never-persisted source override; Main never hydrates or writes the fenced parent. Cross-session message reads for fenced targets likewise use detached reads without rehydrating the Main catalog session. Cross-session control/settings (other-session stop/dequeue/retry/settings), `stop_session` beyond the current session, recall beyond the current session, and unscoped `get_memory_context` remain explicitly retryable-unsupported until concrete product callers exist. Real-child tests cover worker child creation plus reply delivery through each session's own worker, facade queries, read-only fork (parent bytes and cursor unchanged), stale-generation rejection, and bounded-arg validation.
 
-### M-D — close concrete destructive lifecycle operations
+### M-D — close concrete destructive lifecycle operations ✅ completed
 
 For stop/delete/archive/fork or other destructive operations, define each supported operation's authority reload, generation fence, persistence, and replacement behavior. Implement a real closed operation rather than a generic mutation protocol.
+
+Implemented per operation: **stop** — control `stop` on a fenced session routes to the worker runtime `interrupt` through the exact supervisor fence; the interrupt signals immediately (in-memory stopping flag plus provider-request abort, never queued behind the serialized host chain) and persists `stopping=true` transactionally on that chain detached, so interrupting a wedged turn cannot hang the RPC; Main mirrors stopping with a catalog-only stub write. dequeue/retry stay explicitly retryable-unsupported. **delete** — sessionManager delete entry points route fenced sessions through the delete hook: interrupt any active turn, graceful supervisor stop with handback, durable fence/mailbox deletion requiring an inactive fence, then ordinary local authority/catalog/archive deletion; any lifecycle failure (for example a handback wedge or an unconfirmed exit) fails closed and never touches the authority, and a stopped worker never resurrects a deleted authority. **fork** — a fenced source derives from a read-only detached authority snapshot via the session-manager fork-source provider (parent bytes and cursor untouched, no hydration). **archive/displayName** — Main-owned presentation metadata stays open as catalog-only writes; other settings stay closed. Handback additionally clears any hydrated stub history so post-release reads lazily rehydrate the fresh authority (fixes the stale-presentation path where a stub hydrated during the fence became a wrong semantic source after release); the main-management facade existence checks are catalog-map-only and no longer hydrate fenced stubs.
 
 ### M-E — optional managed/admin closure
 
@@ -176,6 +178,7 @@ FOXWARM_SYNC_FILE_LOG=1 node --test --test-concurrency=1 \
   lib/sessionWorkerHandback.test.js \
   lib/sessionWorkerCrossSession.test.js \
   lib/sessionWorkerCrashRecovery.test.js \
+  lib/sessionWorkerDestructive.test.js \
   lib/sessionWorkerSupervisor.test.js \
   lib/sessionWorkerHost.test.js \
   lib/sessionRuntimeService.test.js \

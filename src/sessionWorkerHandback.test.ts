@@ -3,7 +3,8 @@ import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { serializeSessionHistoryPayload } from './session/metadataStore';
+import * as sessionManager from './sessionManager';
+import { getSessionHistoryFilePath, serializeSessionHistoryPayload } from './session/metadataStore';
 import { performSessionWorkerHandback } from './sessionWorkerHandback';
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
@@ -184,4 +185,56 @@ test('active background exec blocks idle release until its durable completion', 
     assert.ok(stub.meta!.lastMessageTime! > 0);
     assert.equal(fixture.store.getOwnership(sessionId).mailboxCursor, authority.lastAppliedMailboxId);
   } finally { await fixture.close(); }
+});
+
+test('handback clears hydrated stub state so later reads rehydrate the fresh authority', async () => {
+  const sessionId = `mc-stale-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-stale-'));
+  const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
+  const sourceContexts = new SessionWorkerSourceContextRegistry();
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  const realStatePath = getSessionHistoryFilePath(sessionId);
+  const supervisor = new SessionWorkerSupervisor({
+    store, idleMs: 150, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
+    workerEnv: { FOXWARM_DATA_DIR: root }, resolveExactFinalSourceContext: sourceContexts.resolve,
+    handbackWorker: identity => performSessionWorkerHandback({
+      store,
+      getCatalogSession: id => sessionManager.getAllSessions().get(id),
+      upsertCatalogSession: session => sessionManager.getAllSessions().set(session.id, session),
+      saveCatalog: () => sessionManager.saveSessionsMetadata(),
+      stateFilePath: () => statePath,
+    }, identity),
+  });
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id);
+  try {
+    // A stub polluted by a past Main-side hydration: 16 fake stale messages.
+    const polluted = baseSession(sessionId);
+    polluted.history = Array.from({ length: 16 }, (_, i) => ({ role: 'user', parts: [{ text: `stale message ${i}` }] })) as any;
+    polluted.meta = { lastMessageTime: 1 };
+    sessionManager.getAllSessions().set(sessionId, polluted);
+
+    await supervisor.reconcileStartupOwnerships();
+    await ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'fresh input' }] });
+    assert.equal(sessionManager.getAllSessions().get(sessionId)!.history.length, 16, 'the worker never touches the Main stub');
+    await waitFor(() => store.getOwnership(sessionId).state === 'inactive');
+
+    // Handback cleared the hydrated copy; the stub is a pure presentation mirror again.
+    const stub = sessionManager.getAllSessions().get(sessionId)!;
+    assert.equal(stub.history.length, 0, 'handback clears the hydrated stub history');
+    assert.ok(stub.meta!.lastMessageTime! > 1, 'presentation fields still mirror the authority');
+
+    // Bridge the split test state root; later reads lazily rehydrate the fresh authority.
+    await fs.copy(statePath, realStatePath);
+    const rehydrated = await sessionManager.getExistingSession(sessionId);
+    assert.ok(JSON.stringify(rehydrated!.history).includes('deterministic child answer'), 'reads serve the fresh authority, not the stale stub');
+    assert.ok(!JSON.stringify(rehydrated!.history).includes('stale message 0'));
+  } finally {
+    await supervisor.shutdown(5_000).catch(() => {});
+    store.close();
+    sessionManager.getAllSessions().delete(sessionId);
+    await fs.remove(realStatePath).catch(() => {});
+    await sessionManager.saveSessionsMetadata().catch(() => {});
+    await fs.remove(root);
+  }
 });

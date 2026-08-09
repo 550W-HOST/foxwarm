@@ -1457,7 +1457,8 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
   // sourceOverride lets a trusted caller (e.g. the Main management facade)
   // supply a detached read-only snapshot of a worker-owned authority instead
   // of hydrating it into Main. Overrides are never persisted back.
-  const sourceSession = options?.sourceOverride || await getSessionUnlocked(sourceSessionId);
+  const detachedSource = options?.sourceOverride || await workerForkSourceProvider?.(sourceSessionId);
+  const sourceSession = detachedSource || await getSessionUnlocked(sourceSessionId);
   const realSourceSessionId = sourceSession.id || sourceSessionId;
   const newSessionId = await allocateForkSessionId(realSourceSessionId, suffix, isChildSession);
   const sourcePreviousPromptCacheKey = sourceSession.promptCacheKey;
@@ -2120,6 +2121,7 @@ async function enqueueSessionItemForLoadedSession(session: Session, item: QueueI
 
 let workerEnqueueSink: ((sessionId: string, item: QueueItem) => Promise<void>) | undefined;
 let workerDeleteHandler: ((sessionId: string) => Promise<boolean>) | undefined;
+let workerForkSourceProvider: ((sessionId: string) => Promise<Session | undefined>) | undefined;
 
 export function setSessionWorkerEnqueueSink(handler: ((sessionId: string, item: QueueItem) => Promise<void>) | undefined): void {
   workerEnqueueSink = handler;
@@ -2134,6 +2136,16 @@ export function setSessionWorkerEnqueueSink(handler: ((sessionId: string, item: 
  */
 export function setSessionWorkerDeleteHandler(handler: ((sessionId: string) => Promise<boolean>) | undefined): void {
   workerDeleteHandler = handler;
+}
+
+/**
+ * Registers the Session-worker fork source resolver. When set, forkSession
+ * derives a worker-fenced source from this read-only detached snapshot instead
+ * of hydrating the fenced authority into Main; unfenced sessions resolve to
+ * undefined and keep ordinary local semantics.
+ */
+export function setSessionWorkerForkSourceProvider(provider: ((sessionId: string) => Promise<Session | undefined>) | undefined): void {
+  workerForkSourceProvider = provider;
 }
 
 export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
@@ -2550,6 +2562,7 @@ export async function setSessionCompactThreshold(sessionId: string, thresholdTok
  */
 export async function deleteSession(sessionId: string, owningClaimId?: string): Promise<boolean> {
   assertSessionDestructiveMutationAllowed([sessionId], 'be deleted', owningClaimId);
+  if (workerDeleteHandler) await workerDeleteHandler(sessionId);
   clearActiveSessionRuntimeState(sessionId);
 
   if (!sessions.has(sessionId)) {

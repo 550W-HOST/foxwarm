@@ -82,6 +82,10 @@ export async function performSessionWorkerHandback(
   // displayName is presentation metadata: adopt the authority value when present,
   // but never erase a Main-owned name the authority does not carry.
   if (typeof raw.displayName === 'string' && raw.displayName) stub.displayName = raw.displayName;
+  // The stub must never become a semantic source: any hydrated history (for
+  // example from a past Main-side existence check) is cleared so later reads
+  // lazily rehydrate the fresh authority instead of serving stale copies.
+  stub.history = [];
   if (!existing) deps.upsertCatalogSession(stub);
   await deps.saveCatalog();
 }

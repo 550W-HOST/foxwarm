@@ -32,11 +32,10 @@ test('named wait-timeout method validates exact DTO and does not expand model op
   const sourceId = `main_wait_schedule_${Date.now()}`;
   const source = session(sourceId);
   const originals = {
-    getExisting: sessionManager.getExistingSession,
     create: timers.createWaitTimeoutTimer,
   };
   const calls: any[] = [];
-  (sessionManager as any).getExistingSession = async (id: string) => id === sourceId ? source : null;
+  sessionManager.getAllSessions().set(sourceId, source);
   (timers as any).createWaitTimeoutTimer = async (args: any) => { calls.push(structuredClone(args)); return { id: 'timer' }; };
 
   try {
@@ -58,7 +57,7 @@ test('named wait-timeout method validates exact DTO and does not expand model op
       { code: 'MAIN_MANAGEMENT_OPERATION_NOT_ALLOWED' });
     assert.equal(calls.length, 1);
   } finally {
-    (sessionManager as any).getExistingSession = originals.getExisting;
+    sessionManager.getAllSessions().delete(sourceId);
     (timers as any).createWaitTimeoutTimer = originals.create;
     await resetService();
   }
@@ -69,25 +68,21 @@ test('bound reverse handler rejects wrong source before lookup or mutation', asy
   registry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ expectedSourceSessionId: 'owned' }));
   const transport = new LocalRpcTransport(registry);
   const client = new RpcClient(mainManagementToolServiceDescriptor, transport);
-  const originalLookup = sessionManager.getExistingSession;
   const originalCreate = timers.createWaitTimeoutTimer;
-  let lookups = 0;
   let timerWrites = 0;
-  (sessionManager as any).getExistingSession = async (id: string): Promise<Session | null> => { lookups += 1; return id === 'owned' ? session(id) : null; };
+  sessionManager.getAllSessions().set('owned', session('owned'));
   (timers as any).createWaitTimeoutTimer = async () => { timerWrites += 1; return { id: 'timer' }; };
   try {
     await assert.rejects(() => client.call('execute', { sourceSessionId: 'wrong', operation: 'list_agents', args: {} }),
       { code: 'MAIN_MANAGEMENT_SOURCE_MISMATCH' });
     await assert.rejects(() => client.call('scheduleWaitTimeout', { sourceSessionId: 'wrong', waitId: 'w', timeoutSeconds: 1 }),
       { code: 'MAIN_MANAGEMENT_SOURCE_MISMATCH' });
-    assert.equal(lookups, 0);
     assert.equal(timerWrites, 0);
     assert.deepEqual(await client.call('scheduleWaitTimeout', { sourceSessionId: 'owned', waitId: 'w', timeoutSeconds: 1 }),
       { scheduled: true, waitId: 'w' });
-    assert.equal(lookups, 1);
     assert.equal(timerWrites, 1);
   } finally {
-    (sessionManager as any).getExistingSession = originalLookup;
+    sessionManager.getAllSessions().delete('owned');
     (timers as any).createWaitTimeoutTimer = originalCreate;
     await transport.drain(); transport.close();
   }
@@ -120,10 +115,9 @@ test('accepted wait-timeout schedule drains and terminal fence rejects new calls
   await resetService();
   const sourceId = `main_wait_drain_${Date.now()}`;
   const originals = {
-    getExisting: sessionManager.getExistingSession,
     create: timers.createWaitTimeoutTimer,
   };
-  (sessionManager as any).getExistingSession = async () => session(sourceId);
+  sessionManager.getAllSessions().set(sourceId, session(sourceId));
   let enteredResolve!: () => void;
   const entered = new Promise<void>(resolve => { enteredResolve = resolve; });
   let releaseResolve!: () => void;
@@ -150,7 +144,7 @@ test('accepted wait-timeout schedule drains and terminal fence rejects new calls
     assert.deepEqual(getMainManagementToolServiceStatus(), { placement: 'local', ready: false });
   } finally {
     releaseResolve();
-    (sessionManager as any).getExistingSession = originals.getExisting;
+    sessionManager.getAllSessions().delete(sourceId);
     (timers as any).createWaitTimeoutTimer = originals.create;
     if (getMainManagementToolServiceStatus().ready) await shutdownMainManagementTools();
     resetMainManagementToolsForTests();

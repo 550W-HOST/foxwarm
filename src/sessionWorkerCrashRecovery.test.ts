@@ -26,12 +26,12 @@ function baseSession(id: string): Session {
   } as Session;
 }
 
-function makeFixture(root: string) {
+function makeFixture(root: string, hangSessionId: string) {
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
   const sourceContexts = new SessionWorkerSourceContextRegistry();
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
-    workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_HANG_TURN: '1' },
+    workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_HANG_TURN: '1', FOXWARM_TEST_HANG_SESSION: hangSessionId },
     resolveExactFinalSourceContext: sourceContexts.resolve,
   });
   const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id);
@@ -54,7 +54,7 @@ async function crashMidTurn(root: string, fixture: ReturnType<typeof makeFixture
 test('stale busy from an unconfirmed exit recovers on the next durable ingress', async () => {
   const sessionId = `mc-crash-${Date.now()}`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-crash-'));
-  const fixture = makeFixture(root);
+  const fixture = makeFixture(root, sessionId);
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
   try {
@@ -78,7 +78,7 @@ test('stale busy from an unconfirmed exit recovers on the next durable ingress',
 test('startup resume eagerly recovers busy sessions without pending intents', async () => {
   const sessionId = `mc-resume-${Date.now()}`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-resume-'));
-  const fixture = makeFixture(root);
+  const fixture = makeFixture(root, sessionId);
   const rootStatePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   try {
     // The authority lives in the real Main state root (mirrored into the worker

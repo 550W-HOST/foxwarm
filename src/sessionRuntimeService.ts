@@ -15,6 +15,7 @@ import type { SessionWorkerProjection } from './sessionWorkerPersistence';
 import type { SessionWorkerProjectionEntry, SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
 import type { SessionWorkerIngressCoordinator, SessionWorkerIngressResult } from './sessionWorkerIngress';
+import type { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { normalizeSessionWorkerIngressRequest } from './sessionWorkerIngress';
 import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 
@@ -228,6 +229,7 @@ export type SessionRuntimeWorkerProjectionOptions = {
   store: SessionWorkerStore;
   registry: SessionWorkerProjectionRegistry;
   ingress?: SessionWorkerIngressCoordinator;
+  supervisor?: SessionWorkerSupervisor;
 };
 
 function requireSession(sessionId: string): Promise<Session> {
@@ -430,13 +432,6 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
     },
     async updateSettings(input) {
       const settingsSessionId = normalizeSessionId(input.sessionId);
-      if (options?.worker) {
-        const selection = workerSelection(settingsSessionId);
-        if (selection.kind !== 'local') {
-          throw new RpcError('SESSION_WORKER_CONTROL_UNSUPPORTED', 'Session settings updates are not supported by Session-worker placement yet.', true);
-        }
-      }
-      const session = await requireSession(settingsSessionId);
       if (!input.patch || typeof input.patch !== 'object' || Array.isArray(input.patch)) {
         throw new RpcError('SESSION_RUNTIME_INVALID_SETTING', 'patch must be an object.');
       }
@@ -461,6 +456,28 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         }
         normalizedThreshold = threshold === null || threshold === undefined ? null : Math.floor(threshold);
       }
+      if (options?.worker) {
+        const selection = workerSelection(settingsSessionId);
+        if (selection.kind !== 'local') {
+          // displayName is Main-owned presentation metadata: a fenced session
+          // accepts a displayName-only patch as a catalog-only write. Every
+          // other setting lives in the worker-owned authority and stays closed.
+          const stub = sessionManager.getAllSessions().get(selection.canonicalId);
+          const displayNameOnly = suppliedKeys.length > 0 && suppliedKeys.every(key => key === 'displayName')
+            && normalizedStrings.has('displayName');
+          if (!displayNameOnly || !stub) {
+            throw new RpcError('SESSION_WORKER_CONTROL_UNSUPPORTED', 'Session settings updates are not supported by Session-worker placement yet.', true);
+          }
+          const previous = settingsFromSession(stub);
+          const normalized = normalizedStrings.get('displayName')!;
+          const changed: Array<keyof SessionRuntimeSettingsPatchDto> = previous.displayName !== normalized ? ['displayName'] : [];
+          if (normalized === null) delete stub.displayName;
+          else stub.displayName = normalized;
+          if (changed.length > 0) await sessionManager.saveSessionsMetadata();
+          return { changed, previous, current: settingsFromSession(stub), session: buildSessionRuntimeSessionDto(stub) };
+        }
+      }
+      const session = await requireSession(settingsSessionId);
       const previous = settingsFromSession(session);
       const changed: Array<keyof SessionRuntimeSettingsPatchDto> = [];
       for (const [key, normalized] of normalizedStrings) {
@@ -489,7 +506,26 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       if (options?.worker) {
         const selection = workerSelection(sessionId);
         if (selection.kind !== 'local') {
-          throw new RpcError('SESSION_WORKER_CONTROL_UNSUPPORTED', 'stop, dequeue, and retry are not supported by Session-worker placement yet.', true);
+          if (input.action === 'stop' && options.worker.supervisor) {
+            // Closed stop for a worker-fenced session: the interrupt aborts the
+            // active provider request immediately (never queued behind the
+            // in-flight turn) and persists stopping=true transactionally on the
+            // worker's serialized chain. The Main stub mirrors stopping via a
+            // catalog-only write; the authority stays worker-owned. An inactive
+            // or crashed worker has nothing running to stop.
+            const ownership = options.worker.store.findOwnership(selection.canonicalId);
+            if (ownership && options.worker.supervisor.getStatus(selection.canonicalId)?.ready) {
+              const interrupt = await options.worker.supervisor.interruptActivated(selection.canonicalId, ownership);
+              const stub = sessionManager.getAllSessions().get(selection.canonicalId);
+              if (stub) {
+                stub.stopping = true;
+                await sessionManager.saveSessionsMetadata();
+              }
+              return { action: 'stop', abortedInFlight: interrupt.abortedInFlight };
+            }
+            return { action: 'stop', abortedInFlight: false };
+          }
+          throw new RpcError('SESSION_WORKER_CONTROL_UNSUPPORTED', 'dequeue and retry are not supported by Session-worker placement yet.', true);
         }
       }
       if (input.action === 'stop') {
