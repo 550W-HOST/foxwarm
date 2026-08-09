@@ -85,8 +85,9 @@ and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
   delivery uses that live ID for the matching configured instance and
   conversation, while other session attachments retain ordinary delivery.
   When a compatible follow-up arrives during a no-tool provider request, the
-  Router's pre-final safe point continues the turn before this latest ID is
-  used for the one visible final.
+  Router's pre-final safe point sends that non-empty result once as a non-final
+  intermediate through the latest message ID, then continues the turn. The
+  later genuine final is sent separately with `turnFinal`.
 - The gateway retains the latest dispatch sequence and READY session ID in
   memory. HELLO resumes only when both are present; RECONNECT, resumable and
   non-resumable INVALID_SESSION frames, documented close classes, heartbeat

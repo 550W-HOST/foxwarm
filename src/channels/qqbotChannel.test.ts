@@ -472,7 +472,7 @@ test('QQ Bot busy follow-up joins the active tool loop and one final uses its la
   }
 });
 
-test('QQ Bot follow-up arriving during the final provider request is absorbed before delivery', async () => {
+test('QQ Bot delivers a no-tool result before continuing a late compatible follow-up', async () => {
   const channelId = `qq-final-safe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const sessionId = `session-${channelId}`;
   const outbound: any[] = [];
@@ -491,6 +491,8 @@ test('QQ Bot follow-up arriving during the final provider request is absorbed be
   );
   const router = new MessageRouter([{ platform: 'qqbot', userId: 'openid-1' }]);
   const originalChat = llm.chat;
+  const sends: Array<{ conversationId: string; text: string; options?: any }> = [];
+  const originalSendMessage = channel.sendMessage.bind(channel);
   let firstRequestStarted!: () => void;
   let releaseFirstRequest!: () => void;
   const firstRequestStartedPromise = new Promise<void>(resolve => { firstRequestStarted = resolve; });
@@ -498,6 +500,10 @@ test('QQ Bot follow-up arriving during the final provider request is absorbed be
   let chatCalls = 0;
 
   activateForDirectSend(channel);
+  (channel as any).sendMessage = async (conversationId: string, text: string, options?: any) => {
+    sends.push({ conversationId, text, options });
+    await originalSendMessage(conversationId, text, options);
+  };
   registerChannel(channelId, channel);
   channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
 
@@ -515,6 +521,12 @@ test('QQ Bot follow-up arriving during the final provider request is absorbed be
         await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'intermediate answer' }] });
         return { text: 'intermediate answer', allParts: [{ text: 'intermediate answer' }] };
       }
+      const intermediateSends = sends.filter(send => send.text === 'intermediate answer');
+      assert.equal(intermediateSends.length, 1, 'call one text must be sent before provider call two');
+      assert.equal(intermediateSends[0].conversationId, 'c2c:openid-1');
+      assert.equal(intermediateSends[0].options?.parse_mode, 'Markdown');
+      assert.equal(intermediateSends[0].options?.excludePlatforms?.includes('webui'), true);
+      assert.notEqual(intermediateSends[0].options?.turnFinal, true);
       assert.equal(activeSession.history.some(message => message.parts.some(part => part.system?.includes('late steering'))), true);
       await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'answer to late steering' }] });
       return { text: 'answer to late steering', allParts: [{ text: 'answer to late steering' }] };
@@ -535,10 +547,22 @@ test('QQ Bot follow-up arriving during the final provider request is absorbed be
 
     assert.equal(chatCalls, 2);
     assert.equal(session.history.filter(message => message.role === 'user').length, 2);
-    assert.equal(outbound.some(body => body.content === 'intermediate answer'), false);
+    assert.deepEqual(
+      session.history
+        .filter(message => message.role === 'model')
+        .map(message => message.parts.find(part => part.text)?.text),
+      ['intermediate answer', 'answer to late steering'],
+    );
+    const intermediate = outbound.filter(body => body.content === 'intermediate answer');
+    assert.equal(intermediate.length, 1);
+    assert.equal(intermediate[0].msg_id, 'qq-final-2');
+    assert.equal(sends.filter(send => send.text === 'intermediate answer').length, 1);
     const finals = outbound.filter(body => body.content === 'answer to late steering');
     assert.equal(finals.length, 1);
     assert.equal(finals[0].msg_id, 'qq-final-2');
+    const finalSends = sends.filter(send => send.text === 'answer to late steering');
+    assert.equal(finalSends.length, 1);
+    assert.equal(finalSends[0].options?.turnFinal, true);
   } finally {
     releaseFirstRequest?.();
     (llm as any).chat = originalChat;
