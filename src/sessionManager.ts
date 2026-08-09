@@ -863,7 +863,9 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
           throw new Error('Session history file disappeared during read');
         }
         const retryPendingUpgrade = needsAuthoritativeStateUpgrade;
-        needsAuthoritativeStateUpgrade = replaceAuthoritativeSessionState(session, historyData).upgradedLegacy || retryPendingUpgrade;
+        // displayName is Main-owned presentation metadata: preserve the Main
+        // value (including an explicit clear) across authoritative rehydration.
+        needsAuthoritativeStateUpgrade = replaceAuthoritativeSessionState(session, historyData, { preserveDisplayName: true }).upgradedLegacy || retryPendingUpgrade;
         if (needsAuthoritativeStateUpgrade) pendingAuthoritativeStateUpgrades.add(realId);
         if (historyData.indexingState) {
           // Check if indexing was interrupted

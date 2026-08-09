@@ -229,10 +229,14 @@ export const COMMANDS: Record<string, CommandDef> = {
     requiresSession: true,
     handler: async (ctx, _args, sessionId, session) => {
       if (!sessionId || !session) return
-      if (!session.busy) { ctx.reply('⚠️ Session is not currently running.'); return }
+      // Use the placement-neutral runtime view: under Session-worker placement
+      // the raw catalog stub's busy flag is only refreshed at handback, so it
+      // would falsely report "not running" mid-turn.
+      const runtime = await sessionRuntime.getSession(sessionId)
+      if (!runtime?.busy) { ctx.reply('⚠️ Session is not currently running.'); return }
       try {
         const { abortedInFlight } = await sessionRuntime.control(sessionId, 'stop')
-        const queuedNote = session.queue.length > 0
+        const queuedNote = (runtime.queueLength ?? 0) > 0
           ? ' Queued inputs will be added to history without being run.'
           : ''
         ctx.reply(abortedInFlight
@@ -264,8 +268,11 @@ export const COMMANDS: Record<string, CommandDef> = {
     requiresSession: true,
     handler: async (ctx, _args, sessionId, session) => {
       if (!sessionId || !session) return
-      if (session.busy) { ctx.reply('⚠️ Session is already running.'); return }
-      if (session.history.length === 0) { ctx.reply('⚠️ No history to retry.'); return }
+      // Placement-neutral view: the raw stub is an unhydrated catalog mirror
+      // for worker-fenced sessions.
+      const runtime = await sessionRuntime.getSession(sessionId)
+      if (runtime?.busy) { ctx.reply('⚠️ Session is already running.'); return }
+      if ((runtime?.messageCount ?? session.history.length) === 0) { ctx.reply('⚠️ No history to retry.'); return }
       try {
         ctx.reply('🔄 Retrying last request...')
         await sessionRuntime.control(sessionId, 'retry')

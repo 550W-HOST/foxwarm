@@ -4,17 +4,28 @@ import { annotateHistoryWithContextFrontierMetadata, renderHistoryFromFrontier }
 import { prepareSessionSemanticStateForHydration, replaceSessionSemanticState } from './metadataStore';
 import { externalizeAuthoritativeSessionImages } from './stateFile';
 
-/** Replace all semantic fields from one authoritative payload, upgrading only unversioned legacy files. */
+/** Replace all semantic fields from one authoritative payload, upgrading only unversioned legacy files.
+ * With `preserveDisplayName`, displayName is treated as Main-owned presentation
+ * metadata: the target's current value (including an explicit clear) survives
+ * hydration. Workers load without it, so their authority-carried name stays
+ * authoritative inside the worker; Main stubs pass it so a Main-owned rename
+ * is never rolled back by rehydration. */
 export function replaceAuthoritativeSessionState(
   target: Session,
   raw: Record<string, any>,
+  options?: { preserveDisplayName?: boolean },
 ): { session: Session; upgradedLegacy: boolean } {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new RpcError('SESSION_WORKER_STATE_INVALID', `Authoritative state for ${target.id} is not a session payload.`);
   }
   try {
     const prepared = prepareSessionSemanticStateForHydration(target, raw);
+    const mainOwnedDisplayName = options?.preserveDisplayName ? target.displayName : undefined;
     replaceSessionSemanticState(target, prepared.snapshot);
+    if (options?.preserveDisplayName) {
+      if (mainOwnedDisplayName === undefined) delete target.displayName;
+      else target.displayName = mainOwnedDisplayName;
+    }
     return { session: target, upgradedLegacy: prepared.upgradedLegacy };
   } catch (error: any) {
     if (error instanceof RpcError) throw error;

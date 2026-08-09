@@ -95,9 +95,12 @@ export class SessionWorkerHost {
     // detached so a turn that ignores its abort can never block this RPC.
     const controller = this.activeAbort;
     const abortedInFlight = !!controller;
-    controller?.abort();
     await this.ensureLoaded();
+    // Set the stop signal before aborting: the abort rejection reaches the
+    // runner through microtasks, and the stopped-turn path requires
+    // session.stopping to already be true (mirrors local requestSessionStop).
     this.session!.stopping = true;
+    controller?.abort();
     void this.serialize(async () => {
       await this.fenceMutation();
       this.session!.stopping = true;

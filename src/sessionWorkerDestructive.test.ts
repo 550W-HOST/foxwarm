@@ -227,3 +227,39 @@ test('parent moves on a fenced child stay catalog-only and never write the autho
     await fs.remove(root);
   }
 });
+
+test('interrupt aborts a slow provider request and ends the turn with stopped semantics', async () => {
+  const sessionId = `mc-slow-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-slow-'));
+  const fixture = makeFixture(root, { FOXWARM_TEST_SLOW_PROVIDER: '1', FOXWARM_TEST_SLOW_SESSION: sessionId });
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  try {
+    sessionManager.getAllSessions().set(sessionId, baseSession(sessionId));
+    await fixture.supervisor.reconcileStartupOwnerships();
+    const turn = fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'slow question' }] }).catch(error => error);
+    await waitFor(() => fs.pathExists(path.join(root, 'state', `slow-started-${sessionId}`)));
+
+    const stopped: any = await fixture.runtime.call('control', { sessionId, action: 'stop' });
+    assert.deepEqual(stopped, { action: 'stop', abortedInFlight: true }, 'interrupt aborts the in-flight provider request');
+
+    const started = Date.now();
+    const turnResult = await turn;
+    assert.ok(!(turnResult instanceof Error), `the stopped turn completes without an RPC error: ${(turnResult as any)?.message}`);
+    assert.ok(Date.now() - started < 8_000, 'the turn ends promptly after the abort instead of running the full slow request');
+    const authority = JSON.parse(await fs.readFile(statePath, 'utf8'));
+    const text = JSON.stringify(authority.history);
+    // Canonical local parity: the stopped-turn marker is channel presentation,
+    // not committed history; what matters is the slow answer is never appended
+    // or delivered and the stopping flag is durably persisted.
+    assert.ok(!text.includes('deterministic child answer'), 'the slow answer is never delivered');
+    assert.equal(authority.stopping, true, 'the stopping flag is durably persisted');
+    assert.equal(authority.busy, false, 'the turn released busy');
+  } finally {
+    fixture.transport.close();
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    sessionManager.getAllSessions().delete(sessionId);
+    await fs.remove(root);
+  }
+});

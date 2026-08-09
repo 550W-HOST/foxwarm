@@ -269,3 +269,60 @@ test('handback never rolls back a Main-owned displayName rename but adopts one i
     await fixture2.close();
   }
 });
+
+test('rehydration after release preserves the Main-owned displayName (rename and adopted worker name)', async () => {
+  const renamedId = `mc-rehydrate-${Date.now()}`;
+  const unnamedId = `${renamedId}-unnamed`;
+  const roots: string[] = [];
+  const stores: SessionWorkerStore[] = [];
+  const supervisors: SessionWorkerSupervisor[] = [];
+  async function run(sessionId: string, authorityDisplayName: string, stubDisplayName: string | undefined) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-rehydrate-'));
+    roots.push(root);
+    const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open(); stores.push(store);
+    const sourceContexts = new SessionWorkerSourceContextRegistry();
+    const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+    const authority = { ...baseSession(sessionId), displayName: authorityDisplayName } as Session;
+    await fs.outputJson(statePath, serializeSessionHistoryPayload(authority));
+    const supervisor = new SessionWorkerSupervisor({
+      store, idleMs: 150, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
+      workerEnv: { FOXWARM_DATA_DIR: root }, resolveExactFinalSourceContext: sourceContexts.resolve,
+      handbackWorker: identity => performSessionWorkerHandback({
+        store,
+        getCatalogSession: id => sessionManager.getAllSessions().get(id),
+        upsertCatalogSession: session => sessionManager.getAllSessions().set(session.id, session),
+        saveCatalog: () => sessionManager.saveSessionsMetadata(),
+        stateFilePath: () => statePath,
+      }, identity),
+    });
+    supervisors.push(supervisor);
+    const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id);
+    const stub = baseSession(sessionId);
+    if (stubDisplayName !== undefined) stub.displayName = stubDisplayName;
+    sessionManager.getAllSessions().set(sessionId, stub);
+    await supervisor.reconcileStartupOwnerships();
+    await ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'fresh input' }] });
+    await waitFor(() => store.getOwnership(sessionId).state === 'inactive');
+    // Bridge the split test state root, then force a lazy authoritative rehydration.
+    await fs.copy(statePath, getSessionHistoryFilePath(sessionId));
+    const rehydrated = await sessionManager.getExistingSession(sessionId);
+    return { rehydrated: rehydrated!, statePath };
+  }
+  try {
+    const renamed = await run(renamedId, 'authority-old-name', 'main-new-name');
+    assert.equal(renamed.rehydrated.displayName, 'main-new-name', 'rehydration never rolls back the Main-owned rename');
+    assert.ok(JSON.stringify(renamed.rehydrated.history).includes('deterministic child answer'), 'rehydration still serves the fresh authority');
+
+    const unnamed = await run(unnamedId, 'worker-self-name', undefined);
+    assert.equal(unnamed.rehydrated.displayName, 'worker-self-name', 'the adopted worker self-rename survives rehydration');
+  } finally {
+    for (const supervisor of supervisors) await supervisor.shutdown(3_000).catch(() => {});
+    for (const store of stores) store.close();
+    sessionManager.getAllSessions().delete(renamedId);
+    sessionManager.getAllSessions().delete(unnamedId);
+    await fs.remove(getSessionHistoryFilePath(renamedId)).catch(() => {});
+    await fs.remove(getSessionHistoryFilePath(unnamedId)).catch(() => {});
+    await sessionManager.saveSessionsMetadata().catch(() => {});
+    for (const root of roots) await fs.remove(root);
+  }
+});

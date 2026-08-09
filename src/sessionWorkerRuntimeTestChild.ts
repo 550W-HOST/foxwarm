@@ -87,6 +87,23 @@ async function start(): Promise<void> {
         await new Promise(() => {});
       } finally { options.currentSessionEffects.clearAbortController(session.id, controller); }
     }
+    // Simulates a slow provider request that honors its abort signal, like the
+    // real runner: the controller is registered for the in-flight request and
+    // the request rejects AbortError when interrupted.
+    if (process.env.FOXWARM_TEST_SLOW_PROVIDER === '1' && session.id === String(process.env.FOXWARM_TEST_SLOW_SESSION || '') && chatCount === 1) {
+      const controller = new AbortController();
+      options.currentSessionEffects.registerAbortController(session.id, controller);
+      try {
+        await fs.writeFile(path.join(STATE_DIR, `slow-started-${session.id}`), '1');
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 10_000);
+          controller.signal.addEventListener('abort', () => {
+            clearTimeout(timer);
+            reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
+          });
+        });
+      } finally { options.currentSessionEffects.clearAbortController(session.id, controller); }
+    }
     if (options?.purpose === 'compact-plan' && process.env.FOXWARM_TEST_COMPACT_PLAN) {
       return { toolCalls: [{ name: COMPACT_PLAN_TOOL_NAME, args: JSON.parse(process.env.FOXWARM_TEST_COMPACT_PLAN) }] };
     }
