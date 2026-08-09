@@ -20,10 +20,11 @@ and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
   runtime factory/status handling.
 - `buildQQBotAttachmentPreviewParts()` — creates URL-free metadata parts for
   attachment ingress before authorization and materialization.
-- `materializeQQBotAttachments()` — on Main-hosted sessions, streams allowlisted
-  HTTPS media, saves bounded generic descriptors, and emits transient image
-  parts after a best-effort supported-raster format probe. Isolated or
-  bound-node media is deferred with a controlled bounded error.
+- `materializeQQBotAttachments()` — streams allowlisted HTTPS media into a
+  bounded spool, saves generic descriptors, and emits transient image parts
+  after a best-effort supported-raster format probe. Main-hosted sessions use
+  the path-based atomic saver; isolated/bound-node sessions use the existing
+  whole-buffer saver only up to a fixed 10 MiB transfer cap.
 - `uploadQQBotFile()` — validates a prepared local `ChannelFile`, streams hashes
   and bounded part bodies through the C2C/group upload flow, enforces the
   Tencent-compatible 100 MiB local-send cap, and returns one opaque `file_info`
@@ -50,8 +51,9 @@ and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
   `author.member_openid`, or guild/DM `author.id`. This lets shared channel
   authorization use `allowedUsers` normally rather than treating a group or
   channel target as its sender.
-- The adapter accepts `content` plus attachments from `C2C_MESSAGE_CREATE` and
-  `GROUP_AT_MESSAGE_CREATE`. Attachment-only C2C/group events are retained as
+- The adapter accepts `content` plus attachments from `C2C_MESSAGE_CREATE`,
+  `GROUP_AT_MESSAGE_CREATE`, and (when `requireMention: false`) ordinary
+  `GROUP_MESSAGE_CREATE` events. Attachment-only C2C/group events are retained as
   safe filename/MIME/size metadata and can be materialized only after the
   canonical router has already authorized the sender. Supported raster images
   become transient inline parts and other direct files (including video/voice)
@@ -65,7 +67,9 @@ and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
   bounds, sanitizes names, and uses a best-effort supported-raster format probe;
   declared MIME and filenames remain hints and non-raster bytes stay generic.
   Default local limits are 20 MiB safe inline-image cap, 50 MiB generic-file
-  cap, 200 MiB total, and eight attachments; the image setting cannot exceed
+  cap, 200 MiB total, and eight attachments; isolated/bound-node transfers
+  additionally cap each downloaded attachment at a fixed 10 MiB before the
+  whole-buffer node write. The image setting cannot exceed
   the safe 20 MiB inline cap while the generic-file setting cannot exceed 200
   MiB. Images above the inline cap become generic file descriptors without
   inline bytes. Master inbound file writes use a unique temporary path
@@ -89,7 +93,9 @@ and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
   ACKs, and stop/reconnect generation fencing are handled without persisting a
   session claim.
 - A bounded in-process event-identity map drops duplicate supported gateway
-  deliveries before they reach MessageRouter. Its identity uses event type,
+  deliveries before they reach MessageRouter. AT and ordinary group event
+  types share one canonical business-event namespace, so the same message is
+  not enqueued twice when QQ delivers both forms. Its identity uses event type,
   `msg_id`, and normalized business `msg_seq` and/or official
   `message_scene.ext` `msg_idx=<value>` array entry when supplied; gateway
   dispatch `s` is transport resume state, never business dedup identity.
@@ -115,11 +121,11 @@ and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
 ## Runtime and configuration
 
 - `QQBotConfig` in `src/config.ts` accepts `appId`, `clientSecret`, `enabled`,
-  `allowedUsers`, `allowAllUsers`, and bounded `media` limits
+  `requireMention` (default `true`), `allowedUsers`, `allowAllUsers`, and bounded `media` limits
   (`imageMaxBytes` safe inline-image cap, `fileMaxBytes`, `maxTotalBytes`,
-  `maxAttachments`). Stage 1 materialization is Main-hosted only; isolated or
-  bound-node QQ media currently returns a controlled bounded error because the
-  existing node transfer is whole-buffer, not a streaming boundary. Outbound
+  `maxAttachments`). Main-hosted materialization uses the path saver; isolated
+  or bound-node QQ media uses the existing whole-buffer saver only for files up
+  to the fixed 10 MiB transfer cap. Outbound
   C2C/group media uses the image/file settings subject to the separate 100 MiB
   local-send hard cap and the official local upload flow.
 - `src/channelRuntime.ts` constructs, starts, stops, reloads, and reports each
@@ -148,7 +154,10 @@ previews, direct video/voice generic saves and nested deferral, Main-hosted pref
 streamed spool/total/timeout bounds and cleanup, allowlisted redirect
 validation, safe generic-file storage, safe-inline-cap image fallback, best-effort
 raster format probing, controlled error categories/path scrubbing, and
-transient image data crossing into a canonical blob reference.
+  transient image data crossing into a canonical blob reference, isolated
+  whole-buffer saves, and the fixed isolated transfer cap. Channel tests also
+  cover ordinary group events, default mention gating, AT/non-AT business
+  deduplication, and passive replies retaining the inbound `msg_id`.
 
 ## Design Decisions
 
@@ -186,10 +195,26 @@ content-addressed image-blob conversion runs before durable queue/history
 storage; generic files remain saved node/path descriptors. Images above the
 safe inline cap are generic file descriptors, not inline data. Guild/DM media,
 nested attachments, retries/outbox, and remote URL send are deferred.
-Materialization is intentionally Main-hosted only in Stage 1;
-isolated/bound-node media is rejected with a controlled bounded error until a
-genuinely streaming node transfer boundary exists. Stage 1 does not pretend
-the current whole-buffer node API supports the configured Main-host caps.
+Main-hosted materialization uses the bounded spool path saver. For an
+isolated/bound-node destination, the adapter reuses the existing WeCom-style
+whole-buffer `saveInboundSessionFile`/node transfer only up to a fixed 10 MiB
+per-attachment cap; larger attachments return the ordinary bounded
+too-large result before a Buffer/Base64 transfer. This is deliberately a
+small fallback, not a claim that the node API is a streaming boundary, and
+introduces no new node protocol or configuration.
+
+### D-qqbot-group-mention-policy
+
+`QQBotConfig.requireMention` defaults to `true` to preserve the original
+AT-only behavior. When explicitly `false`, the adapter accepts both
+`GROUP_AT_MESSAGE_CREATE` and `GROUP_MESSAGE_CREATE` through the same group
+identity, authorization, attachment, source metadata, and latest-message
+context path. Replies keep the inbound `msg_id` and therefore remain passive
+when the QQ passive window permits it. The two event types share one canonical
+business dedup key so a duplicate delivery does not enqueue twice. This first
+version has no per-group policy matrix, history-buffer changes, special slash
+command policy, or proactive-send changes; a true proactive failure such as
+QQ `40034105` remains a platform permission result.
 
 ### D-qqbot-outbound-media
 

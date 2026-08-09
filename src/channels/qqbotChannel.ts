@@ -180,6 +180,7 @@ export class QQBotChannel implements Channel {
   private readonly channelId: string;
   private readonly appId: string;
   private readonly clientSecret: string;
+  private readonly requireMention: boolean;
   private readonly mediaConfig: QQBotConfig['media'];
   private readonly saveInboundSessionFileFromPath?: QQBotChannelDeps['saveInboundSessionFileFromPath'];
   private readonly fetchFn: typeof fetch;
@@ -211,6 +212,7 @@ export class QQBotChannel implements Channel {
     this.channelId = name;
     this.appId = config.appId?.trim() || '';
     this.clientSecret = config.clientSecret?.trim() || '';
+    this.requireMention = config.requireMention !== false;
     this.mediaConfig = config.media;
     this.fetchFn = deps.fetch || globalThis.fetch;
     this.saveInboundSessionFileFromPath = deps.saveInboundSessionFileFromPath;
@@ -635,7 +637,7 @@ export class QQBotChannel implements Channel {
       return;
     }
 
-    if (!['C2C_MESSAGE_CREATE', 'GROUP_AT_MESSAGE_CREATE', 'AT_MESSAGE_CREATE', 'DIRECT_MESSAGE_CREATE'].includes(frame.t)) {
+    if (!['C2C_MESSAGE_CREATE', 'GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE', 'AT_MESSAGE_CREATE', 'DIRECT_MESSAGE_CREATE'].includes(frame.t)) {
       return;
     }
     await this.routeInboundMessage(frame.t, frame.d, frame.s);
@@ -671,6 +673,11 @@ export class QQBotChannel implements Channel {
 
   private async routeInboundMessage(eventType: string, event: any, sequence?: number): Promise<void> {
     const content = typeof event?.content === 'string' ? event.content : '';
+
+    if (eventType === 'GROUP_MESSAGE_CREATE' && this.requireMention) {
+      logger.debug({ channelId: this.channelId, eventType, messageId: event?.id }, 'Ignoring non-mention QQ Bot group event');
+      return;
+    }
 
     const inbound = this.normalizeInboundEvent(eventType, event);
     if (!inbound) {
@@ -749,7 +756,7 @@ export class QQBotChannel implements Channel {
       const senderId = typeof event?.author?.user_openid === 'string' ? event.author.user_openid.trim() : '';
       return senderId ? { kind: 'c2c', conversationId: `c2c:${senderId}`, senderId, username: senderId, messageId } : null;
     }
-    if (eventType === 'GROUP_AT_MESSAGE_CREATE') {
+    if (eventType === 'GROUP_AT_MESSAGE_CREATE' || eventType === 'GROUP_MESSAGE_CREATE') {
       const senderId = typeof event?.author?.member_openid === 'string' ? event.author.member_openid.trim() : '';
       const groupId = typeof event?.group_openid === 'string' ? event.group_openid.trim() : '';
       return senderId && groupId
@@ -773,7 +780,10 @@ export class QQBotChannel implements Channel {
   private isDuplicateInboundEvent(eventType: string, messageId: string, event: any): boolean {
     const messageSequence = normalizeBusinessScalar(event?.msg_seq);
     const messageIndex = getMessageSceneIndex(event?.message_scene?.ext);
-    const key = `${eventType}:${messageId}:${messageSequence ? `seq=${messageSequence}` : 'seq=-'}:${messageIndex ? `idx=${messageIndex}` : 'idx=-'}`;
+    const canonicalEventType = eventType === 'GROUP_AT_MESSAGE_CREATE' || eventType === 'GROUP_MESSAGE_CREATE'
+      ? 'GROUP_MESSAGE_CREATE'
+      : eventType;
+    const key = `${canonicalEventType}:${messageId}:${messageSequence ? `seq=${messageSequence}` : 'seq=-'}:${messageIndex ? `idx=${messageIndex}` : 'idx=-'}`;
     if (this.recentInboundEvents.has(key)) {
       return true;
     }

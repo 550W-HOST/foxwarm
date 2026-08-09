@@ -52,11 +52,12 @@ Persisted conversation attachments and broadcast selection are owned by [session
 - Weixin context tokens are in-memory per user; a new inbound message is required after token loss. QR login sessions expire after five minutes.
 - WebUI `sendFile` is intentionally a no-op because the browser uses authenticated downloads/tool metadata.
 - QQ Bot C2C/group attachments use an authorization-gated, bounded inbound
-  spool/materializer on the Main host; direct video/voice are generic saved
+  spool/materializer. Main-hosted saves use the path boundary; isolated or
+  bound-node saves reuse the existing whole-buffer node boundary only up to a
+  fixed 10 MiB attachment cap. Direct video/voice are generic saved
   descriptors and nested attachments remain deferred. C2C/group `sendFile`
-  uses the destination-specific official chunk-upload flow. Guild/DM media,
-  remote URL send, and isolated/bound-node QQ media remain unsupported until
-  their respective streaming or scene-specific boundaries exist.
+  uses the destination-specific official chunk-upload flow. Guild/DM media and
+  remote URL send remain unsupported.
 
 ## Compatibility
 

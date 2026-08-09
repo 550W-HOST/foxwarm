@@ -98,6 +98,65 @@ test('QQ Bot deduplicates by business message sequence/index, not gateway sequen
   assert.deepEqual(received, ['c2c first', 'c2c next business message', 'group first', 'group next business message', 'malformed ext still uses msg seq', 'malformed ext next msg seq', 'ambiguous ext id fallback']);
 });
 
+test('QQ Bot optionally accepts ordinary group messages and canonicalizes AT/non-AT duplicates', async () => {
+  const calls: Array<{ url: string; body: any }> = [];
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret', requireMention: false },
+    'qq-group-always',
+    {
+      fetch: async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ url: String(url), body: JSON.parse(String(init?.body || '{}')) });
+        return response({ id: 'outbound-id' });
+      },
+    },
+  );
+  activateForDirectSend(channel);
+  (channel as any).accessToken = { value: 'token', expiresAt: Date.now() + 600_000 };
+  const received: any[] = [];
+  channel.onMessage(async (ctx, message) => { received.push({ ctx, message }); });
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    id: 'ordinary-group-message',
+    content: 'ordinary group message',
+    group_openid: 'group-1',
+    author: { member_openid: 'member-1', username: 'Member' },
+  });
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+    id: 'ordinary-group-message',
+    content: 'duplicate AT delivery',
+    group_openid: 'group-1',
+    author: { member_openid: 'member-1', username: 'Member' },
+  });
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0].ctx.conversationId, 'group:group-1');
+  assert.equal(received[0].ctx.senderId, 'member-1');
+  assert.equal(received[0].ctx.qqbotMessageId, 'ordinary-group-message');
+  assert.deepEqual(received[0].message.parts, [{ text: 'ordinary group message' }]);
+
+  await received[0].ctx.reply('passive group reply');
+  const groupCalls = calls.filter(call => call.url.includes('/v2/groups/'));
+  assert.equal(groupCalls.length, 1);
+  assert.equal(groupCalls[0].url, 'https://api.sgroup.qq.com/v2/groups/group-1/messages');
+  assert.equal(groupCalls[0].body.msg_id, 'ordinary-group-message');
+  assert.equal(groupCalls[0].body.msg_seq, 1);
+});
+
+test('QQ Bot keeps ordinary GROUP_MESSAGE_CREATE events ignored by the default mention policy', async () => {
+  const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-group-mention-default');
+  const received: any[] = [];
+  channel.onMessage(async (ctx, message) => { received.push({ ctx, message }); });
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    id: 'ordinary-group-default',
+    content: 'ordinary group message',
+    group_openid: 'group-1',
+    author: { member_openid: 'member-1' },
+  });
+
+  assert.equal(received.length, 0);
+});
+
 test('QQ Bot accepts C2C/group attachment-only turns with safe metadata and keeps attachment order', async () => {
   const received: any[] = [];
   const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-media-preview');
@@ -695,7 +754,7 @@ test('QQ Bot maps group, guild, and guild-DM sends while keeping guild media uns
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const socket = new FakeSocket();
   const channel = new QQBotChannel(
-    { appId: 'app-id', clientSecret: 'secret' },
+    { appId: 'app-id', clientSecret: 'secret', requireMention: false },
     'qq-secondary',
     {
       fetch: async (url: string | URL | Request, init?: RequestInit) => {
@@ -722,6 +781,10 @@ test('QQ Bot maps group, guild, and guild-DM sends while keeping guild media uns
   await flush();
   assert.equal(received[0].ctx.conversationId, 'group:group-1');
   assert.equal(received[0].ctx.senderId, 'member-1');
+  socket.emit('message', Buffer.from(JSON.stringify({ op: 0, t: 'GROUP_MESSAGE_CREATE', d: { id: 'group-ordinary', content: 'ordinary group hello', group_openid: 'group-1', author: { member_openid: 'member-2', username: 'Member 2' } } })));
+  await flush();
+  assert.equal(received[1].ctx.conversationId, 'group:group-1');
+  assert.equal(received[1].ctx.qqbotMessageId, 'group-ordinary');
 
   await channel.sendMessage('group:group-1', 'group reply', { replyToId: 'group-incoming' });
   await channel.sendMessage('guild:channel-1', 'guild reply', { replyToId: 'guild-incoming' });
