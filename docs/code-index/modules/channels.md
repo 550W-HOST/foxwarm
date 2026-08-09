@@ -56,8 +56,8 @@ Persisted conversation attachments and broadcast selection are owned by [session
   bound-node saves reuse the existing whole-buffer node boundary only up to a
   fixed 10 MiB attachment cap. Direct video/voice are generic saved
   descriptors and nested attachments remain deferred. C2C/group `sendFile`
-  uses the destination-specific official chunk-upload flow. Guild/DM media and
-  remote URL send remain unsupported.
+  uses the destination-specific direct-small or streamed-large official upload
+  flow. Guild/DM media and remote URL send remain unsupported.
 
 ## Compatibility
 

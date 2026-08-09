@@ -1,18 +1,21 @@
 import assert from 'node:assert/strict';
-import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import sharp from 'sharp';
 import type { ChannelFile } from '../channel';
-import { uploadQQBotFile } from './qqbotMediaUpload';
+import { QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES, uploadQQBotFile } from './qqbotMediaUpload';
 
 const PNG_HEADER = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const PART_HOST = 'https://cos.ap-guangzhou.myqcloud.com';
 
 async function validPng(): Promise<Buffer> {
   return sharp({ create: { width: 2, height: 1, channels: 3, background: { r: 10, g: 20, b: 30 } } }).png().toBuffer();
+}
+
+async function validJpeg(): Promise<Buffer> {
+  return sharp({ create: { width: 2, height: 1, channels: 3, background: { r: 30, g: 20, b: 10 } } }).jpeg().toBuffer();
 }
 
 type RequestRecord = { path: string; body: Record<string, unknown> };
@@ -61,43 +64,41 @@ function createMockTransport(blockSize: number, parts: number) {
   return { request, fetchFn, requests, puts };
 }
 
-test('QQ outbound uploader probes C2C PNG bytes despite file hints and streams chunk flow with hashes', async () => {
+test('QQ outbound uploader sends tiny C2C PNG directly with bounded base64 body', async () => {
   const data = await validPng();
   await withTempFile(data, 'photo.png', async filePath => {
-    const blockSize = Math.ceil(data.length / 3);
-    const transport = createMockTransport(blockSize, 3);
+    const transport = createMockTransport(64, 1);
     const result = await uploadQQBotFile('c2c', 'user-openid', channelFile(filePath, 'photo.bin', 'application/octet-stream', false), undefined, {
       request: transport.request,
       fetch: transport.fetchFn,
     });
 
     assert.deepEqual(result, { fileInfo: 'opaque-file-info', fileType: 1, sizeBytes: data.length, isImage: true });
-    assert.equal(transport.requests[0].path, '/v2/users/user-openid/upload_prepare');
-    assert.equal(transport.requests.at(-1)?.path, '/v2/users/user-openid/files');
-    assert.deepEqual(transport.requests.slice(1, -1).map(item => item.path), [
-      '/v2/users/user-openid/upload_part_finish',
-      '/v2/users/user-openid/upload_part_finish',
-      '/v2/users/user-openid/upload_part_finish',
-    ]);
-    assert.deepEqual(transport.puts.map(item => item.body), [
-      data.subarray(0, blockSize),
-      data.subarray(blockSize, blockSize * 2),
-      data.subarray(blockSize * 2),
-    ]);
-    assert.ok(transport.puts.every(item => item.init.method === 'PUT'));
-    assert.ok(transport.puts.every(item => item.init.redirect === 'error'));
-    assert.ok(transport.puts.every(item => !(item.init.headers as Record<string, string>).Authorization));
-    const prepare = transport.requests[0].body;
-    assert.equal(prepare.file_type, 1);
-    assert.equal(prepare.file_size, data.length);
-    assert.equal(prepare.md5, crypto.createHash('md5').update(data).digest('hex'));
-    assert.equal(prepare.sha1, crypto.createHash('sha1').update(data).digest('hex'));
-    assert.equal(transport.requests[1].body.md5, crypto.createHash('md5').update(data.subarray(0, blockSize)).digest('hex'));
-    assert.equal(transport.requests[1].body.block_size, blockSize);
+    assert.equal(transport.requests.length, 1);
+    assert.equal(transport.requests[0].path, '/v2/users/user-openid/files');
+    assert.equal(transport.requests[0].body.file_type, 1);
+    assert.equal(transport.requests[0].body.srv_send_msg, false);
+    assert.equal(transport.requests[0].body.file_data, data.toString('base64'));
+    assert.equal(transport.requests[0].body.file_name, undefined);
+    assert.equal(transport.puts.length, 0);
   });
 });
 
-test('QQ outbound uploader uses destination-specific Group routes and generic file type', async () => {
+test('QQ outbound uploader sends tiny JPEG and generic Group files directly', async () => {
+  const jpeg = await validJpeg();
+  await withTempFile(jpeg, 'photo.jpg', async jpegPath => {
+    const transport = createMockTransport(64, 1);
+    const result = await uploadQQBotFile('c2c', 'user-openid', channelFile(jpegPath, 'photo.jpg', 'image/jpeg', false), undefined, {
+      request: transport.request,
+      fetch: transport.fetchFn,
+    });
+    assert.equal(result.fileType, 1);
+    assert.equal(transport.requests.length, 1);
+    assert.equal(transport.requests[0].path, '/v2/users/user-openid/files');
+    assert.equal(transport.requests[0].body.file_data, jpeg.toString('base64'));
+    assert.equal(transport.puts.length, 0);
+  });
+
   const data = Buffer.from('generic-file-payload');
   await withTempFile(data, 'report.txt', async filePath => {
     const transport = createMockTransport(64, 1);
@@ -107,10 +108,92 @@ test('QQ outbound uploader uses destination-specific Group routes and generic fi
     });
     assert.equal(result.fileType, 4);
     assert.equal(result.isImage, false);
-    assert.equal(transport.requests[0].path, '/v2/groups/group-openid/upload_prepare');
-    assert.equal(transport.requests.at(-1)?.path, '/v2/groups/group-openid/files');
-    assert.equal(transport.requests[1].path, '/v2/groups/group-openid/upload_part_finish');
-    assert.equal(transport.requests[1].body.part_index, 1);
+    assert.equal(transport.requests.length, 1);
+    assert.equal(transport.requests[0].path, '/v2/groups/group-openid/files');
+    assert.equal(transport.requests[0].body.file_type, 4);
+    assert.equal(transport.requests[0].body.srv_send_msg, false);
+    assert.equal(transport.requests[0].body.file_name, 'report.txt');
+    assert.equal(transport.requests[0].body.file_data, data.toString('base64'));
+    assert.equal(transport.puts.length, 0);
+  });
+});
+
+test('QQ outbound uploader keeps the exact 5 MiB boundary and larger files on streamed chunk flow', async () => {
+  const threshold = QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES;
+  for (const [size, name] of [[threshold, 'exact.bin'], [threshold + 1, 'larger.bin']] as const) {
+    const data = Buffer.alloc(size, 7);
+    await withTempFile(data, name, async filePath => {
+      const transport = createMockTransport(threshold + 1, 1);
+      const result = await uploadQQBotFile('group', 'group-openid', channelFile(filePath, name, 'application/octet-stream', false), undefined, {
+        request: transport.request,
+        fetch: transport.fetchFn,
+      });
+      assert.equal(result.fileType, 4);
+      assert.equal(transport.requests[0].path, '/v2/groups/group-openid/upload_prepare');
+      assert.equal(transport.requests.at(-1)?.path, '/v2/groups/group-openid/files');
+      assert.equal(transport.requests.filter(item => item.path.endsWith('/upload_part_finish')).length, 1);
+      assert.equal(transport.puts.length, 1);
+      assert.equal(transport.puts[0].body.length, size);
+    });
+  }
+});
+
+test('QQ outbound direct upload requires a bounded opaque file_info and honors generation fences', async () => {
+  const data = Buffer.from('tiny-direct-file');
+  await withTempFile(data, 'direct.bin', async filePath => {
+    const transport = createMockTransport(64, 1);
+    const request = async (requestPath: string, body: Record<string, unknown>, maxResponseBytes?: number): Promise<unknown> => {
+      assert.equal(requestPath, '/v2/users/user-openid/files');
+      assert.equal(maxResponseBytes, 4 * 1024 * 1024);
+      assert.equal(body.file_data, data.toString('base64'));
+      return {};
+    };
+    await assert.rejects(
+      uploadQQBotFile('c2c', 'user-openid', channelFile(filePath, 'direct.bin', 'application/octet-stream', false), undefined, {
+        request,
+      }),
+      /direct media upload returned no file_info/,
+    );
+    assert.equal(transport.puts.length, 0);
+
+    let requestCount = 0;
+    await assert.rejects(
+      uploadQQBotFile('c2c', 'user-openid', channelFile(filePath, 'direct.bin', 'application/octet-stream', false), undefined, {
+        request: async () => {
+          requestCount += 1;
+          return { file_info: 'should-not-send' };
+        },
+        isCurrent: () => false,
+      }),
+      /invalidated before final delivery/,
+    );
+    assert.equal(requestCount, 0);
+
+    let readFenceChecks = 0;
+    await assert.rejects(
+      uploadQQBotFile('c2c', 'user-openid', channelFile(filePath, 'direct.bin', 'application/octet-stream', false), undefined, {
+        request: async () => {
+          requestCount += 1;
+          return { file_info: 'should-not-send-after-read' };
+        },
+        isCurrent: () => ++readFenceChecks < 4,
+      }),
+      /invalidated before final delivery/,
+    );
+    assert.equal(requestCount, 0);
+
+    let requestFenceChecks = 0;
+    await assert.rejects(
+      uploadQQBotFile('c2c', 'user-openid', channelFile(filePath, 'direct.bin', 'application/octet-stream', false), undefined, {
+        request: async () => {
+          requestCount += 1;
+          return { file_info: 'discarded-after-request' };
+        },
+        isCurrent: () => ++requestFenceChecks < 5,
+      }),
+      /invalidated before final delivery/,
+    );
+    assert.equal(requestCount, 1);
   });
 });
 
@@ -124,7 +207,12 @@ test('QQ outbound uploader downgrades oversized raster images to generic files w
     }, { request: transport.request, fetch: transport.fetchFn });
     assert.equal(result.fileType, 4);
     assert.equal(result.isImage, false);
+    assert.equal(transport.requests[0].path, '/v2/users/user-openid/files');
     assert.equal(transport.requests[0].body.file_type, 4);
+    assert.equal(transport.requests[0].body.srv_send_msg, false);
+    assert.equal(transport.requests[0].body.file_name, 'large.png');
+    assert.equal(transport.requests[0].body.file_data, data.toString('base64'));
+    assert.equal(transport.puts.length, 0);
   });
 });
 
@@ -177,12 +265,12 @@ test('QQ outbound uploader rejects a sparse file above the 100 MiB local cap bef
 });
 
 test('QQ outbound uploader rejects non-HTTPS presigned URLs and never performs a PUT', async () => {
-  const data = Buffer.from('payload');
+  const data = Buffer.alloc(QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES, 1);
   await withTempFile(data, 'payload.bin', async filePath => {
-    const transport = createMockTransport(64, 1);
+    const transport = createMockTransport(QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES, 1);
     const request = async (requestPath: string, body: Record<string, unknown>): Promise<unknown> => {
       if (requestPath.endsWith('/upload_prepare')) {
-        return { upload_id: 'id', block_size: 64, parts: [{ index: 1, presigned_url: 'http://evil.example/part' }] };
+        return { upload_id: 'id', block_size: QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES, parts: [{ index: 1, presigned_url: 'http://evil.example/part' }] };
       }
       return transport.request(requestPath, body);
     };
@@ -198,14 +286,14 @@ test('QQ outbound uploader rejects non-HTTPS presigned URLs and never performs a
 });
 
 test('QQ outbound uploader rejects malformed or incomplete prepare parts before any PUT', async () => {
-  const data = Buffer.from('payload');
+  const data = Buffer.alloc(QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES, 2);
   await withTempFile(data, 'payload.bin', async filePath => {
-    const transport = createMockTransport(64, 1);
+    const transport = createMockTransport(QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES, 1);
     const request = async (requestPath: string, body: Record<string, unknown>): Promise<unknown> => {
       if (requestPath.endsWith('/upload_prepare')) {
         return {
           upload_id: 'id',
-          block_size: 2,
+          block_size: QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES,
           parts: [{ index: 2, presigned_url: `${PART_HOST}/part/2` }],
         };
       }
@@ -216,19 +304,44 @@ test('QQ outbound uploader rejects malformed or incomplete prepare parts before 
         request,
         fetch: transport.fetchFn,
       }),
-      /incomplete part list/,
+      /out-of-order parts/,
+    );
+    assert.equal(transport.puts.length, 0);
+  });
+});
+
+test('QQ outbound uploader rejects a zero prepare block size without treating it as one part', async () => {
+  const data = Buffer.alloc(QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES, 5);
+  await withTempFile(data, 'zero-block.bin', async filePath => {
+    const transport = createMockTransport(QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES, 1);
+    const request = async (requestPath: string, body: Record<string, unknown>): Promise<unknown> => {
+      if (requestPath.endsWith('/upload_prepare')) {
+        return {
+          upload_id: 'id',
+          block_size: 0,
+          parts: [{ index: 1, presigned_url: `${PART_HOST}/part/1` }],
+        };
+      }
+      return transport.request(requestPath, body);
+    };
+    await assert.rejects(
+      uploadQQBotFile('c2c', 'user-openid', channelFile(filePath, 'zero-block.bin', 'application/octet-stream', false), undefined, {
+        request,
+        fetch: transport.fetchFn,
+      }),
+      /invalid block_size/,
     );
     assert.equal(transport.puts.length, 0);
   });
 });
 
 test('QQ outbound uploader does not use fs.readFile or whole-file base64 for part bodies', async () => {
-  const data = Buffer.concat([PNG_HEADER, Buffer.alloc(80, 1)]);
+  const data = Buffer.alloc(QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES, 1);
   const originalReadFile = fs.readFile;
   (fs as any).readFile = async () => { throw new Error('whole-file readFile must not be used'); };
   try {
     await withTempFile(data, 'stream.png', async filePath => {
-      const transport = createMockTransport(32, 3);
+      const transport = createMockTransport(Math.ceil(data.length / 3), 3);
       await uploadQQBotFile('c2c', 'user-openid', channelFile(filePath, 'stream.png', 'image/png', true), undefined, {
         request: transport.request,
         fetch: transport.fetchFn,
@@ -241,7 +354,7 @@ test('QQ outbound uploader does not use fs.readFile or whole-file base64 for par
 });
 
 test('QQ outbound uploader bounds one stalled presigned PUT, aborts it, and closes every file handle', async () => {
-  const data = Buffer.from('stalled-upload');
+  const data = Buffer.alloc(QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES, 3);
   await withTempFile(data, 'stalled.bin', async filePath => {
     const originalOpen: (...args: any[]) => Promise<any> = fs.open as any;
     let openCount = 0;
@@ -258,7 +371,7 @@ test('QQ outbound uploader bounds one stalled presigned PUT, aborts it, and clos
       };
       return handle;
     };
-    const transport = createMockTransport(64, 1);
+    const transport = createMockTransport(QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES, 1);
     const stalledFetch = async (url: string | URL, init?: RequestInit): Promise<Response> => {
       if (!String(url).startsWith(PART_HOST)) return transport.fetchFn(url, init);
       putCount += 1;
@@ -288,10 +401,10 @@ test('QQ outbound uploader bounds one stalled presigned PUT, aborts it, and clos
 });
 
 test('QQ outbound uploader cancels unused success/error PUT response bodies without retrying', async () => {
-  const data = Buffer.from('response-body');
+  const data = Buffer.alloc(QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES, 4);
   for (const status of [200, 500]) {
     await withTempFile(data, `response-${status}.bin`, async filePath => {
-      const transport = createMockTransport(64, 1);
+      const transport = createMockTransport(QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES, 1);
       let cancelCount = 0;
       let putCount = 0;
       const responseBody = new ReadableStream<Uint8Array>({

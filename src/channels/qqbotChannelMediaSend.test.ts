@@ -9,6 +9,7 @@ import { sendFileToChannelTargetId } from '../session/channels';
 import { tool_send_file } from '../toolsSessionAgent/interSession';
 import type { ChannelFile } from '../channel';
 import { QQBotChannel } from './qqbotChannel';
+import { QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES } from './qqbotMediaUpload';
 
 const API_PREFIX = 'https://api.sgroup.qq.com';
 const COS_PREFIX = 'https://cos.ap-guangzhou.myqcloud.com';
@@ -38,7 +39,7 @@ function activate(channel: QQBotChannel): void {
   (channel as any).connectionGeneration = 1;
 }
 
-function createFetchTransport(options: { failRichMedia?: boolean; failExpiredPassiveMedia?: boolean; delayPrepare?: boolean } = {}) {
+function createFetchTransport(options: { failRichMedia?: boolean; failExpiredPassiveMedia?: boolean; delayPrepare?: boolean; blockSize?: number } = {}) {
   const calls: Call[] = [];
   const partBodies: Buffer[] = [];
   let prepareStartedResolve: (() => void) | undefined;
@@ -63,7 +64,7 @@ function createFetchTransport(options: { failRichMedia?: boolean; failExpiredPas
       prepareStartedResolve?.();
       if (options.delayPrepare) await prepareGate;
       const requestBody = JSON.parse(String(init?.body || '{}')) as { file_size: number };
-      const blockSize = 8;
+      const blockSize = options.blockSize ?? 8;
       const count = Math.ceil(requestBody.file_size / blockSize);
       return new Response(JSON.stringify({
         upload_id: `upload-${parsed.pathname.includes('/groups/') ? 'group' : 'c2c'}`,
@@ -105,7 +106,7 @@ function body(call: Call): any {
   return JSON.parse(String(call.init?.body || '{}'));
 }
 
-test('QQ Bot sendFile uses latest C2C passive ID, streamed image/file upload, msg_seq, and bounded caption', async () => {
+test('QQ Bot sendFile uses latest C2C passive ID and direct-small image/file upload', async () => {
   await withTempFiles(async paths => {
     const transport = createFetchTransport();
     const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-send-c2c', { fetch: transport.fetch });
@@ -129,17 +130,24 @@ test('QQ Bot sendFile uses latest C2C passive ID, streamed image/file upload, ms
     assert.equal(body(messages[1]).media.file_info, 'file-info-c2c');
     assert.equal(body(messages[1]).msg_id, 'latest-c2c-message');
     assert.equal(body(messages[1]).msg_seq, 2);
-    assert.equal(apiCalls(transport, '/upload_prepare').length, 2);
-    assert.equal(body(apiCalls(transport, '/upload_prepare')[0]).file_type, 1);
-    assert.equal(body(apiCalls(transport, '/upload_prepare')[1]).file_type, 4);
-    assert.deepEqual(Buffer.concat(transport.partBodies), Buffer.concat([await fs.readFile(paths.png), await fs.readFile(paths.generic)]));
+    const directFiles = apiCalls(transport, '/files');
+    assert.equal(directFiles.length, 2);
+    assert.equal(body(directFiles[0]).file_type, 1);
+    assert.equal(body(directFiles[0]).srv_send_msg, false);
+    assert.equal(body(directFiles[0]).file_data, (await fs.readFile(paths.png)).toString('base64'));
+    assert.equal(body(directFiles[0]).file_name, undefined);
+    assert.equal(body(directFiles[1]).file_type, 4);
+    assert.equal(body(directFiles[1]).srv_send_msg, false);
+    assert.equal(body(directFiles[1]).file_name, 'report.txt');
+    assert.equal(body(directFiles[1]).file_data, (await fs.readFile(paths.generic)).toString('base64'));
+    assert.equal(apiCalls(transport, '/upload_prepare').length, 0);
+    assert.equal(apiCalls(transport, '/upload_part_finish').length, 0);
     const putCalls = transport.calls.filter(call => call.url.startsWith(COS_PREFIX));
-    assert.ok(putCalls.every(call => call.init?.method === 'PUT'));
-    assert.ok(putCalls.every(call => !(call.init?.headers as Record<string, string>).Authorization));
+    assert.equal(putCalls.length, 0);
   });
 });
 
-test('QQ Bot sendFile uses Group upload/message routes and a persisted passive ID after latest-state loss', async () => {
+test('QQ Bot sendFile uses Group direct-small/message routes and a persisted passive ID after latest-state loss', async () => {
   await withTempFiles(async paths => {
     const transport = createFetchTransport();
     const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-send-group', { fetch: transport.fetch });
@@ -149,10 +157,15 @@ test('QQ Bot sendFile uses Group upload/message routes and a persisted passive I
       qqbotConversationId: 'group:group-openid',
       qqbotMessageId: 'persisted-group-message',
     });
-    const prepare = apiCalls(transport, '/upload_prepare')[0];
+    const directFile = apiCalls(transport, '/files')[0];
     const message = apiCalls(transport, '/messages')[0];
-    assert.equal(prepare.url, `${API_PREFIX}/v2/groups/group-openid/upload_prepare`);
-    assert.equal(body(prepare).file_type, 4);
+    assert.equal(directFile.url, `${API_PREFIX}/v2/groups/group-openid/files`);
+    assert.equal(body(directFile).file_type, 4);
+    assert.equal(body(directFile).srv_send_msg, false);
+    assert.equal(body(directFile).file_name, 'clip.mp4');
+    assert.equal(body(directFile).file_data, (await fs.readFile(paths.generic)).toString('base64'));
+    assert.equal(apiCalls(transport, '/upload_prepare').length, 0);
+    assert.equal(transport.calls.filter(call => call.url.startsWith(COS_PREFIX)).length, 0);
     assert.equal(message.url, `${API_PREFIX}/v2/groups/group-openid/messages`);
     assert.equal(body(message).msg_id, 'persisted-group-message');
     assert.equal(body(message).msg_seq, 1);
@@ -181,8 +194,10 @@ test('QQ Bot media passive state and opaque file_info stay isolated per adapter 
     assert.equal(body(secondMessage).msg_id, 'instance-two-message');
     assert.equal(body(firstMessage).media.file_info, 'file-info-c2c');
     assert.equal(body(secondMessage).media.file_info, 'file-info-c2c');
-    assert.equal(apiCalls(firstTransport, '/upload_prepare').length, 1);
-    assert.equal(apiCalls(secondTransport, '/upload_prepare').length, 1);
+    assert.equal(apiCalls(firstTransport, '/files').length, 1);
+    assert.equal(apiCalls(secondTransport, '/files').length, 1);
+    assert.equal(apiCalls(firstTransport, '/upload_prepare').length, 0);
+    assert.equal(apiCalls(secondTransport, '/upload_prepare').length, 0);
   });
 });
 
@@ -233,9 +248,13 @@ test('QQ Bot media expiration retries the final message proactively without re-u
 
     await channel.sendFile('group:group-openid', file(paths.generic, 'report.txt', 'text/plain', false));
 
-    const prepareCalls = apiCalls(transport, '/upload_prepare');
+    const directFiles = apiCalls(transport, '/files');
     const messages = apiCalls(transport, '/messages').map(body);
-    assert.equal(prepareCalls.length, 1);
+    assert.equal(directFiles.length, 1);
+    assert.equal(body(directFiles[0]).file_type, 4);
+    assert.equal(body(directFiles[0]).srv_send_msg, false);
+    assert.equal(body(directFiles[0]).file_name, 'report.txt');
+    assert.equal(apiCalls(transport, '/upload_prepare').length, 0);
     assert.equal(messages.length, 2);
     assert.equal(messages[0].msg_id, 'media-expired-message');
     assert.equal(messages[0].msg_seq, 1);
@@ -247,7 +266,8 @@ test('QQ Bot media expiration retries the final message proactively without re-u
 
 test('QQ Bot media generation fence stops before final POST and Guild/DM stay explicitly unsupported', async () => {
   await withTempFiles(async paths => {
-    const transport = createFetchTransport({ delayPrepare: true });
+    await fs.truncate(paths.generic, QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES + 1);
+    const transport = createFetchTransport({ delayPrepare: true, blockSize: QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES + 1 });
     const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-send-fence', { fetch: transport.fetch });
     activate(channel);
     const sending = channel.sendFile('c2c:openid-1', file(paths.generic, 'report.txt', 'text/plain', false));

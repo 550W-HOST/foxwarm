@@ -13,6 +13,7 @@ const HASH_READ_CHUNK_BYTES = 64 * 1024;
 const MD5_10M_BYTES = 10_002_432;
 const MAX_UPLOAD_PARTS = 4_096;
 export const QQBOT_MEDIA_OUTBOUND_HARD_MAX_BYTES = 100 * 1024 * 1024;
+export const QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES = 5 * 1024 * 1024;
 const MAX_UPLOAD_BLOCK_BYTES = QQBOT_MEDIA_OUTBOUND_HARD_MAX_BYTES;
 const MAX_UPLOAD_ID_LENGTH = 256;
 const MAX_FILE_INFO_LENGTH = 8_192;
@@ -137,6 +138,29 @@ async function inspectLocalFile(file: ChannelFile): Promise<LocalFileSnapshot> {
   }
 }
 
+async function readSmallFile(snapshot: LocalFileSnapshot): Promise<Buffer> {
+  const handle = await fs.open(snapshot.path, 'r');
+  try {
+    const fileStats = await handle.stat();
+    assertRegularFile(fileStats);
+    if (fileStats.size !== snapshot.sizeBytes || fileStats.size >= QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES) {
+      throw new Error('QQ Bot file changed while it was being read');
+    }
+    const buffer = Buffer.alloc(snapshot.sizeBytes);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const result = await handle.read(buffer, offset, buffer.length - offset, offset);
+      if (result.bytesRead <= 0) {
+        throw new Error('QQ Bot file changed while it was being read');
+      }
+      offset += result.bytesRead;
+    }
+    return buffer;
+  } finally {
+    await handle.close();
+  }
+}
+
 async function hashFile(snapshot: LocalFileSnapshot): Promise<FileHashes> {
   const handle = await fs.open(snapshot.path, 'r');
   try {
@@ -205,13 +229,20 @@ function parsePrepareResponse(raw: unknown, fileSize: number): ParsedPrepare {
     const part = rawPart as Record<string, unknown>;
     const index = parsePositiveInteger(part.index, 'part index', MAX_UPLOAD_PARTS);
     if (index !== position + 1) throw new Error('QQ Bot upload_prepare returned out-of-order parts');
-    const partBlockSize = part.block_size === undefined || part.block_size === 0
+    const partBlockSize = part.block_size === undefined
       ? blockSize
       : parsePositiveInteger(part.block_size, 'part block_size', MAX_UPLOAD_BLOCK_BYTES);
     if (partBlockSize > blockSize) throw new Error('QQ Bot upload response has an oversized part range');
     return { index, url: validatePresignedUploadUrl(part.presigned_url ?? part.url), blockSize: partBlockSize };
   });
   return { uploadId, blockSize, parts };
+}
+
+function parseFileInfoResponse(raw: unknown, label: string): string {
+  if (!raw || typeof raw !== 'object') throw new Error(`QQ Bot ${label} returned an invalid response`);
+  const fileInfo = boundedString((raw as Record<string, unknown>).file_info, MAX_FILE_INFO_LENGTH);
+  if (!fileInfo) throw new Error(`QQ Bot ${label} returned no file_info`);
+  return fileInfo;
 }
 
 async function hashPart(snapshot: LocalFileSnapshot, offset: number, length: number): Promise<string> {
@@ -377,7 +408,6 @@ export async function uploadQQBotFile(
 ): Promise<QQBotMediaUploadResult> {
   if (target !== 'c2c' && target !== 'group') throw new Error('QQ Bot media upload is unsupported for this destination');
   const fetchFn = deps.fetch || globalThis.fetch;
-  if (!fetchFn) throw new Error('QQ Bot media upload requires a fetch-capable runtime');
   assertUploadCurrent(deps);
   const snapshot = await inspectLocalFile(file);
   assertUploadCurrent(deps);
@@ -392,6 +422,24 @@ export async function uploadQQBotFile(
   if (!sendAsImage && snapshot.sizeBytes > limits.fileMaxBytes) {
     throw new Error('QQ Bot file exceeds the configured media limit');
   }
+
+  if (snapshot.sizeBytes < QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES) {
+    assertUploadCurrent(deps);
+    const data = await readSmallFile(snapshot);
+    assertUploadCurrent(deps);
+    const directBody: Record<string, unknown> = {
+      file_type: fileType,
+      srv_send_msg: false,
+      file_data: data.toString('base64'),
+      ...(fileType === 4 ? { file_name: safeFileName(file.name) } : {}),
+    };
+    const directRaw = await deps.request(buildPath(target, targetId, 'files'), directBody, QQBOT_MEDIA_UPLOAD_RESPONSE_MAX_BYTES);
+    assertUploadCurrent(deps);
+    const fileInfo = parseFileInfoResponse(directRaw, 'direct media upload');
+    return { fileInfo, fileType, sizeBytes: snapshot.sizeBytes, isImage: sendAsImage };
+  }
+
+  if (!fetchFn) throw new Error('QQ Bot media upload requires a fetch-capable runtime');
 
   snapshot.hashes = await hashFile(snapshot);
   const fileName = safeFileName(file.name);
@@ -416,8 +464,6 @@ export async function uploadQQBotFile(
   }
   assertUploadCurrent(deps);
   const completeRaw = await deps.request(buildPath(target, targetId, 'files'), { upload_id: prepared.uploadId }, QQBOT_MEDIA_UPLOAD_RESPONSE_MAX_BYTES);
-  if (!completeRaw || typeof completeRaw !== 'object') throw new Error('QQ Bot media upload completion returned an invalid response');
-  const fileInfo = boundedString((completeRaw as Record<string, unknown>).file_info, MAX_FILE_INFO_LENGTH);
-  if (!fileInfo) throw new Error('QQ Bot media upload completion returned no file_info');
+  const fileInfo = parseFileInfoResponse(completeRaw, 'media upload completion');
   return { fileInfo, fileType, sizeBytes: snapshot.sizeBytes, isImage: sendAsImage };
 }

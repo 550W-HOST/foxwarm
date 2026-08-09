@@ -9,7 +9,8 @@ configuration. It uses the QQ access-token endpoint, gateway WebSocket, and
 official REST message endpoints without depending on an unlicensed QR
 credential-provisioning package. C2C and group ingress also accepts bounded
 image/file/video/voice attachments through a deferred, authorization-gated materializer,
-and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
+and C2C/group `Channel.sendFile` uses the official direct-small or streamed-large
+upload flow.
 
 ## Key exports
 
@@ -25,8 +26,9 @@ and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
   after a best-effort supported-raster format probe. Main-hosted sessions use
   the path-based atomic saver; isolated/bound-node sessions use the existing
   whole-buffer saver only up to a fixed 10 MiB transfer cap.
-- `uploadQQBotFile()` — validates a prepared local `ChannelFile`, streams hashes
-  and bounded part bodies through the C2C/group upload flow, enforces the
+- `uploadQQBotFile()` — validates a prepared local `ChannelFile`, sends files
+  below the 5 MiB direct-upload threshold through the bounded base64 endpoint
+  and larger files through streamed hashes/part bodies, enforces the
   Tencent-compatible 100 MiB local-send cap, and returns one opaque `file_info`
   token without caching it.
 
@@ -38,7 +40,7 @@ and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
 | `QQBotChannel.handleGatewayMessage()` | Identifies or resumes after `HELLO`, retains dispatch sequence/session state, handles gateway control frames, and accepts supported message events. |
 | `QQBotChannel.routeInboundMessage()` | Deduplicates supported events, creates scoped identity, keeps C2C/group attachment metadata URL-free, and attaches an ephemeral media materializer. |
 | `QQBotChannel.sendMessage()` | Routes C2C, group, guild-channel, and guild-DM text to their official REST endpoint. |
-| `QQBotChannel.sendFile()` | Sends C2C/group images or generic files through destination-specific chunk upload and one rich-media message; rejects guild/DM media. |
+| `QQBotChannel.sendFile()` | Sends C2C/group images or generic files through destination-specific direct-small or streamed-large upload and one rich-media message; rejects guild/DM media. |
 | `QQBotChannel.sendTyping()` | Uses the official C2C input-notify message with the latest conversation-local inbound message ID when available. |
 | `QQBotChannel.apiRequest()` / `getAccessToken()` | Performs authenticated API requests with a bounded 401 token refresh. |
 
@@ -107,11 +109,12 @@ and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
   typing only for a C2C conversation with a current latest inbound message ID.
 - C2C/group `sendFile` reuses a latest conversation-local message ID when
   available, or a matching persisted ID supplied by the generic file-delivery
-  boundary after restart. It uploads locally prepared files through the
-  destination-specific official chunk flow, sends images only for format-probed
-  PNG/JPEG bytes within the image cap, and downgrades other images to generic
-  files within the file cap. Outbound local files are hard-capped at 100 MiB;
-  this is lower than the 200 MiB inbound configuration hard cap.
+  boundary after restart. It sends locally prepared files smaller than 5 MiB
+  through the destination-specific direct base64 flow, and uses the official
+  streamed chunk flow at or above 5 MiB. Images are sent only for
+  format-probed PNG/JPEG bytes within the image cap; other images downgrade to
+  generic files within the file cap. Outbound local files are hard-capped at
+  100 MiB; this is lower than the 200 MiB inbound configuration hard cap.
 - `MessageRouter` carries only the current turn's QQ source metadata through
   the in-process tool context to `send_file`. An explicit target receives that
   fallback metadata only when its exact instance/conversation matches; a
@@ -142,7 +145,7 @@ identity and attachment ordering, deduplication before media fetch, passive
 reply and C2C typing identifiers, gateway identify and resume control flow,
 guild/DM media rejection, group/guild/DM outbound routes, and
 shutdown/reconnect fencing. Outbound tests cover destination-specific
-upload routes, streamed hash/chunk order, passive IDs/counts/sequences,
+upload routes, direct-small bodies, streamed hash/chunk order, passive IDs/counts/sequences,
 caption/cap handling, permission failures, generation fences, and the
 `send_file` target path, including current-turn restart fallback metadata and
 mismatched-target proactive delivery. `src/channels/qqbotMediaUpload.test.ts` covers safe
@@ -154,12 +157,14 @@ previews, direct video/voice generic saves and nested deferral, Main-hosted pref
 streamed spool/total/timeout bounds and cleanup, allowlisted redirect
 validation, safe generic-file storage, safe-inline-cap image fallback, best-effort
 raster format probing, controlled error categories/path scrubbing, and
-  transient image data crossing into a canonical blob reference, isolated
-  whole-buffer saves, and the fixed isolated transfer cap. Channel tests also
-  cover ordinary group events, default mention gating, AT/non-AT business
-  deduplication, passive replies retaining the inbound `msg_id`, the three-minute
-  boundary, structured expiration fallback, and media final retry without a
-  second upload.
+transient image data crossing into a canonical blob reference, isolated
+whole-buffer saves, and the fixed isolated transfer cap. Channel tests also
+cover ordinary group events, default mention gating, AT/non-AT business
+deduplication, passive replies retaining the inbound `msg_id`, the three-minute
+boundary, structured expiration fallback, and media final retry without a
+second upload. Upload-unit tests cover tiny PNG/JPEG/generic direct bodies,
+  the exact 5 MiB boundary, larger streamed files, bounded direct responses,
+  and direct generation fences.
 
 ## Design Decisions
 
@@ -227,24 +232,30 @@ QQ `40034105` remains a platform permission result.
 
 ### D-qqbot-outbound-media
 
-[2026-08-08] QQ outbound media is limited to C2C and Group `Channel.sendFile`
-using an already prepared safe local file. Supported PNG/JPEG files within the
+[2026-08-10] QQ outbound media is limited to C2C and Group `Channel.sendFile` using an
+already prepared safe local file. Supported PNG/JPEG files within the
 configured image threshold use QQ `file_type=1`; other or oversized images use
-`file_type=4` when within the generic-file cap. The adapter performs the
-destination-specific `upload_prepare` → presigned COS part PUT →
-`upload_part_finish` → `/files` flow and sends one `msg_type=7` message with
-opaque `media.file_info`. Hashes and part bodies are streamed, upload URLs use
-HTTPS with no userinfo and normal ports, and the QQ API response is the trust
-boundary; bot credentials are never sent to the presigned host. The local send path is hard-capped at 100 MiB even when inbound
-`fileMaxBytes` is set to the 200 MiB inbound maximum. The file-info token is
-never cached or reused across target or adapter instances. Latest
+`file_type=4` when within the generic-file cap. Files smaller than 5 MiB use
+the destination-specific `/files` direct-upload body with `srv_send_msg: false`
+and bounded base64 `file_data`; generic direct uploads also include the
+sanitized `file_name`. Files at or above 5 MiB use the existing
+`upload_prepare` → presigned COS part PUT → `upload_part_finish` → `/files`
+completion flow. The direct path may read one strictly sub-5 MiB file buffer;
+the streamed path hashes and sends part bodies without whole-file buffering.
+Neither path retries, caches `file_info`, falls back to the other protocol
+after an error, or logs/persists direct `file_data`. The local send path is
+hard-capped at 100 MiB even when inbound `fileMaxBytes` is set to the 200 MiB
+inbound maximum. Upload URLs use HTTPS with no userinfo and normal ports, and
+the QQ API response is the trust boundary; bot credentials are never sent to
+the presigned host. Latest
 conversation-local QQ message IDs share the existing four-success passive
 limiter and monotonic `msg_seq`; age/count and the structured `40034005`
 fallback are canonical in
 [D-qqbot-passive-reply-fallback](#d-qqbot-passive-reply-fallback). Media final
 fallback reuses the just-uploaded same-target `file_info` and does not upload
 again; upload failures and non-expiration final failures do not infer a retry.
-Generation checks occur before reading, each upload stage, and final delivery.
+Generation checks fence the local read, each direct/chunk request stage, and
+final delivery.
 Guild/DM native media, remote URL send, and general upload-service abstractions
 remain unsupported; video/audio files use ordinary generic `file_type=4` when
 within the local cap.
