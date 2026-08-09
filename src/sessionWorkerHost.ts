@@ -158,18 +158,27 @@ export class SessionWorkerHost {
    * local resumeBusySessions semantics without a second recovery channel.
    */
   private async recoverStaleBusy(session: Session): Promise<void> {
-    if (!session.busy) return;
-    logger.warn({ sessionId: session.id, generation: this.identity.generation }, 'Session worker recovering stale busy state from an unconfirmed previous incarnation');
+    // A freshly spawned incarnation has no in-flight turn, so a persisted busy
+    // or stopping flag is necessarily residue from a previous incarnation —
+    // a persisted stopping=true would otherwise silently stop the next turn
+    // (the runner halts on the flag), which local placement never does because
+    // its stop signal is in-memory only.
+    const staleBusy = session.busy === true;
+    const staleStopping = session.stopping === true;
+    if (!staleBusy && !staleStopping) return;
+    logger.warn({ sessionId: session.id, generation: this.identity.generation, staleBusy, staleStopping }, 'Session worker recovering stale busy/stopping state from a previous incarnation');
     session.busy = false;
     session.busyStartedAt = undefined;
     session.stopping = false;
-    const restartMarker = 'Session worker restarted after an unconfirmed exit; resuming interrupted work.';
-    const alreadyQueued = (session.queue || []).some(item => JSON.stringify(item.parts || []).includes('Session worker restarted after an unconfirmed exit'));
-    if (!alreadyQueued) {
-      session.queue = [...(session.queue || []), {
-        id: crypto.randomUUID(), type: 'background',
-        parts: buildTimestampedSystemMessageParts(restartMarker), queuedAt: Date.now(),
-      } as QueueItem];
+    if (staleBusy) {
+      const restartMarker = 'Session worker restarted after an unconfirmed exit; resuming interrupted work.';
+      const alreadyQueued = (session.queue || []).some(item => JSON.stringify(item.parts || []).includes('Session worker restarted after an unconfirmed exit'));
+      if (!alreadyQueued) {
+        session.queue = [...(session.queue || []), {
+          id: crypto.randomUUID(), type: 'background',
+          parts: buildTimestampedSystemMessageParts(restartMarker), queuedAt: Date.now(),
+        } as QueueItem];
+      }
     }
     await this.persistOwner();
   }

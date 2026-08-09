@@ -114,3 +114,28 @@ test('startup resume eagerly recovers busy sessions without pending intents', as
     await fs.remove(root);
   }
 });
+
+test('stale stopping residue from a previous incarnation never silently stops the next turn', async () => {
+  const sessionId = `mc-stopping-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-stopping-'));
+  // No hang hook: the worker's turn runs to completion normally.
+  const fixture = makeFixture(root, '__none__');
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  // Simulates the residue a stopped turn can leave: the interrupt's detached
+  // persist lands stopping=true after the stopped turn's final writes, while
+  // busy is already false. A new incarnation must not inherit the stop signal.
+  await fs.outputJson(statePath, serializeSessionHistoryPayload({ ...baseSession(sessionId), stopping: true }));
+  try {
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'final verification ok' }] });
+    const authority = JSON.parse(await fs.readFile(statePath, 'utf8'));
+    assert.equal(authority.stopping, false, 'the stale stopping flag is cleared at load');
+    const text = JSON.stringify(authority.history);
+    assert.ok(text.includes('deterministic child answer'), 'the first turn of the new incarnation runs normally');
+    assert.ok(!text.includes('Session worker restarted after an unconfirmed exit'), 'a clean stale-stopping recovery enqueues no restart event');
+  } finally {
+    await fixture.supervisor.shutdown(5_000).catch(() => {});
+    fixture.store.close();
+    await fs.remove(root);
+  }
+});
