@@ -14,6 +14,7 @@ import { sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeSer
 import type { CompactionRequest } from './types';
 import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
 import { vectorServiceDescriptor } from './vectorServiceDescriptor';
+import { createSessionWorkerPresentationServiceHandler, sessionWorkerPresentationServiceDescriptor } from './sessionWorkerPresentationService';
 import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationServiceDescriptor,
   SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
 import { createSessionTurnDeliveryServiceHandler, sessionTurnDeliveryServiceDescriptor,
@@ -31,6 +32,13 @@ export type SessionWorkerSupervisorOptions = {
   projectionRegistry?: SessionWorkerProjectionRegistry;
   resolveExactFinalSourceContext?: ExactFinalSourceContextResolver;
   handbackWorker?: (identity: Pick<SessionWorkerIdentity, 'sessionId' | 'generation' | 'incarnationId'>) => Promise<void>;
+  /** Called after a worker activates and becomes ready (used to re-push Main-owned transient presentation subscriptions). */
+  onWorkerReady?: (sessionId: string) => void;
+  /** Pure pass-through sinks for the transient presentation channel (WebUI SSE fan-out / stream-event bus); never write semantic state. */
+  presentationSink?: {
+    broadcastMessage: (sessionId: string, message: any) => void;
+    notifySessionEvent: (sessionId: string, event: any) => void;
+  };
 };
 
 type ProvisionalChild = {
@@ -206,6 +214,18 @@ export class SessionWorkerSupervisor {
     }
   }
 
+  /** Best-effort transient presentation subscription push; failures only log. */
+  async setPresentationSubscription(sessionId: string, active: boolean): Promise<void> {
+    const entry = this.entries.get(sessionId);
+    if (!entry?.ready) return;
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      await runtime.call('setPresentationSubscription', { active });
+    } catch (error) {
+      logger.warn({ err: error, sessionId }, 'Presentation subscription push failed');
+    }
+  }
+
   touch(sessionId: string): void { const entry = this.entries.get(sessionId); if (entry?.ready) this.touchEntry(entry); }
 
   async stopWorker(sessionId: string, timeoutMs = 10_000): Promise<boolean> {
@@ -299,6 +319,13 @@ export class SessionWorkerSupervisor {
       reverseRegistry.register(sessionWorkerPublicationServiceDescriptor, createSessionWorkerPublicationServiceHandler({
         expected: publicationIdentity, registry: this.projectionRegistry,
       }));
+      if (this.options.presentationSink) {
+        reverseRegistry.register(sessionWorkerPresentationServiceDescriptor, createSessionWorkerPresentationServiceHandler({
+          expected: publicationIdentity,
+          broadcastMessage: this.options.presentationSink.broadcastMessage,
+          notifySessionEvent: this.options.presentationSink.notifySessionEvent,
+        }));
+      }
       reverseRegistry.register(mcpExternalServiceDescriptor, createMcpExternalServiceHandler({ expectedSourceSessionId: sessionId }));
       reverseRegistry.register(vectorServiceDescriptor, createVectorFacadeProxyHandler());
       reverseServer = new ProcessRpcServer(reverseRegistry, {
@@ -349,6 +376,8 @@ export class SessionWorkerSupervisor {
       entry.client = client; entry.ready = true;
       this.restartDelays.set(sessionId, this.restartBaseDelayMs); this.touchEntry(entry);
       logger.info({ sessionId, generation, incarnationId, pid: child.pid }, 'Session worker ready');
+      try { this.options.onWorkerReady?.(sessionId); }
+      catch (hookError) { logger.warn({ err: hookError, sessionId }, 'onWorkerReady hook failed'); }
       return this.getStatus(sessionId)!;
     } catch (error) {
       entry.intentionalStop = true; entry.client = undefined; transport.close();

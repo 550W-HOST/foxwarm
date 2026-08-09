@@ -7,11 +7,12 @@ import type { CompactionRequest } from './types';
 export type SessionWorkerIdleStatus = { busy: boolean; queueLength: number; runningExecCount: number };
 export type SessionWorkerInterruptResult = { stopping: boolean; abortedInFlight: boolean };
 
-export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 2, {
+export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 3, {
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
   compactAwaited: rpcMethod<{ request: CompactionRequest }, { compacted: boolean; projection: SessionWorkerProjection }>(),
   idleStatus: rpcMethod<Record<string, never>, SessionWorkerIdleStatus>(),
   interrupt: rpcMethod<Record<string, never>, SessionWorkerInterruptResult>(),
+  setPresentationSubscription: rpcMethod<{ active: boolean }, { active: boolean }>(),
 });
 
 export function createSessionWorkerRuntimeServiceHandler(
@@ -32,6 +33,15 @@ export function createSessionWorkerRuntimeServiceHandler(
         throw new RpcError('SESSION_WORKER_INTERRUPT_INVALID', 'interrupt takes an empty request object.');
       }
       return host.interrupt();
+    },
+    async setPresentationSubscription(input) {
+      gate.assertActive();
+      if (!input || typeof input !== 'object' || Array.isArray(input)
+        || Object.keys(input).length !== 1 || typeof input.active !== 'boolean') {
+        throw new RpcError('SESSION_WORKER_PRESENTATION_SUBSCRIPTION_INVALID', 'setPresentationSubscription takes { active: boolean }.');
+      }
+      host.setPresentationSubscription(input.active);
+      return { active: input.active };
     },
     async runPending(input) {
       gate.assertActive();

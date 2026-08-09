@@ -7,6 +7,7 @@ import { executeMainManagementTool, initializeMainManagementTools, shutdownMainM
 import { callMcpTool, initializeMcpExternalService, listMcpServers, shutdownMcpExternalService } from './mcpExternalService';
 import { copyBetweenNodes, executeRemoteNodeTool, initializeNodeExecution, listNodeTopology, shutdownNodeExecution, validateNodeSelection } from './nodeExecution';
 import { deliverFile, initializeFileDelivery, shutdownFileDelivery } from './fileDelivery';
+import { initializeSessionWorkerPresentation, publishPresentationMessage, publishPresentationModelStream } from './sessionWorkerPresentation';
 import { initializeSessionWorkerPublication, publishCommitted, shutdownSessionWorkerPublication } from './sessionWorkerPublication';
 import { deliverCommittedFinal, initializeSessionTurnDelivery, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
 import * as llm from './llm';
@@ -117,6 +118,14 @@ async function start(): Promise<void> {
         await new Promise(() => {});
       } finally { options.currentSessionEffects.clearAbortController(session.id, controller); }
     }
+    // Emits presentation model-stream deltas like a real streaming turn, for
+    // coalesce/forward coverage (rapid frames should collapse per streamId).
+    if (process.env.FOXWARM_TEST_STREAM_DELTAS === '1' && chatCount === Number(process.env.FOXWARM_TEST_STREAM_DELTAS_AT || '1')) {
+      for (const text of ['partial-1', 'partial-2', 'partial-3']) {
+        options.currentSessionEffects.notifySessionEvent(session.id, { type: 'model-stream-update', streamId: 'test-stream', iteration: 0, reasoning: '', text, toolCalls: [] } as any);
+      }
+      options.currentSessionEffects.notifySessionEvent(session.id, { type: 'model-stream-reset', streamId: 'test-stream', iteration: 0 } as any);
+    }
     // Simulates a slow provider request that honors its abort signal, like the
     // real runner: the controller is registered for the in-flight request and
     // the request rejects AbortError when interrupted.
@@ -207,11 +216,14 @@ async function start(): Promise<void> {
   await initializeFileDelivery({ transport: reverseTransport, placement: 'child-reverse' });
   await initializeSessionTurnDelivery(reverseTransport);
   await initializeSessionWorkerPublication({ transport: reverseTransport, identity });
+  await initializeSessionWorkerPresentation({ transport: reverseTransport });
   await initializeMcpExternalService({ transport: reverseTransport, placement: 'child-reverse' });
   await vector.init({ transport: reverseTransport, placement: 'child-reverse' });
   const host = new SessionWorkerHost(identity, store, {
     publishCommitted: projection => publishCommitted(identity, projection),
     deliverCommittedFinal: (source, text, outcome) => deliverCommittedFinal({ sourceSessionId: sessionId, source, text, outcome }).then(() => {}),
+    publishPresentationMessage: message => publishPresentationMessage(identity, message),
+    publishPresentationStream: event => publishPresentationModelStream(identity, event),
     persistence: {
       readState: async id => {
         readCount += 1;

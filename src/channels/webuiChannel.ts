@@ -635,6 +635,16 @@ export class WebUIChannel implements Channel {
   private enableWebUI: boolean;
   private enableTrigger: boolean;
   private sseClients: Map<string, express.Response[]> = new Map(); // sessionId -> clients
+  private presentationSubscriptionListener?: (sessionId: string, active: boolean) => void;
+
+  /** Main→worker transient presentation subscription bridge (Session-worker placement). */
+  setPresentationSubscriptionListener(listener: ((sessionId: string, active: boolean) => void) | undefined): void {
+    this.presentationSubscriptionListener = listener;
+  }
+
+  hasPresentationSubscribers(sessionId: string): boolean {
+    return (this.sseClients.get(sessionId)?.length || 0) > 0;
+  }
   private globalSseClients: express.Response[] = []; // Global clients for session list updates
 
   private async streamPathDownload(resolvedPath: string, res: express.Response): Promise<void> {
@@ -2193,10 +2203,12 @@ export class WebUIChannel implements Channel {
           res.flushHeaders(); // Flush headers immediately
           
           // Add client to list
-          if (!this.sseClients.has(sessionId)) {
+          const hadClients = this.sseClients.has(sessionId);
+          if (!hadClients) {
             this.sseClients.set(sessionId, []);
           }
           this.sseClients.get(sessionId)!.push(res);
+          if (!hadClients) this.presentationSubscriptionListener?.(sessionId, true);
           
           // logger.info({ sessionId, clientCount: this.sseClients.get(sessionId)!.length }, 'SSE client connected');
           
@@ -2228,6 +2240,7 @@ export class WebUIChannel implements Channel {
               }
               if (clients.length === 0) {
                 this.sseClients.delete(sessionId);
+                this.presentationSubscriptionListener?.(sessionId, false);
               }
             }
             // logger.info({ sessionId }, 'SSE client disconnected');
@@ -2819,6 +2832,7 @@ export class WebUIChannel implements Channel {
 
     if (!session) {
       this.sseClients.delete(sessionId);
+      this.presentationSubscriptionListener?.(sessionId, false);
     }
   }
 

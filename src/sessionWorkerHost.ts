@@ -23,7 +23,7 @@ import {
 } from './sessionWorkerPersistence';
 import type { SessionWorkerIdentity } from './sessionWorkerControlService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
-import { isQueueItem, type CompactionRequest, type Message, type QueueItem, type Session } from './types';
+import { isQueueItem, type CompactionRequest, type Message, type QueueItem, type Session, type SessionStreamEvent } from './types';
 import { buildTimestampedSystemMessageParts } from './utils/systemMessageParts';
 
 export type SessionWorkerHostDependencies = {
@@ -32,6 +32,10 @@ export type SessionWorkerHostDependencies = {
   createTurnHost?: (effects: CurrentSessionTurnEffects, session: Session) => SessionTurnHost;
   publishCommitted?: (projection: SessionWorkerProjection) => Promise<void>;
   deliverCommittedFinal?: (source: NonNullable<QueueItem['source']>, text: string, outcome: SessionTurnFinalKind) => Promise<void>;
+  /** Transient presentation channel: appended-message copies for the WebUI fan-out. */
+  publishPresentationMessage?: (message: Message) => Promise<void>;
+  /** Transient presentation channel: model-stream events for the WebUI fan-out. */
+  publishPresentationStream?: (event: SessionStreamEvent) => Promise<void>;
 };
 
 export class SessionWorkerHost {
@@ -46,6 +50,10 @@ export class SessionWorkerHost {
   private poison?: { original: unknown; resync: unknown };
   private publicationPoison?: unknown;
   private transientPublishTail: Promise<void> = Promise.resolve();
+  private presentationSubscribed = false;
+  private presentationTail: Promise<void> = Promise.resolve();
+  private coalescedStreamEvents = new Map<string, SessionStreamEvent>();
+  private streamCoalesceTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
     private readonly identity: SessionWorkerIdentity,
@@ -174,8 +182,78 @@ export class SessionWorkerHost {
     } catch (error) {
       if (String((error as any)?.code || '') !== 'SESSION_WORKER_AUTO_COMPACTION_FATAL') await this.resyncAfterFailure(error);
       throw error;
+    } finally {
+      // Turn boundary: flush any coalesced stream delta so the final frame is
+      // never stranded in the 500ms window after the turn ends.
+      this.flushCoalescedStreamEvents();
     }
     return buildSessionWorkerProjection(session);
+  }
+
+  /** Main-driven subscription gate: transient presentation forwards only run while subscribed. */
+  setPresentationSubscription(active: boolean): void {
+    this.presentationSubscribed = active === true;
+    if (!this.presentationSubscribed) {
+      this.coalescedStreamEvents.clear();
+      if (this.streamCoalesceTimer) { clearTimeout(this.streamCoalesceTimer); this.streamCoalesceTimer = undefined; }
+    }
+  }
+
+  private forwardPresentation(send: () => Promise<void>): void {
+    const task = this.presentationTail.then(async () => {
+      try {
+        await Promise.race([
+          send(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('presentation forward timed out')), 5_000)),
+        ]);
+      } catch (error) {
+        logger.warn({ err: error, sessionId: this.identity.sessionId }, 'Transient presentation forward failed');
+      }
+    });
+    this.presentationTail = task.then(() => {}, () => {});
+  }
+
+  /** Presentation-only copies of appended messages; never semantic state. */
+  private forwardAppendedMessages(messages: Message[]): void {
+    if (!this.presentationSubscribed || !this.dependencies.publishPresentationMessage) return;
+    for (const message of messages) {
+      const copy = JSON.parse(JSON.stringify(message)) as Message;
+      this.forwardPresentation(() => this.dependencies.publishPresentationMessage!(copy));
+    }
+  }
+
+  private static readonly STREAM_COALESCE_MS = 500;
+
+  private forwardSessionStreamEvent(event: SessionStreamEvent): void {
+    if (!this.presentationSubscribed || !this.dependencies.publishPresentationStream) return;
+    if (event.type === 'model-stream-reset') {
+      // Resets are structural (draft lifecycle), forward immediately.
+      const copy = JSON.parse(JSON.stringify(event)) as SessionStreamEvent;
+      this.forwardPresentation(() => this.dependencies.publishPresentationStream!(copy));
+      return;
+    }
+    if (event.type !== 'model-stream-update') return;
+    // Coalesce per streamId: frames carry cumulative snapshots and WebUI
+    // replaces the draft wholesale, so keeping the latest frame per 500ms
+    // window loses nothing.
+    const streamId = (event as any).streamId || 'current';
+    this.coalescedStreamEvents.set(streamId, JSON.parse(JSON.stringify(event)) as SessionStreamEvent);
+    if (!this.streamCoalesceTimer) {
+      this.streamCoalesceTimer = setTimeout(() => {
+        this.streamCoalesceTimer = undefined;
+        this.flushCoalescedStreamEvents();
+      }, SessionWorkerHost.STREAM_COALESCE_MS);
+    }
+  }
+
+  private flushCoalescedStreamEvents(): void {
+    if (!this.coalescedStreamEvents.size) return;
+    const pending = [...this.coalescedStreamEvents.values()];
+    this.coalescedStreamEvents.clear();
+    if (!this.presentationSubscribed || !this.dependencies.publishPresentationStream) return;
+    for (const event of pending) {
+      this.forwardPresentation(() => this.dependencies.publishPresentationStream!(event));
+    }
   }
 
   /**
@@ -284,6 +362,7 @@ export class SessionWorkerHost {
     const appendMessages = (owner: Session, messages: Message[]) => transactional(async () => {
       this.assertOwner(owner);
       await appendSessionMessagesForSession(owner, messages, persist, () => {});
+      this.forwardAppendedMessages(messages);
     });
     let activeAbort: AbortController | undefined;
     return {
@@ -309,7 +388,7 @@ export class SessionWorkerHost {
         return transactional(async () => { result = await startSessionWaitForSession(owner, options, persist); }).then(() => result!);
       },
       notifyHistoryUpdate: () => {},
-      notifySessionEvent: () => {},
+      notifySessionEvent: (_sessionId, event) => { this.forwardSessionStreamEvent(event); },
       setRuntimeState: setActiveSessionRuntimeState,
       clearRuntimeState: clearActiveSessionRuntimeState,
       registerAbortController: (sessionId, controller) => { this.assertId(sessionId); activeAbort = controller; this.activeAbort = controller; },

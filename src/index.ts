@@ -205,6 +205,8 @@ async function start() {
     // allowed to open archive checkpoints or LanceDB.
     await sessionManager.loadSessions();
 
+    let webuiChannel: WebUIChannel | null = null;
+
     // Session-worker placement: assemble the durable ownership/mailbox store,
     // supervisor, and closed ingress coordinator before any consumer starts.
     if (SESSION_WORKERS_ENABLED) {
@@ -216,6 +218,17 @@ async function start() {
             idleMs: SESSION_WORKERS_CONFIG.idleSeconds * 1000,
             shouldRestart: () => true,
             resolveExactFinalSourceContext: sourceContexts.resolve,
+            // Transient presentation channel: pure pass-through into the WebUI
+            // SSE fan-out and the stream-event bus; never writes semantic state.
+            presentationSink: {
+                broadcastMessage: (sessionId, message) => webuiChannel?.broadcastMessage(sessionId, message),
+                notifySessionEvent: (sessionId, event) => sessionManager.notifySessionEvent(sessionId, event),
+            },
+            onWorkerReady: sessionId => {
+                if (webuiChannel?.hasPresentationSubscribers(sessionId)) {
+                    void sessionWorkerSupervisor!.setPresentationSubscription(sessionId, true);
+                }
+            },
             handbackWorker: identity => performSessionWorkerHandback({
                 store: sessionWorkerStore!,
                 getCatalogSession: id => sessionManager.getAllSessions().get(id),
@@ -342,7 +355,6 @@ async function start() {
     await initializeTimers();
 
     // Start unified HTTP server (WebUI + Trigger + Nodes)
-    let webuiChannel: WebUIChannel | null = null;
     if (ENABLE_WEBUI || ENABLE_TRIGGER) {
         const token = await ensureToken();
         const nodeToken = await ensureNodeToken();
@@ -368,6 +380,11 @@ async function start() {
         
         await webuiChannel.start();
         registerChannel('webui', webuiChannel);
+        // Session-worker transient presentation subscription bridge: SSE
+        // subscriber 0↔1 transitions gate worker-side forwarding.
+        webuiChannel.setPresentationSubscriptionListener((sessionId, active) => {
+            void sessionWorkerSupervisor?.setPresentationSubscription(sessionId, active);
+        });
         
         // Bridge transport-neutral SessionRuntime events into WebUI SSE.
         sessionRuntime.subscribe((eventName, payload: any) => {
