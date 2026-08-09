@@ -10,6 +10,7 @@ import * as sessionManager from '../sessionManager';
 import {
   buildQQBotAttachmentPreviewParts,
   materializeQQBotAttachments,
+  QQBOT_MEDIA_ISOLATED_TRANSFER_MAX_BYTES,
   QQBOT_MEDIA_HARD_MAX_BYTES,
 } from './qqbotMedia';
 
@@ -59,6 +60,13 @@ function pathSaver(onSave: (options: any) => void): (options: any) => Promise<Sa
   return async options => {
     onSave(options);
     return savedFile(options.fileName || 'file', options.mimeType || 'application/octet-stream', options.sizeBytes, options.isImage === true);
+  };
+}
+
+function bufferSaver(onSave: (options: any) => void): (options: any) => Promise<SavedChannelFile> {
+  return async options => {
+    onSave(options);
+    return savedFile(options.fileName || 'file', options.mimeType || 'application/octet-stream', options.buffer.length, options.isImage === true);
   };
 }
 
@@ -548,53 +556,96 @@ test('QQ media errors expose only controlled categories, not spool/final paths o
   assert.doesNotMatch(parts[1].text || '', /foxwarm-qqbot-media-private-source|\/private\/qqbot|secret-token|qpic\.cn/);
 });
 
-test('QQ isolated media is a controlled non-goal without exposing the node transfer error', async () => {
-  const sourcePath = '/tmp/foxwarm-qqbot-media-isolated-source';
+test('QQ isolated media uses the bounded whole-buffer node path and keeps raster bytes transient', async () => {
+  const image = await sharp({
+    create: { width: 2, height: 1, channels: 3, background: { r: 20, g: 40, b: 60 } },
+  }).png().toBuffer();
+  const saves: Array<{ buffer: Buffer; isImage?: boolean }> = [];
   const parts = await materializeQQBotAttachments({
-    content: 'isolated media',
-    eventId: 'message-isolated-media',
-    sessionId: 'session-isolated-media',
-    attachments: [{ url: 'https://qpic.cn/isolated', filename: 'file.bin', content_type: 'file' }],
+    content: 'isolated small media',
+    eventId: 'message-isolated-small',
+    sessionId: 'session-isolated-small',
+    attachments: [
+      { url: 'https://qpic.cn/isolated-image', filename: 'image.png', content_type: 'image/png' },
+      { url: 'https://qpic.cn/isolated-file', filename: 'file.bin', content_type: 'file' },
+    ],
     deps: {
-      fetch: async () => response('small'),
-      saveInboundSessionFileFromPath: async () => {
-        throw new Error(`Inbound media cannot be saved to an isolated node: the existing node file transfer is whole-buffer only and has no bounded streaming boundary. source=${sourcePath}`);
-      },
+      isMainHostedSession: async () => false,
+      fetch: async url => response(String(url).endsWith('isolated-image') ? image : 'small file'),
+      saveInboundSessionFile: bufferSaver(options => saves.push({ buffer: options.buffer, isImage: options.isImage })),
     },
   });
 
-  assert.match(parts[1].text || '', /media storage is unavailable for isolated sessions/);
-  assert.doesNotMatch(parts[1].text || '', /whole-buffer|isolated-source|qpic\.cn/);
+  assert.equal(saves.length, 2);
+  assert.deepEqual(saves.map(save => save.isImage), [true, false]);
+  assert.deepEqual(saves[0].buffer, image);
+  assert.equal(saves[1].buffer.toString(), 'small file');
+  assert.equal(parts[1].inlineData?.mimeType, 'image/png');
+  assert.equal(Buffer.from(parts[1].inlineData?.data || '', 'base64').toString('hex'), image.toString('hex'));
+  assert.match(parts[2].text || '', /File:/);
 });
 
-test('QQ isolated media is rejected before download when the default master saver is used', async () => {
-  const originalGetExistingSession = sessionManager.getExistingSession;
-  const originalIsSessionEffectivelyIsolated = sessionManager.isSessionEffectivelyIsolated;
-  const originalGetAgentIsolationNode = sessionManager.getAgentIsolationNode;
+test('QQ isolated media rejects over-cap attachments before Buffer/node transfer', async () => {
   let fetchCount = 0;
-  try {
-    (sessionManager as any).getExistingSession = async () => ({ id: 'isolated/preflight', agent: 'isolated-agent', currentNode: 'sandbox-node' });
-    (sessionManager as any).isSessionEffectivelyIsolated = () => true;
-    (sessionManager as any).getAgentIsolationNode = () => 'sandbox-node';
-    const parts = await materializeQQBotAttachments({
-      content: 'isolated preflight',
-      eventId: 'message-isolated-preflight',
-      sessionId: 'isolated/preflight',
-      attachments: [{ url: 'https://qpic.cn/preflight', filename: 'file.bin', content_type: 'file' }],
-      deps: {
-        fetch: async () => {
-          fetchCount += 1;
-          return response('must not fetch');
-        },
+  let saveCount = 0;
+  const parts = await materializeQQBotAttachments({
+    content: 'isolated over cap',
+    eventId: 'message-isolated-over-cap',
+    sessionId: 'session-isolated-over-cap',
+    attachments: [{
+      url: 'https://qpic.cn/over-cap',
+      filename: 'large.bin',
+      content_type: 'file',
+      size: QQBOT_MEDIA_ISOLATED_TRANSFER_MAX_BYTES + 1,
+    }],
+    deps: {
+      isMainHostedSession: async () => false,
+      fetch: async () => {
+        fetchCount += 1;
+        return response('must not fetch');
       },
-    });
-    assert.equal(fetchCount, 0);
-    assert.match(parts[1].text || '', /media storage is unavailable for isolated sessions/);
-  } finally {
-    (sessionManager as any).getExistingSession = originalGetExistingSession;
-    (sessionManager as any).isSessionEffectivelyIsolated = originalIsSessionEffectivelyIsolated;
-    (sessionManager as any).getAgentIsolationNode = originalGetAgentIsolationNode;
-  }
+      saveInboundSessionFile: bufferSaver(() => { saveCount += 1; }),
+    },
+  });
+  assert.equal(fetchCount, 0);
+  assert.equal(saveCount, 0);
+  assert.match(parts[1].text || '', /configured size limit/);
+});
+
+test('QQ isolated per-attachment cap does not exhaust the independent total bound', async () => {
+  const oversizedBody = new Uint8Array(QQBOT_MEDIA_ISOLATED_TRANSFER_MAX_BYTES + 1).fill(0x61);
+  const savedBuffers: Buffer[] = [];
+  let fetchCount = 0;
+  const parts = await materializeQQBotAttachments({
+    content: 'isolated per-file cap',
+    eventId: 'message-isolated-per-file-cap',
+    sessionId: 'session-isolated-per-file-cap',
+    attachments: [
+      { url: 'https://qpic.cn/unknown-large', filename: 'large.bin', content_type: 'file' },
+      { url: 'https://qpic.cn/unknown-small', filename: 'small.bin', content_type: 'file' },
+    ],
+    deps: {
+      isMainHostedSession: async () => false,
+      fetch: async () => {
+        fetchCount += 1;
+        if (fetchCount === 1) {
+          return response(new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(oversizedBody);
+              controller.close();
+            },
+          }));
+        }
+        return response('small file');
+      },
+      saveInboundSessionFile: bufferSaver(options => { savedBuffers.push(options.buffer); }),
+    },
+  });
+
+  assert.equal(fetchCount, 2);
+  assert.deepEqual(savedBuffers.map(buffer => buffer.toString()), ['small file']);
+  assert.match(parts[1].text || '', /configured size limit/);
+  assert.match(parts[2].text || '', /File:/);
 });
 
 test('QQ real master save copy errors become controlled storage errors without path leakage', async () => {

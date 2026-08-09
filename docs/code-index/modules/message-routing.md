@@ -56,11 +56,11 @@ Channel source wrappers are added once when a queued user item is constructed. Q
 
 ### D-routing-runtime-state
 
-The router publishes transient `requesting-model` and `running-tool` phases separately from channel-specific progress payloads.
+The runner publishes transient `requesting-model` and `running-tool` phases separately from channel-specific progress payloads.
 
 ### D-routing-final-broadcast
 
-Final replies carry a generic `turnFinal` signal. Channels may use it to close an aggregate response; the router does not embed platform-specific completion logic.
+Final replies carry a generic `turnFinal` signal. Channels may use it to close an aggregate response; the runner does not embed platform-specific completion logic.
 
 ## Canonical cross-module ownership
 

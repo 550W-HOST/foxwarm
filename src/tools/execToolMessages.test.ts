@@ -168,11 +168,12 @@ test('persistent exec rejects missing cwd with a friendly cwd-focused error and 
     }),
     (err: any) => {
       const message = String(err?.message || err);
-      assert.match(message, /working directory is invalid/i);
-      assert.match(message, /Source: explicit/i);
-      assert.match(message, /Raw cwd/i);
-      assert.match(message, /Resolved cwd/i);
-      assert.match(message, /not a missing `\/bin\/bash`/i);
+      assert.equal(
+        message,
+        `Cannot start exec on node \`master\`: working directory is invalid (path does not exist). Source: explicit. Raw cwd: \`${missing}\`. Resolved cwd: \`${missing}\`.`,
+      );
+      assert.doesNotMatch(message, /\/bin\/bash/i);
+      assert.doesNotMatch(message, /spawn .*ENOENT/i);
       return true;
     },
   );

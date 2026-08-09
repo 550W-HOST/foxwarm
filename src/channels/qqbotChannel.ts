@@ -14,7 +14,7 @@ const MAX_RECONNECT_ATTEMPTS = 100;
 const MAX_RECENT_INBOUND_EVENTS = 10_000;
 const MAX_REPLY_SEQUENCES = 10_000;
 const RATE_LIMIT_RECONNECT_DELAY_MS = 60_000;
-const PASSIVE_REPLY_TTL_MS = 60 * 60 * 1_000;
+const PASSIVE_REPLY_TTL_MS = 3 * 60 * 1_000;
 const MAX_PASSIVE_TEXT_REPLIES = 4;
 const MAX_PASSIVE_REPLY_CONTEXTS = 10_000;
 const MAX_PASSIVE_REPLY_CHAINS = 10_000;
@@ -58,6 +58,7 @@ type QQBotSendOptions = {
 type PassiveReplyContext = {
   firstSeenAt: number;
   successfulReplies: number;
+  expired?: boolean;
 };
 
 type PassiveReplyChain = {
@@ -159,6 +160,39 @@ function getMessageSceneIndex(value: unknown): string | undefined {
   return undefined;
 }
 
+class QQBotApiError extends Error {
+  readonly code?: number;
+
+  constructor(message: string, code?: number) {
+    super(message);
+    this.name = 'QQBotApiError';
+    this.code = code;
+  }
+}
+
+function parseQQBotApiErrorCode(responseText: string): number | undefined {
+  let payload: any;
+  try {
+    payload = JSON.parse(responseText);
+  } catch {
+    return undefined;
+  }
+  for (const candidate of [payload?.code, payload?.err_code]) {
+    if (typeof candidate === 'number' && Number.isSafeInteger(candidate)) {
+      return candidate;
+    }
+    if (typeof candidate === 'string' && /^-?\d+$/u.test(candidate.trim())) {
+      const code = Number(candidate.trim());
+      if (Number.isSafeInteger(code)) return code;
+    }
+  }
+  return undefined;
+}
+
+function isQQBotMessageExpiredError(error: unknown): boolean {
+  return error instanceof QQBotApiError && error.code === 40034005;
+}
+
 export function parseQQBotConversationId(value: string): QQBotConversation {
   const separator = value.indexOf(':');
   const kind = separator === -1 ? '' : value.slice(0, separator);
@@ -180,6 +214,7 @@ export class QQBotChannel implements Channel {
   private readonly channelId: string;
   private readonly appId: string;
   private readonly clientSecret: string;
+  private readonly requireMention: boolean;
   private readonly mediaConfig: QQBotConfig['media'];
   private readonly saveInboundSessionFileFromPath?: QQBotChannelDeps['saveInboundSessionFileFromPath'];
   private readonly fetchFn: typeof fetch;
@@ -211,6 +246,7 @@ export class QQBotChannel implements Channel {
     this.channelId = name;
     this.appId = config.appId?.trim() || '';
     this.clientSecret = config.clientSecret?.trim() || '';
+    this.requireMention = config.requireMention !== false;
     this.mediaConfig = config.media;
     this.fetchFn = deps.fetch || globalThis.fetch;
     this.saveInboundSessionFileFromPath = deps.saveInboundSessionFileFromPath;
@@ -288,7 +324,7 @@ export class QQBotChannel implements Channel {
 
     const send = async (): Promise<void> => {
       const useProactiveFallback = sourceBoundPassiveReply && this.shouldUseProactiveReply(replyToId!);
-      const passiveReplyId = useProactiveFallback ? undefined : replyToId;
+      let passiveReplyId = useProactiveFallback ? undefined : replyToId;
       const messageSequence = passiveReplyId && (target.kind === 'c2c' || target.kind === 'group')
         ? this.allocateReplySequence(passiveReplyId)
         : undefined;
@@ -306,11 +342,36 @@ export class QQBotChannel implements Channel {
       try {
         await this.apiRequest(messagePath, 'POST', body);
       } catch (error) {
-        if (sourceBoundPassiveReply && options?.turnFinal) {
-          logger.error({ err: error, channelId: this.channelId, conversationId, fallbackAttempted: useProactiveFallback }, 'QQ Bot source-bound final reply could not be delivered');
-          return;
+        const canRetryExpiredPassive = sourceBoundPassiveReply
+          && !useProactiveFallback
+          && Boolean(passiveReplyId)
+          && (target.kind === 'c2c' || target.kind === 'group')
+          && isQQBotMessageExpiredError(error);
+        if (canRetryExpiredPassive) {
+          if (!this.isCurrentReplyGeneration(replyGeneration)) {
+            throw new Error('QQ Bot source-bound reply was invalidated before proactive retry');
+          }
+          this.markPassiveReplyExpired(replyToId!);
+          passiveReplyId = undefined;
+          try {
+            await this.apiRequest(messagePath, 'POST', {
+              content,
+              msg_type: 0,
+            });
+          } catch (proactiveError) {
+            if (options?.turnFinal) {
+              logger.error({ err: proactiveError, channelId: this.channelId, conversationId, fallbackAttempted: true }, 'QQ Bot source-bound final reply could not be delivered');
+              return;
+            }
+            throw proactiveError;
+          }
+        } else {
+          if (sourceBoundPassiveReply && options?.turnFinal) {
+            logger.error({ err: error, channelId: this.channelId, conversationId, fallbackAttempted: useProactiveFallback }, 'QQ Bot source-bound final reply could not be delivered');
+            return;
+          }
+          throw error;
         }
-        throw error;
       }
       if (sourceBoundPassiveReply && passiveReplyId && this.isCurrentReplyGeneration(replyGeneration)) {
         this.recordPassiveSuccessfulReply(passiveReplyId);
@@ -361,7 +422,7 @@ export class QQBotChannel implements Channel {
         throw new Error('QQ Bot media send was invalidated before upload');
       }
       const useProactiveFallback = sourceBoundPassiveReply && this.shouldUseProactiveReply(replyToId!);
-      const passiveReplyId = useProactiveFallback ? undefined : replyToId;
+      let passiveReplyId = useProactiveFallback ? undefined : replyToId;
       const uploaded = await uploadQQBotFile(
         mediaTarget,
         target.id,
@@ -377,12 +438,34 @@ export class QQBotChannel implements Channel {
         throw new Error('QQ Bot media send was invalidated before final delivery');
       }
       const messageSequence = passiveReplyId ? this.allocateReplySequence(passiveReplyId) : undefined;
-      await this.apiRequest(messagePath, 'POST', {
+      const messageBody = {
         ...(caption ? { content: caption } : {}),
         msg_type: 7,
         media: { file_info: uploaded.fileInfo },
         ...(passiveReplyId ? { msg_id: passiveReplyId, msg_seq: messageSequence } : { msg_seq: 1 }),
-      });
+      };
+      try {
+        await this.apiRequest(messagePath, 'POST', messageBody);
+      } catch (error) {
+        const canRetryExpiredPassive = sourceBoundPassiveReply
+          && !useProactiveFallback
+          && Boolean(passiveReplyId)
+          && isQQBotMessageExpiredError(error);
+        if (!canRetryExpiredPassive) {
+          throw error;
+        }
+        if (!this.isCurrentReplyGeneration(replyGeneration)) {
+          throw new Error('QQ Bot source-bound media reply was invalidated before proactive retry');
+        }
+        this.markPassiveReplyExpired(replyToId!);
+        passiveReplyId = undefined;
+        await this.apiRequest(messagePath, 'POST', {
+          ...(caption ? { content: caption } : {}),
+          msg_type: 7,
+          media: { file_info: uploaded.fileInfo },
+          msg_seq: 1,
+        });
+      }
       if (sourceBoundPassiveReply && passiveReplyId && this.isCurrentReplyGeneration(replyGeneration)) {
         this.recordPassiveSuccessfulReply(passiveReplyId);
       }
@@ -635,7 +718,7 @@ export class QQBotChannel implements Channel {
       return;
     }
 
-    if (!['C2C_MESSAGE_CREATE', 'GROUP_AT_MESSAGE_CREATE', 'AT_MESSAGE_CREATE', 'DIRECT_MESSAGE_CREATE'].includes(frame.t)) {
+    if (!['C2C_MESSAGE_CREATE', 'GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE', 'AT_MESSAGE_CREATE', 'DIRECT_MESSAGE_CREATE'].includes(frame.t)) {
       return;
     }
     await this.routeInboundMessage(frame.t, frame.d, frame.s);
@@ -671,6 +754,11 @@ export class QQBotChannel implements Channel {
 
   private async routeInboundMessage(eventType: string, event: any, sequence?: number): Promise<void> {
     const content = typeof event?.content === 'string' ? event.content : '';
+
+    if (eventType === 'GROUP_MESSAGE_CREATE' && this.requireMention) {
+      logger.debug({ channelId: this.channelId, eventType, messageId: event?.id }, 'Ignoring non-mention QQ Bot group event');
+      return;
+    }
 
     const inbound = this.normalizeInboundEvent(eventType, event);
     if (!inbound) {
@@ -749,7 +837,7 @@ export class QQBotChannel implements Channel {
       const senderId = typeof event?.author?.user_openid === 'string' ? event.author.user_openid.trim() : '';
       return senderId ? { kind: 'c2c', conversationId: `c2c:${senderId}`, senderId, username: senderId, messageId } : null;
     }
-    if (eventType === 'GROUP_AT_MESSAGE_CREATE') {
+    if (eventType === 'GROUP_AT_MESSAGE_CREATE' || eventType === 'GROUP_MESSAGE_CREATE') {
       const senderId = typeof event?.author?.member_openid === 'string' ? event.author.member_openid.trim() : '';
       const groupId = typeof event?.group_openid === 'string' ? event.group_openid.trim() : '';
       return senderId && groupId
@@ -773,7 +861,10 @@ export class QQBotChannel implements Channel {
   private isDuplicateInboundEvent(eventType: string, messageId: string, event: any): boolean {
     const messageSequence = normalizeBusinessScalar(event?.msg_seq);
     const messageIndex = getMessageSceneIndex(event?.message_scene?.ext);
-    const key = `${eventType}:${messageId}:${messageSequence ? `seq=${messageSequence}` : 'seq=-'}:${messageIndex ? `idx=${messageIndex}` : 'idx=-'}`;
+    const canonicalEventType = eventType === 'GROUP_AT_MESSAGE_CREATE' || eventType === 'GROUP_MESSAGE_CREATE'
+      ? 'GROUP_MESSAGE_CREATE'
+      : eventType;
+    const key = `${canonicalEventType}:${messageId}:${messageSequence ? `seq=${messageSequence}` : 'seq=-'}:${messageIndex ? `idx=${messageIndex}` : 'idx=-'}`;
     if (this.recentInboundEvents.has(key)) {
       return true;
     }
@@ -816,26 +907,27 @@ export class QQBotChannel implements Channel {
       return existing;
     }
     const now = Date.now();
-    for (const [id, context] of this.passiveReplyContexts) {
-      if (now - context.firstSeenAt >= PASSIVE_REPLY_TTL_MS * 2) {
-        this.passiveReplyContexts.delete(id);
-      }
-    }
     if (this.passiveReplyContexts.size >= MAX_PASSIVE_REPLY_CONTEXTS) {
       const oldest = this.passiveReplyContexts.keys().next().value;
       if (oldest) {
         this.passiveReplyContexts.delete(oldest);
       }
     }
-    const context = { firstSeenAt: now, successfulReplies: 0 };
+    const context = { firstSeenAt: now, successfulReplies: 0, expired: false };
     this.passiveReplyContexts.set(messageId, context);
     return context;
   }
 
   private shouldUseProactiveReply(messageId: string): boolean {
     const context = this.rememberPassiveReplyContext(messageId);
-    return Date.now() - context.firstSeenAt >= PASSIVE_REPLY_TTL_MS
+    return context.expired === true
+      || Date.now() - context.firstSeenAt >= PASSIVE_REPLY_TTL_MS
       || context.successfulReplies >= MAX_PASSIVE_TEXT_REPLIES;
+  }
+
+  private markPassiveReplyExpired(messageId: string): void {
+    const context = this.rememberPassiveReplyContext(messageId);
+    context.expired = true;
   }
 
   private recordPassiveSuccessfulReply(messageId: string): void {
@@ -894,7 +986,10 @@ export class QQBotChannel implements Channel {
       ? await response.text()
       : await readResponseTextBounded(response, maxResponseBytes);
     if (!response.ok) {
-      throw new Error(`QQ Bot API ${method} ${path} failed (${response.status}): ${responseText.slice(0, 300)}`);
+      throw new QQBotApiError(
+        `QQ Bot API ${method} ${path} failed (${response.status}): ${responseText.slice(0, 300)}`,
+        parseQQBotApiErrorCode(responseText),
+      );
     }
     if (!responseText.trim()) {
       return {} as T;

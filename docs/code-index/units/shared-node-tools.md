@@ -63,7 +63,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `writeNodeTransferFile(filePath, agentName, dataBase64, overwrite, restrictToAgentDir)` | ~60 | Writes a base64-encoded file to disk through a temporary path and atomic rename |
 | `expandHomePath(filePath)` (execCwd) | ~22 | Expands ~ to home directory |
 | `resolveExecCwd(options)` | ~28 | Resolves exec cwd from explicit/session/default sources |
-| `buildInvalidExecCwdMessage(resolved, reason, nodeId)` | ~44 | Builds a descriptive error message for invalid cwd |
+| `buildInvalidExecCwdMessage(resolved, reason, nodeId)` | ~44 | Builds a concise invalid-cwd message with reason, source, raw cwd, and resolved cwd |
 | `validateResolvedExecCwd(resolved, nodeId)` | ~49 | Validates that resolved cwd exists and is accessible |
 | `resolveValidatedExecCwd(options)` | ~73 | Resolves and validates exec cwd in one call |
 | `estimateTokenCount(text)` | ~1 | Estimates token count using codepoint heuristics |
@@ -101,7 +101,7 @@ Non-image file reads above 1 MiB must not full-read or decode their source befor
 - File transfer functions enforce path traversal restrictions by default and
   write through unique temporary files with atomic rename/cleanup so remote
   inbound descriptors cannot point at a partially written destination.
-- Exec cwd validation produces detailed error messages distinguishing cwd issues from missing shell errors
+- Exec cwd validation produces concise error messages preserving the failure reason, cwd source, raw cwd, and resolved cwd
 - Output exceeding `INLINE_OUTPUT_LIMIT` (10K chars) is truncated with a pointer to the log file
 - Node `apply_patch` success and partial-failure summaries use the shared per-operation formatter, including per-file add/update counts; the count contract is canonical in [D-apply-patch-change-counts](./shared-apply-patch.md#d-apply-patch-change-counts).
 - `parseSessionLinkText` preserves all surrounding text while linking legacy session references and only the `sourceSessionId` value inside an opening `<foxwarm-message type="inter-agent" ...>` tag. It does not link arbitrary XML attributes or direct channel wrappers.

@@ -617,7 +617,7 @@ export class PersistentExecManager {
       child.once('spawn', () => resolve());
       child.once('error', (err: any) => {
         if (err?.code === 'ENOENT') {
-          reject(new Error(`Failed to start exec on node \`${nodeId}\`: ${err.message}. Working directory was validated as \`${initialCwd}\`; if you see \`spawn /bin/bash ENOENT\` with a different cwd, it is commonly a cwd issue rather than a missing shell.`));
+          reject(new Error(`Failed to start exec on node \`${nodeId}\`: ${err.message}. Working directory was validated as \`${initialCwd}\`.`));
           return;
         }
         reject(err);

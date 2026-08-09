@@ -3,6 +3,7 @@ import { ChevronDown, Code2, ExternalLink } from 'lucide-react'
 import { normalizeCodePath } from '../vscodeWeb'
 import NodeTargetSelect from './NodeTargetSelect'
 import { getNodeTargetAvailability, preserveSelectedNodeTarget, type WebUiNodeTarget } from '../nodeTargets'
+import { selectLauncherDraftNode } from '../launcherDraft'
 
 interface CodeLaunchButtonProps {
   path: string
@@ -73,6 +74,14 @@ export default function CodeLaunchButton({
     setOpen(false)
   }
 
+  const handleNodeChange = (nextNodeId: string) => {
+    const nextDraft = selectLauncherDraftNode({ nodeId: draftNodeId, path: draftPath }, nextNodeId)
+    if (nextDraft.nodeId === draftNodeId) return
+    setDraftNodeId(nextDraft.nodeId)
+    setDraftPath(nextDraft.path)
+    setPathError('')
+  }
+
   return (
     <div className="relative" ref={rootRef}>
       <div className="flex w-full items-stretch gap-1">
@@ -113,7 +122,7 @@ export default function CodeLaunchButton({
                 value={draftNodeId}
                 nodes={nodeTargets}
                 requiredService="vscode-fs"
-                onChange={setDraftNodeId}
+                onChange={handleNodeChange}
               />
               {nodeTargetsError && <div className="mt-1 text-xs text-red-600 dark:text-red-400">{nodeTargetsError}</div>}
               {!selectedAvailability.available && !nodeTargetsError && (

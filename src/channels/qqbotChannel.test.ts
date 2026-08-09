@@ -98,6 +98,65 @@ test('QQ Bot deduplicates by business message sequence/index, not gateway sequen
   assert.deepEqual(received, ['c2c first', 'c2c next business message', 'group first', 'group next business message', 'malformed ext still uses msg seq', 'malformed ext next msg seq', 'ambiguous ext id fallback']);
 });
 
+test('QQ Bot optionally accepts ordinary group messages and canonicalizes AT/non-AT duplicates', async () => {
+  const calls: Array<{ url: string; body: any }> = [];
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret', requireMention: false },
+    'qq-group-always',
+    {
+      fetch: async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ url: String(url), body: JSON.parse(String(init?.body || '{}')) });
+        return response({ id: 'outbound-id' });
+      },
+    },
+  );
+  activateForDirectSend(channel);
+  (channel as any).accessToken = { value: 'token', expiresAt: Date.now() + 600_000 };
+  const received: any[] = [];
+  channel.onMessage(async (ctx, message) => { received.push({ ctx, message }); });
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    id: 'ordinary-group-message',
+    content: 'ordinary group message',
+    group_openid: 'group-1',
+    author: { member_openid: 'member-1', username: 'Member' },
+  });
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+    id: 'ordinary-group-message',
+    content: 'duplicate AT delivery',
+    group_openid: 'group-1',
+    author: { member_openid: 'member-1', username: 'Member' },
+  });
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0].ctx.conversationId, 'group:group-1');
+  assert.equal(received[0].ctx.senderId, 'member-1');
+  assert.equal(received[0].ctx.qqbotMessageId, 'ordinary-group-message');
+  assert.deepEqual(received[0].message.parts, [{ text: 'ordinary group message' }]);
+
+  await received[0].ctx.reply('passive group reply');
+  const groupCalls = calls.filter(call => call.url.includes('/v2/groups/'));
+  assert.equal(groupCalls.length, 1);
+  assert.equal(groupCalls[0].url, 'https://api.sgroup.qq.com/v2/groups/group-1/messages');
+  assert.equal(groupCalls[0].body.msg_id, 'ordinary-group-message');
+  assert.equal(groupCalls[0].body.msg_seq, 1);
+});
+
+test('QQ Bot keeps ordinary GROUP_MESSAGE_CREATE events ignored by the default mention policy', async () => {
+  const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-group-mention-default');
+  const received: any[] = [];
+  channel.onMessage(async (ctx, message) => { received.push({ ctx, message }); });
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    id: 'ordinary-group-default',
+    content: 'ordinary group message',
+    group_openid: 'group-1',
+    author: { member_openid: 'member-1' },
+  });
+
+  assert.equal(received.length, 0);
+});
+
 test('QQ Bot accepts C2C/group attachment-only turns with safe metadata and keeps attachment order', async () => {
   const received: any[] = [];
   const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-media-preview');
@@ -414,7 +473,7 @@ test('QQ Bot busy follow-up joins the active tool loop and one final uses its la
   }
 });
 
-test('QQ Bot follow-up arriving during the final provider request is absorbed before delivery', async () => {
+test('QQ Bot delivers a no-tool result before continuing a late compatible follow-up', async () => {
   const channelId = `qq-final-safe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const sessionId = `session-${channelId}`;
   const outbound: any[] = [];
@@ -433,6 +492,8 @@ test('QQ Bot follow-up arriving during the final provider request is absorbed be
   );
   const router = new MessageRouter([{ platform: 'qqbot', userId: 'openid-1' }]);
   const originalChat = llm.chat;
+  const sends: Array<{ conversationId: string; text: string; options?: any }> = [];
+  const originalSendMessage = channel.sendMessage.bind(channel);
   let firstRequestStarted!: () => void;
   let releaseFirstRequest!: () => void;
   const firstRequestStartedPromise = new Promise<void>(resolve => { firstRequestStarted = resolve; });
@@ -440,6 +501,10 @@ test('QQ Bot follow-up arriving during the final provider request is absorbed be
   let chatCalls = 0;
 
   activateForDirectSend(channel);
+  (channel as any).sendMessage = async (conversationId: string, text: string, options?: any) => {
+    sends.push({ conversationId, text, options });
+    await originalSendMessage(conversationId, text, options);
+  };
   registerChannel(channelId, channel);
   channel.onMessage((ctx, message) => router.handleMessage(ctx, message));
 
@@ -457,6 +522,12 @@ test('QQ Bot follow-up arriving during the final provider request is absorbed be
         await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'intermediate answer' }] });
         return { text: 'intermediate answer', allParts: [{ text: 'intermediate answer' }] };
       }
+      const intermediateSends = sends.filter(send => send.text === 'intermediate answer');
+      assert.equal(intermediateSends.length, 1, 'call one text must be sent before provider call two');
+      assert.equal(intermediateSends[0].conversationId, 'c2c:openid-1');
+      assert.equal(intermediateSends[0].options?.parse_mode, 'Markdown');
+      assert.equal(intermediateSends[0].options?.excludePlatforms?.includes('webui'), true);
+      assert.notEqual(intermediateSends[0].options?.turnFinal, true);
       assert.equal(activeSession.history.some(message => message.parts.some(part => part.system?.includes('late steering'))), true);
       await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'answer to late steering' }] });
       return { text: 'answer to late steering', allParts: [{ text: 'answer to late steering' }] };
@@ -477,12 +548,22 @@ test('QQ Bot follow-up arriving during the final provider request is absorbed be
 
     assert.equal(chatCalls, 2);
     assert.equal(session.history.filter(message => message.role === 'user').length, 2);
-    const intermediates = outbound.filter(body => body.content === 'intermediate answer');
-    assert.equal(intermediates.length, 1);
-    assert.equal(intermediates[0].msg_id, 'qq-final-2');
+    assert.deepEqual(
+      session.history
+        .filter(message => message.role === 'model')
+        .map(message => message.parts.find(part => part.text)?.text),
+      ['intermediate answer', 'answer to late steering'],
+    );
+    const intermediate = outbound.filter(body => body.content === 'intermediate answer');
+    assert.equal(intermediate.length, 1);
+    assert.equal(intermediate[0].msg_id, 'qq-final-2');
+    assert.equal(sends.filter(send => send.text === 'intermediate answer').length, 1);
     const finals = outbound.filter(body => body.content === 'answer to late steering');
     assert.equal(finals.length, 1);
     assert.equal(finals[0].msg_id, 'qq-final-2');
+    const finalSends = sends.filter(send => send.text === 'answer to late steering');
+    assert.equal(finalSends.length, 1);
+    assert.equal(finalSends[0].options?.turnFinal, true);
   } finally {
     releaseFirstRequest?.();
     (llm as any).chat = originalChat;
@@ -536,7 +617,13 @@ test('QQ Bot uses the bounded local passive-reply policy without inferring serve
         calls.push({ url: String(url), init });
         if (String(url).includes('getAppAccessToken')) return response({ access_token: 'token', expires_in: 7200 });
         const body = JSON.parse(String(init?.body || '{}'));
-        if (failPassive && body.msg_id === 'unknown-failure') return response({ code: 999999, message: 'unknown' }, 400);
+        if (body.msg_id === 'expired-server') return response({ code: 40034005, message: '回复消息msg_id已过期' }, 400);
+        if (body.content === 'expired-proactive-failure') {
+          return response(body.msg_id
+            ? { err_code: 40034005, message: '回复消息msg_id已过期' }
+            : { code: 40034105, message: '主动消息失败, 无权限' }, 400);
+        }
+        if (failPassive && body.msg_id === 'unknown-failure') return response({ code: 999999, message: 'unrelated text mentions 40034005 only' }, 400);
         if (failProactive && !body.msg_id) return response({ code: 999998, message: 'proactive failed' }, 400);
         return response({ id: 'outbound-id' });
       },
@@ -561,11 +648,45 @@ test('QQ Bot uses the bounded local passive-reply policy without inferring serve
   const independent = calls.find(call => String(call.init?.body).includes('independent'));
   assert.equal(JSON.parse(String(independent?.init?.body)).msg_id, 'independent-id');
 
-  const contexts = (channel as any).passiveReplyContexts as Map<string, { firstSeenAt: number; successfulReplies: number }>;
-  contexts.set('expired-id', { firstSeenAt: Date.now() - 3_600_001, successfulReplies: 0 });
+  const contexts = (channel as any).passiveReplyContexts as Map<string, { firstSeenAt: number; successfulReplies: number; expired?: boolean }>;
+  contexts.set('within-three-minutes', { firstSeenAt: Date.now() - (3 * 60 * 1_000 - 1_000), successfulReplies: 0 });
+  await sendBound('within-three-minutes', 'within three minute boundary', true);
+  const withinBoundary = calls.find(call => String(call.init?.body).includes('within three minute boundary'));
+  assert.equal(JSON.parse(String(withinBoundary?.init?.body)).msg_id, 'within-three-minutes');
+
+  contexts.set('expired-id', { firstSeenAt: Date.now() - (3 * 60 * 1_000 + 1_000), successfulReplies: 0 });
   await sendBound('expired-id', 'expired proactive', true);
   const expired = calls.find(call => String(call.init?.body).includes('expired proactive'));
   assert.equal(JSON.parse(String(expired?.init?.body)).msg_id, undefined);
+
+  const beforeServerExpired = calls.length;
+  await sendBound('expired-server', 'expired server fallback', true);
+  const serverExpiredBodies = calls
+    .slice(beforeServerExpired)
+    .filter(call => String(call.url).includes('/v2/users/'))
+    .map(call => JSON.parse(String(call.init?.body || '{}')));
+  assert.deepEqual(serverExpiredBodies, [
+    { content: 'expired server fallback', msg_type: 0, msg_id: 'expired-server', msg_seq: 1 },
+    { content: 'expired server fallback', msg_type: 0 },
+  ]);
+  const beforeFutureExpired = calls.length;
+  await sendBound('expired-server', 'future expired server fallback', true);
+  const futureExpiredBodies = calls
+    .slice(beforeFutureExpired)
+    .filter(call => String(call.url).includes('/v2/users/'))
+    .map(call => JSON.parse(String(call.init?.body || '{}')));
+  assert.deepEqual(futureExpiredBodies, [{ content: 'future expired server fallback', msg_type: 0 }]);
+
+  const beforeProactiveKnownFailure = calls.length;
+  await sendBound('expired-proactive-failure', 'expired-proactive-failure', true);
+  const proactiveKnownFailureBodies = calls
+    .slice(beforeProactiveKnownFailure)
+    .filter(call => String(call.url).includes('/v2/users/'))
+    .map(call => JSON.parse(String(call.init?.body || '{}')));
+  assert.deepEqual(proactiveKnownFailureBodies, [
+    { content: 'expired-proactive-failure', msg_type: 0, msg_id: 'expired-proactive-failure', msg_seq: 1 },
+    { content: 'expired-proactive-failure', msg_type: 0 },
+  ]);
 
   failPassive = true;
   const beforeUnknownFailure = calls.length;
@@ -586,6 +707,47 @@ test('QQ Bot uses the bounded local passive-reply policy without inferring serve
     channel.sendMessage('c2c:openid-1', 'ordinary direct failure', { replyToId: 'unknown-failure' }),
     /QQ Bot API POST/,
   );
+});
+
+test('QQ Bot keeps aged and server-expired passive contexts through unrelated inbound contexts', async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret' },
+    'qq-passive-context-retention',
+    {
+      fetch: async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ url: String(url), init });
+        if (String(url).includes('getAppAccessToken')) return response({ access_token: 'token', expires_in: 7200 });
+        return response({ id: 'outbound-id' });
+      },
+    },
+  );
+  activateForDirectSend(channel);
+  const contexts = (channel as any).passiveReplyContexts as Map<string, { firstSeenAt: number; successfulReplies: number; expired?: boolean }>;
+  contexts.set('aged-id', { firstSeenAt: Date.now() - (6 * 60 * 1_000 + 1_000), successfulReplies: 0 });
+  contexts.set('server-expired-id', { firstSeenAt: Date.now(), successfulReplies: 0, expired: true });
+
+  await (channel as any).routeInboundMessage('C2C_MESSAGE_CREATE', {
+    id: 'unrelated-inbound-one',
+    content: 'unrelated one',
+    author: { user_openid: 'openid-1' },
+  });
+  await (channel as any).routeInboundMessage('C2C_MESSAGE_CREATE', {
+    id: 'unrelated-inbound-two',
+    content: 'unrelated two',
+    author: { user_openid: 'openid-1' },
+  });
+
+  await channel.sendMessage('c2c:openid-1', 'aged stays proactive', { replyToId: 'aged-id', qqbotSourceBound: true });
+  await channel.sendMessage('c2c:openid-1', 'expired stays proactive', { replyToId: 'server-expired-id', qqbotSourceBound: true });
+
+  const bodies = calls
+    .filter(call => String(call.url).includes('/v2/users/'))
+    .map(call => JSON.parse(String(call.init?.body || '{}')));
+  assert.deepEqual(bodies, [
+    { content: 'aged stays proactive', msg_type: 0 },
+    { content: 'expired stays proactive', msg_type: 0 },
+  ]);
 });
 
 test('QQ Bot serializes concurrent source-bound replies per inbound message ID', async () => {
@@ -703,7 +865,7 @@ test('QQ Bot maps group, guild, and guild-DM sends while keeping guild media uns
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const socket = new FakeSocket();
   const channel = new QQBotChannel(
-    { appId: 'app-id', clientSecret: 'secret' },
+    { appId: 'app-id', clientSecret: 'secret', requireMention: false },
     'qq-secondary',
     {
       fetch: async (url: string | URL | Request, init?: RequestInit) => {
@@ -730,6 +892,10 @@ test('QQ Bot maps group, guild, and guild-DM sends while keeping guild media uns
   await flush();
   assert.equal(received[0].ctx.conversationId, 'group:group-1');
   assert.equal(received[0].ctx.senderId, 'member-1');
+  socket.emit('message', Buffer.from(JSON.stringify({ op: 0, t: 'GROUP_MESSAGE_CREATE', d: { id: 'group-ordinary', content: 'ordinary group hello', group_openid: 'group-1', author: { member_openid: 'member-2', username: 'Member 2' } } })));
+  await flush();
+  assert.equal(received[1].ctx.conversationId, 'group:group-1');
+  assert.equal(received[1].ctx.qqbotMessageId, 'group-ordinary');
 
   await channel.sendMessage('group:group-1', 'group reply', { replyToId: 'group-incoming' });
   await channel.sendMessage('guild:channel-1', 'guild reply', { replyToId: 'guild-incoming' });

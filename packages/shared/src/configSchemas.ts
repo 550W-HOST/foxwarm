@@ -161,6 +161,7 @@ const channelEntry = {
     enabled: { type: 'boolean' },
     appId: { type: 'string' },
     clientSecret: { type: 'string' },
+    requireMention: { type: 'boolean', description: 'Require @mention in QQ groups; defaults to true.' },
     media: {
       type: 'object',
       additionalProperties: true,

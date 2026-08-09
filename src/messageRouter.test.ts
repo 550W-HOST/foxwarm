@@ -497,10 +497,14 @@ test('MessageRouter leaves a different QQ conversation for provider call three a
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
   let chatCalls = 0;
+  const turnIds: string[] = [];
 
-  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session, _iteration: number, options: any) => {
     chatCalls += 1;
-    if (parts) await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    turnIds.push(options?.turnId);
+    if (parts) {
+      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    }
     if (chatCalls === 1) {
       const toolCall = { id: 'call-1', name: 'read', args: { filePath: 'README.md' } };
       await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ functionCall: toolCall }] });
@@ -525,11 +529,72 @@ test('MessageRouter leaves a different QQ conversation for provider call three a
       source: { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a', channelUserId: 'c2c:user-a', qqbotMessageId: 'qq-1' },
     });
     assert.equal(chatCalls, 3);
+    assert.equal(turnIds.length, 3);
+    assert.match(turnIds[0], /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    assert.equal(turnIds[0], turnIds[1], 'one session turn keeps one TURN_ID across its tool loop');
+    assert.notEqual(turnIds[0], turnIds[2], 'a later runSessionTurn receives a new TURN_ID');
     assert.equal(userTextOccurrences(session, 'different conversation input'), 1);
     assert.equal(session.queue.length, 0);
   } finally {
     (llm as any).chat = originalChat;
     (llm as any).executeTools = originalExecuteTools;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('MessageRouter keeps a different QQ conversation separate at the pre-final safe point', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('qq_conversation_boundary_pre_final');
+  const originalChat = llm.chat;
+  const broadcasts: Array<{ text: string; options?: any }> = [];
+  let chatCalls = 0;
+  session.broadcast = (text: string, options?: any) => broadcasts.push({ text, options });
+
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+    chatCalls += 1;
+    if (parts) {
+      await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
+    }
+    if (chatCalls === 1) {
+      await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'first conversation final' }] });
+      await sessionManager.enqueueSessionItem(session.id, {
+        type: 'user',
+        source: {
+          platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-b',
+          channelUserId: 'c2c:user-b', qqbotMessageId: 'qq-2',
+        },
+        parts: [{ text: 'different conversation input' }],
+      });
+      return { text: 'first conversation final', allParts: [{ text: 'first conversation final' }] };
+    }
+
+    assert.equal(userTextOccurrences(activeSession, 'different conversation input'), 1);
+    await sessionManager.appendSessionMessage(activeSession, { role: 'model', parts: [{ text: 'second conversation final' }] });
+    return { text: 'second conversation final', allParts: [{ text: 'second conversation final' }] };
+  };
+
+  try {
+    await router.turnRunner.runSessionTurn(session.id, {
+      session,
+      preclaimed: true,
+      parts: [{ text: 'first conversation input' }],
+      source: {
+        platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a',
+        channelUserId: 'c2c:user-a', qqbotMessageId: 'qq-1',
+      },
+    });
+
+    assert.equal(chatCalls, 2);
+    assert.deepEqual(broadcasts.map(entry => entry.text), [
+      'first conversation final',
+      'second conversation final',
+    ]);
+    assert.equal(broadcasts.every(entry => entry.options?.turnFinal === true), true);
+    assert.equal(broadcasts.some(entry => entry.options?.parse_mode === 'Markdown'), false);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (llm as any).chat = originalChat;
     sessionManager.clearActiveSessionRuntimeState(session.id);
     await sessionManager.deleteSession(session.id).catch(() => {});
   }

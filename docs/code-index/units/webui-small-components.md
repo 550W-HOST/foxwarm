@@ -1,6 +1,6 @@
 # Unit: webui-small-components
 
-Files: packages/webui/src/components/ContentHeader.tsx, packages/webui/src/components/ContextMenu.tsx, packages/webui/src/components/AgentCreationMenu.tsx, packages/webui/src/agentCreation.ts, packages/webui/src/components/CreateTabButton.tsx, packages/webui/src/components/CodeLaunchButton.tsx, packages/webui/src/components/NodeTargetSelect.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/components/ReasoningCard.tsx, packages/webui/src/components/ReloadAppButton.tsx, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/SpecialBlock.tsx, packages/webui/src/components/SyntaxHighlightedText.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/utils/languages.ts, packages/webui/test/imageParts.e2e.mjs, packages/webui/test/specialBlocks.e2e.mjs
+Files: packages/webui/src/components/ContentHeader.tsx, packages/webui/src/components/ContextMenu.tsx, packages/webui/src/components/AgentCreationMenu.tsx, packages/webui/src/agentCreation.ts, packages/webui/src/components/CreateTabButton.tsx, packages/webui/src/components/CodeLaunchButton.tsx, packages/webui/src/components/NodeTargetSelect.tsx, packages/webui/src/launcherDraft.ts, packages/webui/src/components/ImageParts.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/components/ReasoningCard.tsx, packages/webui/src/components/ReloadAppButton.tsx, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/SpecialBlock.tsx, packages/webui/src/components/SyntaxHighlightedText.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/utils/languages.ts, packages/webui/test/imageParts.e2e.mjs, packages/webui/test/launcherDraft.test.mjs, packages/webui/test/specialBlocks.e2e.mjs
 Secondary files: packages/webui/src/components/CollapsedSidebar.tsx
 
 ## Purpose
@@ -40,6 +40,7 @@ A collection of small, reusable React UI components and utility functions for th
 | `AgentCreationMenu({ ... })` | (AgentCreationMenu.tsx) | Renders the creation dropdown plus agent/session modal flows shared by desktop and mobile expanded sidebars |
 | `buildSessionCreationBody(agentId, sessionId)` | (agentCreation.ts) | Omits blank session IDs so random backend naming remains authoritative |
 | `CreateTabButton({ ... })` | ~50–110 | Split button with dropdown form for custom terminal tab creation |
+| `selectLauncherDraftNode(draft, nodeId)` | `launcherDraft.ts` | Preserve a same-node draft or reset a changed node's path to `/` |
 | `ImageItem({ part, label })` | `ImageParts.tsx` | Resolves deployment-relative blob URLs, enforces safe-raster inline policy, and reports load failure |
 | `ImageParts({ ... })` | `ImageParts.tsx` | Renders a grid of image thumbnails or download-only attachment links |
 | `ProcessingStatus({ ... })` | ~10–50 | Shows animated bounce dots and status text for session processing states |
@@ -84,6 +85,7 @@ A collection of small, reusable React UI components and utility functions for th
 - `CreateTabButton` manages local dropdown state with click-outside detection and syncs terminal defaults from props via effects; it no longer displays a session/default-context hint because terminal creation is cwd/node-based.
 - Its fixed 20rem dropdown also has a viewport-relative maximum width so the same split button remains usable inside the narrow Code-embedded sidebar.
 - Main `CreateTabButton` and `CodeLaunchButton` selectors show approved offline/incompatible nodes disabled, preserve a stale selected node as unavailable, and apply service-specific requirements through `NodeTargetSelect`. The Code-embedded leaf does not receive the selectable node list because its fixed host message has no target fields.
+- Selecting a different node in either main launcher dropdown updates the local draft node and resets its draft path to `/`; switching again resets again, while rerenders, node-list refreshes, same-node selections, and external default synchronization do not trigger this reset or persist the draft. Code also clears its local path error on an actual node change.
 - `CodeLaunchButton` validates absolute POSIX paths before opening, shows inline errors for invalid input, and exposes controlled node/path/open-mode callbacks so `App` owns global persistence.
 
 ## Integration

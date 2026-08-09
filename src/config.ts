@@ -72,6 +72,8 @@ export type QQBotConfig = {
   enabled?: boolean;
   appId?: string;
   clientSecret?: string;
+  /** Whether QQ group messages require an @mention before routing. */
+  requireMention?: boolean;
   allowedUsers?: string[];
   allowAllUsers?: boolean;
   guestAgent?: GuestAgentConfig;

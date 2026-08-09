@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, SquareTerminal } from 'lucide-react'
 import NodeTargetSelect from './NodeTargetSelect'
 import { getNodeTargetAvailability, MASTER_NODE_TARGET, preserveSelectedNodeTarget, type WebUiNodeTarget } from '../nodeTargets'
+import { selectLauncherDraftNode } from '../launcherDraft'
 
 interface CreateTabButtonProps {
   defaultNodeId: string
@@ -55,6 +56,13 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
     setOpen(false)
   }
 
+  const handleNodeChange = (nextNodeId: string) => {
+    const nextDraft = selectLauncherDraftNode({ nodeId, path }, nextNodeId)
+    if (nextDraft.nodeId === nodeId) return
+    setNodeId(nextDraft.nodeId)
+    setPath(nextDraft.path)
+  }
+
   return (
     <div className="relative" ref={rootRef}>
       <div className="flex w-full items-stretch gap-1">
@@ -90,7 +98,7 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
                 value={nodeId}
                 nodes={availableTargets}
                 requiredService="vscode-pty"
-                onChange={setNodeId}
+                onChange={handleNodeChange}
               />
               {nodeTargetsError && <div className="mt-1 text-xs text-red-600 dark:text-red-400">{nodeTargetsError}</div>}
               {!selectedAvailability.available && !nodeTargetsError && (
