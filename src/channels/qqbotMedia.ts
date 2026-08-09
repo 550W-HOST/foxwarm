@@ -6,6 +6,7 @@ import sharp from 'sharp';
 import {
   buildSavedFileText,
   isInboundSessionMainHosted,
+  saveInboundSessionFile,
   saveInboundSessionFileFromPath,
   SavedChannelFile,
 } from '../channelFiles';
@@ -16,6 +17,12 @@ const MIB = 1024 * 1024;
 
 export const QQBOT_MEDIA_HARD_MAX_BYTES = 200 * MIB;
 export const QQBOT_MEDIA_SAFE_INLINE_IMAGE_MAX_BYTES = 20 * MIB;
+/**
+ * The existing remote-node file API is whole-buffer based. Keep its QQ
+ * fallback deliberately small instead of pretending it is a streaming
+ * transfer boundary.
+ */
+export const QQBOT_MEDIA_ISOLATED_TRANSFER_MAX_BYTES = 10 * MIB;
 export const QQBOT_MEDIA_DEFAULT_IMAGE_MAX_BYTES = QQBOT_MEDIA_SAFE_INLINE_IMAGE_MAX_BYTES;
 export const QQBOT_MEDIA_DEFAULT_FILE_MAX_BYTES = 50 * MIB;
 export const QQBOT_MEDIA_DEFAULT_TOTAL_MAX_BYTES = QQBOT_MEDIA_HARD_MAX_BYTES;
@@ -59,7 +66,6 @@ type QQBotMediaErrorCategory =
   | 'download-timeout'
   | 'invalid-media'
   | 'storage-failed'
-  | 'isolated-unavailable'
   | 'unsupported-media';
 
 const QQBOT_MEDIA_ERROR_MESSAGES: Record<QQBotMediaErrorCategory, string> = {
@@ -68,7 +74,6 @@ const QQBOT_MEDIA_ERROR_MESSAGES: Record<QQBotMediaErrorCategory, string> = {
   'download-timeout': 'media download timed out',
   'invalid-media': 'media metadata or bytes were invalid',
   'storage-failed': 'media storage failed',
-  'isolated-unavailable': 'media storage is unavailable for isolated sessions',
   'unsupported-media': 'nested QQ media is deferred',
 };
 
@@ -104,6 +109,7 @@ type NormalizedAttachment = {
 
 export type QQBotMediaDeps = {
   fetch?: typeof fetch;
+  saveInboundSessionFile?: typeof saveInboundSessionFile;
   saveInboundSessionFileFromPath?: typeof saveInboundSessionFileFromPath;
   isMainHostedSession?: typeof isInboundSessionMainHosted;
   timeoutMs?: number;
@@ -516,30 +522,6 @@ function buildPreviewParts(content: string, attachments: unknown[], limits: QQBo
   return parts.length > 0 ? parts : [{ text: '[QQ message contained no readable text or media]' }];
 }
 
-function buildMainHostedOnlyErrorParts(
-  content: string,
-  attachments: unknown[],
-  limits: QQBotMediaLimits,
-  error = mediaError('isolated-unavailable'),
-): MessagePart[] {
-  const parts: MessagePart[] = [];
-  if (content.trim()) parts.push({ text: content });
-  for (let index = 0; index < attachments.length && index < limits.maxAttachments; index += 1) {
-    const attachment = normalizeAttachment(attachments[index], index);
-    if (!attachment) {
-      parts.push({ text: malformedPreview(index) });
-    } else if (attachment.mediaKind === 'unsupported') {
-      parts.push(mediaErrorPart(attachmentPreview(attachment), mediaError('unsupported-media')));
-    } else {
-      parts.push(mediaErrorPart(attachmentPreview(attachment), error));
-    }
-  }
-  if (attachments.length > limits.maxAttachments) {
-    parts.push({ text: `[QQ media: ${attachments.length - limits.maxAttachments} additional attachments omitted by the inbound bound]` });
-  }
-  return parts.length > 0 ? parts : [{ text: '[QQ message contained no readable text or media]' }];
-}
-
 export function buildQQBotAttachmentPreviewParts(content: string, attachments: unknown[], config?: QQBotMediaConfig): MessagePart[] {
   return buildPreviewParts(content, attachments, resolveLimits(config));
 }
@@ -556,10 +538,18 @@ async function saveInbound(
 ): Promise<SavedChannelFile> {
   try {
     return await (deps?.saveInboundSessionFileFromPath || saveInboundSessionFileFromPath)(options);
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('whole-buffer only')) {
-      throw mediaError('isolated-unavailable');
-    }
+  } catch {
+    throw mediaError('storage-failed');
+  }
+}
+
+async function saveInboundBuffer(
+  deps: QQBotMediaDeps | undefined,
+  options: Parameters<typeof saveInboundSessionFile>[0],
+): Promise<SavedChannelFile> {
+  try {
+    return await (deps?.saveInboundSessionFile || saveInboundSessionFile)(options);
+  } catch {
     throw mediaError('storage-failed');
   }
 }
@@ -570,16 +560,18 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
   const parts: MessagePart[] = [];
   if (options.content.trim()) parts.push({ text: options.content });
 
+  let mainHosted = true;
+  try {
+    mainHosted = await (options.deps?.isMainHostedSession || isInboundSessionMainHosted)(options.sessionId);
+  } catch {
+    return buildPreviewParts(options.content, attachments, limits).map(part => ({
+      ...part,
+      text: part.text ? `${part.text}\n[QQ media unavailable: ${QQBOT_MEDIA_ERROR_MESSAGES['storage-failed']}]` : part.text,
+    }));
+  }
+
   let totalDownloaded = 0;
   let totalBoundReached = false;
-  if (!options.deps?.saveInboundSessionFileFromPath) {
-    try {
-      const mainHosted = await (options.deps?.isMainHostedSession || isInboundSessionMainHosted)(options.sessionId);
-      if (!mainHosted) return buildMainHostedOnlyErrorParts(options.content, attachments, limits);
-    } catch {
-      return buildMainHostedOnlyErrorParts(options.content, attachments, limits, mediaError('storage-failed'));
-    }
-  }
   const fetchFn = options.deps?.fetch || globalThis.fetch;
   if (!fetchFn) {
     return buildPreviewParts(options.content, attachments, limits).map(part => ({
@@ -602,9 +594,12 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
     }
 
     const canPotentiallyInlineImage = attachment.mediaKind === 'image';
-    const downloadLimit = canPotentiallyInlineImage
+    const configuredDownloadLimit = canPotentiallyInlineImage
       ? Math.max(limits.fileMaxBytes, limits.imageInlineMaxBytes)
       : limits.fileMaxBytes;
+    const downloadLimit = mainHosted
+      ? configuredDownloadLimit
+      : Math.min(configuredDownloadLimit, QQBOT_MEDIA_ISOLATED_TRANSFER_MAX_BYTES);
     const selectedUrl = selectAttachmentUrl(attachment);
     if (!selectedUrl) {
       parts.push(mediaErrorPart(label, mediaError('invalid-media')));
@@ -622,6 +617,7 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
 
     const remainingTotal = limits.totalMaxBytes - totalDownloaded;
     const fetchLimit = Math.min(downloadLimit, remainingTotal, QQBOT_MEDIA_HARD_MAX_BYTES);
+    let downloadCompleted = false;
     let spoolDir: string | undefined;
     try {
       try {
@@ -640,6 +636,7 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
         options.deps?.timeoutMs,
       );
       totalDownloaded += sizeBytes;
+      downloadCompleted = true;
 
       const raster = sizeBytes <= limits.imageInlineMaxBytes
         ? await probeRaster(spoolPath)
@@ -650,22 +647,41 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
       }
       if (canInlineImage) {
         const imageMeta = raster!;
-        const saved = await saveInbound(options.deps, {
-          sessionId: options.sessionId,
-          platform: 'qqbot',
-          sourcePath: spoolPath,
-          sizeBytes,
-          fileName: attachment.fileName,
-          mimeType: imageMeta.mimeType,
-          isImage: true,
-        });
-        // The only full-buffer media read is after the safe inline-image cap
-        // and raster validation have both passed.
+        let saved: SavedChannelFile;
         let buffer: Buffer;
-        try {
-          buffer = await fs.readFile(spoolPath);
-        } catch {
-          throw mediaError('storage-failed');
+        if (mainHosted) {
+          saved = await saveInbound(options.deps, {
+            sessionId: options.sessionId,
+            platform: 'qqbot',
+            sourcePath: spoolPath,
+            sizeBytes,
+            fileName: attachment.fileName,
+            mimeType: imageMeta.mimeType,
+            isImage: true,
+          });
+          // The only full-buffer media read is after the safe inline-image cap
+          // and raster validation have both passed.
+          try {
+            buffer = await fs.readFile(spoolPath);
+          } catch {
+            throw mediaError('storage-failed');
+          }
+        } else {
+          // The isolated path is intentionally whole-buffer and capped above;
+          // do not introduce a second node transfer protocol here.
+          try {
+            buffer = await fs.readFile(spoolPath);
+          } catch {
+            throw mediaError('storage-failed');
+          }
+          saved = await saveInboundBuffer(options.deps, {
+            sessionId: options.sessionId,
+            platform: 'qqbot',
+            buffer,
+            fileName: attachment.fileName,
+            mimeType: imageMeta.mimeType,
+            isImage: true,
+          });
         }
         parts.push({
           text: buildSavedFileText(saved, 'image'),
@@ -679,15 +695,26 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
           },
         });
       } else {
-        const saved = await saveInbound(options.deps, {
-          sessionId: options.sessionId,
-          platform: 'qqbot',
-          sourcePath: spoolPath,
-          sizeBytes,
-          fileName: attachment.fileName,
-          mimeType: attachment.mimeType,
-          isImage: false,
-        });
+        const saved = mainHosted
+          ? await saveInbound(options.deps, {
+              sessionId: options.sessionId,
+              platform: 'qqbot',
+              sourcePath: spoolPath,
+              sizeBytes,
+              fileName: attachment.fileName,
+              mimeType: attachment.mimeType,
+              isImage: false,
+            })
+          : await saveInboundBuffer(options.deps, {
+              sessionId: options.sessionId,
+              platform: 'qqbot',
+              buffer: await fs.readFile(spoolPath).catch(() => {
+                throw mediaError('storage-failed');
+              }),
+              fileName: attachment.fileName,
+              mimeType: attachment.mimeType,
+              isImage: false,
+            });
         const imageFallbackNote = attachment.mediaKind === 'image'
           ? `\n[QQ image kept as a generic file; inline image limit is ${formatByteCount(limits.imageInlineMaxBytes)} and no image bytes were sent inline]`
           : '';
@@ -698,7 +725,7 @@ export async function materializeQQBotAttachments(options: QQBotMediaMaterialize
       }
     } catch (error) {
       const controlledError = asMediaError(error, 'download-failed');
-      if (controlledError.category === 'download-too-large') {
+      if (controlledError.category === 'download-too-large' && !downloadCompleted && fetchLimit === remainingTotal) {
         totalBoundReached = true;
       }
       parts.push(mediaErrorPart(label, controlledError));
