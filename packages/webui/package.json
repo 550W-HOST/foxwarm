@@ -11,6 +11,7 @@
     "test:config-editor": "node --test test/configEditor.test.mjs",
     "test:model-options": "node --test test/modelOptionsLoader.test.mjs",
     "test:model-filter": "node --test test/modelFilter.test.mjs",
+    "test:launcher-draft": "node --test test/launcherDraft.test.mjs",
     "test:setup-models-e2e": "node --test test/setupModels.e2e.mjs",
     "test:theme-e2e": "node --test test/themeMarkdownStyles.e2e.mjs",
     "test:special-blocks-e2e": "node --test test/specialBlocks.e2e.mjs",
