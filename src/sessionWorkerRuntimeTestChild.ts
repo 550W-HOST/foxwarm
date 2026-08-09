@@ -1,5 +1,6 @@
 import fs from 'fs-extra';
 import path from 'node:path';
+import axios from 'axios';
 import { logger } from './common';
 import { STATE_DIR } from './config';
 import { executeMainManagementTool, initializeMainManagementTools, shutdownMainManagementTools } from './mainManagementTools';
@@ -44,10 +45,39 @@ async function start(): Promise<void> {
     process.exit(1);
   }
   const processIdentity = readSessionWorkerProcessIdentity(process.pid)!;
+  // Mock-axios mode: keep the REAL llm.chat path (model resolution, request
+  // plan, journal, request logging, HTTP dispatch, response parsing) and stub
+  // only the network boundary, so tests cover the full pre-HTTP pipeline. Each
+  // dispatch writes a marker file proving the request actually fired.
+  if (process.env.FOXWARM_TEST_MOCK_AXIOS === '1') {
+    let mockCalls = 0;
+    (axios as any).post = async (url: string, _body: any, config: any) => {
+      mockCalls += 1;
+      await fs.writeFile(path.join(STATE_DIR, `axios-mock-${mockCalls}`), String(url));
+      if (config?.responseType === 'stream') {
+        const { Readable } = await import('node:stream');
+        return {
+          status: 200,
+          data: Readable.from([
+            'data: {"choices":[{"delta":{"role":"assistant","content":"mock axios answer"}}]}\n\n',
+            'data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n',
+            'data: [DONE]\n\n',
+          ]),
+        };
+      }
+      return {
+        status: 200,
+        data: {
+          choices: [{ message: { role: 'assistant', content: 'mock axios answer' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+        },
+      };
+    };
+  }
   const failWrites = new Set(String(process.env.FOXWARM_TEST_FAIL_WRITE_AT || '').split(',').map(Number).filter(Boolean));
   const failReads = new Set(String(process.env.FOXWARM_TEST_FAIL_READ_AT || '').split(',').map(Number).filter(Boolean));
   let writeCount = 0; let readCount = 0; let initializeCount = 0; let chatCount = 0; let failedGoal = false; let backgroundExecStarted = false;
-  (llm as any).chat = async (parts: any, session: any, _iteration: number, options: any) => {
+  if (process.env.FOXWARM_TEST_MOCK_AXIOS !== '1') (llm as any).chat = async (parts: any, session: any, _iteration: number, options: any) => {
     chatCount += 1;
     if (parts) await options.appendMessage({ role: 'user', parts });
     if (process.env.FOXWARM_TEST_BACKGROUND_EXEC === '1' && !backgroundExecStarted && options?.purpose !== 'compact-plan') {

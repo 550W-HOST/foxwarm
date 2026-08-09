@@ -2388,6 +2388,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                 if (requestStartedAt === undefined) {
                     requestStartedAt = performance.now();
                 }
+                logger.debug({ modelKey, iteration, attempt, url: plan.url }, 'Dispatching LLM HTTP request');
                 response = await axios.post(plan.url, plan.requestBody, {
                     headers: { ...plan.headers, ...plan.compressionHeaders },
                     timeout: options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS,

@@ -45,6 +45,7 @@ export class SessionWorkerHost {
   private activeAbort?: AbortController;
   private poison?: { original: unknown; resync: unknown };
   private publicationPoison?: unknown;
+  private transientPublishTail: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly identity: SessionWorkerIdentity,
@@ -58,18 +59,26 @@ export class SessionWorkerHost {
     // reached Main piggybacked on authoritative commits, leaving the served
     // projection stuck on the last committed phase after a turn ended (local
     // placement wires the same callback to notifySessionUpdated). Publish the
-    // current projection on every transition, ordered on the serialized chain;
-    // failures only log — the next authoritative commit republishes full state.
+    // current projection on every transition — fire-and-forget on a dedicated
+    // tail that orders transient publishes among themselves but NEVER couples
+    // to the serialized host chain: a stuck Main-side publication must not
+    // wedge future turns. Each publish is time-bounded and failures only log —
+    // the next authoritative commit republishes full state.
     setSessionRuntimeStateUpdateCallback(sessionId => {
       if (sessionId !== this.identity.sessionId) return;
-      void this.serialize(async () => {
+      const task = this.transientPublishTail.then(async () => {
         if (!this.session || !this.dependencies.publishCommitted) return;
+        const publish = this.dependencies.publishCommitted(buildSessionWorkerProjection(this.session));
         try {
-          await this.dependencies.publishCommitted(buildSessionWorkerProjection(this.session));
+          await Promise.race([
+            publish,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('transient projection publication timed out')), 5_000)),
+          ]);
         } catch (error) {
           logger.warn({ err: error, sessionId: this.identity.sessionId }, 'Transient runtime-state projection publication failed');
         }
-      }).catch(error => logger.error({ err: error, sessionId: this.identity.sessionId }, 'Transient runtime-state publication scheduling failed'));
+      });
+      this.transientPublishTail = task.then(() => {}, () => {});
     });
   }
 

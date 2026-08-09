@@ -356,3 +356,29 @@ test('committed projections track turn phases and settle to idle while the worke
     await fs.remove(root);
   }
 });
+
+test('the real llm.chat pipeline dispatches its HTTP request through a worker turn (mocked network boundary)', async () => {
+  const sessionId = `mc-axios-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-axios-'));
+  // Mock-axios mode keeps the REAL llm.chat path (model resolution, request
+  // plan, journal, request logging, HTTP dispatch, response parsing) and stubs
+  // only the network boundary — a regression that hangs the pre-HTTP pipeline
+  // fails this test instead of slipping through the deterministic chat hook.
+  const fixture = makeFixture(root, { FOXWARM_TEST_MOCK_AXIOS: '1' });
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  try {
+    sessionManager.getAllSessions().set(sessionId, baseSession(sessionId));
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'axios mock question' }] });
+    assert.ok(await fs.pathExists(path.join(root, 'state', 'axios-mock-1')), 'the LLM HTTP request was actually dispatched');
+    const authority = JSON.parse(await fs.readFile(statePath, 'utf8'));
+    assert.ok(JSON.stringify(authority.history).includes('mock axios answer'), 'the parsed provider answer completes the turn');
+  } finally {
+    fixture.transport.close();
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    sessionManager.getAllSessions().delete(sessionId);
+    await fs.remove(root);
+  }
+});
