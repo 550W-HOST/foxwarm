@@ -157,7 +157,9 @@ raster format probing, controlled error categories/path scrubbing, and
   transient image data crossing into a canonical blob reference, isolated
   whole-buffer saves, and the fixed isolated transfer cap. Channel tests also
   cover ordinary group events, default mention gating, AT/non-AT business
-  deduplication, and passive replies retaining the inbound `msg_id`.
+  deduplication, passive replies retaining the inbound `msg_id`, the three-minute
+  boundary, structured expiration fallback, and media final retry without a
+  second upload.
 
 ## Design Decisions
 
@@ -165,19 +167,26 @@ raster format probing, controlled error categories/path scrubbing, and
 
 For a source-bound QQ reply, Foxwarm follows the Tencent/OpenClaw local policy
 instead of inferring a server error: from the inbound/first-seen `msg_id`, at
-most four **successful passive text/image/file replies** are sent in one hour.
-The next reply after that count or age boundary makes exactly one proactive
-attempt to the same scoped conversation. A per-`msg_id` in-process chain
-serializes the decision, HTTP result, and successful-count update, so concurrent
-replies do not spend speculative quota; unrelated IDs remain concurrent. Each
-queued operation is fenced to the adapter run generation before it begins I/O;
-stop or reload clears state, and stale old-generation chains cannot affect a new
-run. Typing receives
-its own monotonic `msg_seq` but does not consume the four passive replies. The
-limiter is per adapter instance, bounded and in-memory only. Unknown API failures, generic HTTP failures,
-network/auth/rate-limit failures, and a failed proactive attempt never trigger
-a fallback or retry; a source-bound final delivery logs and completes rather
-than making Router send another error through the same passive context.
+most four **successful passive text/image/file replies** are sent in three
+minutes. The next reply after that count or age boundary makes exactly one
+proactive attempt to the same scoped conversation. A per-`msg_id` in-process
+chain serializes the decision, HTTP result, and successful-count update, so
+concurrent replies do not spend speculative quota; unrelated IDs remain
+concurrent. Each queued operation is fenced to the adapter run generation
+before it begins I/O; stop or reload clears state, and stale old-generation
+chains cannot affect a new run. Typing receives its own monotonic `msg_seq`
+but does not consume the four passive replies. The limiter is per adapter
+instance, bounded and in-memory only.
+
+When a passive C2C/group text or media final/intermediate delivery receives
+the structured QQ API error code `40034005` (`code` or `err_code`), the
+adapter marks that `msg_id` expired and makes exactly one proactive retry.
+Text retries omit `msg_id`; media retries reuse the just-uploaded same-target
+`file_info` and send proactive `msg_seq: 1` without re-uploading. Future
+operations for that ID remain proactive. No other API failure, generic HTTP
+failure, network/auth/rate-limit failure, or proactive failure triggers a
+fallback loop or retry; a source-bound text final delivery logs and completes
+rather than making Router send another error through the same passive context.
 
 ### D-qqbot-inbound-media-boundary
 
@@ -230,8 +239,11 @@ boundary; bot credentials are never sent to the presigned host. The local send p
 `fileMaxBytes` is set to the 200 MiB inbound maximum. The file-info token is
 never cached or reused across target or adapter instances. Latest
 conversation-local QQ message IDs share the existing four-success passive
-limiter and monotonic `msg_seq`; after the limit one proactive attempt is made
-with `msg_seq: 1`, while upload/final failures do not infer fallback or retry.
+limiter and monotonic `msg_seq`; age/count and the structured `40034005`
+fallback are canonical in
+[D-qqbot-passive-reply-fallback](#d-qqbot-passive-reply-fallback). Media final
+fallback reuses the just-uploaded same-target `file_info` and does not upload
+again; upload failures and non-expiration final failures do not infer a retry.
 Generation checks occur before reading, each upload stage, and final delivery.
 Guild/DM native media, remote URL send, and general upload-service abstractions
 remain unsupported; video/audio files use ordinary generic `file_type=4` when

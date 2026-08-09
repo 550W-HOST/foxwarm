@@ -38,7 +38,7 @@ function activate(channel: QQBotChannel): void {
   (channel as any).connectionGeneration = 1;
 }
 
-function createFetchTransport(options: { failRichMedia?: boolean; delayPrepare?: boolean } = {}) {
+function createFetchTransport(options: { failRichMedia?: boolean; failExpiredPassiveMedia?: boolean; delayPrepare?: boolean } = {}) {
   const calls: Call[] = [];
   const partBodies: Buffer[] = [];
   let prepareStartedResolve: (() => void) | undefined;
@@ -77,7 +77,10 @@ function createFetchTransport(options: { failRichMedia?: boolean; delayPrepare?:
     if (parsed.pathname.endsWith('/upload_part_finish')) return new Response('{}', { status: 200 });
     if (parsed.pathname.endsWith('/files')) return new Response(JSON.stringify({ file_info: `file-info-${parsed.pathname.includes('/groups/') ? 'group' : 'c2c'}` }), { status: 200 });
     if (parsed.pathname.endsWith('/messages')) {
-      const body = JSON.parse(String(init?.body || '{}')) as { msg_type?: number };
+      const body = JSON.parse(String(init?.body || '{}')) as { msg_type?: number; msg_id?: string };
+      if (options.failExpiredPassiveMedia && body.msg_type === 7 && body.msg_id) {
+        return new Response(JSON.stringify({ code: 40034005, message: '回复消息msg_id已过期' }), { status: 400 });
+      }
       if (options.failRichMedia && body.msg_type === 7) {
         return new Response(JSON.stringify({ code: 40034105, message: '主动消息失败, 无权限' }), { status: 400 });
       }
@@ -216,6 +219,29 @@ test('QQ Bot media POST failure surfaces the group permission error without fall
     await assert.rejects(channel.sendFile('group:group-openid', file(paths.generic, 'report.txt', 'text/plain', false)), /40034105/);
     assert.equal(apiCalls(transport, '/messages').length, 1);
     assert.equal(body(apiCalls(transport, '/messages')[0]).msg_id, 'permission-message');
+  });
+});
+
+test('QQ Bot media expiration retries the final message proactively without re-uploading', async () => {
+  await withTempFiles(async paths => {
+    const transport = createFetchTransport({ failExpiredPassiveMedia: true });
+    const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-media-expired', { fetch: transport.fetch });
+    activate(channel);
+    await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+      id: 'media-expired-message', content: 'inbound', group_openid: 'group-openid', author: { member_openid: 'member-openid' },
+    });
+
+    await channel.sendFile('group:group-openid', file(paths.generic, 'report.txt', 'text/plain', false));
+
+    const prepareCalls = apiCalls(transport, '/upload_prepare');
+    const messages = apiCalls(transport, '/messages').map(body);
+    assert.equal(prepareCalls.length, 1);
+    assert.equal(messages.length, 2);
+    assert.equal(messages[0].msg_id, 'media-expired-message');
+    assert.equal(messages[0].msg_seq, 1);
+    assert.equal(messages[1].msg_id, undefined);
+    assert.equal(messages[1].msg_seq, 1);
+    assert.equal(messages[1].media.file_info, messages[0].media.file_info);
   });
 });
 

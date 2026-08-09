@@ -592,7 +592,13 @@ test('QQ Bot uses the bounded local passive-reply policy without inferring serve
         calls.push({ url: String(url), init });
         if (String(url).includes('getAppAccessToken')) return response({ access_token: 'token', expires_in: 7200 });
         const body = JSON.parse(String(init?.body || '{}'));
-        if (failPassive && body.msg_id === 'unknown-failure') return response({ code: 999999, message: 'unknown' }, 400);
+        if (body.msg_id === 'expired-server') return response({ code: 40034005, message: '回复消息msg_id已过期' }, 400);
+        if (body.content === 'expired-proactive-failure') {
+          return response(body.msg_id
+            ? { err_code: 40034005, message: '回复消息msg_id已过期' }
+            : { code: 40034105, message: '主动消息失败, 无权限' }, 400);
+        }
+        if (failPassive && body.msg_id === 'unknown-failure') return response({ code: 999999, message: 'unrelated text mentions 40034005 only' }, 400);
         if (failProactive && !body.msg_id) return response({ code: 999998, message: 'proactive failed' }, 400);
         return response({ id: 'outbound-id' });
       },
@@ -617,11 +623,45 @@ test('QQ Bot uses the bounded local passive-reply policy without inferring serve
   const independent = calls.find(call => String(call.init?.body).includes('independent'));
   assert.equal(JSON.parse(String(independent?.init?.body)).msg_id, 'independent-id');
 
-  const contexts = (channel as any).passiveReplyContexts as Map<string, { firstSeenAt: number; successfulReplies: number }>;
-  contexts.set('expired-id', { firstSeenAt: Date.now() - 3_600_001, successfulReplies: 0 });
+  const contexts = (channel as any).passiveReplyContexts as Map<string, { firstSeenAt: number; successfulReplies: number; expired?: boolean }>;
+  contexts.set('within-three-minutes', { firstSeenAt: Date.now() - (3 * 60 * 1_000 - 1_000), successfulReplies: 0 });
+  await sendBound('within-three-minutes', 'within three minute boundary', true);
+  const withinBoundary = calls.find(call => String(call.init?.body).includes('within three minute boundary'));
+  assert.equal(JSON.parse(String(withinBoundary?.init?.body)).msg_id, 'within-three-minutes');
+
+  contexts.set('expired-id', { firstSeenAt: Date.now() - (3 * 60 * 1_000 + 1_000), successfulReplies: 0 });
   await sendBound('expired-id', 'expired proactive', true);
   const expired = calls.find(call => String(call.init?.body).includes('expired proactive'));
   assert.equal(JSON.parse(String(expired?.init?.body)).msg_id, undefined);
+
+  const beforeServerExpired = calls.length;
+  await sendBound('expired-server', 'expired server fallback', true);
+  const serverExpiredBodies = calls
+    .slice(beforeServerExpired)
+    .filter(call => String(call.url).includes('/v2/users/'))
+    .map(call => JSON.parse(String(call.init?.body || '{}')));
+  assert.deepEqual(serverExpiredBodies, [
+    { content: 'expired server fallback', msg_type: 0, msg_id: 'expired-server', msg_seq: 1 },
+    { content: 'expired server fallback', msg_type: 0 },
+  ]);
+  const beforeFutureExpired = calls.length;
+  await sendBound('expired-server', 'future expired server fallback', true);
+  const futureExpiredBodies = calls
+    .slice(beforeFutureExpired)
+    .filter(call => String(call.url).includes('/v2/users/'))
+    .map(call => JSON.parse(String(call.init?.body || '{}')));
+  assert.deepEqual(futureExpiredBodies, [{ content: 'future expired server fallback', msg_type: 0 }]);
+
+  const beforeProactiveKnownFailure = calls.length;
+  await sendBound('expired-proactive-failure', 'expired-proactive-failure', true);
+  const proactiveKnownFailureBodies = calls
+    .slice(beforeProactiveKnownFailure)
+    .filter(call => String(call.url).includes('/v2/users/'))
+    .map(call => JSON.parse(String(call.init?.body || '{}')));
+  assert.deepEqual(proactiveKnownFailureBodies, [
+    { content: 'expired-proactive-failure', msg_type: 0, msg_id: 'expired-proactive-failure', msg_seq: 1 },
+    { content: 'expired-proactive-failure', msg_type: 0 },
+  ]);
 
   failPassive = true;
   const beforeUnknownFailure = calls.length;
@@ -642,6 +682,47 @@ test('QQ Bot uses the bounded local passive-reply policy without inferring serve
     channel.sendMessage('c2c:openid-1', 'ordinary direct failure', { replyToId: 'unknown-failure' }),
     /QQ Bot API POST/,
   );
+});
+
+test('QQ Bot keeps aged and server-expired passive contexts through unrelated inbound contexts', async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret' },
+    'qq-passive-context-retention',
+    {
+      fetch: async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ url: String(url), init });
+        if (String(url).includes('getAppAccessToken')) return response({ access_token: 'token', expires_in: 7200 });
+        return response({ id: 'outbound-id' });
+      },
+    },
+  );
+  activateForDirectSend(channel);
+  const contexts = (channel as any).passiveReplyContexts as Map<string, { firstSeenAt: number; successfulReplies: number; expired?: boolean }>;
+  contexts.set('aged-id', { firstSeenAt: Date.now() - (6 * 60 * 1_000 + 1_000), successfulReplies: 0 });
+  contexts.set('server-expired-id', { firstSeenAt: Date.now(), successfulReplies: 0, expired: true });
+
+  await (channel as any).routeInboundMessage('C2C_MESSAGE_CREATE', {
+    id: 'unrelated-inbound-one',
+    content: 'unrelated one',
+    author: { user_openid: 'openid-1' },
+  });
+  await (channel as any).routeInboundMessage('C2C_MESSAGE_CREATE', {
+    id: 'unrelated-inbound-two',
+    content: 'unrelated two',
+    author: { user_openid: 'openid-1' },
+  });
+
+  await channel.sendMessage('c2c:openid-1', 'aged stays proactive', { replyToId: 'aged-id', qqbotSourceBound: true });
+  await channel.sendMessage('c2c:openid-1', 'expired stays proactive', { replyToId: 'server-expired-id', qqbotSourceBound: true });
+
+  const bodies = calls
+    .filter(call => String(call.url).includes('/v2/users/'))
+    .map(call => JSON.parse(String(call.init?.body || '{}')));
+  assert.deepEqual(bodies, [
+    { content: 'aged stays proactive', msg_type: 0 },
+    { content: 'expired stays proactive', msg_type: 0 },
+  ]);
 });
 
 test('QQ Bot serializes concurrent source-bound replies per inbound message ID', async () => {
