@@ -575,7 +575,7 @@ async function resolveOptionalSessionId(sessionId: unknown, label: string): Prom
   }
   const trimmed = sessionId.trim();
   if (!trimmed) return null;
-  const session = await sessionManager.getExistingSession(trimmed);
+  const session = sessionManager.getSessionCatalog(trimmed);
   if (!session) {
     const error = new Error(`${label} session "${trimmed}" was not found.`);
     (error as any).statusCode = 404;
@@ -597,7 +597,7 @@ async function assertNoSidebarParentCycle(childSessionId: string, targetParentSe
   const seen = new Set<string>([childSessionId]);
   let cursorParentId: string | null = targetParentSessionId;
   while (cursorParentId) {
-    const cursorParent = await sessionManager.getExistingSession(cursorParentId);
+    const cursorParent = sessionManager.getSessionCatalog(cursorParentId);
     if (!cursorParent) break;
     const canonicalCursorId = cursorParent.id;
     if (seen.has(canonicalCursorId)) {
@@ -1085,7 +1085,7 @@ export class WebUIChannel implements Channel {
               inherit: inheritAgent,
               createMainSession: true,
             });
-            const session = await sessionManager.getExistingSession(result.mainSessionId);
+            const session = sessionManager.getSessionCatalog(result.mainSessionId);
             if (session) {
               const rootSiblings = getWebUiSidebarSiblings(null, session.id);
               writeWebUiSidebarOrder([session, ...rootSiblings]);
@@ -1168,7 +1168,7 @@ export class WebUIChannel implements Channel {
               sessionId = result.sessionId;
             }
 
-            const session = await sessionManager.getExistingSession(sessionId);
+            const session = sessionManager.getSessionCatalog(sessionId);
             if (!session) throw new Error(`Created session "${sessionId}" could not be loaded.`);
             const rootSiblings = getWebUiSidebarSiblings(null, session.id);
             writeWebUiSidebarOrder([session, ...rootSiblings]);
@@ -1440,7 +1440,9 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
-            await sessionManager.getExistingSession(sessionId);
+            if (!sessionManager.getSessionCatalog(sessionId)) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
             const resolvedPath = getSessionHistoryFilePath(sessionId);
             if (!await fs.pathExists(resolvedPath)) {
               return res.status(404).json({ error: 'Session file not found' });
@@ -1571,7 +1573,7 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
-            const session = await sessionManager.getExistingSession(sessionId);
+            const session = sessionManager.getSessionCatalog(sessionId);
 
             if (!session) {
               return res.status(404).json({ error: 'Session not found' });
@@ -1604,7 +1606,7 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const requestedSessionId = req.params.sessionId as string;
-            const session = await sessionManager.getExistingSession(requestedSessionId);
+            const session = sessionManager.getSessionCatalog(requestedSessionId);
             if (!session) return res.status(404).json({ error: 'Session not found' });
 
             const archived = req.body?.archived !== false;
@@ -1668,7 +1670,7 @@ export class WebUIChannel implements Channel {
           const body = req.body || {};
 
           try {
-            const movingSession = await sessionManager.getExistingSession(requestedSessionId);
+            const movingSession = sessionManager.getSessionCatalog(requestedSessionId);
             if (!movingSession) {
               res.status(404).json({
                 error: `Session "${requestedSessionId}" was not found, so it cannot be moved.`,
@@ -1733,7 +1735,7 @@ export class WebUIChannel implements Channel {
             }
 
             const anchorSession = anchorSessionId
-              ? await sessionManager.getExistingSession(anchorSessionId)
+              ? sessionManager.getSessionCatalog(anchorSessionId)
               : null;
 
             const parentProvided = Object.prototype.hasOwnProperty.call(body, 'parentSessionId');
@@ -1766,7 +1768,7 @@ export class WebUIChannel implements Channel {
               await sessionManager.setSessionParent(movingSession.id, targetParentSessionId || undefined);
             }
 
-            const latestMovingSession = await sessionManager.getExistingSession(movingSession.id);
+            const latestMovingSession = sessionManager.getSessionCatalog(movingSession.id);
             if (!latestMovingSession) {
               res.status(404).json({
                 error: `Session "${movingSession.id}" disappeared while moving.`,
@@ -1870,7 +1872,7 @@ export class WebUIChannel implements Channel {
           const operation = targetParentId ? 'move-up' : 'promote-to-root';
 
           try {
-            const childSession = await sessionManager.getExistingSession(sessionId);
+            const childSession = sessionManager.getSessionCatalog(sessionId);
             if (!childSession) {
               res.status(404).json({
                 error: `Session "${sessionId}" was not found, so it cannot be promoted.`,
@@ -1884,7 +1886,7 @@ export class WebUIChannel implements Channel {
 
             let targetParentBusy: boolean | undefined;
             if (targetParentId) {
-              const targetParentSession = await sessionManager.getExistingSession(targetParentId);
+              const targetParentSession = sessionManager.getSessionCatalog(targetParentId);
               if (!targetParentSession) {
                 res.status(404).json({
                   error: `Target parent session "${targetParentId}" was not found, so session "${childSession.id}" cannot be moved there.`,
@@ -1933,14 +1935,14 @@ export class WebUIChannel implements Channel {
                   return;
                 }
                 seenAncestors.add(cursorParentId);
-                const cursorParent = await sessionManager.getExistingSession(cursorParentId);
+                const cursorParent = sessionManager.getSessionCatalog(cursorParentId);
                 if (!cursorParent) break;
                 cursorParentId = cursorParent.parentSessionId || undefined;
               }
             }
 
             const result = await sessionManager.setSessionParent(sessionId, targetParentId);
-            const movedSession = await sessionManager.getExistingSession(result.childSessionId);
+            const movedSession = sessionManager.getSessionCatalog(result.childSessionId);
 
             if (movedSession) {
               const previousParentSessionId = result.previousParentSessionId || null;
@@ -1999,7 +2001,7 @@ export class WebUIChannel implements Channel {
           const includeDescendants = req.body?.includeDescendants === true;
           let deleteClaimId: string | undefined;
           try {
-            const rootSession = await sessionManager.getExistingSession(requestedSessionId);
+            const rootSession = sessionManager.getSessionCatalog(requestedSessionId);
             if (!rootSession) return res.status(404).json({ error: 'Session not found' });
 
             const relationTree = includeDescendants
@@ -2063,7 +2065,7 @@ export class WebUIChannel implements Channel {
               targetSessionIds: [...targetSessionIds],
             });
 
-            const currentRootSession = await sessionManager.getExistingSession(rootSession.id);
+            const currentRootSession = sessionManager.getSessionCatalog(rootSession.id);
             if (!currentRootSession) {
               return res.status(409).json({
                 error: 'The session tree changed while preparing deletion. Retry the delete request.',
@@ -2570,7 +2572,7 @@ export class WebUIChannel implements Channel {
               ? req.body.clientMessageId
               : undefined;
 
-            const existingSession = await sessionManager.getExistingSession(sessionId);
+            const existingSession = sessionManager.getSessionCatalog(sessionId);
             if (!existingSession) {
               return res.status(404).json({ error: 'Session not found' });
             }

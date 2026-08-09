@@ -10,12 +10,17 @@ import {
   createSessionRuntimeServiceHandler,
   SessionRuntimeControlAction,
   SessionRuntimeControlResultDto,
+  SessionRuntimeClearHistoryResultDto,
+  SessionRuntimeDeleteMessagesResultDto,
   SessionRuntimeCompactionResultDto,
   SessionRuntimeEventPayloads,
   SessionRuntimeHistoryDto,
   SessionRuntimeSessionDto,
   SessionRuntimeSettingsPatchDto,
   SessionRuntimeSettingsResultDto,
+  SessionRuntimeIndexResultDto,
+  SessionRuntimeSnapshotResultDto,
+  SessionRuntimeForkNotificationResultDto,
   SessionRuntimeWorkerProjectionOptions,
   sessionRuntimeServiceDescriptor,
 } from './sessionRuntimeService';
@@ -102,6 +107,34 @@ export async function updateSettings(
   patch: SessionRuntimeSettingsPatchDto,
 ): Promise<SessionRuntimeSettingsResultDto> {
   return (await getClient()).call('updateSettings', { sessionId, patch });
+}
+
+export async function deleteMessages(sessionId: string, num: number): Promise<SessionRuntimeDeleteMessagesResultDto> {
+  return (await getClient()).call('deleteMessages', { sessionId, num });
+}
+
+export async function clearHistory(sessionId: string): Promise<SessionRuntimeClearHistoryResultDto> {
+  return (await getClient()).call('clearHistory', { sessionId });
+}
+
+export async function forceIndex(sessionId: string): Promise<SessionRuntimeIndexResultDto> {
+  return (await getClient()).call('forceIndex', { sessionId });
+}
+
+export async function refreshSnapshot(sessionId: string): Promise<SessionRuntimeSnapshotResultDto> {
+  return (await getClient()).call('refreshSnapshot', { sessionId });
+}
+
+export async function notifyManualForkCreated(
+  parentSessionId: string,
+  childSessionId: string,
+  initialMessage?: string,
+): Promise<SessionRuntimeForkNotificationResultDto> {
+  return (await getClient()).call('notifyManualForkCreated', {
+    parentSessionId,
+    childSessionId,
+    ...(initialMessage === undefined ? {} : { initialMessage }),
+  });
 }
 
 export async function control(

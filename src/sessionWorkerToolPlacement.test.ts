@@ -89,9 +89,6 @@ test('worker guards run before unsupported handlers and exact current state tool
   const crafted = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="remote_node", args={"action":" list "})' }, ctx);
   assert.equal(crafted.status, 'failed'); assert.match(String(crafted.error), /SESSION_WORKER_TOOL_UNAVAILABLE/);
   assert.match(String(await callTool('session', { action: 'status' }, ctx)), new RegExp(session.id));
-  assert.match(String(await callTool('session', { action: 'update-display-name', name: 'Worker exact' }, ctx)), /changed/);
-  assert.match(String(await callTool('session', { action: 'update-display-name', sessionId: '', name: 'Worker exact 2' }, ctx)), /changed/);
-  assert.equal(session.displayName, 'Worker exact 2');
   assert.match(String(await callTool('set_goal', { goal: 'stay exact' }, ctx)), /ok/);
   assert.match(String(await callTool('wait', { reason: 'pause' }, ctx)), /object Object|stopCurrentTurn/);
   assert.match(String(await callTool('stop_session', { sessionId: session.id }, ctx)), /Stop signal set/);

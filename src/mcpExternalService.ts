@@ -166,7 +166,7 @@ async function authorize(sourceSessionId: unknown, toolName: string, args: Recor
   if (expectedSourceSessionId && source !== expectedSourceSessionId) {
     throw new RpcError('MCP_EXTERNAL_SOURCE_MISMATCH', `MCP external reverse source must be \`${expectedSourceSessionId}\`.`);
   }
-  if (!await sessionManager.getExistingSession(source)) {
+  if (!sessionManager.getSessionCatalog(source)) {
     throw new RpcError('MCP_EXTERNAL_SOURCE_NOT_FOUND', `Source session \`${source}\` was not found.`);
   }
   await checkToolPermission(toolName, source, 'master', args);

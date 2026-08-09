@@ -129,7 +129,7 @@ function normalizeRoutingSnapshot(value: unknown): NodeExecutionRoutingSnapshot 
 }
 
 export async function requireNodeExecutionTarget(sourceSessionId: string, nodeId: string): Promise<Session> {
-  const source = await sessionManager.getExistingSession(sourceSessionId);
+  const source = sessionManager.getSessionCatalog(sourceSessionId);
   if (!source) {
     throw new RpcError('NODE_EXECUTION_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
   }
@@ -153,7 +153,7 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
     if (options.expectedSourceSessionId && sourceSessionId !== options.expectedSourceSessionId) {
       throw new RpcError('NODE_EXECUTION_SOURCE_MISMATCH', `Node execution reverse source must be \`${options.expectedSourceSessionId}\`.`);
     }
-    const source = await sessionManager.getExistingSession(sourceSessionId);
+    const source = sessionManager.getSessionCatalog(sourceSessionId);
     if (!source) throw new RpcError('NODE_EXECUTION_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
     return { sourceSessionId, source };
   };

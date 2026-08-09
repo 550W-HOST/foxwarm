@@ -34,7 +34,7 @@ function makeFixture(root: string, hangSessionId: string) {
     workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_HANG_TURN: '1', FOXWARM_TEST_HANG_SESSION: hangSessionId },
     resolveExactFinalSourceContext: sourceContexts.resolve,
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
   return { store, sourceContexts, supervisor, ingress };
 }
 

@@ -77,7 +77,7 @@ Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /retry, /node, /s
 - `./channel` — `ChannelContext`, `getChannelId`, `getChannelType`, `getConversationId`
 - `./channelAuth` — `inspectChannelAuthorizationFromContext`, `formatAuthorizationInspection`
 - `./channelRuntime` — `getManagedChannelIds`, `getChannelRuntimeStatus`, `listChannelRuntimeStatuses`, `restartManagedChannel`, `startManagedChannel`, `stopManagedChannel`
-- `./sessionRuntime` — stop/dequeue/retry controls and persisted model/node/compact-threshold setting commands
+- `./sessionRuntime` — placement-neutral status/history, stop/dequeue/retry, settings, history delete/clear/index, snapshot, and fork-notification operations
 - `./sessionManager` — live Session CRUD, channel-session binding, lifecycle, and channel config
 - `./config` — App config paths, model resolution, defaults, read/write config
 - `./sessionStatus` — Shared `/status` and `session({ action: "status" })` status builder/formatter
@@ -93,7 +93,7 @@ Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /retry, /node, /s
 
 ## Behavior
 
-- Each command handler validates arguments, performs the action (often via SessionRuntime, `sessionManager`, or other managers), and replies to the user via `ctx.reply`. `/stop`, `/dequeue`, and `/retry` use the SessionRuntime control command while preserving their router/session-manager semantics. `/stop` and `/retry` pre-check busy/history through the placement-neutral runtime DTO (worker-projection overlaid), never the raw catalog stub — under Session-worker placement the stub's busy flag is only refreshed at handback. `/messages` likewise totals from the runtime DTO and reads a worker-fenced session from a read-only detached authority snapshot instead of the stub. Model/node/compact-threshold mutations use its persisted settings command. `/retry` only sends an immediate channel acknowledgement; it does not create a model-visible retry prompt. `/dequeue` replies with the queued-item count and whether an active LLM request was aborted or a running tool must finish first.
+- Each command handler validates arguments, performs the action (often via SessionRuntime, `sessionManager`, or other managers), and replies to the user via `ctx.reply`. `CommandHandler` resolves the current session through a catalog/projection DTO rather than hydrating Worker authority. `/stop`, `/dequeue`, and `/retry` use SessionRuntime control; `/stop` is closed for Workers while dequeue/retry fail explicitly there. `/messages`, `/delete-messages`, `/session clear`, `/index`, model/node/verbose/compact-threshold settings, snapshot refresh, and manual-fork notification use typed placement-neutral operations. Timer commands use SessionRuntime projections for current owner defaults and never save Worker authority in Main. `/btw`, session identity move/rename, and agent-wide inherit/isolation/delete admin remain unavailable while Worker placement is enabled until their exact ownership/lifecycle paths are closed. `/retry` only sends an immediate channel acknowledgement; it does not create a model-visible retry prompt.
 - Session-requiring commands automatically resolve the active session from the channel/conversation binding; if none exists, they short-circuit with an error message.
 - Timer commands enforce permission checks for isolated agents before creating timers.
 - `/config` can modify persistent app config (model settings, WeChat credentials) and triggers channel restarts when relevant config changes.

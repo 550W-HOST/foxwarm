@@ -73,11 +73,13 @@ test('detached current recall exact targets and aliases match legacy output with
   const originals = {
     getExisting: sessionManager.getExistingSession,
     getSession: sessionManager.getSession,
+    getCatalog: sessionManager.getSessionCatalog,
     isolated: sessionManager.isSessionEffectivelyIsolated,
   };
   (sessionManager as any).isSessionEffectivelyIsolated = () => false;
   (sessionManager as any).getExistingSession = async (id: string) => id === session.id || session.aliases?.includes(id) ? session : null;
   (sessionManager as any).getSession = async () => session;
+  (sessionManager as any).getSessionCatalog = (id: string) => id === session.id || session.aliases?.includes(id) ? session : undefined;
   const cases: any[] = [
     { target: 'overview' },
     { target: 'blocks' },
@@ -98,6 +100,7 @@ test('detached current recall exact targets and aliases match legacy output with
     restoreArchive();
     (sessionManager as any).getExistingSession = originals.getExisting;
     (sessionManager as any).getSession = originals.getSession;
+    (sessionManager as any).getSessionCatalog = originals.getCatalog;
     (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
   }
 });
@@ -107,8 +110,10 @@ test('detached recall preserves isolated own access and legacy cross-target deni
   const restoreArchive = installArchiveFixtures();
   const originals = {
     getExisting: sessionManager.getExistingSession,
+    getCatalog: sessionManager.getSessionCatalog,
     isolated: sessionManager.isSessionEffectivelyIsolated,
   };
+  (sessionManager as any).getSessionCatalog = (id: string) => id === session.id ? session : undefined;
   (sessionManager as any).isSessionEffectivelyIsolated = (candidate: Session | undefined) => candidate === session;
   try {
     (sessionManager as any).getExistingSession = async () => { throw new Error('own source lookup forbidden'); };
@@ -124,30 +129,34 @@ test('detached recall preserves isolated own access and legacy cross-target deni
   } finally {
     restoreArchive();
     (sessionManager as any).getExistingSession = originals.getExisting;
+    (sessionManager as any).getSessionCatalog = originals.getCatalog;
     (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
   }
 });
 
-test('recall no-hook and mismatched owners retain global source lookup', async () => {
+test('recall no-hook and mismatched owners use catalog lookup without semantic hydration', async () => {
   const session = createSession(`legacy_recall_${Date.now()}`);
   const clone = createSession(`${session.id}_clone`);
   const restoreArchive = installArchiveFixtures();
   const originals = {
     getExisting: sessionManager.getExistingSession,
+    getCatalog: sessionManager.getSessionCatalog,
     isolated: sessionManager.isSessionEffectivelyIsolated,
   };
-  let lookups = 0;
+  let catalogLookups = 0;
   (sessionManager as any).isSessionEffectivelyIsolated = () => false;
-  (sessionManager as any).getExistingSession = async () => { lookups += 1; return session; };
+  (sessionManager as any).getExistingSession = async () => { throw new Error('semantic hydration forbidden'); };
+  (sessionManager as any).getSessionCatalog = () => { catalogLookups += 1; return session; };
   try {
     await tool_recall({ sessionId: session.id, target: 'overview' }, { sessionId: session.id, session } as any);
     await tool_recall({ sessionId: session.id, target: 'overview' }, {
       sessionId: session.id, session: clone, persistCurrentSession: async () => {},
     } as any);
-    assert.equal(lookups, 2);
+    assert.equal(catalogLookups, 2);
   } finally {
     restoreArchive();
     (sessionManager as any).getExistingSession = originals.getExisting;
+    (sessionManager as any).getSessionCatalog = originals.getCatalog;
     (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
   }
 });
@@ -157,6 +166,7 @@ test('detached vector scope resolution matches legacy for session, alias, and ag
   const originals = {
     getSession: sessionManager.getSession,
     getExisting: sessionManager.getExistingSession,
+    getCatalog: sessionManager.getSessionCatalog,
     isolated: sessionManager.isSessionEffectivelyIsolated,
     lineage: archiveStore.getVectorSearchLineage,
     search: vector.search,
@@ -164,6 +174,7 @@ test('detached vector scope resolution matches legacy for session, alias, and ag
   (sessionManager as any).isSessionEffectivelyIsolated = () => false;
   (sessionManager as any).getSession = async () => session;
   (sessionManager as any).getExistingSession = async () => session;
+  (sessionManager as any).getSessionCatalog = () => session;
   (archiveStore as any).getVectorSearchLineage = async (): Promise<any[]> => [];
   const requests = [
     { scope: 'current-session' as const },
@@ -199,6 +210,7 @@ test('detached vector scope resolution matches legacy for session, alias, and ag
   } finally {
     (sessionManager as any).getSession = originals.getSession;
     (sessionManager as any).getExistingSession = originals.getExisting;
+    (sessionManager as any).getSessionCatalog = originals.getCatalog;
     (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
     (archiveStore as any).getVectorSearchLineage = originals.lineage;
     (vector as any).search = originals.search;

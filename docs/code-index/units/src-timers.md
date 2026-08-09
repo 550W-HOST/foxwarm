@@ -63,7 +63,8 @@ Manages scheduled timers that fire messages into sessions — either as one-time
 
 - `./config` — `TIMERS_FILE`, `getAgentDir`
 - `./common` — `logger`
-- `./sessionManager` — `getExistingSession`, `queueSessionSystemEvent`, `queueSessionWaitTimeoutEvent`, `createSessionInAgentWithAutomaticName`
+- `./sessionManager` — catalog-only existence/agent lookup plus `queueSessionSystemEvent`, `queueSessionWaitTimeoutEvent`, and `createSessionInAgentWithAutomaticName`
+- `./sessionRuntime` — placement-neutral owner model/node/agent projections for timer create/update defaults
 - `./utils/diskJsonData` — `DiskJsonData` (persistent JSON file abstraction)
 - `./utils/localTime` — `formatLocalTimestamp`
 
@@ -74,14 +75,14 @@ Manages scheduled timers that fire messages into sessions — either as one-time
 - `fireTimer` handles two paths: wait-timeout timers deliver via `queueSessionWaitTimeoutEvent` as a pure system event wrapper, while regular timers deliver via `queueSessionSystemEvent` (to existing or newly-created sessions) with the raw timer message wrapped in a single `<foxwarm-message type="timer" ...>...</foxwarm-message>` system part. New-session timers generate/retry names inside the atomic session identity boundary, skipping live and archived candidates.
 - One-time timers are deleted after firing or on delivery failure; cron timers persist and only update `lastTriggeredAt`.
 - Input validation enforces allowed characters in `sessionPrefix`, positive timeout values, and exactly one schedule mode for creates / schedule-changing updates.
-- `updateTimer` rejects internal wait-timeout timers, verifies optional session ownership scope, preserves omitted fields, supports message/schedule/new-session target edits, and cancels/reschedules the active job so `nextRunAt` reflects the new schedule.
+- `createTimer`/`updateTimer` read owner defaults through SessionRuntime projections and never hydrate or save Worker-owned Session authority in Main. `updateTimer` rejects internal wait-timeout timers, verifies optional session ownership scope, preserves omitted fields, supports message/schedule/new-session target edits, and cancels/reschedules the active job so `nextRunAt` reflects the new schedule.
 - Cron runtime behavior is governed by installed `node-schedule` + `cron-parser`: 5-field and optional-seconds 6-field cron are accepted; `L` works for last day-of-month and last weekday-of-month; `W` is rejected.
 - The persistence layer uses `DiskJsonData` with backups disabled for lightweight writes.
 
 ## Integration
 
-- Public timer CRUD is triggered through the seven-operation Main Management tool allowlist. Internal wait timeout scheduling enters the same Main-owned timer implementation through its separate fixed `scheduleWaitTimeout` RPC method after canonical wait persistence; it is not an eighth model operation.
-- Delivers events back into the session system via `sessionManager`, which processes them as background system events.
+- Public timer CRUD is triggered through the closed Main Management tool allowlist. Internal wait timeout scheduling enters the same Main-owned timer implementation through its separate fixed `scheduleWaitTimeout` RPC method after canonical wait persistence; it is not another model operation.
+- Delivers events back into the session system via `sessionManager`; under Session-worker placement the registered enqueue sink persists them through the exact Worker mailbox instead of mutating a Main stub.
 - Can spawn new sessions in a specified agent directory, enabling scheduled autonomous tasks.
 - Relies on `config` for file paths and agent directory resolution.
 - Automatic timer-session ID allocation follows [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).

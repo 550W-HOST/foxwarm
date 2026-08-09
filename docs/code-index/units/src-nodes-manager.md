@@ -45,7 +45,7 @@ Maintains the in-memory view of connected nodes and routes tool/file/session req
 ## Dependencies
 
 - `ws` — WebSocket connection objects for remote nodes.
-- `../sessionManager` — session lookup, isolation metadata, queueing node-originated events.
+- `../sessionManager` / `../sessionRuntime` — catalog/isolation metadata, projection-aware current assignment and history reads, and queueing node-originated events.
 - `../nodeFileTransfer` — master-side read/write transfer helpers.
 - `./registry` — reserved node-id checks for runtime registration.
 - `../tools` (lazy require) — local tool implementations and definitions.
@@ -57,7 +57,7 @@ Maintains the in-memory view of connected nodes and routes tool/file/session req
 - Remote tool calls, file transfers, and backend service requests are tracked by generated ids and time out if no response arrives. Service timers are cleared on reply/disconnect. Fixed commands avoid per-keystroke response state; authenticated service events are dispatched to registered listeners.
 - Node disconnect emits `node-unavailable` to each advertised service before removal, allowing terminal bridges to close clients while leaving detached node-owned PTYs eligible for rediscovery after a same-process reconnect.
 - `disconnectNode` is used by administrative `/node remove` and `/node move` flows so deleting or renaming approved credentials also removes online runtime state and rejects pending work for the old node id.
-- Node-originated session access is allowed only when the target session's `currentNode` matches the node id or the session's agent is isolated and bound to that node.
+- Node-originated session access is allowed only when the target session's projection-aware `currentNode` matches the node id or the session's agent is isolated and bound to that node. Main does not authorize an event from a stale Worker catalog setting.
 - Local/master execution passes `__runtimeNodeId` through tool context when needed, then strips it from user-visible tool args.
 - Remote dispatch normally reads current session routing at call time. A direct parallel-exec segment may pass its one captured current-node/cwd snapshot so all calls in that segment route consistently even if live session metadata changes while they run.
 - Remote model-tool responses pass through one isolated compatibility adapter before their pending call resolves. Master-local and MCP results never enter this adapter. The adapter's complete deletion contract is canonical in [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).

@@ -48,7 +48,7 @@ export function createFileDeliveryServiceHandler(options: { expectedSourceSessio
       if (options.expectedSourceSessionId && sourceSessionId !== options.expectedSourceSessionId) {
         throw new RpcError('FILE_DELIVERY_SOURCE_MISMATCH', `File delivery reverse source must be \`${options.expectedSourceSessionId}\`.`);
       }
-      const source = await sessionManager.getExistingSession(sourceSessionId);
+      const source = sessionManager.getSessionCatalog(sourceSessionId);
       if (!source) throw new RpcError('FILE_DELIVERY_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
       if (!input.intent || typeof input.intent !== 'object' || Array.isArray(input.intent)) throw new RpcError('FILE_DELIVERY_INVALID_REQUEST', 'intent must be an object.');
       if (!input.routing || typeof input.routing !== 'object' || Array.isArray(input.routing)) throw new RpcError('FILE_DELIVERY_INVALID_REQUEST', 'routing must be an object.');

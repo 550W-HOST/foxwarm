@@ -10,8 +10,9 @@ import { ProcessRpcClientTransport, ProcessRpcServer, RpcClient, RpcError, RpcSe
 import { SessionWorkerIdentity, sessionWorkerControlServiceDescriptor } from './sessionWorkerControlService';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { SessionWorkerOwnershipRecord, SessionWorkerStore } from './sessionWorkerStore';
-import { sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
+import { sessionWorkerRuntimeServiceDescriptor, type SessionWorkerHistoryMutationResult, type SessionWorkerSettingsPatch, type SessionWorkerSettingsResult } from './sessionWorkerRuntimeService';
 import type { CompactionRequest } from './types';
+import type { SessionRuntimeHistoryDto } from './sessionRuntimeService';
 import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
 import { vectorServiceDescriptor } from './vectorServiceDescriptor';
 import { createSessionWorkerPresentationServiceHandler, sessionWorkerPresentationServiceDescriptor } from './sessionWorkerPresentationService';
@@ -39,6 +40,8 @@ export type SessionWorkerSupervisorOptions = {
     broadcastMessage: (sessionId: string, message: any) => void;
     notifySessionEvent: (sessionId: string, event: any) => void;
   };
+  /** Exact-owner history reader used by the Worker-to-Main management facade. */
+  readSessionHistory?: (sessionId: string) => Promise<SessionRuntimeHistoryDto | null>;
 };
 
 type ProvisionalChild = {
@@ -164,6 +167,22 @@ export class SessionWorkerSupervisor {
     }
   }
 
+  async loadProjectionActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+  ) {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      return await runtime.call('loadProjection', {});
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
+  }
+
   async compactAwaitedActivated(
     sessionId: string,
     expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
@@ -176,6 +195,106 @@ export class SessionWorkerSupervisor {
     try {
       const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
       return await runtime.call('compactAwaited', { request });
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
+  }
+
+  async updateSettingsActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+    patch: SessionWorkerSettingsPatch,
+  ): Promise<SessionWorkerSettingsResult> {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      return await runtime.call('updateSettings', { patch });
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
+  }
+
+  async deleteMessagesActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+    num: number,
+  ): Promise<SessionWorkerHistoryMutationResult> {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      return await runtime.call('deleteMessages', { num });
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
+  }
+
+  async clearHistoryActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+  ): Promise<SessionWorkerHistoryMutationResult> {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      return await runtime.call('clearHistory', {});
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
+  }
+
+  async forceIndexActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+  ): Promise<SessionWorkerHistoryMutationResult> {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      return await runtime.call('forceIndex', {});
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
+  }
+
+  async refreshSnapshotActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+  ): Promise<SessionWorkerHistoryMutationResult> {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      return await runtime.call('refreshSnapshot', {});
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
+  }
+
+  async notifyManualForkCreatedActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+    childSessionId: string,
+    initialMessage?: string,
+  ): Promise<{ result: 'appended' | 'queued' }> {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      return await runtime.call('notifyManualForkCreated', { childSessionId, ...(initialMessage === undefined ? {} : { initialMessage }) });
     } finally {
       entry.activeCalls -= 1;
       if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
@@ -309,6 +428,7 @@ export class SessionWorkerSupervisor {
       reverseRegistry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({
         expectedSourceSessionId: sessionId, expectedGeneration: generation, expectedIncarnationId: incarnationId,
         workerStore: this.options.store,
+        readSessionHistory: this.options.readSessionHistory,
       }));
       reverseRegistry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: sessionId }));
       reverseRegistry.register(fileDeliveryServiceDescriptor, createFileDeliveryServiceHandler({ expectedSourceSessionId: sessionId }));

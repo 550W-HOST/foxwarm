@@ -4,7 +4,6 @@ import { nodesManager } from './nodes/manager';
 import { approvePendingPairing, isReservedNodeId, moveApprovedNode, rejectPendingPairing, removeApprovedNode } from './nodes/registry';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
-import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 import * as skills from './skills';
 import * as tools from './tools';
 import { APP_CONFIG_PATH, getDefaultChannelIdByType, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config';
@@ -17,7 +16,7 @@ import { getChannelRuntimeStatus, restartManagedChannel } from './channelRuntime
 
 // Re-export types
 export { CommandDef, CommandAutocompleteNode, CommandAutocomplete, literalNode, placeholderNode } from './commands/types';
-import { CommandDef } from './commands/types';
+import { commandSessionMessageCount, CommandDef } from './commands/types';
 import { placeholderNode } from './commands/types';
 
 // Import autocomplete trees
@@ -80,6 +79,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         ctx.reply(BTW_USAGE)
         return
       }
+      if (sessionRuntime.getSessionRuntimeStatus().placement === 'worker') {
+        ctx.reply('⚠️ `/btw` is not available while Session-worker placement is enabled.')
+        return
+      }
       void runBtwRequest(sessionId, message).catch((err: any) => {
         logger.error({ err, sessionId }, 'BTW background request failed')
       })
@@ -97,7 +100,8 @@ export const COMMANDS: Record<string, CommandDef> = {
     requiresSession: true,
     handler: async (ctx, _args, sessionId, session) => {
       if (!sessionId || !session) return
-      ctx.reply(formatSessionStatus(await buildSessionStatusInfo(sessionId, session)))
+      const history = await sessionRuntime.getHistory(sessionId)
+      ctx.reply(formatSessionStatus(await buildSessionStatusInfo(sessionId, session, false, history?.messages)))
     }
   },
   '/session': {
@@ -119,7 +123,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       try {
         sessionManager.validateChildSessionSuffix(suffix);
         const requestedSessionId = sessionManager.buildChildSessionId(sessionId, suffix);
-        if (await sessionManager.getExistingSession(requestedSessionId)) {
+        if (sessionManager.getSessionCatalog(requestedSessionId)) {
           ctx.reply(`❌ Session \`${requestedSessionId}\` already exists.`);
           return;
         }
@@ -128,7 +132,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         if (initialMessage !== undefined) {
           await sessionManager.sendToSession(childSessionId, initialMessage, sessionId);
         }
-        await sessionManager.notifyManualForkCreated(sessionId, childSessionId, initialMessage);
+        await sessionRuntime.notifyManualForkCreated(sessionId, childSessionId, initialMessage);
         ctx.reply(`✅ Forked session \`${sessionId}\` → \`${childSessionId}\`${initialMessage === undefined ? '' : '\nInitial message sent.'}`);
       } catch (e: any) {
         ctx.reply(`❌ Fork failed: ${e.message}`);
@@ -147,7 +151,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         return
       }
       const targetSessionId = args[0]
-      const targetSession = await sessionManager.getExistingSession(targetSessionId)
+      const targetSession = sessionManager.getSessionCatalog(targetSessionId)
       if (!targetSession) {
         ctx.reply(`❌ Session \`${targetSessionId}\` not found.`)
         return
@@ -273,7 +277,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       // for worker-fenced sessions.
       const runtime = await sessionRuntime.getSession(sessionId)
       if (runtime?.busy) { ctx.reply('⚠️ Session is already running.'); return }
-      if ((runtime?.messageCount ?? session.history.length) === 0) { ctx.reply('⚠️ No history to retry.'); return }
+      if ((runtime?.messageCount ?? commandSessionMessageCount(session)) === 0) { ctx.reply('⚠️ No history to retry.'); return }
       try {
         ctx.reply('🔄 Retrying last request...')
         await sessionRuntime.control(sessionId, 'retry')
@@ -390,7 +394,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       const query = queryParts.join(' ').trim()
       if (!query) { ctx.reply('Usage: /search [--session <session-id>] [--agent <agent-name>] [--limit <n>] <query>'); return }
       try {
-        const result = await tools.recall({ vector_query: query, limit, sessionId: targetSessionId, agentName: targetAgentName }, { sessionId, session })
+        const result = await tools.recall({ vector_query: query, limit, sessionId: targetSessionId, agentName: targetAgentName }, { sessionId })
         ctx.reply(result)
       } catch (e: any) { ctx.reply(`❌ Search failed: ${e.message}`) }
     }
@@ -402,10 +406,8 @@ export const COMMANDS: Record<string, CommandDef> = {
     autocomplete: { children: MESSAGES_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
-      // Placement-neutral totals: a worker-fenced catalog stub is an
-      // unhydrated mirror whose history is empty by design.
-      const runtime = await sessionRuntime.getSession(sessionId)
-      const totalMessages = runtime?.messageCount ?? session.history.length
+      const history = await sessionRuntime.getHistory(sessionId)
+      const totalMessages = history?.messages.length ?? commandSessionMessageCount(session)
       const previewLength = 100
       let start: number | undefined; let end: number | undefined
       if (args.length === 0) { ctx.reply(messagesUsage); return }
@@ -424,11 +426,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         end = Math.max(0, Math.min(end, totalMessages))
       }
       if (end === undefined || start === undefined || end < start) { ctx.reply('No messages found in the specified range.'); return }
-      // A worker-fenced authority is served from a read-only detached read;
-      // Main never hydrates it for presentation.
-      const messages = sessionManager.isSessionWorkerFenced(sessionId)
-        ? (await readDetachedWorkerSession(sessionId, session)).history.slice(start, end)
-        : await sessionManager.getSessionMessages(sessionId, start, end - start)
+      const messages = (history?.messages || []).slice(start, end)
       const preview = formatSessionMessagesPreview(sessionId, messages, start, totalMessages, previewLength)
       ctx.reply(preview)
     }
@@ -475,7 +473,7 @@ export const COMMANDS: Record<string, CommandDef> = {
       if (args.length === 0) { ctx.reply(deleteMessagesUsage); return }
       const num = parseInt(args[0], 10)
       if (isNaN(num) || num === 0) { ctx.reply(deleteMessagesUsage); return }
-      const result = await sessionManager.deleteMessages(sessionId, num)
+      const result = await sessionRuntime.deleteMessages(sessionId, num)
       ctx.reply(`✅ Deleted ${result.deleted} messages. Remaining: ${result.remaining}.`)
     }
   },
@@ -485,11 +483,12 @@ export const COMMANDS: Record<string, CommandDef> = {
     autocomplete: { children: VERBOSE_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId) => {
       if (!sessionId) return
-      const session = await sessionManager.getSession(sessionId)
+      const session = await sessionRuntime.getSession(sessionId)
+      if (!session) { ctx.reply('❌ No active session.'); return }
       if (args.length === 0) { ctx.reply(`Verbose mode is currently *${session.verbose ? 'on' : 'off'}*.`); return }
       const target = args[0].toLowerCase()
-      if (target === 'on') { session.verbose = true; await sessionManager.saveSession(sessionId); ctx.reply('✅ Verbose mode enabled. Tool calls will be shown.') }
-      else if (target === 'off') { session.verbose = false; await sessionManager.saveSession(sessionId); ctx.reply('✅ Verbose mode disabled. Tool calls will be hidden.') }
+      if (target === 'on') { await sessionRuntime.updateSettings(sessionId, { verbose: true }); ctx.reply('✅ Verbose mode enabled. Tool calls will be shown.') }
+      else if (target === 'off') { await sessionRuntime.updateSettings(sessionId, { verbose: false }); ctx.reply('✅ Verbose mode disabled. Tool calls will be hidden.') }
       else { ctx.reply('Usage: /verbose [on|off]') }
     }
   },

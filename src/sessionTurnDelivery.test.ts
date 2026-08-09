@@ -7,6 +7,7 @@ import { registerChannel, unregisterChannel, type Channel, type ChannelContext }
 import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
 import { attachChannel, createChannelsStore, resetChannelsForTests, saveChannels, setChannelsStoreForTests } from './session/channels';
 import { createSessionTurnDeliveryServiceHandler, sessionTurnDeliveryServiceDescriptor } from './sessionTurnDelivery';
+import { QQBotChannel } from './channels/qqbotChannel';
 
 const source = {
   platform: 'telegram', channelId: 'telegram', channelType: 'telegram',
@@ -101,5 +102,43 @@ test('committed-final handler uses exact direct context and awaited attachment f
   } finally {
     transport.close(); for (const id of ['telegram', 'secondary', 'webui', 'wework', 'qqbot']) unregisterChannel(id);
     resetChannelsForTests(); setChannelsStoreForTests(null); await fs.remove(root);
+  }
+});
+
+test('Worker intermediate delivery preserves QQ latest passive ID and monotonic sequence before final', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'turn-delivery-qq-intermediate-'));
+  const calls: Array<{ url: string; body: any }> = [];
+  const fetch = async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const urlText = String(url);
+    if (urlText.includes('getAppAccessToken')) return new Response(JSON.stringify({ access_token: 'token', expires_in: 7200 }), { status: 200 });
+    calls.push({ url: urlText, body: JSON.parse(String(init?.body || '{}')) });
+    return new Response('{}', { status: 200 });
+  };
+  const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-worker-delivery', { fetch });
+  (channel as any).stopped = false; (channel as any).connectionGeneration = 1;
+  await (channel as any).routeInboundMessage('C2C_MESSAGE_CREATE', {
+    id: 'latest-passive-id', content: 'inbound', author: { user_openid: 'openid-worker' },
+  });
+  setChannelsStoreForTests(createChannelsStore(path.join(root, 'channels.json'))); resetChannelsForTests();
+  registerChannel('qq-worker-delivery', channel);
+  attachChannel('qq-worker-delivery', 'c2c:openid-worker', 'worker-owner'); await saveChannels();
+  const source = {
+    platform: 'qqbot', channelId: 'qq-worker-delivery', channelType: 'qqbot',
+    channelUserId: 'c2c:openid-worker', conversationId: 'c2c:openid-worker',
+    qqbotMessageId: 'stale-fallback-id',
+  };
+  const registry = new RpcServiceRegistry();
+  registry.register(sessionTurnDeliveryServiceDescriptor, createSessionTurnDeliveryServiceHandler({ expectedSourceSessionId: 'worker-owner' }));
+  const transport = new LocalRpcTransport(registry); const client = new RpcClient(sessionTurnDeliveryServiceDescriptor, transport);
+  try {
+    assert.deepEqual(await client.call('deliverIntermediateText', { sourceSessionId: 'worker-owner', source, text: 'intermediate-1' }), { attempted: 1, delivered: 1 });
+    assert.deepEqual(await client.call('deliverIntermediateText', { sourceSessionId: 'worker-owner', source, text: 'intermediate-2' }), { attempted: 1, delivered: 1 });
+    assert.deepEqual(await client.call('deliverCommittedFinal', { sourceSessionId: 'worker-owner', source, outcome: 'response', text: 'final' }), { attempted: 1, delivered: 1 });
+    const messages = calls.filter(call => new URL(call.url).pathname.endsWith('/messages'));
+    assert.deepEqual(messages.map(call => call.body.msg_id), ['latest-passive-id', 'latest-passive-id', 'latest-passive-id']);
+    assert.deepEqual(messages.map(call => call.body.msg_seq), [1, 2, 3]);
+    assert.deepEqual(messages.map(call => call.body.content), ['intermediate-1', 'intermediate-2', 'final']);
+  } finally {
+    transport.close(); unregisterChannel('qq-worker-delivery'); resetChannelsForTests(); setChannelsStoreForTests(null); await fs.remove(root);
   }
 });

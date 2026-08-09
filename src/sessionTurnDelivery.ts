@@ -5,9 +5,13 @@ import { defineRpcService, rpcMethod, RpcClient, RpcError, type RpcServiceHandle
 import type { QueueSource } from './types';
 export type SessionTurnFinalKind = 'response' | 'error' | 'empty-final';
 export type SessionTurnDeliveryRequest = { sourceSessionId: string; source: QueueSource; outcome: SessionTurnFinalKind; text: string };
+export type SessionTurnIntermediateDeliveryRequest = { sourceSessionId: string; source: QueueSource; text: string };
 export type SessionTurnDeliveryAck = { attempted: number; delivered: number };
 export type ExactFinalSourceContextResolver = (sourceSessionId: string, source: QueueSource) => ChannelContext | undefined | Promise<ChannelContext | undefined>;
-export const sessionTurnDeliveryServiceDescriptor = defineRpcService('session-turn-delivery', 1, { deliverCommittedFinal: rpcMethod<SessionTurnDeliveryRequest, SessionTurnDeliveryAck>() });
+export const sessionTurnDeliveryServiceDescriptor = defineRpcService('session-turn-delivery', 2, {
+  deliverCommittedFinal: rpcMethod<SessionTurnDeliveryRequest, SessionTurnDeliveryAck>(),
+  deliverIntermediateText: rpcMethod<SessionTurnIntermediateDeliveryRequest, SessionTurnDeliveryAck>(),
+});
 function plain(value: unknown, label: string): asserts value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
     throw new RpcError('SESSION_TURN_DELIVERY_INVALID', `${label} must be a plain object.`);
@@ -72,6 +76,34 @@ function finalOptions(source: QueueSource, outcome: SessionTurnFinalKind): any {
   };
   return { ...stream, ...qqbot, ...(outcome === 'response' ? { excludePlatforms: ['webui'] } : {}), turnFinal: true };
 }
+function intermediateOptions(source: QueueSource): any {
+  const stream = source.weworkStreamId ? {
+    weworkStreamId: source.weworkStreamId,
+    weworkStreamChannelId: source.channelId || source.platform,
+    weworkStreamConversationId: source.conversationId || source.channelUserId,
+  } : {};
+  const qqbot = source.qqbotMessageId ? {
+    qqbotMessageId: source.qqbotMessageId,
+    qqbotChannelId: source.channelId || source.platform,
+    qqbotConversationId: source.conversationId || source.channelUserId,
+  } : {};
+  return {
+    ...stream,
+    ...qqbot,
+    parse_mode: 'Markdown',
+    excludePlatforms: ['webui', ...(source.weworkStreamId ? [source.channelId || source.platform] : [])],
+  };
+}
+async function deliverAttachments(sourceSessionId: string, textValue: string, options: any): Promise<SessionTurnDeliveryAck> {
+  try {
+    const result = await deliverCommittedFinalToAttachments(sourceSessionId, textValue, options);
+    for (const failure of result.failures) logger.error({ sessionId: sourceSessionId, failure }, 'Session turn attachment delivery failed');
+    return { attempted: result.attempted, delivered: result.delivered };
+  } catch (error: any) {
+    logger.error({ err: error, sessionId: sourceSessionId }, 'Session turn attachment delivery failed');
+    return { attempted: 0, delivered: 0 };
+  }
+}
 export function createSessionTurnDeliveryServiceHandler(options: {
   expectedSourceSessionId: string;
   resolveExactSourceContext?: ExactFinalSourceContextResolver;
@@ -99,14 +131,15 @@ export function createSessionTurnDeliveryServiceHandler(options: {
           }
         }
       }
-      try {
-        const result = await deliverCommittedFinalToAttachments(sourceSessionId, finalText, deliveryOptions);
-        for (const failure of result.failures) logger.error({ sessionId: sourceSessionId, failure }, 'Committed final attachment delivery failed');
-        return { attempted: result.attempted, delivered: result.delivered };
-      } catch (error: any) {
-        logger.error({ err: error, sessionId: sourceSessionId, outcome }, 'Committed final delivery failed');
-        return { attempted: 0, delivered: 0 };
-      }
+      return deliverAttachments(sourceSessionId, finalText, deliveryOptions);
+    },
+    async deliverIntermediateText(input) {
+      plain(input, 'request'); exactKeys(input, ['sourceSessionId', 'source', 'text'], 'request');
+      const sourceSessionId = text(input.sourceSessionId, 'sourceSessionId', 256);
+      if (sourceSessionId !== options.expectedSourceSessionId) throw new RpcError('SESSION_TURN_DELIVERY_SOURCE_MISMATCH', 'Intermediate delivery source session mismatch.');
+      const source = normalizeSessionTurnDeliverySource(input.source);
+      const intermediateText = text(input.text, 'text', 1024 * 1024);
+      return deliverAttachments(sourceSessionId, intermediateText, intermediateOptions(source));
     },
   };
 }
@@ -122,5 +155,9 @@ export async function initializeSessionTurnDelivery(reverseTransport: RpcTranspo
 export async function deliverCommittedFinal(request: SessionTurnDeliveryRequest): Promise<SessionTurnDeliveryAck> {
   if (!client) throw new RpcError('SESSION_TURN_DELIVERY_UNAVAILABLE', 'Committed-final delivery is unavailable.', true);
   return client.call('deliverCommittedFinal', request);
+}
+export async function deliverIntermediateText(request: SessionTurnIntermediateDeliveryRequest): Promise<SessionTurnDeliveryAck> {
+  if (!client) throw new RpcError('SESSION_TURN_DELIVERY_UNAVAILABLE', 'Intermediate delivery is unavailable.', true);
+  return client.call('deliverIntermediateText', request);
 }
 export async function shutdownSessionTurnDelivery() { client = undefined; transport = undefined; }

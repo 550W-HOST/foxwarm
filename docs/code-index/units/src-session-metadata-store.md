@@ -66,7 +66,7 @@ Manages persistence of session metadata and history as separate JSON files on di
 
 ## Behavior
 
-- Separates session data into two tiers: a main-owned shared metadata index (`sessions.json`) with backup rotation (5 numbered + legacy `.bak`), and authoritative full semantic per-session state files (no backups). Current local save writes state then catalog; future worker catalog delivery is deferred to the concrete placement slice.
+- Separates session data into two tiers: a main-owned shared metadata index (`sessions.json`) with backup rotation (5 numbered + legacy `.bak`), and authoritative full semantic per-session state files (no backups). Current local save writes state then catalog; Session-worker placement keeps Main as the sole catalog writer and updates it from explicit catalog mutations plus bounded Worker projections, never by Worker file writes.
 - `sidebarOrder` and `pinned` are WebUI/session-list metadata fields saved in the shared metadata index only. They are excluded from per-session history serialization/application so reorder/pin operations do not touch or risk stale rewrites of history JSON files.
 - Uses an in-memory `Map` cache for history store instances to avoid recreating them.
 - The real per-session file reader applies tolerant history/frontier shape normalization only to unversioned legacy payloads. Versioned payload shapes pass through unchanged to strict hydration, so malformed v1 history/frontier data and unknown versions fail closed without an empty-history rewrite.

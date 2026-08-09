@@ -58,6 +58,7 @@ async function withLocalHost(
   keepRunner = false,
   publishCommitted?: (projection: any) => Promise<void>,
   deliverCommittedFinal?: (source: any, text: string, outcome: any) => Promise<void>,
+  deliverIntermediateText?: (source: any, text: string) => Promise<void>,
 ): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-local-worker-host-'));
   const store = new SessionWorkerStore(path.join(root, 'runtime.sqlite')); store.open();
@@ -76,6 +77,7 @@ async function withLocalHost(
       writeState: async session => { durable = structuredClone(serializeSessionHistoryPayload(session)); },
     },
     publishCommitted,
+    deliverIntermediateText,
     deliverCommittedFinal,
   });
   try {
@@ -141,6 +143,146 @@ test('worker swallows one ambiguous final-delivery failure after committed respo
       throw new Error('ambiguous reverse transport');
     });
   } finally { (llm as any).chat = originalChat; }
+});
+
+test('worker delivers canonical model text before multiple tool iterations and only finalizes the genuine no-tool result', async () => {
+  const initial = baseSession('worker-intermediate-text');
+  const originalChat = llm.chat;
+  const intermediate: Array<{ source: any; text: string }> = [];
+  const finals: Array<{ source: any; text: string; outcome: string }> = [];
+  let chatCalls = 0;
+  const source = {
+    platform: 'qqbot', channelId: 'qq-instance', channelType: 'qqbot',
+    channelUserId: 'c2c:openid', conversationId: 'c2c:openid',
+    qqbotMessageId: 'inbound-message',
+  };
+  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    chatCalls += 1;
+    if (chatCalls <= 2) {
+      const text = `intermediate-${chatCalls}`;
+      const toolCall = { id: `status-${chatCalls}`, name: 'session', args: { action: 'status' } };
+      await options.appendMessage({ role: 'model', parts: [{ text }, { functionCall: toolCall }] });
+      return { text, toolCalls: [toolCall], allParts: [{ text }, { functionCall: toolCall }], usage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 } };
+    }
+    const text = 'genuine-final';
+    await options.appendMessage({ role: 'model', parts: [{ text }] });
+    return { text, usage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 } };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      store.enqueueIntent(initial.id, 'intermediate-text', 'enqueue', { type: 'user', source, parts: [{ text: 'run tools' }] });
+      await host.runPending(8);
+      assert.equal(chatCalls, 3);
+      assert.deepEqual(intermediate.map(item => item.text), ['intermediate-1', 'intermediate-2']);
+      assert.deepEqual(finals.map(item => [item.text, item.outcome]), [['genuine-final', 'response']]);
+      assert.equal(readDurable().history.filter((message: any) => message.role === 'model' && message.parts.some((part: any) => part.text === 'intermediate-1')).length, 1);
+      assert.equal(readDurable().busy, false);
+    }, true, undefined,
+      async (finalSource, text, outcome) => { finals.push({ source: finalSource, text, outcome }); },
+      async (intermediateSource, text) => { intermediate.push({ source: intermediateSource, text }); });
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('worker publishes a no-tool result once when a compatible QQ follow-up arrives during the provider request', async () => {
+  const initial = baseSession('worker-no-tool-compatible-followup');
+  const originalChat = llm.chat;
+  const intermediate: Array<{ source: any; text: string }> = [];
+  const finals: Array<{ source: any; text: string; outcome: string }> = [];
+  const firstSource = {
+    platform: 'qqbot', channelId: 'qq-instance', channelType: 'qqbot',
+    channelUserId: 'c2c:openid', conversationId: 'c2c:openid', qqbotMessageId: 'qq-first',
+  };
+  const latestSource = { ...firstSource, qqbotMessageId: 'qq-latest' };
+  let storeRef: SessionWorkerStore | undefined;
+  let chatCalls = 0;
+  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    chatCalls += 1;
+    if (chatCalls === 1) {
+      const text = 'seq604 no-tool text';
+      await options.appendMessage({ role: 'model', parts: [{ text }] });
+      storeRef!.enqueueIntent(initial.id, 'qq-compatible-followup', 'enqueue', {
+        type: 'user', source: latestSource, parts: [{ text: 'compatible follow-up' }], queuedAt: Date.now(),
+      });
+      return { text, usage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 } };
+    }
+    const text = 'provider-call-2 final';
+    await options.appendMessage({ role: 'model', parts: [{ text }] });
+    return { text, usage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 } };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      storeRef = store;
+      store.enqueueIntent(initial.id, 'qq-initial', 'enqueue', {
+        type: 'user', source: firstSource, parts: [{ text: 'initial request' }], queuedAt: Date.now(),
+      });
+      await host.runPending(8);
+      assert.equal(chatCalls, 2);
+      assert.deepEqual(intermediate.map(item => [item.text, item.source.qqbotMessageId]), [['seq604 no-tool text', 'qq-latest']]);
+      assert.deepEqual(finals.map(item => [item.text, item.outcome, item.source.qqbotMessageId]), [['provider-call-2 final', 'response', 'qq-latest']]);
+      assert.deepEqual(readDurable().history.map((message: any) => message.role), ['user', 'model', 'user', 'model']);
+      const durableText = JSON.stringify(readDurable().history);
+      for (const expectedText of ['initial request', 'seq604 no-tool text', 'compatible follow-up', 'provider-call-2 final']) {
+        assert.equal(durableText.split(expectedText).length - 1, 1, `${expectedText} remains one separate canonical row`);
+      }
+      assert.equal(readDurable().lastAppliedMailboxId, 2);
+      assert.equal(readDurable().busy, false);
+    }, true, undefined,
+      async (source, text, outcome) => { finals.push({ source, text, outcome }); },
+      async (source, text) => { intermediate.push({ source, text }); });
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('worker intermediate delivery failure is swallowed without poisoning later turns', async () => {
+  const initial = baseSession('worker-intermediate-delivery-failure');
+  const originalChat = llm.chat;
+  let chatCalls = 0; let intermediateCalls = 0; let finalCalls = 0;
+  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    chatCalls += 1;
+    const toolCall = { id: `failure-status-${chatCalls}`, name: 'session', args: { action: 'status' } };
+    if (chatCalls % 2 === 1) {
+      await options.appendMessage({ role: 'model', parts: [{ text: 'intermediate despite delivery failure' }, { functionCall: toolCall }] });
+      return { text: 'intermediate despite delivery failure', toolCalls: [toolCall], allParts: [{ text: 'intermediate despite delivery failure' }, { functionCall: toolCall }] };
+    }
+    await options.appendMessage({ role: 'model', parts: [{ text: `final-${chatCalls}` }] });
+    return { text: `final-${chatCalls}` };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      store.enqueueIntent(initial.id, 'first', 'enqueue', { type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'first' }] });
+      await host.runPending(8);
+      assert.equal(intermediateCalls, 1); assert.equal(finalCalls, 1); assert.equal(readDurable().busy, false);
+      store.enqueueIntent(initial.id, 'second', 'enqueue', { type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'second' }] });
+      await host.runPending(8);
+      assert.equal(intermediateCalls, 2); assert.equal(finalCalls, 2); assert.equal(readDurable().busy, false);
+    }, true, undefined,
+      async () => { finalCalls += 1; },
+      async () => { intermediateCalls += 1; throw new Error('QQ delivery unavailable'); });
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('worker suppresses a duplicate final after a tool stop when intermediate text was already delivered', async () => {
+  const initial = baseSession('worker-intermediate-no-duplicate-final');
+  const originalChat = llm.chat; const originalExecuteTools = llm.executeTools;
+  let intermediateCalls = 0; let finalCalls = 0;
+  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    const toolCall = { id: 'stop-after-intermediate', name: 'session', args: { action: 'status' } };
+    await options.appendMessage({ role: 'model', parts: [{ text: 'already sent', }, { functionCall: toolCall }] });
+    return { text: 'already sent', toolCalls: [toolCall], allParts: [{ text: 'already sent' }, { functionCall: toolCall }] };
+  };
+  (llm as any).executeTools = async () => ({ parts: [{ functionResponse: { name: 'session', response: 'stopped' } }], __toolLoopControl: { stopCurrentTurn: true } });
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      store.enqueueIntent(initial.id, 'stop-after-text', 'enqueue', { type: 'user', source: { platform: 'qqbot', channelId: 'qq', channelType: 'qqbot', channelUserId: 'c2c:openid', conversationId: 'c2c:openid', qqbotMessageId: 'inbound' }, parts: [{ text: 'stop' }] });
+      await host.runPending(8);
+      assert.equal(intermediateCalls, 1); assert.equal(finalCalls, 0); assert.equal(readDurable().busy, false);
+    }, true, undefined,
+      async () => { finalCalls += 1; },
+      async () => { intermediateCalls += 1; });
+  } finally { (llm as any).chat = originalChat; (llm as any).executeTools = originalExecuteTools; }
 });
 
 test('automatic compact maintenance failure after a delivered success resyncs without a second final', async () => {

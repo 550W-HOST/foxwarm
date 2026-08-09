@@ -81,8 +81,14 @@ and C2C/group `Channel.sendFile` uses the official local chunk-upload flow.
   delivery uses that live ID for the matching configured instance and
   conversation, while other session attachments retain ordinary delivery.
   When a compatible follow-up arrives during a no-tool provider request, the
-  Router's pre-final safe point continues the turn before this latest ID is
-  used for the one visible final.
+  Router's pre-final safe point publishes the completed result once as
+  intermediate output using this latest ID, then continues the turn; the later
+  genuine final advances the same conversation's monotonic sequence normally.
+- Session-worker intermediate model-text delivery uses the same source metadata
+  and attachment path with `turnFinal` unset, so each continuing-result text uses the
+  current/latest passive `msg_id` and the adapter's monotonic `msg_seq`; WebUI
+  and active WeWork stream aggregation are excluded by the turn runner before
+  this channel is called.
 - The gateway retains the latest dispatch sequence and READY session ID in
   memory. HELLO resumes only when both are present; RECONNECT, resumable and
   non-resumable INVALID_SESSION frames, documented close classes, heartbeat

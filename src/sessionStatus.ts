@@ -1,11 +1,13 @@
 import { getAgentDir, resolveModelConfig } from './config';
 import { nodesManager } from './nodes/manager';
 import * as sessionManager from './sessionManager';
+import * as sessionRuntime from './sessionRuntime';
 import { estimateSessionSummary } from './tokenCount';
-import type { Session, TokenUsage } from './types';
+import type { Message, Session, TokenUsage } from './types';
+import type { SessionRuntimeSessionDto } from './sessionRuntimeService';
 import { formatSessionRuntimeStateSummary, type SessionRuntimeState } from './sessionRuntimeState';
 
-type SessionListItem = ReturnType<typeof sessionManager.listSessions>[number];
+type SessionListItem = ReturnType<typeof sessionManager.listSessions>[number] | SessionRuntimeSessionDto;
 
 export interface SessionStatusInfo {
   sessionId: string;
@@ -83,7 +85,7 @@ function getNodeInfo(nodeId: string): SessionStatusInfo['currentNode'] {
 
 export function formatSessionListRow(s: SessionListItem, currentSessionId?: string): string {
   const date = formatDate(s.lastMessageTime);
-  const channel = s.hasChannel ? '📱' : '🤖';
+  const channel = sessionManager.getChannelsBySession(s.id).length > 0 ? '📱' : '🤖';
   const displayName = s.displayName ? ` (${s.displayName})` : '';
   const node = s.currentNode || 'master';
   const isolated = s.isolated ? ' isolated' : '';
@@ -97,7 +99,7 @@ export function formatSessionListRow(s: SessionListItem, currentSessionId?: stri
 }
 
 export async function buildSessionListOutput(args: Record<string, any> = {}, currentSessionId?: string): Promise<string> {
-  const sessions = sessionManager.listSessions();
+  const sessions = await sessionRuntime.listSessions();
 
   if (sessions.length === 0) {
     return 'No sessions found.';
@@ -115,7 +117,7 @@ export async function buildSessionListOutput(args: Record<string, any> = {}, cur
   }
 
   const end = start + pageSessions.length;
-  const currentSession = currentSessionId ? await sessionManager.getSession(currentSessionId) : undefined;
+  const currentSession = currentSessionId ? await sessionRuntime.getSession(currentSessionId) : undefined;
   const parentSessionId = currentSession?.parentSessionId;
 
   let result = '';
@@ -140,15 +142,35 @@ export async function buildSessionListOutput(args: Record<string, any> = {}, cur
   return result;
 }
 
-export async function buildSessionStatusInfo(sessionId: string, suppliedSession?: Session, exactOwner = false): Promise<SessionStatusInfo> {
+export async function buildSessionStatusInfo(
+  sessionId: string,
+  suppliedSession?: Session | SessionRuntimeSessionDto,
+  exactOwner = false,
+  historyMessages?: Message[],
+): Promise<SessionStatusInfo> {
   const session = suppliedSession || await sessionManager.getSession(sessionId);
   const realSessionId = session.id || sessionId;
   const agentName = session.agent || 'main';
   const agentDir = getAgentDir(agentName);
-  const sessionSummary = estimateSessionSummary(session);
+  const runtimeDto = 'tokenUsage' in session ? session : undefined;
+  const summarySource = runtimeDto
+    ? {
+        ...runtimeDto,
+        history: historyMessages || [],
+        stats: {
+          totalCachedTokens: runtimeDto.tokenUsage.cachedTokens,
+          totalInputTokens: runtimeDto.tokenUsage.inputTokens,
+          totalOutputTokens: runtimeDto.tokenUsage.outputTokens,
+          lastUsage: runtimeDto.tokenUsage.lastUsage,
+        },
+        meta: { lastMessageTime: runtimeDto.lastMessageTime },
+        queue: [],
+      } as unknown as Session
+    : session as Session;
+  const sessionSummary = estimateSessionSummary(summarySource);
   const { currentKey, contextLimit } = resolveModelConfig(session.model);
   const currentNodeId = session.currentNode || 'master';
-  const allSessions = exactOwner ? [] : sessionManager.listSessions();
+  const allSessions = exactOwner ? [] : runtimeDto ? await sessionRuntime.listSessions() : sessionManager.listSessions();
   const childSessions = allSessions
     .filter(s => s.parentSessionId === realSessionId)
     .slice(0, 10);
@@ -158,7 +180,7 @@ export async function buildSessionStatusInfo(sessionId: string, suppliedSession?
   const defaultCwdDescription = cwd
     ? `\`${cwd}\``
     : `not set (defaults to current node agent directory; master: \`${agentDir}\`)`;
-  const lastUsage = session.stats?.lastUsage || null;
+  const lastUsage = runtimeDto ? runtimeDto.tokenUsage.lastUsage : (session as Session).stats?.lastUsage || null;
 
   return {
     sessionId: realSessionId,
@@ -168,22 +190,22 @@ export async function buildSessionStatusInfo(sessionId: string, suppliedSession?
     parentSessionId: session.parentSessionId,
     archived: !!session.archived,
     modelKey: currentKey,
-    messageCount: session.history.length,
+    messageCount: runtimeDto ? runtimeDto.messageCount : (session as Session).history.length,
     tokenEstimate: sessionSummary.tokens,
     imageCount: sessionSummary.imageCount,
     contextLimit,
-    autoCompactThresholdTokens: sessionManager.getEffectiveCompactThresholdTokens(session),
+    autoCompactThresholdTokens: sessionManager.getEffectiveCompactThresholdTokens(summarySource),
     compactThresholdOverrideTokens: typeof session.compactThresholdTokens === 'number' ? session.compactThresholdTokens : undefined,
     lastUsage,
     lastUsageTotalTokens: getUsageTotalTokens(lastUsage),
-    lastMessageTime: session.meta?.lastMessageTime,
+    lastMessageTime: runtimeDto ? runtimeDto.lastMessageTime : (session as Session).meta?.lastMessageTime,
     currentNode: exactOwner ? { id: currentNodeId, connected: currentNodeId === 'master', ...(currentNodeId === 'master' ? { type: 'master' } : {}) } : getNodeInfo(currentNodeId),
     cwd,
     defaultCwdDescription,
-    isolated: sessionManager.isSessionEffectivelyIsolated(session),
+    isolated: runtimeDto ? runtimeDto.isolated : sessionManager.isSessionEffectivelyIsolated(session as Session),
     busy: !!session.busy,
-    queueLength: session.queue?.length || 0,
-    runtimeState: sessionManager.buildSessionRuntimeState(session),
+    queueLength: runtimeDto ? runtimeDto.queueLength : (session as Session).queue?.length || 0,
+    runtimeState: runtimeDto ? runtimeDto.runtimeState : sessionManager.buildSessionRuntimeState(session as Session),
     childSessions,
   };
 }

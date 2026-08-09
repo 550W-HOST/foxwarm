@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Session core owns durable session/agent lifecycle, the queue and wait boundary, metadata/history persistence, parent-child relations, channel attachments, managed-session leases, goals, and canonical runtime state. `src/sessionManager.ts` remains the live-object integration façade over smaller `src/session/*` domains. `SessionRuntime` is the asynchronous immutable-DTO boundary for external session queries, commands, and update events; local placement currently delegates to the manager through the shared RPC contract.
+Session core owns durable session/agent lifecycle, the queue and wait boundary, metadata/history persistence, parent-child relations, channel attachments, managed-session leases, goals, and canonical runtime state. `src/sessionManager.ts` remains the live-object integration façade over smaller `src/session/*` domains. `SessionRuntime` is the asynchronous immutable-DTO boundary for external session queries, commands, and update events; it delegates to the manager in local placement and routes supported semantic operations to the exact owner when Session-worker placement is enabled.
 
 The live LLM/tool turn loop belongs to the `SessionTurnRunner` reached through `MessageRouter.processSessionQueue()`. Session core stores and triggers work; message routing claims it and executes the turn. Canonical flow: [message processing pipeline](../threads/message-processing-pipeline.md).
 
@@ -13,8 +13,8 @@ Canonical image references in live history, queues, archives, and forks are owne
 ## Units
 
 - [src-session-manager](../units/src-session-manager.md) — façade, in-memory map, lazy hydration, queue/wait coordination, callbacks, and restart recovery.
-- [src-session-runtime](../units/src-session-runtime.md) — local high-level DTO service/facade for external session queries, commands, settings, controls, and events.
-- [src-session-worker-runtime](../units/src-session-worker-runtime.md) — durable process-generation/mailbox fencing, authoritative state coordination, and supervised per-session child lifecycle foundation; production placement is not enabled yet.
+- [src-session-runtime](../units/src-session-runtime.md) — placement-neutral high-level DTO service/facade for external session queries, commands, settings, controls, and events.
+- [src-session-worker-runtime](../units/src-session-worker-runtime.md) — activated configurable process-generation/mailbox fencing, authoritative state coordination, exact-owner operations, and supervised per-session child lifecycle.
 - [src-session-runtime-state](../units/src-session-runtime-state.md) — `requesting-model`, `running-tool`, `waiting`, and `idle` derivation.
 - [src-session-metadata-store](../units/src-session-metadata-store.md) — shared metadata index, per-session history snapshots, rebuild, and durable writes.
 - [src-session-channels](../units/src-session-channels.md) — persisted channel attachments, direct delivery, and session broadcasts.
@@ -43,7 +43,7 @@ Context frontier, compaction, archive-store, and vector retrieval are owned by [
 - `state/sessions.json` is the shared metadata/presentation index and uses five numbered backups.
 - `state/sessions/<id>.json` owns versioned authoritative full semantic session state: durable history, queue, wait/managed metadata, prompt snapshot/cache key, embedded `contextFrontier`, settings, and worker mailbox cursor. Unversioned legacy files receive a one-time tolerant upgrade; current-version hydration replaces semantic fields rather than merging stale catalog values. Per-session files use durable serialized replacement without numbered rotation.
 - `state/channels.json` owns channel attachments.
-- `state/session-runtime.sqlite` owns future session-worker generations, incarnations, mailbox intents, and acknowledged mailbox cursors; it does not own semantic Session state and is currently exercised only by the disconnected worker foundation.
+- `state/session-runtime.sqlite` owns Session-worker generations, incarnations, mailbox intents, and acknowledged mailbox cursors when process placement is enabled; it never owns semantic Session state.
 - `state/sessions/<id>.json` additionally persists `lastAppliedMailboxId`; worker placement must durably replace this authoritative file before SQLite acknowledges the corresponding ordered session-local mailbox prefix.
 - Agent metadata is separate from session history.
 - Active model/tool phases are in memory; wait metadata is persisted on the session.

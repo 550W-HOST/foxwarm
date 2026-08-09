@@ -39,7 +39,8 @@ Implements a terminal-based user interface (TUI) channel using the `blessed` lib
 
 - `../channel` — `Channel`, `ChannelContext`, `ChannelMessage` interfaces
 - `../common` — `logger`
-- `../sessionManager` — Session retrieval, binding, creation, and listing functions
+- `../sessionManager` — Main-owned channel binding and pre-runtime catalog fallback
+- `../sessionRuntime` — placement-neutral session list, history, and status projections
 
 ## Behavior
 
@@ -48,14 +49,14 @@ Implements a terminal-based user interface (TUI) channel using the `blessed` lib
 - If no session exists for the selected ID, creates one via `sessionManager.createSession`.
 - Handles `/`-prefixed commands by delegating to the registered command handler.
 - Displays non-command replies directly; it no longer carries a special filter for busy queue acknowledgements because the router now enqueues busy messages silently.
-- Polls session `busy` state every 500ms to update a processing indicator in the status bar and chat label.
+- Polls the SessionRuntime projection every 500ms to update a processing indicator in the status bar and chat label without hydrating Worker-owned state in Main.
 - Ensures UTF-8 cleanliness by round-tripping text through `Buffer`.
 - Shows an exit confirmation dialog to prevent accidental quit.
 
 ## Integration
 
 - Implements the `Channel` interface, making it interchangeable with other channel implementations (e.g., Discord, CLI).
-- Relies on `sessionManager` for all session state (history, binding, creation) — does not maintain its own persistence.
+- Uses SessionRuntime for list/history/status reads and `sessionManager` only for Main-owned channel binding/catalog fallback during startup; it does not maintain its own persistence or hydrate Worker-owned authority.
 - Exposes `logToTUI` for external code to route log output into the TUI logs panel.
 - Exposes `getScreen()` so other components can interact with the blessed screen if needed.
 - Message and command handlers are injected by the application bootstrap layer via `onMessage`/`onCommand`.

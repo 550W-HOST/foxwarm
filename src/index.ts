@@ -218,6 +218,7 @@ async function start() {
             idleMs: SESSION_WORKERS_CONFIG.idleSeconds * 1000,
             shouldRestart: () => true,
             resolveExactFinalSourceContext: sourceContexts.resolve,
+            readSessionHistory: sessionId => sessionRuntime.getHistory(sessionId),
             // Transient presentation channel: pure pass-through into the WebUI
             // SSE fan-out and the stream-event bus; never writes semantic state.
             presentationSink: {
@@ -242,6 +243,7 @@ async function start() {
             sessionWorkerSupervisor,
             sourceContexts,
             (sessionId) => sessionManager.resolveLoadedSessionId(sessionId),
+            (sessionId) => !!sessionManager.getSessionCatalog(sessionId),
         );
         sessionManager.setSessionWorkerEnqueueSink(
             (sessionId, item) => sessionWorkerIngress!.enqueueEnsuringWorker(sessionId, item).then(() => {}),
@@ -250,9 +252,13 @@ async function start() {
             sessionId => teardownSessionWorkerForDelete({ store: sessionWorkerStore!, supervisor: sessionWorkerSupervisor! }, sessionId),
         );
         sessionManager.setSessionWorkerForkSourceProvider(async sessionId => {
-            if (!sessionWorkerStore!.findOwnership(sessionId)) return undefined;
             const catalog = sessionManager.getAllSessions().get(sessionId);
-            return catalog ? readDetachedWorkerSession(sessionId, catalog) : undefined;
+            // Fork is a Main-owned lifecycle read, but it must never hydrate a
+            // full authority into Main merely because this session is idle and
+            // has not spawned its first Worker yet.
+            if (!catalog) return undefined;
+            await sessionWorkerIngress!.ensureWorkerOwner(sessionId);
+            return readDetachedWorkerSession(sessionId, catalog);
         });
         sessionManager.setSessionWorkerFenceChecker(sessionId => {
             const ownership = sessionWorkerStore!.findOwnership(sessionId);
@@ -275,7 +281,10 @@ async function start() {
             ? { worker: { store: sessionWorkerStore, registry: sessionWorkerSupervisor.projectionRegistry, ingress: sessionWorkerIngress, supervisor: sessionWorkerSupervisor } }
             : undefined,
     );
-    await mainManagementTools.initializeMainManagementTools({ workerStore: sessionWorkerStore });
+    await mainManagementTools.initializeMainManagementTools({
+        workerStore: sessionWorkerStore,
+        readSessionHistory: sessionWorkerStore ? sessionId => sessionRuntime.getHistory(sessionId) : undefined,
+    });
     await nodeExecution.initializeNodeExecution();
     await mcpExternal.initializeMcpExternalService();
 
@@ -497,12 +506,16 @@ async function start() {
 
     logger.info('Foxwarm started successfully');
 
-    // Resume busy sessions after restart (must be after callback is set)
-    await sessionManager.resumeBusySessions();
+    // Resume busy sessions after restart (must be after callback is set). A
+    // worker-enabled process must never execute Main-local residual state;
+    // the exact Worker owns stale-busy recovery and durable mailbox replay.
+    if (!SESSION_WORKERS_ENABLED) {
+        await sessionManager.resumeBusySessions();
+    }
 
     // Durable Worker mailbox intents survive restarts; ensure their owners and
     // run the pending prefix. Per-session failures keep the work retryable.
-    if (sessionWorkerStore && sessionWorkerSupervisor) {
+    if (SESSION_WORKERS_ENABLED && sessionWorkerStore && sessionWorkerSupervisor) {
         void resumeSessionWorkerPendingIntents(sessionWorkerStore, sessionWorkerSupervisor,
           () => [...sessionManager.getAllSessions().keys()]);
     }

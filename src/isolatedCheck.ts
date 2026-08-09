@@ -25,7 +25,7 @@ export async function checkToolPermission(
   executionNode?: string,
   toolArgs?: Record<string, any>
 ): Promise<void> {
-  const session = await sessionManager.getExistingSession(sessionId);
+  const session = sessionManager.getSessionCatalog(sessionId);
   if (!session) return;
   await checkToolPermissionForSession(session, toolName, executionNode, toolArgs);
 }
@@ -162,7 +162,7 @@ export async function requireNotIsolated(sessionIdOrCtx: string | { sessionId?: 
   const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
   if (!sessionId) return;
   
-  const session = await sessionManager.getExistingSession(sessionId);
+  const session = sessionManager.getSessionCatalog(sessionId);
   requireNotIsolatedForSession(session, operation);
 }
 
@@ -187,12 +187,12 @@ export async function checkArchivedReadPermission(
   const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
   if (!sessionId) return;
 
-  const session = await sessionManager.getExistingSession(sessionId);
+  const session = sessionManager.getSessionCatalog(sessionId);
   if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
 
   const callerAgent = session?.agent || 'main';
   const requested = targetSessionId || sessionId;
-  const targetSession = await sessionManager.getExistingSession(requested);
+  const targetSession = sessionManager.getSessionCatalog(requested);
   const targetAgent = targetSession?.agent || requested.split('/')[0] || callerAgent;
 
   if (targetAgent !== callerAgent) {
@@ -226,7 +226,7 @@ export async function checkChannelPermission(sessionIdOrCtx: string | { sessionI
   const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
   if (!sessionId) return;
   
-  const session = await sessionManager.getExistingSession(sessionId);
+  const session = sessionManager.getSessionCatalog(sessionId);
   if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
 
   const attachedChannels = sessionManager.getChannelsBySession(sessionId);
@@ -250,7 +250,7 @@ export async function checkSendFilePermission(
   const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
   if (!sessionId) return;
 
-  const session = await sessionManager.getExistingSession(sessionId);
+  const session = sessionManager.getSessionCatalog(sessionId);
   if (!sessionManager.isSessionEffectivelyIsolated(session)) return;
 
   if (options.channelTargetId) {
@@ -280,7 +280,7 @@ export async function checkTimerPermission(
   const sessionId = typeof sessionIdOrCtx === 'string' ? sessionIdOrCtx : sessionIdOrCtx.sessionId;
   if (!sessionId) return;
 
-  const session = await sessionManager.getExistingSession(sessionId);
+  const session = sessionManager.getSessionCatalog(sessionId);
   if (!session) return;
   checkTimerPermissionForSession(session, options);
 }

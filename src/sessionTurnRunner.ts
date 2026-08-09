@@ -91,17 +91,21 @@ export interface SessionTurnHost {
   hasBroadcast(session: Session): boolean;
   broadcast(session: Session, text: string, options?: any): void;
   sendSessionReply(session: Session, sourceCtx: ChannelContext | undefined, text: string, options?: any, preferDirectReply?: boolean): Promise<void>;
+  ingestPendingQueue?(session: Session): Promise<void>;
+  deliverIntermediateText?(session: Session, source: QueueSource, text: string): Promise<void>;
   deliverCommittedFinal?(session: Session, source: QueueSource, text: string, outcome: SessionTurnFinalKind): Promise<void>;
 }
 
 export type LocalSessionTurnHostOverrides = Partial<Pick<SessionTurnHost,
   'applyCompletedCompactJob' | 'processSessionCompactionRequest' | 'checkAndCompactIfNeeded'
-  | 'queueSessionSystemEvent' | 'refreshSessionSnapshot' | 'deliverCommittedFinal'>>;
+  | 'queueSessionSystemEvent' | 'refreshSessionSnapshot' | 'ingestPendingQueue' | 'deliverIntermediateText' | 'deliverCommittedFinal'>>;
 
 /** Existing in-process effects, exposed without changing their behavior. */
 export class LocalSessionTurnHost implements SessionTurnHost {
   private readonly currentSessionEffects: llm.CurrentSessionTurnEffects;
   readonly deliverCommittedFinal?: SessionTurnHost['deliverCommittedFinal'];
+  readonly deliverIntermediateText?: SessionTurnHost['deliverIntermediateText'];
+  readonly ingestPendingQueue?: SessionTurnHost['ingestPendingQueue'];
 
   constructor(
     effects?: llm.CurrentSessionEffects,
@@ -145,6 +149,8 @@ export class LocalSessionTurnHost implements SessionTurnHost {
       clearRuntimeState: turnEffects.clearRuntimeState ? bind(turnEffects.clearRuntimeState) : defaults.clearRuntimeState,
     };
     this.deliverCommittedFinal = overrides.deliverCommittedFinal;
+    this.deliverIntermediateText = overrides.deliverIntermediateText;
+    this.ingestPendingQueue = overrides.ingestPendingQueue;
   }
 
   private assertOwnerId(sessionId: string): void {
@@ -498,6 +504,19 @@ export class SessionTurnRunner {
     };
   }
 
+  private latestCompatibleQueuedSource(session: Session, turnBoundary: SourceMergeBoundary): QueueSource | undefined {
+    let latest: QueueSource | undefined;
+    for (const item of session.queue) {
+      if (!isQueueItem(item)) continue;
+      if (item.type === 'compact-commit') break;
+      const queuedBoundary = this.getSourceMergeBoundary(item.source);
+      if (queuedBoundary.preferDirectReply !== turnBoundary.preferDirectReply
+        || (queuedBoundary.streamKey && queuedBoundary.streamKey !== turnBoundary.streamKey)) break;
+      if (item.source) latest = item.source;
+    }
+    return latest;
+  }
+
   private async appendQueuedTurnInputs(session: Session, sessionId: string, items: QueueItem[]): Promise<void> {
     let firstInputItem = true;
     for (const item of items) {
@@ -819,6 +838,27 @@ export class SessionTurnRunner {
     await this.host.appendSessionMessage(session, reminder);
   }
 
+  private async deliverIntermediateModelText(
+    session: Session,
+    source: QueueSource | undefined,
+    text: string,
+    broadcast: Session['broadcast'] | undefined,
+    turnOptions: Record<string, any>,
+  ): Promise<boolean> {
+    if (!shouldBroadcastChannelText(text)) return false;
+    if (source && this.host.deliverIntermediateText) {
+      await this.host.deliverIntermediateText(session, source, text);
+      return true;
+    }
+    if (!broadcast) return false;
+    const excludePlatforms = Array.from(new Set([
+      'webui',
+      ...(turnOptions.weworkStreamChannelId ? [turnOptions.weworkStreamChannelId] : []),
+    ]));
+    broadcast(text, { parse_mode: 'Markdown', excludePlatforms });
+    return true;
+  }
+
   private async sendFinalResponse(session: Session, sourceCtx: ChannelContext | undefined, source: QueueSource | undefined, response: string, alreadyBroadcasted: boolean, turnOptions?: Record<string, any>): Promise<boolean> {
     if (!alreadyBroadcasted && shouldBroadcastChannelText(response)) {
       await this.sendSessionReply(session, sourceCtx, response, this.mergeTurnOptions(turnOptions || {}, { excludePlatforms: ['webui'], turnFinal: true }), source);
@@ -867,12 +907,12 @@ export class SessionTurnRunner {
 
     await maybeRefreshStaleSessionSnapshot(session, this.host.refreshSessionSnapshot);
 
-    const turnSource = options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined);
+    let turnSource = options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined);
     // One ephemeral identity covers the complete provider/tool loop for this
     // invocation. A queued item consumed by this loop stays in the same turn;
     // a later runSessionTurn invocation receives a new identity.
     const turnId = randomUUID();
-    const turnChannelOptions = this.getTurnChannelOptions(undefined, turnSource);
+    let turnChannelOptions = this.getTurnChannelOptions(undefined, turnSource);
     const turnBoundary = this.getSourceMergeBoundary(turnSource);
     const broadcast = this.host.hasBroadcast(session)
       ? (text: string, broadcastOptions?: any) => this.host.broadcast(session, text, this.mergeTurnOptions(turnChannelOptions, broadcastOptions))
@@ -924,8 +964,13 @@ export class SessionTurnRunner {
           parts = null;
         }
 
+        const queuedBeforeSource = this.latestCompatibleQueuedSource(session, turnBoundary);
         const queuedBeforeLlm = await this.consumeLeadingQueuedTurnInputs(session, parts, turnBoundary);
         parts = queuedBeforeLlm.parts;
+        if (queuedBeforeSource) {
+          turnSource = queuedBeforeSource;
+          turnChannelOptions = this.getTurnChannelOptions(undefined, turnSource);
+        }
 
         if (session.stopping) {
           logger.info({ sessionId: session.id }, 'Session stopping flag detected, halting tool call loop');
@@ -985,9 +1030,23 @@ export class SessionTurnRunner {
           session.stats.lastUsage = result.usage;
         }
 
+        // A Worker turn cannot accept a second runPending call while this turn
+        // owns the serial lane. Pull newly durable mailbox inputs at this safe
+        // point so compatible follow-ups received during the provider request
+        // participate in the same canonical runner semantics as local queues.
+        await this.host.ingestPendingQueue?.(session);
+        const providerTimeSource = this.latestCompatibleQueuedSource(session, turnBoundary);
+        if (providerTimeSource) {
+          turnSource = providerTimeSource;
+          turnChannelOptions = this.getTurnChannelOptions(undefined, turnSource);
+        }
+
         if (!result.toolCalls?.length) {
           const queuedAfterLlm = await this.consumeLeadingQueuedTurnInputs(session, null, turnBoundary);
           if (queuedAfterLlm.consumedInput) {
+            lastTextBroadcasted = await this.deliverIntermediateModelText(
+              session, turnSource, result.text, broadcast, turnChannelOptions,
+            ) || lastTextBroadcasted;
             await this.maybeRequestAutoCompactionBeforeContinuation(session, result.usage, iteration);
             iteration++;
             continue;
@@ -999,14 +1058,9 @@ export class SessionTurnRunner {
         const turnToolCalls = this.getTurnToolCalls(result.toolCalls, iteration);
 
         const hasBroadcastableToolText = shouldBroadcastChannelText(result.text);
-        if (hasBroadcastableToolText && broadcast) {
-          const excludePlatforms = Array.from(new Set([
-            'webui',
-            ...(turnChannelOptions.weworkStreamChannelId ? [turnChannelOptions.weworkStreamChannelId] : []),
-          ]));
-          broadcast(result.text, { parse_mode: 'Markdown', excludePlatforms });
-          lastTextBroadcasted = true;
-        }
+        lastTextBroadcasted = await this.deliverIntermediateModelText(
+          session, turnSource, result.text, broadcast, turnChannelOptions,
+        ) || lastTextBroadcasted;
 
         this.emitTurnProgress(broadcast, turnChannelOptions, {
           type: 'tool-calls-start',
@@ -1114,6 +1168,12 @@ export class SessionTurnRunner {
           continue;
         }
 
+        await this.host.ingestPendingQueue?.(session);
+        const toolTimeSource = this.latestCompatibleQueuedSource(session, turnBoundary);
+        if (toolTimeSource) {
+          turnSource = toolTimeSource;
+          turnChannelOptions = this.getTurnChannelOptions(undefined, turnSource);
+        }
         const queuedAfterTools = await this.consumeLeadingQueuedTurnInputs(session, null, turnBoundary);
         parts = queuedAfterTools.parts;
 
@@ -1145,7 +1205,9 @@ export class SessionTurnRunner {
 
       await this.maybeQueueChildReminder(session);
       const workerFinal = this.host.deliverCommittedFinal && turnSource
-        ? (shouldBroadcastChannelText(response) ? 'response' : (turnSource.weworkStreamId ? 'empty-final' : undefined))
+        ? (shouldBroadcastChannelText(response) && !lastTextBroadcasted
+          ? 'response'
+          : (turnSource.weworkStreamId ? 'empty-final' : undefined))
         : undefined;
       if (workerFinal) await this.host.deliverCommittedFinal!(session, turnSource!, workerFinal === 'empty-final' ? '' : response, workerFinal);
       const finalSent = workerFinal ? true : await this.sendFinalResponse(session, options.sourceCtx, turnSource, response, lastTextBroadcasted, turnChannelOptions);

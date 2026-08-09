@@ -53,7 +53,7 @@ async function createFixture(sessionId: string, options: {
     workerEnv: { FOXWARM_DATA_DIR: root, ...options.workerEnv }, resolveExactFinalSourceContext: sourceContexts.resolve,
     handbackWorker,
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
   return {
@@ -70,8 +70,11 @@ async function createFixture(sessionId: string, options: {
 test('idle release hands back authority before fence release and refreshes the Main catalog stub', async () => {
   const sessionId = 'worker-handback-idle';
   const fixture = await createFixture(sessionId, { idleMs: 200 });
+  const initialAuthority = await fs.readJson(fixture.statePath);
+  initialAuthority.verbose = true;
+  await fs.writeJson(fixture.statePath, initialAuthority);
   fixture.catalog.set(sessionId, {
-    ...baseSession(sessionId), pinned: true, displayName: 'old-name',
+    ...baseSession(sessionId), pinned: true, displayName: 'old-name', verbose: false,
     meta: { lastMessageTime: 1, lastChannel: { channelType: 'webui', conversationId: 'c1' } as any }, model: 'stale-model',
   });
   try {
@@ -101,6 +104,7 @@ test('idle release hands back authority before fence release and refreshes the M
       'catalog-only meta.lastChannel survives the authority mirror');
     assert.equal(stub.pinned, true, 'Main-owned presentation fields are never derived from the authority');
     assert.equal(stub.displayName, 'old-name', 'an authority payload without displayName never erases the Main-owned name');
+    assert.equal(stub.verbose, true, 'Worker-owned settings are refreshed from authority before fence release');
     assert.equal(stub.busy, false); assert.deepEqual(stub.queue, []);
     assert.equal(stub.history.length, 0, 'handback must not hydrate authority history into the Main stub');
     assert.equal(fixture.store.getOwnership(sessionId).mailboxCursor, authority.lastAppliedMailboxId,
@@ -206,7 +210,7 @@ test('handback clears hydrated stub state so later reads rehydrate the fresh aut
       stateFilePath: () => statePath,
     }, identity),
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
   try {
     // A stub polluted by a past Main-side hydration: 16 fake stale messages.
     const polluted = baseSession(sessionId);
@@ -296,7 +300,7 @@ test('rehydration after release preserves the Main-owned displayName (rename and
       }, identity),
     });
     supervisors.push(supervisor);
-    const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id);
+    const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
     const stub = baseSession(sessionId);
     if (stubDisplayName !== undefined) stub.displayName = stubDisplayName;
     sessionManager.getAllSessions().set(sessionId, stub);

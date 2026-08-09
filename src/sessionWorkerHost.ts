@@ -8,10 +8,10 @@ import type { CurrentSessionTurnEffects } from './llm';
 import { RpcError } from './rpc';
 import { initArchiveStore } from './session/archiveStore';
 import { refreshSessionSnapshotForSession } from './session/agentMetadata';
-import { getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSessionCompactionRequest, type SessionHistoryDeps } from './session/history';
+import { clearSession, deleteMessages, forceIndexSession, getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSessionCompactionRequest, type SessionHistoryDeps } from './session/history';
 import { getManagedSessionState } from './session/managedState';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './session/metadataStore';
-import { applyQueuedItemToWaitState, appendSessionMessagesForSession, startSessionWaitForSession, updateSessionBusyStateForSession } from './sessionManager';
+import { applyQueuedItemToWaitState, appendSessionMessagesForSession, buildManualForkNotificationMessage, startSessionWaitForSession, updateSessionBusyStateForSession } from './sessionManager';
 import { clearActiveSessionRuntimeState, setActiveSessionRuntimeState, setSessionRuntimeStateUpdateCallback } from './sessionRuntimeState';
 import { LocalSessionTurnHost, SessionTurnRunner, type SessionTurnHost } from './sessionTurnRunner';
 import type { SessionTurnFinalKind } from './sessionTurnDelivery';
@@ -23,14 +23,16 @@ import {
 } from './sessionWorkerPersistence';
 import type { SessionWorkerIdentity } from './sessionWorkerControlService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
-import { isQueueItem, type CompactionRequest, type Message, type QueueItem, type Session, type SessionStreamEvent } from './types';
+import { isQueueItem, type CompactionRequest, type Message, type QueueItem, type QueueSource, type Session, type SessionStreamEvent } from './types';
 import { buildTimestampedSystemMessageParts } from './utils/systemMessageParts';
+import type { SessionWorkerHistoryMutationResult, SessionWorkerSettings, SessionWorkerSettingsPatch, SessionWorkerSettingsResult } from './sessionWorkerRuntimeService';
 
 export type SessionWorkerHostDependencies = {
   persistence?: SessionWorkerPersistenceDependencies;
   initialize?: () => Promise<void>;
   createTurnHost?: (effects: CurrentSessionTurnEffects, session: Session) => SessionTurnHost;
   publishCommitted?: (projection: SessionWorkerProjection) => Promise<void>;
+  deliverIntermediateText?: (source: QueueSource, text: string) => Promise<void>;
   deliverCommittedFinal?: (source: NonNullable<QueueItem['source']>, text: string, outcome: SessionTurnFinalKind) => Promise<void>;
   /** Transient presentation channel: appended-message copies for the WebUI fan-out. */
   publishPresentationMessage?: (message: Message) => Promise<void>;
@@ -95,6 +97,14 @@ export class SessionWorkerHost {
     return run;
   }
 
+  async loadProjection(): Promise<SessionWorkerProjection> {
+    return this.serialize(async () => {
+      await this.ensureLoaded();
+      await this.ensureHealthy();
+      return buildSessionWorkerProjection(this.session!);
+    });
+  }
+
   async compactAwaited(request: CompactionRequest): Promise<{ compacted: boolean; projection: SessionWorkerProjection }> {
     if (this.serializedPending > 0) throw new RpcError('SESSION_WORKER_COMPACTION_BUSY', 'Session worker is not idle for awaited compaction.', true);
     return this.serialize(async () => {
@@ -103,6 +113,126 @@ export class SessionWorkerHost {
       if (owner.busy || owner.queue.length || getManagedSessionState(owner)) throw new RpcError('SESSION_WORKER_COMPACTION_BUSY', 'Session worker is not idle for awaited compaction.', true);
       const compacted = await this.runExactCompaction(request, 'explicit');
       return { compacted, projection: buildSessionWorkerProjection(owner) };
+    });
+  }
+
+  async updateSettings(patch: SessionWorkerSettingsPatch): Promise<SessionWorkerSettingsResult> {
+    return this.serialize(async () => {
+      await this.ensureLoaded(); await this.ensureHealthy(); await this.fenceMutation();
+      const session = this.session!;
+      const previous = this.settingsSnapshot(session);
+      const before = captureSessionSemanticState(session);
+      const changed: string[] = [];
+      try {
+        for (const key of ['cwd', 'model', 'childModelDefault', 'currentNode'] as const) {
+          if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
+          const value = patch[key];
+          const prior = session[key] ?? null;
+          if (prior !== value) changed.push(key);
+          if (value === null) delete session[key]; else session[key] = value;
+        }
+        if (Object.prototype.hasOwnProperty.call(patch, 'compactThresholdTokens')) {
+          const value = patch.compactThresholdTokens;
+          const prior = typeof session.compactThresholdTokens === 'number' ? session.compactThresholdTokens : null;
+          if (prior !== value) changed.push('compactThresholdTokens');
+          if (value === null) delete session.compactThresholdTokens; else session.compactThresholdTokens = value;
+        }
+        if (Object.prototype.hasOwnProperty.call(patch, 'verbose')) {
+          const value = !!patch.verbose;
+          const prior = !!session.verbose;
+          if (prior !== value) changed.push('verbose');
+          session.verbose = value;
+        }
+        if (changed.length > 0) await this.persistOwner();
+        return { changed, previous, current: this.settingsSnapshot(session), projection: buildSessionWorkerProjection(session) };
+      } catch (error) {
+        if (!this.isResyncError(error)) restoreSessionSemanticState(session, before);
+        throw error;
+      }
+    });
+  }
+
+  async deleteMessages(num: number): Promise<SessionWorkerHistoryMutationResult> {
+    return this.serialize(async () => {
+      await this.ensureLoaded(); await this.ensureHealthy(); await this.fenceMutation();
+      const session = this.session!;
+      const before = captureSessionSemanticState(session);
+      try {
+        const result = await deleteMessages(this.historyDeps(), session.id, num);
+        return { ...result, projection: buildSessionWorkerProjection(session) };
+      } catch (error) {
+        if (!this.isResyncError(error)) restoreSessionSemanticState(session, before);
+        throw error;
+      }
+    });
+  }
+
+  async clearHistory(): Promise<SessionWorkerHistoryMutationResult> {
+    return this.serialize(async () => {
+      await this.ensureLoaded(); await this.ensureHealthy(); await this.fenceMutation();
+      const session = this.session!;
+      const before = captureSessionSemanticState(session);
+      try {
+        await clearSession(this.historyDeps(), session.id);
+        return { projection: buildSessionWorkerProjection(session) };
+      } catch (error) {
+        if (!this.isResyncError(error)) restoreSessionSemanticState(session, before);
+        throw error;
+      }
+    });
+  }
+
+  async forceIndex(): Promise<SessionWorkerHistoryMutationResult> {
+    return this.serialize(async () => {
+      await this.ensureLoaded(); await this.ensureHealthy(); await this.fenceMutation();
+      const session = this.session!;
+      const before = captureSessionSemanticState(session);
+      try {
+        await forceIndexSession(this.historyDeps(), session.id);
+        return {
+          latestSeq: Math.max(0, (session.nextMessageSeq || 1) - 1),
+          projection: buildSessionWorkerProjection(session),
+        };
+      } catch (error) {
+        if (!this.isResyncError(error)) restoreSessionSemanticState(session, before);
+        throw error;
+      }
+    });
+  }
+
+  async refreshSnapshot(): Promise<SessionWorkerHistoryMutationResult> {
+    return this.serialize(async () => {
+      await this.ensureLoaded(); await this.ensureHealthy(); await this.fenceMutation();
+      const session = this.session!;
+      const before = captureSessionSemanticState(session);
+      try {
+        await refreshSessionSnapshotForSession(session, () => this.persistOwner());
+        return { agentName: session.agent || 'main', projection: buildSessionWorkerProjection(session) };
+      } catch (error) {
+        if (!this.isResyncError(error)) restoreSessionSemanticState(session, before);
+        throw error;
+      }
+    });
+  }
+
+  async notifyManualForkCreated(childSessionId: string, initialMessage?: string): Promise<{ result: 'appended' | 'queued' }> {
+    return this.serialize(async () => {
+      await this.ensureLoaded(); await this.ensureHealthy(); await this.fenceMutation();
+      const session = this.session!;
+      const notification = buildManualForkNotificationMessage(session.id, childSessionId, initialMessage);
+      if (session.busy) {
+        await this.applyAndPersistQueueItem({ type: 'background', message: notification });
+        return { result: 'queued' };
+      }
+      const before = captureSessionSemanticState(session);
+      try {
+        await appendSessionMessagesForSession(session, [notification], () => this.persistOwner(), () => {});
+        this.forwardAppendedMessages([notification]);
+        return { result: 'appended' };
+      } catch (error) {
+        if (!this.isResyncError(error)) restoreSessionSemanticState(session, before);
+        throw error;
+      }
     });
   }
 
@@ -157,27 +287,7 @@ export class SessionWorkerHost {
     await this.ensureHealthy();
     const session = this.session!;
     try {
-      this.assertSupportedQueue(session);
-      const mailboxCursorBefore = session.lastAppliedMailboxId || 0;
-      await this.persistence.applyAndPersistPendingPrefix(
-        session,
-        this.identity.generation,
-        this.identity.incarnationId,
-        limit,
-        (owner, intents) => {
-          if (intents.some(intent => isQueueItem(intent.payload) && intent.payload.type === 'compact-commit')) {
-            throw new RpcError('SESSION_WORKER_QUEUE_UNSUPPORTED', 'Managed-session and compact-commit queues are not supported by the Session worker yet.', true);
-          }
-          for (const intent of intents) {
-            if (intent.kind !== 'enqueue' || !isQueueItem(intent.payload)) {
-              throw new RpcError('SESSION_WORKER_INVALID_QUEUE_ITEM', 'Session worker mailbox payload is not a current QueueItem.');
-            }
-            const transition = applyQueuedItemToWaitState(owner, structuredClone(intent.payload));
-            if (transition.action === 'enqueue') owner.queue.push(...transition.items);
-          }
-        },
-      );
-      if ((session.lastAppliedMailboxId || 0) !== mailboxCursorBefore) await this.publishCurrent();
+      await this.ingestPendingMailbox(limit);
       await this.runner!.processSessionQueue(session.id);
     } catch (error) {
       if (String((error as any)?.code || '') !== 'SESSION_WORKER_AUTO_COMPACTION_FATAL') await this.resyncAfterFailure(error);
@@ -188,6 +298,37 @@ export class SessionWorkerHost {
       this.flushCoalescedStreamEvents();
     }
     return buildSessionWorkerProjection(session);
+  }
+
+  /**
+   * Apply the exact durable mailbox prefix without starting a second queue
+   * runner. The canonical runner calls this only at persisted safe points while
+   * it already owns the host serial lane, allowing provider-time follow-ups to
+   * join the active turn without concurrent Session mutation.
+   */
+  private async ingestPendingMailbox(limit: number): Promise<void> {
+    const session = this.session!;
+    this.assertSupportedQueue(session);
+    const mailboxCursorBefore = session.lastAppliedMailboxId || 0;
+    await this.persistence.applyAndPersistPendingPrefix(
+      session,
+      this.identity.generation,
+      this.identity.incarnationId,
+      limit,
+      (owner, intents) => {
+        if (intents.some(intent => isQueueItem(intent.payload) && intent.payload.type === 'compact-commit')) {
+          throw new RpcError('SESSION_WORKER_QUEUE_UNSUPPORTED', 'Managed-session and compact-commit queues are not supported by the Session worker yet.', true);
+        }
+        for (const intent of intents) {
+          if (intent.kind !== 'enqueue' || !isQueueItem(intent.payload)) {
+            throw new RpcError('SESSION_WORKER_INVALID_QUEUE_ITEM', 'Session worker mailbox payload is not a current QueueItem.');
+          }
+          const transition = applyQueuedItemToWaitState(owner, structuredClone(intent.payload));
+          if (transition.action === 'enqueue') owner.queue.push(...transition.items);
+        }
+      },
+    );
+    if ((session.lastAppliedMailboxId || 0) !== mailboxCursorBefore) await this.publishCurrent();
   }
 
   /** Main-driven subscription gate: transient presentation forwards only run while subscribed. */
@@ -337,10 +478,21 @@ export class SessionWorkerHost {
           const total = getUsageTotalTokens(usage);
           if (total > 0 && total > getEffectiveCompactThresholdTokens(owner)) await this.runAutomaticCompaction({ completionMarker: 'Compaction completed.' }, 'post-final');
         },
+        ingestPendingQueue: async candidate => {
+          this.assertOwner(candidate);
+          await this.ensureHealthy();
+          await this.ingestPendingMailbox(4096);
+        },
         ...(this.dependencies.deliverCommittedFinal ? {
           deliverCommittedFinal: async (_session, source, text, outcome) => {
             try { await this.dependencies.deliverCommittedFinal!(source, text, outcome); }
             catch (error) { logger.error({ err: error, sessionId: owner.id, outcome }, 'Committed final reverse delivery failed'); }
+          },
+        } : {}),
+        ...(this.dependencies.deliverIntermediateText ? {
+          deliverIntermediateText: async (_session, source, text) => {
+            try { await this.dependencies.deliverIntermediateText!(source, text); }
+            catch (error) { logger.error({ err: error, sessionId: owner.id }, 'Intermediate Worker channel delivery failed'); }
           },
         } : {}),
       },
@@ -453,6 +605,17 @@ export class SessionWorkerHost {
       getExistingSession: async id => { this.assertId(id); return this.session || null; },
       saveSession: async id => { this.assertId(id); await this.persistOwner(); },
       notifyHistoryUpdate: () => {},
+    };
+  }
+
+  private settingsSnapshot(session: Session): SessionWorkerSettings {
+    return {
+      cwd: session.cwd || null,
+      model: session.model || null,
+      childModelDefault: session.childModelDefault || null,
+      currentNode: session.currentNode || null,
+      compactThresholdTokens: typeof session.compactThresholdTokens === 'number' ? session.compactThresholdTokens : null,
+      verbose: !!session.verbose,
     };
   }
 

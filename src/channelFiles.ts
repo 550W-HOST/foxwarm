@@ -53,13 +53,13 @@ export async function resolveChannelAgentName(platform: string, channelUserId: s
     return 'main';
   }
 
-  const session = await sessionManager.getExistingSession(sessionId);
+  const session = sessionManager.getSessionCatalog(sessionId);
   return session?.agent || 'main';
 }
 
 async function resolveInboundSession(platform: string, channelUserId?: string, sessionId?: string) {
   if (typeof sessionId === 'string' && sessionId.trim()) {
-    return await sessionManager.getExistingSession(sessionId.trim());
+    return sessionManager.getSessionCatalog(sessionId.trim()) || null;
   }
 
   if (!channelUserId) {
@@ -71,7 +71,7 @@ async function resolveInboundSession(platform: string, channelUserId?: string, s
     return null;
   }
 
-  return await sessionManager.getExistingSession(resolvedSessionId);
+  return sessionManager.getSessionCatalog(resolvedSessionId) || null;
 }
 
 export async function isInboundSessionMainHosted(sessionId: string, platform = 'qqbot'): Promise<boolean> {

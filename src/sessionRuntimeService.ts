@@ -48,6 +48,7 @@ export type SessionRuntimeSessionDto = {
   messageCount: number;
   lastMessageTime: number;
   tokenUsage: SessionRuntimeTokenTotalsDto;
+  verbose: boolean;
 };
 
 export type SessionRuntimeHistoryDto = {
@@ -64,6 +65,7 @@ export type SessionRuntimeSettingsPatchDto = {
   currentNode?: string | null;
   displayName?: string | null;
   compactThresholdTokens?: number | null;
+  verbose?: boolean;
 };
 
 export type SessionRuntimeSettingsDto = Required<SessionRuntimeSettingsPatchDto>;
@@ -73,6 +75,30 @@ export type SessionRuntimeSettingsResultDto = {
   previous: SessionRuntimeSettingsDto;
   current: SessionRuntimeSettingsDto;
   session: SessionRuntimeSessionDto;
+};
+
+export type SessionRuntimeDeleteMessagesResultDto = {
+  deleted: number;
+  remaining: number;
+  session: SessionRuntimeSessionDto;
+};
+export type SessionRuntimeClearHistoryResultDto = {
+  cleared: boolean;
+  requiresRetry: boolean;
+  droppedQueueItems: number;
+  abortedInFlight: boolean;
+  session: SessionRuntimeSessionDto;
+};
+export type SessionRuntimeIndexResultDto = {
+  latestSeq: number;
+  session: SessionRuntimeSessionDto;
+};
+export type SessionRuntimeSnapshotResultDto = {
+  agentName: string;
+  session: SessionRuntimeSessionDto;
+};
+export type SessionRuntimeForkNotificationResultDto = {
+  result: 'appended' | 'queued';
 };
 
 export type SessionRuntimeControlAction = 'stop' | 'dequeue' | 'retry';
@@ -112,6 +138,15 @@ export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime
     sessionId: string;
     patch: SessionRuntimeSettingsPatchDto;
   }, SessionRuntimeSettingsResultDto>(),
+  deleteMessages: rpcMethod<{ sessionId: string; num: number }, SessionRuntimeDeleteMessagesResultDto>(),
+  clearHistory: rpcMethod<{ sessionId: string }, SessionRuntimeClearHistoryResultDto>(),
+  forceIndex: rpcMethod<{ sessionId: string }, SessionRuntimeIndexResultDto>(),
+  refreshSnapshot: rpcMethod<{ sessionId: string }, SessionRuntimeSnapshotResultDto>(),
+  notifyManualForkCreated: rpcMethod<{
+    parentSessionId: string;
+    childSessionId: string;
+    initialMessage?: string;
+  }, SessionRuntimeForkNotificationResultDto>(),
   control: rpcMethod<{
     sessionId: string;
     action: SessionRuntimeControlAction;
@@ -144,6 +179,7 @@ function settingsFromSession(session: Session): SessionRuntimeSettingsDto {
     currentNode: typeof session.currentNode === 'string' && session.currentNode.trim() ? session.currentNode.trim() : null,
     displayName: typeof session.displayName === 'string' && session.displayName.trim() ? session.displayName.trim() : null,
     compactThresholdTokens: typeof session.compactThresholdTokens === 'number' ? session.compactThresholdTokens : null,
+    verbose: !!session.verbose,
   };
 }
 
@@ -181,6 +217,7 @@ export function buildSessionRuntimeSessionDto(session: Session): SessionRuntimeS
     model: session.model || null,
     childModelDefault: session.childModelDefault || null,
     compactThresholdTokens: typeof session.compactThresholdTokens === 'number' ? session.compactThresholdTokens : null,
+    verbose: !!session.verbose,
     isolated: sessionManager.isSessionEffectivelyIsolated(session),
     parentSessionId: session.parentSessionId || null,
     pinned: !!session.pinned,
@@ -216,6 +253,7 @@ export function overlaySessionWorkerProjection(
     model: projection.model,
     childModelDefault: projection.childModelDefault,
     compactThresholdTokens: projection.compactThresholdTokens,
+    verbose: projection.verbose ?? session.verbose,
     tokenUsage: {
       cachedTokens: projection.stats.totalCachedTokens,
       inputTokens: projection.stats.totalInputTokens,
@@ -245,7 +283,10 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
   let eventContext: SessionRuntimeEventContext | undefined;
   let unsubscribeWorkerProjections: (() => void) | undefined;
   const workerListSignatures = new Map<string, string>();
-  type WorkerSelection = { canonicalId: string; kind: 'local' | 'unavailable' | 'worker'; entry?: SessionWorkerProjectionEntry };
+  type WorkerSelection =
+    | { canonicalId: string; kind: 'local' }
+    | { canonicalId: string; kind: 'unavailable' }
+    | { canonicalId: string; kind: 'worker'; entry: SessionWorkerProjectionEntry };
   const workerSelection = (requestedId: string): WorkerSelection => {
     const canonicalId = sessionManager.resolveLoadedSessionId(requestedId);
     const ownership = options?.worker?.store.findOwnership(canonicalId);
@@ -258,19 +299,34 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
   const projectedDto = (session: Session, selection = workerSelection(session.id)): SessionRuntimeSessionDto => overlaySessionWorkerProjection(
     buildSessionRuntimeSessionDto(session), selection.kind === 'worker' ? selection.entry?.projection : undefined,
   );
+  const ensureWorkerSelection = async (requestedId: string): Promise<Extract<WorkerSelection, { kind: 'worker' }>> => {
+    const canonicalId = sessionManager.resolveLoadedSessionId(requestedId);
+    if (!sessionManager.getAllSessions().has(canonicalId)) {
+      throw new RpcError('SESSION_NOT_FOUND', `Session \`${canonicalId}\` not found.`);
+    }
+    if (!options?.worker?.ingress) {
+      throw new RpcError('SESSION_WORKER_OPERATION_UNAVAILABLE', 'Session-worker operation is unavailable.', true);
+    }
+    await options.worker.ingress.ensureWorkerOwner(canonicalId);
+    const selection = workerSelection(canonicalId);
+    if (selection.kind !== 'worker') {
+      throw new RpcError('SESSION_WORKER_STATE_UNAVAILABLE', `Committed state for session \`${canonicalId}\` is unavailable.`, true);
+    }
+    return selection;
+  };
   const listSignature = (session: SessionRuntimeSessionDto) => JSON.stringify({
     busy: session.busy, busyStartedAt: session.busyStartedAt, queueLength: session.queueLength,
     runtimeState: session.runtimeState, messageCount: session.messageCount, lastMessageTime: session.lastMessageTime,
     currentNode: session.currentNode, cwd: session.cwd, model: session.model,
     childModelDefault: session.childModelDefault, compactThresholdTokens: session.compactThresholdTokens,
-    tokenUsage: session.tokenUsage,
+    tokenUsage: session.tokenUsage, verbose: session.verbose,
   });
 
   const emitState = (sessionId: string) => {
     const session = sessionManager.getAllSessions().get(sessionId);
     eventContext?.emit('stateChanged', {
       sessionId,
-      session: session ? buildSessionRuntimeSessionDto(session) : null,
+      session: session ? projectedDto(session) : null,
     });
   };
 
@@ -317,12 +373,11 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       if (selection.kind === 'unavailable') {
         throw new RpcError('SESSION_WORKER_STATE_UNAVAILABLE', `Committed state for session \`${selection.canonicalId}\` is unavailable.`, true);
       }
-      if (options?.worker && selection.kind === 'local' && !sessionManager.getAllSessions().has(selection.canonicalId)) {
-        return { session: null };
-      }
-      const session = selection.kind === 'worker'
+      const session = options?.worker
         ? sessionManager.getAllSessions().get(selection.canonicalId) || null
-        : await sessionManager.getExistingSession(selection.canonicalId);
+        : selection.kind === 'worker'
+          ? sessionManager.getAllSessions().get(selection.canonicalId) || null
+          : await sessionManager.getExistingSession(selection.canonicalId);
       if (selection.kind === 'worker' && !session) {
         throw new RpcError('SESSION_WORKER_STATE_UNAVAILABLE', `Committed state for session \`${selection.canonicalId}\` is unavailable.`, true);
       }
@@ -337,12 +392,9 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
     },
     async getHistory(input) {
       const requestedId = normalizeSessionId(input.sessionId);
-      const selection = workerSelection(requestedId);
+      const selection = options?.worker ? await ensureWorkerSelection(requestedId) : workerSelection(requestedId);
       if (selection.kind === 'unavailable') {
         throw new RpcError('SESSION_WORKER_HISTORY_UNAVAILABLE', `Authoritative history for session \`${selection.canonicalId}\` is unavailable.`, true);
-      }
-      if (options?.worker && selection.kind === 'local' && !sessionManager.getAllSessions().has(selection.canonicalId)) {
-        return null;
       }
       const session = selection.kind === 'worker'
         ? sessionManager.getAllSessions().get(selection.canonicalId) || null
@@ -403,7 +455,9 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       const unknown = Object.keys(input).find(key => !['sessionId', 'keepPercent', 'toolNoise'].includes(key));
       if (unknown || (input.keepPercent !== undefined && (!Number.isFinite(input.keepPercent) || input.keepPercent! <= 0 || input.keepPercent! > 1))
         || (input.toolNoise !== undefined && typeof input.toolNoise !== 'boolean')) throw new RpcError('SESSION_RUNTIME_INVALID_COMPACTION', 'Compaction request is invalid.');
-      const requestedId = normalizeSessionId(input.sessionId); const selection = workerSelection(requestedId);
+      const requestedId = normalizeSessionId(input.sessionId); const selection = options?.worker
+        ? await ensureWorkerSelection(requestedId)
+        : workerSelection(requestedId);
       if (selection.kind === 'unavailable') throw new RpcError('SESSION_WORKER_COMPACTION_UNAVAILABLE', 'Committed Worker state is unavailable.', true);
       if (selection.kind === 'worker') {
         if (input.toolNoise) return { kind: 'unsupported', message: 'Tool-noise compaction is not supported by Session-worker placement yet.' };
@@ -435,7 +489,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       if (!input.patch || typeof input.patch !== 'object' || Array.isArray(input.patch)) {
         throw new RpcError('SESSION_RUNTIME_INVALID_SETTING', 'patch must be an object.');
       }
-      const supportedKeys = new Set(['cwd', 'model', 'childModelDefault', 'currentNode', 'displayName', 'compactThresholdTokens']);
+      const supportedKeys = new Set(['cwd', 'model', 'childModelDefault', 'currentNode', 'displayName', 'compactThresholdTokens', 'verbose']);
       const suppliedKeys = Object.keys(input.patch);
       const unknownKey = suppliedKeys.find(key => !supportedKeys.has(key));
       if (unknownKey) {
@@ -456,25 +510,63 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         }
         normalizedThreshold = threshold === null || threshold === undefined ? null : Math.floor(threshold);
       }
+      let normalizedVerbose: boolean | undefined;
+      if (Object.prototype.hasOwnProperty.call(input.patch, 'verbose')) {
+        if (typeof input.patch.verbose !== 'boolean') {
+          throw new RpcError('SESSION_RUNTIME_INVALID_SETTING', 'verbose must be boolean.');
+        }
+        normalizedVerbose = input.patch.verbose;
+      }
       if (options?.worker) {
         const selection = workerSelection(settingsSessionId);
-        if (selection.kind !== 'local') {
-          // displayName is Main-owned presentation metadata: a fenced session
-          // accepts a displayName-only patch as a catalog-only write. Every
-          // other setting lives in the worker-owned authority and stays closed.
+        if (suppliedKeys.length === 0) {
           const stub = sessionManager.getAllSessions().get(selection.canonicalId);
-          const displayNameOnly = suppliedKeys.length > 0 && suppliedKeys.every(key => key === 'displayName')
-            && normalizedStrings.has('displayName');
-          if (!displayNameOnly || !stub) {
-            throw new RpcError('SESSION_WORKER_CONTROL_UNSUPPORTED', 'Session settings updates are not supported by Session-worker placement yet.', true);
-          }
+          if (!stub) throw new RpcError('SESSION_NOT_FOUND', `Session \`${selection.canonicalId}\` not found.`);
+          const current = settingsFromSession(stub);
+          return { changed: [], previous: current, current, session: projectedDto(stub, workerSelection(stub.id)) };
+        }
+        const displayNameOnly = suppliedKeys.length > 0 && suppliedKeys.every(key => key === 'displayName')
+          && normalizedStrings.has('displayName');
+        const semanticKeys = suppliedKeys.filter(key => key !== 'displayName');
+        if (displayNameOnly) {
+          // displayName is Main-owned presentation metadata. It never enters
+          // the worker authority, even when the worker is active or absent.
+          const stub = sessionManager.getAllSessions().get(selection.canonicalId);
+          if (!stub) throw new RpcError('SESSION_NOT_FOUND', `Session \`${selection.canonicalId}\` not found.`);
           const previous = settingsFromSession(stub);
           const normalized = normalizedStrings.get('displayName')!;
           const changed: Array<keyof SessionRuntimeSettingsPatchDto> = previous.displayName !== normalized ? ['displayName'] : [];
           if (normalized === null) delete stub.displayName;
           else stub.displayName = normalized;
-          if (changed.length > 0) await sessionManager.saveSessionsMetadata();
-          return { changed, previous, current: settingsFromSession(stub), session: buildSessionRuntimeSessionDto(stub) };
+          if (changed.length > 0) {
+            await sessionManager.saveSessionsMetadata();
+            sessionManager.notifySessionStateUpdated(stub.id);
+          }
+          return { changed, previous, current: settingsFromSession(stub), session: projectedDto(stub, workerSelection(stub.id)) };
+        }
+        if (semanticKeys.length > 0 && suppliedKeys.includes('displayName')) {
+          throw new RpcError('SESSION_RUNTIME_INVALID_SETTING', 'displayName cannot be changed in the same operation as worker-owned settings.');
+        }
+        if (semanticKeys.length > 0) {
+          const workerSelectionResult = await ensureWorkerSelection(settingsSessionId);
+          if (!options.worker.ingress) throw new RpcError('SESSION_WORKER_OPERATION_UNAVAILABLE', 'Session-worker settings are unavailable.', true);
+          const patch: any = {};
+          for (const [key, normalized] of normalizedStrings) {
+            if (key !== 'displayName') patch[key] = normalized;
+          }
+          if (normalizedThreshold !== undefined) patch.compactThresholdTokens = normalizedThreshold;
+          if (normalizedVerbose !== undefined) patch.verbose = normalizedVerbose;
+          const workerResult = await options.worker.ingress.updateSettings(workerSelectionResult.canonicalId, patch);
+          const stub = sessionManager.getAllSessions().get(workerSelectionResult.canonicalId);
+          if (!stub) throw new RpcError('SESSION_WORKER_STATE_UNAVAILABLE', `Session \`${workerSelectionResult.canonicalId}\` is unavailable.`, true);
+          const previous = { ...settingsFromSession(stub), ...workerResult.previous };
+          const current = { ...settingsFromSession(stub), ...workerResult.current };
+          return {
+            changed: workerResult.changed as Array<keyof SessionRuntimeSettingsPatchDto>,
+            previous,
+            current,
+            session: projectedDto(stub, workerSelectionResult),
+          };
         }
       }
       const session = await requireSession(settingsSessionId);
@@ -491,6 +583,10 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         if (normalizedThreshold === null) delete session.compactThresholdTokens;
         else session.compactThresholdTokens = normalizedThreshold;
       }
+      if (normalizedVerbose !== undefined) {
+        if (!!session.verbose !== normalizedVerbose) changed.push('verbose');
+        session.verbose = normalizedVerbose;
+      }
       if (changed.length > 0) {
         await sessionManager.saveSession(session.id);
       }
@@ -500,6 +596,126 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         current: settingsFromSession(session),
         session: buildSessionRuntimeSessionDto(session),
       };
+    },
+    async deleteMessages(input) {
+      const sessionId = normalizeSessionId(input.sessionId);
+      if (!Number.isSafeInteger(input.num) || input.num === 0) {
+        throw new RpcError('SESSION_RUNTIME_INVALID_HISTORY', 'num must be a non-zero safe integer.');
+      }
+      if (options?.worker) {
+        const selection = await ensureWorkerSelection(sessionId);
+        if (!options.worker.ingress) throw new RpcError('SESSION_WORKER_OPERATION_UNAVAILABLE', 'Session-worker history mutation is unavailable.', true);
+        const result = await options.worker.ingress.deleteMessages(selection.canonicalId, input.num);
+        const stub = sessionManager.getAllSessions().get(selection.canonicalId);
+        if (!stub) throw new RpcError('SESSION_WORKER_STATE_UNAVAILABLE', `Session \`${selection.canonicalId}\` is unavailable.`, true);
+        return { deleted: result.deleted || 0, remaining: result.remaining || 0, session: projectedDto(stub, workerSelection(selection.canonicalId)) };
+      }
+      const result = await sessionManager.deleteMessages(sessionId, input.num);
+      const session = await requireSession(sessionId);
+      return { ...result, session: buildSessionRuntimeSessionDto(session) };
+    },
+    async clearHistory(input) {
+      const sessionId = normalizeSessionId(input.sessionId);
+      if (options?.worker) {
+        const selection = await ensureWorkerSelection(sessionId);
+        const projection = selection.entry?.projection;
+        if (projection?.busy) {
+          let abortedInFlight = false;
+          if (options.worker.supervisor) {
+            const ownership = options.worker.store.findOwnership(selection.canonicalId);
+            if (ownership && options.worker.supervisor.getStatus(selection.canonicalId)?.ready) {
+              abortedInFlight = (await options.worker.supervisor.interruptActivated(selection.canonicalId, ownership)).abortedInFlight;
+            }
+          }
+          const stub = sessionManager.getAllSessions().get(selection.canonicalId);
+          if (!stub) throw new RpcError('SESSION_WORKER_STATE_UNAVAILABLE', `Session \`${selection.canonicalId}\` is unavailable.`, true);
+          return {
+            cleared: false, requiresRetry: true, droppedQueueItems: 0,
+            abortedInFlight, session: projectedDto(stub, workerSelection(selection.canonicalId)),
+          };
+        }
+        if (!options.worker.ingress) throw new RpcError('SESSION_WORKER_OPERATION_UNAVAILABLE', 'Session-worker history mutation is unavailable.', true);
+        await options.worker.ingress.clearHistory(selection.canonicalId);
+        const stub = sessionManager.getAllSessions().get(selection.canonicalId);
+        if (!stub) throw new RpcError('SESSION_WORKER_STATE_UNAVAILABLE', `Session \`${selection.canonicalId}\` is unavailable.`, true);
+        return {
+          cleared: true, requiresRetry: false, droppedQueueItems: 0, abortedInFlight: false,
+          session: projectedDto(stub, workerSelection(selection.canonicalId)),
+        };
+      }
+      const prepared = await sessionManager.prepareSessionForDestructiveAction(sessionId);
+      if (prepared.requiresRetry) {
+        return {
+          cleared: false, requiresRetry: true, droppedQueueItems: prepared.droppedQueueItems,
+          abortedInFlight: prepared.abortedInFlight, session: buildSessionRuntimeSessionDto(prepared.session),
+        };
+      }
+      await sessionManager.clearSession(sessionId);
+      const session = await requireSession(sessionId);
+      return {
+        cleared: true, requiresRetry: false, droppedQueueItems: prepared.droppedQueueItems,
+        abortedInFlight: prepared.abortedInFlight, session: buildSessionRuntimeSessionDto(session),
+      };
+    },
+    async forceIndex(input) {
+      const sessionId = normalizeSessionId(input.sessionId);
+      if (options?.worker) {
+        const selection = await ensureWorkerSelection(sessionId);
+        if (!options.worker.ingress) throw new RpcError('SESSION_WORKER_OPERATION_UNAVAILABLE', 'Session-worker indexing is unavailable.', true);
+        const result = await options.worker.ingress.forceIndex(selection.canonicalId);
+        const stub = sessionManager.getAllSessions().get(selection.canonicalId);
+        if (!stub) throw new RpcError('SESSION_WORKER_STATE_UNAVAILABLE', `Session \`${selection.canonicalId}\` is unavailable.`, true);
+        return { latestSeq: result.latestSeq || 0, session: projectedDto(stub, workerSelection(selection.canonicalId)) };
+      }
+      await sessionManager.forceIndexSession(sessionId);
+      const session = await requireSession(sessionId);
+      return { latestSeq: Math.max(0, (session.nextMessageSeq || 1) - 1), session: buildSessionRuntimeSessionDto(session) };
+    },
+    async refreshSnapshot(input) {
+      const sessionId = normalizeSessionId(input.sessionId);
+      if (options?.worker) {
+        const selection = await ensureWorkerSelection(sessionId);
+        if (!options.worker.ingress) throw new RpcError('SESSION_WORKER_OPERATION_UNAVAILABLE', 'Session-worker snapshot refresh is unavailable.', true);
+        const result = await options.worker.ingress.refreshSnapshot(selection.canonicalId);
+        const stub = sessionManager.getAllSessions().get(selection.canonicalId);
+        if (!stub) throw new RpcError('SESSION_WORKER_STATE_UNAVAILABLE', `Session \`${selection.canonicalId}\` is unavailable.`, true);
+        return { agentName: result.agentName || stub.agent || 'main', session: projectedDto(stub, workerSelection(selection.canonicalId)) };
+      }
+      const result = await sessionManager.refreshSessionSnapshot(sessionId);
+      const session = await requireSession(sessionId);
+      return { ...result, session: buildSessionRuntimeSessionDto(session) };
+    },
+    async notifyManualForkCreated(input) {
+      const parentSessionId = normalizeSessionId(input.parentSessionId);
+      const childSessionId = normalizeSessionId(input.childSessionId);
+      if (input.initialMessage !== undefined && typeof input.initialMessage !== 'string') {
+        throw new RpcError('SESSION_RUNTIME_INVALID_FORK', 'initialMessage must be a string when supplied.');
+      }
+      if (options?.worker) {
+        // The parent event is a semantic history mutation, so it follows the
+        // exact parent owner rather than hydrating a Main catalog stub.
+        const selection = await ensureWorkerSelection(parentSessionId);
+        if (!options.worker.ingress) throw new RpcError('SESSION_WORKER_OPERATION_UNAVAILABLE', 'Session-worker fork notification is unavailable.', true);
+        // Admission is classified from the current committed projection. A
+        // busy owner receives the existing background QueueItem so the active
+        // canonical runner can ingest it at its next persisted safe point. An
+        // idle owner keeps the existing append-only notification semantics.
+        if (selection.entry.projection.busy) {
+          const notification = sessionManager.buildManualForkNotificationMessage(
+            selection.canonicalId,
+            childSessionId,
+            input.initialMessage,
+          );
+          await options.worker.ingress.enqueueEnsuringWorker(selection.canonicalId, {
+            type: 'background',
+            message: notification,
+          });
+          return { result: 'queued' };
+        }
+        const result = await options.worker.ingress.notifyManualForkCreated(selection.canonicalId, childSessionId, input.initialMessage);
+        return { result: result.result };
+      }
+      return { result: await sessionManager.notifyManualForkCreated(parentSessionId, childSessionId, input.initialMessage) };
     },
     async control(input) {
       const sessionId = normalizeSessionId(input.sessionId);

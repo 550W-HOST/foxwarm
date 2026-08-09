@@ -39,7 +39,7 @@ function makeFixture(root: string, workerEnv: Record<string, string> = {}) {
     workerEnv: { FOXWARM_DATA_DIR: root, ...workerEnv },
     resolveExactFinalSourceContext: sourceContexts.resolve,
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
   const registry = new RpcServiceRegistry();
   registry.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler({
     worker: { store, registry: supervisor.projectionRegistry, ingress, supervisor },

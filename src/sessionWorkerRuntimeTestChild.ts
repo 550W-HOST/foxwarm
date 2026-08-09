@@ -9,7 +9,7 @@ import { copyBetweenNodes, executeRemoteNodeTool, initializeNodeExecution, listN
 import { deliverFile, initializeFileDelivery, shutdownFileDelivery } from './fileDelivery';
 import { initializeSessionWorkerPresentation, publishPresentationMessage, publishPresentationModelStream } from './sessionWorkerPresentation';
 import { initializeSessionWorkerPublication, publishCommitted, shutdownSessionWorkerPublication } from './sessionWorkerPublication';
-import { deliverCommittedFinal, initializeSessionTurnDelivery, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
+import { deliverCommittedFinal, deliverIntermediateText, initializeSessionTurnDelivery, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
 import * as llm from './llm';
 import { initLlmRequestJournal } from './llmRequestJournal';
 import { ProcessRpcClientTransport, ProcessRpcServer, RpcServiceRegistry } from './rpc';
@@ -143,6 +143,13 @@ async function start(): Promise<void> {
         });
       } finally { options.currentSessionEffects.clearAbortController(session.id, controller); }
     }
+    if (process.env.FOXWARM_TEST_HOLD_PROVIDER === '1'
+      && session.id === String(process.env.FOXWARM_TEST_HOLD_SESSION || '') && chatCount === 1) {
+      const startedPath = path.join(STATE_DIR, `hold-started-${session.id}`);
+      const releasePath = path.join(STATE_DIR, `hold-release-${session.id}`);
+      await fs.writeFile(startedPath, '1');
+      while (!await fs.pathExists(releasePath)) await new Promise(resolve => setTimeout(resolve, 10));
+    }
     if (options?.purpose === 'compact-plan' && process.env.FOXWARM_TEST_COMPACT_PLAN) {
       return { toolCalls: [{ name: COMPACT_PLAN_TOOL_NAME, args: JSON.parse(process.env.FOXWARM_TEST_COMPACT_PLAN) }] };
     }
@@ -221,6 +228,7 @@ async function start(): Promise<void> {
   await vector.init({ transport: reverseTransport, placement: 'child-reverse' });
   const host = new SessionWorkerHost(identity, store, {
     publishCommitted: projection => publishCommitted(identity, projection),
+    deliverIntermediateText: (source, text) => deliverIntermediateText({ sourceSessionId: sessionId, source, text }).then(() => {}),
     deliverCommittedFinal: (source, text, outcome) => deliverCommittedFinal({ sourceSessionId: sessionId, source, text, outcome }).then(() => {}),
     publishPresentationMessage: message => publishPresentationMessage(identity, message),
     publishPresentationStream: event => publishPresentationModelStream(identity, event),

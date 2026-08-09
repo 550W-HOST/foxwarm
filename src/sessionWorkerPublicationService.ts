@@ -25,7 +25,9 @@ function validateProjection(value: unknown, sessionId: string): SessionWorkerPro
   if (Buffer.byteLength(json, 'utf8') > 64 * 1024) throw new RpcError('SESSION_WORKER_PUBLICATION_INVALID', 'Projection exceeds 64 KiB.');
   const projection = JSON.parse(json) as any;
   const keys = ['sessionId','lastAppliedMailboxId','busy','busyStartedAt','queueLength','runtimeState','messageCount','lastMessageTime','stats','currentNode','cwd','model','childModelDefault','compactThresholdTokens'];
-  if (Object.keys(projection).length !== keys.length || keys.some(key => !Object.prototype.hasOwnProperty.call(projection, key))) {
+  if ((Object.keys(projection).length !== keys.length && Object.keys(projection).length !== keys.length + 1)
+    || keys.some(key => !Object.prototype.hasOwnProperty.call(projection, key))
+    || (Object.prototype.hasOwnProperty.call(projection, 'verbose') && typeof projection.verbose !== 'boolean')) {
     throw new RpcError('SESSION_WORKER_PUBLICATION_INVALID', 'Projection has an invalid shape.');
   }
   const safeInt = (number: any) => Number.isSafeInteger(number) && number >= 0;

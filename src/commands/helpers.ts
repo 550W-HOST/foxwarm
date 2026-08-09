@@ -5,7 +5,7 @@ import { listApprovedNodes, listPendingPairings } from '../nodes/registry';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
 import { COMPACT_PERCENT, HTTP_PORT, resolveModelConfig } from '../config';
-import { Session } from '../types';
+import { commandSessionMessageCount, type CommandSession } from './types';
 
 export function formatTimerDate(timestamp?: number | null): string {
   if (!timestamp) return 'n/a'
@@ -330,7 +330,7 @@ export async function buildNodeListReply(currentNode: string, boundNode?: string
   return reply
 }
 
-export async function handleCompactCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: Session) {
+export async function handleCompactCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: CommandSession) {
   if (!sessionId || !session) return
 
   if (args[0] === 'tools') {
@@ -349,7 +349,7 @@ export async function handleCompactCommand(ctx: ChannelContext, args: string[], 
     const result = compact.result
     ctx.reply(
       `🧹 Tool-noise compaction finished. Replaced ${result.replacedFunctionCalls} tool call(s) and ${result.replacedFunctionResponses} tool response(s) across ${result.touchedMessages} message(s). `
-      + `Inspected ${result.inspectedMessages} older message(s); kept the most recent ${Math.max(0, session.history.length - result.keepStartIndex)} message(s) untouched.`
+      + `Inspected ${result.inspectedMessages} older message(s); kept the most recent ${Math.max(0, commandSessionMessageCount(session) - result.keepStartIndex)} message(s) untouched.`
     )
     return
   }

@@ -274,8 +274,11 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
   store.activateCandidate(sessionId, ownership.generation, incarnationId, process.pid, 'runtime-worker-process');
   const registry = new SessionWorkerProjectionRegistry();
   const identity = { sessionId, generation: ownership.generation, incarnationId };
+  const ingress = {
+    ensureWorkerOwner: async () => ({ sessionId, generation: identity.generation, incarnationId: identity.incarnationId }),
+  } as any;
   const services = new RpcServiceRegistry();
-  services.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler({ worker: { store, registry } }));
+  services.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler({ worker: { store, registry, ingress } }));
   const transport = new LocalRpcTransport(services); const client = new RpcClient(sessionRuntimeServiceDescriptor, transport);
   const events: string[] = []; const unsubscribe = client.subscribe(name => { events.push(name); });
   try {
@@ -287,7 +290,7 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     };
     try {
       await assert.rejects(() => client.call('getSession', { sessionId: alias }), { code: 'SESSION_WORKER_STATE_UNAVAILABLE' });
-      await assert.rejects(() => client.call('getHistory', { sessionId: alias }), { code: 'SESSION_WORKER_HISTORY_UNAVAILABLE' });
+      await assert.rejects(() => client.call('getHistory', { sessionId: alias }), { code: 'SESSION_WORKER_STATE_UNAVAILABLE' });
       const catalogOnly = (await client.call('listSessions', {})).sessions.find(item => item.id === sessionId)!;
       assert.equal(catalogOnly.busy, false); assert.equal(semanticLoads, 0);
     } finally {
@@ -308,7 +311,7 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     stub.aliases = []; sessionManager.updateAliasCache([alias], sessionId);
     try {
       assert.equal((await client.call('getSession', { sessionId: alias })).session, null);
-      assert.equal(await client.call('getHistory', { sessionId: alias }), null);
+      await assert.rejects(() => client.call('getHistory', { sessionId: alias }), { code: 'SESSION_NOT_FOUND' });
       assert.equal(forgedLoads, 0);
     } finally {
       stub.aliases = [alias]; (sessionManager as any).getExistingSession = originalForgedLoader;
@@ -341,7 +344,7 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     const mismatchRegistry = new SessionWorkerProjectionRegistry();
     mismatchRegistry.establish({ sessionId, generation: identity.generation + 1, incarnationId: 'mismatched-incarnation' });
     const mismatchServices = new RpcServiceRegistry();
-    mismatchServices.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler({ worker: { store, registry: mismatchRegistry } }));
+    mismatchServices.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler({ worker: { store, registry: mismatchRegistry, ingress } }));
     const mismatchTransport = new LocalRpcTransport(mismatchServices);
     const mismatchClient = new RpcClient(sessionRuntimeServiceDescriptor, mismatchTransport);
     const originalMismatchLoader = sessionManager.getExistingSession; let mismatchLoads = 0;
@@ -350,7 +353,7 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     };
     try {
       await assert.rejects(() => mismatchClient.call('getSession', { sessionId: alias }), { code: 'SESSION_WORKER_STATE_UNAVAILABLE' });
-      await assert.rejects(() => mismatchClient.call('getHistory', { sessionId: alias }), { code: 'SESSION_WORKER_HISTORY_UNAVAILABLE' });
+      await assert.rejects(() => mismatchClient.call('getHistory', { sessionId: alias }), { code: 'SESSION_WORKER_STATE_UNAVAILABLE' });
       assert.equal(mismatchLoads, 0);
     } finally { (sessionManager as any).getExistingSession = originalMismatchLoader; mismatchTransport.close(); }
     assert.deepEqual(await fs.readFile(authorityPath), authorityBefore);
@@ -375,7 +378,10 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     assert.equal(stub.busy, false);
     const localAgain = (await client.call('getSession', { sessionId })).session!;
     assert.equal(localAgain.busy, false); assert.equal(localAgain.currentNode, 'master');
-    assert.equal((await client.call('getHistory', { sessionId }))!.messages[0].parts[0].text, 'later local authority');
+    // This isolated seam supplies only a no-op ingress fixture. Production
+    // history reads ensure/spawn the exact owner before returning authority;
+    // without that owner transition this fixture must fail closed.
+    await assert.rejects(() => client.call('getHistory', { sessionId }), { code: 'SESSION_WORKER_STATE_UNAVAILABLE' });
     await client.call('stopEvents', {});
   } finally {
     unsubscribe(); transport.close(); store.close(); await fs.remove(root);

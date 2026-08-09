@@ -521,6 +521,15 @@ export function resolveLoadedSessionId(sessionId: string): string {
   return matchedId;
 }
 
+/**
+ * Return the already-loaded catalog/session stub without filesystem lookup or
+ * semantic hydration. Main-owned presentation and permission checks use this
+ * boundary when Session-worker placement owns the full state.
+ */
+export function getSessionCatalog(sessionId: string): Session | undefined {
+  return sessions.get(resolveLoadedSessionId(sessionId));
+}
+
 export function isSessionDestructiveLifecycleClaimed(sessionId: string): boolean {
   return destructiveLifecycleClaims.has(resolveLoadedSessionId(sessionId));
 }
@@ -1176,10 +1185,12 @@ export function getAgentInheritanceChain(agentName: string): string[] {
 }
 
 export async function setAgentInherit(agentName: string, inheritAgentName?: string): Promise<{ affectedSessions: string[] }> {
+  assertAgentMetadataMutationAllowed('Agent inheritance changes');
   return sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(), agentName, inheritAgentName);
 }
 
 export async function setAgentIsolation(agentName: string, isolatedNode?: string): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string }> {
+  assertAgentMetadataMutationAllowed('Agent isolation changes');
   return sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(), agentName, isolatedNode);
 }
 
@@ -1203,6 +1214,9 @@ export async function createAgentWithMainSession(options: {
   updatedChildren: string[];
   createdMainSession: boolean;
 }> {
+  if (workerEnqueueSink && (options.sourceSessionId || options.convertSessionId)) {
+    throw new RpcError('SESSION_WORKER_ADMIN_UNSUPPORTED', 'Creating an agent from or by converting an existing session is unavailable while Session-worker placement is enabled.', true);
+  }
   const { inherit, isolatedNode, ...createOptions } = options;
   const normalizedInherit = inherit && String(inherit).trim() ? String(inherit).trim() : undefined;
   const normalizedIsolatedNode = isolatedNode && String(isolatedNode).trim() ? String(isolatedNode).trim() : undefined;
@@ -1278,6 +1292,9 @@ export async function moveSessionToTarget(options: {
   requestedParentSessionId?: string;
   parentUpdateError?: string;
 }> {
+  if (workerEnqueueSink) {
+    throw new RpcError('SESSION_WORKER_ADMIN_UNSUPPORTED', 'Session identity move/rename is unavailable while Session-worker placement is enabled.', true);
+  }
   let previousParentSessionId: string | undefined;
   let requestedParentSessionId: string | undefined;
   const parentWasProvided = options.parentSessionId !== undefined;
@@ -1340,12 +1357,17 @@ export async function getOrCreateSessionForChannel(
   options?: {
     createSession?: () => Promise<{ session: Session; created: boolean }>;
     attachmentConfig?: Partial<sessionChannels.ChannelConfig>;
+    hydrateExisting?: boolean;
   },
 ): Promise<{ sessionId: string; session: Session }> {
   return withChannelSessionCreationLock(channelId, conversationId, async () => {
     const existingSessionId = getSessionByChannel(channelId, conversationId);
     if (existingSessionId) {
-      return { sessionId: existingSessionId, session: await getSession(existingSessionId) };
+      const session = options?.hydrateExisting === false
+        ? getSessionCatalog(existingSessionId)
+        : await getSession(existingSessionId);
+      if (!session) throw new Error(`Session \`${existingSessionId}\` is not loaded.`);
+      return { sessionId: existingSessionId, session };
     }
 
     const created = options?.createSession
@@ -1358,7 +1380,13 @@ export async function getOrCreateSessionForChannel(
       await saveChannelsCritical();
       return {
         sessionId: concurrentlyAttachedSessionId,
-        session: await getSession(concurrentlyAttachedSessionId),
+        session: options?.hydrateExisting === false
+          ? (() => {
+              const session = getSessionCatalog(concurrentlyAttachedSessionId);
+              if (!session) throw new Error(`Session \`${concurrentlyAttachedSessionId}\` is not loaded.`);
+              return session;
+            })()
+          : await getSession(concurrentlyAttachedSessionId),
       };
     }
 
@@ -1407,7 +1435,7 @@ export async function sendFileToChannelTargetId(channelTargetId: string, file: C
 }
 
 export async function sendFileToSession(sessionId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<FileDeliveryResult> {
-  return sessionChannels.sendFileToSession({ getExistingSession }, sessionId, file, options);
+  return sessionChannels.sendFileToSession({ getExistingSession: async id => getSessionCatalog(id) || null }, sessionId, file, options);
 }
 
 /**
@@ -1685,7 +1713,7 @@ export async function setSessionParent(childSessionId: string, parentSessionId?:
   // A worker-fenced child's authority is worker-owned: the parent link is
   // Main-owned presentation metadata there, so update it catalog-only and
   // never write the fenced authority (a stale stub write could corrupt it).
-  if (workerFenceChecker?.(childSessionId)) {
+  if (workerEnqueueSink || workerFenceChecker?.(childSessionId)) {
     const child = sessions.get(childSessionId);
     if (!child) throw new Error(`Session \`${childSessionId}\` not found.`);
     const previousParentSessionId = child.parentSessionId;
@@ -1707,7 +1735,7 @@ export async function updateChildSessionParentIds(oldParentSessionId: string, ne
   return sessionRelations.updateChildSessionParentIds({
     // Worker-fenced children keep their authority worker-owned: skip the
     // per-child authority write; the catalog metadata update still lands.
-    saveSession: sessionId => workerFenceChecker?.(sessionId) ? Promise.resolve() : saveSession(sessionId),
+    saveSession: sessionId => (workerEnqueueSink || workerFenceChecker?.(sessionId)) ? Promise.resolve() : saveSession(sessionId),
     saveSessionsMetadata,
     getSessionsMap: getAllSessions,
     notifySessionListUpdated,
@@ -1732,6 +1760,7 @@ async function updateChildSessionParentIdsCritical(oldParentSessionId: string, n
 export async function sendToSession(targetSessionId: string, message: string, fromSessionId?: string): Promise<{ requestedSessionId: string; resolvedSessionId: string }> {
   return await sessionRelations.sendToSession({
     getExistingSession,
+    getSessionCatalog,
     getAgentMetadata,
     enqueueSessionItem,
   }, targetSessionId, message, fromSessionId);
@@ -2180,16 +2209,27 @@ export function isSessionWorkerFenced(sessionId: string): boolean {
   return workerFenceChecker?.(sessionId) === true;
 }
 
+/**
+ * Agent metadata changes refresh prompt snapshots for affected sessions. That
+ * refresh is a Session-semantic mutation, so Main must not run it against a
+ * worker-owned authority through the catalog stubs.
+ */
+export function assertAgentMetadataMutationAllowed(operation: string): void {
+  if (!workerEnqueueSink) return;
+  throw new RpcError('SESSION_WORKER_ADMIN_UNSUPPORTED', `${operation} is unavailable while Session-worker placement is enabled.`, true);
+}
+
 export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
   if (workerEnqueueSink) {
     // Session-worker placement: all Main-side producers share one durable
     // ingress boundary. Managed sessions remain explicitly unsupported there;
     // fail closed instead of spawning a worker that must reject them.
-    const stub = sessions.get(resolveLoadedSessionId(sessionId));
+    const canonicalSessionId = resolveLoadedSessionId(sessionId);
+    const stub = sessions.get(canonicalSessionId);
     if (stub && getManagedSessionState(stub as Session)) {
       throw new RpcError('SESSION_WORKER_QUEUE_UNSUPPORTED', 'Managed sessions are not supported by Session-worker placement yet.', true);
     }
-    await workerEnqueueSink(sessionId, item);
+    await workerEnqueueSink(canonicalSessionId, item);
     return;
   }
   const session = await getSession(sessionId);
@@ -2389,30 +2429,34 @@ export async function appendSessionMessage(sessionOrId: Session | string, messag
   await appendSessionMessages(sessionOrId, [message]);
 }
 
-export async function notifyManualForkCreated(parentSessionId: string, childSessionId: string, initialMessage?: string): Promise<'appended' | 'queued'> {
-  const parent = await getSession(parentSessionId);
+export function buildManualForkNotificationMessage(parentSessionId: string, childSessionId: string, initialMessage?: string): Message {
   const inputTime = formatLocalTimestamp(Date.now());
   const messageText = initialMessage === undefined
     ? formatFoxwarmSystem({
       kind: 'session-event',
       event: 'manual-fork-created',
-      currentSessionId: parent.id,
+      currentSessionId: parentSessionId,
       childSessionId,
       time: inputTime,
       initialMessage: '(none)',
-    }, `User manually created fork child session \`${childSessionId}\` from the current session \`${parent.id}\`.\nInitial message: (none)`)
+    }, `User manually created fork child session \`${childSessionId}\` from the current session \`${parentSessionId}\`.\nInitial message: (none)`)
     : `${formatFoxwarmSystemOpen({
       kind: 'session-event',
       event: 'manual-fork-created',
-      currentSessionId: parent.id,
+      currentSessionId: parentSessionId,
       childSessionId,
       time: inputTime,
-    })}\nUser manually created fork child session \`${childSessionId}\` from the current session \`${parent.id}\`.\nInitial message:\n${initialMessage}\n${formatFoxwarmSystemClose()}`;
-  const notification: Message = {
+    })}\nUser manually created fork child session \`${childSessionId}\` from the current session \`${parentSessionId}\`.\nInitial message:\n${initialMessage}\n${formatFoxwarmSystemClose()}`;
+  return {
     role: 'user',
     parts: [systemPart(messageText)],
     __meta: { timestamp: Date.now() },
   };
+}
+
+export async function notifyManualForkCreated(parentSessionId: string, childSessionId: string, initialMessage?: string): Promise<'appended' | 'queued'> {
+  const parent = await getSession(parentSessionId);
+  const notification = buildManualForkNotificationMessage(parent.id, childSessionId, initialMessage);
 
   if (parent.busy) {
     await queueSessionMessageEvent(parent.id, notification, 'background');

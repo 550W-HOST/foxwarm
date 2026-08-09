@@ -131,6 +131,21 @@ test('list_agents uses the service and preserves isolated-session rejection', as
   }
 });
 
+test('worker display-name updates cross the Main-owned catalog boundary', async () => {
+  const sourceId = makeId('management_display_name');
+  await sessionManager.getSession(sourceId);
+  try {
+    const result = String(await executeMainManagementTool('session_update_display_name', {
+      action: 'update-display-name',
+      name: 'Main-owned name',
+    }, { sessionId: sourceId }));
+    assert.match(result, /display name changed/);
+    assert.equal(sessionManager.getSessionCatalog(sourceId)?.displayName, 'Main-owned name');
+  } finally {
+    await cleanup(sourceId);
+  }
+});
+
 test('terminal shutdown rejects later calls until explicit test reset', async () => {
   const sourceId = makeId('management_lifecycle');
   await sessionManager.getSession(sourceId);

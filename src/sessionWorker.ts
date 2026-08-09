@@ -16,7 +16,7 @@ import { SessionWorkerStore } from './sessionWorkerStore';
 import * as vector from './vector';
 import { initializeSessionWorkerPresentation, publishPresentationMessage, publishPresentationModelStream, shutdownSessionWorkerPresentation } from './sessionWorkerPresentation';
 import { initializeSessionWorkerPublication, publishCommitted, shutdownSessionWorkerPublication } from './sessionWorkerPublication';
-import { deliverCommittedFinal, initializeSessionTurnDelivery, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
+import { deliverCommittedFinal, deliverIntermediateText, initializeSessionTurnDelivery, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
 
 async function start(): Promise<void> {
   const sessionId = process.env.FOXWARM_SESSION_WORKER_SESSION_ID || '';
@@ -35,6 +35,7 @@ async function start(): Promise<void> {
   const gate = new SessionWorkerActivationGate();
   const host = new SessionWorkerHost(identity, store, {
     publishCommitted: projection => publishCommitted(identity, projection),
+    deliverIntermediateText: (source, text) => deliverIntermediateText({ sourceSessionId: sessionId, source, text }).then(() => {}),
     deliverCommittedFinal: (source, text, outcome) => deliverCommittedFinal({ sourceSessionId: sessionId, source, text, outcome }).then(() => {}),
     publishPresentationMessage: message => publishPresentationMessage(identity, message),
     publishPresentationStream: event => publishPresentationModelStream(identity, event),

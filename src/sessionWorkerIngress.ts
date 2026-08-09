@@ -10,6 +10,7 @@ import type { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { stableSessionWorkerJson } from './sessionWorkerStableJson';
 import type { CompactionRequest, ImageMeta, InlineDataRef, Message, MessagePart, QueueItem } from './types';
+import type { SessionWorkerHistoryMutationResult, SessionWorkerSettingsPatch, SessionWorkerSettingsResult } from './sessionWorkerRuntimeService';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 
 const MAX_INGRESS_BYTES = 1024 * 1024;
@@ -139,13 +140,15 @@ export async function resumeSessionWorkerPendingIntents(
   supervisor: SessionWorkerSupervisor,
   busyCandidates?: () => string[],
 ): Promise<void> {
-  const resumable = new Set(store.listSessionsWithPendingIntents());
+  const catalogCandidates = busyCandidates ? new Set(busyCandidates()) : undefined;
+  const resumable = new Set(store.listSessionsWithPendingIntents()
+    .filter(sessionId => !catalogCandidates || catalogCandidates.has(sessionId)));
   // Eager crash recovery: an unconfirmed exit can leave an authority busy flag
   // with no pending mailbox intent, so also resume sessions whose authoritative
   // JSON still says busy. The worker clears the stale flag and re-triggers the
   // canonical runner inside its own ownership on load.
-  if (busyCandidates) {
-    for (const candidateId of busyCandidates()) {
+  if (catalogCandidates) {
+    for (const candidateId of catalogCandidates) {
       if (resumable.has(candidateId)) continue;
       try {
         const raw = await fs.readJson(getSessionHistoryFilePath(candidateId));
@@ -174,6 +177,7 @@ export class SessionWorkerIngressCoordinator {
     private readonly supervisor: SessionWorkerSupervisor,
     readonly sourceContexts: SessionWorkerSourceContextRegistry,
     private readonly resolveCanonicalSessionId: (sessionId: string) => string,
+    private readonly hasCatalogSession: (sessionId: string) => boolean,
   ) {}
 
   registerSourceContext(sessionId: string, item: QueueItem, context?: ChannelContext): () => void {
@@ -194,6 +198,47 @@ export class SessionWorkerIngressCoordinator {
     const { sessionId, item: payload } = this.resolveExact(requestedSessionId, item);
     const expected = await this.ensureReadyOwner(sessionId);
     return this.appendAndRun(sessionId, payload, expected);
+  }
+
+  async ensureWorkerOwner(requestedSessionId: string): Promise<{ sessionId: string; generation: number; incarnationId: string }> {
+    const sessionId = this.requireLoadedCatalogSession(requestedSessionId);
+    if (sessionId !== requestedSessionId) throw new RpcError('SESSION_WORKER_OWNER_INVALID_SESSION', 'Session worker operations require an exact canonical session ID.');
+    const expected = await this.ensureReadyOwner(sessionId);
+    const published = this.supervisor.projectionRegistry.get(sessionId);
+    if (!published?.projection || published.generation !== expected.generation || published.incarnationId !== expected.incarnationId) {
+      await this.supervisor.loadProjectionActivated(sessionId, expected);
+    }
+    return { sessionId, ...expected };
+  }
+
+  async updateSettings(requestedSessionId: string, patch: SessionWorkerSettingsPatch): Promise<SessionWorkerSettingsResult> {
+    const expected = await this.ensureWorkerOwner(requestedSessionId);
+    return this.supervisor.updateSettingsActivated(expected.sessionId, expected, patch);
+  }
+
+  async deleteMessages(requestedSessionId: string, num: number): Promise<SessionWorkerHistoryMutationResult> {
+    const expected = await this.ensureWorkerOwner(requestedSessionId);
+    return this.supervisor.deleteMessagesActivated(expected.sessionId, expected, num);
+  }
+
+  async clearHistory(requestedSessionId: string): Promise<SessionWorkerHistoryMutationResult> {
+    const expected = await this.ensureWorkerOwner(requestedSessionId);
+    return this.supervisor.clearHistoryActivated(expected.sessionId, expected);
+  }
+
+  async forceIndex(requestedSessionId: string): Promise<SessionWorkerHistoryMutationResult> {
+    const expected = await this.ensureWorkerOwner(requestedSessionId);
+    return this.supervisor.forceIndexActivated(expected.sessionId, expected);
+  }
+
+  async refreshSnapshot(requestedSessionId: string): Promise<SessionWorkerHistoryMutationResult> {
+    const expected = await this.ensureWorkerOwner(requestedSessionId);
+    return this.supervisor.refreshSnapshotActivated(expected.sessionId, expected);
+  }
+
+  async notifyManualForkCreated(requestedSessionId: string, childSessionId: string, initialMessage?: string): Promise<{ result: 'appended' | 'queued' }> {
+    const expected = await this.ensureWorkerOwner(requestedSessionId);
+    return this.supervisor.notifyManualForkCreatedActivated(expected.sessionId, expected, childSessionId, initialMessage);
   }
 
   /**
@@ -231,11 +276,20 @@ export class SessionWorkerIngressCoordinator {
 
   private resolveExact(requestedSessionId: string, item: QueueItem): { sessionId: string; item: QueueItem } {
     const normalized = normalizeSessionWorkerIngressRequest({ sessionId: requestedSessionId, item });
-    const sessionId = this.resolveCanonicalSessionId(normalized.sessionId);
+    const sessionId = this.requireLoadedCatalogSession(normalized.sessionId);
     if (sessionId !== normalized.sessionId) {
       throw new RpcError('SESSION_WORKER_INGRESS_INVALID_SESSION', 'Worker ingress does not accept a session alias.');
     }
     return { sessionId, item: normalized.item };
+  }
+
+  /** Resolve aliases without hydration, then require a live Main-owned catalog entry before any Worker/store effect. */
+  private requireLoadedCatalogSession(requestedSessionId: string): string {
+    const sessionId = this.resolveCanonicalSessionId(requestedSessionId);
+    if (!this.hasCatalogSession(sessionId)) {
+      throw new RpcError('SESSION_WORKER_SESSION_NOT_FOUND', `Session \`${requestedSessionId}\` not found.`);
+    }
+    return sessionId;
   }
 
   private async appendAndRun(
@@ -260,7 +314,7 @@ export class SessionWorkerIngressCoordinator {
   }
 
   async compactAwaited(requestedSessionId: string, request: CompactionRequest): Promise<SessionWorkerCompactionResult> {
-    const sessionId = this.resolveCanonicalSessionId(requestedSessionId);
+    const sessionId = this.requireLoadedCatalogSession(requestedSessionId);
     if (sessionId !== requestedSessionId) throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', 'Awaited compaction requires an exact canonical session ID.');
     const ownership = this.store.findOwnership(sessionId);
     const entry = this.supervisor.projectionRegistry.get(sessionId);

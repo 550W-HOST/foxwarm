@@ -22,6 +22,7 @@ export type SessionWorkerProjection = {
   model: string | null;
   childModelDefault: string | null;
   compactThresholdTokens: number | null;
+  verbose?: boolean;
 };
 
 export type SessionWorkerPersistenceDependencies = {
@@ -48,6 +49,7 @@ export function buildSessionWorkerProjection(session: Session): SessionWorkerPro
     model: session.model || null,
     childModelDefault: session.childModelDefault || null,
     compactThresholdTokens: typeof session.compactThresholdTokens === 'number' ? session.compactThresholdTokens : null,
+    verbose: !!session.verbose,
   }));
 }
 

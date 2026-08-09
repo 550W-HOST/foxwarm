@@ -64,7 +64,9 @@ export async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
     }
 
     // Get session for isolated check
-    const session = ctx.sessionId ? await sessionManager.getExistingSession(ctx.sessionId) : undefined;
+    const session = ctx.sessionPlacement === 'session-worker'
+        ? ctx.session
+        : (ctx.sessionId ? sessionManager.getSessionCatalog(ctx.sessionId) : undefined);
     
     // Isolated sessions can only call tools on their bound node
     const isolatedAllowedRemoteNodes = sessionManager.isSessionEffectivelyIsolated(session)

@@ -790,6 +790,7 @@ async function requestModelWithoutContext(prompt: string, session: Session, mode
     systemPrompt: '',
     model: model || session.model,
     sessionId: session.id,
+    promptCacheKey: llm.ensurePromptCacheKey(session),
     toolDefinitions: [],
     notifySessionEvents: false,
     registerAbortController: false,

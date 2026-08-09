@@ -194,6 +194,7 @@ export class MessageRouter {
     const resolved = await sessionManager.getOrCreateSessionForChannel(channelId, conversationId, {
       createSession: async () => ({ session: await sessionManager.getSession(await this.createGuestSession(guestAgent)), created: true }),
       attachmentConfig: { dangerouslyAllowAllUsers: true },
+      hydrateExisting: this.workerSubmit ? false : undefined,
     });
     return sessionManager.getChannelDangerouslyAllowAllUsers(channelId, conversationId) ? resolved : null;
   }
@@ -307,7 +308,9 @@ export class MessageRouter {
   }
 
   private async resolveSessionForIncomingMessage(ctx: ChannelContext): Promise<{ sessionId: string; session: Session }> {
-    return sessionManager.getOrCreateSessionForChannel(getChannelId(ctx), getConversationId(ctx));
+    return sessionManager.getOrCreateSessionForChannel(getChannelId(ctx), getConversationId(ctx), {
+      hydrateExisting: this.workerSubmit ? false : undefined,
+    });
   }
 
 

@@ -9,11 +9,14 @@ import * as interSessionTools from './toolsSessionAgent/interSession';
 import * as archiveRecallTools from './toolsSessionAgent/archiveRecall';
 import * as agentTools from './toolsSessionAgent/agents';
 import * as timerTools from './toolsSessionAgent/timers';
+import * as sessionCrudTools from './toolsSessionAgent/sessionCrud';
 import * as timers from './timers';
 import type { ToolArgs, ToolContext } from './tools/helpers';
 import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 import { buildSessionListOutput } from './sessionStatus';
 import type { SessionWorkerStore } from './sessionWorkerStore';
+import type { Session } from './types';
+import type { SessionRuntimeHistoryDto } from './sessionRuntimeService';
 
 export const MAIN_MANAGEMENT_TOOL_OPERATIONS = [
   'send_to_session',
@@ -25,6 +28,7 @@ export const MAIN_MANAGEMENT_TOOL_OPERATIONS = [
   'delete_timer',
   'create_child_session',
   'session_list',
+  'session_update_display_name',
   'get_session_messages',
 ] as const;
 
@@ -38,7 +42,7 @@ export type MainManagementToolResponse = { result: unknown };
 export type ScheduleWaitTimeoutRequest = { sourceSessionId: string; waitId: string; timeoutSeconds: number };
 export type ScheduleWaitTimeoutResponse = { scheduled: true; waitId: string };
 
-export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 1, {
+export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 2, {
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),
   scheduleWaitTimeout: rpcMethod<ScheduleWaitTimeoutRequest, ScheduleWaitTimeoutResponse>(),
 });
@@ -78,6 +82,7 @@ async function invokeAllowedOperation(operation: MainManagementToolOperation, ar
     case 'update_timer': return timerTools.tool_update_timer(args, ctx);
     case 'delete_timer': return timerTools.tool_delete_timer(args, ctx);
     case 'session_list': return buildSessionListOutput(args, ctx.sessionId);
+    case 'session_update_display_name': return sessionCrudTools.tool_session(args, ctx);
   }
 }
 
@@ -107,6 +112,7 @@ export function createMainManagementToolServiceHandler(options: {
   expectedGeneration?: number;
   expectedIncarnationId?: string;
   workerStore?: SessionWorkerStore;
+  readSessionHistory?: (sessionId: string) => Promise<SessionRuntimeHistoryDto | null>;
 } = {}): RpcServiceHandler<typeof mainManagementToolServiceDescriptor> {
   const assertExpectedSource = (sourceSessionId: string): void => {
     if (options.expectedSourceSessionId && sourceSessionId !== options.expectedSourceSessionId) {
@@ -127,9 +133,10 @@ export function createMainManagementToolServiceHandler(options: {
     if (bounded.fork === true && options.workerStore && !ownership) {
       throw new RpcError('MAIN_MANAGEMENT_FORK_UNFENCED', `Cannot fork session \`${sourceSessionId}\`: it has no durable worker fence to derive from.`, true);
     }
-    // A fork of a worker-fenced source must derive from the authoritative JSON
-    // via a strictly read-only detached read; Main never hydrates or writes it.
-    const sourceOverride = bounded.fork === true && ownership
+    // Child creation inherits current source settings even without fork. A
+    // worker-owned source therefore always derives from the authoritative JSON
+    // through a read-only detached snapshot; Main never hydrates or writes it.
+    const sourceOverride = ownership
       ? await readDetachedWorkerSession(sourceSessionId, source)
       : source;
     return interSessionTools.tool_create_child_session(bounded, { sessionId: sourceSessionId, sourceOverride } as ToolContext);
@@ -138,12 +145,22 @@ export function createMainManagementToolServiceHandler(options: {
     const targetId = typeof args?.sessionId === 'string' ? args.sessionId : undefined;
     if (!targetId) throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'get_session_messages requires a sessionId.');
     // Catalog-map-only: hydrating a worker-fenced stub would poison later local reads.
-    const target = sessionManager.getAllSessions().get(targetId);
+    const target = sessionManager.getSessionCatalog(targetId);
     if (!target) return `Session \`${targetId}\` not found.`;
-    // A worker-fenced target is served from its authoritative JSON via a
-    // strictly read-only detached read; Main never hydrates it.
-    if (options.workerStore?.findOwnership(target.id)) {
-      const detached = await readDetachedWorkerSession(target.id, target);
+    // Production injects SessionRuntime so this read ensures/loads the exact
+    // target owner. Isolated service tests may use the same read-only file
+    // reader directly; neither path hydrates a Main catalog stub.
+    if (options.workerStore) {
+      const detached = options.readSessionHistory
+        ? await options.readSessionHistory(target.id).then(snapshot => snapshot ? ({
+          ...target,
+          ...snapshot.session,
+          history: snapshot.messages,
+          queue: snapshot.queue,
+          persistentMemorySnapshot: snapshot.persistentMemorySnapshot,
+        } as Session) : null)
+        : await readDetachedWorkerSession(target.id, target);
+      if (!detached) return `Session \`${targetId}\` not found.`;
       return archiveRecallTools.tool_get_session_messages(args, { sessionId: detached.id, session: detached, persistCurrentSession: async () => {} } as unknown as ToolContext);
     }
     return archiveRecallTools.tool_get_session_messages(args, { sessionId: sourceSessionId });
@@ -167,6 +184,15 @@ export function createMainManagementToolServiceHandler(options: {
       }
       if (operation === 'get_session_messages') {
         return { result: await invokeGetSessionMessages(args, sourceSessionId) };
+      }
+      if (operation === 'session_update_display_name') {
+        const action = typeof args.action === 'string' ? args.action.trim().toLowerCase() : '';
+        const requestedTarget = typeof args.sessionId === 'string' && args.sessionId.trim() ? args.sessionId.trim() : sourceSessionId;
+        const target = sessionManager.getSessionCatalog(requestedTarget);
+        if (action !== 'update-display-name' || typeof args.name !== 'string'
+          || !target || target.id !== sourceSessionId) {
+          throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'session_update_display_name requires the exact source session, update-display-name action, and a string name.');
+        }
       }
       return {
         result: await invokeAllowedOperation(operation as MainManagementToolOperation, args, { sessionId: sourceSessionId }),

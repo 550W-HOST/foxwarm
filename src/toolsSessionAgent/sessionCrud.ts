@@ -20,6 +20,7 @@ export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
   }
 
   if (action === 'update-display-name') {
+    if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('session_update_display_name', args, ctx);
     return updateSessionDisplayName(args, ctx);
   }
 
@@ -77,15 +78,6 @@ async function updateSessionDisplayName(args: ToolArgs, ctx?: ToolContext) {
   }
   if (typeof name !== 'string') {
     throw new Error('session.name is required for action="update-display-name".');
-  }
-
-  if (ctx?.sessionPlacement === 'session-worker' && ctx.session && (ctx.session.id === targetId || ctx.session.aliases?.includes(targetId)) && ctx.persistCurrentSession) {
-    const previousName = ctx.session.displayName || undefined;
-    const nextName = name.trim() || undefined;
-    if (previousName === nextName) return `Session \`${targetId}\` display name unchanged (from ${formatDisplayName(previousName)} to ${formatDisplayName(nextName)}).`;
-    ctx.session.displayName = nextName;
-    await ctx.persistCurrentSession();
-    return `Session \`${targetId}\` display name changed from ${formatDisplayName(previousName)} to ${formatDisplayName(nextName)}.`;
   }
 
   const session = await sessionRuntime.getSession(targetId);
@@ -164,6 +156,10 @@ export async function tool_compact_session(args: ToolArgs, ctx: ToolContext) {
 
   if (!targetSessionId) {
     throw new Error('sessionId is required when there is no current session context.');
+  }
+
+  if (sessionManager.isSessionWorkerFenced(targetSessionId)) {
+    throw new Error('Cross-session compaction is unavailable while the target Session worker is active. Request compaction from the target session when it is idle.');
   }
 
   const targetSession = await sessionManager.getExistingSession(targetSessionId);

@@ -44,10 +44,12 @@ test('detached get_session_messages is byte-compatible without global session re
   const originals = {
     getExisting: sessionManager.getExistingSession,
     getMessages: sessionManager.getSessionMessages,
+    getCatalog: sessionManager.getSessionCatalog,
     isolated: sessionManager.isSessionEffectivelyIsolated,
   };
   (sessionManager as any).isSessionEffectivelyIsolated = () => false;
   (sessionManager as any).getExistingSession = async () => session;
+  (sessionManager as any).getSessionCatalog = (id: string) => id === session.id ? session : undefined;
   (sessionManager as any).getSessionMessages = async (_id: string, start?: number, count?: number) => {
     const startIndex = start || 0;
     return session.history.slice(startIndex, count === undefined ? session.history.length : startIndex + count);
@@ -74,6 +76,7 @@ test('detached get_session_messages is byte-compatible without global session re
   } finally {
     (sessionManager as any).getExistingSession = originals.getExisting;
     (sessionManager as any).getSessionMessages = originals.getMessages;
+    (sessionManager as any).getSessionCatalog = originals.getCatalog;
     (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
   }
 });
@@ -82,9 +85,11 @@ test('detached isolated get_session_messages preserves the existing denial', asy
   const session = createSession(`detached_isolated_messages_${Date.now()}`, [{ role: 'user', parts: [{ text: 'secret' }] }]);
   const originals = {
     getExisting: sessionManager.getExistingSession,
+    getCatalog: sessionManager.getSessionCatalog,
     isolated: sessionManager.isSessionEffectivelyIsolated,
   };
   (sessionManager as any).getExistingSession = async () => { throw new Error('ID isolation lookup forbidden'); };
+  (sessionManager as any).getSessionCatalog = (id: string) => id === session.id ? session : undefined;
   (sessionManager as any).isSessionEffectivelyIsolated = (candidate: Session | undefined) => candidate === session;
   try {
     await assert.rejects(() => tool_get_session_messages({ sessionId: session.id }, {
@@ -92,6 +97,7 @@ test('detached isolated get_session_messages preserves the existing denial', asy
     } as any), { message: 'Isolated session cannot use get_session_messages tool.' });
   } finally {
     (sessionManager as any).getExistingSession = originals.getExisting;
+    (sessionManager as any).getSessionCatalog = originals.getCatalog;
     (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
   }
 });
@@ -104,13 +110,18 @@ test('get_session_messages no-hook and mismatched contexts retain the legacy tar
   const originals = {
     getExisting: sessionManager.getExistingSession,
     getMessages: sessionManager.getSessionMessages,
+    getCatalog: sessionManager.getSessionCatalog,
     isolated: sessionManager.isSessionEffectivelyIsolated,
   };
-  let getExistingCount = 0;
+  let getExistingCount = 0; let getCatalogCount = 0;
   (sessionManager as any).isSessionEffectivelyIsolated = () => false;
   (sessionManager as any).getExistingSession = async (id: string) => {
     getExistingCount += 1;
     return id === targetId ? globalSession : null;
+  };
+  (sessionManager as any).getSessionCatalog = (id: string) => {
+    getCatalogCount += 1;
+    return id === targetId || id === 'caller-id' ? (id === targetId ? globalSession : createSession('caller-id', [])) : undefined;
   };
   (sessionManager as any).getSessionMessages = async (id: string, start?: number, count?: number) => {
     if (id !== targetId) return [];
@@ -130,10 +141,12 @@ test('get_session_messages no-hook and mismatched contexts retain the legacy tar
       assert.match(output, /global-visible/);
       assert.doesNotMatch(output, /clone-secret|mismatch-secret/);
     }
-    assert.ok(getExistingCount >= 6, 'legacy isolation and target lookups should remain active');
+    assert.ok(getExistingCount >= 3, 'legacy target hydration should remain active');
+    assert.ok(getCatalogCount >= 3, 'legacy isolation checks should use catalog lookup without hydration');
   } finally {
     (sessionManager as any).getExistingSession = originals.getExisting;
     (sessionManager as any).getSessionMessages = originals.getMessages;
+    (sessionManager as any).getSessionCatalog = originals.getCatalog;
     (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
   }
 });

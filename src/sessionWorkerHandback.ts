@@ -18,7 +18,7 @@ function handbackUnavailable(message: string): never {
   throw new RpcError('SESSION_WORKER_HANDBACK_UNAVAILABLE', message, true);
 }
 
-const AUTHORITY_SETTING_KEYS = ['model', 'childModelDefault', 'currentNode', 'cwd', 'compactThresholdTokens'] as const;
+const AUTHORITY_SETTING_KEYS = ['model', 'childModelDefault', 'currentNode', 'cwd', 'compactThresholdTokens', 'verbose'] as const;
 
 /**
  * The single Main-side handback step of the worker release flow: the

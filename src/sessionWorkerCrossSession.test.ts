@@ -39,9 +39,13 @@ test('worker child creation, reply delivery, and facade queries stay Main-owned 
     workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_CROSS_SESSION: 'create-child,reply,query' },
     resolveExactFinalSourceContext: sourceContexts.resolve,
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
   const parentStatePath = path.join(root, 'state', 'sessions', `${parentId}.json`);
   await fs.outputJson(parentStatePath, serializeSessionHistoryPayload(baseSession(parentId)));
+  // Production Main and Worker share this authority path; mirror the split test
+  // root so non-fork child creation can inherit current owner settings from the
+  // same read-only detached source as fork creation.
+  await fs.copy(parentStatePath, getSessionHistoryFilePath(parentId));
   const parentAuthorityText = async () => fs.readFile(parentStatePath, 'utf8');
   const createdRealSessions: string[] = [];
   try {
@@ -103,6 +107,7 @@ test('worker child creation, reply delivery, and facade queries stay Main-owned 
     store.close();
     for (const id of createdRealSessions) await sessionManager.deleteSession(id).catch(() => {});
     sessionManager.getAllSessions().delete(parentId);
+    await fs.remove(getSessionHistoryFilePath(parentId)).catch(() => {});
     await sessionManager.saveSessionsMetadata().catch(() => {});
     await fs.remove(root);
   }

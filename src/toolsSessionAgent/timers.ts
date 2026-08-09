@@ -5,7 +5,7 @@ import {
   formatTimerSummary,
   formatTimerUpdateSummary,
 } from './helpers';
-import * as sessionManager from '../sessionManager';
+import * as sessionRuntime from '../sessionRuntime';
 import * as timers from '../timers';
 import { checkTimerPermission } from '../isolatedCheck';
 
@@ -22,7 +22,7 @@ export async function tool_create_timer(args: ToolArgs, ctx: ToolContext) {
     throw new Error('sessionId is required when there is no current session context.');
   }
 
-  const targetSession = await sessionManager.getExistingSession(targetSessionId);
+  const targetSession = await sessionRuntime.getSession(targetSessionId);
   if (!targetSession) {
     throw new Error(`Session \`${targetSessionId}\` not found.`);
   }

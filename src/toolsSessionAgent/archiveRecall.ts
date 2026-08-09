@@ -1029,7 +1029,7 @@ export async function renderContextBlockExpansion(args: {
     throw contextBlockExpansionError('sessionId is required.', 400, 'SESSION_ID_REQUIRED');
   }
 
-  const session = await sessionManager.getExistingSession(targetSessionId);
+  const session = sessionManager.getSessionCatalog(targetSessionId);
   if (!session) {
     throw contextBlockExpansionError(`Session \`${targetSessionId}\` not found.`, 404, 'SESSION_NOT_FOUND');
   }

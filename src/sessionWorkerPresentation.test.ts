@@ -44,7 +44,7 @@ function makeFixture(root: string, extraEnv: Record<string, string> = {}) {
     },
     onWorkerReady: sessionId => { readySessions.push(sessionId); },
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
   return { store, sourceContexts, supervisor, ingress, receivedMessages, receivedEvents, readySessions };
 }
 

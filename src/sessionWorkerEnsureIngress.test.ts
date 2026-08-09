@@ -40,6 +40,7 @@ async function createFixture(sessionId: string, options: { resolveAlias?: boolea
   const ingress = new SessionWorkerIngressCoordinator(
     store, supervisor, sourceContexts,
     options.resolveAlias ? (id => (id === 'alias' ? sessionId : id)) : (id => id),
+    id => id === sessionId,
   );
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
@@ -103,6 +104,22 @@ test('ensuring submit spawns, durably activates, and runs an inactive session wo
     (sessionManager as any).saveSession = originals.saveSession;
     await fixture.close();
   }
+});
+
+test('ensureWorkerOwner loads authoritative state and publishes a committed projection without mailbox work', async () => {
+  const sessionId = 'worker-ensure-owner-projection';
+  const fixture = await createFixture(sessionId);
+  try {
+    await fixture.supervisor.reconcileStartupOwnerships();
+    assert.equal(fixture.supervisor.projectionRegistry.get(sessionId), undefined);
+    const owner = await fixture.ingress.ensureWorkerOwner(sessionId);
+    assert.equal(owner.generation, 1);
+    assert.equal(fixture.store.countMailboxIntents(), 0);
+    const projection = fixture.supervisor.projectionRegistry.get(sessionId)?.projection;
+    assert.equal(projection?.messageCount, 0);
+    assert.equal(projection?.busy, false);
+    assert.equal(fixture.store.getOwnership(sessionId).state, 'ready');
+  } finally { await fixture.close(); }
 });
 
 test('concurrent ensuring submits share one spawn and apply both mailbox intents once', async () => {

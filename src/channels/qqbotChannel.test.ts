@@ -477,7 +477,9 @@ test('QQ Bot follow-up arriving during the final provider request is absorbed be
 
     assert.equal(chatCalls, 2);
     assert.equal(session.history.filter(message => message.role === 'user').length, 2);
-    assert.equal(outbound.some(body => body.content === 'intermediate answer'), false);
+    const intermediates = outbound.filter(body => body.content === 'intermediate answer');
+    assert.equal(intermediates.length, 1);
+    assert.equal(intermediates[0].msg_id, 'qq-final-2');
     const finals = outbound.filter(body => body.content === 'answer to late steering');
     assert.equal(finals.length, 1);
     assert.equal(finals[0].msg_id, 'qq-final-2');

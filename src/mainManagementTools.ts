@@ -13,6 +13,7 @@ import {
   mainManagementToolServiceDescriptor,
 } from './mainManagementToolService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
+import type { SessionRuntimeHistoryDto } from './sessionRuntimeService';
 import type { ToolArgs, ToolContext } from './tools/helpers';
 
 let transport: RpcTransport | undefined;
@@ -34,6 +35,7 @@ export async function initializeMainManagementTools(options: {
   transport?: RpcTransport;
   placement?: 'child-reverse';
   workerStore?: SessionWorkerStore;
+  readSessionHistory?: (sessionId: string) => Promise<SessionRuntimeHistoryDto | null>;
 } = {}): Promise<void> {
   assertNotTerminallyShutDown();
   const requestedPlacement = options.transport ? (options.placement || 'child-reverse') : 'local';
@@ -63,7 +65,10 @@ export async function initializeMainManagementTools(options: {
         return;
       }
       const registry = new RpcServiceRegistry();
-      registry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({ workerStore: options.workerStore }));
+      registry.register(mainManagementToolServiceDescriptor, createMainManagementToolServiceHandler({
+        workerStore: options.workerStore,
+        readSessionHistory: options.readSessionHistory,
+      }));
       const nextTransport = new LocalRpcTransport(registry, { maxPendingRequests: 128 });
       if (terminalShutdown) {
         nextTransport.close();
