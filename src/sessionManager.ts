@@ -2175,6 +2175,11 @@ export function setSessionWorkerFenceChecker(checker: ((sessionId: string) => bo
   workerFenceChecker = checker;
 }
 
+/** True when the session currently has an active (non-inactive) Session-worker fence. */
+export function isSessionWorkerFenced(sessionId: string): boolean {
+  return workerFenceChecker?.(sessionId) === true;
+}
+
 export async function enqueueSessionItem(sessionId: string, item: QueueItem): Promise<void> {
   if (workerEnqueueSink) {
     // Session-worker placement: all Main-side producers share one durable

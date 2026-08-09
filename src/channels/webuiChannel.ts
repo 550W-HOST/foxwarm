@@ -2086,8 +2086,11 @@ export class WebUIChannel implements Channel {
               .getChannelsBySession(sessionId)
               .filter(channel => channel.channelId !== 'webui')
               .map(channel => ({ sessionId, ...channel })));
-            const revalidatedBusySessionIds = targetSessionIds.filter(sessionId => sessionManager.getAllSessions().get(sessionId)?.busy);
-            const revalidatedQueuedSessionIds = targetSessionIds.filter(sessionId => (sessionManager.getAllSessions().get(sessionId)?.queue?.length || 0) > 0);
+            // Placement-neutral revalidation: worker-fenced stubs only mirror
+            // busy/queue at handback, so check the projection-overlaid DTOs.
+            const runtimeById = new Map((await sessionRuntime.listSessions()).map(session => [session.id, session]));
+            const revalidatedBusySessionIds = targetSessionIds.filter(sessionId => runtimeById.get(sessionId)?.busy);
+            const revalidatedQueuedSessionIds = targetSessionIds.filter(sessionId => (runtimeById.get(sessionId)?.queueLength || 0) > 0);
             if (revalidatedChannelBlockers.length > 0 || revalidatedBusySessionIds.length > 0 || revalidatedQueuedSessionIds.length > 0) {
               return res.status(409).json({
                 error: 'The session tree became active or channel-blocked while preparing deletion. Retry the delete request.',

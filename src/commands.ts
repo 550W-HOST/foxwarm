@@ -4,6 +4,7 @@ import { nodesManager } from './nodes/manager';
 import { approvePendingPairing, isReservedNodeId, moveApprovedNode, rejectPendingPairing, removeApprovedNode } from './nodes/registry';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
+import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 import * as skills from './skills';
 import * as tools from './tools';
 import { APP_CONFIG_PATH, getDefaultChannelIdByType, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config';
@@ -401,7 +402,10 @@ export const COMMANDS: Record<string, CommandDef> = {
     autocomplete: { children: MESSAGES_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
-      const totalMessages = session.history.length
+      // Placement-neutral totals: a worker-fenced catalog stub is an
+      // unhydrated mirror whose history is empty by design.
+      const runtime = await sessionRuntime.getSession(sessionId)
+      const totalMessages = runtime?.messageCount ?? session.history.length
       const previewLength = 100
       let start: number | undefined; let end: number | undefined
       if (args.length === 0) { ctx.reply(messagesUsage); return }
@@ -420,7 +424,11 @@ export const COMMANDS: Record<string, CommandDef> = {
         end = Math.max(0, Math.min(end, totalMessages))
       }
       if (end === undefined || start === undefined || end < start) { ctx.reply('No messages found in the specified range.'); return }
-      const messages = await sessionManager.getSessionMessages(sessionId, start, end - start)
+      // A worker-fenced authority is served from a read-only detached read;
+      // Main never hydrates it for presentation.
+      const messages = sessionManager.isSessionWorkerFenced(sessionId)
+        ? (await readDetachedWorkerSession(sessionId, session)).history.slice(start, end)
+        : await sessionManager.getSessionMessages(sessionId, start, end - start)
       const preview = formatSessionMessagesPreview(sessionId, messages, start, totalMessages, previewLength)
       ctx.reply(preview)
     }
