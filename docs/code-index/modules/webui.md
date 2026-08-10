@@ -77,7 +77,7 @@ Chat, terminal, Agents, Setup, and Code use one tab/pane workbench. Agents and S
 
 ### D-webui-session-stream-ownership
 
-Mounted Chat owns per-session state/stream. Global list streaming remains for list-wide UI and never substitutes for Chat runtime state.
+Mounted Chat owns per-session state/stream. The global list stream carries catalog invalidation plus bounded deltas for explicitly subscribed loaded/current/open/watch rows; it never sends an all-Session payload and never substitutes for Chat runtime state. Browser cache/query completeness is canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
 
 ### D-webui-history-bootstrap
 

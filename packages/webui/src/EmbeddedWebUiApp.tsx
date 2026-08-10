@@ -1,16 +1,16 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { DndContext } from '@dnd-kit/core'
 import { Bot, Workflow } from 'lucide-react'
 import Chat from './components/Chat'
-import SessionListCore, { type Session } from './components/SessionListCore'
+import SessionListCore from './components/SessionListCore'
 import AgentCreationMenu from './components/AgentCreationMenu'
 import GlobalUiSettingsMenu from './components/GlobalUiSettingsMenu'
 import CreateTabButton from './components/CreateTabButton'
 import { API_BASE_PATH } from './config'
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 import { postFoxwarmEmbedHostMessage, readEmbeddedSessionLink, readFoxwarmActiveTargetMessage, readFoxwarmFocusModelsMessage, type FoxwarmActiveTarget, type FoxwarmEmbeddedTarget } from './embeddedWebUi'
-import { applyLatestSessionListRequest, createLatestSessionListRequestGate, createSessionListRefreshScheduler } from './sessionListRefresh'
 import { useSessionIdleNotifications } from './sessionIdleNotifications'
+import { useBoundedSessionList } from './boundedSessionList'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
 const SetupView = lazy(() => import('./components/SetupView'))
@@ -99,77 +99,26 @@ function normalizeSettings(value: unknown): WebUiSettings {
   }
 }
 
-function useEmbeddedSessions(onGlobalUpdate?: () => Promise<unknown>) {
-  const [sessions, setSessions] = useState<Session[]>([])
-  const [loadError, setLoadError] = useState('')
-  const reconnectTimer = useRef<number | null>(null)
-  const sessionListRequestGateRef = useRef(createLatestSessionListRequestGate())
-  const onGlobalUpdateRef = useRef(onGlobalUpdate)
-  onGlobalUpdateRef.current = onGlobalUpdate
-
-  const fetchSessions = useCallback(async () => {
-    await applyLatestSessionListRequest(
-      sessionListRequestGateRef.current,
-      async () => {
-        const response = await fetch(`${API_BASE_PATH}/sessions`)
-        if (!response.ok) throw new Error(`Failed to load sessions (${response.status})`)
-        const data = await response.json()
-        return Array.isArray(data.sessions) ? data.sessions as Session[] : []
-      },
-      setSessions,
-    )
-  }, [])
-
-  useEffect(() => {
-    let disposed = false
-    let eventSource: EventSource | null = null
-    let delay = 1000
-
-    const refresh = async () => {
-      try {
-        await Promise.all([fetchSessions(), onGlobalUpdateRef.current?.()])
-        if (!disposed) setLoadError('')
-      } catch (error) {
-        if (!disposed) setLoadError(error instanceof Error ? error.message : String(error))
-      }
-    }
-    const refreshScheduler = createSessionListRefreshScheduler(refresh)
-    const connect = () => {
-      if (disposed) return
-      eventSource?.close()
-      eventSource = new EventSource(`${API_BASE_PATH}/sessions/stream`)
-      eventSource.onopen = () => { delay = 1000 }
-      eventSource.onmessage = (event) => {
-        try {
-          if (JSON.parse(event.data)?.type === 'sessions-updated') refreshScheduler.requestRefresh()
-        } catch {}
-      }
-      eventSource.onerror = () => {
-        eventSource?.close()
-        reconnectTimer.current = window.setTimeout(() => {
-          void refresh().finally(connect)
-          delay = Math.min(delay * 2, 30000)
-        }, delay)
-      }
-    }
-
-    void refresh().finally(connect)
-    return () => {
-      disposed = true
-      refreshScheduler.dispose()
-      eventSource?.close()
-      if (reconnectTimer.current !== null) window.clearTimeout(reconnectTimer.current)
-    }
-  }, [fetchSessions])
-
-  return { sessions, fetchSessions, loadError }
-}
-
 export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbeddedTarget, { kind: 'sidebar' }> }) {
   const preferences = useEmbeddedPreferences()
   const [agents, setAgents] = useState<AgentSummary[]>([])
   const [settings, setSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [activeTarget, setActiveTarget] = useState<FoxwarmActiveTarget | null>(null)
+  const currentSession = activeTarget?.kind === 'session' ? activeTarget.sessionId : ''
+  const boundedSessions = useBoundedSessionList({ focusIds: currentSession ? [currentSession] : [], exactIds: currentSession ? [currentSession] : [] })
+  const sessions = boundedSessions.knownSessions
+  const sidebarSessions = boundedSessions.sessions
+  const fetchSessions = boundedSessions.refresh
+  const loadError = ''
+  const boundedPresentation = {
+    serverOrdered: true as const, hasMoreRoots: boundedSessions.hasMoreRoots, childPages: boundedSessions.childPages,
+    descendantBusy: boundedSessions.descendantBusy, invalidationVersion: boundedSessions.invalidationVersion,
+    onModeChange: boundedSessions.setMode, onFilterChange: boundedSessions.setQuery,
+    onLoadMoreRoots: () => { void boundedSessions.loadMoreRoots() },
+    onLoadMoreChildren: (sessionId: string) => { void boundedSessions.loadMoreChildren(sessionId) },
+    onExpandBranch: (sessionId: string) => { void boundedSessions.expandBranch(sessionId) },
+    onCollapseBranch: boundedSessions.collapseBranch,
+  }
 
   const fetchAgents = useCallback(async () => {
     const response = await fetch(`${API_BASE_PATH}/agents`)
@@ -185,12 +134,12 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
     setSettings(normalizeSettings(data.settings))
   }, [])
 
-  const { sessions, fetchSessions, loadError } = useEmbeddedSessions(fetchAgents)
   const { idleNotificationModes, toggleIdleNotificationMode } = useSessionIdleNotifications(sessions)
 
   useEffect(() => {
     void fetchSettings()
-  }, [fetchSettings])
+    void fetchAgents()
+  }, [fetchSettings, fetchAgents])
 
   useEffect(() => {
     const handleHostMessage = (event: MessageEvent) => {
@@ -250,7 +199,6 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
     setSettings(normalizeSettings(data.settings))
   }
 
-  const currentSession = activeTarget?.kind === 'session' ? activeTarget.sessionId : ''
   const currentRecord = sessions.find(item => item.id === currentSession || item.aliases?.includes(currentSession))
   const agentsActive = activeTarget?.kind === 'agents'
   return (
@@ -297,7 +245,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
           </div>
         </div>
         <div className="min-h-0 flex-1 border-t border-gray-200 dark:border-gray-700">
-          <SessionListCore sessions={sessions} currentSession={currentSession} onSelectSession={openSession} onKeepSession={openSession} toolbarContainerClassName="p-2 pb-1" listContainerClassName="p-2 pt-1" dragEnabled={false} idleNotificationModes={idleNotificationModes} onToggleIdleNotificationMode={toggleIdleNotificationMode} />
+          <SessionListCore sessions={sidebarSessions} currentSession={currentSession} onSelectSession={openSession} onKeepSession={openSession} toolbarContainerClassName="p-2 pb-1" listContainerClassName="p-2 pt-1" dragEnabled={false} idleNotificationModes={idleNotificationModes} onToggleIdleNotificationMode={toggleIdleNotificationMode} bounded={boundedPresentation} />
         </div>
       </div>
     </DndContext>
@@ -310,16 +258,13 @@ function EmbeddedLeafFallback({ label }: { label: string }) {
 
 export function EmbeddedAgentsApp({ target }: { target: Extract<FoxwarmEmbeddedTarget, { kind: 'agents' }> }) {
   useEmbeddedPreferences()
-  const { sessions, loadError } = useEmbeddedSessions()
   const openSession = (sessionId: string) => {
-    const session = sessions.find(item => item.id === sessionId || item.aliases?.includes(sessionId))
-    postFoxwarmEmbedHostMessage(target.nonce, { type: 'open-session', sessionId, title: session?.displayName || session?.id || sessionId })
+    postFoxwarmEmbedHostMessage(target.nonce, { type: 'open-session', sessionId, title: sessionId })
   }
   return (
     <div className="foxwarm-fixed-viewport-shell h-full min-h-0 overflow-hidden bg-gray-100 dark:bg-gray-900">
-      {loadError ? <div className="m-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">{loadError}</div> : null}
       <Suspense fallback={<EmbeddedLeafFallback label="Agents" />}>
-        <ArchitectureView sessions={sessions} onSelectSession={openSession} />
+        <ArchitectureView onSelectSession={openSession} />
       </Suspense>
     </div>
   )

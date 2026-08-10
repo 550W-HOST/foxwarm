@@ -17,6 +17,8 @@ import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
 import type { SessionRuntimeSessionDto } from '../sessionRuntime';
+import { buildSessionRuntimeSessionDto } from '../sessionRuntimeService';
+import { sessionCatalogStore } from '../session/catalogStore';
 import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, getActiveModelsConfigPath, readAppConfigFile, resolveModelConfig } from '../config';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
@@ -28,7 +30,7 @@ import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClie
 import { getSessionHistoryFilePath } from '../session/metadataStore';
 import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
 import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
-import type { Message, MessagePart, QueueItem } from '../types';
+import type { Message, MessagePart, QueueItem, Session } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
 import { registerVscodeWebRoutes } from '../vscodeWebRoutes';
 import { externalizeMessages, externalizeQueueItems, getSafeRasterMimeType, resolveImageBlobPath } from '../imageBlobs';
@@ -693,6 +695,13 @@ export class WebUIChannel implements Channel {
     return (this.sseClients.get(sessionId)?.length || 0) > 0;
   }
   private globalSseClients: express.Response[] = []; // Global clients for session list updates
+  private globalSseSessionIds = new WeakMap<express.Response, Set<string>>();
+  private globalSseInitialization = new WeakMap<express.Response, {
+    pending: Map<string, { sessions: any[]; deletedIds: string[] }>;
+    invalidation: string | null;
+    initializing: boolean;
+  }>();
+  private globalSseInvalidationEventId = 0;
 
   private async streamPathDownload(resolvedPath: string, res: express.Response): Promise<void> {
     const stat = await fs.stat(resolvedPath);
@@ -1232,6 +1241,38 @@ export class WebUIChannel implements Channel {
             res.json(mapSessionListQueryPayload(result));
           } catch (e: any) {
             sendSessionListQueryError(res, e, 'Failed session-list architecture query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/descendant-activity', method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.body, ['ids'], 'descendant activity request');
+            if (!Array.isArray(req.body?.ids) || req.body.ids.length > 100
+              || req.body.ids.some((id: unknown) => typeof id !== 'string' || !id || id.length > 512)) {
+              return res.status(400).json({ error: 'ids must contain at most 100 bounded Session IDs.', code: 'SESSION_LIST_IDS_INVALID' });
+            }
+            const requestedIds = [...new Set(req.body.ids as string[])];
+            const resolved = requestedIds.map(requestedId => ({ requestedId, resolution: sessionCatalogStore.resolveId(requestedId) }));
+            const canonicalIds = [...new Set(resolved.flatMap(item => item.resolution.kind === 'exact' || item.resolution.kind === 'alias' ? [item.resolution.sessionId] : []))];
+            const catalogBusyIds = sessionCatalogStore.listBusySessionIds();
+            const current = new Map<string, SessionRuntimeSessionDto>();
+            const batches = catalogBusyIds.length ? Array.from({ length: Math.ceil(catalogBusyIds.length / 200) }, (_, index) => catalogBusyIds.slice(index * 200, index * 200 + 200)) : [[]];
+            for (let index = 0; index < batches.length; index++) {
+              const projections = await sessionRuntime.getSessionListProjections(batches[index], index === 0, true);
+              for (const session of projections.sessions) current.set(session.id, session);
+            }
+            const currentBusyIds = [...current.values()].filter(session => session.runtimeState?.state === 'requesting-model'
+              || session.runtimeState?.state === 'running-tool' || session.busy).map(session => session.id);
+            const counts = sessionCatalogStore.getBusyDescendantCounts(canonicalIds, currentBusyIds);
+            res.json({ version: 1, results: resolved.map(item => {
+              const canonicalId = item.resolution.kind === 'exact' || item.resolution.kind === 'alias' ? item.resolution.sessionId : null;
+              return { requestedId: item.requestedId, sessionId: canonicalId, resolution: item.resolution, busy: canonicalId ? counts.get(canonicalId) || 0 : 0 };
+            }) });
+          } catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed descendant activity query');
           }
         },
       });
@@ -2443,27 +2484,60 @@ export class WebUIChannel implements Channel {
           
           // Add to global clients
           this.globalSseClients.push(res);
+          const rawSessionIds = req.query.sessionId;
+          const requestedSessionIds = (Array.isArray(rawSessionIds) ? rawSessionIds : rawSessionIds === undefined ? [] : [rawSessionIds])
+            .filter((value): value is string => typeof value === 'string' && !!value && value.length <= 512).slice(0, 100);
+          const subscribedIds = new Set(requestedSessionIds);
+          for (const requestedId of requestedSessionIds) {
+            const resolution = sessionCatalogStore.resolveId(requestedId);
+            if (resolution.kind === 'exact' || resolution.kind === 'alias') subscribedIds.add(resolution.sessionId);
+          }
+          this.globalSseSessionIds.set(res, subscribedIds);
+          const initialization: { pending: Map<string, { sessions: any[]; deletedIds: string[] }>; invalidation: string | null; initializing: boolean } = {
+            pending: new Map(), invalidation: null, initializing: true,
+          };
+          this.globalSseInitialization.set(res, initialization);
+          let closed = false;
+          let keepAliveInterval: NodeJS.Timeout | null = null;
+          req.on('close', () => {
+            if (closed) return;
+            closed = true;
+            if (keepAliveInterval) clearInterval(keepAliveInterval);
+            const index = this.globalSseClients.indexOf(res);
+            if (index !== -1) this.globalSseClients.splice(index, 1);
+          });
           
           // Send initial ping
           res.write('data: {"type":"connected"}\n\n');
+          if (requestedSessionIds.length) {
+            const initial = await queryExactSessions(requestedSessionIds, false);
+            if (closed) return;
+            const sessions = initial.results.flatMap(item => item.session ? [mapSessionListQueryPayload(item.session)] : []);
+            const deletedIds = initial.results.filter(item => !item.session).map(item => item.requestedId);
+            const canonicalSubscriptions = this.globalSseSessionIds.get(res)!;
+            for (const session of sessions) if (typeof session.id === 'string') canonicalSubscriptions.add(session.id);
+            res.write(`data: ${JSON.stringify({ type: 'session-list-delta', sessions, deletedIds })}\n\n`);
+          }
+          initialization.initializing = false;
+          for (const [pendingSessionId, pending] of initialization.pending) {
+            if (!this.globalSseSessionIds.get(res)?.has(pendingSessionId)) continue;
+            res.write(`data: ${JSON.stringify({ type: 'session-list-delta', ...pending })}\n\n`);
+          }
+          initialization.pending.clear();
+          if (initialization.invalidation) {
+            res.write(`data: ${initialization.invalidation}\n\n`);
+            initialization.invalidation = null;
+          }
           
           // Keep-alive ping
-          const keepAliveInterval = setInterval(() => {
+          if (closed) return;
+          keepAliveInterval = setInterval(() => {
             try {
               res.write(': keep-alive\n\n');
             } catch (e) {
-              clearInterval(keepAliveInterval);
+              if (keepAliveInterval) clearInterval(keepAliveInterval);
             }
           }, 30000);
-          
-          // Remove on disconnect
-          req.on('close', () => {
-            clearInterval(keepAliveInterval);
-            const index = this.globalSseClients.indexOf(res);
-            if (index !== -1) {
-              this.globalSseClients.splice(index, 1);
-            }
-          });
           
           res;
         },
@@ -2978,9 +3052,6 @@ export class WebUIChannel implements Channel {
 
   broadcastSessionStateUpdate(sessionId: string, runtimeSession?: SessionRuntimeSessionDto | null) {
     const clients = this.sseClients.get(sessionId);
-    if (!clients || clients.length === 0) {
-      return;
-    }
 
     // The production event bridge supplies an immutable DTO. The live-map
     // fallback remains only for direct compatibility callers and existing
@@ -2992,7 +3063,7 @@ export class WebUIChannel implements Channel {
       ? JSON.stringify({ type: 'session-state', session: buildWebUiSessionState(session) })
       : JSON.stringify({ type: 'session-deleted', sessionId });
 
-    clients.forEach(client => {
+    (clients || []).forEach(client => {
       try {
         client.write(`data: ${data}\n\n`);
         if (!session) {
@@ -3007,13 +3078,32 @@ export class WebUIChannel implements Channel {
       this.sseClients.delete(sessionId);
       this.presentationSubscriptionListener?.(sessionId, false);
     }
+
+    const listDelta = session ? [buildWebUiSessionListProjection(runtimeSession === undefined
+      ? buildSessionRuntimeSessionDto(session as Session) : session as SessionRuntimeSessionDto)] : [];
+    for (const client of this.globalSseClients) {
+      const initialization = this.globalSseInitialization.get(client);
+      if (initialization?.initializing) {
+        if (this.globalSseSessionIds.get(client)?.has(sessionId)) {
+          initialization.pending.set(sessionId, { sessions: listDelta, deletedIds: session ? [] : [sessionId] });
+        }
+        continue;
+      }
+      if (!this.globalSseSessionIds.get(client)?.has(sessionId)) continue;
+      try { client.write(`data: ${JSON.stringify({ type: 'session-list-delta', sessions: listDelta,
+        deletedIds: session ? [] : [sessionId] })}\n\n`); }
+      catch (e) { logger.error({ err: e, sessionId }, 'Failed to send bounded global Session delta'); }
+    }
   }
 
   // Broadcast session list update to all global SSE clients
   broadcastSessionListUpdate() {
     if (this.globalSseClients.length > 0) {
-      const data = JSON.stringify({ type: 'sessions-updated' });
+      const data = JSON.stringify({ type: 'sessions-updated', catalogInvalidated: true,
+        eventId: ++this.globalSseInvalidationEventId, presentationRevision: sessionCatalogStore.getPresentationRevision() });
       this.globalSseClients.forEach(client => {
+        const initialization = this.globalSseInitialization.get(client);
+        if (initialization?.initializing) { initialization.invalidation = data; return; }
         try {
           client.write(`data: ${data}\n\n`);
         } catch (e) {

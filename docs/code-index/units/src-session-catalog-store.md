@@ -43,6 +43,10 @@ The cross-module admission and scaling policy is canonical in
 - `getArchitectureSummary()` / `getAgentCounts()` /
   `getDescendantSummary()` — typed global aggregates and read-only recursive
   descendant preview.
+- `listBusySessionIds()` / `getBusyDescendantCounts(rootIds, busyIds)` — Main
+  first reconciles catalog candidates with exact current runtime ownership, then
+  one active-ID ancestor traversal returns bounded busy-descendant badge counts
+  without counting a root through a cycle.
 - `webuiSessionListQueries` — fixed version-1 DTO/cursor composition and
   active local/Worker projection union for `/api/session-list/*` routes.
 

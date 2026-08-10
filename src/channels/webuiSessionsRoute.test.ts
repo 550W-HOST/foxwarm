@@ -254,6 +254,25 @@ test('bounded session-list routes preserve tree modes, focus paths, aliases, sea
 
     response = await request(`/api/session-list/descendants/${encodeURIComponent(ids.root)}?limit=10`);
     const descendants = await response.json() as any; assert.equal(descendants.previewOnly, true); assert.equal(descendants.total, 6);
+    const deepBusy = sessionManager.getAllSessions().get(ids.deep)!; deepBusy.busy = true; await sessionManager.saveSessionCatalogEntries([ids.deep]);
+    response = await request('/api/session-list/descendant-activity', { method: 'POST', body: JSON.stringify({ ids: [ids.root, `${prefix}_unique`, ids.child, ids.deep] }) });
+    const activity = await response.json() as any;
+    assert.equal(activity.results.find((item: any) => item.requestedId === `${prefix}_unique`).sessionId, ids.root);
+    assert.equal(activity.results.find((item: any) => item.requestedId === `${prefix}_unique`).busy, 1, 'unique aliases resolve before activity projection');
+    assert.deepEqual(Object.fromEntries(activity.results.filter((item: any) => item.requestedId !== `${prefix}_unique`).map((item: any) => [item.sessionId, item.busy])), {
+      [ids.root]: 1, [ids.child]: 1, [ids.deep]: 0,
+    }, 'busy descendant badges use authoritative recursive ancestry and exclude the row itself');
+    const childCycle = sessionManager.getAllSessions().get(ids.child)!; childCycle.parentSessionId = ids.deep; deepBusy.parentSessionId = ids.child;
+    await sessionManager.saveSessionCatalogEntries([ids.child, ids.deep]);
+    response = await request('/api/session-list/descendant-activity', { method: 'POST', body: JSON.stringify({ ids: [ids.child, ids.deep] }) });
+    const cycleActivity = await response.json() as any;
+    assert.deepEqual(Object.fromEntries(cycleActivity.results.map((item: any) => [item.sessionId, item.busy])), { [ids.child]: 1, [ids.deep]: 0 },
+      'A↔B cycles terminate and never count the busy row as its own descendant');
+    childCycle.parentSessionId = ids.root; deepBusy.parentSessionId = ids.child; await sessionManager.saveSessionCatalogEntries([ids.child, ids.deep]);
+    deepBusy.busy = false;
+    response = await request('/api/session-list/descendant-activity', { method: 'POST', body: JSON.stringify({ ids: [ids.root] }) });
+    assert.equal(((await response.json()) as any).results[0].busy, 0, 'current exact local idle projection overrides stale catalog busy');
+    await sessionManager.saveSessionCatalogEntries([ids.deep]);
 
     response = await request('/api/session-list/sidebar?mode=time&limit=1'); const timePage = await response.json() as any;
     assert.ok(timePage.nextCursor);
@@ -938,6 +957,38 @@ test('WebUI global SSE broadcasts every session creation path used by the sideba
     for (const sessionId of createdSessionIds.reverse()) {
       await sessionManager.deleteSession(sessionId).catch(() => {});
     }
+  }
+});
+
+test('global SSE sends bounded watched-row deltas plus catalog invalidation without a global list payload', async () => {
+  const sessionId = makeSessionId('webui_global_delta'); const port = 40900 + Math.floor(Math.random() * 100);
+  const token = 'global-delta-token'; const server = new HttpServer(port, token); setHttpServer(server);
+  const channel = new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
+  const created = await sessionManager.createEmptySession(sessionId); assert.equal(created.created, true); await server.start();
+  const alias = `${sessionId}_alias`; sessionManager.getAllSessions().get(sessionId)!.aliases = [alias];
+  await sessionManager.saveSessionCatalogEntries([sessionId]);
+  let sse: ReturnType<typeof createSseDataReader> | null = null;
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sessions/stream?sessionId=${encodeURIComponent(alias)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    const session = sessionManager.getAllSessions().get(sessionId)!; session.busy = true;
+    channel.broadcastSessionStateUpdate(sessionId);
+    sse = createSseDataReader(response.body!);
+    assert.equal((await sse.read()).type, 'connected');
+    const initial = await sse.read(); assert.equal(initial.type, 'session-list-delta');
+    assert.deepEqual(initial.sessions.map((item: any) => item.id), [sessionId]); assert.equal(initial.sessions[0].history, undefined); assert.equal(initial.sessions[0].busy, false);
+    const delta = await sse.read(); assert.equal(delta.type, 'session-list-delta'); assert.equal(delta.sessions[0].busy, true);
+    channel.broadcastSessionListUpdate();
+    const invalidation = await sse.read(); assert.equal(invalidation.type, 'sessions-updated'); assert.equal(invalidation.catalogInvalidated, true);
+    assert.equal(typeof invalidation.eventId, 'number'); assert.equal(typeof invalidation.presentationRevision, 'string');
+    await sse.cancel(); sse = null; await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal((channel as any).globalSseClients.length, 0, 'disconnect cleanup removes the client before any later bootstrap/keepalive work');
+  } finally {
+    await sse?.cancel().catch(() => {}); await server.stop(); setHttpServer(null);
+    const session = sessionManager.getAllSessions().get(sessionId); if (session) session.busy = false;
+    await sessionManager.deleteSession(sessionId).catch(() => {});
   }
 });
 

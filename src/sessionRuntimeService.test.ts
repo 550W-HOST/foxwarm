@@ -21,7 +21,7 @@ import type { Message, SessionStreamEvent } from './types';
 import type { Session } from './types';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
-import { buildSessionWorkerProjection } from './sessionWorkerPersistence';
+import { buildSessionWorkerProjection, type SessionWorkerProjection } from './sessionWorkerPersistence';
 import { writeAuthoritativeSessionState } from './session/stateFile';
 import { getSessionHistoryFilePath } from './session/metadataStore';
 import { SESSIONS_FILE } from './config';
@@ -329,6 +329,15 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     assert.deepEqual(events, ['stateChanged','listChanged']);
     const changedBatch = await client.call('getSessionListProjections', { sessionIds: [], includeVolatile: true });
     assert.notEqual(changedBatch.revision, projectionBatch.revision, 'real list-visible publication changes reset cursors'); events.length = 0;
+    stub.busy = true; await sessionManager.saveSessionCatalogEntries([sessionId]);
+    const { busyStartedAt: _busyStartedAt, ...idleWorkerBase } = listChangedProjection;
+    const idleWorkerProjection: SessionWorkerProjection = { ...idleWorkerBase, busy: false, busyStartedAt: null,
+      runtimeState: { state: 'idle' as const, queueLength: idleWorkerBase.queueLength, busy: false } };
+    await registry.apply(identity, idleWorkerProjection); await flushEvents(); events.length = 0;
+    const currentIdle = await client.call('getSessionListProjections', { sessionIds: [sessionId], currentOwnersOnly: true });
+    assert.equal(currentIdle.sessions[0]?.busy, false, 'current idle Worker projection overrides stale catalog busy');
+    await registry.apply(identity, listChangedProjection); await flushEvents(); events.length = 0;
+    stub.busy = false; await sessionManager.saveSessionCatalogEntries([sessionId]);
 
     const originalForgedLoader = sessionManager.getExistingSession; let forgedLoads = 0;
     (sessionManager as any).getExistingSession = async (...args: any[]) => {
@@ -408,6 +417,8 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     assert.deepEqual(events, ['stateChanged','listChanged'], 'live-to-stale invalidates bounded lists exactly once'); events.length = 0;
     const staleBatch = await client.call('getSessionListProjections', { sessionIds: [], includeVolatile: true });
     assert.notEqual(staleBatch.revision, beforeStale.revision); assert.equal(staleBatch.sessions.some(item => item.id === sessionId), false);
+    const staleCurrentOnly = await client.call('getSessionListProjections', { sessionIds: [sessionId], currentOwnersOnly: true });
+    assert.equal(staleCurrentOnly.sessions.some(item => item.id === sessionId), false, 'stale Worker projection cannot revive catalog busy');
     await assert.rejects(() => client.call('getSession', { sessionId }), { code: 'SESSION_WORKER_STATE_UNAVAILABLE' });
     assert.equal(registry.clear(identity), true); await flushEvents();
     assert.deepEqual(events, [], 'clear after already-stale is presentation-stable');
@@ -416,6 +427,7 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
 
     store.markDraining(sessionId, identity.generation, identity.incarnationId);
     store.markExitObserved(sessionId, identity.generation, identity.incarnationId, 'released');
+    stub.busy = false;
     await writeAuthoritativeSessionState({
       ...stub, busy: false, currentNode: 'master',
       history: [{ role: 'user', parts: [{ text: 'later local authority' }], __meta: { seq: 1, timestamp: 456 } }],

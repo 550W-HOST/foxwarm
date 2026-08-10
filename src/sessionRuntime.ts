@@ -74,8 +74,8 @@ export async function listSessionsPage(options: { limit?: number; offset?: numbe
   return (await getClient()).call('listSessions', options);
 }
 
-export async function getSessionListProjections(sessionIds: string[], includeVolatile = false): Promise<SessionListProjectionBatchDto> {
-  return (await getClient()).call('getSessionListProjections', { sessionIds, includeVolatile: includeVolatile || undefined });
+export async function getSessionListProjections(sessionIds: string[], includeVolatile = false, currentOwnersOnly = false): Promise<SessionListProjectionBatchDto> {
+  return (await getClient()).call('getSessionListProjections', { sessionIds, includeVolatile: includeVolatile || undefined, currentOwnersOnly: currentOwnersOnly || undefined });
 }
 
 export async function getHistory(sessionId: string): Promise<SessionRuntimeHistoryDto | null> {

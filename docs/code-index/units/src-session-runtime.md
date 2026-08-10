@@ -10,13 +10,15 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 
 ## Key exports
 
-- `sessionRuntimeServiceDescriptor` — version-4 request/event descriptor.
+- `sessionRuntimeServiceDescriptor` — version-5 request/event descriptor.
 - `createSessionRuntimeServiceHandler()` — local authoritative handler over current session-manager operations.
 - `initializeSessionRuntime()` / `shutdownSessionRuntime()` — local service lifecycle and bounded drain.
 - `listSessions()`, `getSession()`, `getHistory()` — immutable local or exact current-Worker projections/snapshots; list requests carry SQL-backed `limit`/`offset` and return a maintained total.
 - `getSessionListProjections()` — bounded by-ID projection batch plus optional
   active local/current-Worker union using one ownership query and an in-memory
-  presentation revision for WebUI keyset invalidation.
+  presentation revision for WebUI keyset invalidation. Its optional
+  `currentOwnersOnly` mode omits requested stale/missing Worker ownership so
+  Main can reconcile catalog activity without treating stale projections as busy.
 - `enqueue()`, `queueEvent()`, `updateSettings()`, `control()` — high-level mutation commands.
 - `submitAndRun()` — closed ensure-or-spawn Worker ingress; registers one ephemeral full-source context, ensures or spawns the exact Worker owner, submits one durable mailbox item, and returns bounded committed completion.
 - `requestCompaction()` — placement-aware compaction request; local placement keeps SessionManager behavior, while an exact idle Worker uses one awaited fixed forward operation and never a mailbox item.

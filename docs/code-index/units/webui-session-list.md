@@ -1,7 +1,7 @@
 # Unit: webui-session-list
 
-Files: packages/webui/src/components/SessionListCore.tsx, packages/webui/src/components/SessionList.tsx, packages/webui/src/components/CollapsedSidebar.tsx, packages/webui/src/sessionIdleNotifications.ts, packages/webui/src/sessionListPresentation.ts, packages/webui/src/sessionListDrag.ts, packages/webui/src/sessionTreeActions.ts, packages/webui/src/sessionRuntimeState.ts, packages/webui/test/sessionRuntimeState.test.mjs, packages/webui/test/sessionListDrag.test.mjs, packages/webui/test/sessionListDrag.e2e.mjs, packages/webui/test/sessionIdleNotifications.test.mjs, packages/webui/test/sessionTreeActions.test.mjs
-Secondary files: packages/webui/src/components/ContextMenu.tsx, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/scrollState.e2e.mjs
+Files: packages/webui/src/components/SessionListCore.tsx, packages/webui/src/components/SessionList.tsx, packages/webui/src/components/CollapsedSidebar.tsx, packages/webui/src/boundedSessionList.ts, packages/webui/src/boundedSessionReplay.ts, packages/webui/src/sessionIdleNotifications.ts, packages/webui/src/sessionListPresentation.ts, packages/webui/src/sessionListDrag.ts, packages/webui/src/sessionRuntimeState.ts, packages/webui/test/boundedSessionList.test.mjs, packages/webui/test/boundedSessionReplay.test.mjs, packages/webui/test/sessionRuntimeState.test.mjs, packages/webui/test/sessionListDrag.test.mjs, packages/webui/test/sessionListDrag.e2e.mjs, packages/webui/test/sessionIdleNotifications.test.mjs
+Secondary files: packages/webui/src/components/ContextMenu.tsx, packages/webui/test/sessionListAndWorkbenchState.test.mjs, packages/webui/test/sessionListLiveRefresh.e2e.mjs, packages/webui/test/scrollState.e2e.mjs
 
 ## Purpose
 
@@ -11,6 +11,7 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 
 - `SessionListCore` — default export; renders the fixed search/mode toolbar plus the recursive scrollable session tree with all interactive behaviors
 - `Session` — TypeScript interface describing a session object (exported from `SessionListCore`)
+- `useBoundedSessionList` — normalized server-page/exact/search cache and bounded SSE controller used by App and embedded Sidebar roots
 - `SessionList` — default export; full sidebar/page wrapper around `SessionListCore`, including pass-through of global UI settings controls such as color mode and UI theme style
 
 ## Function Index
@@ -35,11 +36,15 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 | `shouldElevateSessionToRoot(session, mode)` | sessionListPresentation.ts | Elevates pinned sessions in tree modes and all sessions in Flat mode |
 | `shouldEnableSessionListDrag(requested, primaryPointerCoarse)` | sessionListDrag.ts | Disables row drag affordances when the list opts out or the primary pointer is coarse |
 | `shouldActivateSessionListDrag(enabled, pointerType)` | sessionListDrag.ts | Lets only mouse pointer events activate the dnd-kit row sensor, preventing touch/pen swipe activation |
-| `getCanonicalSessionDescendantIds(sessions, rootSessionId)` | sessionTreeActions.ts | Traverses the complete alias-normalized relation graph for lifecycle confirmation counts and rejects cycles |
+| `useBoundedSessionList(options)` | boundedSessionList.ts | Loads ordered root/child windows, exact focus/open/watch rows, server search, and bounded SSE deltas with independent latest-request generations |
+| `replayAtomicWindows(...)` / `replayCursorWindow(...)` / `replayCursorBranches(...)` | boundedSessionReplay.ts | Atomically reconstruct one revision-bound root-plus-branches operation through capped cursor pages, restarting the whole operation on reset/revision change |
+| `mergeForcedPresentationPath(...)` | boundedSessionReplay.ts | Adds an exact off-page focus path as one bounded root/child render chain without replacing the ordinary forest |
+| `mergeHttpRows(...)` / `mergeDeltaRows(...)` | boundedSessionReplay.ts | Enforces per-row monotonic SSE epoch/tombstone precedence over older HTTP responses |
+| `captureExactAliasKeys(...)` / `applyExactMissTombstone(...)` | boundedSessionReplay.ts | Binds a by-ID alias request to its raw alias plus known canonical/alias identities and applies one miss tombstone set |
 | `loadStoredSessionListViewMode()` / `getNextSessionListViewMode(mode)` | top-level helpers | Persist and cycle the sidebar list mode: default, time, or flat time. |
 | `resolveSessionId(sessionId)` | ~165 | Resolves aliases to canonical session IDs |
-| `visibleSessionIds` / `visibleParentMap` memos | ~270–305 | Filter sessions and remap filtered children to the nearest visible ancestor or root |
-| `countBusyDescendants(sessionId)` | ~195–210 | Recursively counts busy descendants for a session |
+| `visibleSessionIds` / `visibleParentMap` memos | component memos | Render only the server-selected rows and their canonical/forced focus relations |
+| `loadDescendantSummary(sessionId)` | component closure | Fetches complete recursive count/busy preview for lifecycle UI without traversing a partial client tree |
 | `toggleExpanded(sessionId)` | ~250 | Toggles expand/collapse state for a session node |
 | `showMoreChildren(sessionId)` | ~255 | Increases visible child count for a session |
 | `handleContextMenu(event, sessionId)` | ~260 | Opens context menu at click position |
@@ -63,18 +68,18 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 
 ## Behavior
 
-- Builds a tree structure from flat session list using parent/child relationships and alias resolution, except in flat-time mode where all visible sessions render as top-level items.
+- Builds a tree from the current bounded server-selected rows and forced focus path. It never assumes the input is a complete Session catalog; flat-time rows render top-level.
 - Session row labels preserve the existing full-parent-prefix omission. In addition, a child rendered under `<agent>/main` whose ID starts with `<agent>/` is shown from the slash onward (for example, `<agent>/task` displays as `/task`); canonical IDs, tree relations, search fields, and navigation remain unchanged.
 - Pinned sessions form a top-level, pinned-first presentation partition in all three modes. A pinned child is removed from its parent's rendered children without mutating the real `parentSessionId`; unpin restores it to the real tree.
-- The search bar includes a compact mode switch:
+- The search bar includes a compact mode switch; each mode and search is ordered by the server:
   - `Default` uses saved `sidebarOrder` when present (falling back to recency) and allows drag reorder plus parent changes.
   - `Time` ignores `sidebarOrder`, sorts by recent activity, and disables sibling-order drops while still allowing parent/detach drops with `updateOrder:false`.
   - `Flat` ignores both `sidebarOrder` and parent relationships, showing all sessions at the top level by recent activity.
-- Within pinned and unpinned partitions, Default still uses `sidebarOrder`, while Time/Flat still ignore it and use recency. The collapsed rail uses the same pinned-first Default comparator and elevates pinned children.
-- Provides a compact search/mode toolbar above (outside) the session-list scroll container, so it stays fixed while the list scrolls. When a query is active, matching sessions remain visible; if a matching session's parent is filtered out, the visible tree promotes that session under the nearest still-visible ancestor or to the root. Filtering auto-expands visible parents but still applies child pagination after filtering/promotion (default 5, +10 per "show more"), so broad queries remain manageable and pagination counts reflect only filtered children.
+- Within pinned and unpinned partitions, Default still uses `sidebarOrder`, while Time/Flat use recency. The browser does not re-sort server ties. The collapsed rail owns a separate 20-root Default window and preserves its server order.
+- Provides a compact fixed search/mode toolbar. Search uses the bounded backend's JavaScript-compatible matcher and renders server order; no local full-catalog filter remains.
 - Session cwd remains part of `getSessionFilterFields`, so users can search by path, but cwd is not rendered in any row (desktop, mobile, or Code embedded sidebar). The selected session's cwd is presented in the Chat header instead.
 - Automatically expands ancestors for the current session as parent/tree metadata changes, but arms active-row scrolling only when the canonical `currentSession` selection actually changes. Unrelated `sessions-updated` refreshes must not pull a user-scrolled sidebar back to the active row.
-- Context menu provides archive/unarchive, rename, fork, and delete actions via REST API calls (using stored auth token). Delete confirmation offers a default-off recursive descendant checkbox based on the complete canonical relation graph and stays open with the backend error on failure. Archive opens the analogous confirmation only when archiving a session with descendants; no-descendant archive and all unarchive actions remain one-click. If live refresh removes every descendant while a dialog is open, recursive mode is immediately made ineffective/reset so hidden stale state cannot submit recursion or display a one-session recursive label.
+- Context menu provides archive/unarchive, rename, fork, and delete actions via REST API calls. Delete/archive confirmations use the backend descendant preview's complete recursive count and busy summary, not the partial loaded tree; archive remains one-click when the fetched count is zero, and unarchive remains one-click.
 - Context menu presents `Notify on idle` as an ordinary menu-item row. Its main action controls `once`, while a separate trailing `always` checkbox stops event propagation before selecting/toggling that mode. A persistent Bell icon is outlined while disabled and active for either enabled mode; enablement stays browser-local and asks for browser notification permission without a backend request.
 - Context menu provides pin/unpin without adding a permanent row button; pinned rows carry a small pin indicator with accessible text.
 - Context menu provides move-up/promote-to-root actions for child sessions; frontend error handling preserves backend code/reason details and distinguishes API vs network failures.
@@ -82,12 +87,16 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 - `dragEnabled={false}` keeps all normal selection/search/context-menu behavior but removes draggable row/drop affordances. The mobile full-page `SessionList` and Code's sidebar-only leaf use this because neither exposes a reliable row-drag workflow. `SessionListCore` also disables drag when `(pointer: coarse)` is the primary input and filters touch/pen activations even when drag remains enabled for a mouse.
 - The list scroll container declares `touch-action: pan-y` (`touch-pan-y`), so vertical touch movement belongs to native scrolling from the start rather than briefly entering a drag overlay/state.
 - Pinned sessions remain draggable into workbench panes, but cannot act as sidebar parent/order targets and cannot be reparented/reordered until unpinned; this prevents presentation elevation from being mistaken for a real root parent.
-- Tracks "busy" descendant counts to show activity indicators on collapsed parents
-- Tracks active descendant counts using canonical runtime state (`requesting-model` / `running-tool`) with legacy `busy` fallback; waiting sessions are visible but are not counted as actively busy.
-- Renders state-specific badges in each row: blue `thinking`, purple `tool: <name>` with batch index when available, amber `waiting: sessions|exec|timer`, and no noisy badge for idle sessions. Bare/reason-only `wait` sessions are idle for display.
+- Uses backend recursive/batched active-descendant summaries for lifecycle confirmation and collapsed-parent activity; it never derives completeness from loaded descendants. Active counts use canonical `requesting-model` / `running-tool` state with legacy `busy` fallback, while waiting and queue-only idle sessions are not counted as active.
+- Renders state-specific badges in each row: blue `thinking`, purple `tool: <name>` with batch index when available, amber `waiting: sessions|exec|timer`, and no noisy badge for idle sessions. Bare/reason-only `wait` and queue-only canonical-idle sessions are idle for display.
 - Collapsed sidebar dots also use runtime-state colors (blue model, purple tool, amber waiting) so waiting sessions remain distinguishable when the sidebar is collapsed.
-- Implements progressive disclosure of children with "show more" pagination
-- Implements top-level pagination at 50 items (+50 per click) so flat mode and large root lists stay manageable.
+- Implements server-backed progressive disclosure with opaque child cursors and top-level opaque root continuation (50 rows per click in expanded Sidebar; 20 roots in collapsed rail).
+- Root replay walks pages at the backend's 100-row cap; expanded branches replay in batches of at most 20 parents and 20 rows per page. Reset or any presentation-revision mismatch across root pages, first-page child batches, continuations, or the root-to-branch boundary restarts the entire bounded replay before one atomic publish, including previously requested depths above one server page.
+- Exact misses tombstone the raw requested alias plus cached/current canonical and alias identities. Eligibility is per captured canonical row: a canonical row newer than the request and every alias still present on that row are preserved, while the missing raw alias and aliases removed by the newer row are tombstoned. Root/search HTTP rejects a row when either its ID or any returned alias has a newer tombstone; pruning retains obsolete tombstones until all older in-flight row requests settle.
+- Current/open/idle-watch exact IDs are never truncated: by-ID HTTP and global SSE subscriptions are chunked at 100 while preserving every accepted ID.
+- Even with no exact/structural rows yet, the controller owns one invalidation-only global SSE connection. Each capped subscription owns and replaces one EventSource/reconnect timer, and sibling streams deduplicate versioned invalidation events while legacy events still coalesce.
+- Ordinary collapsed-parent busy badges come from the bounded batch descendant-activity projection over active ancestor paths. Lifecycle dialogs independently reload exact recursive totals/busy previews and clear stale summaries on catalog invalidation.
+- Context-menu relation rows and descendant summary/loading generations are retained only while their menu/dialog owner is active; close, mode/search/focus/ownership change, invalidation refresh, and unmount clear obsolete state.
 - Rename and delete use modal dialogs with confirmation
 - Elapsed time display for busy sessions updates via interval timer
 
@@ -97,7 +106,7 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 - Communicates with the backend via `fetch` to `API_BASE_PATH` endpoints (`/sessions/:id`, `/sessions/:id/fork`, `/sessions/:id/promote`)
 - Drag data (`type: 'session'`) integrates with a `@dnd-kit` `DndContext` higher in the component tree for session reparenting
 - `onSelectSession` and `onKeepSession` callbacks connect to the app's routing/tab management
-- Normal App and embedded sidebar list-data roots each provide the idle-notification hook once, then pass its settings/actions through list wrappers to `SessionListCore`; list presentation mounts never own notification baselines.
+- Normal App and embedded sidebar roots each provide one bounded controller plus one idle-notification observer. Current/open/watch exact IDs stay subscribed even off-page; off-page absence is not deletion, while exact lookup/SSE deletion explicitly removes the row.
 - `onCreateTerminalTab` / `onCreateSession` connect to the app's tab system
 - `data-session-list-scroll-container` attribute is on the internal scrollable list area and is used by `findScrollableParent` to locate the scroll container for auto-scroll behavior
 - `packages/webui/src/sessionRuntimeState.ts` is shared by `SessionListCore`, collapsed sidebar, `ArchitectureView`, `Chat`, and `App` so all WebUI active-count/status behavior uses the same fallback rules.

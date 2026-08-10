@@ -144,9 +144,37 @@ truncating, or ignoring them.
 
 All new server pages use SQLite `BINARY` Session-ID tie order. In-memory
 volatile merges compare UTF-8 bytes, yielding the same ordering for ASCII, BMP,
-and supplementary IDs as SQLite and cursor tuples. Stage C must consume server
-order without re-sorting ties. The legacy `GET /api/sessions` and current
-frontend remain unchanged; Stage B adds no frontend cache or SSE protocol.
+and supplementary IDs as SQLite and cursor tuples.
+
+The current WebUI consumes these fixed queries through a normalized bounded
+cache. Ordinary App, embedded Sidebar, collapsed rail, and Architecture mounts
+never bootstrap through legacy `GET /api/sessions`. Sidebar keeps at most the
+current root window, loaded child windows, forced focus paths, explicit
+open/watch rows, and current search results; pages retain server order without
+client tie sorting. Architecture owns its global summary plus paged real forest
+and agent-filtered windows. Lifecycle dialogs fetch recursive count/busy
+summaries from the descendant preview route rather than traversing a partial
+client tree.
+
+The global Session SSE remains a catalog invalidation stream and additionally
+accepts a capped repeated exact-ID watch set. It sends immediate bounded list
+projections and later state/deletion deltas only for those IDs; no all-row SSE
+payload or browser-resident complete mirror is introduced. Catalog invalidation
+refetches the current root/expanded windows through the existing fixed
+1-second-visible/10-second-hidden non-overlap scheduler. Independent request
+generations prevent stale root, child, exact, or search responses from replacing
+newer windows. Legacy `GET /api/sessions` remains an external compatibility API.
+
+Root and expanded-branch windows are replayed atomically through backend page
+caps (100 roots; 20 children and 20 parents per child request). A cursor reset
+or any presentation-revision mismatch across root pages, child batches, or the
+root-to-branch boundary restarts the whole bounded replay from page one, including requested depths
+beyond one page, before any structural publish. Per-row in-memory SSE epochs and
+tombstones prevent older HTTP responses from overwriting or reviving newer
+deltas. Exact current/open/watch sets are chunked rather than truncated, for
+both by-ID HTTP and global SSE subscriptions. Ordinary busy-descendant badges
+use a bounded batch active-ancestor projection; destructive dialogs retain exact
+recursive summaries.
 
 ## Design decisions
 
@@ -186,3 +214,12 @@ The canonical tie-break for these new bounded APIs is SQLite `BINARY` ordering
 of exact Session IDs, mirrored byte-for-byte by Main's UTF-8 comparator.
 Sidebar pinned elevation and Architecture's real per-agent forest are distinct
 presentation contracts; neither mutates canonical parent ownership.
+
+[2026-08-10] Normal WebUI list presentation is bounded and mode-aware. It must
+not materialize the complete Session catalog merely to render Sidebar,
+collapsed rail, Architecture, focus/open/watch state, search, or lifecycle
+confirmation. Server order is authoritative; client caches retain only loaded
+windows and exact context, distinguish explicit deletion from off-page absence,
+and refresh invalidated windows without resetting selection or scroll. SSE may
+push bounded deltas for explicitly subscribed rows plus catalog invalidation,
+but must not recreate an all-Session broadcast mirror.

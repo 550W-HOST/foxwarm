@@ -129,10 +129,10 @@ export type SessionListProjectionBatchDto = {
   revision: string;
 };
 
-export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 4, {
+export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 5, {
   getSession: rpcMethod<{ sessionId: string }, { session: SessionRuntimeSessionDto | null }>(),
   listSessions: rpcMethod<{ limit?: number; offset?: number }, { sessions: SessionRuntimeSessionDto[]; total: number }>(),
-  getSessionListProjections: rpcMethod<{ sessionIds: string[]; includeVolatile?: boolean }, SessionListProjectionBatchDto>(),
+  getSessionListProjections: rpcMethod<{ sessionIds: string[]; includeVolatile?: boolean; currentOwnersOnly?: boolean }, SessionListProjectionBatchDto>(),
   getHistory: rpcMethod<{ sessionId: string }, SessionRuntimeHistoryDto | null>(),
   enqueue: rpcMethod<{ sessionId: string; item: QueueItem }, { accepted: true }>(),
   submitAndRun: rpcMethod<{ sessionId: string; item: QueueItem }, SessionWorkerIngressResult>(),
@@ -441,7 +441,9 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
     },
     getSessionListProjections(input) {
       if (!Array.isArray(input.sessionIds) || input.sessionIds.length > 200
-        || input.sessionIds.some(id => typeof id !== 'string' || !id || id.length > 512)) {
+        || input.sessionIds.some(id => typeof id !== 'string' || !id || id.length > 512)
+        || (input.includeVolatile !== undefined && typeof input.includeVolatile !== 'boolean')
+        || (input.currentOwnersOnly !== undefined && typeof input.currentOwnersOnly !== 'boolean')) {
         throw new RpcError('SESSION_LIST_PROJECTION_INVALID', 'sessionIds must contain at most 200 bounded Session IDs.');
       }
       const requested = new Set(input.sessionIds);
@@ -470,6 +472,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         const ownership = ownerships.get(id); const entry = entries.get(id);
         const projection = ownership && entry?.projection && !entry.stale && ownership.generation === entry.generation
           && ownership.incarnationId === entry.incarnationId ? entry.projection : undefined;
+        if (input.currentOwnersOnly && ownership && !projection) continue;
         sessions.push(overlaySessionWorkerProjection(buildSessionRuntimeSessionDto(session), projection));
       }
       return { sessions, revision: `${sessionCatalogStore.getPresentationRevision()}:${volatileSequence}` };

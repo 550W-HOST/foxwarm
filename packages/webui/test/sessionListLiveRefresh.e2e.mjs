@@ -7,7 +7,7 @@ const baseUrl = process.env.FOXWARM_E2E_URL || 'http://localhost:3002'
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const tokenFile = process.env.FOXWARM_E2E_TOKEN_FILE || new URL('../../../test/state/token', import.meta.url)
 
-test('Sidebar keeps a newly forked child when an older global-list response arrives last', async () => {
+test('Sidebar keeps a newly forked child when an older bounded-window response arrives last', async () => {
   const token = (await readFile(tokenFile, 'utf8')).trim()
   const browser = await puppeteer.launch({
     executablePath: chromiumPath,
@@ -21,15 +21,23 @@ test('Sidebar keeps a newly forked child when an older global-list response arri
     window.__foxwarmDelayNextSessionsResponse = false
     window.__foxwarmDelayedSessionsResponseCaptured = false
     window.__foxwarmDelayedSessionsIds = []
+    window.__foxwarmLegacyGlobalGets = 0
+    window.__foxwarmBoundedGets = 0
     window.fetch = async (input, init) => {
       const response = await nativeFetch(input, init)
       const url = new URL(typeof input === 'string' ? input : input.url, location.href)
       const method = (init?.method || (typeof input === 'string' ? 'GET' : input.method) || 'GET').toUpperCase()
-      if (window.__foxwarmDelayNextSessionsResponse && method === 'GET' && url.pathname.endsWith('/api/sessions')) {
+      if (method === 'GET' && url.pathname.endsWith('/api/sessions')) window.__foxwarmLegacyGlobalGets++
+      if (method === 'GET' && url.pathname.endsWith('/api/session-list/sidebar')) window.__foxwarmBoundedGets++
+      if (window.__foxwarmDelayNextSessionsResponse && method === 'GET' && url.pathname.endsWith('/api/session-list/sidebar')) {
         window.__foxwarmDelayNextSessionsResponse = false
         const body = await response.clone().text()
         try {
-          window.__foxwarmDelayedSessionsIds = (JSON.parse(body).sessions || []).map(session => session.id)
+          const payload = JSON.parse(body)
+          window.__foxwarmDelayedSessionsIds = [
+            ...(payload.sessions || []).map(session => session.id),
+            ...(payload.children || []).flatMap(group => (group.sessions || []).map(session => session.id)),
+          ]
         } catch {}
         window.__foxwarmDelayedSessionsResponseCaptured = true
         await new Promise(resolve => setTimeout(resolve, 800))
@@ -100,6 +108,8 @@ test('Sidebar keeps a newly forked child when an older global-list response arri
     assert.equal(await page.evaluate(sessionId => (
       !!document.querySelector(`[data-session-id="${CSS.escape(sessionId)}"]`)
     ), childSessionId), true)
+    assert.equal(await page.evaluate(() => window.__foxwarmLegacyGlobalGets), 0, 'normal App never GETs the legacy global Session list')
+    assert.ok(await page.evaluate(() => window.__foxwarmBoundedGets) >= 2, 'bootstrap and invalidation use bounded sidebar windows')
   } finally {
     if (childSessionId) {
       await page.evaluate(async sessionId => {

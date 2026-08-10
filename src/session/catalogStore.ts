@@ -977,6 +977,31 @@ export class SessionCatalogStore {
       rows: rows.map(projectionFromSqlRow) };
   }
 
+  listBusySessionIds(): string[] {
+    return (this.database().prepare('SELECT session_id FROM session_catalog WHERE busy=1 ORDER BY session_id').all() as Array<{ session_id: string }>).map(row => row.session_id);
+  }
+
+  getBusyDescendantCounts(rootIds: readonly string[], busyIds: readonly string[]): Map<string, number> {
+    const roots = [...new Set(rootIds)].slice(0, 100);
+    const activeIds = [...new Set(busyIds)];
+    if (!roots.length) return new Map();
+    if (!activeIds.length) return new Map(roots.map(id => [id, 0]));
+    const activeUnion = activeIds.map(() => 'SELECT ?').join(' UNION ');
+    const rows = this.database().prepare(`WITH RECURSIVE active(session_id) AS (${activeUnion}), ancestors(active_id,ancestor_id,trail) AS (
+      SELECT active.session_id,c.parent_session_id,'|'||hex(active.session_id)||'|' FROM active
+      JOIN session_catalog c ON c.session_id=active.session_id WHERE c.parent_session_id IS NOT NULL AND c.parent_session_id<>active.session_id
+      UNION ALL
+      SELECT ancestors.active_id,parent.parent_session_id,ancestors.trail||hex(parent.session_id)||'|'
+      FROM ancestors JOIN session_catalog parent ON parent.session_id=ancestors.ancestor_id
+      WHERE parent.parent_session_id IS NOT NULL AND parent.parent_session_id<>ancestors.active_id
+        AND instr(ancestors.trail,'|'||hex(parent.session_id)||'|')=0
+    ) SELECT ancestor_id,count(DISTINCT active_id) busy FROM ancestors
+      WHERE ancestor_id IN (${roots.map(() => '?').join(',')}) GROUP BY ancestor_id`).all(...activeIds, ...roots) as Array<{ ancestor_id: string; busy: number }>;
+    const result = new Map(roots.map(id => [id, 0]));
+    for (const row of rows) result.set(row.ancestor_id, Number(row.busy || 0));
+    return result;
+  }
+
   filterDescendantIds(sessionId: string, candidateIds: readonly string[]): string[] {
     const ids = [...new Set(candidateIds)].slice(0, 200); if (!ids.length) return [];
     return (this.database().prepare(`WITH RECURSIVE subtree(session_id) AS (
