@@ -244,6 +244,120 @@ test('all provider protocols hydrate canonical image refs only in outbound paylo
   }
 });
 
+test('all provider protocols filter historical reasoning only for a proven different concrete model', async t => {
+  const originalPost = axios.post;
+  const destinationModelId = 'fixture/destination';
+  const history: Message[] = [
+    { role: 'user', parts: [{ text: 'history start' }], __meta: { timestamp: 1, seq: 1 } },
+    {
+      role: 'model',
+      parts: [
+        { thinking: 'same thinking', providerMeta: { thinkingSummaries: ['same summary'], encryptedThinking: 'same encrypted', signature: 'same signature' } },
+        { text: 'same text' },
+      ],
+      providerMeta: { providerSpecificFields: { reasoning_signature: 'same opaque' }, sourceModelId: destinationModelId },
+      __meta: { modelId: destinationModelId, timestamp: 2, seq: 2, usage: { cachedTokens: 0, inputTokens: 1, outputTokens: 1, reasoningTokens: 1 } },
+    },
+    { role: 'user', parts: [{ text: 'different follows' }] },
+    {
+      role: 'model',
+      parts: [
+        { thinking: 'different thinking', providerMeta: { thinkingSummaries: ['different summary'], encryptedThinking: 'different encrypted', signature: 'different signature' } },
+        { text: 'different text' },
+      ],
+      // Deliberately conflicts with the authoritative message provenance: a
+      // different message model must remove the whole opaque metadata object.
+      providerMeta: { providerSpecificFields: { reasoning_signature: 'different opaque' }, sourceModelId: destinationModelId },
+      __meta: { modelId: 'other/old-model', timestamp: 3, seq: 3 },
+    },
+    { role: 'user', parts: [{ text: 'legacy follows' }] },
+    {
+      role: 'model',
+      parts: [
+        { thinking: 'legacy thinking', providerMeta: { thinkingSummaries: ['legacy summary'], encryptedThinking: 'legacy encrypted', signature: 'legacy signature' } },
+        { text: 'legacy text' },
+      ],
+      providerMeta: { providerSpecificFields: { reasoning_signature: 'legacy opaque' }, sourceModelId: destinationModelId },
+    },
+    { role: 'model', parts: [{ thinking: 'pure different thinking', providerMeta: { thinkingSummaries: ['pure different summary'], encryptedThinking: 'pure different encrypted', signature: 'pure different signature' } }], __meta: { modelId: 'other/old-model' } },
+    {
+      role: 'model',
+      parts: [
+        { thinking: 'mixed different thinking', providerMeta: { thinkingSummaries: ['mixed different summary'], encryptedThinking: 'mixed different encrypted', signature: 'mixed different signature' } },
+        { text: 'mixed different text' },
+        { functionCall: { id: 'call_filter', name: 'read', args: { filePath: 'README.md' } } },
+      ],
+      providerMeta: { providerSpecificFields: { reasoning_signature: 'mixed different opaque' }, sourceModelId: destinationModelId },
+      __meta: { modelId: 'other/old-model' },
+    },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'call_filter', name: 'read', response: { output: 'tool output' } } }] },
+  ];
+  const originalHistory = structuredClone(history);
+  const captured = new Map<string, any>();
+  const models = {
+    responses: { providerKey: 'fixture', providerType: 'openai-responses', baseUrl: 'https://fixture.example', apiKey: '', model: 'destination', extraFields: {}, extraHeaders: {} },
+    chat: { providerKey: 'fixture', providerType: 'openai-completions', baseUrl: 'https://fixture.example', apiKey: '', model: 'destination', extraFields: {}, extraHeaders: {} },
+    anthropic: { providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'destination', extraFields: {}, extraHeaders: {} },
+  } as const;
+
+  try {
+    await t.test('OpenAI Responses', async () => {
+      (axios as any).post = async (_url: string, data: any) => {
+        captured.set('responses', data);
+        return { status: 200, statusText: 'OK', headers: {}, data: makeResponsesStream() };
+      };
+      await requestLlmOnce({ contents: history, systemPrompt: '', modelEntryOverride: models.responses as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    });
+    await t.test('OpenAI Chat Completions', async () => {
+      (axios as any).post = async (_url: string, data: any) => {
+        captured.set('chat', data);
+        return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream() };
+      };
+      await requestLlmOnce({ contents: history, systemPrompt: '', modelEntryOverride: models.chat as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    });
+    await t.test('Anthropic Messages', async () => {
+      (axios as any).post = async (_url: string, data: any) => {
+        captured.set('anthropic', data);
+        return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }] } };
+      };
+      await requestLlmOnce({ contents: history, systemPrompt: '', modelEntryOverride: models.anthropic as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    });
+
+    assert.deepEqual(history, originalHistory, 'attempt filtering must not mutate caller or persisted history');
+    for (const payload of captured.values()) {
+      const serialized = JSON.stringify(payload);
+      assert.equal(serialized.includes('__meta'), false);
+      assert.equal(serialized.includes('same thinking') || serialized.includes('same summary'), true);
+      assert.equal(serialized.includes('legacy thinking') || serialized.includes('legacy summary'), true);
+      assert.equal(serialized.includes('different thinking'), false);
+      assert.equal(serialized.includes('different summary'), false);
+      assert.equal(serialized.includes('different encrypted'), false);
+      assert.equal(serialized.includes('different signature'), false);
+      assert.equal(serialized.includes('different opaque'), false);
+      assert.equal(serialized.includes('pure different'), false);
+      assert.equal(serialized.includes('mixed different thinking'), false);
+      assert.equal(serialized.includes('different text'), true);
+      assert.equal(serialized.includes('mixed different text'), true);
+      assert.equal(serialized.includes('call_filter'), true);
+      assert.equal(serialized.includes('tool output'), true);
+    }
+
+    const responseReasoning = captured.get('responses').input.filter((item: any) => item.type === 'reasoning');
+    assert.deepEqual(responseReasoning.map((item: any) => item.encrypted_content), ['same encrypted', 'legacy encrypted']);
+
+    const chatAssistants = captured.get('chat').messages.filter((message: any) => message.role === 'assistant');
+    assert.equal(chatAssistants.length, 4, 'the known-different reasoning-only model message is omitted');
+    assert.deepEqual(chatAssistants.filter((message: any) => message.reasoning_content).map((message: any) => message.reasoning_content), ['same thinking', 'legacy thinking']);
+    assert.deepEqual(chatAssistants.filter((message: any) => message.provider_specific_fields).map((message: any) => message.provider_specific_fields.reasoning_signature), ['same opaque', 'legacy opaque']);
+    assert.equal(chatAssistants.some((message: any) => Array.isArray(message.tool_calls) && message.tool_calls[0]?.id === 'call_filter'), true);
+
+    const anthropicBlocks = captured.get('anthropic').messages.flatMap((message: any) => Array.isArray(message.content) ? message.content : []);
+    assert.deepEqual(anthropicBlocks.filter((block: any) => block.type === 'thinking').map((block: any) => block.signature), ['same signature', 'legacy signature']);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('OpenAI Responses and Chat Completions preserve whole output usage and map official reasoning components', async t => {
   const originalPost = axios.post;
   const responsesModel = {
@@ -1145,7 +1259,7 @@ test('chat propagates final request failure without appending fake Error model t
   }
 });
 
-test('chat strips session message __meta, including context block metadata, before provider request', async () => {
+test('chat journals only historical concrete model provenance and strips all __meta from provider payloads', async () => {
   const originalPost = axios.post;
   let capturedBody: any = null;
   const session = createOpenAITestSession('context_block_meta_strip_session');
@@ -1155,6 +1269,10 @@ test('chat strips session message __meta, including context block metadata, befo
     parts: [{ text: '[CTX-BLOCK L1 B#3 raw#1-#2] summary' }],
     __meta: {
       timestamp: 123,
+      seq: 7,
+      modelId: 'anthropic/claude-sonnet-4-5',
+      virtualModelKey: 'fallback',
+      usage: { cachedTokens: 1, inputTokens: 2, outputTokens: 3, reasoningTokens: 1 },
       contextBlock: {
         id: 3,
         level: 1,
@@ -1181,7 +1299,7 @@ test('chat strips session message __meta, including context block metadata, befo
   };
 
   try {
-    await chat(null, session, 0, {
+    const result = await chat(null, session, 0, {
       appendMessage: async (message: Message) => { session.history.push(message); },
       toolDefinitions: [],
       notifySessionEvents: false,
@@ -1193,6 +1311,15 @@ test('chat strips session message __meta, including context block metadata, befo
       content: '[CTX-BLOCK L1 B#3 raw#1-#2] summary',
     }]);
     assert.equal(JSON.stringify(capturedBody).includes('contextBlock'), false);
+    assert.equal(JSON.stringify(capturedBody).includes('__meta'), false);
+    const reconstructed = await reconstructLlmRequest(result.llmRequestId!);
+    assert.equal(reconstructed.completeness, 'complete');
+    if (reconstructed.completeness === 'complete') {
+      assert.deepEqual(reconstructed.messages[0].__meta, { modelId: 'anthropic/claude-sonnet-4-5' });
+      assert.equal(JSON.stringify(reconstructed.messages[0]).includes('contextBlock'), false);
+      assert.equal(JSON.stringify(reconstructed.messages[0]).includes('reasoningTokens'), false);
+      assert.equal(JSON.stringify(reconstructed.messages[0]).includes('virtualModelKey'), false);
+    }
   } finally {
     (axios as any).post = originalPost;
   }

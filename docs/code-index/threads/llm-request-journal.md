@@ -21,10 +21,10 @@ The journal uses `state/llm-request-journal.sqlite` as its sole runtime authorit
 ## Request flow
 
 1. `requestLlmOnce` repairs canonical tool-call adjacency before provider hydration.
-2. It content-addresses the system prompt, exact tool schema, and canonical internal messages.
+2. It content-addresses the system prompt, exact tool schema, and canonical internal messages. Normal chat history includes only the narrow historical concrete `modelId` provenance needed to reconstruct attempt-specific reasoning compatibility decisions; unrelated `__meta` remains excluded.
 3. It durably appends the request manifest before any provider send.
 4. Each concrete retry/failover attempt appends its start record before `axios.post`.
-5. The provider-specific serializer, image hydration, extra fields, sanitation, headers, and optional compression remain ordinary provider-boundary behavior.
+5. Clone-only image hydration and other provider-boundary preparation remain outside the canonical manifest. Immediately before provider serialization, the selected concrete attempt filters historical model-specific reasoning on its clone; extra fields, sanitation, headers, and optional compression remain ordinary provider-boundary behavior. Different failover attempts may therefore have different semantic payload hashes from the same canonical manifest; the filtering contract is [D-model-routing-history-reasoning-compatibility](./model-routing.md#d-model-routing-history-reasoning-compatibility).
 6. A normalized attempt result is appended after success/failure/abort.
 7. A successful result carries its request identity back through `chat` to assistant history metadata.
 

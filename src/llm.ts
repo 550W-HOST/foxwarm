@@ -1099,6 +1099,61 @@ export function fixToolCalls(contents: Message[]): Message[] {
     return fixed as Message[];
 }
 
+function getHistoricalConcreteModelId(message: Message): string | undefined {
+    const modelId = message.role === 'model' ? message.__meta?.modelId : undefined;
+    return typeof modelId === 'string' && modelId.length > 0 && modelId === modelId.trim()
+        ? modelId
+        : undefined;
+}
+
+/**
+ * Build an attempt-local provider history. Internal message metadata is never
+ * serialized, while model-specific reasoning artifacts are retained only when
+ * their concrete source is absent/legacy or exactly matches this destination.
+ */
+function prepareHistoryForConcreteModel(contents: Message[], destinationModelId: string): Message[] {
+    const prepared: Message[] = [];
+
+    for (const original of contents) {
+        const sourceModelId = getHistoricalConcreteModelId(original);
+        const { __meta: _internalMeta, ...withoutInternalMeta } = original;
+        if (!sourceModelId || sourceModelId === destinationModelId) {
+            prepared.push(withoutInternalMeta);
+            continue;
+        }
+
+        const { providerMeta: _messageProviderMeta, ...withoutProviderMeta } = withoutInternalMeta;
+        const parts = withoutProviderMeta.parts
+            .map(part => {
+                const { thinking: _thinking, providerMeta, ...rest } = part;
+                if (!providerMeta) return rest;
+                const {
+                    thinkingSummaries: _thinkingSummaries,
+                    encryptedThinking: _encryptedThinking,
+                    signature: _signature,
+                    ...remainingProviderMeta
+                } = providerMeta;
+                return Object.keys(remainingProviderMeta).length > 0
+                    ? { ...rest, providerMeta: remainingProviderMeta }
+                    : rest;
+            })
+            .filter(part => Object.keys(part).length > 0);
+
+        const legacyContent = (withoutProviderMeta as Message & { content?: unknown }).content;
+        const hasLegacyContent = typeof legacyContent === 'string'
+            ? legacyContent.length > 0
+            : Array.isArray(legacyContent)
+            ? legacyContent.length > 0
+            : legacyContent !== undefined && legacyContent !== null;
+        if (parts.length === 0 && !hasLegacyContent) {
+            continue;
+        }
+        prepared.push({ ...withoutProviderMeta, parts });
+    }
+
+    return prepared;
+}
+
 /**
  * Convert internal message format to Anthropic/Minimax format
  * Internal format: { role: 'user'|'model'|'tool', parts: [{ text, functionCall, functionResponse }] }
@@ -1734,7 +1789,11 @@ export async function chat(
     // Convert to appropriate format based on provider
     const contentsForLlm = session.history
         .filter(isModelVisibleMessage)
-        .map(({ __meta, ...msg }: Message) => msg);
+        .map((message: Message): Message => {
+            const { __meta, ...msg } = message;
+            const modelId = getHistoricalConcreteModelId(message);
+            return modelId ? { ...msg, __meta: { modelId } } : msg;
+        });
     const availableToolDefinitions = options?.toolDefinitions
         ?? tools.modelFacingDefinitions;
     const previousPromptCacheKey = session.promptCacheKey;
@@ -1917,6 +1976,7 @@ function buildConcreteRequestPlan(options: {
     const apiKey = modelEntry?.apiKey || '';
     const modelName = modelEntry?.model || '';
     const modelId = getModelIdForMetadata(modelEntry, modelKey);
+    const providerContents = prepareHistoryForConcreteModel(fixedContents, modelId);
     const openaiRequestApi = getOpenAIRequestApi(providerType);
     const useOpenAIResponsesApi = openaiRequestApi === 'responses';
     const useOpenAIChatCompletionsApi = openaiRequestApi === 'chat-completions';
@@ -1938,7 +1998,7 @@ function buildConcreteRequestPlan(options: {
     let data: any;
 
     if (useOpenAIResponsesApi) {
-        messages = convertToOpenAIResponsesFormatProvider(fixedContents);
+        messages = convertToOpenAIResponsesFormatProvider(providerContents);
         url = `${baseUrl}/responses`;
         headers = {
             'Content-Type': 'application/json',
@@ -1972,7 +2032,7 @@ function buildConcreteRequestPlan(options: {
             stream: true,
         };
     } else if (useOpenAIChatCompletionsApi) {
-        messages = convertToOpenAIFormatProvider(fixedContents, modelId);
+        messages = convertToOpenAIFormatProvider(providerContents, modelId);
         url = `${baseUrl}/chat/completions`;
         headers = {
             'Content-Type': 'application/json',
@@ -2002,7 +2062,7 @@ function buildConcreteRequestPlan(options: {
     } else {
         // Preserve current custom-provider behavior: any concrete provider type
         // not recognized as OpenAI-compatible uses Anthropic serialization.
-        messages = convertToAnthropicFormat(fixedContents, modelEntry);
+        messages = convertToAnthropicFormat(providerContents, modelEntry);
         url = `${baseUrl}/v1/messages`;
         headers = {
             'Content-Type': 'application/json',

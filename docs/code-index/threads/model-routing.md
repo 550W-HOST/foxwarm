@@ -29,7 +29,7 @@ The resolved virtual model reports:
 
 1. `requestLlmOnce` resolves one models-config snapshot and one prompt-cache routing key for the entire outer request.
 2. A concrete model uses its resolved entry directly. A virtual model selects one concrete target for the current attempt.
-3. Every outer attempt rebuilds the selected leaf's URL, credentials, headers, payload, request compression, provider serializer, stream collector, and response parser.
+3. Every outer attempt rebuilds the selected leaf's URL, credentials, headers, payload, request compression, provider serializer, stream collector, and response parser. Historical model reasoning is compatibility-filtered against that attempt's canonical concrete destination.
 4. A successful result records the concrete provider-qualified model ID. The session's selected model remains the virtual key.
 5. Retry callbacks retain the compatibility `maxRetries` field, whose value is the total attempt limit. The default total attempt limit is six.
 
@@ -124,3 +124,9 @@ A provider success requires non-whitespace assistant content or a tool call. Rea
 ### D-model-routing-concrete-attribution
 
 Configured selection surfaces retain the virtual key. Successful results and provider-generated assistant history record the canonical concrete Foxwarm leaf that actually succeeded in the existing `modelId`; when and only when the resolved route was virtual, they also record its resolved models-config key as optional `virtualModelKey`. Resolve that key at routing time rather than inferring it later from mutable session selection. Do not substitute upstream vendor-reported model aliases, duplicate the concrete identity under a new field, or annotate user, tool, synthetic, failed, or legacy messages.
+
+### D-model-routing-history-reasoning-compatibility
+
+[2026-08-11] Provider-generated historical reasoning artifacts are sent only when the historical model message has no concrete source identity (legacy/unknown) or its persisted canonical concrete `modelId` exactly matches the selected concrete destination for that physical attempt. A proven exact mismatch removes thinking text, reasoning summaries/encrypted content/signatures, and message-scoped opaque provider fields from an attempt-local clone while preserving ordinary text, system content, images, tool calls, tool results, and their ordering. A model message left with reasoning alone is omitted from that attempt payload.
+
+The comparison is per physical attempt and never uses the configured virtual key, session selection, provider type, upstream aliases, or inferred legacy identity. Canonical session history remains unchanged, and internal message metadata is not serialized to providers.
