@@ -33,7 +33,7 @@ Provides a managed session lifecycle where one "owner" session can take exclusiv
 | `getManagedSessionStateForTests(sessionId)` | ~248 | Fetches managed state for test assertions |
 | `appendStubUserMessage(session, parts)` | ~test:9 | Test helper: appends a user message to session history |
 | `appendStubModelMessage(session, text)` | ~test:15 | Test helper: appends a model message to session history |
-| `flattenText(parts)` | ~test:22 | Test helper: joins message parts into pipe-delimited string |
+| `flattenUserHistoryText(session)` | ~test:22 | Test helper: reads separately persisted managed-step user rows in canonical order |
 | `makeId(prefix)` | ~test(child):8 | Test helper: generates unique session IDs |
 | `createBaseSession(id, model)` | ~test(child):12 | Test helper: builds a minimal Session object |
 | `ensureSession(id, model)` | ~test(child):26 | Test helper: creates/resets a session with given model |
@@ -54,7 +54,7 @@ Provides a managed session lifecycle where one "owner" session can take exclusiv
 
 - **Lease-based ownership**: Only one owner can manage a session at a time; stale leases (expired or owner deleted) are automatically reclaimed on next open attempt.
 - **Inbox interception**: When a session is managed, incoming queue items (except compact operations) are diverted into `pendingInbox` rather than processed immediately.
-- **Atomic step execution**: `managedSessionStep` assembles manager input and pending inbox items in configurable order (`before`/`after`/`ignore`), prepends them to the session queue, triggers processing, and returns new messages produced.
+- **Atomic step execution**: `managedSessionStep` assembles manager input and pending inbox items in configurable order (`before`/`after`/`ignore`), prepends them to the session queue, triggers processing, and returns new messages produced. The newly activated `currentStep` runs until the runner publishes a matching `lastStepResult.stepId`; idle/tool yield then blocks automatic reentry while the controller consumes the result. Each inbox/manager QueueItem remains its own canonical user row in the requested order rather than being concatenated for the provider.
 - **Concurrency guard**: An in-memory `activeManagedSteps` set prevents concurrent steps on the same session.
 - **Revision tracking**: Each inbox arrival and step increments the revision counter; callers can pass `expectedRevision` for optimistic concurrency control.
 - **Owner notification**: When inbox items arrive, the owner session is notified via a system queue event.

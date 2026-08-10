@@ -88,6 +88,23 @@ async function withLocalHost(
   } finally { store.close(); await fs.remove(root); }
 }
 
+function injectWorkerReleasePersistenceFailure(host: SessionWorkerHost, turnHost: any, message: string): () => number {
+  const realUpdateBusy = turnHost.updateSessionBusyState.bind(turnHost);
+  let releaseAttempts = 0;
+  turnHost.updateSessionBusyState = async (session: Session, busy: boolean) => {
+    if (busy) return realUpdateBusy(session, true);
+    releaseAttempts += 1;
+    const realPersistOwner = (host as any).persistOwner;
+    (host as any).persistOwner = async () => { throw new Error(message); };
+    try {
+      return await realUpdateBusy(session, false);
+    } finally {
+      (host as any).persistOwner = realPersistOwner;
+    }
+  };
+  return () => releaseAttempts;
+}
+
 test('worker swallows one ambiguous final-delivery failure after committed response and error finals', async () => {
   const initial = baseSession('worker-final-ambiguity'); let deliveryCalls = 0; let chatCalls = 0; const outcomes: string[] = [];
   let latestProjection: any; const deliveryRecords: any[] = [];
@@ -500,6 +517,50 @@ test('source-less pre-final compact fatal skips history reminder and delivery br
       assert.equal(session.history.some(message => JSON.stringify(message.parts).includes('Automatic Worker compaction failed')), false);
     }, true, undefined, async () => { deliveries += 1; });
   } finally { (llm as any).chat = originalChat; (sessionHistory as any).processSessionCompactionRequest = originalCompact; }
+});
+
+test('Worker stop-owned release failure restores authority and is not retried by outer cleanup', async () => {
+  const initial = baseSession('worker-stop-release-failure');
+  const originalChat = llm.chat;
+  (llm as any).chat = async (_parts: any, activeSession: Session, _iteration: number, options: any) => {
+    activeSession.stopping = true;
+    await options.appendMessage({ role: 'model', parts: [{ text: 'stop before release' }] });
+    return { text: 'stop before release' };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, session, turnHost, readDurable }) => {
+      const releaseAttempts = injectWorkerReleasePersistenceFailure(host, turnHost, 'worker stop release rejected');
+      store.enqueueIntent(initial.id, 'worker-stop-release', 'enqueue', {
+        type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'stop' }],
+      });
+      await assert.rejects(() => host.runPending(8), /worker stop release rejected/);
+      assert.equal(releaseAttempts(), 1);
+      assert.equal(session.busy, true);
+      assert.equal(readDurable().busy, true);
+    }, true, undefined, async () => {});
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('Worker fenced turn-owned release failure restores authority and is not retried by outer cleanup', async () => {
+  const initial = baseSession('worker-fenced-release-failure');
+  const originalChat = llm.chat;
+  (llm as any).chat = async () => {
+    const error = new Error('worker fenced semantic failure') as Error & { code: string };
+    error.code = 'SESSION_WORKER_AUTO_COMPACTION_FATAL';
+    throw error;
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, session, turnHost, readDurable }) => {
+      const releaseAttempts = injectWorkerReleasePersistenceFailure(host, turnHost, 'worker fenced release rejected');
+      store.enqueueIntent(initial.id, 'worker-fenced-release', 'enqueue', {
+        type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'fenced' }],
+      });
+      await assert.rejects(() => host.runPending(8), /worker fenced release rejected/);
+      assert.equal(releaseAttempts(), 1);
+      assert.equal(session.busy, true);
+      assert.equal(readDurable().busy, true);
+    }, true, undefined, async () => {});
+  } finally { (llm as any).chat = originalChat; }
 });
 
 test('explicit awaited compact rejects busy or queued exact owners instead of waiting', async () => {

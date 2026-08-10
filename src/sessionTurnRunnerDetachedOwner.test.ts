@@ -125,6 +125,167 @@ test('detached exact owner completes canonical foreground provider turn', async 
   }
 });
 
+test('one owned processor iterates many source turns with fresh TURN_IDs and one busy claim/release', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_runner_many_sources_${Date.now()}`, 'unused');
+  session.queue = Array.from({ length: 128 }, (_, index) => ({
+    type: 'user' as const,
+    source: {
+      platform: 'qqbot', channelId: 'qq', channelUserId: `c2c:user-${index}`,
+      conversationId: `c2c:user-${index}`, qqbotMessageId: `message-${index}`,
+    },
+    parts: [{ text: `turn-${index}` }],
+  }));
+  const events: string[] = [];
+  const effects = createEffects(session, events);
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
+  const originalChat = llm.chat;
+  const turnIds: string[] = [];
+  (llm as any).chat = async (parts: any, _owner: Session, _iteration: number, options: any) => {
+    assert.equal(parts, null);
+    turnIds.push(options.turnId);
+    await options.appendMessage({ role: 'model', parts: [{ text: `done-${turnIds.length}` }] });
+    return { text: `done-${turnIds.length}` };
+  };
+
+  try {
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+    assert.equal(turnIds.length, 128);
+    assert.equal(new Set(turnIds).size, 128);
+    assert.equal(session.history.length, 256);
+    assert.equal(session.queue.length, 0);
+    assert.equal(session.busy, false);
+    assert.equal(events.filter(event => event.startsWith('state:')).length, 2, 'one busy claim and one release own all turns');
+  } finally {
+    (llm as any).chat = originalChat;
+  }
+});
+
+test('one owned processor sequences compact turn compact without another busy claim', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_runner_compact_turn_compact_${Date.now()}`, 'unused');
+  session.queue = [
+    { type: 'compact-commit' },
+    { type: 'user', parts: [{ text: 'between compacts' }] },
+    { type: 'compact-commit' },
+  ];
+  const events: string[] = [];
+  let compactApplies = 0;
+  const effects = createEffects(session, events);
+  const host = new LocalSessionTurnHost(effects, session, {
+    applyCompletedCompactJob: async () => { compactApplies += 1; return true; },
+  });
+  const runner = new SessionTurnRunner(host);
+  const originalChat = llm.chat;
+  (llm as any).chat = async (parts: any, _owner: Session, _iteration: number, options: any) => {
+    assert.equal(parts, null);
+    assert.equal(compactApplies, 1, 'the trailing compact remains an outer action until this turn completes');
+    await options.appendMessage({ role: 'model', parts: [{ text: 'between done' }] });
+    return { text: 'between done' };
+  };
+
+  try {
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+    assert.equal(compactApplies, 2);
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'model']);
+    assert.equal(events.filter(event => event.startsWith('state:')).length, 2);
+    assert.equal(session.busy, false);
+  } finally {
+    (llm as any).chat = originalChat;
+  }
+});
+
+test('retry and a different-source queued turn share ownership but receive fresh TURN_IDs', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_runner_retry_then_queue_${Date.now()}`, 'unused');
+  session.queue = [{
+    type: 'user',
+    source: { platform: 'qqbot', channelId: 'qq', channelUserId: 'c2c:later', conversationId: 'c2c:later', qqbotMessageId: 'later-message' },
+    parts: [{ text: 'later source turn' }],
+  }];
+  const events: string[] = [];
+  const effects = createEffects(session, events);
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
+  const originalChat = llm.chat;
+  const turnIds: string[] = [];
+  (llm as any).chat = async (parts: any, _owner: Session, _iteration: number, options: any) => {
+    assert.equal(parts, null);
+    turnIds.push(options.turnId);
+    await options.appendMessage({ role: 'model', parts: [{ text: `result-${turnIds.length}` }] });
+    return { text: `result-${turnIds.length}` };
+  };
+
+  try {
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionRetry(session.id));
+    assert.equal(turnIds.length, 2);
+    assert.notEqual(turnIds[0], turnIds[1]);
+    assert.deepEqual(session.history.map(message => message.role), ['model', 'user', 'model']);
+    assert.equal(events.filter(event => event.startsWith('state:')).length, 2);
+    assert.equal(session.busy, false);
+  } finally {
+    (llm as any).chat = originalChat;
+  }
+});
+
+test('active managed step without a matching yield executes once and releases the one outer claim', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_runner_managed_release_${Date.now()}`, 'managed pending input');
+  session.meta.managedSession = {
+    ownerSessionId: 'controller', leaseId: 'lease', revision: 1, pendingInbox: [],
+    openedAt: Date.now(), leaseTouchedAt: Date.now(), currentStep: { stepId: 'step', runMode: 'idle' },
+  };
+  const events: string[] = [];
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(createEffects(session, events), session));
+  const originalChat = llm.chat;
+  let providerCalls = 0;
+  (llm as any).chat = async (parts: any, _owner: Session, _iteration: number, options: any) => {
+    assert.equal(parts, null);
+    providerCalls += 1;
+    await options.appendMessage({ role: 'model', parts: [{ text: 'managed step done' }] });
+    return { text: 'managed step done' };
+  };
+
+  try {
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+    assert.equal(providerCalls, 1);
+    assert.equal(session.queue.length, 0);
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'model']);
+    assert.equal(session.meta.managedSession?.lastStepResult?.stepId, 'step');
+    assert.equal(session.meta.managedSession?.lastStepResult?.yieldReason, 'idle');
+    assert.equal(session.busy, false);
+    assert.equal(events.filter(event => event.startsWith('state:')).length, 2);
+  } finally {
+    (llm as any).chat = originalChat;
+  }
+});
+
+test('already-yielded matching managed step leaves queued work durable without reentry', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_runner_managed_yielded_${Date.now()}`, 'managed retained input');
+  session.meta.managedSession = {
+    ownerSessionId: 'controller', leaseId: 'lease', revision: 1, pendingInbox: [],
+    openedAt: Date.now(), leaseTouchedAt: Date.now(), currentStep: { stepId: 'step', runMode: 'idle' },
+    lastStepResult: { stepId: 'step', yieldReason: 'idle', yieldedAt: Date.now() },
+  };
+  const events: string[] = [];
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(createEffects(session, events), session));
+  const originalChat = llm.chat;
+  let providerCalls = 0;
+  (llm as any).chat = async () => { providerCalls += 1; throw new Error('yielded managed step must not reenter provider'); };
+
+  try {
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+    assert.equal(providerCalls, 0);
+    assert.equal(session.queue.length, 1);
+    assert.equal(session.busy, false);
+    assert.equal(events.filter(event => event.startsWith('state:')).length, 2);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(providerCalls, 0);
+  } finally {
+    (llm as any).chat = originalChat;
+  }
+});
+
 test('local post-final child-reminder failure keeps one provider final and releases busy', async () => {
   await initArchiveStore();
   const session = createSession(`detached_runner_post_final_reminder_${Date.now()}`, 'provider input');
@@ -386,6 +547,85 @@ test('release persistence failure restores ownership and suppresses trailing han
     assert.equal(session.busyStartedAt, releaseStartedAt);
     assert.equal(chatCount, 1);
     assert.equal(session.queue.length, 1);
+  } finally {
+    (llm as any).chat = originalChat;
+  }
+});
+
+test('stop-owned release failure is attempted once and is not retried by outer cleanup', async () => {
+  const session = createSession(`detached_runner_stop_release_failure_${Date.now()}`, 'stop-retained input');
+  session.stopping = true;
+  const events: string[] = [];
+  const effects = createEffects(session, events);
+  const originalUpdateBusy = effects.updateBusy;
+  let releaseAttempts = 0;
+  effects.updateBusy = async (owner, busy) => {
+    if (busy) return originalUpdateBusy(owner, true);
+    releaseAttempts += 1;
+    return sessionManager.updateSessionBusyStateForSession(
+      owner,
+      false,
+      async () => { throw new Error('stop release persist rejected'); },
+      effects.clearRuntimeState,
+      () => {},
+    );
+  };
+  const originalChat = llm.chat;
+  let providerCalls = 0;
+  (llm as any).chat = async () => { providerCalls += 1; throw new Error('stopped turn must not enter provider'); };
+
+  try {
+    await assert.rejects(
+      () => new SessionTurnRunner(new LocalSessionTurnHost(effects, session)).processSessionQueue(session.id),
+      /stop release persist rejected/,
+    );
+    assert.equal(releaseAttempts, 1);
+    assert.equal(providerCalls, 0);
+    assert.equal(session.busy, true);
+    assert.equal(session.history.filter(message => message.role === 'user').length, 1);
+    assert.equal(session.queue.length, 0);
+  } finally {
+    (llm as any).chat = originalChat;
+  }
+});
+
+test('fenced turn-owned release failure is attempted once and propagates without outer retry', async () => {
+  const session = createSession(`detached_runner_fenced_release_failure_${Date.now()}`, 'fenced input');
+  session.queue[0] = {
+    type: 'user',
+    source: { platform: 'test', channelId: 'test', channelUserId: 'direct', conversationId: 'direct' },
+    parts: [{ text: 'fenced input' }],
+  };
+  const events: string[] = [];
+  const effects = createEffects(session, events);
+  const originalUpdateBusy = effects.updateBusy;
+  let releaseAttempts = 0;
+  effects.updateBusy = async (owner, busy) => {
+    if (busy) return originalUpdateBusy(owner, true);
+    releaseAttempts += 1;
+    return sessionManager.updateSessionBusyStateForSession(
+      owner,
+      false,
+      async () => { throw new Error('fenced release persist rejected'); },
+      effects.clearRuntimeState,
+      () => {},
+    );
+  };
+  const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session, {
+    deliverCommittedFinal: async () => {},
+  }));
+  const originalChat = llm.chat;
+  (llm as any).chat = async () => {
+    const error = new Error('fenced semantic failure') as Error & { code: string };
+    error.code = 'SESSION_WORKER_AUTO_COMPACTION_FATAL';
+    throw error;
+  };
+
+  try {
+    await assert.rejects(() => runner.processSessionQueue(session.id), /fenced release persist rejected/);
+    assert.equal(releaseAttempts, 1);
+    assert.equal(session.busy, true);
+    assert.equal(session.history.filter(message => message.role === 'user').length, 1);
   } finally {
     (llm as any).chat = originalChat;
   }

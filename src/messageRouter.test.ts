@@ -26,6 +26,11 @@ async function createRouterQueueTestSession(prefix: string): Promise<Session> {
   return session;
 }
 
+async function processOwnedTestQueue(router: MessageRouter, session: Session): Promise<void> {
+  await sessionManager.saveSession(session.id);
+  await router.processSessionQueue(session.id);
+}
+
 async function appendMockChatMessages(
   session: Session,
   parts: MessagePart[] | null,
@@ -44,10 +49,6 @@ function userTextOccurrences(session: Session, text: string): number {
     .filter(message => message.role === 'user')
     .filter(message => message.parts.some(part => part.text === text))
     .length;
-}
-
-function hasPartText(parts: MessagePart[] | null, text: string): boolean {
-  return !!parts?.some(part => part.text === text);
 }
 
 function countHistoryPartText(messages: Message[], text: string): number {
@@ -166,7 +167,7 @@ test('MessageRouter top-level queue drain persists user and intersession inputs 
   };
 
   try {
-    await router.turnRunner.continueWithQueuedWork(session);
+    await processOwnedTestQueue(router, session);
 
     assert.equal(seenRequests.length, 1);
     assert.equal(countHistoryPartText(seenRequests[0], 'queued channel user'), 1);
@@ -183,25 +184,26 @@ test('MessageRouter top-level queue drain persists user and intersession inputs 
   }
 });
 
-test('MessageRouter keeps a drained queued batch unsent across a pre-LLM compact commit', async () => {
+test('MessageRouter outer owner sequences compact then turn then trailing compact under one claim', async () => {
   const router = new MessageRouter() as any;
   const session = await createRouterQueueTestSession('top_level_queue_compact_boundary');
   const originalChat = llm.chat;
   const originalApplyCompletedCompactJob = sessionManager.applyCompletedCompactJob;
-  let compactApplied = false;
+  let compactApplies = 0;
   session.queue.push(
+    { type: 'compact-commit' },
     { type: 'user', parts: [{ text: 'queued before compact commit' }] },
     { type: 'compact-commit' },
   );
 
   (sessionManager as any).applyCompletedCompactJob = async () => {
-    compactApplied = true;
-    assert.equal(userTextOccurrences(session, 'queued before compact commit'), 0);
-    await sessionManager.appendSessionMessage(session, { role: 'user', parts: [{ system: 'compact commit applied' }] });
+    compactApplies += 1;
+    assert.equal(userTextOccurrences(session, 'queued before compact commit'), compactApplies === 1 ? 0 : 1);
+    await sessionManager.appendSessionMessage(session, { role: 'user', parts: [{ system: `compact commit ${compactApplies} applied` }] });
     return true;
   };
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
-    assert.equal(compactApplied, true);
+    assert.equal(compactApplies, 1);
     assert.equal(parts, null);
     assert.equal(userTextOccurrences(activeSession, 'queued before compact commit'), 1);
     await appendMockChatMessages(activeSession, parts, [{ text: 'handled after compact commit' }]);
@@ -209,8 +211,9 @@ test('MessageRouter keeps a drained queued batch unsent across a pre-LLM compact
   };
 
   try {
-    await router.turnRunner.continueWithQueuedWork(session);
+    await processOwnedTestQueue(router, session);
 
+    assert.equal(compactApplies, 2);
     assert.equal(userTextOccurrences(session, 'queued before compact commit'), 1);
     assert.equal(session.queue.length, 0);
   } finally {
@@ -236,7 +239,7 @@ test('MessageRouter keeps the first queued item as the turn source when later co
   router.turnRunner.runSessionTurn = async (_sessionId: string, options: any) => captured.push(options);
 
   try {
-    await router.turnRunner.continueWithQueuedWork(session);
+    await processOwnedTestQueue(router, session);
 
     assert.equal(captured.length, 1);
     assert.equal(captured[0].source, undefined);
@@ -524,10 +527,11 @@ test('MessageRouter leaves a different QQ conversation for provider call three a
   };
 
   try {
-    await router.turnRunner.runSessionTurn(session.id, {
-      session, preclaimed: true, parts: [{ text: 'first conversation input' }],
+    session.queue.push({
+      type: 'user', parts: [{ text: 'first conversation input' }],
       source: { platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a', channelUserId: 'c2c:user-a', qqbotMessageId: 'qq-1' },
     });
+    await processOwnedTestQueue(router, session);
     assert.equal(chatCalls, 3);
     assert.equal(turnIds.length, 3);
     assert.match(turnIds[0], /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
@@ -575,15 +579,14 @@ test('MessageRouter keeps a different QQ conversation separate at the pre-final 
   };
 
   try {
-    await router.turnRunner.runSessionTurn(session.id, {
-      session,
-      preclaimed: true,
-      parts: [{ text: 'first conversation input' }],
+    session.queue.push({
+      type: 'user', parts: [{ text: 'first conversation input' }],
       source: {
         platform: 'qqbot', channelId: 'qq-a', conversationId: 'c2c:user-a',
         channelUserId: 'c2c:user-a', qqbotMessageId: 'qq-1',
       },
     });
+    await processOwnedTestQueue(router, session);
 
     assert.equal(chatCalls, 2);
     assert.deepEqual(broadcasts.map(entry => entry.text), [
@@ -636,7 +639,8 @@ test('MessageRouter applies pending auto-compaction before a late compatible fol
   (sessionManager as any).applyCompletedCompactJob = async () => { compactApplies += 1; return true; };
 
   try {
-    await router.turnRunner.runSessionTurn(session.id, { session, preclaimed: true, parts: [{ text: 'first compacted input' }], source });
+    session.queue.push({ type: 'user', parts: [{ text: 'first compacted input' }], source });
+    await processOwnedTestQueue(router, session);
     assert.equal(chatCalls, 2);
     assert.equal(compactRequests, 1);
     assert.equal(compactApplies, 1);
@@ -875,30 +879,10 @@ test('MessageRouter LLM retry notifier appends one display-only message then upd
 
 test('MessageRouter LLM final failure keeps retry notice display-only without appending Error model text', async () => {
   const router = new MessageRouter() as any;
-  router.turnRunner.continueWithQueuedWork = async () => false;
   const broadcasts: Array<{ text: string; options: any }> = [];
-  const session: Session = {
-    id: 'retry_final_failure_session',
-    history: [],
-    persistentMemorySnapshot: 'system prompt',
-    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
-    busy: false,
-    queue: [],
-    meta: { lastMessageTime: Date.now() },
-    broadcast: (text: string, options?: any) => { broadcasts.push({ text, options }); },
-  } as Session;
+  const session = await createRouterQueueTestSession('retry_final_failure_session');
+  session.broadcast = (text: string, options?: any) => { broadcasts.push({ text, options }); };
   const originalChat = llm.chat;
-  const originalAppend = sessionManager.appendSessionMessage;
-  const originalSave = sessionManager.saveSession;
-  const originalNotify = sessionManager.notifyHistoryUpdate;
-  let nextSeq = 1;
-
-  (sessionManager as any).appendSessionMessage = async (targetSession: Session, message: Message) => {
-    message.__meta = { ...(message.__meta || {}), timestamp: message.__meta?.timestamp || Date.now(), seq: nextSeq++ };
-    targetSession.history.push(message);
-  };
-  (sessionManager as any).saveSession = async () => {};
-  (sessionManager as any).notifyHistoryUpdate = () => {};
   (llm as any).chat = async (parts: any, activeSession: Session, _iteration: number, options?: { onRetry?: (event: llm.LlmRetryEvent) => Promise<void> | void }) => {
     if (parts) {
       await sessionManager.appendSessionMessage(activeSession, { role: 'user', parts });
@@ -914,11 +898,8 @@ test('MessageRouter LLM final failure keeps retry notice display-only without ap
   };
 
   try {
-    await router.turnRunner.runSessionTurn(session.id, {
-      parts: [{ text: 'trigger final failure' }],
-      session,
-      preclaimed: true,
-    });
+    session.queue.push({ type: 'user', parts: [{ text: 'trigger final failure' }] });
+    await processOwnedTestQueue(router, session);
 
     assert.equal(session.history.length, 2);
     assert.equal(session.history[0].role, 'user');
@@ -931,9 +912,7 @@ test('MessageRouter LLM final failure keeps retry notice display-only without ap
     assert.equal(broadcasts.some(event => /No more retries/.test(event.text)), true);
   } finally {
     (llm as any).chat = originalChat;
-    (sessionManager as any).appendSessionMessage = originalAppend;
-    (sessionManager as any).saveSession = originalSave;
-    (sessionManager as any).notifyHistoryUpdate = originalNotify;
+    await sessionManager.deleteSession(session.id).catch(() => {});
   }
 });
 
@@ -1134,7 +1113,8 @@ test('stop signal commits queued work to history without running it', async () =
   };
 
   try {
-    await router.turnRunner.runSessionTurn(sessionId, { parts: [{ text: 'start current turn' }], session });
+    session.queue.push({ type: 'user', parts: [{ text: 'start current turn' }] });
+    await processOwnedTestQueue(router, session);
 
     assert.equal(seenParts.length, 1);
     assert.equal(session.queue.length, 0);
@@ -1143,7 +1123,7 @@ test('stop signal commits queued work to history without running it', async () =
     const queuedHistoryMessage = session.history.find(message => message.parts.some(part => part.text === 'queued after stop'));
     assert.equal(queuedHistoryMessage?.__meta?.clientMessageId, 'queued-after-stop-client-id');
 
-    await router.processSessionQueue(sessionId);
+    await processOwnedTestQueue(router, session);
     assert.equal(seenParts.length, 1);
 
     const deletion = await sessionManager.deleteMessages(sessionId, -1);
@@ -1203,7 +1183,8 @@ test('stop commits content and applies a ready compact commit', async () => {
   };
 
   try {
-    await router.turnRunner.runSessionTurn(sessionId, { parts: [{ text: 'start mixed turn' }], session });
+    session.queue.push({ type: 'user', parts: [{ text: 'start mixed turn' }] });
+    await processOwnedTestQueue(router, session);
 
     assert.equal(chatCallCount, 1);
     assert.equal(session.queue.length, 0);
@@ -1269,7 +1250,8 @@ test('stop commits content that arrives while stop history is being finalized', 
   };
 
   try {
-    await router.turnRunner.runSessionTurn(sessionId, { parts: [{ text: 'start finalizing turn' }], session });
+    session.queue.push({ type: 'user', parts: [{ text: 'start finalizing turn' }] });
+    await processOwnedTestQueue(router, session);
 
     assert.equal(chatCallCount, 1);
     assert.equal(session.queue.length, 0);
@@ -1326,7 +1308,7 @@ test('input after the stop boundary is handed to a fresh processor instead of lo
   };
 
   try {
-    await router.processSessionQueue(sessionId);
+    await processOwnedTestQueue(router, session);
     await processedAfterBoundary;
     while (session.busy) {
       await new Promise(resolve => setImmediate(resolve));
@@ -1374,7 +1356,8 @@ test('dequeue signal drains queued work once after a compact-commit boundary', a
   };
 
   try {
-    await router.turnRunner.runSessionTurn(sessionId, { parts: [{ text: 'start current turn' }], session });
+    session.queue.push({ type: 'user', parts: [{ text: 'start current turn' }] });
+    await processOwnedTestQueue(router, session);
 
     assert.equal(seenParts.length, 2);
     assert.equal(seenParts[1], null);
@@ -1417,9 +1400,10 @@ test('MessageRouter does not replay dispatched parts after an async compact comm
   };
 
   try {
-    await router.turnRunner.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
+    session.queue.push({ type: 'user', parts: [{ text: 'A' }] });
+    await processOwnedTestQueue(router, session);
 
-    assert.equal(hasPartText(seenParts[0], 'A'), true);
+    assert.equal(seenParts[0], null, 'owned queued input is already canonical before the provider call');
     assert.equal(seenParts[1], null);
     assert.equal(userTextOccurrences(session, 'A'), 1);
     assert.equal(session.contextFrontier?.filter(item => item.kind === 'message').length, session.history.length);
@@ -1462,9 +1446,10 @@ test('MessageRouter keeps a queued user item behind compact commit separate from
   };
 
   try {
-    await router.turnRunner.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
+    session.queue.push({ type: 'user', parts: [{ text: 'A' }] });
+    await processOwnedTestQueue(router, session);
 
-    assert.equal(hasPartText(seenParts[0], 'A'), true);
+    assert.equal(seenParts[0], null, 'owned queued input is already canonical before the provider call');
     assert.equal(seenParts[1], null);
     assert.equal(userTextOccurrences(session, 'A'), 1);
     assert.equal(userTextOccurrences(session, 'Q'), 1);
@@ -1509,7 +1494,8 @@ test('MessageRouter in-tool queue consumption preserves each queued input as sep
   };
 
   try {
-    await router.turnRunner.runSessionTurn(session.id, { parts: [{ text: 'initial request' }], session });
+    session.queue.push({ type: 'user', parts: [{ text: 'initial request' }] });
+    await processOwnedTestQueue(router, session);
 
     assert.equal(seenRequests.length, 2);
     assert.equal(countHistoryPartText(seenRequests[1], 'queued user follow-up'), 1);
@@ -1560,9 +1546,10 @@ test('MessageRouter preserves an already-consumed follow-up once when compact co
   };
 
   try {
-    await router.turnRunner.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
+    session.queue.push({ type: 'user', parts: [{ text: 'A' }] });
+    await processOwnedTestQueue(router, session);
 
-    assert.equal(hasPartText(seenParts[0], 'A'), true);
+    assert.equal(seenParts[0], null, 'owned queued input is already canonical before the provider call');
     assert.equal(seenParts[1], null);
     assert.equal(seenParts[2], null);
     assert.equal(userTextOccurrences(session, 'A'), 1);
@@ -1578,7 +1565,7 @@ test('MessageRouter preserves an already-consumed follow-up once when compact co
   }
 });
 
-test('MessageRouter retains unsent parts across a pre-LLM compact boundary', async () => {
+test('MessageRouter preserves owned queued input across a leading compact action', async () => {
   const router = new MessageRouter() as any;
   const session = await createRouterQueueTestSession('pre_llm_compact_keeps_parts');
   const originalChat = llm.chat;
@@ -1597,9 +1584,10 @@ test('MessageRouter retains unsent parts across a pre-LLM compact boundary', asy
   };
 
   try {
-    await router.turnRunner.runSessionTurn(session.id, { parts: [{ text: 'A' }], session });
+    session.queue.push({ type: 'user', parts: [{ text: 'A' }] });
+    await processOwnedTestQueue(router, session);
 
-    assert.equal(hasPartText(seenParts[0], 'A'), true);
+    assert.equal(seenParts[0], null, 'owned queued input is already canonical before the provider call');
     assert.equal(userTextOccurrences(session, 'A'), 1);
     assert.equal(session.contextFrontier?.filter(item => item.kind === 'message').length, session.history.length);
   } finally {
@@ -1612,14 +1600,13 @@ test('MessageRouter retains unsent parts across a pre-LLM compact boundary', asy
 
 test('MessageRouter exposes requesting-model runtime state while LLM request is in flight', async () => {
   const router = new MessageRouter() as any;
-  router.turnRunner.continueWithQueuedWork = async () => false;
   const sessionId = `runtime_requesting_session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const session = await sessionManager.getSession(sessionId) as Session;
   session.history = [];
   session.persistentMemorySnapshot = 'system prompt';
   session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
-  session.busy = true;
-  session.queue = [];
+  session.busy = false;
+  session.queue = [{ type: 'user', parts: [{ text: 'hello' }] }];
   session.meta = { lastMessageTime: Date.now() };
   const originalChat = llm.chat;
   let releaseChat!: () => void;
@@ -1633,11 +1620,7 @@ test('MessageRouter exposes requesting-model runtime state while LLM request is 
   };
 
   try {
-    const running = router.turnRunner.runSessionTurn(session.id, {
-      parts: [{ text: 'hello' }],
-      session,
-      preclaimed: true,
-    });
+    const running = processOwnedTestQueue(router, session);
 
     while (!chatStarted) {
       await new Promise(resolve => setTimeout(resolve, 5));
@@ -1659,14 +1642,13 @@ test('MessageRouter exposes requesting-model runtime state while LLM request is 
 
 test('MessageRouter exposes running-tool runtime state while tool batch is executing', async () => {
   const router = new MessageRouter() as any;
-  router.turnRunner.continueWithQueuedWork = async () => false;
   const sessionId = `runtime_tool_session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const session = await sessionManager.getSession(sessionId) as Session;
   session.history = [];
   session.persistentMemorySnapshot = 'system prompt';
   session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
-  session.busy = true;
-  session.queue = [];
+  session.busy = false;
+  session.queue = [{ type: 'user', parts: [{ text: 'use tool' }] }];
   session.meta = { lastMessageTime: Date.now() };
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
@@ -1692,11 +1674,7 @@ test('MessageRouter exposes running-tool runtime state while tool batch is execu
   };
 
   try {
-    const running = router.turnRunner.runSessionTurn(session.id, {
-      parts: [{ text: 'use tool' }],
-      session,
-      preclaimed: true,
-    });
+    const running = processOwnedTestQueue(router, session);
 
     while (!toolsStarted) {
       await new Promise(resolve => setTimeout(resolve, 5));

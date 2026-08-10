@@ -247,9 +247,10 @@ test('stop during tool execution does not launch auto compact from stale usage',
       };
     };
 
-    await (router as any).turnRunner.runSessionTurn(sessionId, {
-      parts: [{ text: 'trigger stop during tool execution' }],
-    });
+    const activeSession = await sessionManager.getSession(sessionId);
+    activeSession.queue.push({ type: 'user', parts: [{ text: 'trigger stop during tool execution' }] });
+    await sessionManager.saveSession(sessionId);
+    await router.processSessionQueue(sessionId);
 
     await sleep(50);
 

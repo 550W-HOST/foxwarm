@@ -148,11 +148,9 @@ async function main(): Promise<void> {
           } as Message;
         };
 
-        await (router as any).turnRunner.runSessionTurn(sessionId, {
-          parts: [{ text: 'start queue drain' }],
-          session,
-          preclaimed: true,
-        });
+        session.queue.push({ type: 'user', parts: [{ text: 'start queue drain' }] });
+        await sessionManager.saveSession(sessionId);
+        await router.processSessionQueue(sessionId);
       } finally {
         (llm as any).executeTools = originalExecuteTools;
       }
@@ -227,6 +225,7 @@ async function main(): Promise<void> {
       };
 
       session.queue.push({ type: 'compact-commit' });
+      session.queue.push({ type: 'background', parts: [{ text: 'before compact' }] });
       session.queue.push({ type: 'background', parts: [{ text: 'after compact' }] });
       await sessionManager.saveSession(sessionId);
 
@@ -248,11 +247,7 @@ async function main(): Promise<void> {
         return { text: 'handled after compact boundary' };
       };
 
-      await (router as any).turnRunner.runSessionTurn(sessionId, {
-        parts: [{ text: 'before compact' }],
-        session,
-        preclaimed: true,
-      });
+      await router.processSessionQueue(sessionId);
 
       const refreshedSession = await sessionManager.getSession(sessionId);
       assert(compactRequestCount >= 1);

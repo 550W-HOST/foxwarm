@@ -624,46 +624,18 @@ export class SessionTurnRunner {
     return true;
   }
 
-  private async continueWithQueuedWork(session: Session): Promise<false | 'processed' | 'suppress-trailing-handoff'> {
-    while (session.queue[0] && !isQueueItem(session.queue[0])) {
-      session.queue.shift();
-    }
-    if (session.queue.length === 0) {
-      return false;
-    }
-
-    await this.host.saveSession(session);
-
-    if (session.queue[0]?.type === 'compact-commit') {
-      const nextItem = session.queue.shift();
-      if (!nextItem) {
-        return false;
-      }
-
-      await this.processQueuedItem(session.id, session, nextItem);
-      return 'processed';
-    }
-
-    const queuedTurn = this.drainLeadingQueuedTurnInputs(session);
-    if (queuedTurn.items.length === 0) {
-      return false;
-    }
-
-    const outcome = await this.runSessionTurn(session.id, {
-      parts: null,
-      queuedItems: queuedTurn.items,
-      session,
-      preclaimed: true,
-      source: queuedTurn.broadcastSource,
-    });
-    return outcome === 'suppress-trailing-handoff' ? outcome : 'processed';
-  }
-
-  private async runPendingCompactionIfNeeded(sessionId: string, session: Session): Promise<'continued' | false> {
+  private async runPendingCompactionIfNeeded(
+    sessionId: string,
+    session: Session,
+    outerQueueBoundary?: QueueItem,
+  ): Promise<'continued' | false> {
     while (session.queue[0] && !isQueueItem(session.queue[0])) {
       session.queue.shift();
     }
     const nextItem = session.queue[0];
+    if (nextItem === outerQueueBoundary) {
+      return false;
+    }
     if (nextItem?.type !== 'compact-commit') {
       return false;
     }
@@ -712,28 +684,7 @@ export class SessionTurnRunner {
     } catch (e: any) {
       logger.error({ err: e, sessionId }, 'Queued compaction failed');
       await this.sendSessionError(session, undefined, e);
-    } finally {
-      if (await this.continueWithQueuedWork(session)) {
-        return;
-      }
-
-      await this.host.updateSessionBusyState(session, false);
     }
-  }
-
-  private async processQueuedItem(sessionId: string, session: Session, item: QueueItem): Promise<void> {
-    if (item.type === 'compact-commit') {
-      await this.runQueuedCompaction(sessionId, session);
-      return;
-    }
-
-    await this.runSessionTurn(sessionId, {
-      parts: null,
-      queuedItems: [item],
-      source: item.type === 'user' ? item.source : undefined,
-      session,
-      preclaimed: true,
-    });
   }
 
   private async appendUserMessage(session: Session, parts: MessagePart[], clientMessageId?: string): Promise<void> {
@@ -941,17 +892,14 @@ export class SessionTurnRunner {
       source?: QueueSource;
       sendTyping?: boolean;
       session?: Session;
-      preclaimed?: boolean;
+      outerQueueBoundary?: QueueItem;
+      onTurnOwnedRelease?: () => void;
     }
   ): Promise<'suppress-trailing-handoff' | void> {
     const session = options.session ?? await this.host.getSession(sessionId);
     if (options.parts?.length || options.message || options.queuedItems?.length) {
       sessionManager.clearSessionWaitForDirectTurn(session, options.message || options.queuedItems?.some(item => item.message) ? 'direct-message-turn' : 'direct-parts-turn');
     }
-    if (!options.preclaimed) {
-      await this.host.updateSessionBusyState(session, true);
-    }
-
     await maybeRefreshStaleSessionSnapshot(session, this.host.refreshSessionSnapshot);
 
     let turnSource = options.source ?? (options.sourceCtx ? this.snapshotSource(options.sourceCtx) : undefined);
@@ -995,7 +943,7 @@ export class SessionTurnRunner {
       let iteration = 0;
       let finalUsage: TokenUsage | undefined;
       while (iteration < 500) {
-        const pendingCompaction = await this.runPendingCompactionIfNeeded(sessionId, session);
+        const pendingCompaction = await this.runPendingCompactionIfNeeded(sessionId, session, options.outerQueueBoundary);
         if (pendingCompaction === 'continued') {
           continue;
         }
@@ -1223,7 +1171,7 @@ export class SessionTurnRunner {
           break;
         }
 
-        const compactionAfterTools = await this.runPendingCompactionIfNeeded(sessionId, session);
+        const compactionAfterTools = await this.runPendingCompactionIfNeeded(sessionId, session, options.outerQueueBoundary);
         if (compactionAfterTools === 'continued') {
           iteration++;
           continue;
@@ -1312,6 +1260,7 @@ export class SessionTurnRunner {
       }
     } finally {
       if (fencedMaintenanceError) {
+        options.onTurnOwnedRelease?.();
         try { await this.host.updateSessionBusyState(session, false); }
         catch (releaseError) { if (fencedMaintenanceDirect) throw releaseError; throw fencedMaintenanceError; }
         if (!fencedMaintenanceDirect) throw fencedMaintenanceError;
@@ -1324,19 +1273,13 @@ export class SessionTurnRunner {
       const stopCompleted = stoppedByUser || !!session.stopping;
 
       if (stopCompleted && !runQueuedAfterStop) {
+        options.onTurnOwnedRelease?.();
         await this.finalizeStoppedSession(session);
         return;
       }
       if (session.stopping) {
         session.stopping = false;
       }
-
-      if ((!stopCompleted || runQueuedAfterStop) && !getManagedSessionState(session)?.currentStep) {
-        const continued = await this.continueWithQueuedWork(session);
-        if (continued) return continued === 'suppress-trailing-handoff' ? continued : undefined;
-      }
-
-      await this.host.updateSessionBusyState(session, false);
     }
   }
 
@@ -1353,11 +1296,13 @@ export class SessionTurnRunner {
     }
 
     this.processingSessions.add(sessionId);
+    let session: Session | null = null;
     let claimed = false;
+    let outerOwnsBusyRelease = true;
     let failed = false;
     let suppressTrailingHandoff = false;
     try {
-      const session = await this.host.getExistingSession(sessionId);
+      session = await this.host.getExistingSession(sessionId);
       if (!session) {
         return;
       }
@@ -1369,43 +1314,84 @@ export class SessionTurnRunner {
       }
       claimed = true;
 
-      if (options.retry) {
+      let retryPending = options.retry === true;
+      while (session.busy && !suppressTrailingHandoff) {
+        if (retryPending) {
+          retryPending = false;
+          const outcome = await this.runSessionTurn(sessionId, {
+            parts: null,
+            session,
+            onTurnOwnedRelease: () => { outerOwnsBusyRelease = false; },
+          });
+          suppressTrailingHandoff = outcome === 'suppress-trailing-handoff';
+          continue;
+        }
+
+        const managed = getManagedSessionState(session);
+        if (managed?.currentStep && managed.lastStepResult?.stepId === managed.currentStep.stepId) {
+          break;
+        }
+
+        while (session.queue[0] && !isQueueItem(session.queue[0])) {
+          session.queue.shift();
+        }
+        if (session.queue.length === 0) {
+          break;
+        }
+
+        // Preserve the durable queue before selecting the next owned action.
+        // The selected compact or source turn then commits its own mutation.
+        await this.host.saveSession(session);
+
+        if (session.queue[0]?.type === 'compact-commit') {
+          session.queue.shift();
+          await this.runQueuedCompaction(sessionId, session);
+          continue;
+        }
+
+        const queuedTurn = this.drainLeadingQueuedTurnInputs(session);
+        if (queuedTurn.items.length === 0) {
+          break;
+        }
         const outcome = await this.runSessionTurn(sessionId, {
           parts: null,
+          queuedItems: queuedTurn.items,
           session,
-          preclaimed: true,
+          source: queuedTurn.broadcastSource,
+          ...(session.queue[0] ? { outerQueueBoundary: session.queue[0] } : {}),
+          onTurnOwnedRelease: () => { outerOwnsBusyRelease = false; },
         });
         suppressTrailingHandoff = outcome === 'suppress-trailing-handoff';
-        return;
       }
-
-      const continued = await this.continueWithQueuedWork(session);
-      suppressTrailingHandoff = continued === 'suppress-trailing-handoff';
-      if (continued) {
-        return;
-      }
-
-      await this.host.updateSessionBusyState(session, false);
     } catch (error) {
       failed = true;
       throw error;
     } finally {
-      this.processingSessions.delete(sessionId);
-      // An item can become visible after the previous loop's final queue scan
-      // but before this processor releases ownership. If it arrived after the
-      // stop boundary it is new work, so hand it to a fresh processor rather
-      // than losing the enqueue trigger to this re-entrancy guard.
-      const session = await this.host.getExistingSession(sessionId);
-      if (claimed
-        && !failed
-        && !suppressTrailingHandoff
-        && session
-        && !session.busy
-        && !this.host.isSessionDestructiveLifecycleClaimed(session.id)
-        && session.queue.some(isQueueItem)) {
-        void this.processSessionQueue(sessionId).catch(error => {
-          logger.error({ err: error, sessionId }, 'Trailing queued work failed');
-        });
+      try {
+        if (claimed && outerOwnsBusyRelease && session?.busy) {
+          await this.host.updateSessionBusyState(session, false);
+        }
+      } catch (error) {
+        failed = true;
+        throw error;
+      } finally {
+        this.processingSessions.delete(sessionId);
+        // An item can become visible after the outer loop's final queue scan
+        // but before this processor releases its guard. Hand that finish-window
+        // work to exactly one fresh processor after ownership is idle.
+        session = await this.host.getExistingSession(sessionId);
+        if (claimed
+          && !failed
+          && !suppressTrailingHandoff
+          && session
+          && !session.busy
+          && !getManagedSessionState(session)?.currentStep
+          && !this.host.isSessionDestructiveLifecycleClaimed(session.id)
+          && session.queue.some(isQueueItem)) {
+          void this.processSessionQueue(sessionId).catch(error => {
+            logger.error({ err: error, sessionId }, 'Trailing queued work failed');
+          });
+        }
       }
     }
   }

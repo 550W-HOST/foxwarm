@@ -40,6 +40,13 @@ async function ensureSession(id: string, parentSessionId?: string): Promise<Sess
   return existing;
 }
 
+async function processOwnedTurn(router: MessageRouter, sessionId: string, text: string): Promise<void> {
+  const session = await sessionManager.getSession(sessionId);
+  session.queue.push({ type: 'user', parts: [{ text }] });
+  await sessionManager.saveSession(sessionId);
+  await router.processSessionQueue(sessionId);
+}
+
 async function cleanupSessions(sessionIds: string[]): Promise<void> {
   for (const sessionId of sessionIds) {
     try {
@@ -161,9 +168,7 @@ async function main(): Promise<void> {
         return { text: 'SELFTEST_DONE' };
       };
 
-      await (router as any).turnRunner.runSessionTurn(sessionId, {
-        parts: [{ text: 'run tool chain selftest' }],
-      });
+      await processOwnedTurn(router, sessionId, 'run tool chain selftest');
 
       const finalSession = await sessionManager.getSession(sessionId);
       assert.strictEqual(finalSession.busy, false);
@@ -215,9 +220,7 @@ async function main(): Promise<void> {
         throw new Error(`unexpected session/call combination: ${activeSession.id}#${nextCall}`);
       };
 
-      await (router as any).turnRunner.runSessionTurn(childId, {
-        parts: [{ text: 'child task' }],
-      });
+      await processOwnedTurn(router, childId, 'child task');
 
       const childAfter = await sessionManager.getSession(childId);
       const parentAfterChildRun = await sessionManager.getSession(parentId);
@@ -278,9 +281,7 @@ async function main(): Promise<void> {
         throw new Error(`unexpected session in wait selftest: ${activeSession.id}`);
       };
 
-      await (router as any).turnRunner.runSessionTurn(childId, {
-        parts: [{ text: 'child task with immediate handoff' }],
-      });
+      await processOwnedTurn(router, childId, 'child task with immediate handoff');
 
       const childAfter = await sessionManager.getSession(childId);
       const parentAfterChildRun = await sessionManager.getSession(parentId);
@@ -334,9 +335,7 @@ async function main(): Promise<void> {
         throw new Error(`unexpected session in end-turn compatibility selftest: ${activeSession.id}`);
       };
 
-      await (router as any).turnRunner.runSessionTurn(childId, {
-        parts: [{ text: 'child task with compat immediate handoff' }],
-      });
+      await processOwnedTurn(router, childId, 'child task with compat immediate handoff');
 
       const childAfter = await sessionManager.getSession(childId);
       assert.strictEqual(childCallCount, 1);
@@ -457,9 +456,7 @@ async function main(): Promise<void> {
         throw new Error(`compact_session self-request should resume after the dedicated compaction flow, got LLM call ${llmCallCount}`);
       };
 
-      await (router as any).turnRunner.runSessionTurn(sessionId, {
-        parts: [{ text: 'compact this session now' }],
-      });
+      await processOwnedTurn(router, sessionId, 'compact this session now');
 
       const finalSession = await sessionManager.getSession(sessionId);
       assert.strictEqual(llmCallCount, 5);
@@ -555,18 +552,25 @@ async function main(): Promise<void> {
         parts: [{ text: 'tail message appended after async compact job started' }],
       });
 
+      let compactCommittedInline = false;
       for (let attempt = 0; attempt < 50; attempt += 1) {
         const maybeReady = await sessionManager.getSession(sessionId);
         if (maybeReady.queue.some(item => item.type === 'compact-commit')) {
+          break;
+        }
+        if (maybeReady.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('async compact summary')))) {
+          compactCommittedInline = true;
           break;
         }
         await new Promise(resolve => setTimeout(resolve, 10));
       }
 
       const beforeCommit = await sessionManager.getSession(sessionId);
-      assert(beforeCommit.queue.some(item => item.type === 'compact-commit'));
-
-      await router.processSessionQueue(sessionId);
+      if (beforeCommit.queue.some(item => item.type === 'compact-commit')) {
+        await router.processSessionQueue(sessionId);
+      } else {
+        assert(compactCommittedInline || beforeCommit.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('async compact summary'))));
+      }
 
       const finalSession = await sessionManager.getSession(sessionId);
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('[CTX-BLOCK L1'))));
@@ -691,9 +695,7 @@ async function main(): Promise<void> {
         throw new Error(`automatic in-turn compaction should keep main turn to two calls, got main=${mainTurnCallCount} compact=${compactJobCallCount}`);
       };
 
-      await (router as any).turnRunner.runSessionTurn(sessionId, {
-        parts: [{ text: 'trigger auto compact now' }],
-      });
+      await processOwnedTurn(router, sessionId, 'trigger auto compact now');
 
       let compactCommittedInline = false;
       for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -812,9 +814,7 @@ async function main(): Promise<void> {
       const originalSetTimeout = global.setTimeout;
       (global as any).setTimeout = ((fn: (...args: any[]) => void, _ms?: number, ...args: any[]) => originalSetTimeout(fn, 0, ...args)) as typeof setTimeout;
       try {
-        await (router as any).turnRunner.runSessionTurn(childId, {
-          parts: [{ text: 'child should surface failure' }],
-        });
+        await processOwnedTurn(router, childId, 'child should surface failure');
       } finally {
         (global as any).setTimeout = originalSetTimeout;
       }
