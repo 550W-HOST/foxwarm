@@ -10,7 +10,7 @@ import {
 import * as sessionManager from './sessionManager';
 import type { Message, QueueItem, QueueSource, Session, SessionStreamEvent, TokenUsage } from './types';
 import { isQueueItem } from './types';
-import type { SessionRuntimeState } from './sessionRuntimeState';
+import { getEffectiveSessionQueueLength, type SessionRuntimeState } from './sessionRuntimeState';
 import type { SessionWorkerProjection } from './sessionWorkerPersistence';
 import type { SessionWorkerProjectionEntry, SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
@@ -123,9 +123,9 @@ export type SessionRuntimeEventPayloads = {
   stateChanged: { sessionId: string; session: SessionRuntimeSessionDto | null };
 };
 
-export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 2, {
+export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 3, {
   getSession: rpcMethod<{ sessionId: string }, { session: SessionRuntimeSessionDto | null }>(),
-  listSessions: rpcMethod<Record<string, never>, { sessions: SessionRuntimeSessionDto[] }>(),
+  listSessions: rpcMethod<{ limit?: number; offset?: number }, { sessions: SessionRuntimeSessionDto[]; total: number }>(),
   getHistory: rpcMethod<{ sessionId: string }, SessionRuntimeHistoryDto | null>(),
   enqueue: rpcMethod<{ sessionId: string; item: QueueItem }, { accepted: true }>(),
   submitAndRun: rpcMethod<{ sessionId: string; item: QueueItem }, SessionWorkerIngressResult>(),
@@ -210,7 +210,7 @@ export function buildSessionRuntimeSessionDto(session: Session): SessionRuntimeS
     aliases: Array.isArray(session.aliases) ? [...session.aliases] : [],
     busy: !!session.busy,
     busyStartedAt: typeof session.busyStartedAt === 'number' ? session.busyStartedAt : null,
-    queueLength: session.queue?.length || 0,
+    queueLength: getEffectiveSessionQueueLength(session),
     runtimeState: sessionManager.buildSessionRuntimeState(session),
     displayName: session.displayName || null,
     archived: !!session.archived,
@@ -385,11 +385,28 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       }
       return { session: session ? projectedDto(session, selection) : null };
     },
-    listSessions() {
+    listSessions(input) {
+      const limit = input.limit === undefined ? sessionManager.getAllSessions().size : Math.max(0, Math.min(1000, Math.floor(input.limit)));
+      const offset = Math.max(0, Math.floor(input.offset || 0));
+      if (!options?.worker) {
+        const page = sessionManager.listSessionCatalogPage(limit, offset);
+        return {
+          sessions: page.sessions.map(session => projectedDto(session)),
+          total: page.total,
+        };
+      }
+      const activeProjectionCount = options?.worker?.registry.list().length || 0;
+      const candidatePage = sessionManager.listSessionCatalogPage(limit + offset + activeProjectionCount, 0);
+      const candidates = new Map(candidatePage.sessions.map(session => [session.id, projectedDto(session)]));
+      for (const entry of options?.worker?.registry.list() || []) {
+        const session = sessionManager.getAllSessions().get(entry.sessionId);
+        if (session) candidates.set(session.id, projectedDto(session));
+      }
       return {
-        sessions: [...sessionManager.getAllSessions().values()]
-          .map(session => projectedDto(session))
-          .sort((a, b) => b.lastMessageTime - a.lastMessageTime),
+        sessions: [...candidates.values()]
+          .sort((a, b) => b.lastMessageTime - a.lastMessageTime || a.id.localeCompare(b.id))
+          .slice(offset, offset + limit),
+        total: candidatePage.total,
       };
     },
     async getHistory(input) {
@@ -541,7 +558,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
           if (normalized === null) delete stub.displayName;
           else stub.displayName = normalized;
           if (changed.length > 0) {
-            await sessionManager.saveSessionsMetadata();
+            await sessionManager.saveSessionCatalogEntries([stub.id]);
             sessionManager.notifySessionStateUpdated(stub.id);
           }
           return { changed, previous, current: settingsFromSession(stub), session: projectedDto(stub, workerSelection(stub.id)) };
@@ -744,7 +761,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
               const stub = sessionManager.getAllSessions().get(selection.canonicalId);
               if (stub) {
                 stub.stopping = true;
-                await sessionManager.saveSessionsMetadata();
+                await sessionManager.saveSessionCatalogEntries([stub.id]);
               }
               return { action: 'stop', abortedInFlight: interrupt.abortedInFlight };
             }

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { collectSessionHistoryFiles, createSessionHistoryStore, createSessionsMetadataStore, prepareSessionSemanticStateForHydration, replaceSessionSemanticState, serializeSessionHistoryPayload, stripSessionMetadataForSave } from './metadataStore';
+import { collectSessionHistoryFiles, createSessionHistoryStore, createSessionsMetadataStore, prepareSessionSemanticStateForHydration, replaceSessionSemanticState, serializeSessionHistoryPayload } from './metadataStore';
+import { buildSessionCatalogProjection } from './catalogStore';
 import { replaceAuthoritativeSessionState } from './stateHydration';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
@@ -105,32 +106,24 @@ test('session history store uses lightweight no-backup config and still round-tr
   });
 });
 
-test('real state-file reader preserves strict v1 shapes while normalizing only unversioned legacy', async () => {
+test('real state-file reader rejects malformed v1 shapes while normalizing only unversioned legacy', async () => {
   await withTempDir(async dirPath => {
     const currentPath = path.join(dirPath, 'current.json');
     const malformedCurrent = { sessionStateVersion: 1, history: 'NOT-ARRAY', contextFrontier: { stale: true } };
     await fs.writeFile(currentPath, JSON.stringify(malformedCurrent));
-    const currentRaw = await createSessionHistoryStore(currentPath).readFromPath();
-    assert.equal(currentRaw?.history, 'NOT-ARRAY');
-    assert.deepEqual(currentRaw?.contextFrontier, { stale: true });
     const target: any = { id: 'current', history: [{ role: 'user', parts: [{ text: 'keep' }] }],
       persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 0 } };
-    assert.throws(() => replaceAuthoritativeSessionState(target, currentRaw!),
-      (error: any) => error?.code === 'SESSION_WORKER_STATE_INVALID');
+    await assert.rejects(() => createSessionHistoryStore(currentPath).readFromPath(), /history must be an array/);
     assert.equal(target.history[0].parts[0].text, 'keep');
     assert.deepEqual(JSON.parse(await fs.readFile(currentPath, 'utf8')), malformedCurrent);
 
     const frontierPath = path.join(dirPath, 'frontier.json');
     await fs.writeJson(frontierPath, { sessionStateVersion: 1, history: [], contextFrontier: { invalid: true } });
-    const frontierRaw = await createSessionHistoryStore(frontierPath).readFromPath();
-    assert.throws(() => replaceAuthoritativeSessionState(target, frontierRaw!),
-      (error: any) => error?.code === 'SESSION_WORKER_STATE_INVALID');
+    await assert.rejects(() => createSessionHistoryStore(frontierPath).readFromPath(), /contextFrontier must be an array/);
 
     const unknownPath = path.join(dirPath, 'unknown.json');
     await fs.writeJson(unknownPath, { sessionStateVersion: 99, history: [] });
-    const unknownRaw = await createSessionHistoryStore(unknownPath).readFromPath();
-    assert.throws(() => replaceAuthoritativeSessionState(target, unknownRaw!),
-      (error: any) => error?.code === 'SESSION_WORKER_STATE_VERSION');
+    await assert.rejects(() => createSessionHistoryStore(unknownPath).readFromPath(), /Unsupported per-session state format version 99/);
 
     const legacyPath = path.join(dirPath, 'legacy.json');
     await fs.writeJson(legacyPath, { history: 'legacy-not-array', contextFrontier: { tolerated: true } });
@@ -179,7 +172,7 @@ test('session history payload embeds context frontier and recovery ignores legac
 });
 
 test('legacy goal end-turn setting loads but is omitted from current writes', () => {
-  const target: any = { history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 } };
+  const target: any = { id: 'legacy-goal', history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 } };
   const legacy = {
     goalState: {
       goal: 'Preserve the long-running task',
@@ -194,5 +187,21 @@ test('legacy goal end-turn setting loads but is omitted from current writes', ()
   assert.equal(target.goalState.goal, 'Preserve the long-running task');
   assert.equal(target.goalState.remindOnTurnEnd, false);
   assert.equal((serializeSessionHistoryPayload(target).goalState as any).remindOnTurnEnd, undefined);
-  assert.equal((stripSessionMetadataForSave(target).goalState as any).remindOnTurnEnd, undefined);
+  assert.equal(Object.prototype.hasOwnProperty.call(buildSessionCatalogProjection(target), 'goalState'), false);
+});
+
+test('Main hydration preserves catalog-owned identity and topology while authority semantics win', () => {
+  const target: any = {
+    id: 'catalog-id', agent: 'catalog-agent', aliases: ['catalog-alias'], parentSessionId: 'catalog-parent', displayName: 'Catalog name',
+    history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 }, model: 'catalog-model',
+  };
+  const authority: Record<string, any> = {
+    sessionStateVersion: 1, history: [], queue: [], agent: 'authority-agent', aliases: ['authority-alias'],
+    parentSessionId: 'authority-parent', displayName: 'Authority name', model: 'authority-model',
+    stats: {}, meta: { lastMessageTime: 2 },
+  };
+  replaceAuthoritativeSessionState(target, authority, { preserveCatalogFields: true });
+  assert.equal(target.agent, 'catalog-agent'); assert.deepEqual(target.aliases, ['catalog-alias']);
+  assert.equal(target.parentSessionId, 'catalog-parent'); assert.equal(target.displayName, 'Catalog name');
+  assert.equal(target.model, 'authority-model'); assert.equal(target.meta.lastMessageTime, 2);
 });

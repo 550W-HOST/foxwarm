@@ -58,7 +58,7 @@ Foxwarm 当前把 **agent** 与 **session** 明确分开：
 
 Foxwarm 主要使用以下路径保存 session 与 agent 状态：
 
-- `state/sessions.json` - session 元数据索引
+- `state/catalog.sqlite` - Main-owned session identity/topology/list catalog
 - `state/sessions/<id>.json` - session 历史、snapshot 与附加状态
 - `state/agents.json` - agent metadata
 - `state/channels.json` - channel attachment

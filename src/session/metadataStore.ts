@@ -4,8 +4,10 @@ import { isQueueItem, Message, Session } from '../types';
 import { logger } from '../common';
 import { SESSIONS_DIR, SESSIONS_FILE } from '../config';
 import { DiskJsonData } from '../utils/diskJsonData';
+import { isSessionCatalogInitialized, sessionCatalogStore } from './catalogStore';
+import { CURRENT_SESSION_STATE_VERSION, normalizeAndValidateSessionAuthorityPayload } from './stateValidation';
 
-export const SESSION_STATE_FORMAT_VERSION = 1;
+export const SESSION_STATE_FORMAT_VERSION = CURRENT_SESSION_STATE_VERSION;
 
 export const SESSION_HISTORY_STATE_FIELDS = [
   'queue',
@@ -50,7 +52,6 @@ const SESSION_METADATA_FIELDS = [
   'busy',
   'busyStartedAt',
   'stopping',
-  'queue',
   'meta',
   'displayName',
   'archived',
@@ -162,37 +163,10 @@ export function prepareSessionSemanticStateForHydration(
   catalogStub: Session,
   raw: Record<string, any>,
 ): { snapshot: SessionSemanticSnapshot; upgradedLegacy: boolean } {
+  raw = normalizeAndValidateSessionAuthorityPayload(raw);
   const version = raw.sessionStateVersion;
-  if (version !== undefined && version !== SESSION_STATE_FORMAT_VERSION) {
-    throw new Error(`Unsupported per-session state format version ${String(version)}.`);
-  }
   const upgradedLegacy = version === undefined;
   const source: Record<string, any> = structuredClone(raw);
-  if (Object.prototype.hasOwnProperty.call(source, 'history') && !Array.isArray(source.history)) {
-    throw new Error('Per-session state history must be an array.');
-  }
-  if (Object.prototype.hasOwnProperty.call(source, 'persistentMemorySnapshot')
-    && typeof source.persistentMemorySnapshot !== 'string') {
-    throw new Error('Per-session persistent memory snapshot must be a string.');
-  }
-  if (Object.prototype.hasOwnProperty.call(source, 'queue') && !Array.isArray(source.queue)) {
-    throw new Error('Per-session state queue must be an array.');
-  }
-  if (Object.prototype.hasOwnProperty.call(source, 'contextFrontier') && !Array.isArray(source.contextFrontier)) {
-    throw new Error('Per-session context frontier must be an array.');
-  }
-  if (Object.prototype.hasOwnProperty.call(source, 'stats')
-    && (!source.stats || typeof source.stats !== 'object' || Array.isArray(source.stats))) {
-    throw new Error('Per-session state stats must be an object.');
-  }
-  if (Object.prototype.hasOwnProperty.call(source, 'meta')
-    && (!source.meta || typeof source.meta !== 'object' || Array.isArray(source.meta))) {
-    throw new Error('Per-session state meta must be an object.');
-  }
-  if (Object.prototype.hasOwnProperty.call(source, 'lastAppliedMailboxId')
-    && (!Number.isSafeInteger(source.lastAppliedMailboxId) || source.lastAppliedMailboxId < 0)) {
-    throw new Error('Per-session mailbox cursor must be a non-negative safe integer.');
-  }
   if (source.meta && typeof source.meta === 'object') delete source.meta.lastChannel;
   if (upgradedLegacy) {
     for (const field of LEGACY_CATALOG_SEEDED_STATE_FIELDS) {
@@ -213,34 +187,12 @@ export function prepareSessionSemanticStateForHydration(
   return { snapshot, upgradedLegacy };
 }
 
-export function stripSessionMetadataForSave(session: Session): Omit<Session, 'history' | 'persistentMemorySnapshot' | 'broadcast'> {
-  return serializeSessionStateFields(session, SESSION_METADATA_FIELDS) as Omit<Session, 'history' | 'persistentMemorySnapshot' | 'broadcast'>;
-}
-
 export function getSessionHistoryFilePath(sessionId: string): string {
   return path.join(SESSIONS_DIR, `${sessionId}.json`);
 }
 
 function normalizeSessionHistoryPayload(raw: any, filePath: string): Record<string, any> {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new Error(`Invalid session history payload in ${filePath}`);
-  }
-
-  // Versioned payloads must reach strict hydration with their original
-  // property shapes intact. Only unversioned legacy files receive tolerant
-  // read-old normalization.
-  if (raw.sessionStateVersion !== undefined) return raw;
-
-  const normalized = {
-    ...raw,
-    history: Array.isArray(raw.history) ? raw.history : [],
-  };
-
-  if (normalized.contextFrontier !== undefined && !Array.isArray(normalized.contextFrontier)) {
-    delete normalized.contextFrontier;
-  }
-
-  return normalized;
+  return normalizeAndValidateSessionAuthorityPayload(raw, `Session authority ${filePath}`);
 }
 
 export function createSessionHistoryStore(filePath: string): DiskJsonData<Record<string, any>> {
@@ -406,6 +358,12 @@ export async function rebuildSessionsMetadataFromHistoryFiles(): Promise<any> {
 }
 
 export async function loadSessionsMetadataSnapshot(): Promise<{ data: any; source: string }> {
+  if (isSessionCatalogInitialized()) {
+    return {
+      data: { sessions: Object.fromEntries(sessionCatalogStore.list().map(metadata => [metadata.id, metadata])) },
+      source: sessionCatalogStore.filePath,
+    };
+  }
   const loaded = await sessionsMetadataStore.loadFirstAvailable();
   if (loaded) {
     return loaded;

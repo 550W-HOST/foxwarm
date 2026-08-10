@@ -9,9 +9,11 @@ backup by itself.
 Resolve the data root as described in `../SKILL.md`, then keep one complete
 restore set containing at least:
 
-- `state/archive-store.sqlite` and `state/llm-request-journal.sqlite`, captured
-  as SQLite-consistent snapshots;
-- live session JSON and metadata;
+- `state/archive-store.sqlite`, `state/llm-request-journal.sqlite`, and
+  `state/catalog.sqlite`, captured as SQLite-consistent snapshots;
+- live per-session JSON and the one-time
+  `state/sessions.json.pre-catalog-sqlite-v1.bak` migration evidence when
+  present;
 - `state/session-id-reservations.jsonl` and any
   `state/session-id-move-pending.json`;
 - image/blob data;

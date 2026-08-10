@@ -15,6 +15,11 @@ import type { Session } from './types';
 import { createNodeRegistryStore, createPendingPairing, resetNodeRegistryForTests, setNodeRegistryStoreForTests } from './nodes/registry';
 import * as nodeTools from './tools/nodeTools';
 import { getAgentDir } from './config';
+import { sessionCatalogStore } from './session/catalogStore';
+
+test.before(async () => {
+  await sessionCatalogStore.initialize();
+});
 
 async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -111,7 +116,7 @@ test('worker child creation, reply delivery, and facade queries stay Main-owned 
     for (const id of createdRealSessions) await sessionManager.deleteSession(id).catch(() => {});
     sessionManager.getAllSessions().delete(parentId);
     await fs.remove(getSessionHistoryFilePath(parentId)).catch(() => {});
-    await sessionManager.saveSessionsMetadata().catch(() => {});
+    await sessionManager.saveSessionCatalogEntries(sessionManager.getAllSessions().keys()).catch(() => {});
     await fs.remove(root);
   }
 });

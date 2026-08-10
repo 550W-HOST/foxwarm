@@ -66,7 +66,11 @@ export async function getSession(sessionId: string): Promise<SessionRuntimeSessi
 }
 
 export async function listSessions(): Promise<SessionRuntimeSessionDto[]> {
-  return (await (await getClient()).call('listSessions', {})).sessions;
+  return (await listSessionsPage()).sessions;
+}
+
+export async function listSessionsPage(options: { limit?: number; offset?: number } = {}): Promise<{ sessions: SessionRuntimeSessionDto[]; total: number }> {
+  return (await getClient()).call('listSessions', options);
 }
 
 export async function getHistory(sessionId: string): Promise<SessionRuntimeHistoryDto | null> {

@@ -75,7 +75,9 @@ export class SessionWorkerPersistence {
     const raw = await this.requireState(baseSession.id);
     const stateCursor = this.stateCursor(raw);
     this.store.reconcileActivatedMailboxCursor(baseSession.id, generation, incarnationId, stateCursor);
-    const { session, imagesCanonicalized, upgradedLegacy } = await hydrateAuthoritativeSessionState(target, raw);
+    const { session, imagesCanonicalized, upgradedLegacy } = await hydrateAuthoritativeSessionState(target, raw, {
+      preserveCatalogFields: true, adoptAuthorityDisplayNameWhenMissing: true,
+    });
     // Legacy image/version canonicalization is a same-cursor rewrite. Cursor
     // recovery above is justified by the already-durable raw JSON payload.
     if (imagesCanonicalized || upgradedLegacy) await this.writeState(session);
@@ -104,7 +106,9 @@ export class SessionWorkerPersistence {
   ): Promise<SessionWorkerProjection> {
     const raw = await this.requireState(session.id);
     this.store.reconcileActivatedMailboxCursor(session.id, generation, incarnationId, this.stateCursor(raw));
-    const hydrated = await hydrateAuthoritativeSessionState(session, raw);
+    const hydrated = await hydrateAuthoritativeSessionState(session, raw, {
+      preserveCatalogFields: true, adoptAuthorityDisplayNameWhenMissing: true,
+    });
     if (hydrated.imagesCanonicalized || hydrated.upgradedLegacy) await this.writeState(session);
     return buildSessionWorkerProjection(session);
   }
@@ -168,6 +172,10 @@ export class SessionWorkerPersistence {
       busy: false,
       queue: [],
       meta: structuredClone(baseSession.meta),
+      ...(baseSession.agent === undefined ? {} : { agent: baseSession.agent }),
+      ...(baseSession.aliases === undefined ? {} : { aliases: structuredClone(baseSession.aliases) }),
+      ...(baseSession.parentSessionId === undefined ? {} : { parentSessionId: baseSession.parentSessionId }),
+      ...(baseSession.displayName === undefined ? {} : { displayName: baseSession.displayName }),
       ...(baseSession.vectorIndexPosition === undefined ? {} : { vectorIndexPosition: baseSession.vectorIndexPosition }),
       ...(baseSession.archived === undefined ? {} : { archived: baseSession.archived }),
       ...(baseSession.pinned === undefined ? {} : { pinned: baseSession.pinned }),

@@ -561,10 +561,11 @@ function getWebUiSidebarSiblings(parentSessionId: string | null, excludeSessionI
     .sort(compareWebUiSidebarSessions);
 }
 
-function writeWebUiSidebarOrder(sessions: any[]): void {
+function writeWebUiSidebarOrder(sessions: any[]): string[] {
   sessions.forEach((session, index) => {
     session.sidebarOrder = (index + 1) * 1000;
   });
+  return sessions.map(session => session.id);
 }
 
 async function resolveOptionalSessionId(sessionId: unknown, label: string): Promise<string | null | undefined> {
@@ -1088,8 +1089,8 @@ export class WebUIChannel implements Channel {
             const session = sessionManager.getSessionCatalog(result.mainSessionId);
             if (session) {
               const rootSiblings = getWebUiSidebarSiblings(null, session.id);
-              writeWebUiSidebarOrder([session, ...rootSiblings]);
-              await sessionManager.saveSessionsMetadata();
+              const changedIds = writeWebUiSidebarOrder([session, ...rootSiblings]);
+              await sessionManager.saveSessionCatalogEntries(changedIds);
             }
             this.broadcastSessionListUpdate();
             res.status(201).json({ success: true, agentId, sessionId: result.mainSessionId });
@@ -1171,8 +1172,8 @@ export class WebUIChannel implements Channel {
             const session = sessionManager.getSessionCatalog(sessionId);
             if (!session) throw new Error(`Created session "${sessionId}" could not be loaded.`);
             const rootSiblings = getWebUiSidebarSiblings(null, session.id);
-            writeWebUiSidebarOrder([session, ...rootSiblings]);
-            await sessionManager.saveSessionsMetadata();
+            const changedIds = writeWebUiSidebarOrder([session, ...rootSiblings]);
+            await sessionManager.saveSessionCatalogEntries(changedIds);
 
             this.broadcastSessionListUpdate();
 
@@ -1589,7 +1590,7 @@ export class WebUIChannel implements Channel {
               delete session.pinned;
             }
 
-            await sessionManager.saveSessionsMetadata();
+            await sessionManager.saveSessionCatalogEntries([session.id]);
             this.broadcastSessionListUpdate();
             res.json({ success: true, sessionId: session.id, pinned: !!session.pinned });
           } catch (e: any) {
@@ -1792,8 +1793,9 @@ export class WebUIChannel implements Channel {
               return;
             }
 
+            const changedCatalogIds = new Set<string>([latestMovingSession.id]);
             if (previousParentSessionId !== targetParentSessionId) {
-              writeWebUiSidebarOrder(getWebUiSidebarSiblings(previousParentSessionId, latestMovingSession.id));
+              for (const id of writeWebUiSidebarOrder(getWebUiSidebarSiblings(previousParentSessionId, latestMovingSession.id))) changedCatalogIds.add(id);
             }
 
             const targetSiblingsWithoutMoving = getWebUiSidebarSiblings(targetParentSessionId, latestMovingSession.id);
@@ -1829,9 +1831,9 @@ export class WebUIChannel implements Channel {
 
             const targetSiblings = [...targetSiblingsWithoutMoving];
             targetSiblings.splice(Math.max(0, Math.min(insertIndex, targetSiblings.length)), 0, latestMovingSession);
-            writeWebUiSidebarOrder(targetSiblings);
+            for (const id of writeWebUiSidebarOrder(targetSiblings)) changedCatalogIds.add(id);
 
-            await sessionManager.saveSessionsMetadata();
+            await sessionManager.saveSessionCatalogEntries(changedCatalogIds);
             this.broadcastSessionListUpdate();
 
             res.json({
@@ -1943,13 +1945,14 @@ export class WebUIChannel implements Channel {
 
             const result = await sessionManager.setSessionParent(sessionId, targetParentId);
             const movedSession = sessionManager.getSessionCatalog(result.childSessionId);
+            const changedCatalogIds = new Set<string>([result.childSessionId]);
 
             if (movedSession) {
               const previousParentSessionId = result.previousParentSessionId || null;
               const nextParentSessionId = result.parentSessionId || null;
 
               if (previousParentSessionId !== nextParentSessionId) {
-                writeWebUiSidebarOrder(getWebUiSidebarSiblings(previousParentSessionId, movedSession.id));
+                for (const id of writeWebUiSidebarOrder(getWebUiSidebarSiblings(previousParentSessionId, movedSession.id))) changedCatalogIds.add(id);
               }
 
               const targetSiblingsWithoutMoving = getWebUiSidebarSiblings(nextParentSessionId, movedSession.id);
@@ -1959,10 +1962,10 @@ export class WebUIChannel implements Channel {
               const insertIndex = previousParentIndex >= 0 ? previousParentIndex + 1 : 0;
               const targetSiblings = [...targetSiblingsWithoutMoving];
               targetSiblings.splice(insertIndex, 0, movedSession);
-              writeWebUiSidebarOrder(targetSiblings);
+              for (const id of writeWebUiSidebarOrder(targetSiblings)) changedCatalogIds.add(id);
             }
 
-            await sessionManager.saveSessionsMetadata();
+            await sessionManager.saveSessionCatalogEntries(changedCatalogIds);
 
             this.broadcastSessionListUpdate();
 

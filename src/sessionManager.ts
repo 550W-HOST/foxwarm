@@ -14,14 +14,15 @@ import { RpcError } from './rpc';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import { cloneQueueItem, getManagedSessionState, isManagedSessionLeaseExpired, ManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
 import * as vector from './vector';
-import { SESSIONS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getLegacySessionFrontierPath } from './config';
+import { CATALOG_DB_PATH, CHANNELS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getLegacySessionFrontierPath } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
 import { appendMessagesToArchive, ensureMessageSeq, getNextSessionMessageSeq } from './session/archive';
 import { externalizeMessages, externalizeQueueItemImages } from './imageBlobs';
 import { annotateHistoryWithContextFrontierMetadata, appendMessagesToContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier } from './session/layeredContext';
 import { ensureSessionBranch, hasArchivedSessionId, rollbackUncommittedSessionArchive } from './session/archiveStore';
-import { getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, stripSessionMetadataForSave, withSessionsMetadataWriteLock, writeSessionsMetadataAtomically } from './session/metadataStore';
+import { getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, withSessionsMetadataWriteLock } from './session/metadataStore';
+import { buildSessionCatalogProjection, readLegacyChannelAttachmentsFromCatalogMigrationEvidence, sessionCatalogStore } from './session/catalogStore';
 import { externalizeAuthoritativeSessionImages, externalizeAuthoritativeSessionQueueImages, writeAuthoritativeSessionState } from './session/stateFile';
 import { replaceAuthoritativeSessionState } from './session/stateHydration';
 import * as sessionChannels from './session/channels';
@@ -34,8 +35,11 @@ import { formatFoxwarmMessage, formatFoxwarmSystem, formatFoxwarmSystemClose, fo
 import { runStartupMigrations } from './migrations';
 import {
   buildSessionRuntimeState,
+  clearSessionCatalogStub,
   clearActiveSessionRuntimeState,
   formatSessionRuntimeStateSummary,
+  getEffectiveSessionQueueLength,
+  markSessionCatalogStub,
   setActiveSessionRuntimeState,
   setSessionRuntimeStateUpdateCallback,
   type ActiveSessionRuntimeStateInput,
@@ -47,6 +51,7 @@ function systemPart(system: string): MessagePart {
 }
 
 const MANAGED_OWNER_WAKEUP_COOLDOWN_MS = 30 * 1000;
+const SESSION_WORKER_PROCESS = !!process.env.FOXWARM_SESSION_WORKER_SESSION_ID;
 
 let sessionIdentityLockTail: Promise<void> = Promise.resolve();
 const channelSessionCreationTails = new Map<string, Promise<void>>();
@@ -364,18 +369,7 @@ async function hasPersistedLiveSessionId(sessionId: string): Promise<boolean> {
     return true;
   }
 
-  if (!await fs.pathExists(SESSIONS_FILE)) {
-    return false;
-  }
-
-  try {
-    const data = await fs.readJson(SESSIONS_FILE);
-    const sessionsData = data?.sessions || data;
-    return !!sessionsData && typeof sessionsData === 'object'
-      && Object.prototype.hasOwnProperty.call(sessionsData, sessionId);
-  } catch {
-    return false;
-  }
+  return SESSION_WORKER_PROCESS || !sessionCatalogStore.exists() ? false : !!sessionCatalogStore.get(sessionId);
 }
 
 async function getSessionIdReservation(sessionId: string): Promise<SessionIdReservation> {
@@ -507,18 +501,11 @@ export function resolveLoadedSessionId(sessionId: string): string {
     const target = sessions.get(cached);
     if (!target?.aliases?.includes(sessionId)) aliasCache.delete(sessionId);
   }
-  let matchedId: string | undefined;
-  for (const [realId, session] of sessions) {
-    if (!session.aliases?.includes(sessionId)) continue;
-    if (matchedId) {
-      aliasCache.delete(sessionId);
-      return sessionId;
-    }
-    matchedId = realId;
-  }
-  if (!matchedId) return sessionId;
-  aliasCache.set(sessionId, matchedId);
-  return matchedId;
+  if (SESSION_WORKER_PROCESS || !sessionCatalogStore.exists()) return sessionId;
+  const resolution = sessionCatalogStore.resolveId(sessionId);
+  if (resolution.kind !== 'alias' || !resolution.sessionId) return sessionId;
+  aliasCache.set(sessionId, resolution.sessionId);
+  return resolution.sessionId;
 }
 
 /**
@@ -601,26 +588,13 @@ async function resolveSessionId(sessionId: string): Promise<string> {
     return sessionId;
   }
 
-  // Search through all sessions for alias match
-  for (const [realId, session] of sessions.entries()) {
-    if (session.aliases?.includes(sessionId)) {
-      aliasCache.set(sessionId, realId);
-      return realId;
-    }
-  }
+  if (SESSION_WORKER_PROCESS) return sessionId;
+  if (!sessionCatalogStore.exists()) await sessionCatalogStore.initialize();
 
-  // Check metadata file for aliases
-  if (await fs.pathExists(SESSIONS_FILE)) {
-    const data = await fs.readJson(SESSIONS_FILE);
-    const sessionsData = data.sessions || data;
-    
-    for (const [realId, meta] of Object.entries(sessionsData)) {
-      const sessionMeta = meta as any;
-      if (sessionMeta.aliases?.includes(sessionId)) {
-        aliasCache.set(sessionId, realId);
-        return realId;
-      }
-    }
+  const resolution = sessionCatalogStore.resolveId(sessionId);
+  if (resolution.kind === 'alias' && resolution.sessionId) {
+    aliasCache.set(sessionId, resolution.sessionId);
+    return resolution.sessionId;
   }
 
   // Not an alias, return as-is
@@ -638,7 +612,7 @@ async function getExistingSessionUnlocked(sessionId: string): Promise<Session | 
   
   const session = sessions.get(realId);
   if (session) {
-    // Sessions loaded from sessions.json start as metadata-only placeholders
+    // Sessions loaded from catalog.sqlite start as metadata-only placeholders
     // with an empty history array. Delegate to getSession() so callers that
     // later save or inspect the session do not accidentally operate on an
     // unloaded placeholder and overwrite the on-disk history.
@@ -652,14 +626,7 @@ async function getExistingSessionUnlocked(sessionId: string): Promise<Session | 
     return await getSessionUnlocked(realId);
   }
 
-  // Check metadata store
-  if (await fs.pathExists(SESSIONS_FILE)) {
-    const data = await fs.readJson(SESSIONS_FILE);
-    const sessionsData = data.sessions || data;
-    if (sessionsData[realId]) {
-      return await getSessionUnlocked(realId);
-    }
-  }
+  if (!SESSION_WORKER_PROCESS && sessionCatalogStore.get(realId)) return await getSessionUnlocked(realId);
 
   return null;
 }
@@ -874,7 +841,9 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
         const retryPendingUpgrade = needsAuthoritativeStateUpgrade;
         // displayName is Main-owned presentation metadata: preserve the Main
         // value (including an explicit clear) across authoritative rehydration.
-        needsAuthoritativeStateUpgrade = replaceAuthoritativeSessionState(session, historyData, { preserveDisplayName: true }).upgradedLegacy || retryPendingUpgrade;
+        needsAuthoritativeStateUpgrade = replaceAuthoritativeSessionState(session, historyData, { preserveCatalogFields: true }).upgradedLegacy || retryPendingUpgrade;
+        clearSessionCatalogStub(session);
+        delete (session as any).managedPendingCount;
         if (needsAuthoritativeStateUpgrade) pendingAuthoritativeStateUpgrades.add(realId);
         if (historyData.indexingState) {
           // Check if indexing was interrupted
@@ -985,7 +954,7 @@ export async function updateSessionBusyState(session: Session, busy: boolean): P
   await updateSessionBusyStateForSession(
     session,
     busy,
-    saveSessionsMetadata,
+    () => saveSessionCatalogEntries([session.id]),
     clearActiveSessionRuntimeState,
     notifySessionUpdated,
   );
@@ -1069,7 +1038,7 @@ async function rollbackFailedSessionCreation(sessionId: string, expectedSession:
   await rollbackUncommittedSessionArchive(sessionId).catch(error => {
     logger.error({ err: error, sessionId }, 'Failed to roll back uncommitted session archive');
   });
-  await saveSessionsMetadataCritical().catch(error => {
+  await saveSessionCatalogEntriesCritical([sessionId]).catch(error => {
     logger.error({ err: error, sessionId }, 'Failed to persist session-creation rollback');
   });
 }
@@ -1102,7 +1071,7 @@ function getSessionAgentOpsDeps(underIdentityLock: boolean = false) {
     assertSessionIdAvailableForNewLifetime,
     createSession: underIdentityLock ? createSessionUnlocked : createSession,
     saveSession: underIdentityLock ? saveSessionCritical : saveSession,
-    saveSessionsMetadata: underIdentityLock ? saveSessionsMetadataCritical : saveSessionsMetadata,
+    saveSessionCatalogEntries: underIdentityLock ? saveSessionCatalogEntriesCritical : saveSessionCatalogEntries,
     saveChannels: underIdentityLock ? saveChannelsCritical : saveChannels,
     updateAliasCache,
     updateChildSessionParentIds: underIdentityLock ? updateChildSessionParentIdsCritical : updateChildSessionParentIds,
@@ -1724,14 +1693,14 @@ export async function setSessionParent(childSessionId: string, parentSessionId?:
     if (!child) throw new Error(`Session \`${childSessionId}\` not found.`);
     const previousParentSessionId = child.parentSessionId;
     child.parentSessionId = parentSessionId;
-    await saveSessionsMetadata();
+    await saveSessionCatalogEntries([childSessionId]);
     notifySessionListUpdated();
     return { childSessionId, parentSessionId, previousParentSessionId };
   }
   return sessionRelations.setSessionParent({
     getExistingSession,
     saveSession,
-    saveSessionsMetadata,
+    saveSessionCatalogEntries,
     notifySessionListUpdated,
     assertMutationAllowed: (sessionIds, operation) => assertSessionDestructiveMutationAllowed(sessionIds, operation, owningClaimId),
   }, childSessionId, parentSessionId);
@@ -1742,7 +1711,7 @@ export async function updateChildSessionParentIds(oldParentSessionId: string, ne
     // Worker-fenced children keep their authority worker-owned: skip the
     // per-child authority write; the catalog metadata update still lands.
     saveSession: sessionId => (workerEnqueueSink || workerFenceChecker?.(sessionId)) ? Promise.resolve() : saveSession(sessionId),
-    saveSessionsMetadata,
+    saveSessionCatalogEntries,
     getSessionsMap: getAllSessions,
     notifySessionListUpdated,
   }, oldParentSessionId, newParentSessionId);
@@ -1757,7 +1726,7 @@ async function updateChildSessionParentIdsCritical(oldParentSessionId: string, n
     updated.push(sessionId);
   }
   if (updated.length > 0) {
-    await saveSessionsMetadataCritical();
+    await saveSessionCatalogEntriesCritical(updated);
     notifySessionListUpdated();
   }
   return updated;
@@ -1800,7 +1769,7 @@ async function saveSessionForSessionCritical(session: Session): Promise<void> {
   await saveSessionStateOnlyCritical(session);
 
   // Save metadata (lightweight operation)
-  await saveSessionsMetadataCritical();
+  await saveSessionCatalogEntriesCritical([session.id]);
 
   // Schedule archive-based vector indexing (non-blocking)
   const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
@@ -1823,58 +1792,90 @@ async function saveSessionStateOnlyCritical(session: Session): Promise<void> {
   await writeAuthoritativeSessionState(session);
 }
 
-/**
- * Save sessions metadata (sessions.json)
- */
-export async function saveSessionsMetadata(): Promise<void> {
+/** Persist only the named catalog entries. Missing in-memory IDs are deleted. */
+export async function saveSessionCatalogEntries(sessionIds: Iterable<string>): Promise<void> {
   try {
-    await saveSessionsMetadataCritical();
+    await saveSessionCatalogEntriesCritical(sessionIds);
   } catch (e) {
-    logger.error(e, 'Failed to save metadata');
+    logger.error(e, 'Failed to save session catalog entries');
   }
 }
 
-async function saveSessionsMetadataCritical(): Promise<void> {
-  return withSessionsMetadataWriteLock(saveSessionsMetadataCriticalUnlocked);
+async function saveSessionCatalogEntriesCritical(sessionIds: Iterable<string>): Promise<void> {
+  // The catalog is an always-Main-owned database. A Session worker persists
+  // only its authoritative per-session JSON and publishes a bounded projection
+  // for Main to commit during handback.
+  if (SESSION_WORKER_PROCESS) return;
+  const ids = [...new Set(sessionIds)];
+  return withSessionsMetadataWriteLock(async () => {
+    if (!sessionCatalogStore.exists()) await sessionCatalogStore.initialize();
+    await saveSessionCatalogEntriesCriticalUnlocked(ids);
+  });
 }
 
-async function saveSessionsMetadataCriticalUnlocked(): Promise<void> {
+async function saveSessionCatalogEntriesCriticalUnlocked(sessionIds: string[]): Promise<void> {
   sessionPersistenceFaultInjector?.('metadata');
-  const { data: snapshot, source } = await loadSessionsMetadataSnapshot();
-  const data: any = { sessions: {} };
-  const existingSessions = snapshot?.sessions && typeof snapshot.sessions === 'object'
-    ? snapshot.sessions
-    : {};
-
-    for (const [sessionId, metadata] of Object.entries(existingSessions)) {
-      if (sessions.has(sessionId) || await fs.pathExists(getSessionHistoryFilePath(sessionId))) {
-        const { promptCacheKey: _legacyPromptCacheKey, ...metadataWithoutPromptCacheKey } = (metadata || {}) as Record<string, any>;
-        data.sessions[sessionId] = metadataWithoutPromptCacheKey;
+  const upserts: Record<string, any>[] = [];
+  const deletes: string[] = [];
+  for (const sessionId of sessionIds) {
+    const session = sessions.get(sessionId);
+    if (!session) { deletes.push(sessionId); continue; }
+    await externalizeAuthoritativeSessionQueueImages(session);
+    const metadata = buildSessionCatalogProjection(session);
+    if (workerFenceChecker?.(sessionId)) {
+      const current = sessionCatalogStore.get(sessionId);
+      if (current) {
+        const catalogOnlyFields = ['id', 'agent', 'aliases', 'parentSessionId', 'displayName', 'archived', 'pinned', 'sidebarOrder'] as const;
+        const merged = { ...current };
+        for (const field of catalogOnlyFields) {
+          if (metadata[field] === undefined) delete merged[field];
+          else merged[field] = metadata[field];
+        }
+        const lastChannel = metadata.meta?.lastChannel;
+        if (lastChannel !== undefined) merged.meta = { ...(current.meta || {}), lastChannel };
+        upserts.push(merged);
+        continue;
       }
     }
+    upserts.push(metadata);
+  }
+  sessionCatalogStore.upsertMany(upserts, deletes);
+}
 
-    for (const [sessionId, session] of sessions.entries()) {
-      await externalizeAuthoritativeSessionQueueImages(session);
-      data.sessions[sessionId] = stripSessionMetadataForSave(session);
-    }
-
-    if (source !== SESSIONS_FILE) {
-      logger.warn({ source, inMemorySessionCount: sessions.size, savedSessionCount: Object.keys(data.sessions).length }, 'Saving sessions metadata using recovered baseline');
-    }
-
-  await writeSessionsMetadataAtomically(data);
+/** Commit the complete bounded projection after an exact Worker handback. */
+export async function saveSessionCatalogProjectionStrict(sessionId: string): Promise<void> {
+  if (SESSION_WORKER_PROCESS) throw new Error('Session workers cannot write catalog.sqlite.');
+  await withSessionsMetadataWriteLock(async () => {
+    if (!sessionCatalogStore.exists()) await sessionCatalogStore.initialize();
+    const session = sessions.get(sessionId);
+    if (!session) { sessionCatalogStore.deleteMany([sessionId]); return; }
+    await externalizeAuthoritativeSessionQueueImages(session);
+    sessionCatalogStore.upsertMany([buildSessionCatalogProjection(session)]);
+  });
 }
 
 export async function loadSessions(): Promise<void> {
   // A pending identity move is authoritative data-integrity state. Recovery
   // must finish before ordinary loading and its failure is intentionally fatal.
-  const identityMoveRecovery = await sessionAgentOps.recoverPendingSessionIdentityMove(vector.renameSessionArchiveIndex);
+  const catalogExisted = sessionCatalogStore.exists();
+  const identityMoveRecovery = !catalogExisted
+    ? await sessionAgentOps.recoverPendingSessionIdentityMove(vector.renameSessionArchiveIndex)
+    : 'none';
   if (identityMoveRecovery !== 'none') {
     logger.warn({ identityMoveRecovery }, 'Recovered pending session identity move');
   }
-  // A throwing startup migration is authoritative data-integrity state. Do
-  // not enter the legacy best-effort session-load catch with an unverified
-  // archive migration.
+  let catalogMigration;
+  let sqliteIdentityMoveRecovery: 'none' | 'finished' | 'rolled-back' = 'none';
+  if (catalogExisted) {
+    catalogMigration = await sessionCatalogStore.initialize();
+    sqliteIdentityMoveRecovery = await sessionAgentOps.recoverPendingSessionIdentityMove(vector.renameSessionArchiveIndex, {
+        load: async () => ({ sessions: Object.fromEntries(sessionCatalogStore.list().map(metadata => [metadata.id, metadata])) }),
+        replace: async data => sessionCatalogStore.replaceAll(Object.values(data.sessions || data)),
+      });
+  }
+  if (sqliteIdentityMoveRecovery !== 'none') logger.warn({ identityMoveRecovery: sqliteIdentityMoveRecovery }, 'Recovered pending SQLite session identity move');
+  // Legacy archive migration still reads sessions.json for the live-ID set.
+  // Complete it before the first catalog migration retires that file.
   const migrationResults = await runStartupMigrations();
   for (const migrationResult of migrationResults) {
     if (!migrationResult.skippedByVersion && (migrationResult.migratedFiles > 0 || migrationResult.failedFiles > 0)) {
@@ -1882,16 +1883,20 @@ export async function loadSessions(): Promise<void> {
       logger.info({ migrationSummary }, 'Startup migration finished');
     }
   }
+  if (!catalogExisted) catalogMigration = await sessionCatalogStore.initialize();
+  logger.info({ ...catalogMigration!, databasePath: CATALOG_DB_PATH }, 'Session catalog initialized');
   try {
     // Load agent metadata first
     await sessionAgentMetadata.loadAgentMetadata();
+    const channelsFileExisted = await fs.pathExists(CHANNELS_FILE);
     await loadChannels();
 
-    const { data, source } = await loadSessionsMetadataSnapshot();
-    if (source !== SESSIONS_FILE) {
-      logger.warn({ source }, 'Recovering sessions metadata from fallback source');
-      await writeSessionsMetadataAtomically(data);
+    const legacyChannelAttachments = await readLegacyChannelAttachmentsFromCatalogMigrationEvidence();
+    if (!channelsFileExisted && sessionChannels.getAllAttachments().size === 0 && legacyChannelAttachments) {
+      await sessionChannels.importLegacyChannelAttachments(legacyChannelAttachments as any);
     }
+
+    const { data } = await loadSessionsMetadataSnapshot();
 
     // Load sessions metadata only (history will be loaded on-demand)
     const sessionsData = data.sessions || data;
@@ -1918,15 +1923,15 @@ export async function loadSessions(): Promise<void> {
       };
 
       delete (session as any).isolated;
+      markSessionCatalogStub(session, typeof metadataWithoutPromptCacheKey.queueLength === 'number'
+        ? metadataWithoutPromptCacheKey.queueLength
+        : session.queue.length);
+      delete (session as any).queueLength;
 
       sessions.set(sessionId, session);
     }
 
     // Load channel attachments (migrated to channels.json)
-    if (data.channelAttachments) {
-      await sessionChannels.importLegacyChannelAttachments(data.channelAttachments);
-    }
-
     logger.info({ sessionCount: sessions.size, attachmentCount: sessionChannels.getAllAttachments().size }, 'Session metadata loaded');
   } catch (e) {
     logger.error(e, 'Failed to load sessions');
@@ -2498,13 +2503,23 @@ export function listSessions(): Array<{ id: string; messageCount: number; lastMe
       cwd: session.cwd,
       isolated: isSessionEffectivelyIsolated(session),
       busy: session.busy,
-      queueLength: session.queue?.length || 0,
+      queueLength: getEffectiveSessionQueueLength(session),
       parentSessionId: session.parentSessionId,
       runtimeState: buildSessionRuntimeState(session)
     });
   }
   
   return result.sort((a, b) => (b.lastMessageTime || 0) - (a.lastMessageTime || 0));
+}
+
+export function listSessionCatalogPage(limit: number, offset: number = 0): { sessions: Session[]; total: number } {
+  const boundedLimit = Math.max(0, Math.floor(limit));
+  const boundedOffset = Math.max(0, Math.floor(offset));
+  const metadata = sessionCatalogStore.list({ limit: boundedLimit, offset: boundedOffset });
+  return {
+    sessions: metadata.map(row => sessions.get(row.id)).filter((session): session is Session => !!session),
+    total: sessionCatalogStore.count(),
+  };
 }
 
 export async function setSessionCwd(sessionId: string, cwd?: string): Promise<{ changed: boolean; previous?: string; current?: string }> {
@@ -2671,7 +2686,7 @@ export async function deleteSession(sessionId: string, owningClaimId?: string): 
   }
   
   // Save metadata
-  await saveSessionsMetadata();
+  await saveSessionCatalogEntries([sessionId]);
   await saveChannels();
   
   // Notify global-list and per-session state consumers.
@@ -2691,7 +2706,7 @@ export async function archiveSession(sessionId: string, archived: boolean = true
 
   session.archived = archived;
   // Archive is metadata-only; avoid touching session history file
-  await saveSessionsMetadata();
+  await saveSessionCatalogEntries([sessionId]);
   
   // Notify global-list and per-session state consumers.
   notifySessionUpdated(sessionId);
@@ -2716,7 +2731,7 @@ export async function archiveSessions(sessionIds: string[], archived: boolean = 
   }
 
   if (changedSessionIds.length > 0) {
-    await saveSessionsMetadata();
+    await saveSessionCatalogEntries(changedSessionIds);
     for (const sessionId of changedSessionIds) notifySessionUpdated(sessionId);
   }
 
@@ -2757,19 +2772,26 @@ export async function resumeBusySessions(): Promise<void> {
   const queuedSessionIds: string[] = [];
   const managedPendingSessionIds: string[] = [];
 
-  // Check metadata for busy or queued sessions (no need to load history files)
-  for (const [sessionId, session] of sessions.entries()) {
-    if (session.busy === true) {
+  // The restart candidate set is indexed in catalog.sqlite; only matching
+  // lightweight stubs are inspected here.
+  for (const metadata of sessionCatalogStore.listRecoveryCandidates()) {
+    const sessionId = metadata.id as string;
+    const workerPlacement = !!workerEnqueueSink;
+    const session = workerPlacement ? sessions.get(sessionId) : await getSession(sessionId).catch((error): Session | undefined => {
+      logger.error({ err: error, sessionId }, 'Failed to hydrate restart-recovery candidate');
+      return undefined;
+    });
+    if (!session) continue;
+    if (workerPlacement ? metadata.busy === true : session.busy === true) {
       busySessionIds.push(sessionId);
       continue;
     }
-
-    if ((session.queue?.length || 0) > 0) {
+    if (workerPlacement ? (metadata.queueLength || 0) > 0 : (session.queue?.length || 0) > 0) {
       queuedSessionIds.push(sessionId);
     }
 
     const managed = getManagedSessionState(session as Session);
-    if (managed?.pendingInbox?.length) {
+    if (workerPlacement ? (metadata.managedPendingCount || 0) > 0 : !!managed?.pendingInbox?.length) {
       managedPendingSessionIds.push(sessionId);
     }
   }

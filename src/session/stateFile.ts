@@ -63,7 +63,7 @@ export async function prepareAuthoritativeSessionState(session: Session): Promis
   return serializeSessionHistoryPayload(session);
 }
 
-/** Worker-safe writer: writes only the authoritative per-session JSON, never sessions.json. */
+/** Worker-safe writer: writes only the authoritative per-session JSON, never the shared Main catalog. */
 export async function writeAuthoritativeSessionState(session: Session): Promise<void> {
   const payload = await prepareAuthoritativeSessionState(session);
   const historyFile = path.join(SESSIONS_DIR, `${session.id}.json`);

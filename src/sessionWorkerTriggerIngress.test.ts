@@ -154,7 +154,7 @@ test('high-level persisted alias queueing canonicalizes only the target before e
   try {
     fixture.catalogSession.aliases = [alias];
     sessionManager.updateAliasCache([alias], sessionId);
-    await sessionManager.saveSessionsMetadata();
+    await sessionManager.saveSessionCatalogEntries(sessionManager.getAllSessions().keys());
     await fixture.supervisor.reconcileStartupOwnerships();
     await sessionRuntime.initializeSessionRuntime({
       worker: { store: fixture.store, registry: fixture.supervisor.projectionRegistry, ingress: fixture.ingress, supervisor: fixture.supervisor },

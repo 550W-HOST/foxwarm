@@ -8,6 +8,8 @@ The live LLM/tool turn loop belongs to the `SessionTurnRunner` reached through `
 
 Cross-module creation, hydration, fork/cache lineage, restart, archive, and deletion: [session lifecycle](../threads/session-lifecycle.md).
 
+Main-owned identity/topology/list storage and indexed access: [Main catalog storage and indexed queries](../threads/main-catalog-storage-and-indexed-queries.md).
+
 Canonical image references in live history, queues, archives, and forks are owned by [image blob lifecycle](../threads/image-blob-lifecycle.md).
 
 ## Units
@@ -17,6 +19,7 @@ Canonical image references in live history, queues, archives, and forks are owne
 - [src-session-worker-runtime](../units/src-session-worker-runtime.md) — activated configurable process-generation/mailbox fencing, authoritative state coordination, exact-owner operations, and supervised per-session child lifecycle.
 - [src-session-runtime-state](../units/src-session-runtime-state.md) — `requesting-model`, `running-tool`, `waiting`, and `idle` derivation.
 - [src-session-metadata-store](../units/src-session-metadata-store.md) — shared metadata index, per-session history snapshots, rebuild, and durable writes.
+- [src-session-catalog-store](../units/src-session-catalog-store.md) — Main-owned SQLite Session catalog, strict migration, row/batch writes, indexed queries, and counts.
 - [src-session-channels](../units/src-session-channels.md) — persisted channel attachments, direct delivery, and session broadcasts.
 - [src-session-agent-ops](../units/src-session-agent-ops.md) — agent creation, inheritance/isolation metadata, moves, and snapshot refresh.
 - [src-session-misc](../units/src-session-misc.md) — archive append helpers, relations, message visibility, snapshot refresh, and child reminders.
@@ -40,7 +43,7 @@ Context frontier, compaction, archive-store, and vector retrieval are owned by [
 
 ## Data ownership
 
-- `state/sessions.json` is the shared metadata/presentation index and uses five numbered backups.
+- `state/catalog.sqlite` is the Main-owned identity/topology/list projection. Its cross-module admission rule is canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
 - `state/sessions/<id>.json` owns versioned authoritative full semantic session state: durable history, queue, wait/managed metadata, prompt snapshot/cache key, embedded `contextFrontier`, settings, and worker mailbox cursor. Unversioned legacy files receive a one-time tolerant upgrade; current-version hydration replaces semantic fields rather than merging stale catalog values. Per-session files use durable serialized replacement without numbered rotation.
 - `state/channels.json` owns channel attachments.
 - `state/session-runtime.sqlite` owns Session-worker generations, incarnations, mailbox intents, and acknowledged mailbox cursors when process placement is enabled; it never owns semantic Session state.
@@ -53,7 +56,7 @@ The durable JSON implementation and backup semantics are canonical in [src-utils
 ## Invariants
 
 - Queue processing is serialized per session. `busy` remains the concurrency/recovery flag, while `runtimeState` is the canonical display phase.
-- History files are authoritative for conversation content. The metadata index may be rebuilt from them; presentation-only fields can be lost if every metadata backup is unusable.
+- Per-session JSON is authoritative for semantic state. Catalog-only presentation fields are not inferred from authority files when the catalog is missing.
 - A managed session has at most one live lease. Input addressed to an actively managed target enters its managed inbox.
 - When either side is isolated, inter-session delivery requires the same session or an explicit direct parent/child relation; unrelated and sibling sessions are denied.
 - Fork lineage never exposes parent content created after the fork point.
@@ -77,7 +80,7 @@ The durable JSON implementation and backup semantics are canonical in [src-utils
 
 ### D-session-core-authoritative-history
 
-Per-session JSON is authoritative for full semantic Session state. The shared metadata file is main-owned, rebuildable, and may contain UI-only fields intentionally excluded from session state. The cross-process save-before-mailbox-ack ordering is canonical in [D-process-topology-session-state-authority](../threads/process-topology-and-rpc.md#d-process-topology-session-state-authority).
+Per-session JSON is authoritative for full semantic Session state. The Main-owned catalog may contain UI-only fields intentionally excluded from semantic state. Catalog storage and scaling are canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary); cross-process save-before-mailbox-ack ordering is canonical in [D-process-topology-session-state-authority](../threads/process-topology-and-rpc.md#d-process-topology-session-state-authority).
 
 ### D-session-core-runtime-state
 

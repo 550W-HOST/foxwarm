@@ -99,18 +99,15 @@ export function formatSessionListRow(s: SessionListItem, currentSessionId?: stri
 }
 
 export async function buildSessionListOutput(args: Record<string, any> = {}, currentSessionId?: string): Promise<string> {
-  const sessions = await sessionRuntime.listSessions();
-
-  if (sessions.length === 0) {
-    return 'No sessions found.';
-  }
-
-  const total = sessions.length;
   const rawStart = typeof args.start === 'number' && !Number.isNaN(args.start) ? Math.trunc(args.start) : 0;
   const rawCount = typeof args.count === 'number' && !Number.isNaN(args.count) ? Math.trunc(args.count) : 20;
-  const start = Math.max(0, Math.min(rawStart, total));
-  const count = Math.max(0, rawCount);
-  const pageSessions = sessions.slice(start, start + count);
+  const requestedStart = Math.max(0, rawStart);
+  const count = Math.max(0, Math.min(1000, rawCount));
+  const page = await sessionRuntime.listSessionsPage({ offset: requestedStart, limit: count });
+  const total = page.total;
+  if (total === 0) return 'No sessions found.';
+  const start = Math.min(requestedStart, total);
+  const pageSessions = start === requestedStart ? page.sessions : [];
 
   if (pageSessions.length === 0) {
     return `No sessions found in the requested range. Total sessions: ${total}.`;

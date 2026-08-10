@@ -3,6 +3,7 @@ import { RpcError } from './rpc';
 import { getSessionHistoryFilePath } from './session/metadataStore';
 import type { SessionWorkerStore } from './sessionWorkerStore';
 import type { Session } from './types';
+import { clearSessionCatalogStub } from './sessionRuntimeState';
 
 export type SessionWorkerHandbackIdentity = { sessionId: string; generation: number; incarnationId: string };
 
@@ -10,7 +11,7 @@ export type SessionWorkerHandbackDeps = {
   store: SessionWorkerStore;
   getCatalogSession: (sessionId: string) => Session | undefined;
   upsertCatalogSession: (session: Session) => void;
-  saveCatalog: () => Promise<void>;
+  saveCatalog: (sessionId: string) => Promise<void>;
   stateFilePath?: (sessionId: string) => string;
 };
 
@@ -61,7 +62,7 @@ export async function performSessionWorkerHandback(
     queue: [],
     meta: { lastMessageTime: 0 },
   } as Session);
-  if (typeof raw.agent === 'string' && raw.agent) stub.agent = raw.agent;
+  if (!existing && typeof raw.agent === 'string' && raw.agent) stub.agent = raw.agent;
   if (raw.stats && typeof raw.stats === 'object' && !Array.isArray(raw.stats)) stub.stats = raw.stats;
   // meta.lastChannel is catalog-only presentation state (the authority payload
   // strips it); preserve the Main-owned value across the authority mirror.
@@ -75,6 +76,8 @@ export async function performSessionWorkerHandback(
   stub.busy = raw.busy === true;
   stub.busyStartedAt = typeof raw.busyStartedAt === 'number' ? raw.busyStartedAt : undefined;
   stub.queue = Array.isArray(raw.queue) ? raw.queue : [];
+  clearSessionCatalogStub(stub);
+  delete (stub as any).managedPendingCount;
   for (const key of AUTHORITY_SETTING_KEYS) {
     if (raw[key] === undefined || raw[key] === null) delete (stub as any)[key];
     else (stub as any)[key] = raw[key];
@@ -89,5 +92,5 @@ export async function performSessionWorkerHandback(
   // lazily rehydrate the fresh authority instead of serving stale copies.
   stub.history = [];
   if (!existing) deps.upsertCatalogSession(stub);
-  await deps.saveCatalog();
+  await deps.saveCatalog(sessionId);
 }

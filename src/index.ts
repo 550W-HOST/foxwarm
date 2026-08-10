@@ -235,7 +235,7 @@ async function start() {
                 store: sessionWorkerStore!,
                 getCatalogSession: id => sessionManager.getAllSessions().get(id),
                 upsertCatalogSession: session => sessionManager.getAllSessions().set(session.id, session),
-                saveCatalog: () => sessionManager.saveSessionsMetadata(),
+                saveCatalog: sessionId => sessionManager.saveSessionCatalogProjectionStrict(sessionId),
             }, identity),
         });
         await sessionWorkerSupervisor.reconcileStartupOwnerships();

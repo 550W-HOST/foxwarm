@@ -20,7 +20,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - `createSessionInAgentWithAutomaticName` — runs a caller-supplied automatic name generator inside the identity commit lock and retries reserved candidates.
 - `getOrCreateSessionForChannel` — per-channel serialized first-session creation and attachment, with an optional guest/session factory and attachment config.
 - `getExistingSession`, `getSession`, `createEmptySession`, `createSession`, `deleteSession`, `archiveSession` — lifecycle operations.
-- `saveSession`, `saveSessionsMetadata`, `loadSessions`, `listSessions`, `getAllSessions`, `getSessionCatalog` — persistence and enumeration. `saveSession` accepts either an ID-backed local lookup or an exact supplied Session owner; both share the same state/metadata/index/event composition. `getSessionCatalog` is a Main-owned loaded-stub read that never hydrates worker authority.
+- `saveSession`, `saveSessionCatalogEntries`, `saveSessionCatalogProjectionStrict`, `loadSessions`, `listSessions`, `getAllSessions`, `getSessionCatalog` — persistence and enumeration. Normal saves commit authority before an exact row/batch catalog projection; fenced Main-only presentation writes preserve the current semantic projection, while Worker handback explicitly commits one complete bounded projection. `getSessionCatalog` is a Main-owned loaded-stub read that never hydrates worker authority.
 - `setSessionCwd`, `setSessionChildModelDefault`, `setSessionCompactThreshold` — persisted session settings.
 - `appendSessionMessage`, `appendSessionMessages`, `getSessionMessages` — durable history access. `appendSessionMessagesForSession` exposes the same sequence/image/archive/frontier/persist/notify composition for an exact supplied owner and persistence hook.
 
@@ -69,7 +69,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - **Child/fork creation:** copies or rebuilds prompt snapshots/cache lineage according to fork semantics, records archive lineage, and advances suffix counters past retained IDs.
 - **Managed wakeup:** routes active managed-session input to its inbox and wakes or resumes its owner/controller with cooldown and stale-lease recovery.
 - **Queue notification:** persists queue changes, emits state callbacks, and invokes the registered router trigger when work should run.
-- **Restart recovery:** clears stale busy fields, appends/deduplicates the restart system event, retriggers queued work, and reclaims or wakes persisted managed inbox/controller state. Under Session-worker placement (enqueue sink registered), residual Main-local busy/queued/managed sessions are logged loudly and skipped rather than executed locally; their execution is left to the next durable Worker ingress.
+- **Restart recovery:** selects busy/queued/managed candidates through partial catalog indexes, then local placement hydrates only those exact authority files before clearing stale busy fields or replaying queue/managed state. Under Session-worker placement (enqueue sink registered), bounded counts identify residual candidates, which are logged loudly and skipped rather than hydrated/executed in Main.
 
 ## Dependencies
 
@@ -83,9 +83,9 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 ## Invariants
 
 - One `SessionTurnRunner.processSessionQueue()` invocation may claim a session at a time through the MessageRouter delegate; this façade persists and exposes the `busy` compatibility/concurrency flag.
-- Per-session JSON files are authoritative for full semantic Session state, including conversation content, queue, wait/managed metadata, prompt/cache state, embedded `contextFrontier`, and the worker mailbox cursor. The shared metadata file is a main-owned index/presentation store.
+- Per-session JSON files are authoritative for full semantic Session state, including conversation content, queue, wait/managed metadata, prompt/cache state, embedded `contextFrontier`, and the worker mailbox cursor. `state/catalog.sqlite` is the Main-owned identity/topology/list projection; canonical boundary: [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
 - Operation ownership is stable under Worker placement: Session-semantic work must use the exact owner even when it must first spawn/load an idle Worker; Main catalog/topology/presentation work must remain catalog-only. The manager does not opportunistically hydrate and save authority simply because no Worker is currently active. Canonical decision: [D-process-topology-stable-operation-ownership](../threads/process-topology-and-rpc.md#d-process-topology-stable-operation-ownership).
-- Lazy load upgrades only unversioned per-session files by seeding historically catalog-only fields, while current-format files exactly replace semantic stub state. Current local mode keeps the existing single main-owned `sessions.json` writer; Session-worker placement keeps catalog metadata Main-owned and receives bounded Worker projections through the SessionRuntime service.
+- Lazy load upgrades only unversioned per-session files by seeding historically catalog-only fields, while current-format files exactly replace semantic stub state. Local and Worker placement keep the SQLite catalog Main-owned; Session-worker placement supplies bounded projections through SessionRuntime handback.
 - Queue insertion passes through wait-state and managed-inbox transitions before work is persisted or triggered.
 - Retry and compact planning are not queue insertion paths. Async compact planning starts immediately from a snapshot; a busy `asyncCompact:false` explicit request reports unavailable; ready compact commits alone use the queue safe point.
 - Generic history append persists and notifies only its supplied messages; router-owned goal evaluation is intentionally outside this low-level persistence path.

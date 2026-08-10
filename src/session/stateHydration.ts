@@ -13,16 +13,33 @@ import { externalizeAuthoritativeSessionImages } from './stateFile';
 export function replaceAuthoritativeSessionState(
   target: Session,
   raw: Record<string, any>,
-  options?: { preserveDisplayName?: boolean },
+  options?: { preserveCatalogFields?: boolean; preserveDisplayName?: boolean; adoptAuthorityDisplayNameWhenMissing?: boolean },
 ): { session: Session; upgradedLegacy: boolean } {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new RpcError('SESSION_WORKER_STATE_INVALID', `Authoritative state for ${target.id} is not a session payload.`);
   }
   try {
     const prepared = prepareSessionSemanticStateForHydration(target, raw);
-    const mainOwnedDisplayName = options?.preserveDisplayName ? target.displayName : undefined;
+    const preserveCatalogFields = options?.preserveCatalogFields === true;
+    const catalogFields = new Map<string, { present: boolean; value: unknown }>();
+    if (preserveCatalogFields) {
+      for (const field of ['agent', 'aliases', 'parentSessionId', 'displayName'] as const) {
+        if (field === 'displayName' && options?.adoptAuthorityDisplayNameWhenMissing
+          && !Object.prototype.hasOwnProperty.call(target, field)) continue;
+        catalogFields.set(field, {
+          present: Object.prototype.hasOwnProperty.call(target, field),
+          value: structuredClone((target as any)[field]),
+        });
+      }
+    }
+    const mainOwnedDisplayName = options?.preserveDisplayName && !preserveCatalogFields ? target.displayName : undefined;
     replaceSessionSemanticState(target, prepared.snapshot);
-    if (options?.preserveDisplayName) {
+    if (preserveCatalogFields) {
+      for (const [field, entry] of catalogFields) {
+        if (!entry.present) delete (target as any)[field];
+        else (target as any)[field] = entry.value;
+      }
+    } else if (options?.preserveDisplayName) {
       if (mainOwnedDisplayName === undefined) delete target.displayName;
       else target.displayName = mainOwnedDisplayName;
     }
@@ -40,8 +57,9 @@ export function replaceAuthoritativeSessionState(
 export async function hydrateAuthoritativeSessionState(
   target: Session,
   raw: Record<string, any>,
+  options?: { preserveCatalogFields?: boolean; adoptAuthorityDisplayNameWhenMissing?: boolean },
 ): Promise<{ session: Session; imagesCanonicalized: boolean; upgradedLegacy: boolean }> {
-  const replaced = replaceAuthoritativeSessionState(target, raw);
+  const replaced = replaceAuthoritativeSessionState(target, raw, options);
   if (target.contextFrontier?.length) {
     if (target.history.length !== target.contextFrontier.length) {
       target.history = await renderHistoryFromFrontier(target);

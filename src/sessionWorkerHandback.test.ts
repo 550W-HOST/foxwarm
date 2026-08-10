@@ -12,6 +12,12 @@ import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContext
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerLifecycleError, SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
+import { SessionCatalogStore, sessionCatalogStore } from './session/catalogStore';
+
+test.before(async () => {
+  if (!sessionCatalogStore.exists()) sessionCatalogStore.initializeEmpty();
+  else sessionCatalogStore.open();
+});
 
 async function waitFor(check: () => boolean, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -63,9 +69,12 @@ async function createFixture(sessionId: string, options: {
   idleMs?: number;
   workerEnv?: Record<string, string>;
   handbackError?: boolean;
+  persistCatalog?: boolean;
 } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-handback-'));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
+  const persistentCatalog = options.persistCatalog ? new SessionCatalogStore(path.join(root, 'catalog.sqlite')) : undefined;
+  persistentCatalog?.initializeEmpty();
   const sourceContexts = new SessionWorkerSourceContextRegistry();
   const catalog = new Map<string, Session>();
   const statesAtCatalogSave: string[] = [];
@@ -76,7 +85,14 @@ async function createFixture(sessionId: string, options: {
       store,
       getCatalogSession: id => catalog.get(id),
       upsertCatalogSession: session => catalog.set(session.id, session),
-      saveCatalog: async () => { catalogSaves += 1; statesAtCatalogSave.push(store.getOwnership(identity.sessionId).state); },
+      saveCatalog: async id => {
+        catalogSaves += 1; statesAtCatalogSave.push(store.getOwnership(identity.sessionId).state);
+        if (persistentCatalog) {
+          const session = catalog.get(id);
+          if (!session) throw new Error(`missing catalog stub ${id}`);
+          persistentCatalog.upsertMany([session]);
+        }
+      },
       stateFilePath: id => path.join(root, 'state', 'sessions', `${id}.json`),
     }, identity);
   const supervisor = new SessionWorkerSupervisor({
@@ -88,12 +104,12 @@ async function createFixture(sessionId: string, options: {
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
   return {
-    root, store, sourceContexts, supervisor, ingress, statePath, catalog,
+    root, store, sourceContexts, supervisor, ingress, statePath, catalog, persistentCatalog,
     get catalogSaves() { return catalogSaves; },
     statesAtCatalogSave,
     async close() {
       await supervisor.shutdown(5_000).catch(() => {});
-      store.close(); await fs.remove(root);
+      store.close(); persistentCatalog?.close(); await fs.remove(root);
     },
   };
 }
@@ -143,6 +159,35 @@ test('idle release hands back authority before fence release and refreshes the M
 
     const second = await fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'replacement after handback' }] });
     assert.equal(second.generation, 2, 'replacement spawns only after handback released the fence');
+  } finally { await fixture.close(); }
+});
+
+test('no-write Worker load and idle handback preserve catalog-owned agent in memory and SQLite', async () => {
+  const sessionId = `worker-handback-agent-${Date.now()}`;
+  const fixture = await createFixture(sessionId, { idleMs: 200, persistCatalog: true });
+  const stub = { ...baseSession(sessionId), agent: 'catalog-agent', model: 'stale-model' } as Session;
+  fixture.catalog.set(sessionId, stub);
+  fixture.persistentCatalog!.upsertMany([stub]);
+  const authority = await fs.readJson(fixture.statePath);
+  authority.agent = 'authority-agent'; authority.model = 'authority-model';
+  authority.stats = { totalCachedTokens: 1, totalInputTokens: 2, totalOutputTokens: 3, lastUsage: null };
+  authority.meta = { lastMessageTime: 123, messageCount: 4 };
+  await fs.writeJson(fixture.statePath, authority);
+  const authorityBefore = await fs.readFile(fixture.statePath);
+  try {
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await fixture.ingress.ensureWorkerOwner(sessionId);
+    await waitFor(() => fixture.store.getOwnership(sessionId).state === 'inactive');
+    const refreshed = fixture.catalog.get(sessionId)!;
+    assert.equal(refreshed.agent, 'catalog-agent');
+    assert.equal(refreshed.model, 'authority-model');
+    assert.equal(refreshed.stats.totalInputTokens, 2);
+    assert.equal(refreshed.meta.lastMessageTime, 123);
+    const persisted = fixture.persistentCatalog!.get(sessionId)!;
+    assert.equal(persisted.agent, 'catalog-agent');
+    assert.equal(persisted.model, 'authority-model');
+    assert.equal(persisted.stats.totalInputTokens, 2);
+    assert.deepEqual(await fs.readFile(fixture.statePath), authorityBefore, 'load-to-idle handback performs no semantic authority write');
   } finally { await fixture.close(); }
 });
 
@@ -277,7 +322,7 @@ test('handback clears hydrated stub state so later reads rehydrate the fresh aut
       store,
       getCatalogSession: id => sessionManager.getAllSessions().get(id),
       upsertCatalogSession: session => sessionManager.getAllSessions().set(session.id, session),
-      saveCatalog: () => sessionManager.saveSessionsMetadata(),
+      saveCatalog: sessionId => sessionManager.saveSessionCatalogProjectionStrict(sessionId),
       stateFilePath: () => statePath,
     }, identity),
   });
@@ -309,7 +354,7 @@ test('handback clears hydrated stub state so later reads rehydrate the fresh aut
     store.close();
     sessionManager.getAllSessions().delete(sessionId);
     await fs.remove(realStatePath).catch(() => {});
-    await sessionManager.saveSessionsMetadata().catch(() => {});
+    await sessionManager.saveSessionCatalogEntries(sessionManager.getAllSessions().keys()).catch(() => {});
     await fs.remove(root);
   }
 });
@@ -366,7 +411,7 @@ test('rehydration after release preserves the Main-owned displayName (rename and
         store,
         getCatalogSession: id => sessionManager.getAllSessions().get(id),
         upsertCatalogSession: session => sessionManager.getAllSessions().set(session.id, session),
-        saveCatalog: () => sessionManager.saveSessionsMetadata(),
+        saveCatalog: sessionId => sessionManager.saveSessionCatalogProjectionStrict(sessionId),
         stateFilePath: () => statePath,
       }, identity),
     });
@@ -397,7 +442,7 @@ test('rehydration after release preserves the Main-owned displayName (rename and
     sessionManager.getAllSessions().delete(unnamedId);
     await fs.remove(getSessionHistoryFilePath(renamedId)).catch(() => {});
     await fs.remove(getSessionHistoryFilePath(unnamedId)).catch(() => {});
-    await sessionManager.saveSessionsMetadata().catch(() => {});
+    await sessionManager.saveSessionCatalogEntries(sessionManager.getAllSessions().keys()).catch(() => {});
     for (const root of roots) await fs.remove(root);
   }
 });

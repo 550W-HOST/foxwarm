@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import type { Session } from './types';
 import {
   buildSessionRuntimeState,
+  clearSessionCatalogStub,
   clearActiveSessionRuntimeState,
   formatSessionRuntimeStateSummary,
+  getEffectiveSessionQueueLength,
+  markSessionCatalogStub,
   setActiveSessionRuntimeState,
 } from './sessionRuntimeState';
 
@@ -28,6 +31,18 @@ test('buildSessionRuntimeState derives idle by default', () => {
   assert.equal(runtimeState.busy, false);
   assert.equal(runtimeState.queueLength, 0);
   assert.equal(formatSessionRuntimeStateSummary(runtimeState), 'idle');
+});
+
+test('catalog stub queue count is effective until exact authority hydration wins', () => {
+  const session = makeSession({ queue: [{ type: 'background', parts: [{ text: 'actual' }] }] } as Partial<Session>);
+  markSessionCatalogStub(session, 3);
+  assert.equal(getEffectiveSessionQueueLength(session), 3);
+  const stubState = buildSessionRuntimeState(session);
+  assert.equal(stubState.queueLength, 3);
+  assert.notEqual(stubState.state, 'idle');
+  clearSessionCatalogStub(session);
+  assert.equal(getEffectiveSessionQueueLength(session), 1);
+  assert.equal(buildSessionRuntimeState(session).queueLength, 1);
 });
 
 test('active runtime state wins over persisted wait metadata', () => {

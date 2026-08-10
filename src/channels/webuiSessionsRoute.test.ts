@@ -1,9 +1,16 @@
 import test from 'node:test';
+import { sessionCatalogStore } from '../session/catalogStore';
+
+test.before(() => {
+  if (!sessionCatalogStore.exists()) sessionCatalogStore.initializeEmpty();
+  else sessionCatalogStore.open();
+});
 import assert from 'node:assert/strict';
 import { HttpServer, setHttpServer } from '../httpServer';
 import * as sessionManager from '../sessionManager';
 import { setWebUiDeleteLifecycleTestHookForTests, WebUIChannel } from './webuiChannel';
-import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot } from '../session/metadataStore';
+import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload } from '../session/metadataStore';
+import { markSessionCatalogStub } from '../sessionRuntimeState';
 import type { Session } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
 import fs from 'fs-extra';
@@ -124,6 +131,105 @@ test('WebUI creation routes create agents and random or custom sessions', async 
     }
     await sessionManager.setAgentInherit(agentId, undefined).catch(() => {});
     await fs.remove(getAgentDir(agentId));
+  }
+});
+
+test('WebUI list uses catalog queue count for a lightweight stub, then exact hydration wins', async () => {
+  const sessionId = makeSessionId('webui_catalog_queue');
+  const session = await sessionManager.getSession(sessionId);
+  session.queue = [1, 2, 3].map(index => ({ type: 'background', parts: [{ text: `catalog ${index}` }] }));
+  await sessionManager.saveSession(sessionId);
+  session.queue = [];
+  markSessionCatalogStub(session, 3);
+  await fs.writeJson(getSessionHistoryFilePath(sessionId), serializeSessionHistoryPayload({
+    ...session,
+    queue: [{ type: 'background', parts: [{ text: 'authority wins' }] }],
+  } as Session));
+
+  const port = 34700 + Math.floor(Math.random() * 400);
+  const server = new HttpServer(port, 'queue-token');
+  setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token: 'queue-token', enableTrigger: false, enableWebUI: true });
+  await server.start();
+  const readListed = async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sessions`, { headers: { Authorization: 'Bearer queue-token' } });
+    assert.equal(response.status, 200);
+    return ((await response.json() as any).sessions as any[]).find(item => item.id === sessionId);
+  };
+  try {
+    const stub = await readListed();
+    assert.equal(stub.queueLength, 3);
+    assert.equal(stub.runtimeState.queueLength, 3);
+    assert.notEqual(stub.runtimeState.state, 'idle');
+    await sessionManager.getSession(sessionId);
+    const hydrated = await readListed();
+    assert.equal(hydrated.queueLength, 1);
+    assert.equal(hydrated.runtimeState.queueLength, 1);
+  } finally {
+    await server.stop(); setHttpServer(null);
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
+test('restart catalog stubs preserve sanitized timer, waitAll, and exec presentation until hydration', async () => {
+  const ids = {
+    timer: makeSessionId('webui_wait_timer'),
+    waitAll: makeSessionId('webui_wait_all'),
+    exec: makeSessionId('webui_wait_exec'),
+  };
+  const waits: Record<string, any> = {
+    [ids.timer]: { id: 'timer-wait', startedAt: 100, reason: 'timer reason', timeoutSeconds: 30 },
+    [ids.waitAll]: {
+      id: 'all-wait', startedAt: 200,
+      waitAll: {
+        sessions: ['child-a', 'child-b'], satisfiedSessions: ['child-a'],
+        deferredQueue: [{ type: 'background', parts: [{ text: 'private deferred body' }] }],
+      },
+    },
+    [ids.exec]: { id: 'exec-wait', startedAt: 300, waitExecIds: ['exec-a', 'exec-b'] },
+  };
+  for (const id of Object.values(ids)) {
+    const session = await sessionManager.getSession(id);
+    session.meta = { lastMessageTime: Date.now(), wait: waits[id] } as Session['meta'];
+    await sessionManager.saveSession(id);
+  }
+  const timer = sessionManager.getAllSessions().get(ids.timer)!;
+  await fs.writeJson(getSessionHistoryFilePath(ids.timer), serializeSessionHistoryPayload({
+    ...timer,
+    meta: { ...timer.meta, wait: { id: 'authority-exec-wait', startedAt: 400, waitExecIds: ['authority-exec'] } },
+  } as Session));
+  await sessionManager.loadSessions();
+
+  const port = 35100 + Math.floor(Math.random() * 300);
+  const server = new HttpServer(port, 'wait-token');
+  setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token: 'wait-token', enableTrigger: false, enableWebUI: true });
+  await server.start();
+  const list = async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sessions`, { headers: { Authorization: 'Bearer wait-token' } });
+    assert.equal(response.status, 200);
+    return (await response.json() as any).sessions as any[];
+  };
+  try {
+    const initial = await list();
+    const timerStub = initial.find(item => item.id === ids.timer);
+    assert.equal(timerStub.runtimeState.state, 'waiting'); assert.equal(timerStub.runtimeState.waiting.waitingFor, 'timer');
+    assert.equal(timerStub.runtimeState.waiting.timeoutSeconds, 30);
+    const waitAllStub = initial.find(item => item.id === ids.waitAll);
+    assert.equal(waitAllStub.runtimeState.waiting.waitingFor, 'sessions');
+    assert.deepEqual(waitAllStub.runtimeState.waiting.waitAllSessions, ['child-a', 'child-b']);
+    assert.deepEqual(waitAllStub.runtimeState.waiting.satisfiedSessions, ['child-a']);
+    const execStub = initial.find(item => item.id === ids.exec);
+    assert.equal(execStub.runtimeState.waiting.waitingFor, 'exec');
+    assert.deepEqual(execStub.runtimeState.waiting.waitExecIds, ['exec-a', 'exec-b']);
+
+    await sessionManager.getSession(ids.timer);
+    const hydrated = (await list()).find(item => item.id === ids.timer);
+    assert.equal(hydrated.runtimeState.waiting.waitingFor, 'exec');
+    assert.deepEqual(hydrated.runtimeState.waiting.waitExecIds, ['authority-exec']);
+  } finally {
+    await server.stop(); setHttpServer(null);
+    for (const id of Object.values(ids)) await sessionManager.deleteSession(id).catch(() => {});
   }
 });
 

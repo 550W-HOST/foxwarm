@@ -66,8 +66,10 @@ Each database is exported from a read snapshot with bounded buffering. Existing 
 
 Back up the complete data directory as one restore set. For live databases, use a SQLite-consistent online backup or a quiesced checkpoint/copy procedure; copying only the main `.sqlite` file while WAL writers are active is not sufficient. Include:
 
-- both authoritative SQLite databases and their consistent WAL state or snapshots;
-- live session JSON and metadata;
+- `state/archive-store.sqlite`, `state/llm-request-journal.sqlite`, and
+  `state/catalog.sqlite`, each captured as a SQLite-consistent snapshot;
+- live per-session JSON and the one-time `sessions.json.pre-catalog-sqlite-v1.bak`
+  migration evidence when present;
 - the session-ID reservation ledger and any pending move journal;
 - image blobs and LanceDB/vector data.
 

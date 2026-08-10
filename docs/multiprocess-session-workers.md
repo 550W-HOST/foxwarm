@@ -33,7 +33,7 @@ The implementation has a substantial real-child foundation, but Session-worker p
 | --- | --- |
 | `sessionWorkers` | Defaults off. When enabled, production bootstrap assembles the store/supervisor/ingress and routes the normal-ingress vertical slice through Workers. |
 | `dbWorkers` | Defaults on and currently means only the LanceDB/vector owner. Archive and LLM-request-journal SQLite are not moved behind this worker. |
-| Session authority | `state/sessions/<id>.json` is the full semantic authority. Main remains the sole shared `sessions.json` catalog writer. |
+| Session authority | `state/sessions/<id>.json` is the full semantic authority. Main remains the sole `state/catalog.sqlite` writer. |
 | Ownership | One durable generation/incarnation owns one hot Session. Exact process identity, inert candidates, exit confirmation, and stale-generation fencing are implemented. |
 | Mailbox | Main can validate and persist one ordinary QueueItem for an already-ready exact Worker; JSON replacement precedes mailbox acknowledgement. |
 | Turn execution | `SessionWorkerHost` invokes the same `SessionTurnRunner` used by local placement. There is no reduced Worker-only turn state machine. |
@@ -176,7 +176,7 @@ Before changing the production default or allowing `sessionWorkers:true`, verify
 These are current decisions, not suggestions for a new implementation:
 
 - **One runner:** local and Worker placement use the canonical `SessionTurnRunner`.
-- **One authority:** `state/sessions/<id>.json` is the complete semantic authority; Main remains the catalog writer.
+- **One authority:** `state/sessions/<id>.json` is the complete semantic authority; Main alone writes the identity/topology projection in `state/catalog.sqlite`.
 - **No persisted revision:** committed publication uses reliable awaited full bounded projections and authoritative resync, not a new persisted `stateRevision`.
 - **Trusted placement:** Session workers stay inside the Main trusted host/deployment boundary. Remote nodes are bounded execution targets, not Session-worker hosts.
 - **No generic claims:** do not restore the removed catalog coordinator, mutation-claim, release, or opaque-capability abstractions without a concrete supported caller.

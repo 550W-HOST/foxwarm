@@ -3,6 +3,7 @@ import test from 'node:test';
 import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import {
   LocalRpcTransport,
   RpcClient,
@@ -10,6 +11,7 @@ import {
   RpcServiceRegistry,
 } from './rpc';
 import * as sessionManager from './sessionManager';
+import { sessionCatalogStore } from './session/catalogStore';
 import * as vector from './vector';
 import {
   createSessionRuntimeServiceHandler,
@@ -224,15 +226,19 @@ test('loaded alias resolution rejects stale, forged, and duplicate cache identit
   const alias = `${firstId}-alias`; const forged = `${firstId}-forged`;
   try {
     first.aliases = [alias]; second.aliases = [];
+    await sessionManager.saveSessionCatalogEntries([firstId, secondId]);
     sessionManager.updateAliasCache([alias], firstId);
     assert.equal(sessionManager.resolveLoadedSessionId(alias), firstId, 'valid cached membership resolves');
     sessionManager.updateAliasCache([forged], firstId);
     assert.equal(sessionManager.resolveLoadedSessionId(forged), forged, 'cache-only membership is ignored');
     first.aliases = [];
+    await sessionManager.saveSessionCatalogEntries([firstId]);
     assert.equal(sessionManager.resolveLoadedSessionId(alias), alias, 'removed alias invalidates its cache hit');
     sessionManager.updateAliasCache([alias], firstId); second.aliases = [alias];
+    await sessionManager.saveSessionCatalogEntries([firstId, secondId]);
     assert.equal(sessionManager.resolveLoadedSessionId(alias), secondId, 'stale cache yields to unique current membership');
     first.aliases = [alias];
+    await sessionManager.saveSessionCatalogEntries([firstId]);
     assert.equal(sessionManager.resolveLoadedSessionId(alias), alias, 'duplicate current owners fail unresolved');
     second.aliases = [firstId];
     assert.equal(sessionManager.resolveLoadedSessionId(firstId), firstId, 'an exact real ID wins before aliases');
@@ -251,16 +257,17 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
   const { session: stub } = await sessionManager.createEmptySession(sessionId);
   const alias = `${sessionId}-alias`;
   stub.displayName = 'Catalog name'; stub.pinned = true; stub.sidebarOrder = 7; stub.aliases = [alias];
+  stub.meta.wait = { id: 'catalog-timer-wait', startedAt: 10, timeoutSeconds: 30 };
   await sessionManager.saveSession(sessionId);
-  const catalogBefore = await fs.readFile(SESSIONS_FILE);
+  const catalogBefore = JSON.stringify(sessionCatalogStore.get(sessionId));
   const worker = {
     ...stub,
     history: [{ role: 'user', parts: [{ text: 'authoritative worker history' }], __meta: { seq: 1, timestamp: 123 } }],
-    queue: [{ type: 'background', parts: [{ text: 'authoritative worker queue' }] }],
+    queue: [1, 2, 3].map(index => ({ type: 'background', parts: [{ text: `authoritative worker queue ${index}` }] })),
     contextFrontier: [{ kind: 'message', seq: 1 }],
     persistentMemorySnapshot: 'worker prompt',
     busy: true, busyStartedAt: 100, currentNode: 'worker-node', cwd: '/worker/cwd', model: 'worker/model',
-    meta: { lastMessageTime: 123, messageCount: 1 },
+    meta: { lastMessageTime: 123, messageCount: 1, wait: { id: 'worker-exec-wait', startedAt: 20, waitExecIds: ['worker-exec'] } },
     stats: { totalCachedTokens: 1, totalInputTokens: 2, totalOutputTokens: 3, lastUsage: null },
   } as Session;
   await writeAuthoritativeSessionState(worker);
@@ -308,13 +315,13 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     (sessionManager as any).getExistingSession = async (...args: any[]) => {
       forgedLoads += 1; return originalForgedLoader(...args as [string]);
     };
-    stub.aliases = []; sessionManager.updateAliasCache([alias], sessionId);
+    stub.aliases = []; await sessionManager.saveSessionCatalogEntries([sessionId]); sessionManager.updateAliasCache([alias], sessionId);
     try {
       assert.equal((await client.call('getSession', { sessionId: alias })).session, null);
       await assert.rejects(() => client.call('getHistory', { sessionId: alias }), { code: 'SESSION_NOT_FOUND' });
       assert.equal(forgedLoads, 0);
     } finally {
-      stub.aliases = [alias]; (sessionManager as any).getExistingSession = originalForgedLoader;
+      stub.aliases = [alias]; await sessionManager.saveSessionCatalogEntries([sessionId]); (sessionManager as any).getExistingSession = originalForgedLoader;
     }
 
     const projected = (await client.call('getSession', { sessionId: alias })).session!;
@@ -322,10 +329,12 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     assert.equal(projected.busy, true); assert.equal(projected.currentNode, 'worker-node');
     assert.equal(projected.displayName, 'Catalog name'); assert.equal(projected.pinned, true); assert.equal(projected.sidebarOrder, 7);
     projected.runtimeState.queueLength = 999; projected.tokenUsage.inputTokens = 999;
-    assert.equal((await client.call('getSession', { sessionId })).session!.runtimeState.queueLength, 1);
+    assert.equal((await client.call('getSession', { sessionId })).session!.runtimeState.queueLength, 3);
     assert.equal((await client.call('getSession', { sessionId })).session!.tokenUsage.inputTokens, 2);
     const listed = (await client.call('listSessions', {})).sessions.find(item => item.id === sessionId)!;
     assert.equal(listed.model, 'worker/model');
+    assert.equal(listed.queueLength, 3); assert.equal(listed.runtimeState.queueLength, 3); assert.notEqual(listed.runtimeState.state, 'idle');
+    assert.equal(listed.runtimeState.waiting?.waitingFor, 'exec'); assert.deepEqual(listed.runtimeState.waiting?.waitExecIds, ['worker-exec']);
     registry.markStale(identity);
     assert.equal((await client.call('getSession', { sessionId })).session!.busy, true);
 
@@ -334,12 +343,12 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     assert.equal(history!.messages[0].parts[0].text, 'authoritative worker history');
     assert.equal(history!.messages[0].__meta?.seq, 1);
     assert.deepEqual(history!.messages[0].__meta?.contextFrontierItem, { kind: 'message', seq: 1 });
-    assert.equal(history!.queue[0].parts![0].text, 'authoritative worker queue');
+    assert.equal(history!.queue[0].parts![0].text, 'authoritative worker queue 1');
     assert.equal(history!.persistentMemorySnapshot, 'worker prompt');
     history!.messages[0].parts[0].text = 'caller mutation'; history!.queue[0].parts![0].text = 'caller queue mutation';
     assert.equal((await client.call('getHistory', { sessionId }))!.messages[0].parts[0].text, 'authoritative worker history');
     assert.deepEqual(await fs.readFile(authorityPath), authorityBefore);
-    assert.deepEqual(await fs.readFile(SESSIONS_FILE), catalogBefore);
+    assert.equal(JSON.stringify(sessionCatalogStore.get(sessionId)), catalogBefore);
 
     const mismatchRegistry = new SessionWorkerProjectionRegistry();
     mismatchRegistry.establish({ sessionId, generation: identity.generation + 1, incarnationId: 'mismatched-incarnation' });
@@ -357,7 +366,7 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
       assert.equal(mismatchLoads, 0);
     } finally { (sessionManager as any).getExistingSession = originalMismatchLoader; mismatchTransport.close(); }
     assert.deepEqual(await fs.readFile(authorityPath), authorityBefore);
-    assert.deepEqual(await fs.readFile(SESSIONS_FILE), catalogBefore);
+    assert.equal(JSON.stringify(sessionCatalogStore.get(sessionId)), catalogBefore);
 
     await fs.remove(authorityPath);
     await assert.rejects(() => client.call('getHistory', { sessionId }), { code: 'SESSION_WORKER_HISTORY_UNAVAILABLE' });
@@ -412,4 +421,52 @@ test('SessionRuntime facade starts event publication and drains locally', async 
     ready: false,
     eventsStarted: false,
   });
+});
+
+test('SessionRuntime list pagination is catalog-indexed and returns a stable total', async () => {
+  await sessionManager.loadSessions();
+  const ids = [makeSessionId('runtime_page_a'), makeSessionId('runtime_page_b'), makeSessionId('runtime_page_c')];
+  try {
+    for (let index = 0; index < ids.length; index += 1) {
+      const { session } = await sessionManager.createEmptySession(ids[index]);
+      session.meta = { ...(session.meta || {}), lastMessageTime: Number.MAX_SAFE_INTEGER - index, messageCount: index };
+      if (index === 0) {
+        session.promptCacheKey = 'normal-save-cache-key'; session.lastAppliedMailboxId = 8;
+        session.goalState = { goal: 'normal body', remindEvery: 5, anchorSeq: 0, updatedAt: 1 };
+        session.systemPromptFiles = ['MEMORY.md']; session.indexingState = { inProgress: true, startedAt: 1 } as any;
+        session.contextFrontier = []; (session.meta as any).managedSession = { pendingInbox: [] };
+        (session.meta as any).wait = {
+          id: 'normal-save-wait', startedAt: 1, waitExecIds: ['exec-a'],
+          waitAll: {
+            sessions: ['child-a'], satisfiedSessions: [],
+            deferredQueue: [{ type: 'background', parts: [{ text: 'never project this body' }] }],
+          },
+        };
+      }
+      await sessionManager.saveSession(ids[index]);
+      const catalogProjection = sessionCatalogStore.get(ids[index]);
+      assert.equal(Object.prototype.hasOwnProperty.call(catalogProjection, 'queue'), false);
+      assert.equal(catalogProjection?.queueLength, 0);
+      if (index === 0) {
+        const rawDb = new DatabaseSync(sessionCatalogStore.filePath, { readOnly: true });
+        const raw = JSON.parse((rawDb.prepare('SELECT metadata_json FROM session_catalog WHERE session_id=?').get(ids[index]) as any).metadata_json);
+        rawDb.close();
+        for (const field of ['queue', 'history', 'contextFrontier', 'promptCacheKey', 'lastAppliedMailboxId', 'goalState', 'systemPromptFiles', 'indexingState']) {
+          assert.equal(Object.prototype.hasOwnProperty.call(raw, field), false, `${field} leaked from normal save`);
+        }
+        assert.equal(Object.prototype.hasOwnProperty.call(raw.meta || {}, 'managedSession'), false);
+        assert.deepEqual(raw.meta.wait, {
+          id: 'normal-save-wait', startedAt: 1, waitExecIds: ['exec-a'], waitAll: { sessions: ['child-a'] },
+        });
+      }
+    }
+    const { client, transport } = createLocalClient();
+    try {
+      const page = await client.call('listSessions', { limit: 2, offset: 1 });
+      assert.ok(page.total >= 3);
+      assert.deepEqual(page.sessions.map(session => session.id), [ids[1], ids[2]]);
+    } finally { transport.close(); }
+  } finally {
+    for (const id of ids) await sessionManager.deleteSession(id).catch(() => {});
+  }
 });
