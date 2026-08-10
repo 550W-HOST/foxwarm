@@ -3,7 +3,7 @@ import { ArrowLeft, ExternalLink } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import { getRuntimeStateSummary, isSessionRuntimeActive } from '../sessionRuntimeState'
 import { API_BASE_PATH } from '../config'
-import { createSessionListRefreshScheduler } from '../sessionListRefresh'
+import { createSessionListRefreshScheduler, requestSessionListStreamOpenResync } from '../sessionListRefresh'
 import { BoundedReplayRevisionMismatch, createEpochRows, filterPresentationPathForAgent, mergeDeltaRows, mergeForcedPresentationPath, mergeHttpRows, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from '../boundedSessionReplay'
 
 interface ArchitectureViewProps {
@@ -337,7 +337,7 @@ export default function ArchitectureView({
     const sources: EventSource[] = []
     const batches = architectureSubscriptionIds.length ? Array.from({ length: Math.ceil(architectureSubscriptionIds.length / 100) }, (_, index) => architectureSubscriptionIds.slice(index * 100, index * 100 + 100)) : [[]]
     for (const batch of batches) { const params = new URLSearchParams(); batch.forEach(id => params.append('sessionId', id)); const queryString = params.toString()
-      const source = new EventSource(`${API_BASE_PATH}/sessions/stream${queryString ? `?${queryString}` : ''}`); sources.push(source); source.onmessage = event => { try { if (selectedAgentRef.current !== subscriptionAgent) return; const data = JSON.parse(event.data)
+      const source = new EventSource(`${API_BASE_PATH}/sessions/stream${queryString ? `?${queryString}` : ''}`); sources.push(source); source.onopen = () => requestSessionListStreamOpenResync(scheduler); source.onmessage = event => { try { if (selectedAgentRef.current !== subscriptionAgent) return; const data = JSON.parse(event.data)
         if (data.type === 'session-list-delta') { mergeDeltaRows(rowStoreRef.current, data.sessions || [], data.deletedIds || []); setSessions([...rowStoreRef.current.rows.values()]) }
         if (data.type === 'session-list-invalidated' || data.type === 'sessions-updated') { const identity = data.eventId !== undefined ? `${data.eventId}:${data.presentationRevision ?? ''}` : null; if (!identity || invalidationIdentityRef.current !== identity) { invalidationIdentityRef.current = identity; scheduler.requestRefresh() } }
       } catch {} } }

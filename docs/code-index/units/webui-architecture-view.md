@@ -45,7 +45,7 @@ Renders a bounded hierarchical architecture view with global catalog summary sta
 
 - Receives only navigation/focus callbacks from its parent; the view owns its bounded query/cache lifecycle.
 - The Code `foxwarmEmbed=agents` leaf lazily reuses this component inside a stable Agents custom editor and bridges selection to deterministic chat editors without owning another global Session mirror.
-- Global SSE subscribes only to loaded Architecture rows for immediate state/deletion deltas; catalog invalidation refetches the current bounded root window through the fixed refresh scheduler.
+- Global SSE subscribes only to loaded Architecture rows for immediate state/deletion deltas, retaining one invalidation-only stream while the row set is empty. Catalog invalidation refetches the current bounded root window through the fixed refresh scheduler; each new/reconnected batch also submits that scheduler's post-open resync, so replacement gaps close while sibling opens coalesce and stable subscription signatures do not loop.
 - Agent changes clear historical rows, branches, expansion, summaries, refs, and epochs before loading the new forest; collapse and root-window changes prune unreachable descendants.
 - The current Session is independently loaded by exact ID with its presentation path. In unfiltered mode, off-page canonical path rows become a forced bounded ownership/render chain. Under an agent filter, a different-agent focus is not forced; a matching focus keeps only its contiguous same-agent suffix after the nearest cross-agent boundary, preserving the filtered real forest without duplicate roots/edges. Path arrival/change re-expands focus without materializing the agent forest.
 - `onSelectSession` navigates to a specific session's detail/chat view

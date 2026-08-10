@@ -54,7 +54,7 @@ test('Sidebar keeps a newly forked child when an older bounded-window response a
   let parentSessionId
   let childSessionId
   try {
-    await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'networkidle2' })
+    await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
 
     parentSessionId = await page.evaluate(async () => {

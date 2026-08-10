@@ -311,6 +311,7 @@ async function loadRefreshScheduler() {
   const {
     createSessionListRefreshScheduler,
     getSessionListRefreshDelayMs,
+    requestSessionListStreamOpenResync,
     SESSION_LIST_HIDDEN_REFRESH_DELAY_MS,
     SESSION_LIST_VISIBLE_REFRESH_DELAY_MS,
   } = await loadTypeScriptModule('../src/sessionListRefresh.ts')
@@ -323,6 +324,7 @@ async function loadRefreshScheduler() {
   }
   return {
     createSessionListRefreshScheduler,
+    requestSessionListStreamOpenResync,
     clock,
     options,
     setVisibilityState: state => { visibilityState = state },
@@ -330,6 +332,23 @@ async function loadRefreshScheduler() {
     visibleDelayMs: SESSION_LIST_VISIBLE_REFRESH_DELAY_MS,
   }
 }
+
+test('Session-list sibling stream opens coalesce into one bounded post-open resync', async () => {
+  const { createSessionListRefreshScheduler, requestSessionListStreamOpenResync, clock, options, visibleDelayMs } = await loadRefreshScheduler()
+  let refreshCount = 0; const scheduler = createSessionListRefreshScheduler(async () => { refreshCount++ }, options)
+  requestSessionListStreamOpenResync(scheduler); requestSessionListStreamOpenResync(scheduler); requestSessionListStreamOpenResync(scheduler)
+  assert.equal(clock.pendingCount(), 1)
+  clock.advanceBy(visibleDelayMs); await flushRefreshPromises(); assert.equal(refreshCount, 1)
+  assert.equal(clock.pendingCount(), 0, 'stable watched IDs do not create a refresh loop after the resync')
+})
+
+test('Session-list stream reconnect schedules a later bounded resync', async () => {
+  const { createSessionListRefreshScheduler, requestSessionListStreamOpenResync, clock, options, visibleDelayMs } = await loadRefreshScheduler()
+  let refreshCount = 0; const scheduler = createSessionListRefreshScheduler(async () => { refreshCount++ }, options)
+  requestSessionListStreamOpenResync(scheduler); clock.advanceBy(visibleDelayMs); await flushRefreshPromises(); assert.equal(refreshCount, 1)
+  requestSessionListStreamOpenResync(scheduler); assert.equal(clock.pendingCount(), 1)
+  clock.advanceBy(visibleDelayMs); await flushRefreshPromises(); assert.equal(refreshCount, 2)
+})
 
 test('global refresh scheduler uses a fixed 1s visible deadline across later intents and visibility changes', async () => {
   const { createSessionListRefreshScheduler, clock, options, setVisibilityState, visibleDelayMs } = await loadRefreshScheduler()
