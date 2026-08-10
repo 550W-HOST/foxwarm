@@ -27,7 +27,7 @@ The primary source entry points are:
 
 ## Current status
 
-The implementation has a substantial real-child foundation, but normal production placement is deliberately disabled.
+The implementation has a substantial real-child foundation, but Session-worker placement remains experimental and defaults off. Deployments should keep `sessionWorkers` omitted or explicitly disabled unless they are intentionally evaluating the experimental placement.
 
 | Area | Current state |
 | --- | --- |
@@ -41,10 +41,21 @@ The implementation has a substantial real-child foundation, but normal productio
 | History and compaction | Detached authoritative history reads and synchronous awaited Worker compaction are implemented and tested. Background compact jobs remain unsupported. |
 | Final delivery | Main-owned committed-final delivery carries a serialized QueueSource and makes one delivery attempt after commit/publication. There is no outbox or automatic retry. |
 | Tool placement | Fixed Main reverse services cover the implemented Worker paths for management, Node execution, file delivery, final delivery, MCP, vector, and publication. Child creation (including fork via read-only detached authority read), the catalog session list, and cross-session message reads route through the main-management facade with stale-generation fencing. Unsupported paths fail explicitly before effects. |
-| Normal ingress | `MessageRouter` routes ordinary busy/idle channel/WebUI input through the closed ensure/spawn/append/run ingress operation (`submitEnsuringWorker`), and all Main-side enqueue producers (timer, wait-timeout, ONBOOT, node events, RPC enqueue, inter-session delivery) share the same durable boundary through the session-manager sink. Managed sessions fail closed retryably at that boundary; worker-fenced stop/dequeue/retry and settings updates are explicitly unsupported. Startup resumes durable pending mailbox intents non-fatally. |
+| Normal ingress | `MessageRouter` routes ordinary busy/idle channel/WebUI input through the closed ensure/spawn/append/run ingress operation (`submitEnsuringWorker`), and all Main-side enqueue producers (timer, wait-timeout, ONBOOT, node events, RPC enqueue, inter-session delivery) share the same durable boundary through the session-manager sink. Managed sessions fail closed retryably at that boundary; exact fenced stop and supported Worker-owned settings use closed operations, while dequeue/retry and explicitly unsupported settings/admin remain unavailable. Startup resumes durable pending mailbox intents non-fatally. |
 | Lifecycle handback | Idle/crash/shutdown release runs one closed supervisor-owned flow: the supervisor's single injected Main handback step reconciles the mailbox cursor against the authoritative JSON and refreshes the Main catalog stub read-only before the fence is released; handback failure retains the fence fail-closed. Idle release postpones while the worker reports a busy owner, queued work, or running background exec processes via the exact `idleStatus` runtime method. |
 
 The distinction is important: a passing real-child test proves a closed seam, not that `sessionWorkers:true` is ready for ordinary users.
+
+## Downgrade and rollout contract
+
+`sessionWorkers:false` changes the active placement; it does not retire durable Worker lineage. Draining every Worker, reaching zero pending mailbox rows, and restarting in local mode are necessary operational steps, but they are not sufficient preparation for running code from before the Session-worker state format.
+
+- A Session that has never used Worker ingress has cursor `0` and no nonzero ownership/mailbox lineage. Its current version-1 JSON remains readable by pre-Session-worker code. If that old code saves the Session, it removes the version/cursor fields; current code can later perform its normal legacy upgrade and restore cursor `0` safely.
+- After a Session has any nonzero Worker cursor/lineage, running pre-Session-worker code against it is unsupported. An old local save preserves ordinary history but removes `sessionStateVersion` and `lastAppliedMailboxId`, while `session-runtime.sqlite` still records the nonzero acknowledged cursor. Current code must treat that SQLite-ahead condition as impossible and fail closed; it must never infer the missing JSON cursor from SQLite.
+- There is no lineage-retirement command or migration in the current release. A future downgrade would require an explicit current-version preparation that proves and retires the complete lineage before old code starts. Do not claim that draining or disabling Workers performs this step.
+- If an unsupported downgrade has already rewritten a nonzero-lineage authority, recover the verified matching authority/catalog/runtime-database backup set or remain on current code and follow a separately reviewed evidence-bound recovery. Do not manufacture a cursor, add a second cursor mirror, or continue old-code writes.
+
+Keep Session workers off for observation deployments that may need to return to pre-Session-worker code. The canonical compatibility decision is [D-process-topology-session-worker-downgrade](./code-index/threads/process-topology-and-rpc.md#d-process-topology-session-worker-downgrade).
 
 ## What is already implemented
 
@@ -171,6 +182,7 @@ These are current decisions, not suggestions for a new implementation:
 - **No local fallback after Worker selection:** an ambiguous durable Worker submission remains durable and retryable; it must not silently run a second local turn.
 - **No first-version delivery ledger:** final external delivery is one Main attempt after canonical commit/publication; there is no automatic retry or outbox in this release.
 - **No speculative hardening:** prioritize normal supported callers and real data-integrity/failure consequences over artificial hostile same-process scenarios.
+- **No implicit downgrade after Worker lineage:** disabling/draining placement does not make a nonzero-lineage Session safe for pre-Session-worker saves; use the explicit downgrade contract above.
 
 ## Open questions
 

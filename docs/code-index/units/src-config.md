@@ -41,13 +41,14 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 - Agent, skill, and MCP paths may also be selected through their documented app-config fields.
 - The archive moved-ID reservation ledger is explicit durable state at `<data-root>/state/session-id-reservations.jsonl`.
 - The temporary crash-recovery journal for one in-progress identity move is `<data-root>/state/session-id-move-pending.json`.
-- Future session-worker ownership/mailbox coordination uses `<data-root>/state/session-runtime.sqlite`; full semantic session state remains in the existing authoritative per-session JSON files under `<data-root>/state/sessions/`. The disconnected foundation does not open the runtime database during normal startup.
+- When `sessionWorkers` is enabled, ownership/mailbox coordination uses `<data-root>/state/session-runtime.sqlite`; full semantic session state remains in the authoritative per-session JSON files under `<data-root>/state/sessions/`. Default-disabled startup does not open the Session-worker runtime database, independently of `dbWorkers` placement.
 
 Worker placement is startup configuration:
 
-- `sessionWorkers` accepts a boolean or object. Omission/`false` keeps the default in-process session runtime. `true` enables default worker settings. An object enables workers unless `enabled:false`; `idleSeconds` defaults to 60 and accepts numeric YAML integers from 1 through 86,400 (boolean and string coercion is rejected).
+- `sessionWorkers` is experimental and accepts a boolean or object. Omission/`false` keeps the default in-process session runtime. `true` enables default worker settings. An object enables workers unless `enabled:false`; `idleSeconds` defaults to 60 and accepts numeric YAML integers from 1 through 86,400 (boolean and string coercion is rejected).
 - `dbWorkers` is boolean, defaults to `true`, and currently moves only the LanceDB/vector owner into a child process.
 - Worker placement changes require a process restart. Managed channel hot reload does not change process topology.
+- Disabling/draining Session workers does not erase durable Worker lineage. Pre-Session-worker downgrade is supported only for Sessions that never acquired a nonzero cursor; after nonzero lineage it requires future explicit retirement tooling that does not currently exist. See [D-process-topology-session-worker-downgrade](../threads/process-topology-and-rpc.md#d-process-topology-session-worker-downgrade).
 
 These are selected runtime overrides, not an environment-to-YAML migration.
 
@@ -91,6 +92,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 ## Compatibility
 
 - `CONFIG_PATH`, model-root `models`, provider `model`, and provider `provider` are documented readers. The removed app-config `paths.modelsConfigPath` and generic `MODELS_CONFIG_PATH` override are not readers.
+- Pre-Session-worker code may read and rewrite a never-enabled/cursor-0 Session, after which the current legacy reader restores cursor `0`. A nonzero Worker lineage is not backward-compatible with old saves because they remove the authoritative JSON cursor while SQLite retains its acknowledgement; current code deliberately fails that SQLite-ahead condition closed.
 - `TRIGGER_PORT`, `WEBUI_PORT`, and `WORKSPACE_DIR` remain exported compatibility aliases.
 - New writes use current YAML shapes; no `.env` migration contract exists.
 
