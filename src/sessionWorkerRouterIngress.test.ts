@@ -15,6 +15,7 @@ import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContext
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
+import { COMMANDS } from './commands';
 
 function baseSession(id: string): Session {
   return {
@@ -25,9 +26,9 @@ function baseSession(id: string): Session {
   } as Session;
 }
 
-function makeCtx(replies: any[]): ChannelContext {
+function makeCtx(replies: any[], platform = 'test'): ChannelContext {
   return {
-    platform: 'test', channelId: 'test-channel', channelType: 'test',
+    platform, channelId: platform === 'webui' ? 'webui' : 'test-channel', channelType: platform,
     channelUserId: 'room', conversationId: 'room', username: 'user', senderId: 'sender-1',
     preferDirectReply: true,
     reply: async (text: string, options: any) => { replies.push({ text, options }); },
@@ -44,11 +45,12 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root }, resolveExactFinalSourceContext: sourceContexts.resolve,
   });
-  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, id => id === sessionId);
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
   await fs.ensureFile(SESSIONS_FILE); const sessionsBefore = await fs.readFile(SESSIONS_FILE);
   const stubSession = { id: sessionId, busy: false, queue: [], meta: {}, history: [] } as any as Session;
+  sessionManager.getAllSessions().set(sessionId, stubSession);
   const originals = {
     getOrCreateSessionForChannel: sessionManager.getOrCreateSessionForChannel,
     enqueueSessionItem: sessionManager.enqueueSessionItem,
@@ -98,15 +100,26 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
     assert.equal(authority.history.length, 4);
     assert.equal(localRuns, 0); assert.equal(mainLocalMutationCalls, 0);
 
-    // Destructive local turn controls fail closed for a worker-fenced session.
-    for (const action of ['stop', 'dequeue', 'retry'] as const) {
-      await assert.rejects(
-        () => sessionRuntime.control(sessionId, action),
-        (error: any) => error?.code === 'SESSION_WORKER_CONTROL_UNSUPPORTED',
-      );
-    }
+    // Retry uses the exact Worker owner and canonical parts:null turn without
+    // appending a mailbox/queue record; its serialized source keeps direct
+    // channel final delivery equivalent to ordinary ingress.
+    stubSession.busy = false;
+    const retryCtx = makeCtx(replies, 'webui');
+    await COMMANDS['/retry'].handler(retryCtx, [], sessionId, stubSession);
+    authority = await fs.readJson(statePath);
+    assert.equal(authority.history.length, 5);
+    assert.equal(authority.history[4].role, 'model');
+    assert.equal(store.countMailboxIntents(), 2, 'retry does not invent a queue/mailbox intent');
+    assert.equal(replies.length, 4);
+    assert.equal(replies[2].text, '🔄 Retrying last request...');
+    assert.equal(replies[3].text, 'deterministic child answer');
+    await assert.rejects(() => sessionRuntime.control(sessionId, 'dequeue'),
+      (error: any) => error?.code === 'SESSION_WORKER_CONTROL_UNSUPPORTED');
+    await assert.rejects(() => sessionRuntime.control(`${sessionId}-unknown`, 'retry', makeCtx(replies)),
+      (error: any) => error?.code === 'SESSION_WORKER_SESSION_NOT_FOUND');
+    assert.equal(store.findOwnership(`${sessionId}-unknown`), undefined);
+    assert.equal(sourceContexts.size, 0);
     assert.equal(mainLocalMutationCalls, 0);
-    assert.deepEqual(await fs.readFile(SESSIONS_FILE), sessionsBefore);
   } finally {
     (sessionManager as any).getOrCreateSessionForChannel = originals.getOrCreateSessionForChannel;
     (sessionManager as any).enqueueSessionItem = originals.enqueueSessionItem;
@@ -118,6 +131,89 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
     await supervisor.shutdown(5_000).catch(() => {}); store.close();
     resetChannelsForTests(); setChannelsStoreForTests(null);
     await fs.remove(root);
+    sessionManager.getAllSessions().delete(sessionId);
+  }
+});
+
+test('Worker retry response loss is reported as ambiguous after exactly one committed and delivered result', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-router-retry-ambiguous-'));
+  const sessionId = 'router-worker-retry-ambiguous';
+  const authority = baseSession(sessionId);
+  authority.history = [{ role: 'user', parts: [{ text: 'retry this request' }], __meta: { timestamp: Date.now(), seq: 1 } } as any];
+  authority.nextMessageSeq = 2;
+  const stubSession = { ...baseSession(sessionId), history: authority.history.slice() } as Session;
+  const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
+  const sourceContexts = new SessionWorkerSourceContextRegistry();
+  const supervisor = new SessionWorkerSupervisor({
+    store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
+    workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_DROP_RETRY_RESPONSE_AFTER_COMMIT: '1' },
+    resolveExactFinalSourceContext: sourceContexts.resolve,
+  });
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, id => id === sessionId);
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  const replies: any[] = [];
+  try {
+    await fs.outputJson(statePath, serializeSessionHistoryPayload(authority));
+    sessionManager.getAllSessions().set(sessionId, stubSession);
+    await supervisor.reconcileStartupOwnerships();
+    await sessionRuntime.initializeSessionRuntime({ worker: { store, registry: supervisor.projectionRegistry, ingress } });
+
+    await COMMANDS['/retry'].handler(makeCtx(replies, 'webui'), [], sessionId, stubSession);
+
+    const committed = await fs.readJson(statePath);
+    assert.equal(committed.history.filter((message: any) => message.role === 'user').length, 1);
+    assert.equal(committed.history.filter((message: any) => message.role === 'model').length, 1);
+    assert.equal(committed.history.at(-1)?.parts?.[0]?.text, 'deterministic child answer');
+    assert.equal(store.countMailboxIntents(), 0, 'retry ambiguity does not create or replay a mailbox intent');
+    assert.equal(replies.filter(reply => reply.text === 'deterministic child answer').length, 1, 'the committed final was delivered exactly once before response loss');
+    assert.ok(replies.some(reply => String(reply.text).startsWith('⚠️ Retry outcome is unknown:')));
+    assert.ok(!replies.some(reply => String(reply.text).startsWith('❌ Retry failed:')));
+    assert.equal(sourceContexts.size, 0);
+  } finally {
+    await sessionRuntime.shutdownSessionRuntime().catch(() => {});
+    await supervisor.shutdown(5_000).catch(() => {}); store.close();
+    sessionManager.getAllSessions().delete(sessionId);
+    await fs.remove(root);
+  }
+});
+
+test('serialized retry handler cancellation and deadline rejections remain definite', async () => {
+  for (const code of ['RPC_CANCELLED', 'RPC_DEADLINE_EXCEEDED']) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), `foxwarm-router-retry-${code.toLowerCase()}-`));
+    const sessionId = `router-worker-retry-${code.toLowerCase()}`;
+    const authority = baseSession(sessionId);
+    authority.history = [{ role: 'user', parts: [{ text: 'retry this request' }], __meta: { timestamp: Date.now(), seq: 1 } } as any];
+    authority.nextMessageSeq = 2;
+    const stubSession = { ...baseSession(sessionId), history: authority.history.slice() } as Session;
+    const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
+    const sourceContexts = new SessionWorkerSourceContextRegistry();
+    const supervisor = new SessionWorkerSupervisor({
+      store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
+      workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_REJECT_RETRY_CODE: code },
+      resolveExactFinalSourceContext: sourceContexts.resolve,
+    });
+    const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, id => id === sessionId);
+    const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+    try {
+      await fs.outputJson(statePath, serializeSessionHistoryPayload(authority));
+      sessionManager.getAllSessions().set(sessionId, stubSession);
+      await supervisor.reconcileStartupOwnerships();
+      await sessionRuntime.initializeSessionRuntime({ worker: { store, registry: supervisor.projectionRegistry, ingress } });
+
+      await assert.rejects(
+        () => sessionRuntime.control(sessionId, 'retry', makeCtx([], 'webui')),
+        (error: any) => error?.code === code && error?.code !== 'SESSION_WORKER_RETRY_OUTCOME_UNKNOWN',
+      );
+      const unchanged = await fs.readJson(statePath);
+      assert.equal(unchanged.history.filter((message: any) => message.role === 'model').length, 0);
+      assert.equal(store.countMailboxIntents(), 0);
+      assert.equal(sourceContexts.size, 0);
+    } finally {
+      await sessionRuntime.shutdownSessionRuntime().catch(() => {});
+      await supervisor.shutdown(5_000).catch(() => {}); store.close();
+      sessionManager.getAllSessions().delete(sessionId);
+      await fs.remove(root);
+    }
   }
 });
 

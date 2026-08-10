@@ -73,12 +73,15 @@ test('worker guards run before unsupported handlers and exact current state tool
   for (const [name, args, extra] of [
     ['delete_session', { sessionId: 'other/session' }],
     ['get_memory_context', { timestamp: 1 }],
+    ['create_agent', { agentName: 'unsafe', convertSession: true }],
+    ['create_agent', { agentName: 'unsafe', sourceSessionId: 'other/session' }],
     ['remote_node', { action: ' list ' }], ['node_tools', { action: 'List' }],
-    ['recall', { sessionId: 'other/session' }],
     ['stop_session', { sessionId: '' }], ['stop_session', { sessionId: ' ' }],
     ['session', { action: 'update-display-name', sessionId: 'other/session', name: 'x' }],
     ['set_session_child_model', { sessionId: ' ', model: 'x' }],
-    ['recall', { agentName: ' other-agent ', vector_query: 'x' }],
+    ['set_agent_inherit', { agentName: 'main' }],
+    ['set_agent_isolated', { agentName: 'main' }],
+    ['move_session', { sessionId: session.id, newSessionId: 'moved' }],
   ] as any[]) {
     await assert.rejects(() => callTool(name, args, { ...ctx, ...(extra || {}) }), { code: 'SESSION_WORKER_TOOL_UNAVAILABLE', retryable: true });
   }

@@ -756,6 +756,9 @@ export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolConte
   const targetSessionId = args.sessionId || ctx?.sessionId;
   const exactOwner = ctx?.sessionPlacement === 'session-worker' && ctx.session
     && (targetSessionId === ctx.session.id || ctx.session.aliases?.includes(targetSessionId));
+  if (ctx?.sessionPlacement === 'session-worker' && !exactOwner) {
+    return executeMainManagementTool('get_archived_messages', args, ctx);
+  }
   if (exactOwner) checkArchivedReadPermissionForSession(ctx!.session, targetSessionId, 'get_archived_messages');
   else await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_messages');
 
@@ -793,6 +796,9 @@ export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext
   const targetSessionId = args.sessionId || ctx?.sessionId;
   const exactOwner = ctx?.sessionPlacement === 'session-worker' && ctx.session
     && (targetSessionId === ctx.session.id || ctx.session.aliases?.includes(targetSessionId));
+  if (ctx?.sessionPlacement === 'session-worker' && !exactOwner) {
+    return executeMainManagementTool('get_archived_blocks', args, ctx);
+  }
   if (exactOwner) checkArchivedReadPermissionForSession(ctx!.session, targetSessionId, 'get_archived_blocks');
   else await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_blocks');
 
@@ -1230,6 +1236,11 @@ export async function tool_recall(args: ToolArgs = {}, ctx?: ToolContext) {
     && (targetSessionId === ctx.session.id || (ctx.session.aliases || []).includes(targetSessionId))
     ? ctx.session
     : undefined;
+  const requestedAgent = typeof args.agentName === 'string' ? args.agentName : undefined;
+  if (ctx?.sessionPlacement === 'session-worker'
+    && (!trustedSession || (requestedAgent && requestedAgent !== (ctx.session?.agent || 'main')))) {
+    return executeMainManagementTool('recall', args, ctx);
+  }
   if (trustedSession) checkArchivedReadPermissionForSession(trustedSession, targetSessionId, 'recall');
   else await checkArchivedReadPermission(ctx || {}, targetSessionId, 'recall');
 

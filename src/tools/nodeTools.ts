@@ -12,6 +12,7 @@ import { getAgentDir } from '../config';
 import { copyBetweenNodes, executeRemoteNodeTool, listNodeTopology, validateNodeSelection } from '../nodeExecution';
 import { requireNodeExecutionTarget } from '../nodeExecutionService';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
+import { executeMainManagementTool } from '../mainManagementTools';
 
 export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
     const { sourceNode, sourcePath, targetNode, targetPath, overwrite = false } = args;
@@ -238,12 +239,14 @@ export async function tool_node(args: ToolArgs, ctx: ToolContext) {
     throw new Error('node.action must be "list" or "select".');
 }
 
-export const tool_node_bootstrap_info = async (_args: ToolArgs = {}) => {
+export const tool_node_bootstrap_info = async (args: ToolArgs = {}, ctx?: ToolContext) => {
+    if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('node_bootstrap_info', args, ctx);
     const token = await ensureNodePairingToken();
     return buildNodeBootstrapInfo({ pairingToken: token });
 };
 
-export const tool_node_pair_approve = async (args: ToolArgs) => {
+export const tool_node_pair_approve = async (args: ToolArgs, ctx?: ToolContext) => {
+    if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('node_pair_approve', args, ctx);
     const { pendingId, nodeId: requestedNodeId } = args;
     if (!pendingId) throw new Error('Missing required parameter: pendingId');
 
@@ -252,7 +255,8 @@ export const tool_node_pair_approve = async (args: ToolArgs) => {
     return `✅ Approved node \`${result.nodeId}\` (delivered live: ${result.deliveredLive})`;
 };
 
-export const tool_node_pair_list = async () => {
+export const tool_node_pair_list = async (args: ToolArgs = {}, ctx?: ToolContext) => {
+    if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('node_pair_list', args, ctx);
     const { listPendingPairings } = await import('../nodes/registry');
     const pendings = await listPendingPairings();
     if (pendings.length === 0) return 'No pending pairing requests.';

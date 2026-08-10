@@ -8,7 +8,7 @@ import {
   RpcServiceHandler,
 } from './rpc';
 import * as sessionManager from './sessionManager';
-import type { Message, QueueItem, Session, SessionStreamEvent, TokenUsage } from './types';
+import type { Message, QueueItem, QueueSource, Session, SessionStreamEvent, TokenUsage } from './types';
 import { isQueueItem } from './types';
 import type { SessionRuntimeState } from './sessionRuntimeState';
 import type { SessionWorkerProjection } from './sessionWorkerPersistence';
@@ -18,6 +18,7 @@ import type { SessionWorkerIngressCoordinator, SessionWorkerIngressResult } from
 import type { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { normalizeSessionWorkerIngressRequest } from './sessionWorkerIngress';
 import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
+import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
 
 export type SessionRuntimeTokenTotalsDto = {
   cachedTokens: number;
@@ -122,7 +123,7 @@ export type SessionRuntimeEventPayloads = {
   stateChanged: { sessionId: string; session: SessionRuntimeSessionDto | null };
 };
 
-export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 1, {
+export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 2, {
   getSession: rpcMethod<{ sessionId: string }, { session: SessionRuntimeSessionDto | null }>(),
   listSessions: rpcMethod<Record<string, never>, { sessions: SessionRuntimeSessionDto[] }>(),
   getHistory: rpcMethod<{ sessionId: string }, SessionRuntimeHistoryDto | null>(),
@@ -150,6 +151,7 @@ export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime
   control: rpcMethod<{
     sessionId: string;
     action: SessionRuntimeControlAction;
+    source?: QueueSource;
   }, SessionRuntimeControlResultDto>(),
   startEvents: rpcMethod<Record<string, never>, { started: true }>(),
   stopEvents: rpcMethod<Record<string, never>, { stopped: true }>(),
@@ -720,6 +722,13 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
     async control(input) {
       const sessionId = normalizeSessionId(input.sessionId);
       if (options?.worker) {
+        if (input.action === 'retry') {
+          if (!options.worker.ingress) throw new RpcError('SESSION_WORKER_OPERATION_UNAVAILABLE', 'Session-worker retry is unavailable.', true);
+          const source = input.source === undefined ? undefined : normalizeSessionTurnDeliverySource(input.source);
+          await options.worker.ingress.retryEnsuringWorker(sessionId, source);
+          return { action: 'retry' };
+        }
+        if (input.source !== undefined) throw new RpcError('SESSION_RUNTIME_INVALID_CONTROL', 'source is supported only for retry.');
         const selection = workerSelection(sessionId);
         if (selection.kind !== 'local') {
           if (input.action === 'stop' && options.worker.supervisor) {
@@ -741,7 +750,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
             }
             return { action: 'stop', abortedInFlight: false };
           }
-          throw new RpcError('SESSION_WORKER_CONTROL_UNSUPPORTED', 'dequeue and retry are not supported by Session-worker placement yet.', true);
+          throw new RpcError('SESSION_WORKER_CONTROL_UNSUPPORTED', 'dequeue is not supported by Session-worker placement yet.', true);
         }
       }
       if (input.action === 'stop') {

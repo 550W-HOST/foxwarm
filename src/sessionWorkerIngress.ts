@@ -9,7 +9,8 @@ import type { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { stableSessionWorkerJson } from './sessionWorkerStableJson';
-import type { CompactionRequest, ImageMeta, InlineDataRef, Message, MessagePart, QueueItem } from './types';
+import type { SessionWorkerProjection } from './sessionWorkerPersistence';
+import type { CompactionRequest, ImageMeta, InlineDataRef, Message, MessagePart, QueueItem, QueueSource } from './types';
 import type { SessionWorkerHistoryMutationResult, SessionWorkerSettingsPatch, SessionWorkerSettingsResult } from './sessionWorkerRuntimeService';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 
@@ -185,6 +186,13 @@ export class SessionWorkerIngressCoordinator {
     return this.sourceContexts.register(sessionId, normalizeIngressSource(item.source), context);
   }
 
+  registerRetrySourceContext(requestedSessionId: string, source: QueueSource, context?: ChannelContext): () => void {
+    if (!context) return () => {};
+    const sessionId = this.requireLoadedCatalogSession(requestedSessionId);
+    if (sessionId !== requestedSessionId) throw new RpcError('SESSION_WORKER_RETRY_INVALID', 'Session worker retry requires an exact canonical session ID.');
+    return this.sourceContexts.register(sessionId, normalizeIngressSource(source), context);
+  }
+
   async submitQueuedInput(requestedSessionId: string, item: QueueItem): Promise<SessionWorkerIngressResult> {
     const { sessionId, item: payload } = this.resolveExact(requestedSessionId, item);
     const ownership = this.store.findOwnership(sessionId);
@@ -209,6 +217,19 @@ export class SessionWorkerIngressCoordinator {
       await this.supervisor.loadProjectionActivated(sessionId, expected);
     }
     return { sessionId, ...expected };
+  }
+
+  async retryEnsuringWorker(requestedSessionId: string, source?: QueueSource): Promise<SessionWorkerProjection> {
+    const sessionId = this.requireLoadedCatalogSession(requestedSessionId);
+    if (sessionId !== requestedSessionId) throw new RpcError('SESSION_WORKER_RETRY_INVALID', 'Session worker retry requires an exact canonical session ID.');
+    this.supervisor.assertRetryAdmissionAvailable(sessionId);
+    const expected = await this.ensureReadyOwner(sessionId);
+    this.supervisor.assertRetryAdmissionAvailable(sessionId);
+    const published = this.supervisor.projectionRegistry.get(sessionId);
+    if (!published?.projection || published.generation !== expected.generation || published.incarnationId !== expected.incarnationId) {
+      await this.supervisor.loadProjectionActivated(sessionId, expected);
+    }
+    return this.supervisor.retryActivated(sessionId, expected, source);
   }
 
   async updateSettings(requestedSessionId: string, patch: SessionWorkerSettingsPatch): Promise<SessionWorkerSettingsResult> {

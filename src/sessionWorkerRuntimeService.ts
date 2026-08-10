@@ -2,7 +2,8 @@ import { defineRpcService, rpcMethod, RpcError, type RpcServiceHandler } from '.
 import type { SessionWorkerProjection } from './sessionWorkerPersistence';
 import type { SessionWorkerActivationGate } from './sessionWorkerControlService';
 import type { SessionWorkerHost } from './sessionWorkerHost';
-import type { CompactionRequest } from './types';
+import type { CompactionRequest, QueueSource } from './types';
+import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
 
 export type SessionWorkerIdleStatus = { busy: boolean; queueLength: number; runningExecCount: number };
 export type SessionWorkerInterruptResult = { stopping: boolean; abortedInFlight: boolean };
@@ -37,9 +38,10 @@ export type SessionWorkerHistoryMutationResult = {
   projection: SessionWorkerProjection;
 };
 
-export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 5, {
+export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 6, {
   loadProjection: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
+  retry: rpcMethod<{ source?: QueueSource }, SessionWorkerProjection>(),
   compactAwaited: rpcMethod<{ request: CompactionRequest }, { compacted: boolean; projection: SessionWorkerProjection }>(),
   updateSettings: rpcMethod<{ patch: SessionWorkerSettingsPatch }, SessionWorkerSettingsResult>(),
   deleteMessages: rpcMethod<{ num: number }, SessionWorkerHistoryMutationResult>(),
@@ -55,6 +57,10 @@ export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-w
 export function createSessionWorkerRuntimeServiceHandler(
   gate: SessionWorkerActivationGate,
   host: SessionWorkerHost,
+  options: {
+    beforeRetry?: () => void | Promise<void>;
+    afterRetryBeforeResponse?: () => void | Promise<void>;
+  } = {},
 ): RpcServiceHandler<typeof sessionWorkerRuntimeServiceDescriptor> {
   return {
     async loadProjection(input) {
@@ -162,6 +168,20 @@ export function createSessionWorkerRuntimeServiceHandler(
         throw new RpcError('SESSION_WORKER_MAILBOX_LIMIT', 'Mailbox prefix limit must be an integer from 1 through 4096.');
       }
       return host.runPending(input.limit);
+    },
+    async retry(input) {
+      gate.assertActive();
+      if (!input || typeof input !== 'object' || Array.isArray(input)
+        || Object.keys(input).some(key => key !== 'source')) {
+        throw new RpcError('SESSION_WORKER_RETRY_INVALID', 'retry takes an optional serialized source only.');
+      }
+      const source = Object.prototype.hasOwnProperty.call(input, 'source')
+        ? normalizeSessionTurnDeliverySource(input.source)
+        : undefined;
+      await options.beforeRetry?.();
+      const projection = await host.retry(source);
+      await options.afterRetryBeforeResponse?.();
+      return projection;
     },
     async compactAwaited(input) {
       gate.assertActive();

@@ -48,7 +48,7 @@ Worker placement is startup configuration:
 - `sessionWorkers` is experimental and accepts a boolean or object. Omission/`false` keeps the default in-process session runtime. `true` enables default worker settings. An object enables workers unless `enabled:false`; `idleSeconds` defaults to 60 and accepts numeric YAML integers from 1 through 86,400 (boolean and string coercion is rejected).
 - `dbWorkers` is boolean, defaults to `true`, and currently moves only the LanceDB/vector owner into a child process.
 - Worker placement changes require a process restart. Managed channel hot reload does not change process topology.
-- Disabling/draining Session workers does not erase durable Worker lineage. Pre-Session-worker downgrade is supported only for Sessions that never acquired a nonzero cursor; after nonzero lineage it requires future explicit retirement tooling that does not currently exist. See [D-process-topology-session-worker-downgrade](../threads/process-topology-and-rpc.md#d-process-topology-session-worker-downgrade).
+- Disabling/draining Session workers does not erase durable Worker lineage. Current-code `sessionWorkers:false` remains supported; after a nonzero cursor, pre-Session-worker code is unsupported as a writer and no lineage-retirement tooling is required. See [D-process-topology-session-worker-downgrade](../threads/process-topology-and-rpc.md#d-process-topology-session-worker-downgrade).
 
 These are selected runtime overrides, not an environment-to-YAML migration.
 

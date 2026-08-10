@@ -88,8 +88,7 @@ setDefinitionsRef(definitions, isToolDirectlyExposedToModel, getToolPermissionNo
 
 const WORKER_UNSUPPORTED_TOOLS = new Set([
     'delete_session',
-    'node_bootstrap_info', 'node_pair_approve', 'node_pair_list',
-    'create_agent', 'create_session', 'set_agent_inherit', 'set_agent_isolated', 'move_session',
+    'set_agent_inherit', 'set_agent_isolated', 'move_session',
     'get_memory_context',
 ]);
 
@@ -107,6 +106,8 @@ export function assertToolAvailableForPlacement(toolName: string, args: any, ctx
         && (targetId === currentId || (Array.isArray(owner.aliases) && owner.aliases.includes(targetId)));
     const fallbackTarget = args?.sessionId || currentId;
     const literalTarget = args?.sessionId;
+    if (toolName === 'create_agent' && args?.convertSession === true) workerUnavailable(toolName);
+    if (toolName === 'create_agent' && args?.sourceSessionId && !isCurrent(args.sourceSessionId)) workerUnavailable(toolName);
     if (toolName === 'session') {
         const action = typeof args?.action === 'string' && args.action.trim() ? args.action.trim().toLowerCase() : 'status';
         if (action === 'update-display-name' && !isCurrent(fallbackTarget)) workerUnavailable(toolName);
@@ -116,13 +117,8 @@ export function assertToolAvailableForPlacement(toolName: string, args: any, ctx
         if (action !== 'list') workerUnavailable(toolName);
     }
     if (toolName === 'stop_session' && !isCurrent(literalTarget)) workerUnavailable(toolName);
-    if (['get_archived_messages', 'get_archived_blocks', 'set_session_child_model',
+    if (['set_session_child_model',
         'set_session_compact_threshold', 'update_session_snapshot'].includes(toolName) && !isCurrent(fallbackTarget)) workerUnavailable(toolName);
-    if (toolName === 'recall') {
-        const target = typeof args?.sessionId === 'string' ? (args.sessionId.trim() || currentId) : (args?.sessionId || currentId);
-        const agent = typeof args?.agentName === 'string' ? args.agentName.trim() : args?.agentName;
-        if (!isCurrent(target) || (agent && agent !== (owner.agent || 'main'))) workerUnavailable(toolName);
-    }
 }
 
 // --- callTool dispatcher ---

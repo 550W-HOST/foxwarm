@@ -206,7 +206,13 @@ test('detached vector scope resolution matches legacy for session, alias, and ag
     assert.equal(isolated.effectiveScope, 'current-session');
     assert.deepEqual(isolated.searchOptions, { sessionIds: [session.id, ...session.aliases!] });
     (sessionManager as any).isSessionEffectivelyIsolated = () => false;
-    await assert.rejects(() => resolveMemorySearchOptions({ targetSessionId: 'other/session' }, ctx), /global vector target lookup forbidden/);
+    const other = createSession('other/session');
+    (sessionManager as any).getSessionCatalog = (id: string) => id === other.id ? other : session;
+    const otherScope = await resolveMemorySearchOptions({ targetSessionId: other.id }, {
+      sessionId: session.id, session, detachedReadOnlySession: true,
+    } as any);
+    assert.equal(otherScope.effectiveScope, 'current-session');
+    assert.deepEqual(otherScope.searchOptions, { sessionIds: [other.id, ...other.aliases!] });
   } finally {
     (sessionManager as any).getSession = originals.getSession;
     (sessionManager as any).getExistingSession = originals.getExisting;

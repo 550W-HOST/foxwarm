@@ -507,6 +507,7 @@ export async function createAgentWithMainSession(options: {
   agentName: string;
   inheritMemory?: boolean;
   sourceSessionId?: string;
+  sourceSessionOverride?: Session;
   convertSessionId?: string;
   initialMemoryFiles?: Record<string, string>;
   displayName?: string;
@@ -525,6 +526,7 @@ export async function createAgentWithMainSession(options: {
     agentName,
     inheritMemory = false,
     sourceSessionId,
+    sourceSessionOverride,
     convertSessionId,
     initialMemoryFiles,
     displayName,
@@ -546,7 +548,7 @@ export async function createAgentWithMainSession(options: {
     await deps.assertSessionIdAvailableForNewLifetime(mainSessionId);
   }
 
-  const sourceSession = sourceSessionId ? await deps.getSession(sourceSessionId) : undefined;
+  const sourceSession = sourceSessionOverride || (sourceSessionId ? await deps.getSession(sourceSessionId) : undefined);
   const sourceAgentName = sourceSession?.agent || 'main';
   const { agentDir } = await initializeAgentDirectory({
     agentName,

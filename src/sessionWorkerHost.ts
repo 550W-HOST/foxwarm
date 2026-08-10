@@ -97,6 +97,21 @@ export class SessionWorkerHost {
     return run;
   }
 
+  async retry(source?: QueueSource): Promise<SessionWorkerProjection> {
+    if (this.serializedPending > 0) throw new RpcError('SESSION_WORKER_RETRY_BUSY', 'Session worker is already processing work.', true);
+    return this.serialize(async () => {
+      await this.ensureLoaded(); await this.ensureHealthy();
+      try {
+        await this.ingestPendingMailbox(4096);
+        await this.runner!.processSessionRetry(this.session!.id, source);
+      } catch (error) {
+        if (String((error as any)?.code || '') !== 'SESSION_WORKER_AUTO_COMPACTION_FATAL') await this.resyncAfterFailure(error);
+        throw error;
+      } finally { this.flushCoalescedStreamEvents(); }
+      return buildSessionWorkerProjection(this.session!);
+    });
+  }
+
   async loadProjection(): Promise<SessionWorkerProjection> {
     return this.serialize(async () => {
       await this.ensureLoaded();

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import * as sessionManager from './sessionManager';
 import * as agentTools from './toolsSessionAgent/agents';
+import * as archiveRecallTools from './toolsSessionAgent/archiveRecall';
+import * as nodeTools from './tools/nodeTools';
 import {
   executeMainManagementTool,
   getMainManagementToolServiceStatus,
@@ -12,9 +14,12 @@ import {
 } from './mainManagementTools';
 import {
   call_tool,
+  create_agent,
   list_agents,
+  recall,
   send_to_session,
 } from './tools';
+import { tool_run_script } from './toolscript';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -43,6 +48,10 @@ test('main management service rejects missing, stale, and non-allowlisted source
     await assert.rejects(
       () => executeMainManagementTool('read' as any, {}, { sessionId: sourceId }),
       (error: any) => error?.code === 'MAIN_MANAGEMENT_OPERATION_NOT_ALLOWED',
+    );
+    await assert.rejects(
+      () => executeMainManagementTool('list_agents', { overbound: 'x'.repeat(65 * 1024) }, { sessionId: sourceId }),
+      (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS',
     );
   } finally {
     await cleanup(sourceId);
@@ -75,6 +84,40 @@ test('local transport clones request/response and resolves raw handlers at call 
     );
   } finally {
     (agentTools as any).tool_list_agents = original;
+    await cleanup(sourceId);
+  }
+});
+
+test('worker recall, agent creation, and node administration keep direct unified and ToolScript parity through the fixed service', async () => {
+  const sourceId = makeId('management_worker_tools');
+  const source = await sessionManager.getSession(sourceId);
+  const ctx: any = { sessionId: sourceId, session: source, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
+  const originals = {
+    recall: (archiveRecallTools as any).tool_recall,
+    createAgent: (agentTools as any).tool_create_agent,
+    pairList: (nodeTools as any).tool_node_pair_list,
+    bootstrap: (nodeTools as any).tool_node_bootstrap_info,
+  };
+  (archiveRecallTools as any).tool_recall = async (_args: any, rawCtx: any) => `main-recall:${rawCtx.sessionId}`;
+  (agentTools as any).tool_create_agent = async (_args: any, rawCtx: any) => `main-create-agent:${rawCtx.sessionId}`;
+  (nodeTools as any).tool_node_pair_list = async (_args: any, rawCtx: any) => `main-pair-list:${rawCtx.sessionId}`;
+  (nodeTools as any).tool_node_bootstrap_info = async (_args: any, rawCtx: any) => `main-bootstrap:${rawCtx.sessionId}`;
+  try {
+    assert.equal(await recall({ sessionId: 'other/session', target: 'overview' }, ctx), `main-recall:${sourceId}`);
+    assert.equal(await call_tool({ source: 'builtin', name: 'create_agent', args: { agentName: 'unused' } }, ctx), `main-create-agent:${sourceId}`);
+    assert.equal(await executeMainManagementTool('node_bootstrap_info', {}, ctx), `main-bootstrap:${sourceId}`);
+    const nested = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="node_pair_list", args={})' }, ctx);
+    assert.equal(nested.status, 'completed');
+    assert.equal(nested.result, `main-pair-list:${sourceId}`);
+    await assert.rejects(() => create_agent({ agentName: 'unsafe', convertSession: true }, ctx),
+      (error: any) => error?.code === 'SESSION_WORKER_TOOL_UNAVAILABLE' && error?.retryable === true);
+    await assert.rejects(() => create_agent({ agentName: 'unsafe', sourceSessionId: 'other/session' }, ctx),
+      (error: any) => error?.code === 'SESSION_WORKER_TOOL_UNAVAILABLE' && error?.retryable === true);
+  } finally {
+    (archiveRecallTools as any).tool_recall = originals.recall;
+    (agentTools as any).tool_create_agent = originals.createAgent;
+    (nodeTools as any).tool_node_pair_list = originals.pairList;
+    (nodeTools as any).tool_node_bootstrap_info = originals.bootstrap;
     await cleanup(sourceId);
   }
 });

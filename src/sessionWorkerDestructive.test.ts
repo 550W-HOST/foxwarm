@@ -83,11 +83,12 @@ test('closed stop interrupts a fenced worker turn and mirrors stopping catalog-o
     const idleAuthority = JSON.parse(await fs.readFile(path.join(root, 'state', 'sessions', `${sessionId2}.json`), 'utf8'));
     assert.equal(idleAuthority.stopping, true, 'idle interrupt still persists the stopping flag transactionally');
 
-    // dequeue and retry remain explicitly unsupported for fenced sessions.
+    // dequeue remains unsupported. Retry is closed, but an active Worker call
+    // rejects immediately rather than queuing a second retry behind it.
     await assert.rejects(() => fixture.runtime.call('control', { sessionId, action: 'dequeue' }),
       (error: any) => error?.code === 'SESSION_WORKER_CONTROL_UNSUPPORTED' && error?.retryable === true);
     await assert.rejects(() => fixture.runtime.call('control', { sessionId, action: 'retry' }),
-      (error: any) => error?.code === 'SESSION_WORKER_CONTROL_UNSUPPORTED' && error?.retryable === true);
+      (error: any) => error?.code === 'SESSION_WORKER_RETRY_BUSY' && error?.retryable === true);
   } finally {
     fixture.transport.close();
     await fixture.supervisor.shutdown(3_000).catch(() => {});

@@ -167,6 +167,42 @@ export class SessionWorkerSupervisor {
     }
   }
 
+  assertRetryAdmissionAvailable(sessionId: string): void {
+    const entry = this.entries.get(sessionId);
+    if (entry && entry.activeCalls !== 0) throw new RpcError('SESSION_WORKER_RETRY_BUSY', 'Session worker has an active operation.', true);
+  }
+
+  async retryActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+    source?: import('./types').QueueSource,
+  ) {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    this.assertRetryAdmissionAvailable(sessionId);
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      try {
+        return await runtime.call('retry', { ...(source ? { source } : {}) });
+      } catch (error: any) {
+        const transportCode = typeof error?.code === 'string' ? error.code : '';
+        if (['RPC_UNAVAILABLE', 'RPC_SEND_FAILED', 'RPC_CLOSED'].includes(transportCode)) {
+          throw new RpcError(
+            'SESSION_WORKER_RETRY_OUTCOME_UNKNOWN',
+            'Retry outcome is unknown because the Worker response was lost; it may already be committed or delivered. Inspect session history before retrying.',
+            true,
+            { transportCode },
+          );
+        }
+        throw error;
+      }
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
+  }
+
   async loadProjectionActivated(
     sessionId: string,
     expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,

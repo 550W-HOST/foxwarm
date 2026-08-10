@@ -12,6 +12,9 @@ import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContext
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
+import { createNodeRegistryStore, createPendingPairing, resetNodeRegistryForTests, setNodeRegistryStoreForTests } from './nodes/registry';
+import * as nodeTools from './tools/nodeTools';
+import { getAgentDir } from './config';
 
 async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -192,6 +195,73 @@ test('main-management facade forks read-only, rejects stale generations, and val
     transport.close();
     for (const id of createdSessions) await sessionManager.deleteSession(id).catch(() => {});
     store.close();
+    await fs.remove(root);
+  }
+});
+
+test('real Worker calls cross-session recall, agent creation, and node bootstrap/pairing through exact Main ownership', async () => {
+  const sourceId = `mc-tools-${Date.now()}`;
+  const targetId = `${sourceId}-target`;
+  const agentName = `mcagent_${Date.now()}`;
+  const createdSessionId = `${agentName}/created`;
+  const approvedNodeId = `mc-node-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-main-tools-'));
+  const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
+  const sourceContexts = new SessionWorkerSourceContextRegistry();
+  setNodeRegistryStoreForTests(createNodeRegistryStore(path.join(root, 'nodes.json')));
+  const pending = await createPendingPairing({ requestedName: 'worker-fixture', nodeType: 'cli', capabilities: { tools: [] } });
+  const calls = [
+    { name: 'recall', args: { sessionId: targetId, target: 'overview', previewLength: 1000 } },
+    { name: 'get_archived_messages', args: { sessionId: targetId } },
+    { name: 'get_archived_blocks', args: { sessionId: targetId } },
+    { name: 'create_agent', args: { agentName, createMainSession: false } },
+    { name: 'create_session', args: { agentName, sessionName: 'created' } },
+    { name: 'node_bootstrap_info', args: {} },
+    { name: 'node_pair_list', args: {} },
+    { name: 'node_pair_approve', args: { pendingId: pending.id, nodeId: approvedNodeId } },
+  ];
+  const supervisor = new SessionWorkerSupervisor({
+    store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
+    workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_MAIN_TOOLS: JSON.stringify(calls) },
+    resolveExactFinalSourceContext: sourceContexts.resolve,
+  });
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, id => sessionManager.getAllSessions().has(id));
+  const sourcePath = path.join(root, 'state', 'sessions', `${sourceId}.json`);
+  const originalBootstrap = (nodeTools as any).tool_node_bootstrap_info;
+  (nodeTools as any).tool_node_bootstrap_info = async () => ({ kind: 'disposable-bootstrap-fixture' });
+  try {
+    await supervisor.reconcileStartupOwnerships();
+    const source = baseSession(sourceId); source.model = 'openai/gpt-5.6-sol';
+    const sourceStub = baseSession(sourceId); sourceStub.model = 'stale-main-model';
+    const target = baseSession(targetId);
+    sessionManager.getAllSessions().set(sourceId, sourceStub); sessionManager.getAllSessions().set(targetId, target);
+    await fs.outputJson(sourcePath, serializeSessionHistoryPayload(source));
+    await fs.outputJson(getSessionHistoryFilePath(sourceId), serializeSessionHistoryPayload(source));
+    await fs.outputJson(getSessionHistoryFilePath(targetId), serializeSessionHistoryPayload(target));
+    sessionManager.setSessionWorkerEnqueueSink(async (id, item) => { await ingress.enqueueEnsuringWorker(id, item); });
+    await ingress.submitEnsuringWorker(sourceId, { type: 'user', parts: [{ text: 'exercise main-owned tools' }] });
+    const authority = await fs.readJson(sourcePath);
+    const text = JSON.stringify(authority.history);
+    assert.match(text, new RegExp(`Recall overview for session .${targetId}`));
+    assert.match(text, /No archived messages matched/);
+    assert.match(text, /No archived blocks found/);
+    assert.ok(text.includes(agentName) && text.includes('created successfully'));
+    assert.ok(text.includes(createdSessionId) && text.includes('created under agent'));
+    assert.equal((await sessionManager.getSession(createdSessionId)).model, source.model, 'new session inherits the detached Worker authority model, not the stale Main stub');
+    assert.match(text, /disposable-bootstrap-fixture/);
+    assert.match(text, new RegExp(pending.id));
+    assert.match(text, new RegExp(`Approved node.*${approvedNodeId}`));
+    assert.equal(JSON.stringify(sessionManager.getAllSessions().get(sourceId)!.history), '[]', 'Main source stub remains unhydrated');
+  } finally {
+    sessionManager.setSessionWorkerEnqueueSink(undefined);
+    (nodeTools as any).tool_node_bootstrap_info = originalBootstrap;
+    await supervisor.shutdown(5_000).catch(() => {}); store.close();
+    await sessionManager.deleteSession(createdSessionId).catch(() => {});
+    await sessionManager.deleteSession(targetId).catch(() => {});
+    sessionManager.getAllSessions().delete(sourceId);
+    await fs.remove(getSessionHistoryFilePath(sourceId)).catch(() => {});
+    await fs.remove(getAgentDir(agentName)).catch(() => {});
+    resetNodeRegistryForTests(); setNodeRegistryStoreForTests(null);
     await fs.remove(root);
   }
 });

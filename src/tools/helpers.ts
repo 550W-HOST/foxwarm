@@ -30,6 +30,8 @@ export interface ToolContext {
     deferSessionCwdSync?: boolean;
     /** In-process owner hook for persisting ctx.session; never serialized as a tool/RPC DTO. */
     persistCurrentSession?: () => Promise<void>;
+    /** Main-local detached read marker; permits read helpers to trust ctx.session without hydration or persistence. */
+    detachedReadOnlySession?: true;
     /** Process-local exec owner; never serialized as a tool/RPC DTO. */
     execRuntime?: ExecRuntime;
     /** Captured owner routing/cwd for one local parallel tool segment. */

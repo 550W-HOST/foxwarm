@@ -28,6 +28,7 @@ import type { QueueItem } from './types';
 import type { ChannelContext } from './channel';
 import type { SessionWorkerIngressCoordinator, SessionWorkerIngressResult } from './sessionWorkerIngress';
 import { normalizeSessionWorkerIngressRequest } from './sessionWorkerIngress';
+import { snapshotQueueSource } from './sessionTurnDelivery';
 
 export type SessionRuntimeEventListener = RpcEventListener<typeof sessionRuntimeServiceDescriptor>;
 
@@ -140,8 +141,15 @@ export async function notifyManualForkCreated(
 export async function control(
   sessionId: string,
   action: SessionRuntimeControlAction,
+  sourceContext?: ChannelContext,
 ): Promise<SessionRuntimeControlResultDto> {
-  return (await getClient()).call('control', { sessionId, action });
+  if (action !== 'retry' || !workerIngress || !sourceContext) {
+    return (await getClient()).call('control', { sessionId, action });
+  }
+  const source = snapshotQueueSource(sourceContext);
+  const cleanup = workerIngress.registerRetrySourceContext(sessionId, source, sourceContext);
+  try { return await (await getClient()).call('control', { sessionId, action, source }); }
+  finally { cleanup(); }
 }
 
 export function subscribe(listener: SessionRuntimeEventListener): () => void {

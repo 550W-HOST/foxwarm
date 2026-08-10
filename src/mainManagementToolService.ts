@@ -10,6 +10,7 @@ import * as archiveRecallTools from './toolsSessionAgent/archiveRecall';
 import * as agentTools from './toolsSessionAgent/agents';
 import * as timerTools from './toolsSessionAgent/timers';
 import * as sessionCrudTools from './toolsSessionAgent/sessionCrud';
+import * as nodeTools from './tools/nodeTools';
 import * as timers from './timers';
 import type { ToolArgs, ToolContext } from './tools/helpers';
 import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
@@ -30,6 +31,14 @@ export const MAIN_MANAGEMENT_TOOL_OPERATIONS = [
   'session_list',
   'session_update_display_name',
   'get_session_messages',
+  'get_archived_messages',
+  'get_archived_blocks',
+  'recall',
+  'create_agent',
+  'create_session',
+  'node_bootstrap_info',
+  'node_pair_list',
+  'node_pair_approve',
 ] as const;
 
 export type MainManagementToolOperation = typeof MAIN_MANAGEMENT_TOOL_OPERATIONS[number];
@@ -42,7 +51,7 @@ export type MainManagementToolResponse = { result: unknown };
 export type ScheduleWaitTimeoutRequest = { sourceSessionId: string; waitId: string; timeoutSeconds: number };
 export type ScheduleWaitTimeoutResponse = { scheduled: true; waitId: string };
 
-export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 2, {
+export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 3, {
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),
   scheduleWaitTimeout: rpcMethod<ScheduleWaitTimeoutRequest, ScheduleWaitTimeoutResponse>(),
 });
@@ -59,6 +68,12 @@ function normalizeSourceSessionId(value: unknown): string {
 function normalizeArgs(value: unknown): ToolArgs {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'args must be an object.');
+  }
+  let encoded: string;
+  try { encoded = JSON.stringify(value); }
+  catch { throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'args must be JSON-serializable.'); }
+  if (Buffer.byteLength(encoded, 'utf8') > 64 * 1024) {
+    throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'args exceed the 64 KiB Main-management bound.');
   }
   return value as ToolArgs;
 }
@@ -83,6 +98,14 @@ async function invokeAllowedOperation(operation: MainManagementToolOperation, ar
     case 'delete_timer': return timerTools.tool_delete_timer(args, ctx);
     case 'session_list': return buildSessionListOutput(args, ctx.sessionId);
     case 'session_update_display_name': return sessionCrudTools.tool_session(args, ctx);
+    case 'get_archived_messages': return archiveRecallTools.tool_get_archived_messages(args, ctx);
+    case 'get_archived_blocks': return archiveRecallTools.tool_get_archived_blocks(args, ctx);
+    case 'recall': return archiveRecallTools.tool_recall(args, ctx);
+    case 'create_agent': return agentTools.tool_create_agent(args, ctx);
+    case 'create_session': return agentTools.tool_create_session(args, ctx);
+    case 'node_bootstrap_info': return nodeTools.tool_node_bootstrap_info(args, ctx);
+    case 'node_pair_list': return nodeTools.tool_node_pair_list(args, ctx);
+    case 'node_pair_approve': return nodeTools.tool_node_pair_approve(args, ctx);
   }
 }
 
@@ -165,6 +188,11 @@ export function createMainManagementToolServiceHandler(options: {
     }
     return archiveRecallTools.tool_get_session_messages(args, { sessionId: sourceSessionId });
   };
+  const exactSourceContext = async (sourceSessionId: string, source: Session): Promise<ToolContext> => {
+    const ownership = options.workerStore?.findOwnership(sourceSessionId);
+    const exactSource = ownership ? await readDetachedWorkerSession(sourceSessionId, source) : source;
+    return { sessionId: sourceSessionId, session: exactSource, detachedReadOnlySession: true } as ToolContext;
+  };
   return {
     async execute(input) {
       const sourceSessionId = normalizeSourceSessionId(input?.sourceSessionId);
@@ -185,6 +213,13 @@ export function createMainManagementToolServiceHandler(options: {
       if (operation === 'get_session_messages') {
         return { result: await invokeGetSessionMessages(args, sourceSessionId) };
       }
+      if (operation === 'create_agent' && args.convertSession === true) {
+        throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'create_agent convertSession is unavailable from a Session worker because it mutates the source identity.');
+      }
+      if (operation === 'create_agent' && typeof args.sourceSessionId === 'string'
+        && args.sourceSessionId !== sourceSessionId && !source.aliases?.includes(args.sourceSessionId)) {
+        throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'create_agent from another source session is unavailable from a Session worker.');
+      }
       if (operation === 'session_update_display_name') {
         const action = typeof args.action === 'string' ? args.action.trim().toLowerCase() : '';
         const requestedTarget = typeof args.sessionId === 'string' && args.sessionId.trim() ? args.sessionId.trim() : sourceSessionId;
@@ -194,9 +229,12 @@ export function createMainManagementToolServiceHandler(options: {
           throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'session_update_display_name requires the exact source session, update-display-name action, and a string name.');
         }
       }
-      return {
-        result: await invokeAllowedOperation(operation as MainManagementToolOperation, args, { sessionId: sourceSessionId }),
-      };
+      const needsExactSource = ['get_archived_messages', 'get_archived_blocks', 'recall', 'create_agent', 'create_session'].includes(operation);
+      return { result: await invokeAllowedOperation(
+        operation as MainManagementToolOperation,
+        args,
+        needsExactSource ? await exactSourceContext(sourceSessionId, source) : { sessionId: sourceSessionId },
+      ) };
     },
     async scheduleWaitTimeout(input) {
       const prototype = input && typeof input === 'object' ? Object.getPrototypeOf(input) : undefined;

@@ -12,7 +12,7 @@ import { initializeSessionWorkerPublication, publishCommitted, shutdownSessionWo
 import { deliverCommittedFinal, deliverIntermediateText, initializeSessionTurnDelivery, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
 import * as llm from './llm';
 import { initLlmRequestJournal } from './llmRequestJournal';
-import { ProcessRpcClientTransport, ProcessRpcServer, RpcServiceRegistry } from './rpc';
+import { ProcessRpcClientTransport, ProcessRpcServer, RpcError, RpcServiceRegistry } from './rpc';
 import { writeAuthoritativeSessionState } from './session/stateFile';
 import { readSessionHistorySnapshot } from './session/metadataStore';
 import { initArchiveStore } from './session/archiveStore';
@@ -94,6 +94,9 @@ async function start(): Promise<void> {
     // parts. They emit real tool calls so the canonical tool loop exercises the
     // facade handoff-wait post-action path (waitAfterHandoff arms the wait).
     const crossSession = String(process.env.FOXWARM_TEST_CROSS_SESSION || '');
+    if (process.env.FOXWARM_TEST_MAIN_TOOLS && chatCount === 1) {
+      return { toolCalls: JSON.parse(process.env.FOXWARM_TEST_MAIN_TOOLS) };
+    }
     if (crossSession.includes('create-child') && chatCount === 1 && !session.id.endsWith('_mp-child')) {
       return { toolCalls: [{ name: 'create_child_session', args: { suffix: 'mp-child', message: 'hello child', waitAfterHandoff: true } }] };
     }
@@ -274,7 +277,14 @@ async function start(): Promise<void> {
     () => { store.verifyActivatedIncarnation(sessionId, generation, incarnationId, process.pid, processIdentity); },
     gate,
   ));
-  registry.register(sessionWorkerRuntimeServiceDescriptor, createSessionWorkerRuntimeServiceHandler(gate, host));
+  registry.register(sessionWorkerRuntimeServiceDescriptor, createSessionWorkerRuntimeServiceHandler(gate, host, {
+    ...(process.env.FOXWARM_TEST_REJECT_RETRY_CODE ? {
+      beforeRetry: () => { throw new RpcError(process.env.FOXWARM_TEST_REJECT_RETRY_CODE!, 'injected retry handler rejection', true); },
+    } : {}),
+    ...(process.env.FOXWARM_TEST_DROP_RETRY_RESPONSE_AFTER_COMMIT === '1' ? {
+      afterRetryBeforeResponse: async () => { process.disconnect?.(); await new Promise(resolve => setTimeout(resolve, 25)); },
+    } : {}),
+  }));
   new ProcessRpcServer(registry, { generation, exitOnDrain: true, onDrain: async () => {
     await shutdownToolScriptRuntime();
     await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownSessionTurnDelivery(), shutdownSessionWorkerPublication(), shutdownMcpExternalService(), vector.shutdown()]);

@@ -125,6 +125,19 @@ export const tool_create_timer = (args: ToolArgs, ctx?: ToolContext) => executeM
 export const tool_list_timers = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('list_timers', args, ctx);
 export const tool_update_timer = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('update_timer', args, ctx);
 export const tool_delete_timer = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('delete_timer', args, ctx);
+export const tool_get_archived_messages = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('get_archived_messages', args, ctx);
+export const tool_get_archived_blocks = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('get_archived_blocks', args, ctx);
+export const tool_recall = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('recall', args, ctx);
+export const tool_create_agent = (args: ToolArgs, ctx?: ToolContext) => {
+  if (ctx?.sessionPlacement === 'session-worker' && args.convertSession === true) {
+    throw new RpcError('SESSION_WORKER_TOOL_UNAVAILABLE', 'create_agent source conversion is unavailable in Session-worker placement.', true);
+  }
+  return executeMainManagementTool('create_agent', args, ctx);
+};
+export const tool_create_session = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('create_session', args, ctx);
+export const tool_node_bootstrap_info = (args: ToolArgs = {}, ctx?: ToolContext) => executeMainManagementTool('node_bootstrap_info', args, ctx);
+export const tool_node_pair_list = (args: ToolArgs = {}, ctx?: ToolContext) => executeMainManagementTool('node_pair_list', args, ctx);
+export const tool_node_pair_approve = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('node_pair_approve', args, ctx);
 
 export function getMainManagementToolServiceStatus(): { placement: 'local' | 'child-reverse'; ready: boolean } {
   return { placement, ready: !!client };

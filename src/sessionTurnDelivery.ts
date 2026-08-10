@@ -44,7 +44,7 @@ export function normalizeSessionTurnDeliverySource(value: unknown): QueueSource 
   }
   return result;
 }
-function sourceFromContext(ctx: ChannelContext): QueueSource {
+export function snapshotQueueSource(ctx: ChannelContext): QueueSource {
   return {
     platform: getChannelType(ctx),
     channelId: getChannelId(ctx),
@@ -123,7 +123,7 @@ export function createSessionTurnDeliveryServiceHandler(options: {
         let ctx: ChannelContext | undefined;
         try { ctx = await options.resolveExactSourceContext(sourceSessionId, structuredClone(source)); }
         catch (error) { logger.warn({ err: error, sessionId: sourceSessionId }, 'Exact committed-final source lookup failed; using attachments'); }
-        if (ctx && sameSource(sourceFromContext(ctx), source)) {
+        if (ctx && sameSource(snapshotQueueSource(ctx), source)) {
           try { await ctx.reply(finalText, deliveryOptions); return { attempted: 1, delivered: 1 }; }
           catch (error: any) {
             logger.error({ err: error, sessionId: sourceSessionId, outcome }, 'Committed final direct delivery failed');

@@ -280,8 +280,14 @@ export const COMMANDS: Record<string, CommandDef> = {
       if ((runtime?.messageCount ?? commandSessionMessageCount(session)) === 0) { ctx.reply('⚠️ No history to retry.'); return }
       try {
         ctx.reply('🔄 Retrying last request...')
-        await sessionRuntime.control(sessionId, 'retry')
-      } catch (e: any) { ctx.reply(`❌ Retry failed: ${e.message}`) }
+        await sessionRuntime.control(sessionId, 'retry', ctx)
+      } catch (e: any) {
+        if (e?.code === 'SESSION_WORKER_RETRY_OUTCOME_UNKNOWN') {
+          ctx.reply('⚠️ Retry outcome is unknown: it may already be committed or delivered. Inspect session history before retrying.')
+        } else {
+          ctx.reply(`❌ Retry failed: ${e.message}`)
+        }
+      }
     }
   },
   '/node': {

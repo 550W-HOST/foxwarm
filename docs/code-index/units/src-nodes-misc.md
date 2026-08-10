@@ -72,6 +72,6 @@ Manages node connectivity to the master server via WebSocket (pairing and authen
 
 - The WebSocket endpoint is the primary communication channel between remote nodes and the master; it feeds `nodesManager` which exposes node tools to sessions and the agent loop.
 - HTTP bootstrap routes enable one-liner node setup from any machine that can reach the master.
-- `buildNodeBootstrapInfo` is exposed as the `node_bootstrap_info` tool in the tool catalog, callable by the AI agent to guide operators.
+- `buildNodeBootstrapInfo` is exposed as the `node_bootstrap_info` tool in the tool catalog. Session Workers call it, pending-pair listing, and approval through the exact-source-fenced Main-management topology boundary; node registry/token authority stays in Main.
 - Tests for `/node` commands and `change_current_node` verify the CLI surface for managing nodes, including approved-node remove/move behavior, online-runtime disconnects, and switching a session's active node context.
 - CLI session access tests confirm that node-scoped session isolation is enforced (a node can only see its own sessions).

@@ -2,13 +2,13 @@
 
 import { randomUUID } from 'crypto';
 import { logger } from './common';
-import { ChannelContext, getChannelId, getChannelType, getConversationId } from './channel';
+import { ChannelContext, getChannelId, getConversationId } from './channel';
 import { buildChildReminder, isModelNoActionSignal } from './session/childSessionReminder';
 import { getManagedSessionState, setManagedSessionState } from './session/managedState';
 import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
 import { maybeBuildGoalReminderMessage } from './session/goal';
-import type { SessionTurnFinalKind } from './sessionTurnDelivery';
+import { snapshotQueueSource, type SessionTurnFinalKind } from './sessionTurnDelivery';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, QueueItem, QueueSource, Session, TokenUsage } from './types';
@@ -233,18 +233,7 @@ export class SessionTurnRunner {
   constructor(private readonly host: SessionTurnHost) {}
 
   snapshotSource(ctx: ChannelContext): QueueSource {
-    return {
-      platform: getChannelType(ctx),
-      channelId: getChannelId(ctx),
-      channelType: getChannelType(ctx),
-      channelUserId: getConversationId(ctx),
-      conversationId: getConversationId(ctx),
-      username: ctx.username,
-      senderId: ctx.senderId,
-      weworkStreamId: ctx.weworkStreamId,
-      qqbotMessageId: ctx.qqbotMessageId,
-      ...(ctx.preferDirectReply === true ? { preferDirectReply: true } : {}),
-    };
+    return snapshotQueueSource(ctx);
   }
 
   private getSourceStreamKey(source?: QueueSource): string | undefined {
@@ -1283,11 +1272,11 @@ export class SessionTurnRunner {
     }
   }
 
-  async processSessionRetry(sessionId: string): Promise<void> {
-    await this.processSessionQueue(sessionId, { retry: true });
+  async processSessionRetry(sessionId: string, source?: QueueSource): Promise<void> {
+    await this.processSessionQueue(sessionId, { retry: true, retrySource: source });
   }
 
-  async processSessionQueue(sessionId: string, options: { retry?: boolean } = {}): Promise<void> {
+  async processSessionQueue(sessionId: string, options: { retry?: boolean; retrySource?: QueueSource } = {}): Promise<void> {
     if (this.processingSessions.has(sessionId)) {
       if (options.retry) {
         throw new Error('Session is already busy');
@@ -1321,6 +1310,7 @@ export class SessionTurnRunner {
           const outcome = await this.runSessionTurn(sessionId, {
             parts: null,
             session,
+            source: options.retrySource,
             onTurnOwnedRelease: () => { outerOwnsBusyRelease = false; },
           });
           suppressTrailingHandoff = outcome === 'suppress-trailing-handoff';

@@ -1198,6 +1198,7 @@ export async function createAgentWithMainSession(options: {
   agentName: string;
   inheritMemory?: boolean;
   sourceSessionId?: string;
+  sourceSessionOverride?: Session;
   convertSessionId?: string;
   initialMemoryFiles?: Record<string, string>;
   displayName?: string;
@@ -1214,7 +1215,12 @@ export async function createAgentWithMainSession(options: {
   updatedChildren: string[];
   createdMainSession: boolean;
 }> {
-  if (workerEnqueueSink && (options.sourceSessionId || options.convertSessionId)) {
+  if (options.sourceSessionOverride && options.sourceSessionId
+    && options.sourceSessionOverride.id !== options.sourceSessionId
+    && !options.sourceSessionOverride.aliases?.includes(options.sourceSessionId)) {
+    throw new RpcError('SESSION_WORKER_ADMIN_SOURCE_MISMATCH', 'Detached agent-creation source does not match sourceSessionId.');
+  }
+  if (workerEnqueueSink && (options.convertSessionId || (options.sourceSessionId && !options.sourceSessionOverride))) {
     throw new RpcError('SESSION_WORKER_ADMIN_UNSUPPORTED', 'Creating an agent from or by converting an existing session is unavailable while Session-worker placement is enabled.', true);
   }
   const { inherit, isolatedNode, ...createOptions } = options;
