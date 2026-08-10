@@ -995,6 +995,62 @@ test('retrySession enters the router directly and runs one ordinary turn without
   }
 });
 
+test('exact turn owner rejects continuation after a completed model answer', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('continue_completed_session');
+  const originalChat = llm.chat;
+  let chatCalls = 0;
+  await sessionManager.appendSessionMessages(session, [
+    { role: 'user', parts: [{ text: 'completed request' }] },
+    { role: 'model', parts: [{ text: 'completed answer' }] },
+  ]);
+  (llm as any).chat = async () => { chatCalls += 1; throw new Error('must not run'); };
+
+  try {
+    await assert.rejects(
+      () => router.processSessionRetry(session.id),
+      (error: any) => error?.code === 'SESSION_CONTINUATION_NOT_AVAILABLE'
+        && /no interrupted turn/i.test(error.message),
+    );
+    assert.equal(chatCalls, 0);
+    assert.equal(session.busy, false);
+    assert.equal(session.history.length, 2);
+  } finally {
+    (llm as any).chat = originalChat;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('exact turn owner suppresses continuation while a parameterized wait is active', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('continue_waiting_session');
+  const waitCall = { id: 'continue-wait', name: 'wait', args: { timeoutSeconds: 30 } };
+  await sessionManager.appendSessionMessages(session, [
+    { role: 'model', parts: [{ functionCall: waitCall }] },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: waitCall.id, name: 'wait', response: { output: 'waiting' } } }] },
+  ]);
+  session.meta.wait = {
+    id: 'continue-wait-state',
+    startedAt: Date.now(),
+    timeoutSeconds: 30,
+  } as any;
+  await sessionManager.saveSession(session.id);
+
+  try {
+    await assert.rejects(
+      () => router.processSessionRetry(session.id),
+      (error: any) => error?.code === 'SESSION_CONTINUATION_NOT_AVAILABLE'
+        && /session is waiting/i.test(error.message),
+    );
+    assert.equal(session.busy, false);
+    assert.equal(session.history.length, 2);
+  } finally {
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
 test('router drops an unrecognized persisted queue record without executing it', async () => {
   const router = new MessageRouter() as any;
   const session = await createRouterQueueTestSession('unknown_queue_record');

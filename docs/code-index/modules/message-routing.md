@@ -67,5 +67,5 @@ Final replies carry a generic `turnFinal` signal. Channels may use it to close a
 - Canonical queue-item history boundaries: [D-pipeline-canonical-queue-item-boundaries](../threads/message-processing-pipeline.md#d-pipeline-canonical-queue-item-boundaries).
 - Platform source/turn boundaries: [D-pipeline-source-boundary](../threads/message-processing-pipeline.md#d-pipeline-source-boundary).
 - Busy-time queue presentation: [D-pipeline-busy-queue-silence](../threads/message-processing-pipeline.md#d-pipeline-busy-queue-silence).
-- Manual retry/stop/dequeue semantics: [D-pipeline-control-commands](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+- Manual Continue/stop/dequeue semantics: [D-pipeline-control-commands](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
 - Provider request failure boundary: [D-llm-request-errors](./llm.md#d-llm-request-errors).

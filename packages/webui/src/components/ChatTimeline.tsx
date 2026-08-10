@@ -45,8 +45,6 @@ interface ChatTimelineProps {
   isMobile: boolean
   groupTools: boolean
   showUsageBadge: boolean
-  retryableLlmRetryNotice?: Message | null
-  onRetryLlmNotice?: () => void
   onOpenCodeFile?: OpenCodeFileHandler
   onOpenCodeCommit?: OpenCodeCommitHandler
   nestedDepth?: number
@@ -471,7 +469,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
   )
 })
 
-const AssistantTextCard = memo(function AssistantTextCard({ text, message, showRetryButton, onRetry, onOpenCodeCommit }: { text: string; message: Message; showRetryButton?: boolean; onRetry?: () => void; onOpenCodeCommit?: OpenCodeCommitHandler }) {
+const AssistantTextCard = memo(function AssistantTextCard({ text, message, onOpenCodeCommit }: { text: string; message: Message; onOpenCodeCommit?: OpenCodeCommitHandler }) {
   const [viewMode, setViewMode] = useState<ViewMode>('rendered')
   const [copied, setCopied] = useState(false)
   const copyResetTimeoutRef = useRef<number | null>(null)
@@ -544,17 +542,6 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, showR
       ) : (
         <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-gray-900 dark:text-gray-100">{jsonText}</pre>
       )}
-      {showRetryButton && (
-        <div className="mb-2 mt-2 flex justify-end">
-          <button
-            type="button"
-            onClick={(event) => { event.preventDefault(); event.stopPropagation(); onRetry?.() }}
-            className="rounded border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 transition-colors hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-300 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50 dark:focus:ring-red-800"
-          >
-            Retry
-          </button>
-        </div>
-      )}
     </div>
   )
 })
@@ -578,8 +565,6 @@ interface MessageRowProps {
   onExpandGroup: (groupKey: string) => void
   sessionId: string
   nestedDepth: number
-  showRetryButton: boolean
-  onRetryLlmNotice?: () => void
   onOpenCodeFile?: OpenCodeFileHandler
   onOpenCodeCommit?: OpenCodeCommitHandler
   renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number) => ReactNode
@@ -604,8 +589,6 @@ const MessageRow = memo(function MessageRow({
   onExpandGroup,
   sessionId,
   nestedDepth,
-  showRetryButton,
-  onRetryLlmNotice,
   onOpenCodeFile,
   onOpenCodeCommit,
   renderNestedMessages,
@@ -680,7 +663,7 @@ const MessageRow = memo(function MessageRow({
               if (contextBlock && partIdx === firstTextPartIndex && part.text) {
                 return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} />
               }
-              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} showRetryButton={showRetryButton} onRetry={onRetryLlmNotice} onOpenCodeCommit={onOpenCodeCommit} />
+              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} onOpenCodeCommit={onOpenCodeCommit} />
             })}
             <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
             {groupTools && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
@@ -712,14 +695,12 @@ const MessageRow = memo(function MessageRow({
   prev.groupExpanded === next.groupExpanded &&
   prev.sessionId === next.sessionId &&
   prev.nestedDepth === next.nestedDepth &&
-  prev.showRetryButton === next.showRetryButton &&
-  prev.onRetryLlmNotice === next.onRetryLlmNotice &&
   prev.onOpenCodeFile === next.onOpenCodeFile &&
   prev.onOpenCodeCommit === next.onOpenCodeCommit &&
   prev.renderNestedMessages === next.renderNestedMessages
 ))
 
-const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, retryableLlmRetryNotice, onRetryLlmNotice, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
+const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
 
   const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number) => (
@@ -938,8 +919,6 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
             onExpandGroup={handleExpandGroup}
             sessionId={sessionId}
             nestedDepth={nestedDepth}
-            showRetryButton={nestedDepth === 0 && msg === retryableLlmRetryNotice}
-            onRetryLlmNotice={onRetryLlmNotice}
             onOpenCodeFile={onOpenCodeFile}
             onOpenCodeCommit={onOpenCodeCommit}
             renderNestedMessages={renderNestedMessages}

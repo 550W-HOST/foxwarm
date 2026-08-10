@@ -39,10 +39,14 @@ test('catalog stub queue count is effective until exact authority hydration wins
   assert.equal(getEffectiveSessionQueueLength(session), 3);
   const stubState = buildSessionRuntimeState(session);
   assert.equal(stubState.queueLength, 3);
-  assert.notEqual(stubState.state, 'idle');
+  assert.equal(stubState.state, 'idle');
+  assert.equal(stubState.busy, false);
   clearSessionCatalogStub(session);
   assert.equal(getEffectiveSessionQueueLength(session), 1);
-  assert.equal(buildSessionRuntimeState(session).queueLength, 1);
+  const hydratedState = buildSessionRuntimeState(session);
+  assert.equal(hydratedState.queueLength, 1);
+  assert.equal(hydratedState.state, 'idle');
+  assert.equal(hydratedState.busy, false);
 });
 
 test('active runtime state wins over persisted wait metadata', () => {

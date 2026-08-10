@@ -31,7 +31,7 @@ async function buildFixtureBundle() {
       if (!entry) throw new Error('No pending history request')
       entry.settled = true
       entry.resolve(new Response(JSON.stringify({
-        session: { id: 'fixture/main', busy: queueLength > 0, runtimeState: { state: queueLength > 0 ? 'requesting-model' : 'idle' }, queueLength, modelKey: 'fixture/model' },
+        session: { id: 'fixture/main', busy: false, runtimeState: { state: 'idle', busy: false, queueLength }, queueLength, modelKey: 'fixture/model' },
         messages,
         persistentMemorySnapshot: 'snapshot supplied by history',
         queuedMessages: [],
@@ -374,7 +374,7 @@ test('post-request stream state wins over an older history session snapshot', as
 
   assert.equal(await page.$eval('[data-session-header-subtitle]', element => element.getAttribute('title')), '/live/cwd')
   assert.ok(await page.$('[title="live/model"]'))
-  assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('Processing • 3 queued...')), true)
+  assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('thinking • 3 queued messages will be inserted after this model response')), true)
   assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('live streaming text')), true)
   assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 2)
   await page.close()

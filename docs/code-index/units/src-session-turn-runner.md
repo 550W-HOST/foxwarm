@@ -1,6 +1,6 @@
 # Unit: src-session-turn-runner
 
-Files: src/sessionTurnRunner.ts
+Files: src/sessionTurnRunner.ts, src/sessionContinuation.ts
 Secondary files: src/sessionTurnRunnerDetachedOwner.test.ts, src/sessionWorkerHost.test.ts, src/messageRouter.test.ts, src/managedSessions.test.ts, src/toolsSessionAgent/handoffWait.test.ts, src/toolsSessionAgent/waitTool.test.ts, src/selftest/queueDrainSelfTest.ts, src/selftest/goalReminderSelfTest.ts, src/selftest/toolLoopStallSelfTest.ts
 
 ## Purpose
@@ -16,6 +16,7 @@ One turn-specific `SessionTurnHost` exposes only effects called by the runner. `
 - `LocalSessionTurnHost` — in-process implementation shared by Main-local turns and the child host; it binds one effects owner and accepts a small coherent override object for exact snapshot, system-queue, compaction, safe-point pending-queue ingestion, intermediate delivery, and committed-final behavior. Unbound hosts preserve module-backed behavior. A bound host rejects every other ID and every different same-ID Session object before invoking effects.
 - `SessionTurnRunner.processSessionQueue(sessionId, options)` — canonical iterative queue owner from one busy claim through final finish-window recheck.
 - `SessionTurnRunner.processSessionRetry(sessionId)` — direct retry entry into the ordinary turn loop without queue control state.
+- `isSessionTurnIncomplete(messages)` — pure derived-history classifier shared semantically with WebUI Continue presentation.
 - `shouldBroadcastChannelText(text)` — shared final-response visibility predicate.
 
 ## Canonical flow
@@ -48,6 +49,7 @@ One turn-specific `SessionTurnHost` exposes only effects called by the runner. `
 - Main-local and Session-worker placement both invoke this runner; the Worker host owns the exact Session and uses typed Main delivery for external channel output.
 - The turn host is an in-process runner boundary; only the Worker-owned effects and fixed delivery services cross process RPC. No second queue loop or generic broadcast RPC exists.
 - Every provider result performs one iteration-local text decision after canonical persistence/publication and compatible-input peek: intermediate when the iteration will continue, committed final otherwise. Delivery excludes WebUI and the active WeWork stream where applicable, preserves QQ passive source metadata, and logs Worker delivery failures without poisoning the semantic turn. No tail `finalResponse` or `lastTextBroadcasted` compensation state remains; one iteration-local handled-text boolean only preserves the existing Stop annotation when a tool iteration had no handled non-empty text.
+- The internal retry entry used by public Continue validates the exact owner's current runtime/history before claiming busy. An active parameterized wait and completed history reject with `SESSION_CONTINUATION_NOT_AVAILABLE`; the classifier contract is canonical in [D-pipeline-control-commands](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
 
 ## Tests
 

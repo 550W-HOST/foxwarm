@@ -100,19 +100,28 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
     assert.equal(authority.history.length, 4);
     assert.equal(localRuns, 0); assert.equal(mainLocalMutationCalls, 0);
 
-    // Retry uses the exact Worker owner and canonical parts:null turn without
+    // Continue uses the exact Worker owner and canonical parts:null turn without
     // appending a mailbox/queue record; its serialized source keeps direct
     // channel final delivery equivalent to ordinary ingress.
     stubSession.busy = false;
-    const retryCtx = makeCtx(replies, 'webui');
-    await COMMANDS['/retry'].handler(retryCtx, [], sessionId, stubSession);
+    await sessionRuntime.deleteMessages(sessionId, -1);
     authority = await fs.readJson(statePath);
-    assert.equal(authority.history.length, 5);
-    assert.equal(authority.history[4].role, 'model');
-    assert.equal(store.countMailboxIntents(), 2, 'retry does not invent a queue/mailbox intent');
+    assert.equal(authority.history.length, 3);
+    assert.equal(authority.history[2].role, 'user');
+    const continueCtx = makeCtx(replies, 'webui');
+    await COMMANDS['/continue'].handler(continueCtx, [], sessionId, stubSession);
+    authority = await fs.readJson(statePath);
+    assert.equal(authority.history.length, 4);
+    assert.equal(authority.history[3].role, 'model');
+    assert.equal(store.countMailboxIntents(), 2, 'continue does not invent a queue/mailbox intent');
     assert.equal(replies.length, 4);
-    assert.equal(replies[2].text, '🔄 Retrying last request...');
+    assert.equal(replies[2].text, '▶️ Continuing interrupted turn...');
     assert.equal(replies[3].text, 'deterministic child answer');
+    await COMMANDS['/continue'].handler(continueCtx, [], sessionId, stubSession);
+    authority = await fs.readJson(statePath);
+    assert.equal(authority.history.length, 4, 'a completed Worker answer cannot be continued again');
+    assert.equal(replies[4].text, '▶️ Continuing interrupted turn...');
+    assert.equal(replies[5].text, '⚠️ Session has no interrupted turn to continue.');
     await assert.rejects(() => sessionRuntime.control(sessionId, 'dequeue'),
       (error: any) => error?.code === 'SESSION_WORKER_CONTROL_UNSUPPORTED');
     await assert.rejects(() => sessionRuntime.control(`${sessionId}-unknown`, 'retry', makeCtx(replies)),
@@ -158,7 +167,7 @@ test('Worker retry response loss is reported as ambiguous after exactly one comm
     await supervisor.reconcileStartupOwnerships();
     await sessionRuntime.initializeSessionRuntime({ worker: { store, registry: supervisor.projectionRegistry, ingress } });
 
-    await COMMANDS['/retry'].handler(makeCtx(replies, 'webui'), [], sessionId, stubSession);
+    await COMMANDS['/continue'].handler(makeCtx(replies, 'webui'), [], sessionId, stubSession);
 
     const committed = await fs.readJson(statePath);
     assert.equal(committed.history.filter((message: any) => message.role === 'user').length, 1);
@@ -166,8 +175,8 @@ test('Worker retry response loss is reported as ambiguous after exactly one comm
     assert.equal(committed.history.at(-1)?.parts?.[0]?.text, 'deterministic child answer');
     assert.equal(store.countMailboxIntents(), 0, 'retry ambiguity does not create or replay a mailbox intent');
     assert.equal(replies.filter(reply => reply.text === 'deterministic child answer').length, 1, 'the committed final was delivered exactly once before response loss');
-    assert.ok(replies.some(reply => String(reply.text).startsWith('⚠️ Retry outcome is unknown:')));
-    assert.ok(!replies.some(reply => String(reply.text).startsWith('❌ Retry failed:')));
+    assert.ok(replies.some(reply => String(reply.text).startsWith('⚠️ Continue outcome is unknown:')));
+    assert.ok(!replies.some(reply => String(reply.text).startsWith('❌ Continue failed:')));
     assert.equal(sourceContexts.size, 0);
   } finally {
     await sessionRuntime.shutdownSessionRuntime().catch(() => {});

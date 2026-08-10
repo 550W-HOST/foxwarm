@@ -8,6 +8,8 @@ import { getManagedSessionState, setManagedSessionState } from './session/manage
 import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
 import { maybeBuildGoalReminderMessage } from './session/goal';
+import { isSessionTurnIncomplete, SessionContinuationUnavailableError } from './sessionContinuation';
+import { buildSessionRuntimeState } from './sessionRuntimeState';
 import { snapshotQueueSource, type SessionTurnFinalKind } from './sessionTurnDelivery';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
@@ -1294,6 +1296,14 @@ export class SessionTurnRunner {
       session = await this.host.getExistingSession(sessionId);
       if (!session) {
         return;
+      }
+      if (options.retry) {
+        if (buildSessionRuntimeState(session).state === 'waiting') {
+          throw new SessionContinuationUnavailableError('Session is waiting and cannot be continued manually.');
+        }
+        if (!isSessionTurnIncomplete(session.history)) {
+          throw new SessionContinuationUnavailableError();
+        }
       }
       if (!await this.tryClaimSession(session)) {
         if (options.retry) {

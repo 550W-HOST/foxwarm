@@ -198,6 +198,10 @@ test('one owned processor sequences compact turn compact without another busy cl
 test('retry and a different-source queued turn share ownership but receive fresh TURN_IDs', async () => {
   await initArchiveStore();
   const session = createSession(`detached_runner_retry_then_queue_${Date.now()}`, 'unused');
+  session.history = [{
+    role: 'user',
+    parts: [{ system: '<foxwarm-system kind="event" type="trigger">interrupted continuation seed</foxwarm-system>' }],
+  }];
   session.queue = [{
     type: 'user',
     source: { platform: 'qqbot', channelId: 'qq', channelUserId: 'c2c:later', conversationId: 'c2c:later', qqbotMessageId: 'later-message' },
@@ -219,7 +223,7 @@ test('retry and a different-source queued turn share ownership but receive fresh
     await withGlobalOwnerLookupsForbidden(() => runner.processSessionRetry(session.id));
     assert.equal(turnIds.length, 2);
     assert.notEqual(turnIds[0], turnIds[1]);
-    assert.deepEqual(session.history.map(message => message.role), ['model', 'user', 'model']);
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'model', 'user', 'model']);
     assert.equal(events.filter(event => event.startsWith('state:')).length, 2);
     assert.equal(session.busy, false);
   } finally {

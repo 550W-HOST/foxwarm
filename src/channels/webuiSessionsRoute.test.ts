@@ -160,11 +160,14 @@ test('WebUI list uses catalog queue count for a lightweight stub, then exact hyd
     const stub = await readListed();
     assert.equal(stub.queueLength, 3);
     assert.equal(stub.runtimeState.queueLength, 3);
-    assert.notEqual(stub.runtimeState.state, 'idle');
+    assert.equal(stub.runtimeState.state, 'idle');
+    assert.equal(stub.runtimeState.busy, false);
     await sessionManager.getSession(sessionId);
     const hydrated = await readListed();
     assert.equal(hydrated.queueLength, 1);
     assert.equal(hydrated.runtimeState.queueLength, 1);
+    assert.equal(hydrated.runtimeState.state, 'idle');
+    assert.equal(hydrated.runtimeState.busy, false);
   } finally {
     await server.stop(); setHttpServer(null);
     await sessionManager.deleteSession(sessionId).catch(() => {});

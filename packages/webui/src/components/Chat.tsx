@@ -12,8 +12,8 @@ import type { Message, MessagePart, ModelStreamToolCall, SessionStreamEvent, Too
 import SessionDebugModal from './SessionDebugModal'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
+import { isSessionTurnIncomplete } from '../sessionContinuation'
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
-import { getRetryableLlmRetryNotice } from '../retryNotice'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
 import { createLatestRequestGate, runLatestModelOptionsRequest } from '../modelOptionsLoader'
 import {
@@ -1361,8 +1361,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     void sendSessionCommand('/dequeue')
   }, [sendSessionCommand])
 
-  const handleRetryLlmNotice = useCallback(() => {
-    void sendSessionCommand('/retry')
+  const handleContinue = useCallback(() => {
+    void sendSessionCommand('/continue')
   }, [sendSessionCommand])
 
   const handleTranscribeAudio = useCallback(async (file: File, draftText: string): Promise<AsrTranscribeResult> => {
@@ -1525,10 +1525,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     return modelOptions.find(option => option.key === currentModelKey)?.contextLimit ?? null
   }, [modelOptions, sessionRecord?.modelKey])
 
-  const retryableLlmRetryNotice = useMemo(
-    () => getRetryableLlmRetryNotice(messages, sessionBusy),
-    [messages, sessionBusy],
-  )
+  const turnIncomplete = useMemo(() => isSessionTurnIncomplete(messages), [messages])
 
   return (
     <div ref={chatRootRef} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
@@ -1636,16 +1633,19 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             )}
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full overflow-x-hidden">
               <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} retryableLlmRetryNotice={retryableLlmRetryNotice} onRetryLlmNotice={handleRetryLlmNotice} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
+                <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
               </ToolScriptProgressContext.Provider>
             </div>
             <ProcessingStatus
               sessionBusy={sessionBusy}
+              runtimeState={sessionRecord?.runtimeState}
               sessionQueueLength={sessionQueueLength}
+              turnIncomplete={sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
               loading={loading}
               isMobile={isMobile}
               onStop={handleStop}
               onRunQueued={handleRunQueued}
+              onContinue={handleContinue}
             />
             {queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full overflow-x-hidden" data-queued-preview="true" aria-label="Queued messages">

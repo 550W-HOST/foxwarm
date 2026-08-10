@@ -206,16 +206,6 @@ export function buildSessionRuntimeState(session: Session): SessionRuntimeState 
     };
   }
 
-  if (queueLength > 0) {
-    return {
-      state: 'requesting-model',
-      note: 'Session has queued work awaiting processing.',
-      queueLength,
-      busy: false,
-      active: { phase: 'unknown' },
-    };
-  }
-
   return {
     state: 'idle',
     queueLength,

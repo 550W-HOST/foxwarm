@@ -60,13 +60,13 @@ export function getSessionRuntimeStateName(session: RuntimeStateSessionLike): Se
 
 export function getRuntimeStateSummary(runtimeState?: SessionRuntimeState | null, fallbackBusy = false): string {
   if (!runtimeState) {
-    return fallbackBusy ? 'requesting model' : 'idle'
+    return fallbackBusy ? 'thinking' : 'idle'
   }
 
   if (runtimeState.state === 'requesting-model') {
     return runtimeState.active?.phase && runtimeState.active.phase !== 'normal-turn'
-      ? `requesting model · ${runtimeState.active.phase}`
-      : 'requesting model'
+      ? `thinking · ${runtimeState.active.phase}`
+      : 'thinking'
   }
 
   if (runtimeState.state === 'running-tool') {

@@ -268,24 +268,28 @@ export const COMMANDS: Record<string, CommandDef> = {
       } catch (e: any) { ctx.reply(`❌ Dequeue failed: ${e.message}`) }
     }
   },
-  '/retry': {
-    description: 'Retry last request (reactivate session without adding new message)',
+  '/continue': {
+    description: 'Continue an interrupted turn without adding a new message',
     requiresSession: true,
     handler: async (ctx, _args, sessionId, session) => {
       if (!sessionId || !session) return
-      // Placement-neutral view: the raw stub is an unhydrated catalog mirror
-      // for worker-fenced sessions.
-      const runtime = await sessionRuntime.getSession(sessionId)
-      if (runtime?.busy) { ctx.reply('⚠️ Session is already running.'); return }
-      if ((runtime?.messageCount ?? commandSessionMessageCount(session)) === 0) { ctx.reply('⚠️ No history to retry.'); return }
       try {
-        ctx.reply('🔄 Retrying last request...')
+        const runtime = await sessionRuntime.getSession(sessionId)
+        if (!runtime) { ctx.reply('⚠️ No active session to continue.'); return }
+        if (runtime.busy) { ctx.reply('⚠️ Session is already running.'); return }
+        if (runtime.runtimeState?.state === 'waiting') {
+          ctx.reply('⚠️ Session is waiting and cannot be continued manually.')
+          return
+        }
+        ctx.reply('▶️ Continuing interrupted turn...')
         await sessionRuntime.control(sessionId, 'retry', ctx)
       } catch (e: any) {
         if (e?.code === 'SESSION_WORKER_RETRY_OUTCOME_UNKNOWN') {
-          ctx.reply('⚠️ Retry outcome is unknown: it may already be committed or delivered. Inspect session history before retrying.')
+          ctx.reply('⚠️ Continue outcome is unknown: it may already be committed or delivered. Inspect session history before continuing again.')
+        } else if (e?.code === 'SESSION_CONTINUATION_NOT_AVAILABLE') {
+          ctx.reply(`⚠️ ${e.message}`)
         } else {
-          ctx.reply(`❌ Retry failed: ${e.message}`)
+          ctx.reply(`❌ Continue failed: ${e.message}`)
         }
       }
     }

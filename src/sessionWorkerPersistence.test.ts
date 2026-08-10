@@ -270,6 +270,9 @@ test('bounded projection remains a pure cloned DTO with no catalog writer protoc
   const projection = buildSessionWorkerProjection(current);
   assert.equal(projection.messageCount, 1);
   assert.equal(projection.queueLength, 1);
+  assert.equal(projection.runtimeState.state, 'idle');
+  assert.equal(projection.runtimeState.busy, false);
+  assert.equal(projection.runtimeState.queueLength, 1);
   assert.equal('history' in projection, false);
   assert.equal('queue' in projection, false);
   projection.stats.totalInputTokens = 999;
