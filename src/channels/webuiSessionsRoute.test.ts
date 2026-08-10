@@ -171,6 +171,162 @@ test('WebUI list uses catalog queue count for a lightweight stub, then exact hyd
   }
 });
 
+test('bounded session-list routes preserve tree modes, focus paths, aliases, search, architecture, and descendant preview', async () => {
+  const prefix = makeSessionId('webui_bounded'); const agent = `${prefix}_agent`;
+  const ids = { root: `${prefix}_root`, child: `${prefix}_child`, child2: `${prefix}_child2`, deep: `${prefix}_deep`,
+    pinned: `${prefix}_pinned`, dangling: `${prefix}_dangling`, volatile: `${prefix}_volatile` };
+  const cross = { childB: `${prefix}_cross_b`, deepA: `${prefix}_cross_a` };
+  const now = Date.now();
+  const configure = async (id: string, values: Partial<Session>) => {
+    const session = await sessionManager.getSession(id); Object.assign(session, values); session.agent = agent;
+    session.meta = { ...session.meta, lastMessageTime: (values.meta as any)?.lastMessageTime || now };
+    await sessionManager.saveSession(id);
+  };
+  await configure(ids.root, { displayName: `${prefix} Search Display`, aliases: [`${prefix}_unique`, `${prefix}_shared`], sidebarOrder: 1, meta: { lastMessageTime: now } });
+  await configure(ids.child, { parentSessionId: ids.root, aliases: [`${prefix}_shared`], sidebarOrder: 1, meta: { lastMessageTime: now - 1 } });
+  await configure(ids.child2, { parentSessionId: ids.root, sidebarOrder: 2, meta: { lastMessageTime: now - 2 } });
+  await configure(ids.deep, { parentSessionId: ids.child, meta: { lastMessageTime: now - 3 } });
+  await configure(ids.pinned, { parentSessionId: ids.root, pinned: true, meta: { lastMessageTime: now - 4 } });
+  await configure(ids.dangling, { parentSessionId: `${prefix}_missing`, meta: { lastMessageTime: now - 5 } });
+  await configure(ids.volatile, { meta: { lastMessageTime: 1 } });
+  const volatile = sessionManager.getAllSessions().get(ids.volatile)!; volatile.meta.lastMessageTime = now + 1000; volatile.busy = true;
+
+  const port = 34900 + Math.floor(Math.random() * 300); const token = 'bounded-list-token';
+  const server = new HttpServer(port, token); setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true }); await server.start();
+  const request = (route: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${port}${route}`, {
+    ...init, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...init.headers },
+  });
+  try {
+    let response = await request(`/api/session-list/sidebar?mode=default&limit=100&childLimit=1&focusSessionId=${encodeURIComponent(ids.deep)}`);
+    assert.equal(response.status, 200); const sidebar = await response.json() as any;
+    assert.equal(sidebar.version, 1); assert.ok(sidebar.sessions.some((item: any) => item.id === ids.root));
+    assert.ok(sidebar.sessions.some((item: any) => item.id === ids.pinned), 'pinned child is presentation-elevated');
+    assert.ok(sidebar.sessions.some((item: any) => item.id === ids.dangling), 'dangling canonical parent projects as root');
+    assert.equal(sidebar.sessions.find((item: any) => item.id === ids.pinned).parentSessionId, ids.root, 'elevation does not mutate real parent');
+    assert.equal(sidebar.sessions.find((item: any) => item.id === ids.dangling).parentSessionId, null);
+    assert.deepEqual(sidebar.presentationPaths[ids.deep], [ids.root, ids.child, ids.deep]);
+    assert.deepEqual(sidebar.forcedChildren[ids.root], [ids.child]);
+    assert.ok(sidebar.pathContext.some((item: any) => item.session?.id === ids.root));
+    const rootChildren = sidebar.children.find((item: any) => item.parentSessionId === ids.root);
+    assert.equal(rootChildren.sessions.length, 1); assert.equal(rootChildren.total, 2); assert.ok(rootChildren.nextCursor);
+
+    response = await request('/api/session-list/sidebar?mode=flat-time&limit=100');
+    const flat = await response.json() as any; assert.ok(flat.sessions.some((item: any) => item.id === ids.deep), 'flat mode ignores real parents');
+    response = await request('/api/session-list/sidebar?mode=time&limit=2');
+    const volatilePage = await response.json() as any; assert.ok(volatilePage.sessions.some((item: any) => item.id === ids.volatile),
+      'an unsaved newly-recent active local projection enters the bounded page before sorting');
+
+    response = await request('/api/session-list/children', { method: 'POST', body: JSON.stringify({ mode: 'default', limit: 10,
+      parents: [{ parentSessionId: ids.root, cursor: rootChildren.nextCursor }] }) });
+    assert.equal(response.status, 200); const continued = await response.json() as any;
+    assert.deepEqual(continued.children[0].sessions.map((item: any) => item.id), [ids.child2]);
+
+    response = await request('/api/session-list/by-id', { method: 'POST', body: JSON.stringify({ ids: [`${prefix}_unique`, `${prefix}_shared`], includePaths: true }) });
+    const byId = await response.json() as any; assert.equal(byId.results[0].resolution.kind, 'alias');
+    assert.equal(byId.results[0].session.id, ids.root); assert.equal(byId.results[1].resolution.kind, 'ambiguous');
+
+    response = await request(`/api/session-list/search?q=${encodeURIComponent('search display')}&limit=10`);
+    const search = await response.json() as any; assert.ok(search.sessions.some((item: any) => item.id === ids.root));
+
+    await configure(cross.childB, { parentSessionId: ids.root, meta: { lastMessageTime: now - 10 } });
+    const crossB = sessionManager.getAllSessions().get(cross.childB)!; crossB.agent = `${agent}_b`; await sessionManager.saveSessionCatalogEntries([cross.childB]);
+    await configure(cross.deepA, { parentSessionId: cross.childB, meta: { lastMessageTime: now - 11 } });
+
+    response = await request(`/api/session-list/architecture?agent=${encodeURIComponent(agent)}&limit=100&childLimit=10`);
+    const architecture = await response.json() as any; assert.equal(architecture.version, 1);
+    assert.ok(architecture.agentCounts.some((item: any) => item.agent === agent && item.count === 8));
+    assert.ok(architecture.roots.sessions.every((item: any) => item.agent === agent));
+    assert.ok(architecture.roots.sessions.some((item: any) => item.id === cross.deepA), 'A→B→A descendant becomes an A forest root');
+    assert.equal(architecture.roots.sessions.some((item: any) => item.id === ids.pinned), false, 'pinned same-agent child is not a real forest root');
+    assert.ok((architecture.children.find((item: any) => item.parentSessionId === ids.root)?.sessions || [])
+      .some((item: any) => item.id === ids.pinned), 'Architecture preserves pinned child real relation');
+    assert.ok(!(architecture.children.find((item: any) => item.parentSessionId === ids.root)?.sessions || [])
+      .some((item: any) => item.id === cross.childB), 'agent child preview excludes other-agent children');
+    response = await request('/api/session-list/children', { method: 'POST', body: JSON.stringify({ mode: 'time', agent,
+      parents: [{ parentSessionId: ids.root }] }) });
+    const agentChildren = await response.json() as any;
+    assert.ok(agentChildren.children[0].sessions.every((item: any) => item.agent === agent));
+    assert.equal(agentChildren.children[0].sessions.some((item: any) => item.id === cross.childB), false);
+
+    response = await request(`/api/session-list/descendants/${encodeURIComponent(ids.root)}?limit=10`);
+    const descendants = await response.json() as any; assert.equal(descendants.previewOnly, true); assert.equal(descendants.total, 6);
+
+    response = await request('/api/session-list/sidebar?mode=time&limit=1'); const timePage = await response.json() as any;
+    assert.ok(timePage.nextCursor);
+    const root = sessionManager.getAllSessions().get(ids.root)!; root.meta.lastMessageTime = now + 100; await sessionManager.saveSession(ids.root);
+    response = await request(`/api/session-list/sidebar?mode=time&limit=1&cursor=${encodeURIComponent(timePage.nextCursor)}`);
+    const resetPage = await response.json() as any; assert.equal(resetPage.reset, true, 'catalog mutations reset stateless cursors');
+    response = await request(`/api/session-list/sidebar?mode=default&limit=1&cursor=${encodeURIComponent(timePage.nextCursor)}`);
+    assert.equal(response.status, 400, 'cursor scope/mode mismatches fail strictly');
+    assert.equal((await request('/api/session-list/search?q=x&limit=bad')).status, 400);
+    assert.equal((await request('/api/session-list/by-id', { method: 'POST', body: JSON.stringify({ ids: ids.root }) })).status, 400);
+    assert.equal((await request('/api/session-list/by-id', { method: 'POST', body: JSON.stringify({ ids: [ids.root], extra: true }) })).status, 400);
+    assert.equal((await request('/api/session-list/children', { method: 'POST', body: JSON.stringify({ mode: 'time', limit: '10', parents: [] }) })).status, 400);
+    assert.equal((await request('/api/session-list/children', { method: 'POST', body: JSON.stringify({ mode: 'time', parents: [{ parentSessionId: ids.root, extra: true }] }) })).status, 400);
+  } finally {
+    await server.stop(); setHttpServer(null);
+    volatile.busy = false;
+    for (const id of [cross.deepA, cross.childB, ids.deep, ids.child, ids.child2, ids.pinned, ids.dangling, ids.volatile, ids.root]) await sessionManager.deleteSession(id).catch(() => {});
+  }
+});
+
+test('sidebar focus query keeps comma IDs, repeatable focus values, and a complete 105-deep render path', async () => {
+  const prefix = makeSessionId('webui_focus_deep'); const rootId = `${prefix},comma`;
+  const ids = [rootId, ...Array.from({ length: 105 }, (_, index) => `${prefix}_d${String(index + 1).padStart(3, '0')}`)];
+  const sessions = ids.map((id, index) => ({
+    id, agent: `${prefix}_agent`, aliases: [], parentSessionId: index ? ids[index - 1] : undefined,
+    history: [], contextFrontier: [], persistentMemorySnapshot: '', systemPromptFiles: [],
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false, queue: [], meta: { lastMessageTime: ids.length - index, messageCount: 0 }, currentNode: 'master',
+  } as Session));
+  for (const session of sessions) sessionManager.getAllSessions().set(session.id, session);
+  sessionCatalogStore.upsertMany(sessions as any[]);
+  const port = 40500 + Math.floor(Math.random() * 100); const token = 'deep-focus-token';
+  const server = new HttpServer(port, token); setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true }); await server.start();
+  try {
+    const params = new URLSearchParams({ mode: 'default', limit: '100', childLimit: '5' });
+    params.append('focusSessionId', rootId); params.append('focusSessionId', ids.at(-1)!);
+    const response = await fetch(`http://127.0.0.1:${port}/api/session-list/sidebar?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(response.status, 200); const payload = await response.json() as any;
+    assert.deepEqual(payload.presentationPaths[rootId], [rootId], 'comma is literal ID content, not a CSV separator');
+    assert.equal(payload.presentationPaths[ids.at(-1)!].length, 106);
+    assert.deepEqual(payload.presentationPaths[ids.at(-1)!], ids);
+    assert.equal(new Set(payload.pathContext.map((item: any) => item.session?.id).filter(Boolean)).size, 106,
+      'all accepted path rows have renderable projections across exact-helper chunks');
+    const tooMany = new URLSearchParams({ mode: 'default' });
+    for (let index = 0; index < 9; index++) tooMany.append('focusSessionId', ids[index]);
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/session-list/sidebar?${tooMany}`, { headers: { Authorization: `Bearer ${token}` } })).status, 400);
+  } finally {
+    await server.stop(); setHttpServer(null); sessionCatalogStore.deleteMany(ids);
+    for (const id of ids) sessionManager.getAllSessions().delete(id);
+  }
+});
+
+test('bounded cursor and volatile union share SQLite BINARY UTF-8 tie ordering', async () => {
+  const prefix = makeSessionId('webui_binary'); const ids = [`${prefix}_A`, `${prefix}_a`, `${prefix}_\uE000`, `${prefix}_😀`];
+  const future = 8_000_000_000_000_000;
+  for (const id of ids) {
+    const session = await sessionManager.getSession(id); session.pinned = true; session.meta.lastMessageTime = future;
+    await sessionManager.saveSession(id);
+  }
+  const volatile = sessionManager.getAllSessions().get(ids[3])!; volatile.busy = true;
+  const port = 40700 + Math.floor(Math.random() * 100); const token = 'binary-token'; const server = new HttpServer(port, token);
+  setHttpServer(server); new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true }); await server.start();
+  const get = (route: string) => fetch(`http://127.0.0.1:${port}${route}`, { headers: { Authorization: `Bearer ${token}` } });
+  try {
+    let response = await get('/api/session-list/sidebar?mode=flat-time&limit=2'); const first = await response.json() as any;
+    assert.deepEqual(first.sessions.map((item: any) => item.id), ids.slice(0, 2)); assert.ok(first.nextCursor);
+    response = await get(`/api/session-list/sidebar?mode=flat-time&limit=2&cursor=${encodeURIComponent(first.nextCursor)}`);
+    const second = await response.json() as any; assert.deepEqual(second.sessions.map((item: any) => item.id), ids.slice(2));
+    assert.equal(new Set([...first.sessions, ...second.sessions].map((item: any) => item.id)).size, 4, 'no tie skip or duplicate');
+  } finally {
+    volatile.busy = false; await server.stop(); setHttpServer(null);
+    for (const id of ids) await sessionManager.deleteSession(id).catch(() => {});
+  }
+});
+
 test('restart catalog stubs preserve sanitized timer, waitAll, and exec presentation until hydration', async () => {
   const ids = {
     timer: makeSessionId('webui_wait_timer'),

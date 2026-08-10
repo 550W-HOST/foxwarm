@@ -34,6 +34,20 @@ import { registerVscodeWebRoutes } from '../vscodeWebRoutes';
 import { externalizeMessages, externalizeQueueItems, getSafeRasterMimeType, resolveImageBlobPath } from '../imageBlobs';
 import { nodesManager } from '../nodes/manager';
 import { listApprovedNodes } from '../nodes/registry';
+import {
+  assertExactDto,
+  boundedBodyLimit,
+  boundedQueryLimit,
+  normalizeSessionListMode,
+  optionalQueryString,
+  queryArchitecture,
+  queryChildrenContinuations,
+  queryChildrenPreviews,
+  queryDescendants,
+  queryExactSessions,
+  querySessionListPage,
+  repeatedFocusIds,
+} from '../webuiSessionListQueries';
 
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 const MAX_QUEUED_PREVIEW_ITEMS = 20;
@@ -444,6 +458,38 @@ function buildWebUiSessionState(session: any) {
       ? session.isolated
       : sessionManager.isSessionEffectivelyIsolated(session),
   };
+}
+
+function buildWebUiSessionListProjection(session: SessionRuntimeSessionDto) {
+  return {
+    ...buildWebUiSessionState(session),
+    messageCount: session.messageCount,
+    lastMessageTime: session.lastMessageTime,
+    parentSessionId: session.parentSessionId,
+    pinned: session.pinned,
+    sidebarOrder: session.sidebarOrder,
+    tokenUsage: {
+      cachedTokens: session.tokenUsage.cachedTokens,
+      inputTokens: session.tokenUsage.inputTokens,
+      outputTokens: session.tokenUsage.outputTokens,
+    },
+  };
+}
+
+function mapSessionListQueryPayload(value: any): any {
+  if (Array.isArray(value)) return value.map(mapSessionListQueryPayload);
+  if (!value || typeof value !== 'object') return value;
+  if (typeof value.id === 'string' && value.runtimeState && value.tokenUsage) return buildWebUiSessionListProjection(value);
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'rows')
+    .map(([key, entry]) => [key, mapSessionListQueryPayload(entry)]));
+}
+
+function sendSessionListQueryError(res: express.Response, error: any, logMessage: string): void {
+  const code = typeof error?.code === 'string' ? error.code : undefined;
+  const status = code === 'SESSION_NOT_FOUND' ? 404
+    : code?.includes('INVALID') || code === 'SESSION_ALIAS_AMBIGUOUS' ? 400 : 500;
+  if (status === 500) logger.error({ err: error }, logMessage);
+  res.status(status).json({ error: error?.message || logMessage, ...(code ? { code } : {}) });
 }
 
 function buildWebUiModelsPayload(currentModel?: string) {
@@ -1104,7 +1150,129 @@ export class WebUIChannel implements Channel {
         },
       });
 
-      // Get all sessions
+      httpServerInstance.addRoute({
+        path: '/api/session-list/sidebar', method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.query, ['mode','limit','childLimit','cursor','focusSessionId'], 'sidebar query');
+            const mode = normalizeSessionListMode(req.query.mode);
+            const limit = boundedQueryLimit(req.query.limit, 50, 100);
+            const childLimit = boundedQueryLimit(req.query.childLimit, 5, 20);
+            const cursor = optionalQueryString(req.query.cursor, 'cursor', 4096);
+            const focusIds = repeatedFocusIds(req.query.focusSessionId);
+            const roots = await querySessionListPage({ mode, limit, cursor, roots: true });
+            const children = mode === 'flat-time' ? { revision: roots.revision, children: [] }
+              : await queryChildrenPreviews(roots.sessions.map(session => session.id), mode, childLimit);
+            const focus = focusIds.length ? await queryExactSessions(focusIds, true)
+              : { results: [] as any[], paths: {} as Record<string, string[]> };
+            const forcedChildren: Record<string, string[]> = {};
+            for (const pathIds of Object.values(focus.paths || {}) as string[][]) {
+              for (let index = 0; index + 1 < pathIds.length; index++) {
+                const children = (forcedChildren[pathIds[index]] ||= []);
+                if (!children.includes(pathIds[index + 1])) children.push(pathIds[index + 1]);
+              }
+            }
+            const pathContextIds = [...new Set((Object.values(focus.paths || {}) as string[][]).flat())];
+            const pathContext = { results: [] as any[] };
+            for (let index = 0; index < pathContextIds.length; index += 100) {
+              pathContext.results.push(...(await queryExactSessions(pathContextIds.slice(index, index + 100), false)).results);
+            }
+            res.json(mapSessionListQueryPayload({ ...roots, children: children.children, focus: focus.results,
+              presentationPaths: focus.paths || {}, pathContext: pathContext.results, forcedChildren }));
+          } catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list sidebar query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/children', method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.body, ['mode','limit','parents','agent'], 'children request');
+            const mode = normalizeSessionListMode(req.body?.mode);
+            const limit = boundedBodyLimit(req.body?.limit, 10, 20);
+            if (req.body.agent !== undefined && (typeof req.body.agent !== 'string' || !req.body.agent || req.body.agent.length > 128)) {
+              return res.status(400).json({ error: 'agent is invalid.', code: 'SESSION_LIST_AGENT_INVALID' });
+            }
+            const agent = req.body.agent as string | undefined;
+            if (agent && mode !== 'time') return res.status(400).json({ error: 'agent-scoped children require time mode.', code: 'SESSION_LIST_MODE_INVALID' });
+            const result = await queryChildrenContinuations(req.body?.parents, mode, limit, agent);
+            res.json(mapSessionListQueryPayload(result));
+          } catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list children query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/by-id', method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.body, ['ids','includePaths'], 'by-id request');
+            if (req.body.includePaths !== undefined && typeof req.body.includePaths !== 'boolean') {
+              return res.status(400).json({ error: 'includePaths must be boolean.', code: 'SESSION_LIST_DTO_INVALID' });
+            }
+            res.json(mapSessionListQueryPayload(await queryExactSessions(req.body.ids, req.body.includePaths === true)));
+          }
+          catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list by-id query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/architecture', method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.query, ['agent','limit','childLimit','cursor'], 'architecture query');
+            const agent = optionalQueryString(req.query.agent, 'agent', 128);
+            const result = await queryArchitecture({ agent, limit: boundedQueryLimit(req.query.limit, 50, 100),
+              childLimit: boundedQueryLimit(req.query.childLimit, 10, 20), cursor: optionalQueryString(req.query.cursor, 'cursor', 4096) });
+            res.json(mapSessionListQueryPayload(result));
+          } catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list architecture query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/descendants/:sessionId', method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.query, ['limit'], 'descendant query');
+            if (typeof req.params.sessionId !== 'string' || !req.params.sessionId || req.params.sessionId.length > 512) {
+              return res.status(400).json({ error: 'sessionId is invalid.', code: 'SESSION_LIST_SESSION_ID_INVALID' });
+            }
+            res.json(mapSessionListQueryPayload(await queryDescendants(req.params.sessionId,
+            boundedQueryLimit(req.query.limit, 20, 100)))); }
+          catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list descendant query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/search', method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.query, ['q','limit'], 'search query');
+            const query = (optionalQueryString(req.query.q, 'q', 256) || '').trim();
+            if (!query) return res.status(400).json({ error: 'q must contain 1 to 256 characters.', code: 'SESSION_LIST_SEARCH_INVALID' });
+            const limit = boundedQueryLimit(req.query.limit, 50, 100);
+            const normalized = query.toLowerCase();
+            const sessions = (await sessionRuntime.listSessions()).map(buildWebUiSessionListProjection);
+            const matches = sessions.filter((session: any) => [session.displayName,session.id,...(session.aliases || []),session.agent,
+              session.currentNode,session.cwd,session.model,session.modelKey,session.defaultModelKey,session.childModelDefault,
+              session.effectiveChildModelKey].filter(value => typeof value === 'string' && value.trim()).some(value => value.toLowerCase().includes(normalized)));
+            res.json({ version: 1, query, sessions: matches.slice(0, limit), hasMore: matches.length > limit, candidateCount: sessions.length });
+          } catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list search');
+          }
+        },
+      });
+
+      // Legacy compatibility: Get all sessions.
       httpServerInstance.addRoute({
         path: '/api/sessions',
         method: 'GET',

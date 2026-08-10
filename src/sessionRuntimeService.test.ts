@@ -308,8 +308,27 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     const projection = buildSessionWorkerProjection(worker);
     await registry.apply(identity, projection); await flushEvents();
     assert.deepEqual(events, ['stateChanged', 'listChanged']); events.length = 0;
+    const originalListFenced = store.listFencedOwnerships.bind(store); let ownershipBatchReads = 0;
+    (store as any).listFencedOwnerships = () => { ownershipBatchReads += 1; return originalListFenced(); };
+    const projectionBatch = await client.call('getSessionListProjections', { sessionIds: [], includeVolatile: true });
+    assert.equal(ownershipBatchReads, 1, 'one batched ownership read covers the volatile projection union');
+    assert.equal(projectionBatch.sessions.find(item => item.id === sessionId)?.lastMessageTime, 123);
+    assert.equal(projectionBatch.sessions.find(item => item.id === sessionId)?.model, 'worker/model');
+    (store as any).listFencedOwnerships = originalListFenced;
     await registry.apply(identity, projection); await flushEvents();
     assert.deepEqual(events, ['stateChanged']);
+    const identicalBatch = await client.call('getSessionListProjections', { sessionIds: [], includeVolatile: true });
+    assert.equal(identicalBatch.revision, projectionBatch.revision, 'byte-identical publication does not reset list cursors'); events.length = 0;
+    const mailboxOnlyProjection = { ...projection, lastAppliedMailboxId: projection.lastAppliedMailboxId + 1 };
+    await registry.apply(identity, mailboxOnlyProjection); await flushEvents();
+    assert.deepEqual(events, ['stateChanged']);
+    const mailboxOnlyBatch = await client.call('getSessionListProjections', { sessionIds: [], includeVolatile: true });
+    assert.equal(mailboxOnlyBatch.revision, projectionBatch.revision, 'non-list publication fields do not reset list cursors'); events.length = 0;
+    const listChangedProjection = { ...mailboxOnlyProjection, messageCount: mailboxOnlyProjection.messageCount + 1 };
+    await registry.apply(identity, listChangedProjection); await flushEvents();
+    assert.deepEqual(events, ['stateChanged','listChanged']);
+    const changedBatch = await client.call('getSessionListProjections', { sessionIds: [], includeVolatile: true });
+    assert.notEqual(changedBatch.revision, projectionBatch.revision, 'real list-visible publication changes reset cursors'); events.length = 0;
 
     const originalForgedLoader = sessionManager.getExistingSession; let forgedLoads = 0;
     (sessionManager as any).getExistingSession = async (...args: any[]) => {
@@ -335,9 +354,6 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     assert.equal(listed.model, 'worker/model');
     assert.equal(listed.queueLength, 3); assert.equal(listed.runtimeState.queueLength, 3); assert.notEqual(listed.runtimeState.state, 'idle');
     assert.equal(listed.runtimeState.waiting?.waitingFor, 'exec'); assert.deepEqual(listed.runtimeState.waiting?.waitExecIds, ['worker-exec']);
-    registry.markStale(identity);
-    assert.equal((await client.call('getSession', { sessionId })).session!.busy, true);
-
     const history = await client.call('getHistory', { sessionId: alias });
     assert.equal(history!.session.id, sessionId); assert.deepEqual(history!.session.aliases, [alias]);
     assert.equal(history!.messages[0].parts[0].text, 'authoritative worker history');
@@ -376,6 +392,27 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     await assert.rejects(() => client.call('getHistory', { sessionId }), { code: 'SESSION_WORKER_HISTORY_UNAVAILABLE' });
     assert.deepEqual(await fs.readFile(authorityPath), malformed);
     await fs.writeFile(authorityPath, authorityBefore);
+
+    events.length = 0;
+    const beforeLiveClear = await client.call('getSessionListProjections', { sessionIds: [], includeVolatile: true });
+    assert.equal(registry.clear(identity), true); await flushEvents();
+    assert.deepEqual(events, ['stateChanged','listChanged'], 'clear of a live effective overlay invalidates exactly once'); events.length = 0;
+    const liveCleared = await client.call('getSessionListProjections', { sessionIds: [], includeVolatile: true });
+    assert.notEqual(liveCleared.revision, beforeLiveClear.revision); assert.equal(liveCleared.sessions.some(item => item.id === sessionId), false);
+    registry.establish(identity); await flushEvents();
+    assert.deepEqual(events, [], 'establish without a visible projection is presentation-stable');
+    assert.equal((await client.call('getSessionListProjections', { sessionIds: [], includeVolatile: true })).revision, liveCleared.revision);
+    await registry.apply(identity, listChangedProjection); await flushEvents(); events.length = 0;
+    const beforeStale = await client.call('getSessionListProjections', { sessionIds: [], includeVolatile: true });
+    assert.equal(registry.markStale(identity), true); await flushEvents();
+    assert.deepEqual(events, ['stateChanged','listChanged'], 'live-to-stale invalidates bounded lists exactly once'); events.length = 0;
+    const staleBatch = await client.call('getSessionListProjections', { sessionIds: [], includeVolatile: true });
+    assert.notEqual(staleBatch.revision, beforeStale.revision); assert.equal(staleBatch.sessions.some(item => item.id === sessionId), false);
+    await assert.rejects(() => client.call('getSession', { sessionId }), { code: 'SESSION_WORKER_STATE_UNAVAILABLE' });
+    assert.equal(registry.clear(identity), true); await flushEvents();
+    assert.deepEqual(events, [], 'clear after already-stale is presentation-stable');
+    const clearedBatch = await client.call('getSessionListProjections', { sessionIds: [], includeVolatile: true });
+    assert.equal(clearedBatch.revision, staleBatch.revision); assert.equal(clearedBatch.sessions.some(item => item.id === sessionId), false);
 
     store.markDraining(sessionId, identity.generation, identity.incarnationId);
     store.markExitObserved(sessionId, identity.generation, identity.incarnationId, 'released');

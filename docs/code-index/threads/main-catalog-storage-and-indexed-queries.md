@@ -13,7 +13,7 @@ Session runtime/list consumers and future bounded WebUI navigation.
 state/catalog.sqlite
 ```
 
-The first schema version contains only Session catalog rows, ambiguity-preserving
+The second schema version contains only Session catalog rows, ambiguity-preserving
 aliases, canonical parent projections, and maintained counts. Session semantic
 state remains in one authoritative JSON file per Session.
 
@@ -108,13 +108,45 @@ timers remain outside this catalog.
 
 ## Bounded WebUI boundary
 
-The current Stage A WebUI compatibility endpoint may still materialize all
-lightweight rows. The intended navigation boundary is mode-aware and bounded:
-root pages, batched child previews/pages, exact-by-ID context, and flat pages
-must query catalog indexes rather than requiring the browser to receive the
-complete Session tree. Search and descendant aggregation must either be
-honestly output-sensitive or use maintained projections; they must not become
-hidden repeated full scans.
+The Stage B backend exposes fixed version-1 `/api/session-list/*` projections
+for sidebar bootstrap, batched child continuation, exact-by-ID context and
+ancestor paths, Architecture summaries/tree pages, descendant confirmation
+previews, and explicit search. Default/time/flat-time ordering is server-side;
+pinned children are Sidebar presentation roots without changing their
+canonical real parent. Architecture instead uses a real per-agent forest: an
+agent Session is a forest root when its canonical parent is absent or belongs
+to another agent, while same-agent children (including pinned children) retain
+their real relation. Opaque cursors bind mode/scope/parent/agent plus a
+process-instance catalog revision and volatile sequence; a matching mutation
+returns a first-page reset instead of applying a stale key.
+
+Root, child, agent, exact, alias, and by-ID queries use concrete indexes and
+bounded batches. Initial child previews and multi-parent continuation each use
+one bounded compound `UNION ALL` request composed of per-parent indexed
+`LIMIT k+1` seeks, so they do not rank or scan every descendant of high-fanout
+parents. Active local and current Worker projections are unioned in memory
+before scope filtering, sorting, paging, and summary adjustment; one batched
+ownership read validates Worker projections. Worker registry callbacks compare
+one effective list-visible overlay signature: only fallback↔live transitions or
+changed visible fields advance the volatile presentation revision. Establish
+without projection, list-identical publication, and stale→clear are stable;
+live→stale invalidates synchronously once. Stale entries never overlay or enter
+the candidate union. Search is the sole explicit bounded projection scan and uses
+the current ECMAScript lowercase/includes verifier. Recursive descendant
+aggregation is an on-demand indexed CTE used only as a preview; lifecycle
+mutations still recompute their authoritative graph.
+
+Focus uses repeatable `focusSessionId` parameters with a small explicit cap;
+comma is ordinary Session-ID content. Complete ancestor paths are fetched in
+bounded exact-ID chunks so every accepted path row has a renderable DTO. New
+request/query DTOs reject unknown keys and wrong types instead of coercing,
+truncating, or ignoring them.
+
+All new server pages use SQLite `BINARY` Session-ID tie order. In-memory
+volatile merges compare UTF-8 bytes, yielding the same ordering for ASCII, BMP,
+and supplementary IDs as SQLite and cursor tuples. Stage C must consume server
+order without re-sorting ties. The legacy `GET /api/sessions` and current
+frontend remain unchanged; Stage B adds no frontend cache or SSE protocol.
 
 ## Design decisions
 
@@ -140,3 +172,17 @@ requested/satisfied wait-all Session IDs, and advisory exec IDs. Legacy-only
 semantic values must move durably into unversioned per-session authority before
 legacy catalog retirement or make migration fail; they may not survive as a
 generic catalog compatibility bag.
+
+[2026-08-10] Bounded WebUI navigation uses fixed product-neutral APIs rather
+than a generic catalog query DSL. Sidebar pages preserve Default/Time/Flat
+presentation, pinned elevation, forced focus paths, and stateless cursor reset;
+Architecture and destructive-confirmation previews remain read-only catalog
+projections. Explicit search preserves the current JavaScript field matching
+semantics instead of introducing FTS authority. Volatile local/Worker state is
+an in-memory presentation overlay only and never adds a persisted semantic
+revision.
+
+The canonical tie-break for these new bounded APIs is SQLite `BINARY` ordering
+of exact Session IDs, mirrored byte-for-byte by Main's UTF-8 comparator.
+Sidebar pinned elevation and Architecture's real per-agent forest are distinct
+presentation contracts; neither mutates canonical parent ownership.

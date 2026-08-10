@@ -1,13 +1,14 @@
 import { backup, DatabaseSync } from 'node:sqlite';
 import fs from 'fs-extra';
 import path from 'path';
+import { randomUUID } from 'node:crypto';
 import { CATALOG_DB_PATH, SESSIONS_DIR, SESSIONS_FILE, STATE_DIR } from '../config';
 import { CURRENT_SESSION_STATE_VERSION, normalizeAndValidateSessionAuthorityPayload } from './stateValidation';
 import { isQueueItem } from '../types';
 import { getEffectiveSessionQueueLength } from '../sessionRuntimeState';
 import { getLegacyBackupPath, getNumberedBackupPath } from '../utils/diskJsonData';
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MIGRATION_EVIDENCE_PATH = `${SESSIONS_FILE}.pre-catalog-sqlite-v1.bak`;
 const MAX_WAIT_ID_LENGTH = 128;
 const MAX_WAIT_REASON_LENGTH = 500;
@@ -37,6 +38,21 @@ export interface SessionCatalogMigrationResult {
   source: string | null;
   rowCount: number;
   evidencePath: string | null;
+}
+
+export type SessionListOrderMode = 'default' | 'time' | 'flat-time';
+export type SessionPresentationKey = Array<string | number>;
+export interface SessionPresentationPage {
+  rows: Record<string, any>[];
+  hasMore: boolean;
+  nextKey?: SessionPresentationKey;
+}
+export interface SessionChildrenPreview {
+  parentSessionId: string;
+  rows: Record<string, any>[];
+  total: number;
+  hasMore: boolean;
+  nextKey?: SessionPresentationKey;
 }
 
 function sqliteString(value: unknown, field: string, sessionId: string): string | null {
@@ -218,8 +234,15 @@ function createSchema(db: DatabaseSync): void {
       current_node TEXT NOT NULL,
       cwd TEXT,
       vector_index_position INTEGER,
+      cached_tokens INTEGER NOT NULL,
+      input_tokens INTEGER NOT NULL,
+      output_tokens INTEGER NOT NULL,
       metadata_json TEXT NOT NULL CHECK(json_valid(metadata_json)),
-      recent_rank REAL GENERATED ALWAYS AS(-last_message_time) STORED
+      recent_rank REAL GENERATED ALWAYS AS(-last_message_time) STORED,
+      pinned_rank INTEGER GENERATED ALWAYS AS(CASE WHEN pinned=1 THEN 0 ELSE 1 END) VIRTUAL,
+      sidebar_order_missing INTEGER GENERATED ALWAYS AS(CASE WHEN sidebar_order IS NULL THEN 1 ELSE 0 END) VIRTUAL,
+      sidebar_order_value REAL GENERATED ALWAYS AS(COALESCE(sidebar_order,0)) VIRTUAL,
+      presentation_root INTEGER GENERATED ALWAYS AS(CASE WHEN pinned=1 OR parent_session_id IS NULL THEN 1 ELSE 0 END) VIRTUAL
     ) STRICT;
     CREATE TABLE session_alias (
       alias TEXT NOT NULL,
@@ -227,34 +250,73 @@ function createSchema(db: DatabaseSync): void {
       ordinal INTEGER NOT NULL,
       PRIMARY KEY(alias, session_id)
     ) STRICT;
-    CREATE TABLE catalog_count (singleton INTEGER PRIMARY KEY CHECK(singleton=1), session_count INTEGER NOT NULL) STRICT;
-    INSERT INTO catalog_count(singleton,session_count) VALUES(1,0);
+    CREATE TABLE catalog_count (singleton INTEGER PRIMARY KEY CHECK(singleton=1), session_count INTEGER NOT NULL,
+      busy_count INTEGER NOT NULL,queued_count INTEGER NOT NULL,managed_count INTEGER NOT NULL,
+      cached_tokens INTEGER NOT NULL,input_tokens INTEGER NOT NULL,output_tokens INTEGER NOT NULL) STRICT;
+    INSERT INTO catalog_count(singleton,session_count,busy_count,queued_count,managed_count,cached_tokens,input_tokens,output_tokens)
+      VALUES(1,0,0,0,0,0,0,0);
     CREATE TABLE catalog_agent_count (agent TEXT PRIMARY KEY, session_count INTEGER NOT NULL) STRICT;
-    CREATE TABLE catalog_parent_count (parent_key TEXT PRIMARY KEY, session_count INTEGER NOT NULL) STRICT;
+    CREATE TABLE catalog_parent_count (parent_key TEXT PRIMARY KEY, session_count INTEGER NOT NULL, unpinned_session_count INTEGER NOT NULL) STRICT;
+    CREATE TABLE catalog_parent_agent_count (parent_key TEXT NOT NULL,agent TEXT NOT NULL,session_count INTEGER NOT NULL,
+      PRIMARY KEY(parent_key,agent)) STRICT;
     CREATE TRIGGER session_catalog_count_insert AFTER INSERT ON session_catalog BEGIN
-      UPDATE catalog_count SET session_count=session_count+1 WHERE singleton=1;
+      UPDATE catalog_count SET session_count=session_count+1,busy_count=busy_count+new.busy,
+        queued_count=queued_count+CASE WHEN new.queue_length>0 THEN 1 ELSE 0 END,
+        managed_count=managed_count+CASE WHEN new.managed_pending_count>0 THEN 1 ELSE 0 END,
+        cached_tokens=cached_tokens+new.cached_tokens,input_tokens=input_tokens+new.input_tokens,
+        output_tokens=output_tokens+new.output_tokens WHERE singleton=1;
       INSERT INTO catalog_agent_count(agent,session_count) VALUES(new.agent,1)
         ON CONFLICT(agent) DO UPDATE SET session_count=session_count+1;
-      INSERT INTO catalog_parent_count(parent_key,session_count) VALUES(COALESCE(new.parent_session_id,''),1)
-        ON CONFLICT(parent_key) DO UPDATE SET session_count=session_count+1;
+      INSERT INTO catalog_parent_count(parent_key,session_count,unpinned_session_count)
+        VALUES(COALESCE(new.parent_session_id,''),1,CASE WHEN new.pinned=0 THEN 1 ELSE 0 END)
+        ON CONFLICT(parent_key) DO UPDATE SET session_count=session_count+1,
+          unpinned_session_count=unpinned_session_count+CASE WHEN new.pinned=0 THEN 1 ELSE 0 END;
+      INSERT INTO catalog_parent_agent_count(parent_key,agent,session_count) VALUES(COALESCE(new.parent_session_id,''),new.agent,1)
+        ON CONFLICT(parent_key,agent) DO UPDATE SET session_count=session_count+1;
     END;
     CREATE TRIGGER session_catalog_count_delete AFTER DELETE ON session_catalog BEGIN
-      UPDATE catalog_count SET session_count=session_count-1 WHERE singleton=1;
+      UPDATE catalog_count SET session_count=session_count-1,busy_count=busy_count-old.busy,
+        queued_count=queued_count-CASE WHEN old.queue_length>0 THEN 1 ELSE 0 END,
+        managed_count=managed_count-CASE WHEN old.managed_pending_count>0 THEN 1 ELSE 0 END,
+        cached_tokens=cached_tokens-old.cached_tokens,input_tokens=input_tokens-old.input_tokens,
+        output_tokens=output_tokens-old.output_tokens WHERE singleton=1;
       UPDATE catalog_agent_count SET session_count=session_count-1 WHERE agent=old.agent;
       DELETE FROM catalog_agent_count WHERE agent=old.agent AND session_count=0;
       UPDATE catalog_parent_count SET session_count=session_count-1 WHERE parent_key=COALESCE(old.parent_session_id,'');
+      UPDATE catalog_parent_count SET unpinned_session_count=unpinned_session_count-1
+        WHERE parent_key=COALESCE(old.parent_session_id,'') AND old.pinned=0;
       DELETE FROM catalog_parent_count WHERE parent_key=COALESCE(old.parent_session_id,'') AND session_count=0;
+      UPDATE catalog_parent_agent_count SET session_count=session_count-1
+        WHERE parent_key=COALESCE(old.parent_session_id,'') AND agent=old.agent;
+      DELETE FROM catalog_parent_agent_count WHERE parent_key=COALESCE(old.parent_session_id,'') AND agent=old.agent AND session_count=0;
     END;
-    CREATE TRIGGER session_catalog_count_update AFTER UPDATE OF agent,parent_session_id ON session_catalog
-    WHEN old.agent<>new.agent OR old.parent_session_id IS NOT new.parent_session_id BEGIN
+    CREATE TRIGGER session_catalog_count_update AFTER UPDATE OF agent,parent_session_id,pinned ON session_catalog
+    WHEN old.agent<>new.agent OR old.parent_session_id IS NOT new.parent_session_id OR old.pinned<>new.pinned BEGIN
       UPDATE catalog_agent_count SET session_count=session_count-1 WHERE agent=old.agent;
       DELETE FROM catalog_agent_count WHERE agent=old.agent AND session_count=0;
       INSERT INTO catalog_agent_count(agent,session_count) VALUES(new.agent,1)
         ON CONFLICT(agent) DO UPDATE SET session_count=session_count+1;
       UPDATE catalog_parent_count SET session_count=session_count-1 WHERE parent_key=COALESCE(old.parent_session_id,'');
+      UPDATE catalog_parent_count SET unpinned_session_count=unpinned_session_count-1
+        WHERE parent_key=COALESCE(old.parent_session_id,'') AND old.pinned=0;
       DELETE FROM catalog_parent_count WHERE parent_key=COALESCE(old.parent_session_id,'') AND session_count=0;
-      INSERT INTO catalog_parent_count(parent_key,session_count) VALUES(COALESCE(new.parent_session_id,''),1)
-        ON CONFLICT(parent_key) DO UPDATE SET session_count=session_count+1;
+      INSERT INTO catalog_parent_count(parent_key,session_count,unpinned_session_count)
+        VALUES(COALESCE(new.parent_session_id,''),1,CASE WHEN new.pinned=0 THEN 1 ELSE 0 END)
+        ON CONFLICT(parent_key) DO UPDATE SET session_count=session_count+1,
+          unpinned_session_count=unpinned_session_count+CASE WHEN new.pinned=0 THEN 1 ELSE 0 END;
+      UPDATE catalog_parent_agent_count SET session_count=session_count-1
+        WHERE parent_key=COALESCE(old.parent_session_id,'') AND agent=old.agent;
+      DELETE FROM catalog_parent_agent_count WHERE parent_key=COALESCE(old.parent_session_id,'') AND agent=old.agent AND session_count=0;
+      INSERT INTO catalog_parent_agent_count(parent_key,agent,session_count) VALUES(COALESCE(new.parent_session_id,''),new.agent,1)
+        ON CONFLICT(parent_key,agent) DO UPDATE SET session_count=session_count+1;
+    END;
+    CREATE TRIGGER session_catalog_summary_update AFTER UPDATE OF busy,queue_length,managed_pending_count,cached_tokens,input_tokens,output_tokens ON session_catalog BEGIN
+      UPDATE catalog_count SET busy_count=busy_count+new.busy-old.busy,
+        queued_count=queued_count+CASE WHEN new.queue_length>0 THEN 1 ELSE 0 END-CASE WHEN old.queue_length>0 THEN 1 ELSE 0 END,
+        managed_count=managed_count+CASE WHEN new.managed_pending_count>0 THEN 1 ELSE 0 END-CASE WHEN old.managed_pending_count>0 THEN 1 ELSE 0 END,
+        cached_tokens=cached_tokens+new.cached_tokens-old.cached_tokens,
+        input_tokens=input_tokens+new.input_tokens-old.input_tokens,
+        output_tokens=output_tokens+new.output_tokens-old.output_tokens WHERE singleton=1;
     END;
     CREATE INDEX idx_session_catalog_recent ON session_catalog(recent_rank, session_id);
     CREATE INDEX idx_session_catalog_agent_recent ON session_catalog(agent, recent_rank, session_id);
@@ -265,6 +327,15 @@ function createSchema(db: DatabaseSync): void {
     CREATE INDEX idx_session_catalog_recovery_queued ON session_catalog(recent_rank, session_id) WHERE queue_length>0;
     CREATE INDEX idx_session_catalog_recovery_managed ON session_catalog(recent_rank, session_id) WHERE managed_pending_count>0;
     CREATE INDEX idx_session_alias_session ON session_alias(session_id, ordinal);
+    CREATE INDEX idx_session_catalog_root_default ON session_catalog(presentation_root,pinned_rank,archived,sidebar_order_missing,sidebar_order_value,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_root_time ON session_catalog(presentation_root,pinned_rank,archived,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_parent_default ON session_catalog(parent_session_id,pinned,archived,sidebar_order_missing,sidebar_order_value,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_parent_time ON session_catalog(parent_session_id,pinned,archived,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_agent_root_time ON session_catalog(agent,presentation_root,pinned_rank,archived,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_agent_time ON session_catalog(agent,pinned_rank,archived,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_parent_agent_default ON session_catalog(parent_session_id,agent,pinned,archived,sidebar_order_missing,sidebar_order_value,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_parent_agent_time ON session_catalog(parent_session_id,agent,pinned,archived,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_parent_agent_architecture ON session_catalog(parent_session_id,agent,archived,recent_rank,session_id);
   `);
   db.prepare('INSERT INTO catalog_metadata(key,value) VALUES(?,?)').run('schema_version', String(SCHEMA_VERSION));
   db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
@@ -289,6 +360,9 @@ function typedRow(metadata: Record<string, any>) {
     currentNode: sqliteString(metadata.currentNode, 'currentNode', id) || 'master',
     cwd: sqliteString(metadata.cwd, 'cwd', id),
     vectorIndexPosition: sqliteNumber(metadata.vectorIndexPosition, 'vectorIndexPosition', id),
+    cachedTokens: sqliteNumber(metadata.stats?.totalCachedTokens, 'stats.totalCachedTokens', id) || 0,
+    inputTokens: sqliteNumber(metadata.stats?.totalInputTokens, 'stats.totalInputTokens', id) || 0,
+    outputTokens: sqliteNumber(metadata.stats?.totalOutputTokens, 'stats.totalOutputTokens', id) || 0,
     json: JSON.stringify(metadata),
     aliases: (metadata.aliases || []) as string[],
   };
@@ -298,16 +372,18 @@ function insertMetadata(db: DatabaseSync, metadataValue: Record<string, any>): v
   const row = typedRow(metadataValue);
   db.prepare(`INSERT INTO session_catalog(
     session_id,agent,parent_reference,parent_session_id,display_name,archived,pinned,sidebar_order,last_message_time,
-    message_count,busy,queue_length,managed_pending_count,current_node,cwd,vector_index_position,metadata_json
-  ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    message_count,busy,queue_length,managed_pending_count,current_node,cwd,vector_index_position,cached_tokens,input_tokens,output_tokens,metadata_json
+  ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   ON CONFLICT(session_id) DO UPDATE SET
     agent=excluded.agent,parent_reference=excluded.parent_reference,parent_session_id=excluded.parent_session_id,display_name=excluded.display_name,
     archived=excluded.archived,pinned=excluded.pinned,sidebar_order=excluded.sidebar_order,
     last_message_time=excluded.last_message_time,message_count=excluded.message_count,busy=excluded.busy,
     queue_length=excluded.queue_length,managed_pending_count=excluded.managed_pending_count,current_node=excluded.current_node,cwd=excluded.cwd,
-    vector_index_position=excluded.vector_index_position,metadata_json=excluded.metadata_json`).run(
+    vector_index_position=excluded.vector_index_position,cached_tokens=excluded.cached_tokens,input_tokens=excluded.input_tokens,
+    output_tokens=excluded.output_tokens,metadata_json=excluded.metadata_json`).run(
     row.id,row.agent,row.parent,row.parent,row.display,row.archived,row.pinned,row.sidebarOrder,row.lastTime,
-    row.messageCount,row.busy,row.queueLength,row.managedPendingCount,row.currentNode,row.cwd,row.vectorIndexPosition,row.json,
+    row.messageCount,row.busy,row.queueLength,row.managedPendingCount,row.currentNode,row.cwd,row.vectorIndexPosition,
+    row.cachedTokens,row.inputTokens,row.outputTokens,row.json,
   );
   db.prepare('DELETE FROM session_alias WHERE session_id=?').run(row.id);
   const aliasInsert = db.prepare('INSERT INTO session_alias(alias,session_id,ordinal) VALUES(?,?,?)');
@@ -339,6 +415,33 @@ function normalizeParentReferences(db: DatabaseSync, references?: Set<string>): 
     if (canonical === row.session_id) canonical = null;
     if (canonical !== row.parent_session_id) update.run(canonical, row.session_id);
   }
+}
+
+type CatalogProjectionSqlRow = {
+  metadata_json: string; busy: number; queue_length: number; managed_pending_count: number;
+};
+function projectionFromSqlRow(row: CatalogProjectionSqlRow): Record<string, any> {
+  return {
+    ...JSON.parse(row.metadata_json), busy: row.busy === 1,
+    queueLength: row.queue_length, managedPendingCount: row.managed_pending_count,
+  };
+}
+
+function presentationColumns(mode: SessionListOrderMode, child = false): string[] {
+  if (child) return mode === 'default'
+    ? ['archived','sidebar_order_missing','sidebar_order_value','recent_rank','session_id']
+    : ['archived','recent_rank','session_id'];
+  return mode === 'default'
+    ? ['pinned_rank','archived','sidebar_order_missing','sidebar_order_value','recent_rank','session_id']
+    : ['pinned_rank','archived','recent_rank','session_id'];
+}
+function presentationKey(row: any, mode: SessionListOrderMode, child = false): SessionPresentationKey {
+  if (child) return mode === 'default'
+    ? [row.archived,row.sidebar_order_missing,row.sidebar_order_value,row.recent_rank,row.session_id]
+    : [row.archived,row.recent_rank,row.session_id];
+  return mode === 'default'
+    ? [row.pinned_rank,row.archived,row.sidebar_order_missing,row.sidebar_order_value,row.recent_rank,row.session_id]
+    : [row.pinned_rank,row.archived,row.recent_rank,row.session_id];
 }
 
 function fsyncPath(filePath: string): void {
@@ -510,8 +613,119 @@ async function preserveMigrationEvidence(source: string): Promise<void> {
   fsyncPath(path.dirname(MIGRATION_EVIDENCE_PATH));
 }
 
+function migrateSchemaV1ToV2(db: DatabaseSync): void {
+  db.exec(`BEGIN IMMEDIATE;
+    ALTER TABLE session_catalog ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE session_catalog ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE session_catalog ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE session_catalog ADD COLUMN pinned_rank INTEGER GENERATED ALWAYS AS(CASE WHEN pinned=1 THEN 0 ELSE 1 END) VIRTUAL;
+    ALTER TABLE session_catalog ADD COLUMN sidebar_order_missing INTEGER GENERATED ALWAYS AS(CASE WHEN sidebar_order IS NULL THEN 1 ELSE 0 END) VIRTUAL;
+    ALTER TABLE session_catalog ADD COLUMN sidebar_order_value REAL GENERATED ALWAYS AS(COALESCE(sidebar_order,0)) VIRTUAL;
+    ALTER TABLE session_catalog ADD COLUMN presentation_root INTEGER GENERATED ALWAYS AS(CASE WHEN pinned=1 OR parent_session_id IS NULL THEN 1 ELSE 0 END) VIRTUAL;
+    ALTER TABLE catalog_parent_count ADD COLUMN unpinned_session_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE catalog_count ADD COLUMN busy_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE catalog_count ADD COLUMN queued_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE catalog_count ADD COLUMN managed_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE catalog_count ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE catalog_count ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE catalog_count ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE catalog_parent_agent_count (parent_key TEXT NOT NULL,agent TEXT NOT NULL,session_count INTEGER NOT NULL,
+      PRIMARY KEY(parent_key,agent)) STRICT;
+    UPDATE session_catalog SET
+      cached_tokens=CAST(COALESCE(json_extract(metadata_json,'$.stats.totalCachedTokens'),0) AS INTEGER),
+      input_tokens=CAST(COALESCE(json_extract(metadata_json,'$.stats.totalInputTokens'),0) AS INTEGER),
+      output_tokens=CAST(COALESCE(json_extract(metadata_json,'$.stats.totalOutputTokens'),0) AS INTEGER);
+    UPDATE catalog_parent_count SET unpinned_session_count=(SELECT count(*) FROM session_catalog
+      WHERE COALESCE(parent_session_id,'')=catalog_parent_count.parent_key AND pinned=0);
+    INSERT INTO catalog_parent_agent_count(parent_key,agent,session_count)
+      SELECT COALESCE(parent_session_id,''),agent,count(*) FROM session_catalog GROUP BY COALESCE(parent_session_id,''),agent;
+    UPDATE catalog_count SET
+      busy_count=(SELECT COALESCE(sum(busy),0) FROM session_catalog),
+      queued_count=(SELECT count(*) FROM session_catalog WHERE queue_length>0),
+      managed_count=(SELECT count(*) FROM session_catalog WHERE managed_pending_count>0),
+      cached_tokens=(SELECT COALESCE(sum(cached_tokens),0) FROM session_catalog),
+      input_tokens=(SELECT COALESCE(sum(input_tokens),0) FROM session_catalog),
+      output_tokens=(SELECT COALESCE(sum(output_tokens),0) FROM session_catalog) WHERE singleton=1;
+    DROP TRIGGER session_catalog_count_insert;
+    DROP TRIGGER session_catalog_count_delete;
+    DROP TRIGGER session_catalog_count_update;
+    CREATE TRIGGER session_catalog_count_insert AFTER INSERT ON session_catalog BEGIN
+      UPDATE catalog_count SET session_count=session_count+1,busy_count=busy_count+new.busy,
+        queued_count=queued_count+CASE WHEN new.queue_length>0 THEN 1 ELSE 0 END,
+        managed_count=managed_count+CASE WHEN new.managed_pending_count>0 THEN 1 ELSE 0 END,
+        cached_tokens=cached_tokens+new.cached_tokens,input_tokens=input_tokens+new.input_tokens,
+        output_tokens=output_tokens+new.output_tokens WHERE singleton=1;
+      INSERT INTO catalog_agent_count(agent,session_count) VALUES(new.agent,1)
+        ON CONFLICT(agent) DO UPDATE SET session_count=session_count+1;
+      INSERT INTO catalog_parent_count(parent_key,session_count,unpinned_session_count)
+        VALUES(COALESCE(new.parent_session_id,''),1,CASE WHEN new.pinned=0 THEN 1 ELSE 0 END)
+        ON CONFLICT(parent_key) DO UPDATE SET session_count=session_count+1,
+          unpinned_session_count=unpinned_session_count+CASE WHEN new.pinned=0 THEN 1 ELSE 0 END;
+      INSERT INTO catalog_parent_agent_count(parent_key,agent,session_count) VALUES(COALESCE(new.parent_session_id,''),new.agent,1)
+        ON CONFLICT(parent_key,agent) DO UPDATE SET session_count=session_count+1;
+    END;
+    CREATE TRIGGER session_catalog_count_delete AFTER DELETE ON session_catalog BEGIN
+      UPDATE catalog_count SET session_count=session_count-1,busy_count=busy_count-old.busy,
+        queued_count=queued_count-CASE WHEN old.queue_length>0 THEN 1 ELSE 0 END,
+        managed_count=managed_count-CASE WHEN old.managed_pending_count>0 THEN 1 ELSE 0 END,
+        cached_tokens=cached_tokens-old.cached_tokens,input_tokens=input_tokens-old.input_tokens,
+        output_tokens=output_tokens-old.output_tokens WHERE singleton=1;
+      UPDATE catalog_agent_count SET session_count=session_count-1 WHERE agent=old.agent;
+      DELETE FROM catalog_agent_count WHERE agent=old.agent AND session_count=0;
+      UPDATE catalog_parent_count SET session_count=session_count-1,
+        unpinned_session_count=unpinned_session_count-CASE WHEN old.pinned=0 THEN 1 ELSE 0 END
+        WHERE parent_key=COALESCE(old.parent_session_id,'');
+      DELETE FROM catalog_parent_count WHERE parent_key=COALESCE(old.parent_session_id,'') AND session_count=0;
+      UPDATE catalog_parent_agent_count SET session_count=session_count-1
+        WHERE parent_key=COALESCE(old.parent_session_id,'') AND agent=old.agent;
+      DELETE FROM catalog_parent_agent_count WHERE parent_key=COALESCE(old.parent_session_id,'') AND agent=old.agent AND session_count=0;
+    END;
+    CREATE TRIGGER session_catalog_count_update AFTER UPDATE OF agent,parent_session_id,pinned ON session_catalog
+    WHEN old.agent<>new.agent OR old.parent_session_id IS NOT new.parent_session_id OR old.pinned<>new.pinned BEGIN
+      UPDATE catalog_agent_count SET session_count=session_count-1 WHERE agent=old.agent;
+      DELETE FROM catalog_agent_count WHERE agent=old.agent AND session_count=0;
+      INSERT INTO catalog_agent_count(agent,session_count) VALUES(new.agent,1)
+        ON CONFLICT(agent) DO UPDATE SET session_count=session_count+1;
+      UPDATE catalog_parent_count SET session_count=session_count-1,
+        unpinned_session_count=unpinned_session_count-CASE WHEN old.pinned=0 THEN 1 ELSE 0 END
+        WHERE parent_key=COALESCE(old.parent_session_id,'');
+      DELETE FROM catalog_parent_count WHERE parent_key=COALESCE(old.parent_session_id,'') AND session_count=0;
+      INSERT INTO catalog_parent_count(parent_key,session_count,unpinned_session_count)
+        VALUES(COALESCE(new.parent_session_id,''),1,CASE WHEN new.pinned=0 THEN 1 ELSE 0 END)
+        ON CONFLICT(parent_key) DO UPDATE SET session_count=session_count+1,
+          unpinned_session_count=unpinned_session_count+CASE WHEN new.pinned=0 THEN 1 ELSE 0 END;
+      UPDATE catalog_parent_agent_count SET session_count=session_count-1
+        WHERE parent_key=COALESCE(old.parent_session_id,'') AND agent=old.agent;
+      DELETE FROM catalog_parent_agent_count WHERE parent_key=COALESCE(old.parent_session_id,'') AND agent=old.agent AND session_count=0;
+      INSERT INTO catalog_parent_agent_count(parent_key,agent,session_count) VALUES(COALESCE(new.parent_session_id,''),new.agent,1)
+        ON CONFLICT(parent_key,agent) DO UPDATE SET session_count=session_count+1;
+    END;
+    CREATE TRIGGER session_catalog_summary_update AFTER UPDATE OF busy,queue_length,managed_pending_count,cached_tokens,input_tokens,output_tokens ON session_catalog BEGIN
+      UPDATE catalog_count SET busy_count=busy_count+new.busy-old.busy,
+        queued_count=queued_count+CASE WHEN new.queue_length>0 THEN 1 ELSE 0 END-CASE WHEN old.queue_length>0 THEN 1 ELSE 0 END,
+        managed_count=managed_count+CASE WHEN new.managed_pending_count>0 THEN 1 ELSE 0 END-CASE WHEN old.managed_pending_count>0 THEN 1 ELSE 0 END,
+        cached_tokens=cached_tokens+new.cached_tokens-old.cached_tokens,
+        input_tokens=input_tokens+new.input_tokens-old.input_tokens,
+        output_tokens=output_tokens+new.output_tokens-old.output_tokens WHERE singleton=1;
+    END;
+    CREATE INDEX idx_session_catalog_root_default ON session_catalog(presentation_root,pinned_rank,archived,sidebar_order_missing,sidebar_order_value,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_root_time ON session_catalog(presentation_root,pinned_rank,archived,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_parent_default ON session_catalog(parent_session_id,pinned,archived,sidebar_order_missing,sidebar_order_value,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_parent_time ON session_catalog(parent_session_id,pinned,archived,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_agent_root_time ON session_catalog(agent,presentation_root,pinned_rank,archived,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_agent_time ON session_catalog(agent,pinned_rank,archived,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_parent_agent_default ON session_catalog(parent_session_id,agent,pinned,archived,sidebar_order_missing,sidebar_order_value,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_parent_agent_time ON session_catalog(parent_session_id,agent,pinned,archived,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_parent_agent_architecture ON session_catalog(parent_session_id,agent,archived,recent_rank,session_id);
+    UPDATE catalog_metadata SET value='2' WHERE key='schema_version';
+    PRAGMA user_version=2;
+    COMMIT;`);
+}
+
 export class SessionCatalogStore {
   private db: DatabaseSync | null = null;
+  private presentationRevision = 1;
+  private readonly presentationInstance = randomUUID();
   constructor(readonly filePath = CATALOG_DB_PATH) {}
 
   exists(): boolean { return fs.existsSync(this.filePath); }
@@ -578,7 +792,8 @@ export class SessionCatalogStore {
     if (this.db) return;
     const db = new DatabaseSync(this.filePath);
     try {
-      const version = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version);
+      let version = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version);
+      if (version === 1) { migrateSchemaV1ToV2(db); version = 2; }
       if (version !== SCHEMA_VERSION) throw new Error(`Unsupported session catalog schema version ${version}.`);
       db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON');
       this.db = db;
@@ -590,6 +805,184 @@ export class SessionCatalogStore {
     if (!this.db && this.exists()) this.open();
     if (!this.db) throw new Error('Session catalog is not initialized.');
     return this.db;
+  }
+  getPresentationRevision(): string { return `${this.presentationInstance}:${this.presentationRevision}`; }
+
+  getMany(sessionIds: readonly string[]): Record<string, any>[] {
+    const ids = [...new Set(sessionIds)].slice(0, 200);
+    if (!ids.length) return [];
+    const rows = this.database().prepare(`SELECT metadata_json,busy,queue_length,managed_pending_count
+      FROM session_catalog WHERE session_id IN (${ids.map(() => '?').join(',')})`).all(...ids) as CatalogProjectionSqlRow[];
+    const byId = new Map(rows.map(row => { const value = projectionFromSqlRow(row); return [value.id, value]; }));
+    return ids.flatMap(id => { const value = byId.get(id); return value ? [value] : []; });
+  }
+
+  getPresentationScopes(sessionIds: readonly string[]): Record<string, { parentSessionId: string | null; parentAgent: string | null; pinned: boolean; agent: string }> {
+    const ids = [...new Set(sessionIds)].slice(0, 200); if (!ids.length) return {};
+    const rows = this.database().prepare(`SELECT c.session_id,c.parent_session_id,parent.agent parent_agent,c.pinned,c.agent
+      FROM session_catalog c LEFT JOIN session_catalog parent ON parent.session_id=c.parent_session_id
+      WHERE c.session_id IN (${ids.map(() => '?').join(',')})`).all(...ids) as Array<{ session_id: string; parent_session_id: string | null; parent_agent: string | null; pinned: number; agent: string }>;
+    return Object.fromEntries(rows.map(row => [row.session_id, { parentSessionId: row.parent_session_id,
+      parentAgent: row.parent_agent, pinned: row.pinned === 1, agent: row.agent }]));
+  }
+
+  listPresentationPage(options: {
+    mode: SessionListOrderMode; limit: number; after?: SessionPresentationKey; roots?: boolean;
+    parentSessionId?: string; agent?: string;
+  }): SessionPresentationPage {
+    const limit = Math.max(1, Math.min(100, Math.floor(options.limit)));
+    const columns = presentationColumns(options.mode);
+    const terms: string[] = []; const args: any[] = [];
+    if (options.parentSessionId !== undefined) {
+      terms.push('parent_session_id=?', 'pinned=0'); args.push(options.parentSessionId);
+    } else if (options.roots) terms.push('presentation_root=1');
+    if (options.agent !== undefined) { terms.push('agent=?'); args.push(options.agent); }
+    if (options.after) {
+      if (options.after.length !== columns.length) throw new Error('Invalid presentation key.');
+      terms.push(`(${columns.join(',')})>(${columns.map(() => '?').join(',')})`); args.push(...options.after);
+    }
+    const rows = this.database().prepare(`SELECT metadata_json,busy,queue_length,managed_pending_count,
+      ${columns.join(',')} FROM session_catalog${terms.length ? ` WHERE ${terms.join(' AND ')}` : ''}
+      ORDER BY ${columns.join(',')} LIMIT ?`).all(...args, limit + 1) as Array<CatalogProjectionSqlRow & Record<string, any>>;
+    const selected = rows.slice(0, limit);
+    return { rows: selected.map(projectionFromSqlRow), hasMore: rows.length > limit,
+      ...(rows.length > limit && selected.length ? { nextKey: presentationKey(selected[selected.length - 1], options.mode) } : {}) };
+  }
+
+  listAgentForestPage(options: { agent: string; limit: number; after?: SessionPresentationKey }): SessionPresentationPage {
+    const limit = Math.max(1, Math.min(100, Math.floor(options.limit))); const columns = presentationColumns('time');
+    const args: any[] = [options.agent]; const after = options.after
+      ? ` AND (${columns.map(column => `c.${column}`).join(',')})>(${columns.map(() => '?').join(',')})` : '';
+    if (options.after) { if (options.after.length !== columns.length) throw new Error('Invalid agent forest key.'); args.push(...options.after); }
+    const rows = this.database().prepare(`SELECT c.metadata_json,c.busy,c.queue_length,c.managed_pending_count,${columns.map(column => `c.${column}`).join(',')}
+      FROM session_catalog c LEFT JOIN session_catalog parent ON parent.session_id=c.parent_session_id
+      WHERE c.agent=? AND (c.parent_session_id IS NULL OR parent.session_id IS NULL OR parent.agent<>c.agent)${after}
+      ORDER BY ${columns.map(column => `c.${column}`).join(',')} LIMIT ?`).all(...args, limit + 1) as Array<CatalogProjectionSqlRow & Record<string, any>>;
+    const selected = rows.slice(0, limit);
+    return { rows: selected.map(projectionFromSqlRow), hasMore: rows.length > limit,
+      ...(rows.length > limit && selected.length ? { nextKey: presentationKey(selected[selected.length - 1], 'time') } : {}) };
+  }
+
+  listChildrenPreviews(parentSessionIds: readonly string[], mode: SessionListOrderMode, limit: number, agent?: string): SessionChildrenPreview[] {
+    const parents = [...new Set(parentSessionIds)].slice(0, 100);
+    limit = Math.max(1, Math.min(20, Math.floor(limit)));
+    if (!parents.length) return [];
+    const columns = presentationColumns(mode, true);
+    const counts = this.getUnpinnedParentCounts(parents, agent);
+    if (agent !== undefined && mode !== 'time') throw new Error('Agent forest children require time mode.');
+    const indexName = agent === undefined
+      ? (mode === 'default' ? 'idx_session_catalog_parent_default' : 'idx_session_catalog_parent_time')
+      : 'idx_session_catalog_parent_agent_architecture';
+    const branches: string[] = []; const args: any[] = [];
+    for (const parent of parents) {
+      branches.push(`SELECT * FROM (SELECT metadata_json,busy,queue_length,managed_pending_count,parent_session_id,${columns.join(',')}
+        FROM session_catalog INDEXED BY ${indexName} WHERE parent_session_id=?${agent === undefined ? ' AND pinned=0' : ' AND agent=?'}
+        ORDER BY ${columns.join(',')} LIMIT ?)`);
+      args.push(parent, ...(agent === undefined ? [] : [agent]), limit + 1);
+    }
+    const rows = this.database().prepare(branches.join(' UNION ALL ')).all(...args) as Array<CatalogProjectionSqlRow & Record<string, any>>;
+    const grouped = new Map<string, Array<CatalogProjectionSqlRow & Record<string, any>>>();
+    for (const row of rows) { const group = grouped.get(row.parent_session_id) || []; group.push(row); grouped.set(row.parent_session_id, group); }
+    return parents.map(parentSessionId => {
+      const all = grouped.get(parentSessionId) || []; const group = all.slice(0, limit); const total = counts[parentSessionId] || 0;
+      return { parentSessionId, rows: group.map(projectionFromSqlRow), total, hasMore: all.length > limit,
+        ...(all.length > limit && group.length ? { nextKey: presentationKey(group[group.length - 1], mode, true) } : {}) };
+    });
+  }
+
+  listChildrenContinuations(requests: ReadonlyArray<{ parentSessionId: string; after?: SessionPresentationKey }>, mode: SessionListOrderMode, limit: number, agent?: string): SessionChildrenPreview[] {
+    requests = [...new Map(requests.slice(0, 20).map(request => [request.parentSessionId, request])).values()];
+    limit = Math.max(1, Math.min(20, Math.floor(limit)));
+    if (!requests.length) return [];
+    const columns = presentationColumns(mode, true); const args: any[] = []; const branches: string[] = [];
+    if (agent !== undefined && mode !== 'time') throw new Error('Agent forest children require time mode.');
+    const indexName = agent === undefined
+      ? (mode === 'default' ? 'idx_session_catalog_parent_default' : 'idx_session_catalog_parent_time')
+      : 'idx_session_catalog_parent_agent_architecture';
+    for (const request of requests) {
+      if (request.after && request.after.length !== columns.length) throw new Error('Invalid child presentation key.');
+      const after = request.after ? ` AND (${columns.join(',')})>(${columns.map(() => '?').join(',')})` : '';
+      branches.push(`SELECT * FROM (SELECT metadata_json,busy,queue_length,managed_pending_count,parent_session_id,${columns.join(',')}
+        FROM session_catalog INDEXED BY ${indexName} WHERE parent_session_id=?${agent === undefined ? ' AND pinned=0' : ' AND agent=?'}${after}
+        ORDER BY ${columns.join(',')} LIMIT ?)`);
+      args.push(request.parentSessionId, ...(agent === undefined ? [] : [agent]), ...(request.after || []), limit + 1);
+    }
+    const counts = this.getUnpinnedParentCounts(requests.map(request => request.parentSessionId), agent);
+    const rows = this.database().prepare(branches.join(' UNION ALL ')).all(...args) as Array<CatalogProjectionSqlRow & Record<string, any>>;
+    const grouped = new Map<string, Array<CatalogProjectionSqlRow & Record<string, any>>>();
+    for (const row of rows) { const group = grouped.get(row.parent_session_id) || []; group.push(row); grouped.set(row.parent_session_id, group); }
+    return requests.map(request => {
+      const all = grouped.get(request.parentSessionId) || []; const group = all.slice(0, limit); const total = counts[request.parentSessionId] || 0;
+      return { parentSessionId: request.parentSessionId, rows: group.map(projectionFromSqlRow), total,
+        hasMore: all.length > limit, ...(all.length > limit && group.length ? { nextKey: presentationKey(group[group.length - 1], mode, true) } : {}) };
+    });
+  }
+
+  private getUnpinnedParentCounts(parentSessionIds: readonly string[], agent?: string): Record<string, number> {
+    const parents = [...new Set(parentSessionIds)].slice(0, 100); if (!parents.length) return {};
+    if (agent === undefined) {
+      const rows = this.database().prepare(`SELECT parent_key,unpinned_session_count FROM catalog_parent_count
+        WHERE parent_key IN (${parents.map(() => '?').join(',')})`).all(...parents) as Array<{ parent_key: string; unpinned_session_count: number }>;
+      return Object.fromEntries(rows.map(row => [row.parent_key, Number(row.unpinned_session_count)]));
+    }
+    const rows = this.database().prepare(`SELECT parent_key,session_count FROM catalog_parent_agent_count
+      WHERE agent=? AND parent_key IN (${parents.map(() => '?').join(',')})`)
+      .all(agent, ...parents) as Array<{ parent_key: string; session_count: number }>;
+    return Object.fromEntries(rows.map(row => [row.parent_key, Number(row.session_count)]));
+  }
+
+  getPresentationPaths(sessionIds: readonly string[]): Record<string, string[]> {
+    const ids = [...new Set(sessionIds)].slice(0, 100);
+    if (!ids.length) return {};
+    const rows = this.database().prepare(`WITH RECURSIVE paths(focus_id,session_id,parent_session_id,depth,trail) AS (
+      SELECT session_id,session_id,parent_session_id,0,'|'||hex(session_id)||'|' FROM session_catalog
+        WHERE session_id IN (${ids.map(() => '?').join(',')})
+      UNION ALL
+      SELECT paths.focus_id,parent.session_id,parent.parent_session_id,paths.depth+1,
+        paths.trail||hex(parent.session_id)||'|'
+      FROM paths JOIN session_catalog parent ON parent.session_id=paths.parent_session_id
+      WHERE paths.depth<127 AND instr(paths.trail,'|'||hex(parent.session_id)||'|')=0
+    ) SELECT focus_id,session_id,depth FROM paths ORDER BY focus_id,depth DESC`).all(...ids) as Array<{ focus_id: string; session_id: string; depth: number }>;
+    const result: Record<string, string[]> = {};
+    for (const row of rows) (result[row.focus_id] ||= []).push(row.session_id);
+    return result;
+  }
+
+  getArchitectureSummary(): { total: number; busy: number; queued: number; managed: number; cachedTokens: number; inputTokens: number; outputTokens: number } {
+    const row = this.database().prepare(`SELECT session_count total,busy_count busy,queued_count queued,
+      managed_count managed,cached_tokens cachedTokens,input_tokens inputTokens,output_tokens outputTokens
+      FROM catalog_count WHERE singleton=1`).get() as any;
+    return Object.fromEntries(Object.entries(row).map(([key, value]) => [key, Number(value || 0)])) as any;
+  }
+
+  getAgentCounts(): Array<{ agent: string; count: number }> {
+    return (this.database().prepare('SELECT agent,session_count count FROM catalog_agent_count ORDER BY agent').all() as any[])
+      .map(row => ({ agent: row.agent, count: Number(row.count) }));
+  }
+
+  getDescendantSummary(sessionId: string, previewLimit: number): { total: number; busy: number; queued: number; cachedTokens: number; inputTokens: number; outputTokens: number; rows: Record<string, any>[] } {
+    previewLimit = Math.max(0, Math.min(100, Math.floor(previewLimit)));
+    const rows = this.database().prepare(`WITH RECURSIVE subtree(session_id) AS (
+      VALUES(?) UNION SELECT child.session_id FROM session_catalog child JOIN subtree ON child.parent_session_id=subtree.session_id
+    ), descendants AS (
+      SELECT c.*,count(*) OVER() total,sum(c.busy) OVER() busyTotal,
+        sum(CASE WHEN c.queue_length>0 THEN 1 ELSE 0 END) OVER() queuedTotal,
+        sum(c.cached_tokens) OVER() cachedTokens,sum(c.input_tokens) OVER() inputTokens,sum(c.output_tokens) OVER() outputTokens
+      FROM session_catalog c JOIN subtree s ON s.session_id=c.session_id WHERE c.session_id<>?
+    ) SELECT metadata_json,busy,queue_length,managed_pending_count,total,busyTotal,queuedTotal,cachedTokens,inputTokens,outputTokens
+      FROM descendants ORDER BY recent_rank,session_id LIMIT ?`).all(sessionId, sessionId, previewLimit) as Array<CatalogProjectionSqlRow & Record<string, any>>;
+    const first = rows[0];
+    return { total: Number(first?.total || 0), busy: Number(first?.busyTotal || 0), queued: Number(first?.queuedTotal || 0),
+      cachedTokens: Number(first?.cachedTokens || 0), inputTokens: Number(first?.inputTokens || 0), outputTokens: Number(first?.outputTokens || 0),
+      rows: rows.map(projectionFromSqlRow) };
+  }
+
+  filterDescendantIds(sessionId: string, candidateIds: readonly string[]): string[] {
+    const ids = [...new Set(candidateIds)].slice(0, 200); if (!ids.length) return [];
+    return (this.database().prepare(`WITH RECURSIVE subtree(session_id) AS (
+      VALUES(?) UNION SELECT child.session_id FROM session_catalog child JOIN subtree ON child.parent_session_id=subtree.session_id
+    ) SELECT session_id FROM subtree WHERE session_id<>? AND session_id IN (${ids.map(() => '?').join(',')})`)
+      .all(sessionId, sessionId, ...ids) as Array<{ session_id: string }>).map(row => row.session_id);
   }
   count(options: Pick<SessionCatalogPageOptions, 'agent'|'parentSessionId'|'recoveryOnly'> = {}): number {
     if (!options.recoveryOnly && options.agent === undefined && !Object.prototype.hasOwnProperty.call(options, 'parentSessionId')) {
@@ -699,6 +1092,21 @@ export class SessionCatalogStore {
     return { kind: 'ambiguous', sessionIds: rows.map(row => row.session_id) };
   }
 
+  resolveMany(requestedIds: readonly string[]): Record<string, SessionAliasResolution> {
+    const ids = [...new Set(requestedIds)].slice(0, 200); if (!ids.length) return {};
+    const placeholders = ids.map(() => '?').join(',');
+    const exact = new Set((this.database().prepare(`SELECT session_id FROM session_catalog WHERE session_id IN (${placeholders})`).all(...ids) as Array<{ session_id: string }>).map(row => row.session_id));
+    const aliases = this.database().prepare(`SELECT alias,session_id FROM session_alias WHERE alias IN (${placeholders}) ORDER BY alias,session_id`).all(...ids) as Array<{ alias: string; session_id: string }>;
+    const owners = new Map<string, string[]>();
+    for (const row of aliases) { const list = owners.get(row.alias) || []; if (list.length < 2) list.push(row.session_id); owners.set(row.alias, list); }
+    return Object.fromEntries(ids.map(id => {
+      if (exact.has(id)) return [id, { kind: 'exact', sessionId: id }];
+      const matches = owners.get(id) || [];
+      return [id, matches.length === 0 ? { kind: 'missing' } : matches.length === 1
+        ? { kind: 'alias', sessionId: matches[0] } : { kind: 'ambiguous', sessionIds: matches }];
+    }));
+  }
+
   upsertMany(records: Iterable<Record<string, any>>, deletedSessionIds: Iterable<string> = []): void {
     const db = this.database();
     db.exec('BEGIN IMMEDIATE');
@@ -720,6 +1128,7 @@ export class SessionCatalogStore {
       }
       normalizeParentReferences(db, affectedReferences);
       db.exec('COMMIT');
+      this.presentationRevision += 1;
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   }
 
@@ -731,6 +1140,7 @@ export class SessionCatalogStore {
       for (const metadata of records) insertMetadata(db, metadata);
       normalizeParentReferences(db);
       db.exec('COMMIT');
+      this.presentationRevision += 1;
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   }
 

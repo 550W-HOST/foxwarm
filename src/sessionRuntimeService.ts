@@ -19,6 +19,7 @@ import type { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { normalizeSessionWorkerIngressRequest } from './sessionWorkerIngress';
 import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
+import { sessionCatalogStore } from './session/catalogStore';
 
 export type SessionRuntimeTokenTotalsDto = {
   cachedTokens: number;
@@ -123,9 +124,15 @@ export type SessionRuntimeEventPayloads = {
   stateChanged: { sessionId: string; session: SessionRuntimeSessionDto | null };
 };
 
-export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 3, {
+export type SessionListProjectionBatchDto = {
+  sessions: SessionRuntimeSessionDto[];
+  revision: string;
+};
+
+export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 4, {
   getSession: rpcMethod<{ sessionId: string }, { session: SessionRuntimeSessionDto | null }>(),
   listSessions: rpcMethod<{ limit?: number; offset?: number }, { sessions: SessionRuntimeSessionDto[]; total: number }>(),
+  getSessionListProjections: rpcMethod<{ sessionIds: string[]; includeVolatile?: boolean }, SessionListProjectionBatchDto>(),
   getHistory: rpcMethod<{ sessionId: string }, SessionRuntimeHistoryDto | null>(),
   enqueue: rpcMethod<{ sessionId: string; item: QueueItem }, { accepted: true }>(),
   submitAndRun: rpcMethod<{ sessionId: string; item: QueueItem }, SessionWorkerIngressResult>(),
@@ -285,6 +292,8 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
   let eventContext: SessionRuntimeEventContext | undefined;
   let unsubscribeWorkerProjections: (() => void) | undefined;
   const workerListSignatures = new Map<string, string>();
+  const volatileLocalIds = new Set<string>();
+  let volatileSequence = 1;
   type WorkerSelection =
     | { canonicalId: string; kind: 'local' }
     | { canonicalId: string; kind: 'unavailable' }
@@ -294,7 +303,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
     const ownership = options?.worker?.store.findOwnership(canonicalId);
     if (!ownership || ownership.state === 'inactive') return { canonicalId, kind: 'local' };
     const entry = options?.worker?.registry.get(canonicalId);
-    return entry?.projection && ownership.generation === entry.generation && ownership.incarnationId === entry.incarnationId
+    return entry?.projection && !entry.stale && ownership.generation === entry.generation && ownership.incarnationId === entry.incarnationId
       ? { canonicalId, kind: 'worker', entry }
       : { canonicalId, kind: 'unavailable' };
   };
@@ -341,20 +350,40 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       eventContext?.emit('stream', { sessionId, event });
     });
     sessionManager.setOnSessionListUpdated(() => {
+      volatileSequence += 1;
       eventContext?.emit('listChanged', {});
     });
-    sessionManager.setOnSessionStateUpdated(emitState);
+    for (const session of sessionManager.getAllSessions().values()) {
+      if (sessionManager.buildSessionRuntimeState(session).state !== 'idle' || getEffectiveSessionQueueLength(session) > 0) volatileLocalIds.add(session.id);
+    }
+    sessionManager.setOnSessionStateUpdated((sessionId) => {
+      const session = sessionManager.getAllSessions().get(sessionId);
+      if (session && (sessionManager.buildSessionRuntimeState(session).state !== 'idle' || getEffectiveSessionQueueLength(session) > 0)) volatileLocalIds.add(sessionId);
+      else volatileLocalIds.delete(sessionId);
+      volatileSequence += 1; emitState(sessionId);
+    });
     unsubscribeWorkerProjections = options?.worker?.registry.subscribe((entry) => {
+      const session = sessionManager.getAllSessions().get(entry.sessionId);
+      if (!session) { workerListSignatures.delete(entry.sessionId); return; }
+      const fallbackSignature = listSignature(buildSessionRuntimeSessionDto(session));
+      if (entry.stale) {
+        const previousSignature = workerListSignatures.get(entry.sessionId) || fallbackSignature;
+        workerListSignatures.set(entry.sessionId, fallbackSignature);
+        if (previousSignature !== fallbackSignature) {
+          volatileSequence += 1; emitState(entry.sessionId); eventContext?.emit('listChanged', {});
+        }
+        return;
+      }
       const selection = workerSelection(entry.sessionId);
       if (selection.kind !== 'worker' || selection.entry?.incarnationId !== entry.incarnationId) return;
-      const session = sessionManager.getAllSessions().get(entry.sessionId);
-      if (!session) return;
       const current = projectedDto(session, selection);
       eventContext?.emit('stateChanged', { sessionId: session.id, session: current });
       const currentSignature = listSignature(current);
-      const previousSignature = workerListSignatures.get(session.id) || listSignature(buildSessionRuntimeSessionDto(session));
+      const previousSignature = workerListSignatures.get(session.id) || fallbackSignature;
       workerListSignatures.set(session.id, currentSignature);
-      if (previousSignature !== currentSignature) eventContext?.emit('listChanged', {});
+      if (previousSignature !== currentSignature) {
+        volatileSequence += 1; eventContext?.emit('listChanged', {});
+      }
     });
   };
 
@@ -366,6 +395,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
     sessionManager.setOnSessionStateUpdated(() => {});
     unsubscribeWorkerProjections?.(); unsubscribeWorkerProjections = undefined;
     workerListSignatures.clear();
+    volatileLocalIds.clear();
   };
 
   return {
@@ -408,6 +438,41 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
           .slice(offset, offset + limit),
         total: candidatePage.total,
       };
+    },
+    getSessionListProjections(input) {
+      if (!Array.isArray(input.sessionIds) || input.sessionIds.length > 200
+        || input.sessionIds.some(id => typeof id !== 'string' || !id || id.length > 512)) {
+        throw new RpcError('SESSION_LIST_PROJECTION_INVALID', 'sessionIds must contain at most 200 bounded Session IDs.');
+      }
+      const requested = new Set(input.sessionIds);
+      const ownerships = new Map((options?.worker?.store.listFencedOwnerships() || []).map(item => [item.sessionId, item]));
+      const entries = new Map((options?.worker?.registry.list() || []).map(item => [item.sessionId, item]));
+      if (input.includeVolatile) {
+        for (const entry of entries.values()) {
+          const ownership = ownerships.get(entry.sessionId);
+          if (entry.projection && !entry.stale && ownership && ownership.generation === entry.generation
+            && ownership.incarnationId === entry.incarnationId) requested.add(entry.sessionId);
+        }
+        for (const sessionId of volatileLocalIds) if (!ownerships.has(sessionId)) requested.add(sessionId);
+        // Normal startup installs event callbacks and keeps volatileLocalIds
+        // incrementally. Direct low-level callers that have not started events
+        // retain correctness through this compatibility-only in-memory scan.
+        if (!eventContext) {
+          for (const session of sessionManager.getAllSessions().values()) {
+            if (!ownerships.has(session.id)
+              && (sessionManager.buildSessionRuntimeState(session).state !== 'idle' || getEffectiveSessionQueueLength(session) > 0)) requested.add(session.id);
+          }
+        }
+      }
+      const sessions: SessionRuntimeSessionDto[] = [];
+      for (const id of requested) {
+        const session = sessionManager.getAllSessions().get(id); if (!session) continue;
+        const ownership = ownerships.get(id); const entry = entries.get(id);
+        const projection = ownership && entry?.projection && !entry.stale && ownership.generation === entry.generation
+          && ownership.incarnationId === entry.incarnationId ? entry.projection : undefined;
+        sessions.push(overlaySessionWorkerProjection(buildSessionRuntimeSessionDto(session), projection));
+      }
+      return { sessions, revision: `${sessionCatalogStore.getPresentationRevision()}:${volatileSequence}` };
     },
     async getHistory(input) {
       const requestedId = normalizeSessionId(input.sessionId);

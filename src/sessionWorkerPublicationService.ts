@@ -82,6 +82,12 @@ export class SessionWorkerProjectionRegistry {
   private readonly closed = new Set<string>();
   private readonly subscribers = new Set<(entry: SessionWorkerProjectionEntry) => void | Promise<void>>();
 
+  private notifyLifecycle(entry: SessionWorkerProjectionEntry): void {
+    for (const subscriber of this.subscribers) {
+      try { Promise.resolve(subscriber(structuredClone(entry))).catch(() => {}); } catch {}
+    }
+  }
+
   establish(identity: SessionWorkerPublicationIdentity): void {
     assertIdentity(identity);
     const key = identityKey(identity); if (this.current.get(identity.sessionId) === key) return;
@@ -90,7 +96,8 @@ export class SessionWorkerProjectionRegistry {
     if (prior && prior.generation === identity.generation && prior.incarnationId !== identity.incarnationId) throw new RpcError('SESSION_WORKER_PUBLICATION_STALE', 'Worker generation incarnation mismatch.', true);
     this.current.set(identity.sessionId, key);
     this.closed.delete(key);
-    this.entries.set(key, { ...identity, stale: true });
+    const entry: SessionWorkerProjectionEntry = { ...identity, stale: true };
+    this.entries.set(key, entry); this.notifyLifecycle(entry);
   }
   async apply(identity: SessionWorkerPublicationIdentity, projectionValue: unknown): Promise<void> {
     assertIdentity(identity); const key = identityKey(identity);
@@ -99,16 +106,23 @@ export class SessionWorkerProjectionRegistry {
     const entry: SessionWorkerProjectionEntry = { ...identity, projection: structuredClone(projection), stale: false };
     this.entries.set(key, entry);
     try { for (const subscriber of this.subscribers) await subscriber(structuredClone(entry)); }
-    catch (error) { entry.stale = true; this.closed.add(key); throw new RpcError('SESSION_WORKER_PUBLICATION_APPLY_FAILED', String((error as any)?.message || error).slice(0, 4096), true); }
+    catch (error) {
+      entry.stale = true; this.closed.add(key); this.notifyLifecycle(entry);
+      throw new RpcError('SESSION_WORKER_PUBLICATION_APPLY_FAILED', String((error as any)?.message || error).slice(0, 4096), true);
+    }
   }
   markStale(identity: SessionWorkerPublicationIdentity): boolean {
     const key = identityKey(identity); const entry = this.entries.get(key);
     if (!entry || this.current.get(identity.sessionId) !== key) return false;
-    entry.stale = true; this.closed.add(key); return true;
+    if (!entry.stale) { entry.stale = true; this.closed.add(key); this.notifyLifecycle(entry); }
+    return true;
   }
   clear(identity: SessionWorkerPublicationIdentity): boolean {
     const key = identityKey(identity); if (this.current.get(identity.sessionId) !== key) return false;
-    this.current.delete(identity.sessionId); this.closed.delete(key); return this.entries.delete(key);
+    const entry = this.entries.get(key);
+    this.current.delete(identity.sessionId); this.closed.delete(key); const removed = this.entries.delete(key);
+    if (removed && entry) this.notifyLifecycle({ ...entry, stale: true });
+    return removed;
   }
   get(sessionId: string): SessionWorkerProjectionEntry | undefined {
     const key = this.current.get(sessionId); const entry = key ? this.entries.get(key) : undefined;

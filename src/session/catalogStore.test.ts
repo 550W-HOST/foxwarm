@@ -404,3 +404,96 @@ test('malformed current authority is fatal and never falls through to a stale ca
     assert.equal(await fs.pathExists(path.join(state, 'sessions.json.pre-catalog-sqlite-v1.bak')), false);
   }
 });
+
+test('bounded presentation queries preserve modes, pinned roots, canonical paths, summaries, and concrete indexes', async t => {
+  const fixture = await makeStore(); t.after(async () => { fixture.store.close(); await fs.remove(fixture.root); });
+  fixture.store.replaceAll([
+    metadata('root', { aliases: ['root-alias'], sidebarOrder: 2, lastMessageTime: 50,
+      stats: { totalCachedTokens: 1, totalInputTokens: 2, totalOutputTokens: 3, lastUsage: null } }),
+    metadata('ordered', { sidebarOrder: 1, lastMessageTime: 10 }),
+    metadata('child-a', { parentSessionId: 'root', sidebarOrder: 1, lastMessageTime: 40 }),
+    metadata('child-b', { parentSessionId: 'root', sidebarOrder: 2, lastMessageTime: 30, busy: true }),
+    metadata('deep', { parentSessionId: 'child-a', lastMessageTime: 20 }),
+    metadata('pinned-child', { parentSessionId: 'root', pinned: true, lastMessageTime: 1 }),
+    metadata('dangling', { parentSessionId: 'missing', lastMessageTime: 5 }),
+    metadata('alias-owner-1', { aliases: ['duplicate'] }), metadata('alias-owner-2', { aliases: ['duplicate'] }),
+  ]);
+  const versionDb = new DatabaseSync(fixture.dbPath, { readOnly: true });
+  assert.equal(Number((versionDb.prepare('PRAGMA user_version').get() as any).user_version), 2); versionDb.close();
+  assert.deepEqual(fixture.store.listPresentationPage({ mode: 'default', roots: true, limit: 20 }).rows.slice(0, 3).map(row => row.id),
+    ['pinned-child', 'ordered', 'root']);
+  assert.equal(fixture.store.listPresentationPage({ mode: 'time', roots: true, limit: 20 }).rows.some(row => row.id === 'dangling'), true);
+  const previews = fixture.store.listChildrenPreviews(['root'], 'default', 1)[0];
+  assert.equal(previews.total, 2); assert.deepEqual(previews.rows.map(row => row.id), ['child-a']); assert.ok(previews.nextKey);
+  const continuation = fixture.store.listChildrenContinuations([{ parentSessionId: 'root', after: previews.nextKey }], 'default', 10)[0];
+  assert.deepEqual(continuation.rows.map(row => row.id), ['child-b']);
+  const childB = fixture.store.get('child-b')!; childB.pinned = true; fixture.store.upsertMany([childB]);
+  assert.equal(fixture.store.listChildrenPreviews(['root'], 'default', 10)[0].total, 1);
+  childB.pinned = false; fixture.store.upsertMany([childB]);
+  assert.equal(fixture.store.listChildrenPreviews(['root'], 'default', 10)[0].total, 2);
+  assert.deepEqual(fixture.store.getPresentationPaths(['deep']).deep, ['root', 'child-a', 'deep']);
+  assert.equal(fixture.store.resolveMany(['root', 'root-alias', 'duplicate', 'missing']).duplicate.kind, 'ambiguous');
+  const descendants = fixture.store.getDescendantSummary('root', 20);
+  assert.equal(descendants.total, 4); assert.equal(descendants.busy, 1);
+  const summary = fixture.store.getArchitectureSummary(); assert.equal(summary.total, 9);
+  assert.equal(summary.cachedTokens, 1); assert.equal(summary.inputTokens, 2); assert.equal(summary.outputTokens, 3);
+
+  const db = new DatabaseSync(fixture.dbPath, { readOnly: true });
+  try {
+    const plans = [
+      db.prepare(`EXPLAIN QUERY PLAN SELECT session_id FROM session_catalog WHERE presentation_root=1
+        ORDER BY pinned_rank,archived,sidebar_order_missing,sidebar_order_value,recent_rank,session_id LIMIT 50`).all(),
+      db.prepare(`EXPLAIN QUERY PLAN SELECT session_id FROM session_catalog WHERE parent_session_id=? AND pinned=0
+        ORDER BY archived,sidebar_order_missing,sidebar_order_value,recent_rank,session_id LIMIT 10`).all('root'),
+      db.prepare(`EXPLAIN QUERY PLAN SELECT session_id FROM session_catalog WHERE agent=? AND presentation_root=1
+        ORDER BY pinned_rank,archived,recent_rank,session_id LIMIT 50`).all('main'),
+      db.prepare(`EXPLAIN QUERY PLAN SELECT session_id FROM session_catalog WHERE presentation_root=1
+        AND (pinned_rank,archived,recent_rank,session_id)>(?,?,?,?)
+        ORDER BY pinned_rank,archived,recent_rank,session_id LIMIT 50`).all(0, 0, -50, 'root'),
+    ].map(rows => JSON.stringify(rows));
+    assert.match(plans[0], /idx_session_catalog_root_default/);
+    assert.match(plans[1], /idx_session_catalog_parent_default/);
+    assert.match(plans[2], /idx_session_catalog_agent_root_time/);
+    assert.match(plans[3], /idx_session_catalog_root_time/); assert.doesNotMatch(plans[3], /TEMP B-TREE/);
+  } finally { db.close(); }
+});
+
+test('compound child seeks stay bounded on high fanout and SQLite BINARY ties are canonical', async t => {
+  const fixture = await makeStore(); t.after(async () => { fixture.store.close(); await fs.remove(fixture.root); });
+  const binaryIds = ['tie_A','tie_a','tie_\uE000','tie_😀'];
+  fixture.store.replaceAll([
+    metadata('p1', { lastMessageTime: 10 }), metadata('p2', { lastMessageTime: 10 }),
+    metadata('forest-a-root', { agent: 'agent-a' }),
+    metadata('forest-b-child', { agent: 'agent-b', parentSessionId: 'forest-a-root' }),
+    metadata('forest-a-deep', { agent: 'agent-a', parentSessionId: 'forest-b-child' }),
+    ...binaryIds.map(id => metadata(id, { pinned: true, lastMessageTime: 100 })),
+    ...Array.from({ length: 1500 }, (_, index) => metadata(`p1_${String(index).padStart(4, '0')}`, { parentSessionId: 'p1', lastMessageTime: 1500 - index })),
+    ...Array.from({ length: 1500 }, (_, index) => metadata(`p2_${String(index).padStart(4, '0')}`, { parentSessionId: 'p2', lastMessageTime: 1500 - index })),
+  ]);
+  assert.deepEqual(fixture.store.listPresentationPage({ mode: 'time', roots: true, limit: 4 }).rows.map(row => row.id), binaryIds);
+  assert.deepEqual(fixture.store.listAgentForestPage({ agent: 'agent-a', limit: 10 }).rows.map(row => row.id), ['forest-a-deep','forest-a-root']);
+  assert.equal(fixture.store.listChildrenPreviews(['forest-a-root'], 'time', 5, 'agent-a')[0].total, 0);
+  const previews = fixture.store.listChildrenPreviews(['p1','p2'], 'time', 5);
+  assert.deepEqual(previews.map(group => group.rows.length), [5,5]); assert.deepEqual(previews.map(group => group.total), [1500,1500]);
+  const continued = fixture.store.listChildrenContinuations(previews.map(group => ({ parentSessionId: group.parentSessionId, after: group.nextKey })), 'time', 5);
+  assert.deepEqual(continued.map(group => group.rows[0].id), ['p1_0005','p2_0005']);
+
+  const db = new DatabaseSync(fixture.dbPath, { readOnly: true });
+  try {
+    const plan = JSON.stringify(db.prepare(`EXPLAIN QUERY PLAN
+      SELECT * FROM (SELECT metadata_json,busy,queue_length,managed_pending_count,parent_session_id,archived,recent_rank,session_id
+        FROM session_catalog INDEXED BY idx_session_catalog_parent_time
+        WHERE parent_session_id=? AND pinned=0 ORDER BY archived,recent_rank,session_id LIMIT 6)
+      UNION ALL
+      SELECT * FROM (SELECT metadata_json,busy,queue_length,managed_pending_count,parent_session_id,archived,recent_rank,session_id
+        FROM session_catalog INDEXED BY idx_session_catalog_parent_time
+        WHERE parent_session_id=? AND pinned=0 AND (archived,recent_rank,session_id)>(?,?,?)
+        ORDER BY archived,recent_rank,session_id LIMIT 6)`).all('p1','p2',0,-1496,'p2_0004'));
+    assert.match(plan, /idx_session_catalog_parent_time/); assert.doesNotMatch(plan, /TEMP B-TREE|ranked|row_number/i);
+    const forestPlan = JSON.stringify(db.prepare(`EXPLAIN QUERY PLAN SELECT c.session_id FROM session_catalog c
+      LEFT JOIN session_catalog parent ON parent.session_id=c.parent_session_id
+      WHERE c.agent=? AND (c.parent_session_id IS NULL OR parent.session_id IS NULL OR parent.agent<>c.agent)
+      ORDER BY c.pinned_rank,c.archived,c.recent_rank,c.session_id LIMIT 50`).all('agent-a'));
+    assert.match(forestPlan, /idx_session_catalog_agent_time/); assert.match(forestPlan, /sqlite_autoindex_session_catalog_1/);
+  } finally { db.close(); }
+});

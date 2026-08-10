@@ -21,6 +21,7 @@ import {
   SessionRuntimeIndexResultDto,
   SessionRuntimeSnapshotResultDto,
   SessionRuntimeForkNotificationResultDto,
+  SessionListProjectionBatchDto,
   SessionRuntimeWorkerProjectionOptions,
   sessionRuntimeServiceDescriptor,
 } from './sessionRuntimeService';
@@ -71,6 +72,10 @@ export async function listSessions(): Promise<SessionRuntimeSessionDto[]> {
 
 export async function listSessionsPage(options: { limit?: number; offset?: number } = {}): Promise<{ sessions: SessionRuntimeSessionDto[]; total: number }> {
   return (await getClient()).call('listSessions', options);
+}
+
+export async function getSessionListProjections(sessionIds: string[], includeVolatile = false): Promise<SessionListProjectionBatchDto> {
+  return (await getClient()).call('getSessionListProjections', { sessionIds, includeVolatile: includeVolatile || undefined });
 }
 
 export async function getHistory(sessionId: string): Promise<SessionRuntimeHistoryDto | null> {
@@ -218,5 +223,6 @@ export type {
   SessionRuntimeSessionDto,
   SessionRuntimeSettingsPatchDto,
   SessionRuntimeSettingsResultDto,
+  SessionListProjectionBatchDto,
   SessionWorkerIngressResult,
 };
