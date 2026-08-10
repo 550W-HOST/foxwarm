@@ -13,6 +13,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     container_name: foxwarm-test
+    init: true
     ports:
       - "3002:3001" # TODO: before merging to main, remember to revisit/revert this test-env-only port tweak.
     environment:
