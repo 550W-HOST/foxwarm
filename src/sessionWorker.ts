@@ -17,6 +17,7 @@ import * as vector from './vector';
 import { initializeSessionWorkerPresentation, publishPresentationMessage, publishPresentationModelStream, shutdownSessionWorkerPresentation } from './sessionWorkerPresentation';
 import { initializeSessionWorkerPublication, publishCommitted, shutdownSessionWorkerPublication } from './sessionWorkerPublication';
 import { deliverCommittedFinal, deliverIntermediateText, initializeSessionTurnDelivery, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
+import { shutdownToolScriptRuntime } from './toolscript';
 
 async function start(): Promise<void> {
   const sessionId = process.env.FOXWARM_SESSION_WORKER_SESSION_ID || '';
@@ -52,6 +53,7 @@ async function start(): Promise<void> {
     await initializeMcpExternalService({ transport: reverseTransport, placement: 'child-reverse' });
     await vector.init({ transport: reverseTransport, placement: 'child-reverse' });
   } catch (error) {
+    await shutdownToolScriptRuntime().catch(() => {});
     await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownSessionTurnDelivery(), shutdownSessionWorkerPublication(), shutdownSessionWorkerPresentation(), shutdownMcpExternalService(), vector.shutdown()]);
     reverseTransport.close(); store.close(); throw error;
   }
@@ -67,6 +69,7 @@ async function start(): Promise<void> {
     generation,
     exitOnDrain: true,
     onDrain: async () => {
+      await shutdownToolScriptRuntime();
       await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownSessionTurnDelivery(), shutdownSessionWorkerPublication(), shutdownSessionWorkerPresentation(), shutdownMcpExternalService(), vector.shutdown()]);
       await reverseTransport.drain(); reverseTransport.close(); store.close();
     },

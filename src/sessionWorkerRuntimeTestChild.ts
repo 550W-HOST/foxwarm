@@ -31,6 +31,7 @@ import { tool_set_goal } from './toolsSessionAgent/settings';
 import { tool_wait } from './toolsSessionAgent/interSession';
 import * as vector from './vector';
 import { tool_call_tool } from './tools/unifiedSearch';
+import { shutdownToolScriptRuntime } from './toolscript';
 
 async function start(): Promise<void> {
   const sessionId = process.env.FOXWARM_SESSION_WORKER_SESSION_ID!;
@@ -209,6 +210,15 @@ async function start(): Promise<void> {
         await options.appendMessage({ role: 'model', parts: [{ text: `folded publication failure: ${error.message}` }] });
       }
     }
+    if (process.env.FOXWARM_TEST_NATIVE_TOOLSCRIPT === '1' && chatCount === 1) {
+      const call = {
+        id: 'native-worker-toolscript',
+        name: 'run_script',
+        args: { code: 'def main(args):\n    print("native worker lifecycle")\n    return {"ok": True}', mode: 'foreground' },
+      };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+      return { toolCalls: [call] };
+    }
     await options.appendMessage({ role: 'model', parts: [{ text: 'deterministic child answer' }] });
     return { text: 'deterministic child answer' };
   };
@@ -266,6 +276,7 @@ async function start(): Promise<void> {
   ));
   registry.register(sessionWorkerRuntimeServiceDescriptor, createSessionWorkerRuntimeServiceHandler(gate, host));
   new ProcessRpcServer(registry, { generation, exitOnDrain: true, onDrain: async () => {
+    await shutdownToolScriptRuntime();
     await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownSessionTurnDelivery(), shutdownSessionWorkerPublication(), shutdownMcpExternalService(), vector.shutdown()]);
     await reverseTransport.drain(); reverseTransport.close(); store.close();
   } }).start();

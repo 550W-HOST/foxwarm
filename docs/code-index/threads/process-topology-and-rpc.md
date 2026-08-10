@@ -20,6 +20,8 @@ The initial process transport uses Node's parent/child IPC channel. Its transpor
 
 Requests carry protocol/build identity, a process generation, request and trace IDs, and optional deadlines. Child shutdown first stops new requests, drains accepted work within a bound, and then exits. Replies from an obsolete process generation are rejected.
 
+Each process owns its own lazily created ToolScript/Monty pool. A graceful Session-worker drain closes and reaps that native pool after accepted work is drained and before the Worker exits or its durable ownership fence is released. Main graceful shutdown closes its local pool before tearing down the Main-owned services that ToolScript host calls may use. The canonical pool-lifetime decision is [D-toolscript-process-lifetime-pool](../units/src-toolscript.md#d-toolscript-process-lifetime-pool).
+
 The hot turn loop does not move full history, images, or tool output through a central payload broker. Explicit external history/debug reads may return the requested immutable snapshot; high-frequency service calls otherwise use bounded DTOs and stable file/blob/snapshot references where necessary.
 
 ## Vector placement

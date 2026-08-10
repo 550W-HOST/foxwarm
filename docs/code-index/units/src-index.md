@@ -59,7 +59,7 @@ None — this file is the application entry point and does not export any symbol
 - Resumes busy sessions after all channels are up.
 - Schedules periodic log rotation.
 - Processes `ONBOOT.md` to send a startup message/event after a 3-second delay.
-- On `SIGINT`/`SIGTERM`, terminally drains accepted Node execution and Main Management calls, stops SessionRuntime event publication and accepted calls, shuts down Session workers with bounded handback, then gracefully drains the vector owner and exits.
+- On `SIGINT`/`SIGTERM`, shuts down Session workers with bounded handback, closes the Main process's lazy ToolScript/Monty pool before its host-call services, terminally drains Node execution, MCP, Main Management, and SessionRuntime calls/publication, then gracefully drains the vector owner and exits.
 
 ## Integration
 

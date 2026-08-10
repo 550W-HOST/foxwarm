@@ -14,7 +14,7 @@ import { nodesManager } from './nodes/manager';
 import * as nodeExecution from './nodeExecution';
 import { getAgentDir, STATE_DIR } from './config';
 import { convertToOpenAIResponsesFormat } from './llmProviders/openai';
-import { tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, forceToolScriptNativeImportFailureForTests, getToolScriptRunForTests, resetToolScriptMontyRuntimeForTests, resetToolScriptRunsForTests } from './toolscript';
+import { ensureToolScriptMontyRuntimeForTests, tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, forceToolScriptNativeImportFailureForTests, getToolScriptRunForTests, resetToolScriptMontyRuntimeForTests, resetToolScriptRunsForTests, setToolScriptMontyRuntimeFactoryForTests, shutdownToolScriptRuntime } from './toolscript';
 import type { Session } from './types';
 
 function makeId(prefix: string): string {
@@ -46,6 +46,47 @@ function latestUserText(session: Session): string {
 }
 
 const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnSUs8AAAAASUVORK5CYII=';
+
+test('ToolScript runtime shutdown owns pending pool creation and is idempotently lazy', async () => {
+  await resetToolScriptMontyRuntimeForTests();
+  let createCalls = 0;
+  let closeCalls = 0;
+  let releaseFirstCreate!: () => void;
+  const firstCreateGate = new Promise<void>(resolve => { releaseFirstCreate = resolve; });
+  await setToolScriptMontyRuntimeFactoryForTests(async () => {
+    createCalls += 1;
+    if (createCalls === 1) await firstCreateGate;
+    return {
+      monty: {} as any,
+      pool: { close: async () => { closeCalls += 1; } },
+    };
+  });
+  try {
+    await shutdownToolScriptRuntime();
+    assert.equal(createCalls, 0, 'shutdown must not create an unused runtime');
+
+    const pendingUse = ensureToolScriptMontyRuntimeForTests();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(createCalls, 1);
+    const firstShutdown = shutdownToolScriptRuntime();
+    const repeatedShutdown = shutdownToolScriptRuntime();
+    assert.equal(firstShutdown, repeatedShutdown, 'concurrent shutdown calls share the exact close');
+    releaseFirstCreate();
+    await Promise.all([pendingUse, firstShutdown, repeatedShutdown]);
+    assert.equal(closeCalls, 1, 'a pool whose creation was pending closes exactly once');
+
+    await ensureToolScriptMontyRuntimeForTests();
+    assert.equal(createCalls, 2, 'later use lazily creates a fresh pool');
+    const recreatedShutdown = shutdownToolScriptRuntime();
+    assert.equal(recreatedShutdown, shutdownToolScriptRuntime());
+    await recreatedShutdown;
+    assert.equal(closeCalls, 2);
+  } finally {
+    releaseFirstCreate();
+    await setToolScriptMontyRuntimeFactoryForTests(null);
+    await resetToolScriptMontyRuntimeForTests();
+  }
+});
 
 test('run_script executes internal call_tool without surfacing nested tool history entries', async () => {
   await resetToolScriptRunsForTests();

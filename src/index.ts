@@ -20,6 +20,7 @@ import * as mainManagementTools from './mainManagementTools';
 import * as nodeExecution from './nodeExecution';
 import * as mcpExternal from './mcpExternalService';
 import * as vector from './vector';
+import { shutdownToolScriptRuntime } from './toolscript';
 import { registerChannel } from './channel';
 import fs from 'fs-extra';
 import crypto from 'crypto';
@@ -574,6 +575,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         void Promise.resolve()
             .then(() => shutdownSessionWorkers?.())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down session workers cleanly'))
+            .then(() => shutdownToolScriptRuntime())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down ToolScript runtime cleanly'))
             .then(() => nodeExecution.shutdownNodeExecution())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down node execution cleanly'))
             .then(() => mcpExternal.shutdownMcpExternalService())

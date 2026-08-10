@@ -28,6 +28,37 @@ function baseSession(id: string): Session {
   } as Session;
 }
 
+function processDescendants(rootPid: number): number[] {
+  if (process.platform !== 'linux') return [];
+  const descendants = new Set([rootPid]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const entry of fs.readdirSync('/proc')) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const stat = fs.readFileSync(`/proc/${entry}/stat`, 'utf8');
+        const close = stat.lastIndexOf(')');
+        const parentPid = Number(stat.slice(close + 1).trim().split(/\s+/)[1]);
+        const pid = Number(entry);
+        if (descendants.has(parentPid) && !descendants.has(pid)) {
+          descendants.add(pid); changed = true;
+        }
+      } catch {}
+    }
+  }
+  descendants.delete(rootPid);
+  return [...descendants];
+}
+
+function isMontyProcess(pid: number): boolean {
+  try {
+    const comm = fs.readFileSync(`/proc/${pid}/comm`, 'utf8').trim();
+    const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`).toString('utf8').replace(/\0/g, ' ');
+    return comm === 'monty' || /(?:^|\/)monty(?:\s|$)/.test(cmdline);
+  } catch { return false; }
+}
+
 async function createFixture(sessionId: string, options: {
   idleMs?: number;
   workerEnv?: Record<string, string>;
@@ -113,6 +144,46 @@ test('idle release hands back authority before fence release and refreshes the M
     const second = await fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'replacement after handback' }] });
     assert.equal(second.generation, 2, 'replacement spawns only after handback released the fence');
   } finally { await fixture.close(); }
+});
+
+test('graceful Worker drain closes and reaps its real native ToolScript pool before ownership release', {
+  skip: process.platform !== 'linux' ? 'native Monty process lifecycle is Linux-specific' : false,
+}, async () => {
+  const sessionId = `worker-handback-toolscript-${Date.now()}`;
+  const fixture = await createFixture(sessionId, {
+    workerEnv: { FOXWARM_TEST_NATIVE_TOOLSCRIPT: '1' },
+  });
+  fixture.catalog.set(sessionId, baseSession(sessionId));
+  let montyPid: number | undefined;
+  let montyPresentAtFenceRelease: boolean | undefined;
+  const originalMarkExitObserved = fixture.store.markExitObserved.bind(fixture.store);
+  (fixture.store as any).markExitObserved = (...args: any[]) => {
+    montyPresentAtFenceRelease = montyPid === undefined ? undefined : fs.pathExistsSync(`/proc/${montyPid}`);
+    return originalMarkExitObserved(args[0], args[1], args[2], args[3]);
+  };
+  try {
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'run native ToolScript' }] });
+    const authority = await fs.readJson(fixture.statePath);
+    assert.ok(authority.history.some((message: any) => message.parts?.some((part: any) => part.functionCall?.name === 'run_script')));
+    assert.ok(authority.history.some((message: any) => message.parts?.some((part: any) => part.functionResponse?.name === 'run_script')));
+    const workerPid = fixture.supervisor.getStatus(sessionId)?.pid;
+    assert.ok(workerPid);
+    await waitFor(() => processDescendants(workerPid!).some(isMontyProcess));
+    montyPid = processDescendants(workerPid!).find(isMontyProcess);
+    assert.ok(montyPid, 'the real native ToolScript pool owns a Monty subprocess before drain');
+
+    await fixture.supervisor.stopWorker(sessionId, 10_000);
+    assert.equal(montyPresentAtFenceRelease, false,
+      'the Monty child must be gone before markExitObserved releases Worker ownership');
+    assert.equal(fs.pathExistsSync(`/proc/${montyPid}`), false, 'no live or zombie Monty PID survives graceful drain');
+    assert.equal(fixture.store.getOwnership(sessionId).state, 'inactive');
+    const runFiles = (await fs.readdir(path.join(fixture.root, 'state', 'toolscript-runs'))).filter(name => name.endsWith('.json'));
+    assert.equal(runFiles.length, 1, 'runtime shutdown preserves the completed ToolScript run record');
+  } finally {
+    (fixture.store as any).markExitObserved = originalMarkExitObserved;
+    await fixture.close();
+  }
 });
 
 test('a failing handback retains the fence fail-closed on both stop and crash paths', async () => {

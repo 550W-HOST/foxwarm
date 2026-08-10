@@ -181,6 +181,8 @@ const CURRENT_VM_RUNTIME: ToolScriptVmRuntimeIdentity = {
 };
 
 let montyRuntimePromise: Promise<MontyRuntime> | null = null;
+let montyRuntimeShutdownPromise: Promise<void> | null = null;
+let montyRuntimeFactoryForTests: (() => Promise<MontyRuntime>) | null = null;
 let nativeMontyImportFailureForTests: Error | null = null;
 const activeBackgroundRuns = new Set<string>();
 
@@ -264,33 +266,50 @@ function formatRuntimeContext(record: ToolScriptRunRecord, runtimeState: Runtime
   return lines.join('\n');
 }
 
+async function createMontyRuntime(): Promise<MontyRuntime> {
+  if (montyRuntimeFactoryForTests) {
+    return await montyRuntimeFactoryForTests();
+  }
+  let monty: MontyModule;
+  try {
+    monty = await importNativeMonty();
+  } catch (nativeError: any) {
+    logger.warn({ err: nativeError }, 'Monty native runtime unavailable; falling back to WASM runtime');
+    monty = await nativeImport<MontyModule>('@pydantic/monty/wasm');
+  }
+  const pool = await monty.Monty.create();
+  return { monty, pool };
+}
+
 async function getMontyRuntime(): Promise<MontyRuntime> {
+  while (montyRuntimeShutdownPromise) {
+    await montyRuntimeShutdownPromise;
+  }
   if (!montyRuntimePromise) {
-    montyRuntimePromise = (async () => {
-      let monty: MontyModule;
-      try {
-        monty = await importNativeMonty();
-      } catch (nativeError: any) {
-        logger.warn({ err: nativeError }, 'Monty native runtime unavailable; falling back to WASM runtime');
-        monty = await nativeImport<MontyModule>('@pydantic/monty/wasm');
-      }
-      const pool = await monty.Monty.create();
-      return { monty, pool };
-    })();
+    montyRuntimePromise = createMontyRuntime();
   }
   return await montyRuntimePromise;
 }
 
-async function closeMontyRuntime(): Promise<void> {
-  const pending = montyRuntimePromise;
-  montyRuntimePromise = null;
-  if (!pending) {
-    return;
+export function shutdownToolScriptRuntime(): Promise<void> {
+  if (montyRuntimeShutdownPromise) {
+    return montyRuntimeShutdownPromise;
   }
-  try {
-    const runtime = await pending;
-    await runtime.pool.close();
-  } catch {}
+  const pending = montyRuntimePromise;
+  if (!pending) {
+    return Promise.resolve();
+  }
+  montyRuntimePromise = null;
+  let shutdown!: Promise<void>;
+  shutdown = pending
+    .then(runtime => runtime.pool.close())
+    .finally(() => {
+      if (montyRuntimeShutdownPromise === shutdown) {
+        montyRuntimeShutdownPromise = null;
+      }
+    });
+  montyRuntimeShutdownPromise = shutdown;
+  return shutdown;
 }
 
 function runFilePath(runId: string): string {
@@ -1712,17 +1731,29 @@ export async function getToolScriptRunForTests(runId: string): Promise<ToolScrip
 }
 
 export async function resetToolScriptMontyRuntimeForTests(): Promise<void> {
-  await closeMontyRuntime();
+  await shutdownToolScriptRuntime().catch(() => {});
+  montyRuntimeFactoryForTests = null;
   nativeMontyImportFailureForTests = null;
 }
 
 export async function forceToolScriptNativeImportFailureForTests(error: Error): Promise<void> {
-  await closeMontyRuntime();
+  await shutdownToolScriptRuntime().catch(() => {});
+  montyRuntimeFactoryForTests = null;
   nativeMontyImportFailureForTests = error;
 }
 
 export async function resetToolScriptRunsForTests(): Promise<void> {
-  await closeMontyRuntime();
+  await shutdownToolScriptRuntime().catch(() => {});
+  montyRuntimeFactoryForTests = null;
   nativeMontyImportFailureForTests = null;
   await fs.remove(TOOLSCRIPT_RUNS_DIR);
+}
+
+export async function setToolScriptMontyRuntimeFactoryForTests(factory: (() => Promise<MontyRuntime>) | null): Promise<void> {
+  await shutdownToolScriptRuntime().catch(() => {});
+  montyRuntimeFactoryForTests = factory;
+}
+
+export async function ensureToolScriptMontyRuntimeForTests(): Promise<void> {
+  await getMontyRuntime();
 }
