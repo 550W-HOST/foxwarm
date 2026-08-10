@@ -57,7 +57,7 @@ remains preserved. There is intentionally no parent foreign key.
 
 ## Migration
 
-The first open reads `sessions.json`, numbered candidates, then legacy `.bak`.
+The first open reads `sessions.json`, numbered `sessions.json.N.bak` candidates, then legacy `.bak`.
 It strictly validates IDs and row/value shapes. Every selected per-session
 authority passes the shared version-aware validator: legacy normalization is
 tolerant only for the established unversioned history/frontier shapes, while

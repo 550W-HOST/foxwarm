@@ -5,6 +5,7 @@ import { CATALOG_DB_PATH, SESSIONS_DIR, SESSIONS_FILE, STATE_DIR } from '../conf
 import { CURRENT_SESSION_STATE_VERSION, normalizeAndValidateSessionAuthorityPayload } from './stateValidation';
 import { isQueueItem } from '../types';
 import { getEffectiveSessionQueueLength } from '../sessionRuntimeState';
+import { getLegacyBackupPath, getNumberedBackupPath } from '../utils/diskJsonData';
 
 const SCHEMA_VERSION = 1;
 const MIGRATION_EVIDENCE_PATH = `${SESSIONS_FILE}.pre-catalog-sqlite-v1.bak`;
@@ -346,7 +347,11 @@ function fsyncPath(filePath: string): void {
 }
 
 function candidatePaths(): string[] {
-  return [SESSIONS_FILE, ...Array.from({ length: 5 }, (_, index) => `${SESSIONS_FILE}.${index + 1}`), `${SESSIONS_FILE}.bak`];
+  return [
+    SESSIONS_FILE,
+    ...Array.from({ length: 5 }, (_, index) => getNumberedBackupPath(SESSIONS_FILE, index + 1)),
+    getLegacyBackupPath(SESSIONS_FILE),
+  ];
 }
 
 async function hasAuthorityFiles(dir: string): Promise<boolean> {

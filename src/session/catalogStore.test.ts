@@ -217,6 +217,7 @@ test('strict migration publishes SQLite atomically, keeps one evidence copy, tol
       meta: { lastMessageTime: 1, messageCount: 0, lastChannel: { platform: 'telegram', channelUserId: 'legacy-chat' } } }),
   } };
   await fs.outputJson(path.join(state, 'sessions.json'), source, { spaces: 2 });
+  await fs.outputJson(path.join(state, 'sessions.json.1.bak'), source, { spaces: 2 });
   await fs.outputJson(path.join(state, 'sessions', 'first.json'), { id: 'first' });
   await fs.outputJson(path.join(state, 'sessions', 'second.json'), {
     id: 'second', sessionStateVersion: 1, history: [], queue: [], contextFrontier: [],
@@ -233,6 +234,7 @@ test('strict migration publishes SQLite atomically, keeps one evidence copy, tol
   assert.equal(payload.rows.some((row: any) => row.id === 'orphan'), false);
   assert.deepEqual(payload.alias, { kind: 'ambiguous', sessionIds: ['first', 'second'] });
   assert.equal(await fs.pathExists(path.join(state, 'sessions.json')), false);
+  assert.equal(await fs.pathExists(path.join(state, 'sessions.json.1.bak')), false);
   assert.deepEqual(await fs.readFile(path.join(state, 'sessions.json.pre-catalog-sqlite-v1.bak')), before);
   assert.deepEqual(payload.pragmas, { journalMode: 'wal', synchronous: 2, busyTimeout: 5000, foreignKeys: 1 });
   const rawCatalog = readRawCatalogMetadata(path.join(state, 'catalog.sqlite'), 'first');
@@ -340,12 +342,12 @@ test('migration tries numbered backup after corrupt primary', async t => {
   t.after(() => fs.remove(dataRoot));
   const state = path.join(dataRoot, 'state');
   await fs.outputFile(path.join(state, 'sessions.json'), '{broken');
-  await fs.outputJson(path.join(state, 'sessions.json.1'), { sessions: { recovered: metadata('recovered') } });
+  await fs.outputJson(path.join(state, 'sessions.json.1.bak'), { sessions: { recovered: metadata('recovered') } });
   await writeAuthority(dataRoot, 'recovered');
   const result = runMigration(dataRoot);
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const payload = JSON.parse(result.stdout.trim());
-  assert.equal(payload.result.source, path.join(state, 'sessions.json.1'));
+  assert.equal(payload.result.source, path.join(state, 'sessions.json.1.bak'));
   assert.deepEqual(payload.rows.map((row: any) => row.id), ['recovered']);
 });
 
@@ -390,7 +392,7 @@ test('malformed current authority is fatal and never falls through to a stale ca
     t.after(() => fs.remove(dataRoot));
     const state = path.join(dataRoot, 'state');
     await fs.outputJson(path.join(state, 'sessions.json'), { sessions: { broken: metadata('broken') } });
-    await fs.outputJson(path.join(state, 'sessions.json.1'), { sessions: { stale: metadata('stale') } });
+    await fs.outputJson(path.join(state, 'sessions.json.1.bak'), { sessions: { stale: metadata('stale') } });
     await fs.outputJson(path.join(state, 'sessions', 'broken.json'), { id: 'broken', ...authority });
     await fs.outputJson(path.join(state, 'sessions', 'stale.json'), { id: 'stale', sessionStateVersion: 1, history: [] });
     const result = runMigration(dataRoot);
@@ -398,7 +400,7 @@ test('malformed current authority is fatal and never falls through to a stale ca
     assert.match(JSON.parse(result.stdout.trim()).error, expected);
     assert.equal(await fs.pathExists(path.join(state, 'catalog.sqlite')), false);
     assert.equal(await fs.pathExists(path.join(state, 'sessions.json')), true);
-    assert.equal(await fs.pathExists(path.join(state, 'sessions.json.1')), true);
+    assert.equal(await fs.pathExists(path.join(state, 'sessions.json.1.bak')), true);
     assert.equal(await fs.pathExists(path.join(state, 'sessions.json.pre-catalog-sqlite-v1.bak')), false);
   }
 });
