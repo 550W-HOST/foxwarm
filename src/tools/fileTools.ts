@@ -15,13 +15,14 @@ import {
     PENDING_WRITE_REF_TTL_MS,
 } from './helpers';
 import { checkPathAccess } from '../isolatedCheck';
+import { nativeFileOperations } from '../../packages/shared/dist/fileOperations';
 
 export async function tool_read(args: ToolArgs, ctx: ToolContext) {
     const { filePath, startLine, endLine } = args;
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
     enforceIsolatedPathAccess(ctx, fullPath, agentName);
-    return readResolvedPath(fullPath, filePath, startLine, endLine);
+    return readResolvedPath(fullPath, filePath, startLine, endLine, ctx.fileOperations || nativeFileOperations);
 }
 
 export async function tool_write(args: ToolArgs, ctx: ToolContext) {
@@ -45,7 +46,7 @@ export async function tool_write(args: ToolArgs, ctx: ToolContext) {
             parentIssueRetryHint: (parentIssue) => parentIssue.reason === 'missing'
                 ? formatWriteContentRefRetryHint(filePath, contentRef, true)
                 : undefined,
-        });
+        }, ctx.fileOperations || nativeFileOperations);
         deletePendingWriteRef(contentRef);
         return 'File written successfully';
     }
@@ -73,7 +74,7 @@ export async function tool_write(args: ToolArgs, ctx: ToolContext) {
                 ? `${formatWriteContentRefRetryHint(filePath, pending.id, true)} The contentRef expires in ${Math.floor(PENDING_WRITE_REF_TTL_MS / 60000)} minutes and only works in this session/agent for the same path.`
                 : ` The attempted content was too large to cache for contentRef retry; call write again with content and createDirs=true if you want to create missing parent directories.`;
         },
-    });
+    }, ctx.fileOperations || nativeFileOperations);
     return 'File written successfully';
 }
 
@@ -82,7 +83,7 @@ export async function tool_edit(args: ToolArgs, ctx: ToolContext) {
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
     enforceIsolatedPathAccess(ctx, fullPath, agentName);
-    await editResolvedPath(fullPath, oldText, newText);
+    await editResolvedPath(fullPath, oldText, newText, ctx.fileOperations || nativeFileOperations);
     return 'File edited successfully';
 }
 
@@ -103,5 +104,5 @@ export async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
             fullPath,
             displayPath: filePath,
         };
-    });
+    }, ctx.fileOperations || nativeFileOperations);
 }

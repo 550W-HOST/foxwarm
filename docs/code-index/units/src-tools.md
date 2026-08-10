@@ -137,6 +137,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - `./execManager` — Persistent command execution lifecycle
 - `./applyPatch` — Structured file patch application
 - `../../packages/shared/dist/fileToolCore` — shared read/write file tool core reused by master and node wrappers
+- `../../packages/shared/dist/fileOperations` — native low-level file backend and injectable `FileOperations` contract
 - `./session/compactPlan` — `COMPACT_PLAN_TOOL_DEFINITION`
 - `./toolImages` — Image reference resolution and cropping
 - `./jsonObjectArgs` — Argument parsing helpers
@@ -148,7 +149,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 ## Behavior
 
 - **File access control**: File wrappers resolve targets with `resolveAgentPath`, then enforce `checkPathAccess` before I/O.
-- **Shared read/write core**: After master-specific path resolution, isolation checks, and `contentRef` handling, `readResolvedPath` / `writeResolvedPath` delegate file/directory/image read and write-parent semantics to `packages/shared/src/fileToolCore.ts`.
+- **Shared read/write core**: After master-specific path resolution, isolation checks, and `contentRef` handling, `readResolvedPath` / `writeResolvedPath` delegate file/directory/image read and write-parent semantics to `packages/shared/src/fileToolCore.ts`. Main explicitly selects the native low-level backend unless an internal exact ToolContext supplies another backend; public tool names, schemas, path policy, and output/error contracts are unchanged.
 - **Read range placeholders**: `startLine` / `endLine` values of `0` are treated as omitted for file and directory reads, so provider-emitted optional numeric placeholders do not produce empty reads.
 - **Bounded file reads**: Master and remote non-image reads share `fileToolCore` bounded display behavior. Large source files retain only bounded samples before model output handling, while finite line ranges stream only to their endpoint; use ranges for targeted content. Canonical contract: [D-bounded-file-read-excerpts](./shared-node-tools.md#d-bounded-file-read-excerpts).
 - **Write parent dirs**: `write` requires parent directories to already exist by default. Passing `createDirs=true` explicitly creates missing parent directories. The shared core first attempts the actual write, then diagnoses parent-path failures so symlinked parent directories work normally. Missing-parent failures report the first missing parent path and, when possible, return a `contentRef` retry hint so large content can be reused.

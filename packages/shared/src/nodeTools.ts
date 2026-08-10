@@ -1,15 +1,22 @@
 import crypto from 'crypto';
-import fs from 'fs-extra';
 import path from 'path';
 import { applyUpdatePatch, buildAddedFileContent, formatApplyPatchOperationSummary, parseApplyPatchInput } from './applyPatch';
 import { getNodeAgentDir, resolveNodePath } from './nodeFileTransfer';
 import { readFileToolPath, writeFileToolPath } from './fileToolCore';
+import {
+  fileOperationPathExists,
+  nativeFileOperations,
+  readWholeFile,
+  type FileOperations,
+} from './fileOperations';
 import { PersistentExecManager, resolveExecTimeoutSeconds, type ExecStatus, type RunningExecEntry } from './persistentExec';
+import { nativeProcessOperations } from './processOperations';
 
 export interface NodeToolContext {
   sessionId?: string;
   session?: { agent?: string; cwd?: string; currentNode?: string };
   runtimeNodeId?: string;
+  fileOperations?: FileOperations;
   broadcast?: (text: string) => Promise<void>;
   queueSystemEvent?: (message: string, type?: 'background' | 'trigger' | 'onboot') => Promise<void>;
 }
@@ -34,7 +41,7 @@ function resolveToolPath(filePath: string, ctx: NodeToolContext): string {
 
 export async function read(args: ToolArgs, ctx: NodeToolContext = {}) {
   const { filePath, startLine, endLine } = args;
-  return readFileToolPath(resolveToolPath(filePath, ctx), filePath, startLine, endLine);
+  return readFileToolPath(resolveToolPath(filePath, ctx), filePath, startLine, endLine, ctx.fileOperations);
 }
 
 export async function write(args: ToolArgs, ctx: NodeToolContext = {}) {
@@ -45,7 +52,7 @@ export async function write(args: ToolArgs, ctx: NodeToolContext = {}) {
     overwrite: overwrite === true,
     existsMessage: `File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file.`,
     createDirs: args.createDirs === true,
-  });
+  }, ctx.fileOperations);
   return 'File written successfully';
 }
 
@@ -53,12 +60,17 @@ export async function edit(args: ToolArgs, ctx: NodeToolContext = {}) {
   const { filePath, oldText, newText } = args;
   if (typeof oldText !== 'string' || typeof newText !== 'string') throw new Error('Edit tool requires oldText and newText. Use apply_patch for patch-style edits.');
   const fullPath = resolveToolPath(filePath, ctx);
-  const content = await fs.readFile(fullPath, 'utf8');
-  await fs.writeFile(fullPath, applyExactReplacement(content, oldText, newText, 'oldText'));
+  const operations = ctx.fileOperations || nativeFileOperations;
+  const content = (await readWholeFile(operations, fullPath)).toString('utf8');
+  await operations.write(fullPath, applyExactReplacement(content, oldText, newText, 'oldText'), 'w');
   return 'File edited successfully';
 }
 
-async function applyPatchOperations(input: string, resolveOperationPath: (filePath: string) => { fullPath: string; displayPath: string }): Promise<string> {
+async function applyPatchOperations(
+  input: string,
+  resolveOperationPath: (filePath: string) => { fullPath: string; displayPath: string },
+  fileOperations: FileOperations,
+): Promise<string> {
   const operations = parseApplyPatchInput(input);
   const summaries: string[] = [];
   for (let idx = 0; idx < operations.length; idx++) {
@@ -66,18 +78,18 @@ async function applyPatchOperations(input: string, resolveOperationPath: (filePa
     const { fullPath, displayPath } = resolveOperationPath(operation.filePath);
     try {
       if (operation.action === 'update') {
-        if (!await fs.pathExists(fullPath)) throw new Error(`Cannot update missing file: ${displayPath}`);
-        const content = await fs.readFile(fullPath, 'utf8');
-        await fs.writeFile(fullPath, applyUpdatePatch(content, operation.lines, displayPath));
+        if (!await fileOperationPathExists(fileOperations, fullPath)) throw new Error(`Cannot update missing file: ${displayPath}`);
+        const content = (await readWholeFile(fileOperations, fullPath)).toString('utf8');
+        await fileOperations.write(fullPath, applyUpdatePatch(content, operation.lines, displayPath), 'w');
         summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
       } else if (operation.action === 'add') {
-        if (await fs.pathExists(fullPath)) throw new Error(`Cannot add file that already exists: ${displayPath}`);
-        await fs.ensureDir(path.dirname(fullPath));
-        await fs.writeFile(fullPath, buildAddedFileContent(operation.lines));
+        if (await fileOperationPathExists(fileOperations, fullPath)) throw new Error(`Cannot add file that already exists: ${displayPath}`);
+        await fileOperations.mkdir(path.dirname(fullPath));
+        await fileOperations.write(fullPath, buildAddedFileContent(operation.lines), 'w');
         summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
       } else {
-        if (!await fs.pathExists(fullPath)) throw new Error(`Cannot delete missing file: ${displayPath}`);
-        await fs.remove(fullPath);
+        if (!await fileOperationPathExists(fileOperations, fullPath)) throw new Error(`Cannot delete missing file: ${displayPath}`);
+        await fileOperations.remove(fullPath);
         summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
       }
     } catch (err) {
@@ -94,7 +106,11 @@ async function applyPatchOperations(input: string, resolveOperationPath: (filePa
 
 export async function apply_patch(args: ToolArgs, ctx: NodeToolContext = {}) {
   if (!args.input || typeof args.input !== 'string') throw new Error('apply_patch requires input string.');
-  return applyPatchOperations(args.input, filePath => ({ fullPath: resolveToolPath(filePath, ctx), displayPath: filePath }));
+  return applyPatchOperations(
+    args.input,
+    filePath => ({ fullPath: resolveToolPath(filePath, ctx), displayPath: filePath }),
+    ctx.fileOperations || nativeFileOperations,
+  );
 }
 
 const sessionEventDispatchers = new Map<string, NonNullable<NodeToolContext['queueSystemEvent']>>();
@@ -109,6 +125,7 @@ function getExecManager(agentName: string): PersistentExecManager {
     getExecTempDir: () => execTempDir,
     registryPath: path.join(execTempDir, 'running-exec.json'),
     nodeId: process.env.FOXWARM_NODE_ID || 'remote-node',
+    processOperations: nativeProcessOperations,
     completionDispatcher: async (entry: RunningExecEntry, _status: ExecStatus, message: string) => {
       const dispatcher = entry.sessionId ? sessionEventDispatchers.get(entry.sessionId) : undefined;
       if (dispatcher) await dispatcher(message, 'background');

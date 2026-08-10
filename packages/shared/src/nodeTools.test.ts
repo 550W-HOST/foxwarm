@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { apply_patch, buildBrowserScreenshotResult, exec, read, write } from './nodeTools';
+import { apply_patch, buildBrowserScreenshotResult, edit, exec, read, write } from './nodeTools';
 import { getNodeAgentDir } from './nodeFileTransfer';
 import { CLI_NODE_CAPABILITIES } from './nodeCapabilities';
 import { formatWriteContentRefRetryHint } from './fileToolCore';
 import { resolveExecTimeoutSeconds } from './persistentExec';
+import { nativeFileOperations, type FileOperations } from './fileOperations';
 
 function uniqueAgent(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -177,6 +178,63 @@ test('node apply_patch reports added and updated line counts', async () => {
     ].join('\n'));
     assert.equal(await fs.readFile(path.join(baseDir, 'note.txt'), 'utf8'), 'new\nextra\nkeep');
     assert.equal(await fs.readFile(path.join(baseDir, 'added.txt'), 'utf8'), 'first\nsecond');
+  } finally {
+    await cleanupAgent(agentName);
+  }
+});
+
+test('node write edit and patch compose the injected file primitives without changing write flags', async () => {
+  const agentName = uniqueAgent('node_file_operations');
+  const baseDir = getNodeAgentDir(agentName);
+  const writes: Array<{ filePath: string; flag: 'w' | 'wx' }> = [];
+  const removed: string[] = [];
+  const madeDirs: string[] = [];
+  const operations: FileOperations = {
+    ...nativeFileOperations,
+    async write(filePath, content, flag) {
+      writes.push({ filePath, flag });
+      await nativeFileOperations.write(filePath, content, flag);
+    },
+    async mkdir(dirPath) {
+      madeDirs.push(dirPath);
+      await nativeFileOperations.mkdir(dirPath);
+    },
+    async remove(filePath) {
+      removed.push(filePath);
+      await nativeFileOperations.remove(filePath);
+    },
+  };
+  const ctx = { session: { agent: agentName }, fileOperations: operations };
+  try {
+    await fs.ensureDir(baseDir);
+    await write({ filePath: 'note.txt', content: 'old' }, ctx);
+    await write({ filePath: 'note.txt', content: 'old-2', overwrite: true }, ctx);
+    await write({ filePath: 'nested/new.txt', content: 'new', createDirs: true }, ctx);
+    await edit({ filePath: 'note.txt', oldText: 'old-2', newText: 'edited' }, ctx);
+    await fs.writeFile(path.join(baseDir, 'delete-me.txt'), 'delete');
+    const result = await apply_patch({
+      input: [
+        '*** Begin Patch',
+        '*** Update File: note.txt',
+        '@@',
+        '-edited',
+        '+patched',
+        '*** Add File: added/child.txt',
+        '+added',
+        '*** Delete File: delete-me.txt',
+        '*** End Patch',
+      ].join('\n'),
+    }, ctx);
+
+    assert.deepEqual(writes.map(entry => entry.flag), ['wx', 'w', 'wx', 'w', 'w', 'w']);
+    assert.ok(madeDirs.includes(path.join(baseDir, 'nested')));
+    assert.ok(madeDirs.includes(path.join(baseDir, 'added')));
+    assert.deepEqual(removed, [path.join(baseDir, 'delete-me.txt')]);
+    assert.equal(await fs.readFile(path.join(baseDir, 'note.txt'), 'utf8'), 'patched');
+    assert.equal(await fs.readFile(path.join(baseDir, 'added', 'child.txt'), 'utf8'), 'added');
+    assert.match(result, /Updated note\.txt \(\+1 -1\)/);
+    assert.match(result, /Added added\/child\.txt \(\+1\)/);
+    assert.match(result, /Deleted delete-me\.txt/);
   } finally {
     await cleanupAgent(agentName);
   }

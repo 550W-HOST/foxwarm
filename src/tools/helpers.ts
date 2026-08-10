@@ -16,6 +16,12 @@ import {
     type WriteParentIssue,
 } from '../../packages/shared/dist/fileToolCore';
 import type { ExecRuntime } from '../execManager';
+import {
+    fileOperationPathExists,
+    nativeFileOperations,
+    readWholeFile,
+    type FileOperations,
+} from '../../packages/shared/dist/fileOperations';
 
 export { expandHomePath, resolveAgentPath };
 export { findWriteParentIssue, formatWriteContentRefRetryHint, formatWriteParentIssueMessage, type WriteParentIssue };
@@ -27,6 +33,8 @@ export interface ToolContext {
     broadcast?: (text: string, options?: any) => Promise<void>;
     queueSystemEvent?: (message: string, type?: 'background' | 'trigger' | 'onboot') => Promise<void>;
     runtimeNodeId?: string;
+    /** Resolved-target file primitives; local production uses the native backend. */
+    fileOperations?: FileOperations;
     deferSessionCwdSync?: boolean;
     /** In-process owner hook for persisting ctx.session; never serialized as a tool/RPC DTO. */
     persistCurrentSession?: () => Promise<void>;
@@ -191,17 +199,17 @@ export function resolveAgentMemoryPath(filePath: string, agentName: string = 'ma
     return resolved;
 }
 
-export async function readResolvedPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number) {
-    return readFileToolPath(fullPath, displayPath, startLine, endLine);
+export async function readResolvedPath(fullPath: string, displayPath: string, startLine?: number, endLine?: number, operations?: FileOperations) {
+    return readFileToolPath(fullPath, displayPath, startLine, endLine, operations);
 }
 
-export async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string | (() => string), options?: { createDirs?: boolean; parentIssueRetryHint?: (issue: WriteParentIssue) => string | undefined }) {
+export async function writeResolvedPath(fullPath: string, content: string, overwrite: boolean, existsMessage: string | (() => string), options?: { createDirs?: boolean; parentIssueRetryHint?: (issue: WriteParentIssue) => string | undefined }, operations?: FileOperations) {
     await writeFileToolPath(fullPath, content, {
         overwrite,
         existsMessage,
         createDirs: options?.createDirs,
         parentIssueRetryHint: options?.parentIssueRetryHint,
-    });
+    }, operations);
 }
 
 export function escapeRegExp(text: string): string {
@@ -222,15 +230,15 @@ export function applyExactReplacement(content: string, searchText: string, repla
     return content.replace(regex, replaceText);
 }
 
-export async function editResolvedPath(fullPath: string, oldText: string, newText: string) {
-    const content = await fs.readFile(fullPath, 'utf8');
+export async function editResolvedPath(fullPath: string, oldText: string, newText: string, operations: FileOperations = nativeFileOperations) {
+    const content = (await readWholeFile(operations, fullPath)).toString('utf8');
 
     if (typeof oldText !== 'string' || typeof newText !== 'string') {
         throw new Error('Edit tool requires oldText and newText. Use apply_patch for patch-style edits.');
     }
 
     const updatedContent = applyExactReplacement(content, oldText, newText, 'oldText');
-    await fs.writeFile(fullPath, updatedContent);
+    await operations.write(fullPath, updatedContent, 'w');
 }
 
 export async function deleteResolvedPath(fullPath: string, displayPath: string) {
@@ -245,7 +253,7 @@ export async function deleteResolvedPath(fullPath: string, displayPath: string) 
 export async function applyPatchOperations(input: string, resolveOperationPath: (filePath: string) => {
     fullPath: string;
     displayPath: string;
-}): Promise<string> {
+}, fileOperations: FileOperations = nativeFileOperations): Promise<string> {
     const operations = parseApplyPatchInput(input);
     const summaries: string[] = [];
 
@@ -255,30 +263,30 @@ export async function applyPatchOperations(input: string, resolveOperationPath: 
 
         try {
             if (operation.action === 'update') {
-                if (!await fs.pathExists(fullPath)) {
+                if (!await fileOperationPathExists(fileOperations, fullPath)) {
                     throw new Error(`Cannot update missing file: ${displayPath}`);
                 }
-                const content = await fs.readFile(fullPath, 'utf8');
+                const content = (await readWholeFile(fileOperations, fullPath)).toString('utf8');
                 const updatedContent = applyUpdatePatch(content, operation.lines, displayPath);
-                await fs.writeFile(fullPath, updatedContent);
+                await fileOperations.write(fullPath, updatedContent, 'w');
                 summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
                 continue;
             }
 
             if (operation.action === 'add') {
-                if (await fs.pathExists(fullPath)) {
+                if (await fileOperationPathExists(fileOperations, fullPath)) {
                     throw new Error(`Cannot add file that already exists: ${displayPath}`);
                 }
-                await fs.ensureDir(path.dirname(fullPath));
-                await fs.writeFile(fullPath, buildAddedFileContent(operation.lines));
+                await fileOperations.mkdir(path.dirname(fullPath));
+                await fileOperations.write(fullPath, buildAddedFileContent(operation.lines), 'w');
                 summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
                 continue;
             }
 
-            if (!await fs.pathExists(fullPath)) {
+            if (!await fileOperationPathExists(fileOperations, fullPath)) {
                 throw new Error(`Cannot delete missing file: ${displayPath}`);
             }
-            await fs.remove(fullPath);
+            await fileOperations.remove(fullPath);
             summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
         } catch (err) {
             const succeeded = summaries.length > 0

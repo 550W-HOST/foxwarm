@@ -1,8 +1,6 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
-import { ChildProcess, execFile, spawn } from 'child_process';
-import { promises as fsp } from 'fs';
 import { resolveValidatedExecCwd, type ExecCwdSource } from './execCwd';
 import { truncateOutputForDisplay, type OutputTruncationResult } from './outputTruncation';
 import { estimateTokenCount } from './tokenCount';
@@ -14,6 +12,13 @@ import {
   formatDisplayByteConversionDisclaimer,
   readBoundedFileSamples,
 } from './boundedTextExcerpt';
+import {
+  nativeProcessOperations,
+  type ProcessOperations,
+  type ProcessSnapshotEntry,
+} from './processOperations';
+
+export type { ProcessSnapshotEntry } from './processOperations';
 
 export const DEFAULT_EXEC_TIMEOUT_SECONDS = 15;
 export const MIN_EXEC_TIMEOUT_SECONDS = 1;
@@ -64,15 +69,6 @@ const BACKGROUND_COMMAND_PREVIEW_LIMIT = 100;
 export const BACKGROUND_PROCESS_CMDLINE_LIMIT = 100;
 export const BACKGROUND_PROCESS_TREE_LIMIT = 40;
 const BACKGROUND_PROCESS_TREE_MAX_INDENT = 20;
-const PROCESS_INSPECTION_TIMEOUT_MS = 2000;
-const PROCESS_INSPECTION_MAX_BUFFER_BYTES = 1024 * 1024;
-
-export interface ProcessSnapshotEntry {
-  pid: number;
-  parentPid: number;
-  cmdline: string;
-}
-
 export interface ExecStatus {
   exitCode: number | null;
   finishedAt: string;
@@ -131,6 +127,7 @@ export interface PersistentExecManagerOptions {
   registryPath?: string;
   nodeId?: string;
   completionDispatcher?: ExecCompletionDispatcher;
+  processOperations?: ProcessOperations;
   processSnapshotProvider?: () => Promise<ProcessSnapshotEntry[]>;
   logger?: {
     info?: (payload?: any, message?: string) => void;
@@ -222,70 +219,12 @@ export function formatProcessTreeSnapshot(entries: ProcessSnapshotEntry[], rootP
   return `${heading}\n${lines.join('\n')}`;
 }
 
-function runProcessInspectionCommand(command: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(command, args, {
-      encoding: 'utf8',
-      timeout: PROCESS_INSPECTION_TIMEOUT_MS,
-      maxBuffer: PROCESS_INSPECTION_MAX_BUFFER_BYTES,
-      windowsHide: true,
-    }, (error, stdout) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(String(stdout));
-    });
-  });
-}
-
-async function inspectSystemProcessSnapshot(): Promise<ProcessSnapshotEntry[]> {
-  if (process.platform === 'win32') {
-    const script = [
-      '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-      '$items = @(Get-CimInstance Win32_Process | ForEach-Object {',
-      '  [PSCustomObject]@{ pid = [int]$_.ProcessId; parentPid = [int]$_.ParentProcessId; cmdline = $(if ($_.CommandLine) { [string]$_.CommandLine } else { [string]$_.Name }) }',
-      '})',
-      'ConvertTo-Json -InputObject $items -Compress',
-    ].join('\n');
-    const output = await runProcessInspectionCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]);
-    const parsed = JSON.parse(output.trim() || '[]');
-    const items = Array.isArray(parsed) ? parsed : [parsed];
-    return items.map(item => ({
-      pid: Number(item?.pid),
-      parentPid: Number(item?.parentPid),
-      cmdline: typeof item?.cmdline === 'string' ? item.cmdline : '',
-    }));
-  }
-  if (process.platform !== 'linux' && process.platform !== 'darwin' && process.platform !== 'freebsd' && process.platform !== 'openbsd') {
-    throw new Error(`Process inspection is unsupported on ${process.platform}`);
-  }
-
-  const output = await runProcessInspectionCommand('ps', ['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'command=']);
-  const entries: ProcessSnapshotEntry[] = [];
-  for (const line of output.split(/\r?\n/)) {
-    const match = line.match(/^\s*(\d+)\s+(\d+)\s*(.*)$/);
-    if (!match) continue;
-    entries.push({ pid: Number(match[1]), parentPid: Number(match[2]), cmdline: match[3] || '' });
-  }
-  return entries;
-}
-
-function isPidRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err: any) {
-    return err?.code === 'EPERM';
-  }
-}
-
 function buildStatusWriterInvocationPosix(): string {
   return `"$FOXWARM_EXEC_NODE_PATH" -e 'const fs = require("fs"); const statusPath = process.argv[1]; const rawExitCode = process.argv[2]; const exitCode = rawExitCode === "null" ? null : Number(rawExitCode); fs.writeFileSync(statusPath, JSON.stringify({ exitCode, finishedAt: new Date().toISOString() }) + "\\n");'`;
 }
 
-function buildManagedExecScript(command: string): string {
-  if (process.platform === 'win32') {
+function buildManagedExecScript(command: string, platform: NodeJS.Platform): string {
+  if (platform === 'win32') {
     return [
       '$ErrorActionPreference = "Continue"',
       'chcp 65001 | Out-Null',
@@ -410,6 +349,10 @@ export class PersistentExecManager {
 
   constructor(private readonly options: PersistentExecManagerOptions) {
     this.completionDispatcher = options.completionDispatcher || (async () => {});
+  }
+
+  private get processOperations(): ProcessOperations {
+    return this.options.processOperations || nativeProcessOperations;
   }
 
   getDefaultCwd(agentName = 'main'): string {
@@ -578,8 +521,10 @@ export class PersistentExecManager {
     await fs.ensureDir(dateDir);
 
     const execId = `exec_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-    const scriptPath = `${path.join(dateDir, execId)}.command${process.platform === 'win32' ? '.ps1' : '.sh'}`;
-    const commandScriptPath = process.platform === 'win32' ? `${path.join(dateDir, execId)}.user.ps1` : undefined;
+    const processOperations = this.processOperations;
+    const platform = processOperations.platform;
+    const scriptPath = `${path.join(dateDir, execId)}.command${platform === 'win32' ? '.ps1' : '.sh'}`;
+    const commandScriptPath = platform === 'win32' ? `${path.join(dateDir, execId)}.user.ps1` : undefined;
     const pathsPath = path.join(dateDir, `${execId}.paths.json`);
 
     if (commandScriptPath) {
@@ -588,49 +533,43 @@ export class PersistentExecManager {
 
     await fs.writeFile(
       scriptPath,
-      `${buildManagedExecScript(command)}${command.endsWith('\n') ? '' : '\n'}`,
-      process.platform === 'win32' ? undefined : { mode: 0o700 },
+      `${buildManagedExecScript(command, platform)}${command.endsWith('\n') ? '' : '\n'}`,
+      platform === 'win32' ? undefined : { mode: 0o700 },
     );
 
-    const launcher = process.platform === 'win32'
+    const launcher = platform === 'win32'
       ? { command: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath] }
       : { command: '/bin/bash', args: [scriptPath] };
 
-    const child: ChildProcess = spawn(launcher.command, launcher.args, {
-      cwd: initialCwd,
-      env: {
-        ...process.env,
-        TERM: 'xterm-256color',
-        FOXWARM_EXEC_LOG_DIR: dateDir,
-        FOXWARM_EXEC_TIME_TOKEN: timeToken,
-        FOXWARM_EXEC_PATHS_PATH: pathsPath,
-        FOXWARM_EXEC_NODE_PATH: process.execPath,
-        ...(commandScriptPath ? { FOXWARM_EXEC_COMMAND_PATH: commandScriptPath } : {}),
-      },
-      stdio: 'ignore',
-      detached: process.platform !== 'win32',
-      windowsHide: true,
-      shell: false,
-    });
-
-    await new Promise<void>((resolve, reject) => {
-      child.once('spawn', () => resolve());
-      child.once('error', (err: any) => {
-        if (err?.code === 'ENOENT') {
-          reject(new Error(`Failed to start exec on node \`${nodeId}\`: ${err.message}. Working directory was validated as \`${initialCwd}\`.`));
-          return;
-        }
-        reject(err);
+    let launched: { pid: number };
+    try {
+      launched = await processOperations.launch({
+        command: launcher.command,
+        args: launcher.args,
+        cwd: initialCwd,
+        env: {
+          ...process.env,
+          TERM: 'xterm-256color',
+          FOXWARM_EXEC_LOG_DIR: dateDir,
+          FOXWARM_EXEC_TIME_TOKEN: timeToken,
+          FOXWARM_EXEC_PATHS_PATH: pathsPath,
+          FOXWARM_EXEC_NODE_PATH: processOperations.nodePath,
+          ...(commandScriptPath ? { FOXWARM_EXEC_COMMAND_PATH: commandScriptPath } : {}),
+        },
+        detached: platform !== 'win32',
+        windowsHide: true,
       });
-    });
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') {
+        throw new Error(`Failed to start exec on node \`${nodeId}\`: ${err.message}. Working directory was validated as \`${initialCwd}\`.`);
+      }
+      throw err;
+    }
 
-    child.unref();
-    if (!child.pid) throw new Error('Failed to start background process: missing pid');
-
-    const resolvedPaths = await this.waitForResolvedExecPaths(pathsPath, buildResolvedExecPaths(dateDir, timeToken, child.pid));
+    const resolvedPaths = await this.waitForResolvedExecPaths(pathsPath, buildResolvedExecPaths(dateDir, timeToken, launched.pid));
     const entry: RunningExecEntry = {
       id: execId,
-      pid: child.pid,
+      pid: launched.pid,
       sessionId,
       agentName,
       nodeId,
@@ -659,18 +598,6 @@ export class PersistentExecManager {
       return cwd || null;
     } catch (err: any) {
       if (err?.code === 'ENOENT') return null;
-      throw err;
-    }
-  }
-
-  private async readProcessCwd(pid: number): Promise<string | null> {
-    if (process.platform !== 'linux') return null;
-    try {
-      const raw = await fsp.readlink(`/proc/${pid}/cwd`);
-      const cwd = raw.trim();
-      return cwd || null;
-    } catch (err: any) {
-      if (err?.code === 'ENOENT' || err?.code === 'ESRCH') return null;
       throw err;
     }
   }
@@ -818,7 +745,7 @@ export class PersistentExecManager {
 
   private async buildLiveProcessTree(entry: RunningExecEntry): Promise<string> {
     try {
-      const entries = await (this.options.processSnapshotProvider || inspectSystemProcessSnapshot)();
+      const entries = await (this.options.processSnapshotProvider || (() => this.processOperations.inspectSnapshot()))();
       return formatProcessTreeSnapshot(entries, entry.pid);
     } catch (err) {
       this.options.logger?.warn?.({ err, execId: entry.id, pid: entry.pid }, 'Failed to inspect background exec process tree');
@@ -843,7 +770,7 @@ export class PersistentExecManager {
   private async ensureFallbackStatus(entry: RunningExecEntry): Promise<ExecStatus | null> {
     const existing = await this.readExecStatus(entry.statusPath);
     if (existing) return existing;
-    if (isPidRunning(entry.pid)) return null;
+    if (await this.processOperations.isRunning(entry.pid)) return null;
     if (Date.now() - entry.startedAt < MISSING_STATUS_GRACE_MS) return null;
     const fallback: ExecStatus = { exitCode: null, finishedAt: new Date().toISOString(), error: 'Process exited but no status file was written.' };
     await fs.ensureDir(path.dirname(entry.statusPath));
@@ -910,7 +837,7 @@ export class PersistentExecManager {
   }
 
   async readLiveExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null> {
-    return await this.readProcessCwd(entry.pid);
+    return await this.processOperations.readWorkingDirectory(entry.pid);
   }
 
   listRunningExecs(): RunningExecEntry[] {

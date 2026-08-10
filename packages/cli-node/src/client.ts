@@ -10,6 +10,7 @@ import http from 'http';
 import path from 'path';
 import WebSocket from 'ws';
 import { nodeTools } from '../../shared/dist/nodeTools';
+import { nativeFileOperations } from '../../shared/dist/fileOperations';
 import { CLI_NODE_CAPABILITIES } from '../../shared/dist/nodeCapabilities';
 import { readNodeTransferFile, writeNodeTransferFile } from '../../shared/dist/nodeFileTransfer';
 import { executeVscodeNodeService, serializeVscodeNodeServiceError, VSCODE_NODE_SERVICE_VERSIONS, type VscodeNodeServiceName } from '../../shared/dist/vscodeNodeService';
@@ -693,6 +694,7 @@ export class NodeClient {
           cwd: typeof message.sessionCwd === 'string' ? message.sessionCwd : undefined,
         },
         runtimeNodeId: this.connectedNodeId || this.requestedName,
+        fileOperations: nativeFileOperations,
         broadcast: async (text: string) => {
           this.send({
             type: 'broadcast',

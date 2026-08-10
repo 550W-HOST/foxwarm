@@ -40,7 +40,7 @@ Implements the full remote Node.js client: pairing/authenticated WebSocket conne
 - Pairing mode sends `pair_request`; approved credentials are saved and the socket reconnects in authenticated mode before `node_register`.
 - Authentication failure clears local credentials and returns to pairing behavior.
 - Client heartbeat sends WebSocket ping frames every 30 seconds, expects pong within 10 seconds, and reconnects after a 5-second delay.
-- Model tool calls resolve against shared `nodeTools` and may be rejected/timed out by `toolCallInterceptor`.
+- Model tool calls resolve against shared `nodeTools`, explicitly use the shared native file-operations backend in the CLI process, and may be rejected/timed out by `toolCallInterceptor`.
 - Current shared tool image results use structured inline data; old node result reading exists only at the master ingress under [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
 - File transfer uses shared node file-transfer helpers.
 - `node_service_request`, `node_service_command`, and `node_service_event` are separate from model-tool interception.
@@ -50,7 +50,7 @@ Implements the full remote Node.js client: pairing/authenticated WebSocket conne
 
 ## Dependencies
 
-- `packages/shared/dist/nodeTools` and `nodeCapabilities`.
+- `packages/shared/dist/nodeTools`, `fileOperations`, and `nodeCapabilities`.
 - Shared node file-transfer and VS Code service dispatch modules.
 - `masterProxy` for standard proxy handling.
 - `packages/cli-node-runtime` for optional official `node-pty`.

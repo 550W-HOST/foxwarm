@@ -12,6 +12,7 @@ import {
   type RunningExecEntry,
   type StartPersistentExecOptions,
 } from '../packages/shared/dist/persistentExec';
+import { nativeProcessOperations, type ProcessOperations } from '../packages/shared/dist/processOperations';
 
 const RUNNING_EXEC_FILE = path.join(STATE_DIR, 'running-exec.json');
 
@@ -28,6 +29,7 @@ export interface ExecRuntimeOptions {
   registryPath?: string;
   nodeId?: string;
   completionDispatcher?: ExecCompletionDispatcher;
+  processOperations?: ProcessOperations;
 }
 
 export interface ExecRuntime {
@@ -53,6 +55,7 @@ export function createExecRuntime(options: ExecRuntimeOptions): ExecRuntime {
     nodeId,
     logger,
     completionDispatcher: async (entry, status, message) => completionDispatcher(entry, status, message),
+    processOperations: options.processOperations || nativeProcessOperations,
   });
 
   return {

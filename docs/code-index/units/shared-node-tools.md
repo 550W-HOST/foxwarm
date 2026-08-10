@@ -1,6 +1,6 @@
 # Unit: shared-node-tools
 
-Files: packages/shared/src/fileToolCore.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
+Files: packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
 Secondary files: packages/shared/src/outputTruncation.ts, packages/shared/src/outputTruncation.test.ts
 
 ## Purpose
@@ -12,6 +12,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `nodeTools` — aggregated object of all node tool functions (read, write, edit, apply_patch, exec, get_default_cwd, browse_*)
 - `read`, `write`, `edit`, `apply_patch`, `exec`, `get_default_cwd` — file and shell tool functions
 - `readFileToolPath`, `writeFileToolPath`, `readDirectoryListing`, `findWriteParentIssue`, `formatWriteParentIssueMessage` — shared file read/write core used by both master-side and node-side wrappers
+- `FileOperations`, `nativeFileOperations`, `readWholeFile`, `fileOperationPathExists` — low-level target-local stat/ranged-read/list/write/mkdir/remove contract, native implementation, and composition helpers
 - `browse_open`, `browse_list`, `browse_get`, `browse_close`, `browse_interact` — browser automation tools
 - `buildBrowserScreenshotResult` — builds the current structured `inlineData` screenshot result without source-specific base64 fields
 - `CLI_NODE_CAPABILITIES` — tool schema definitions for all node tools (used for LLM tool registration)
@@ -31,6 +32,8 @@ Provides shared file system tools, shell execution, browser automation, and util
 |----------|----------------|-------------|
 | `escapeRegExp(text)` | ~19 | Escapes special regex characters in a string |
 | `applyExactReplacement(content, searchText, replaceText, label)` | ~21 | Replaces exactly one occurrence of text or throws |
+| `nativeFileOperations` (fileOperations) | complete file | Native stat, offset/count read, directory metadata, whole-write, mkdir, and remove implementation |
+| `readWholeFile(operations, filePath)` (fileOperations) | helper | Repeats bounded 64 KiB ranged reads until EOF for edit/patch callers |
 | `normalizeOptionalLineBound(value)` (fileToolCore) | ~35 | Treats omitted/null/non-finite/0 line bounds as absent |
 | `readDirectoryListing(fullPath, displayPath, startLine, endLine)` (fileToolCore) | ~65 | Reads and paginates a directory listing |
 | `getInlineImageMimeType(filePath)` (fileToolCore) | ~120 | Detects image MIME types supported for inline read results |
@@ -77,16 +80,17 @@ Provides shared file system tools, shell execution, browser automation, and util
 
 - `./applyPatch` — `applyUpdatePatch`, `buildAddedFileContent`, `parseApplyPatchInput`
 - `./fileToolCore` — shared read/write core also used by master-side wrappers
+- `./fileOperations` — injected low-level target-local file primitives; production root and CLI Node callers use the native implementation
 - `./nodeFileTransfer` — `detectTransferMimeType`, `getNodeAgentDir`, `resolveNodePath`
 - `./persistentExec` — `PersistentExecManager`, timeout constants, exec types
 
 ## Behavior
 
-- File operations resolve paths relative to session cwd or agent directory, with home path expansion; node wrappers then delegate read/write behavior to `fileToolCore`. Large non-image reads use the shared bounded sampler and preserve `startLine`/`endLine` through bounded streaming; canonical details: [D-bounded-file-read-excerpts](#d-bounded-file-read-excerpts).
+- File operations resolve paths relative to session cwd or agent directory, with home path expansion; node wrappers then delegate read/write behavior to `fileToolCore`. The core composes only the injected `FileOperations` primitives, so stat, ranged bytes, directory metadata, images, edit, and patch remain in one target-local backend. Large non-image reads preserve `startLine`/`endLine` through bounded ranged reads; canonical details: [D-bounded-file-read-excerpts](#d-bounded-file-read-excerpts).
 - `exec` spawns shell commands via `PersistentExecManager`; commands exceeding timeout continue in background and fire a system event pointing to captured command/pipeline output in the log file. Their immediate timeout footer shares the bounded live-tree and outstanding-process reminder contract from [D-persistent-exec-background-timeout-footer-tree](./shared-persistent-exec.md#d-persistent-exec-background-timeout-footer-tree). The node capability guidance tells models not to add `head`/`tail` merely for context control because pipeline filtering changes captured output; canonical capture details: [D-persistent-exec-bounded-log-excerpts](./shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts).
 - Node-side `exec` shares master-side timeout resolution: finite values above 60 seconds clamp to 60 and emit the requested/effective warning in the immediate foreground or background-switch result; invalid and below-minimum values still reject.
 - `edit` enforces single-occurrence matching to prevent ambiguous replacements
-- `write` refuses to overwrite unless explicitly told, and requires parent directories to already exist unless `createDirs=true` is passed. For the default path it first attempts `fs.writeFile` directly, so symlinked parent directories work naturally; friendly parent errors are generated only after write failure.
+- `write` refuses to overwrite unless explicitly told, and requires parent directories to already exist unless `createDirs=true` is passed. The native backend retains `w`/`wx` behavior, so symlinked parent directories work naturally; friendly parent errors are generated only after write failure.
 - Shared cached-write retry formatting emits the executable `write({ ... })` call, explicitly prohibits including `content` alongside `contentRef`, and directs intentional replacements to omit `contentRef` and submit only the new content plus required path/flags; the canonical guidance contract is [D-tools-write-contentref-retry-guidance](./src-tools.md#d-tools-write-contentref-retry-guidance).
 
 ## Design Decisions
