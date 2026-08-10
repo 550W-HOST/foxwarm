@@ -20,7 +20,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 
 ### Model configuration
 
-- `ProviderConfigEntry`, `ProviderModelListItem`, `ModelConfigEntry` (including canonical concrete identity), `ModelsConfig`, and virtual routing config types/guards.
+- `ProviderConfigEntry`, `ProviderModelListItem`, `ModelConfigEntry` (including canonical concrete identity and optional OpenAI Responses `webSearch` settings), `ModelsConfig`, and virtual routing config types/guards.
 - `expandModelsConfig`, `loadModelsConfig`, `loadModelsConfigFromObject`, `resolveModelConfig`.
 
 ### Setup configuration
@@ -77,7 +77,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - Preferred provider field is `models`; legacy `model` remains a reader.
 - `providerType` is current; `provider` is a legacy reader.
 - A single-model provider gets both provider-key and provider/model lookup entries; multi-model providers use provider/model keys.
-- Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly.
+- Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly, and `webSearch` settings merge from provider to concrete model override.
 - `openai`, `openai-responses`, and `openai-completions` receive OpenAI defaults; `anthropic` receives Anthropic defaults; custom types must provide their own base URL/protocol-compatible settings.
 - Invalid provider objects, model lists, and cross-strategy fields fail with provider-qualified validation errors.
 - `session-hash` and `failover` entries resolve strict concrete lookup keys, safe context/async-compact values, and a stable full-leaf configuration fingerprint. Their schema and semantics are canonical in [model routing](../threads/model-routing.md).
@@ -86,7 +86,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 
 - App YAML missing at read time yields an empty config.
 - Setup writes validate by parsing through the same current config readers before replacing files.
-- Structured setup accepts virtual target/failover fields; raw virtual YAML remains byte-preserving after validation.
+- Structured setup accepts virtual target/failover fields; raw virtual YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including `webSearch` are removed before the result is reparsed.
 - `writeAppConfigWithChannels` preserves surrounding raw YAML text/comments when possible.
 - Template models config is a read fallback only and logs once; it is not silently copied into mutable state.
 - Code's fixed workspace-root response consumes exported `BASE_DIR`, resolved `DATA_ROOT_DIR`, `APP_CONFIG_PATH`, and `DEFAULT_MODELS_CONFIG_PATH`; it does not introduce a second path resolver. See [D-code-master-workspace-roots](../threads/code-integration.md#d-code-master-workspace-roots) and [D-code-config-schema-assistance](../threads/code-integration.md#d-code-config-schema-assistance).

@@ -246,7 +246,7 @@ export function buildModelsConfigFromSetupForm(body: any, existingConfig: any = 
     if (isVirtual) {
       const targets = splitModelIds(hasOwn(draft, 'targets') ? draft.targets : existingProvider.targets);
       nextProvider.targets = targets;
-      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'contextLimit', 'asyncCompact'] as const) {
+      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'asyncCompact'] as const) {
         delete nextProvider[field];
       }
       if (providerType === 'session-hash') {

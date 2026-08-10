@@ -119,7 +119,7 @@ test('setup status hydrates virtual targets and round-trips through structured r
     failureThreshold: 7,
     cooldownMs: 12345,
   })
-  for (const forbidden of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'contextLimit', 'asyncCompact']) {
+  for (const forbidden of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'asyncCompact']) {
     assert.equal(Object.hasOwn(request.providers[1], forbidden), false)
     assert.equal(Object.hasOwn(request.providers[2], forbidden), false)
   }

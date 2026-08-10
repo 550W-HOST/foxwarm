@@ -266,6 +266,28 @@ Provider notes:
 - `anthropic` uses Anthropic-compatible requests
 - OpenAI-compatible local gateways can be configured by changing `baseUrl` and model ids. `apiKey` may be left empty if your gateway does not require one.
 
+Responses models can opt into OpenAI's hosted web search without a separate
+Foxwarm model request:
+
+```yaml
+providers:
+  openai:
+    providerType: openai-responses
+    baseUrl: https://api.openai.com/v1
+    apiKey: your-openai-key
+    webSearch:
+      enabled: true
+      toolChoice: auto       # or: required
+      searchContextSize: medium
+    models:
+      - gpt-5.6
+```
+
+Foxwarm appends the hosted search tool beside its normal function tools. The
+completed search item is kept only for replay to the same concrete model, and
+the WebUI displays returned URL citations as clickable sources. Hosted search
+is not enabled for compact planning or setup-test requests.
+
 For stable session routing and ordered failover, see
 [Virtual models](docs/virtual-models.md).
 

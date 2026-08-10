@@ -19,6 +19,7 @@ import {
   THREAD_CARD_HEADER_ROW_CLASS,
   ToolTag,
   type Message,
+  type OpenAIResponsesAnnotation,
   type ToolTagItem,
   type ViewMode,
 } from './chatShared'
@@ -469,7 +470,52 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
   )
 })
 
-const AssistantTextCard = memo(function AssistantTextCard({ text, message, onOpenCodeCommit }: { text: string; message: Message; onOpenCodeCommit?: OpenCodeCommitHandler }) {
+type WebSearchCitation = {
+  url: string
+  title: string
+}
+
+const normalizeWebSearchCitation = (annotation: OpenAIResponsesAnnotation): WebSearchCitation | null => {
+  if (!annotation || typeof annotation !== 'object') return null
+  const nested = annotation.url_citation && typeof annotation.url_citation === 'object' ? annotation.url_citation : annotation
+  const url = typeof nested.url === 'string' ? nested.url.trim() : ''
+  if (!/^https?:\/\//i.test(url)) return null
+  const title = typeof nested.title === 'string' && nested.title.trim() ? nested.title.trim() : url
+  return { url, title }
+}
+
+const WebSearchCitationLinks = memo(function WebSearchCitationLinks({ annotations }: { annotations?: OpenAIResponsesAnnotation[] }) {
+  const citations = useMemo(() => {
+    const unique = new Map<string, WebSearchCitation>()
+    for (const annotation of annotations || []) {
+      const citation = normalizeWebSearchCitation(annotation)
+      if (citation && !unique.has(citation.url)) unique.set(citation.url, citation)
+    }
+    return [...unique.values()]
+  }, [annotations])
+
+  if (citations.length === 0) return null
+  return (
+    <div className="mt-2 flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-gray-400" onClick={handleMarkdownLinkClick}>
+      <span className="font-semibold">Sources:</span>
+      {citations.map((citation, index) => (
+        <a
+          key={citation.url}
+          data-web-search-citation
+          href={citation.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={citation.title}
+          className="max-w-full truncate text-blue-600 underline hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+        >
+          [{index + 1}] {citation.title}
+        </a>
+      ))}
+    </div>
+  )
+})
+
+const AssistantTextCard = memo(function AssistantTextCard({ text, message, annotations, onOpenCodeCommit }: { text: string; message: Message; annotations?: OpenAIResponsesAnnotation[]; onOpenCodeCommit?: OpenCodeCommitHandler }) {
   const [viewMode, setViewMode] = useState<ViewMode>('rendered')
   const [copied, setCopied] = useState(false)
   const copyResetTimeoutRef = useRef<number | null>(null)
@@ -536,6 +582,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, onOpe
               {segment.raw}
             </pre>
           ))}
+          <WebSearchCitationLinks annotations={annotations} />
         </div>
       ) : viewMode === 'raw' ? (
         <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-gray-900 dark:text-gray-100">{text}</pre>
@@ -663,7 +710,7 @@ const MessageRow = memo(function MessageRow({
               if (contextBlock && partIdx === firstTextPartIndex && part.text) {
                 return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} />
               }
-              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} onOpenCodeCommit={onOpenCodeCommit} />
+              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} />
             })}
             <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
             {groupTools && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (

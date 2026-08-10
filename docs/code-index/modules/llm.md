@@ -25,7 +25,7 @@ LLM owns model/provider configuration consumption, prompt snapshots, provider se
 
 Canonical image messages remain blob-reference-only until the provider request boundary; clone-only hydration and diagnostic redaction are owned by [image blob lifecycle](../threads/image-blob-lifecycle.md).
 
-- `openai` and `openai-responses` use the Responses API.
+- `openai` and `openai-responses` use the Responses API; concrete models may opt into the hosted `web_search` tool, whose completed output items remain provider-owned and model-scoped.
 - `openai-completions` uses Chat Completions.
 - `anthropic` uses Anthropic Messages.
 - `session-hash` and `failover` resolve strict concrete leaves before provider serialization. Canonical contract: [model routing](../threads/model-routing.md).

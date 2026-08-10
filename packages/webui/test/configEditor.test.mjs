@@ -92,6 +92,7 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
         current: {
           providerType: 'openai-completions',
           models: ['model-a'],
+          webSearch: { enabled: true, toolChoice: 'auto', searchContextSize: 'medium' },
           extraHeaders: { nested: { supportedByLoader: true }, numeric: 42 },
           customExtension: { enabled: true },
         },
@@ -162,6 +163,9 @@ test('models schema suggests known provider types while accepting custom strings
   assert.equal(failoverRule.properties.targets.minItems, 2)
   assert.equal(provider.properties.failureThreshold.minimum, 1)
   assert.equal(provider.properties.cooldownMs.minimum, 1)
+  assert.equal(provider.properties.webSearch.properties.enabled.type, 'boolean')
+  assert.deepEqual(provider.properties.webSearch.properties.toolChoice.enum, ['auto', 'required'])
+  assert.equal(provider.allOf[0].then.not.anyOf.some((rule) => rule.required.includes('webSearch')), true)
 })
 
 test('dynamic models suggestions use the current document and exclude virtual targets', () => {

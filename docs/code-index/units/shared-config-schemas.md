@@ -17,7 +17,7 @@ The package exports these through `@foxwarm/shared/configSchemas`; browser bundl
 
 ## Behavior
 
-- Objects contain descriptions, types, current and retained legacy spellings, and permissive unknown-property behavior; they contain no configuration values or credentials.
+- Objects contain descriptions, types, current and retained legacy spellings, and permissive unknown-property behavior; they contain no configuration values or credentials. Concrete model/provider entries document optional OpenAI Responses `webSearch` settings while virtual routing entries reject provider request settings.
 - Models `default` remains optional, virtual strategy conditions honor current `providerType` precedence and legacy `provider`, and backend-tolerant headers remain permissive.
 - No schema endpoint, remote reference, file association, editor model URI, or dynamic completion logic lives here.
 - WebUI owns its in-memory URI/file-match wrappers and unsaved-document completion provider. Code's filesystem extension owns exact authoritative master-URI association and supplies serialized local content to Red Hat YAML.

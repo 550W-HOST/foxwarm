@@ -489,10 +489,29 @@ export function resolveDataModelsConfigPath(dataRoot: string = DATA_ROOT_DIR): s
 export const DEFAULT_MODELS_CONFIG_PATH = resolveDataModelsConfigPath();
 export const MODELS_CONFIG_TEMPLATE_PATH = path.join(BASE_DIR, 'templates', 'models.example.yaml');
 
+export type OpenAIWebSearchUserLocation = {
+  type?: 'approximate';
+  country?: string;
+  city?: string;
+  region?: string;
+  timezone?: string;
+};
+
+export type OpenAIWebSearchConfig = {
+  /** Opt in to the hosted Responses API web search tool. */
+  enabled?: boolean;
+  /** Select automatic or required Responses tool use when search is enabled. */
+  toolChoice?: 'auto' | 'required';
+  searchContextSize?: 'low' | 'medium' | 'high';
+  allowedDomains?: string[];
+  userLocation?: OpenAIWebSearchUserLocation;
+};
+
 export type ModelConfigOverride = {
   contextLimit?: number;
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
+  webSearch?: OpenAIWebSearchConfig;
 };
 
 export type ProviderModelListItem = string | ({ id: string } & ModelConfigOverride);
@@ -509,6 +528,7 @@ export type ProviderConfigEntry = {
   requestCompression?: 'gzip' | 'br';
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
+  webSearch?: OpenAIWebSearchConfig;
   targets?: string[];
   failureThreshold?: number;
   cooldownMs?: number;
@@ -536,6 +556,7 @@ export type ModelConfigEntry = {
   requestCompression?: 'gzip' | 'br';
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
+  webSearch?: OpenAIWebSearchConfig;
   virtualRouting?: VirtualModelRoutingConfig;
 };
 
@@ -680,6 +701,10 @@ function applyProviderDefaults(providerEntry: ProviderConfigEntry): ProviderConf
 
 function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderConfigEntry, modelId: string, modelOverride?: ModelConfigOverride): ModelConfigEntry {
   const resolvedProviderEntry = applyProviderDefaults(providerEntry);
+  const webSearch = deepMergeObjects(
+    resolvedProviderEntry.webSearch,
+    modelOverride?.webSearch,
+  );
   return {
     providerKey,
     canonicalModelKey: modelId ? `${providerKey}/${modelId}` : providerKey,
@@ -698,6 +723,7 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
       resolvedProviderEntry.extraFields || {},
       modelOverride?.extraFields || {},
     ) || {},
+    ...(webSearch && Object.keys(webSearch).length > 0 ? { webSearch } : {}),
   };
 }
 
@@ -769,6 +795,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
     'extraHeaders',
     'contextLimit',
     'asyncCompact',
+    'webSearch',
   ];
 
   for (const [virtualKey, providerEntry, providerType] of virtualEntries) {
@@ -855,6 +882,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
           apiKeyHash: hashConfigValue(entry.apiKey || ''),
           extraFieldsHash: hashConfigValue(entry.extraFields || {}),
           extraHeadersHash: hashConfigValue(entry.extraHeaders || {}),
+          webSearchHash: hashConfigValue(entry.webSearch || {}),
         };
       }),
     });

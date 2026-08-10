@@ -68,6 +68,58 @@ function makeResponsesStream(text = 'ok', usage: Record<string, unknown> = {
   return stream;
 }
 
+function makeResponsesWebSearchStream(): PassThrough {
+  const citation = {
+    type: 'url_citation',
+    start_index: 0,
+    end_index: 5,
+    url: 'https://example.com/article',
+    title: 'Example article',
+  };
+  const stream = new PassThrough();
+  process.nextTick(() => {
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.output_item.added',
+      output_index: 0,
+      item: { type: 'web_search_call', id: 'ws_123', status: 'completed', action: { type: 'search', query: 'example query' } },
+    })}\n\n`);
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.output_item.added',
+      output_index: 1,
+      item: { type: 'message', role: 'assistant', content: [] },
+    })}\n\n`);
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.content_part.added',
+      output_index: 1,
+      content_index: 0,
+      part: { type: 'output_text', text: '' },
+    })}\n\n`);
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.output_text.done',
+      output_index: 1,
+      content_index: 0,
+      text: 'Hello',
+    })}\n\n`);
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.output_text.annotation.added',
+      output_index: 1,
+      content_index: 0,
+      annotation_index: 0,
+      annotation: citation,
+    })}\n\n`);
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.completed',
+      response: {
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    })}\n\n`);
+    stream.write('data: [DONE]\n\n');
+    stream.end();
+  });
+  return stream;
+}
+
 function createOpenAITestSession(id: string): Session {
   return {
     id,
@@ -165,6 +217,127 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
   }
 });
 
+test('OpenAI Responses opt-in web search is appended to Foxwarm tools and excluded from compact plans', async () => {
+  const originalPost = axios.post;
+  const capturedBodies: any[] = [];
+  const model = {
+    providerKey: 'fixture',
+    providerType: 'openai-responses',
+    baseUrl: 'https://fixture.example',
+    apiKey: '',
+    model: 'gpt-5.6',
+    extraFields: {},
+    extraHeaders: {},
+    webSearch: {
+      enabled: true,
+      toolChoice: 'required',
+      searchContextSize: 'high',
+      allowedDomains: ['example.com'],
+      userLocation: { city: 'Shenzhen', country: 'CN' },
+    },
+  } as any;
+
+  (axios as any).post = async (_url: string, data: any) => {
+    capturedBodies.push(data);
+    return { status: 200, statusText: 'OK', headers: {}, data: makeResponsesStream() };
+  };
+
+  try {
+    await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'search this' }] }],
+      systemPrompt: '',
+      modelEntryOverride: model,
+      toolDefinitions: [{ name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } }],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+    await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'compact this' }] }],
+      systemPrompt: '',
+      modelEntryOverride: model,
+      purpose: 'compact-plan',
+      toolDefinitions: [{ name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } }],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+    await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'disabled search' }] }],
+      systemPrompt: '',
+      modelEntryOverride: { ...model, webSearch: { enabled: false, toolChoice: 'required' } },
+      toolDefinitions: [{ name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } }],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.deepEqual(capturedBodies[0].tools, [
+      { type: 'function', name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } },
+      {
+        type: 'web_search',
+        search_context_size: 'high',
+        filters: { allowed_domains: ['example.com'] },
+        user_location: { type: 'approximate', country: 'CN', city: 'Shenzhen' },
+      },
+    ]);
+    assert.equal(capturedBodies[0].tool_choice, 'required');
+    assert.deepEqual(capturedBodies[1].tools, [
+      { type: 'function', name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } },
+    ]);
+    assert.equal(capturedBodies[1].tool_choice, 'auto');
+    assert.deepEqual(capturedBodies[2].tools, [
+      { type: 'function', name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } },
+    ]);
+    assert.equal(capturedBodies[2].tool_choice, 'auto');
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('OpenAI Responses parsing persists native web search output and URL annotations with the producing model', async () => {
+  const originalPost = axios.post;
+  const model = {
+    providerKey: 'fixture',
+    providerType: 'openai-responses',
+    baseUrl: 'https://fixture.example',
+    apiKey: '',
+    model: 'gpt-5.6',
+    extraFields: {},
+    extraHeaders: {},
+  } as any;
+  (axios as any).post = async () => ({
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    data: makeResponsesWebSearchStream(),
+  });
+
+  try {
+    const result = await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'search this' }] }],
+      systemPrompt: '',
+      modelEntryOverride: model,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.equal(result.toolCalls?.length, 0);
+    assert.deepEqual(result.allParts?.map(part => part.providerMeta?.openaiResponses?.outputItem?.type || part.text), [
+      'web_search_call',
+      'Hello',
+    ]);
+    assert.equal(result.allParts?.[0].providerMeta?.openaiResponses?.sourceModelId, 'fixture/gpt-5.6');
+    assert.deepEqual(result.allParts?.[1].providerMeta?.openaiResponses?.annotations, [{
+      type: 'url_citation',
+      start_index: 0,
+      end_index: 5,
+      url: 'https://example.com/article',
+      title: 'Example article',
+    }]);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('a post-response journal failure never retries a successful provider generation', async () => {
   const originalPost = axios.post;
   let callCount = 0;
@@ -253,6 +426,23 @@ test('all provider protocols filter historical reasoning only for a proven diffe
       role: 'model',
       parts: [
         { thinking: 'same thinking', providerMeta: { thinkingSummaries: ['same summary'], encryptedThinking: 'same encrypted', signature: 'same signature' } },
+        {
+          providerMeta: {
+            openaiResponses: {
+              sourceModelId: destinationModelId,
+              outputItem: { type: 'web_search_call', id: 'same-search', status: 'completed' },
+            },
+          },
+        },
+        {
+          text: 'same citation text',
+          providerMeta: {
+            openaiResponses: {
+              sourceModelId: destinationModelId,
+              annotations: [{ type: 'url_citation', url: 'https://same.example' }],
+            },
+          },
+        },
         { text: 'same text' },
       ],
       providerMeta: { providerSpecificFields: { reasoning_signature: 'same opaque' }, sourceModelId: destinationModelId },
@@ -263,6 +453,23 @@ test('all provider protocols filter historical reasoning only for a proven diffe
       role: 'model',
       parts: [
         { thinking: 'different thinking', providerMeta: { thinkingSummaries: ['different summary'], encryptedThinking: 'different encrypted', signature: 'different signature' } },
+        {
+          providerMeta: {
+            openaiResponses: {
+              sourceModelId: destinationModelId,
+              outputItem: { type: 'web_search_call', id: 'different-search', status: 'completed' },
+            },
+          },
+        },
+        {
+          text: 'different citation text',
+          providerMeta: {
+            openaiResponses: {
+              sourceModelId: destinationModelId,
+              annotations: [{ type: 'url_citation', url: 'https://different.example' }],
+            },
+          },
+        },
         { text: 'different text' },
       ],
       // Deliberately conflicts with the authoritative message provenance: a
@@ -344,6 +551,11 @@ test('all provider protocols filter historical reasoning only for a proven diffe
 
     const responseReasoning = captured.get('responses').input.filter((item: any) => item.type === 'reasoning');
     assert.deepEqual(responseReasoning.map((item: any) => item.encrypted_content), ['same encrypted', 'legacy encrypted']);
+    const responseSerialized = JSON.stringify(captured.get('responses').input);
+    assert.match(responseSerialized, /same-search/);
+    assert.match(responseSerialized, /https:\/\/same\.example/);
+    assert.doesNotMatch(responseSerialized, /different-search/);
+    assert.doesNotMatch(responseSerialized, /https:\/\/different\.example/);
 
     const chatAssistants = captured.get('chat').messages.filter((message: any) => message.role === 'assistant');
     assert.equal(chatAssistants.length, 4, 'the known-different reasoning-only model message is omitted');

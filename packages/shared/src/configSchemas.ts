@@ -37,10 +37,34 @@ const positiveInteger = {
   minimum: 1,
 }
 
+const openaiWebSearchConfig = {
+  type: 'object',
+  additionalProperties: true,
+  description: 'Opt-in OpenAI Responses hosted web search settings. Ignored by non-Responses providers.',
+  properties: {
+    enabled: { type: 'boolean', description: 'Enable the hosted web_search tool for eligible Responses requests.' },
+    toolChoice: { enum: ['auto', 'required'], description: 'Responses tool-selection mode when hosted search is enabled.' },
+    searchContextSize: { enum: ['low', 'medium', 'high'], description: 'Amount of search context requested from OpenAI.' },
+    allowedDomains: { type: 'array', items: { type: 'string', minLength: 1 }, description: 'Optional domain filter for web search.' },
+    userLocation: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        type: { const: 'approximate' },
+        country: { type: 'string' },
+        city: { type: 'string' },
+        region: { type: 'string' },
+        timezone: { type: 'string' },
+      },
+    },
+  },
+}
+
 const modelOverrideProperties = {
   contextLimit: { type: 'integer', minimum: 1, description: 'Context window size in tokens.' },
   extraFields: { type: 'object', additionalProperties: true, description: 'Provider-specific request fields.' },
   extraHeaders: { type: 'object', additionalProperties: true, description: 'Provider-specific HTTP headers. Values are passed through to the canonical backend loader.' },
+  webSearch: openaiWebSearchConfig,
 }
 
 const modelItem = {
@@ -80,6 +104,7 @@ const providerEntry = {
     requestCompression: { enum: ['gzip', 'br'], description: 'Optional request-body compression.' },
     extraFields: modelOverrideProperties.extraFields,
     extraHeaders: modelOverrideProperties.extraHeaders,
+    webSearch: modelOverrideProperties.webSearch,
     targets: { type: 'array', items: { type: 'string', minLength: 1 }, uniqueItems: true, description: 'Concrete model keys used by a virtual provider.' },
     failureThreshold: { ...positiveInteger, description: 'Consecutive failures before a non-final failover target cools down.' },
     cooldownMs: { ...positiveInteger, description: 'Failover cooldown duration in milliseconds.' },
@@ -90,7 +115,7 @@ const providerEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'contextLimit', 'asyncCompact', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'asyncCompact', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -98,7 +123,7 @@ const providerEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'contextLimit', 'asyncCompact'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'asyncCompact'].map((field) => ({ required: [field] })) },
       },
     },
     {

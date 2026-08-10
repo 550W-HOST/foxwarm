@@ -103,6 +103,48 @@ test('new providers root + models object list applies model overrides and merge 
   });
 });
 
+test('OpenAI web search settings inherit from providers and merge at model level', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'openai/model-a',
+    providers: {
+      openai: {
+        providerType: 'openai-responses',
+        baseUrl: 'https://example.test/v1',
+        webSearch: {
+          enabled: true,
+          toolChoice: 'auto',
+          searchContextSize: 'medium',
+          userLocation: { country: 'CN', city: 'Shenzhen' },
+        },
+        models: [
+          {
+            id: 'model-a',
+            webSearch: {
+              toolChoice: 'required',
+              allowedDomains: ['example.com'],
+            },
+          },
+          'model-b',
+        ],
+      },
+    },
+  });
+
+  assert.deepEqual(parsed.models['openai/model-a'].webSearch, {
+    enabled: true,
+    toolChoice: 'required',
+    searchContextSize: 'medium',
+    allowedDomains: ['example.com'],
+    userLocation: { country: 'CN', city: 'Shenzhen' },
+  });
+  assert.deepEqual(parsed.models['openai/model-b'].webSearch, {
+    enabled: true,
+    toolChoice: 'auto',
+    searchContextSize: 'medium',
+    userLocation: { country: 'CN', city: 'Shenzhen' },
+  });
+});
+
 test('single-model provider entries still expose provider key alias and keep displayModels behavior', () => {
   const parsed = loadModelsConfigFromObject({
     default: 'qwen',
@@ -320,6 +362,7 @@ test('route fingerprint deterministically covers resolved concrete request plans
     (() => { const value = structuredClone(raw); value.providers.leaf.extraFields.nested.a = 9; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); value.providers.leaf.contextLimit = 2000; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); value.providers.leaf.asyncCompact = false; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); (value.providers.leaf as any).webSearch = { enabled: true }; return fingerprint(value); })(),
   ];
   assert.ok(changedFingerprints.every(value => value !== baseFingerprint));
 
@@ -383,7 +426,7 @@ test('provider entries and concrete/virtual routing fields are strictly separate
     default: 'virtual',
     providers: { concrete, virtual: entry },
   });
-  for (const field of ['contextLimit', 'asyncCompact']) {
+  for (const field of ['contextLimit', 'asyncCompact', 'webSearch']) {
     assert.throws(
       () => parseVirtual({ providerType: 'session-hash', targets: ['concrete'], [field]: field === 'contextLimit' ? 1000 : true }),
       new RegExp(`forbids field .*${field}`),

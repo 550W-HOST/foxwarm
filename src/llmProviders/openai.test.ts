@@ -288,6 +288,77 @@ test('collectOpenAIResponsesStream rebuilds streamed output items from SSE delta
   assert.ok(progress.some(snapshot => snapshot.toolCalls?.[0]?.name === 'read'));
 });
 
+test('collectOpenAIResponsesStream preserves web search calls and streamed URL annotations', async () => {
+  const citation = {
+    type: 'url_citation',
+    start_index: 0,
+    end_index: 5,
+    url: 'https://example.com/article',
+    title: 'Example article',
+  };
+  const webSearchCall = {
+    type: 'web_search_call',
+    id: 'ws_123',
+    status: 'completed',
+    action: { type: 'search', query: 'example query' },
+  };
+  const stream = makeStream([
+    {
+      type: 'response.output_item.added',
+      output_index: 0,
+      item: { type: 'web_search_call', id: 'ws_123', status: 'in_progress' },
+    },
+    {
+      type: 'response.output_item.added',
+      output_index: 1,
+      item: { type: 'message', role: 'assistant', content: [] },
+    },
+    {
+      type: 'response.content_part.added',
+      output_index: 1,
+      content_index: 0,
+      part: { type: 'output_text', text: '' },
+    },
+    {
+      type: 'response.output_text.delta',
+      output_index: 1,
+      content_index: 0,
+      delta: 'Hello',
+    },
+    {
+      type: 'response.output_text.annotation.added',
+      output_index: 1,
+      content_index: 0,
+      annotation_index: 0,
+      annotation: citation,
+    },
+    {
+      type: 'response.completed',
+      response: {
+        output: [
+          webSearchCall,
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'Hello', annotations: [citation] }],
+          },
+        ],
+      },
+    },
+    '[DONE]',
+  ]);
+
+  const response = await collectOpenAIResponsesStream(stream, new AbortController().signal);
+  assert.deepEqual(response.output, [
+    webSearchCall,
+    {
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: 'Hello', annotations: [citation] }],
+    },
+  ]);
+});
+
 test('collectOpenAIResponsesStream reports raw SSE body and blocks', async () => {
   const stream = makeStream([
     {
@@ -327,6 +398,68 @@ test('collectOpenAIResponsesStream reports raw SSE body and blocks', async () =>
   assert.equal(rawBlocks.length, 5);
   assert.ok(rawBlocks.some(block => block.includes('response.output_text.delta')));
   assert.equal(rawBlocks[rawBlocks.length - 1], 'data: [DONE]');
+});
+
+test('convertToOpenAIResponsesFormat replays ordered web search metadata only to its source model', () => {
+  const webSearchCall = {
+    type: 'web_search_call',
+    id: 'ws_123',
+    status: 'completed',
+    action: { type: 'search', query: 'example query' },
+  };
+  const annotations = [{
+    type: 'url_citation',
+    start_index: 0,
+    end_index: 5,
+    url: 'https://example.com/article',
+    title: 'Example article',
+  }];
+  const history: Message[] = [{
+    role: 'model',
+    parts: [
+      {
+        providerMeta: {
+          openaiResponses: {
+            sourceModelId: 'openai/gpt-5.6',
+            outputItem: webSearchCall,
+          },
+        },
+      },
+      {
+        text: 'Hello',
+        providerMeta: {
+          openaiResponses: {
+            sourceModelId: 'openai/gpt-5.6',
+            annotations,
+          },
+        },
+      },
+      { functionCall: { id: 'call_1', name: 'read', args: { filePath: 'README.md' } } },
+    ],
+  }];
+
+  const sameModel = convertToOpenAIResponsesFormat(history, 'openai/gpt-5.6');
+  assert.deepEqual(sameModel, [
+    webSearchCall,
+    {
+      type: 'message',
+      role: 'assistant',
+      phase: 'final_answer',
+      content: [{ type: 'output_text', text: 'Hello', annotations }],
+    },
+    { type: 'function_call', call_id: 'call_1', name: 'read', arguments: '{"filePath":"README.md"}' },
+  ]);
+
+  const differentModel = convertToOpenAIResponsesFormat(history, 'openai/gpt-5.5');
+  assert.deepEqual(differentModel, [
+    {
+      type: 'message',
+      role: 'assistant',
+      phase: 'final_answer',
+      content: [{ type: 'output_text', text: 'Hello' }],
+    },
+    { type: 'function_call', call_id: 'call_1', name: 'read', arguments: '{"filePath":"README.md"}' },
+  ]);
 });
 
 test('collectOpenAIResponsesStream rebuilds refusals when completed payload omits content', async () => {

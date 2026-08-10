@@ -105,23 +105,31 @@ function mergeResponseContentPart(existing: any, incoming: any): any {
         return existing;
     }
 
-    return {
+    const merged = {
         ...existing,
         ...incoming,
-        text: incoming.text ?? existing.text,
-        refusal: incoming.refusal ?? existing.refusal,
     };
+    if (incoming.text !== undefined || existing.text !== undefined) {
+        merged.text = incoming.text ?? existing.text;
+    }
+    if (incoming.refusal !== undefined || existing.refusal !== undefined) {
+        merged.refusal = incoming.refusal ?? existing.refusal;
+    }
+    if (incoming.annotations !== undefined || existing.annotations !== undefined) {
+        merged.annotations = Array.isArray(incoming.annotations) && incoming.annotations.length > 0
+            ? incoming.annotations
+            : existing.annotations ?? incoming.annotations;
+    }
+    return merged;
 }
 
 function mergeResponseOutputItem(existing: any, incoming: any): any {
     if (!existing) {
-        return incoming
-            ? {
-                  ...incoming,
-                  content: Array.isArray(incoming.content) ? [...incoming.content] : incoming.content,
-                  summary: Array.isArray(incoming.summary) ? [...incoming.summary] : incoming.summary,
-              }
-            : incoming;
+        if (!incoming) return incoming;
+        const initial = { ...incoming };
+        if (Array.isArray(incoming.content)) initial.content = [...incoming.content];
+        if (Array.isArray(incoming.summary)) initial.summary = [...incoming.summary];
+        return initial;
     }
 
     if (!incoming) {
@@ -349,8 +357,15 @@ export function convertToOpenAIFormat(contents: Message[], concreteModelId?: str
     return openaiMessages;
 }
 
-export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
+export function convertToOpenAIResponsesFormat(contents: Message[], concreteModelId?: string): any[] {
     const responseInput = [];
+
+    const getCompatibleResponsesMeta = (part: MessagePart) => {
+        const metadata = part.providerMeta?.openaiResponses;
+        return concreteModelId && metadata?.sourceModelId === concreteModelId
+            ? metadata
+            : undefined;
+    };
 
     const flushMessageContent = (
         role: 'user' | 'assistant',
@@ -470,6 +485,13 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
         const content: Array<OpenAIResponsesContent> = [];
 
         for (const part of msg.parts || []) {
+            const responsesMeta = getCompatibleResponsesMeta(part);
+
+            if (responsesMeta?.outputItem) {
+                flushMessageContent(role, content);
+                responseInput.push(structuredClone(responsesMeta.outputItem));
+            }
+
             if (part.system) {
                 content.push({
                     type: role === 'assistant' ? 'output_text' : 'input_text',
@@ -478,18 +500,23 @@ export function convertToOpenAIResponsesFormat(contents: Message[]): any[] {
             }
 
             if (part.providerMeta?.thinkingSummaries || part.providerMeta?.encryptedThinking) {
+                flushMessageContent(role, content);
                 responseInput.push({
                     type: 'reasoning',
-                    summary: part.providerMeta.thinkingSummaries.map(text => ({ text, type: 'summary_text' })),
+                    summary: (part.providerMeta.thinkingSummaries || []).map(text => ({ text, type: 'summary_text' })),
                     encrypted_content: part.providerMeta.encryptedThinking,
                 });
             }
 
             if (part.text) {
-                content.push({
+                const outputTextPart: any = {
                     type: role === 'assistant' ? 'output_text' : 'input_text',
                     text: part.text
-                });
+                };
+                if (role === 'assistant' && responsesMeta?.annotations) {
+                    outputTextPart.annotations = structuredClone(responsesMeta.annotations);
+                }
+                content.push(outputTextPart);
             }
 
             if (part.inlineData) {
@@ -629,7 +656,7 @@ export async function collectOpenAIResponsesStream(
             emitProgressUpdate();
         };
 
-        const buildOutputItems = () =>
+        const buildOutputEntries = () =>
             Array.from(outputItems.entries())
                 .sort(([leftIndex], [rightIndex]) => leftIndex - rightIndex)
                 .map(([outputIndex, item]) => {
@@ -659,9 +686,34 @@ export async function collectOpenAIResponsesStream(
                         mergedItem.summary = reasoningSummary;
                     }
 
-                    return mergedItem;
+                    return { outputIndex, item: mergedItem };
                 })
                 .filter(Boolean);
+
+        const mergeCompletedOutputItems = (completedOutput: unknown) => {
+            const streamedEntries = buildOutputEntries();
+            if (streamedEntries.length === 0) {
+                return Array.isArray(completedOutput) ? completedOutput : [];
+            }
+
+            const completedItems = Array.isArray(completedOutput) ? completedOutput : [];
+            const streamedByIndex = new Map(streamedEntries.map(entry => [entry.outputIndex, entry.item]));
+            const maxLength = Math.max(
+                completedItems.length,
+                streamedEntries.reduce((max, entry) => Math.max(max, entry.outputIndex + 1), 0),
+            );
+            return Array.from({ length: maxLength }, (_, index) => {
+                const streamedItem = streamedByIndex.get(index);
+                const completedItem = completedItems[index];
+                if (streamedItem && completedItem) {
+                    // The completed payload is authoritative when it contains
+                    // a final value; the streamed item fills fields omitted by
+                    // compatible gateways and preserves streamed annotations.
+                    return mergeResponseOutputItem(streamedItem, completedItem);
+                }
+                return completedItem || streamedItem;
+            }).filter(Boolean);
+        };
 
         const handleEvent = (event: any) => {
             const key = `${event.output_index ?? 0}:${event.summary_index ?? 0}`;
@@ -698,6 +750,21 @@ export async function collectOpenAIResponsesStream(
                         });
                         if (part && typeof event.text === 'string') {
                             part.text = event.text;
+                            emitProgressUpdate();
+                        }
+                    }
+                    return;
+                case 'response.output_text.annotation.added':
+                    if (typeof event.output_index === 'number' && typeof event.content_index === 'number' && event.annotation) {
+                        const part = ensureContentPart(event.output_index, event.content_index, { type: 'output_text' });
+                        if (part) {
+                            if (!Array.isArray(part.annotations)) {
+                                part.annotations = [];
+                            }
+                            const annotationIndex = typeof event.annotation_index === 'number'
+                                ? event.annotation_index
+                                : part.annotations.length;
+                            part.annotations[annotationIndex] = event.annotation;
                             emitProgressUpdate();
                         }
                     }
@@ -761,10 +828,7 @@ export async function collectOpenAIResponsesStream(
                 case 'response.completed':
                     completedResponse = event.response;
                     if (completedResponse) {
-                        const streamedOutputItems = buildOutputItems();
-                        if (streamedOutputItems.length > 0) {
-                            completedResponse.output = streamedOutputItems;
-                        }
+                        completedResponse.output = mergeCompletedOutputItems(completedResponse.output);
                         emitProgressUpdate();
                     }
                     return;
@@ -823,10 +887,7 @@ export async function collectOpenAIResponsesStream(
             appendDecodedText(decoder.end());
             finish(() => {
                 if (completedResponse) {
-                    const streamedOutputItems = buildOutputItems();
-                    if (streamedOutputItems.length > 0) {
-                        completedResponse.output = streamedOutputItems;
-                    }
+                    completedResponse.output = mergeCompletedOutputItems(completedResponse.output);
                     resolve(completedResponse);
                     return;
                 }

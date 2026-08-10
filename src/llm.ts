@@ -8,7 +8,7 @@ import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
-import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry } from './config';
+import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, OpenAIWebSearchConfig } from './config';
 import * as nodeExecution from './nodeExecution';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
@@ -1131,6 +1131,7 @@ function prepareHistoryForConcreteModel(contents: Message[], destinationModelId:
                     thinkingSummaries: _thinkingSummaries,
                     encryptedThinking: _encryptedThinking,
                     signature: _signature,
+                    openaiResponses: _openaiResponses,
                     ...remainingProviderMeta
                 } = providerMeta;
                 return Object.keys(remainingProviderMeta).length > 0
@@ -1961,6 +1962,39 @@ export function classifyHttpFailure(statusCode: number, body: any): { retryable:
     return { retryable: true, countable: false };
 }
 
+function buildOpenAIWebSearchTool(config: OpenAIWebSearchConfig | undefined): Record<string, any> | undefined {
+    if (config?.enabled !== true) {
+        return undefined;
+    }
+
+    const tool: Record<string, any> = { type: 'web_search' };
+    if (config.searchContextSize && ['low', 'medium', 'high'].includes(config.searchContextSize)) {
+        tool.search_context_size = config.searchContextSize;
+    }
+
+    const allowedDomains = Array.isArray(config.allowedDomains)
+        ? config.allowedDomains
+            .filter((domain): domain is string => typeof domain === 'string' && domain.trim().length > 0)
+            .map(domain => domain.trim())
+        : [];
+    if (allowedDomains.length > 0) {
+        tool.filters = { allowed_domains: allowedDomains };
+    }
+
+    if (config.userLocation && typeof config.userLocation === 'object') {
+        const userLocation: Record<string, string> = { type: 'approximate' };
+        for (const key of ['country', 'city', 'region', 'timezone'] as const) {
+            const value = config.userLocation[key];
+            if (typeof value === 'string' && value.trim().length > 0) {
+                userLocation[key] = value.trim();
+            }
+        }
+        tool.user_location = userLocation;
+    }
+
+    return tool;
+}
+
 function buildConcreteRequestPlan(options: {
     request: RequestLlmOnceOptions;
     fixedContents: Message[];
@@ -1981,6 +2015,16 @@ function buildConcreteRequestPlan(options: {
     const useOpenAIResponsesApi = openaiRequestApi === 'responses';
     const useOpenAIChatCompletionsApi = openaiRequestApi === 'chat-completions';
     const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatCompletionsApi;
+    const webSearchConfig = useOpenAIResponsesApi
+        && request.purpose !== 'compact-plan'
+        && request.purpose !== 'setup-test'
+        ? modelEntry.webSearch
+        : undefined;
+    const webSearchTool = buildOpenAIWebSearchTool(webSearchConfig);
+    const webSearchToolChoice = webSearchTool
+        && (webSearchConfig?.toolChoice === 'required' || webSearchConfig?.toolChoice === 'auto')
+        ? webSearchConfig.toolChoice
+        : 'auto';
 
     if (!baseUrl) {
         throw new Error(`Model config \`${modelKey}\` has no baseUrl`);
@@ -1998,7 +2042,7 @@ function buildConcreteRequestPlan(options: {
     let data: any;
 
     if (useOpenAIResponsesApi) {
-        messages = convertToOpenAIResponsesFormatProvider(providerContents);
+        messages = convertToOpenAIResponsesFormatProvider(providerContents, modelId);
         url = `${baseUrl}/responses`;
         headers = {
             'Content-Type': 'application/json',
@@ -2014,13 +2058,16 @@ function buildConcreteRequestPlan(options: {
             model: modelName,
             instructions: request.systemPrompt,
             input: [...messages],
-            tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
-                type: 'function',
-                name: fd.name,
-                description: fd.description,
-                parameters: fd.parameters,
-            })) : undefined,
-            tool_choice: 'auto',
+            tools: availableToolDefinitions.length > 0 || webSearchTool ? [
+                ...availableToolDefinitions.map(fd => ({
+                    type: 'function',
+                    name: fd.name,
+                    description: fd.description,
+                    parameters: fd.parameters,
+                })),
+                ...(webSearchTool ? [webSearchTool] : []),
+            ] : undefined,
+            tool_choice: webSearchToolChoice,
             parallel_tool_calls: true,
             reasoning: {
                 summary: 'auto',
@@ -2142,6 +2189,20 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
     if (plan.useOpenAIResponsesApi) {
         const outputItems = Array.isArray(resp?.output) ? resp.output : [];
         for (const item of outputItems) {
+            if (item.type === 'web_search_call') {
+                // Hosted Responses tools are completed by OpenAI inside this
+                // request. Keep the output item for same-model history replay,
+                // but never expose it as a Foxwarm function call.
+                allParts.push({
+                    providerMeta: {
+                        openaiResponses: {
+                            sourceModelId: plan.modelId,
+                            outputItem: item,
+                        },
+                    },
+                });
+                continue;
+            }
             if (item.type === 'reasoning') {
                 const summaryText = Array.isArray(item.summary)
                     ? item.summary.map((entry: any) => entry?.text || entry?.summary || '').filter(Boolean).join('\n')
@@ -2159,7 +2220,20 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
                 for (const contentPart of item.content || []) {
                     if (contentPart.type === 'output_text' && typeof contentPart.text === 'string') {
                         responseText += contentPart.text;
-                        allParts.push({ text: contentPart.text });
+                        const annotations = Array.isArray(contentPart.annotations) && contentPart.annotations.length > 0
+                            ? contentPart.annotations
+                            : undefined;
+                        allParts.push({
+                            text: contentPart.text,
+                            ...(annotations ? {
+                                providerMeta: {
+                                    openaiResponses: {
+                                        sourceModelId: plan.modelId,
+                                        annotations,
+                                    },
+                                },
+                            } : {}),
+                        });
                     } else if (contentPart.type === 'refusal' && typeof contentPart.refusal === 'string') {
                         responseText += contentPart.refusal;
                         allParts.push({ text: contentPart.refusal });
