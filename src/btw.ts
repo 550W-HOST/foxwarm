@@ -19,7 +19,7 @@ function cloneMessageArray(messages: Message[]): Message[] {
   return structuredClone(messages || []);
 }
 
-function cloneSessionForBtw(session: Session): Session {
+export function cloneSessionForBtw(session: Session): Session {
   return {
     id: session.id,
     agent: session.agent,
@@ -103,32 +103,37 @@ function formatBtwError(error: any): string {
   return `⚠️ [BTW error]\n${message}`;
 }
 
-async function appendBtwResult(sessionId: string, payloadText: string, meta: Record<string, any> = {}): Promise<string> {
-  const session = await sessionManager.getSession(sessionId);
-  const text = formatBtwPayload(payloadText);
-  await sessionManager.appendSessionMessage(session, createDisplayOnlyModelMessage(text, {
-    noticeType: 'btw',
-    ...meta,
-  }));
+export type BtwExecutionResult = {
+  payloadText: string;
+  toolDenied: boolean;
+  modelId?: string;
+  virtualModelKey?: string;
+};
 
-  if (session.broadcast) {
-    session.broadcast(text, { excludePlatforms: ['webui'] });
-  }
-
-  return text;
+export function ensureBtwPromptCacheKey(session: Session): boolean {
+  const previousPromptCacheKey = session.promptCacheKey;
+  llm.ensurePromptCacheKey(session);
+  return session.promptCacheKey !== previousPromptCacheKey;
 }
 
-export async function runBtwRequest(sessionId: string, message: string): Promise<{ text: string; toolDenied: boolean }> {
-  const sourceSession = await sessionManager.getSession(sessionId);
-  const previousPromptCacheKey = sourceSession.promptCacheKey;
-  llm.ensurePromptCacheKey(sourceSession);
-  if (sourceSession.promptCacheKey !== previousPromptCacheKey) {
-    await sessionManager.saveSession(sourceSession.id);
-  }
-  const tempSession = cloneSessionForBtw(sourceSession);
+export function buildBtwDisplayResult(result: BtwExecutionResult): { text: string; message: Message } {
+  const text = formatBtwPayload(result.payloadText);
+  const message = createDisplayOnlyModelMessage(text, {
+    noticeType: 'btw',
+    ...(result.modelId ? { modelId: result.modelId } : {}),
+    ...(result.virtualModelKey ? { virtualModelKey: result.virtualModelKey } : {}),
+  });
+  return { text, message };
+}
+
+export async function executeBtwRequest(
+  snapshot: Session,
+  message: string,
+): Promise<BtwExecutionResult> {
+  const sessionId = snapshot.id;
   const requestId = randomUUID();
   const appendToTempHistory = async (newMessage: Message) => {
-    tempSession.history.push(structuredClone(newMessage));
+    snapshot.history.push(structuredClone(newMessage));
   };
 
   let payloadText: string;
@@ -138,7 +143,7 @@ export async function runBtwRequest(sessionId: string, message: string): Promise
 
   try {
     logger.info({ sessionId, requestId }, 'BTW background request started');
-    const result = await llm.chat(buildBtwRequestParts(message), tempSession, 0, {
+    const result = await llm.chat(buildBtwRequestParts(message), snapshot, 0, {
       appendMessage: appendToTempHistory,
       notifySessionEvents: false,
       registerAbortController: false,
@@ -159,10 +164,33 @@ export async function runBtwRequest(sessionId: string, message: string): Promise
     payloadText = formatBtwError(error);
   }
 
-  const text = await appendBtwResult(sessionId, payloadText, {
+  logger.info({ sessionId, requestId, toolDenied }, 'BTW background request finished');
+  return {
+    payloadText,
+    toolDenied,
     ...(modelId ? { modelId } : {}),
     ...(virtualModelKey ? { virtualModelKey } : {}),
-  });
-  logger.info({ sessionId, requestId, toolDenied }, 'BTW background request finished');
-  return { text, toolDenied };
+  };
+}
+
+async function appendBtwResult(sessionId: string, result: BtwExecutionResult): Promise<string> {
+  const session = await sessionManager.getSession(sessionId);
+  const { text, message } = buildBtwDisplayResult(result);
+  await sessionManager.appendSessionMessage(session, message);
+
+  if (session.broadcast) {
+    session.broadcast(text, { excludePlatforms: ['webui'] });
+  }
+
+  return text;
+}
+
+export async function runBtwRequest(sessionId: string, message: string): Promise<{ text: string; toolDenied: boolean }> {
+  const sourceSession = await sessionManager.getSession(sessionId);
+  if (ensureBtwPromptCacheKey(sourceSession)) {
+    await sessionManager.saveSession(sourceSession.id);
+  }
+  const result = await executeBtwRequest(cloneSessionForBtw(sourceSession), message);
+  const text = await appendBtwResult(sessionId, result);
+  return { text, toolDenied: result.toolDenied };
 }

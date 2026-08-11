@@ -81,6 +81,41 @@ async function start(): Promise<void> {
   let writeCount = 0; let readCount = 0; let initializeCount = 0; let chatCount = 0; let failedGoal = false; let backgroundExecStarted = false;
   if (process.env.FOXWARM_TEST_MOCK_AXIOS !== '1') (llm as any).chat = async (parts: any, session: any, _iteration: number, options: any) => {
     chatCount += 1;
+    if (options?.purpose === 'btw') {
+      const requestText = Array.isArray(parts) ? parts.map((part: any) => part?.text || '').join(' ') : '';
+      const marker = requestText.includes('hold-busy') ? 'busy'
+        : requestText.includes('hold-idle') ? 'idle'
+          : requestText.includes('tool-deny') ? 'tool'
+            : requestText.includes('provider-error') ? 'error'
+              : 'normal';
+      await fs.writeJson(path.join(STATE_DIR, `btw-started-${marker}-${session.id}.json`), {
+        history: session.history,
+        promptCacheKey: session.promptCacheKey,
+        requestParts: parts,
+        purpose: options.purpose,
+        notifySessionEvents: options.notifySessionEvents,
+        registerAbortController: options.registerAbortController,
+        hasCurrentSessionEffects: !!options.currentSessionEffects,
+      });
+      if (marker === 'busy' || marker === 'idle') {
+        const releasePath = path.join(STATE_DIR, `btw-release-${marker}-${session.id}`);
+        while (!await fs.pathExists(releasePath)) await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      if (marker === 'error') throw new Error('deterministic BTW provider failure');
+      if (parts) await options.appendMessage({ role: 'user', parts });
+      if (marker === 'tool') {
+        const call = { id: 'btw-tool-denied', name: 'exec', args: { command: 'false' } };
+        await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+        return { toolCalls: [call], allParts: [{ functionCall: call }] };
+      }
+      await options.appendMessage({ role: 'model', parts: [{ text: `deterministic BTW ${marker} answer` }] });
+      return {
+        text: `deterministic BTW ${marker} answer`,
+        modelId: 'test/btw-model',
+        virtualModelKey: 'test-btw-route',
+        allParts: [{ text: `deterministic BTW ${marker} answer` }],
+      };
+    }
     if (parts) await options.appendMessage({ role: 'user', parts });
     if (process.env.FOXWARM_TEST_BACKGROUND_EXEC === '1' && !backgroundExecStarted && options?.purpose !== 'compact-plan') {
       backgroundExecStarted = true;

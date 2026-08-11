@@ -21,6 +21,7 @@ import {
   SessionRuntimeIndexResultDto,
   SessionRuntimeSnapshotResultDto,
   SessionRuntimeForkNotificationResultDto,
+  SessionRuntimeBtwResultDto,
   SessionListProjectionBatchDto,
   SessionRuntimeWorkerProjectionOptions,
   sessionRuntimeServiceDescriptor,
@@ -110,6 +111,10 @@ export async function queueEvent(
 
 export async function requestCompaction(sessionId: string, keepPercent?: number, toolNoise = false): Promise<SessionRuntimeCompactionResultDto> {
   return (await getClient()).call('requestCompaction', { sessionId, keepPercent, toolNoise: toolNoise || undefined });
+}
+
+export async function runBtw(sessionId: string, message: string): Promise<SessionRuntimeBtwResultDto> {
+  return (await getClient()).call('runBtw', { sessionId, message });
 }
 
 export async function updateSettings(

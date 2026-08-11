@@ -15,6 +15,8 @@ import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContext
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
+import { registerChannel, unregisterChannel, type Channel } from './channel';
+import { attachChannel, createChannelsStore, resetChannelsForTests, saveChannels, setChannelsStoreForTests } from './session/channels';
 
 async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -31,11 +33,11 @@ function baseSession(id: string): Session {
   } as Session;
 }
 
-function makeFixture(root: string, workerEnv: Record<string, string> = {}) {
+function makeFixture(root: string, workerEnv: Record<string, string> = {}, idleMs = 60_000) {
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
   const sourceContexts = new SessionWorkerSourceContextRegistry();
   const supervisor = new SessionWorkerSupervisor({
-    store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
+    store, idleMs, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, ...workerEnv },
     resolveExactFinalSourceContext: sourceContexts.resolve,
   });
@@ -415,6 +417,116 @@ test('tool-noise compaction is serialized behind a busy worker turn and persists
     fixture.store.close();
     sessionManager.getAllSessions().delete(sessionId);
     sessionManager.getAllSessions().delete(emptySessionId);
+    await fs.remove(root);
+  }
+});
+
+test('worker BTW snapshots a busy owner concurrently and serializes display-only publication and idle lifetime', async () => {
+  const sessionId = `mc-btw-${Date.now()}`;
+  const channelId = `btw-channel-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-btw-'));
+  const fixture = makeFixture(root, {
+    FOXWARM_TEST_HOLD_PROVIDER: '1', FOXWARM_TEST_HOLD_SESSION: sessionId,
+  }, 200);
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  const initial = baseSession(sessionId);
+  initial.promptCacheKey = `btw-cache-${sessionId}`;
+  const stub = baseSession(sessionId);
+  const sent: Array<{ conversationId: string; text: string; options: any }> = [];
+  let turn: Promise<any> | undefined;
+  let busyBtw: Promise<any> | undefined;
+  let idleBtw: Promise<any> | undefined;
+  const channel: Channel = {
+    name: channelId, platform: 'telegram', start: async () => {}, stop: async () => {}, onMessage: () => {}, sendTyping: async () => {},
+    sendMessage: async (conversationId, text, options) => { sent.push({ conversationId, text, options }); },
+  };
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(initial));
+  setChannelsStoreForTests(createChannelsStore(path.join(root, 'channels.json'))); resetChannelsForTests();
+  registerChannel(channelId, channel); attachChannel(channelId, 'btw-room', sessionId); await saveChannels();
+  try {
+    sessionManager.getAllSessions().set(sessionId, stub);
+    await fixture.supervisor.reconcileStartupOwnerships();
+    turn = fixture.ingress.submitEnsuringWorker(sessionId, {
+      type: 'user', parts: [{ text: 'busy owner input' }],
+    });
+    await waitFor(() => fs.pathExists(path.join(root, 'state', `hold-started-${sessionId}`)));
+
+    let busySettled = false;
+    busyBtw = fixture.runtime.call('runBtw', {
+      sessionId, message: 'hold-busy side question',
+    }).finally(() => { busySettled = true; });
+    const busyMarkerPath = path.join(root, 'state', `btw-started-busy-${sessionId}.json`);
+    await waitFor(() => fs.pathExists(busyMarkerPath));
+    const busyMarker = await fs.readJson(busyMarkerPath);
+    const authorityAtSnapshot = await fs.readJson(statePath);
+    assert.equal(fixture.supervisor.getStatus(sessionId)?.activeCalls, 2, 'turn and concurrent BTW RPC are both accepted active calls');
+    assert.equal(busyMarker.purpose, 'btw');
+    assert.equal(busyMarker.notifySessionEvents, false);
+    assert.equal(busyMarker.registerAbortController, false);
+    assert.equal(busyMarker.hasCurrentSessionEffects, false);
+    assert.equal(busyMarker.promptCacheKey, authorityAtSnapshot.promptCacheKey);
+    assert.equal(busyMarker.history.length, 1);
+    assert.equal(JSON.stringify(busyMarker.history).includes('busy owner input'), true);
+    assert.equal(JSON.stringify(authorityAtSnapshot.history).includes('hold-busy side question'), false,
+      'temporary BTW input never mutates the hot owner');
+
+    await fs.outputFile(path.join(root, 'state', `btw-release-busy-${sessionId}`), '1');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(busySettled, false, 'provider completion waits only for the owner serialized append lane');
+    assert.equal(JSON.stringify((await fs.readJson(statePath)).history).includes('[BTW result]'), false);
+    await fs.outputFile(path.join(root, 'state', `hold-release-${sessionId}`), '1');
+    await turn;
+    const busyResult: any = await busyBtw;
+    assert.equal(busyResult.toolDenied, false);
+    assert.match(busyResult.text, /deterministic BTW busy answer/);
+
+    const denied: any = await fixture.runtime.call('runBtw', { sessionId, message: 'tool-deny side question' });
+    const failed: any = await fixture.runtime.call('runBtw', { sessionId, message: 'provider-error side question' });
+    assert.equal(denied.toolDenied, true);
+    assert.match(denied.text, /BTW aborted/);
+    assert.equal(failed.toolDenied, false);
+    assert.match(failed.text, /BTW error/);
+    assert.match(failed.text, /deterministic BTW provider failure/);
+
+    let idleSettled = false;
+    idleBtw = fixture.runtime.call('runBtw', {
+      sessionId, message: 'hold-idle side question',
+    }).finally(() => { idleSettled = true; });
+    await waitFor(() => fs.pathExists(path.join(root, 'state', `btw-started-idle-${sessionId}.json`)));
+    await new Promise(resolve => setTimeout(resolve, 450));
+    assert.equal(idleSettled, false);
+    assert.equal(fixture.supervisor.getStatus(sessionId)?.ready, true, 'accepted BTW RPC prevents idle release while its provider is active');
+    assert.equal(fixture.supervisor.getStatus(sessionId)?.activeCalls, 1);
+    await fs.outputFile(path.join(root, 'state', `btw-release-idle-${sessionId}`), '1');
+    await idleBtw;
+
+    const authority = await fs.readJson(statePath);
+    const displayRows = authority.history.filter((message: any) => message.modelVisible === false && message.__meta?.noticeType === 'btw');
+    assert.equal(displayRows.length, 4);
+    assert.equal(displayRows.filter((message: any) => JSON.stringify(message).includes('deterministic BTW busy answer')).length, 1);
+    assert.equal(displayRows.filter((message: any) => JSON.stringify(message).includes('BTW aborted')).length, 1);
+    assert.equal(displayRows.filter((message: any) => JSON.stringify(message).includes('BTW error')).length, 1);
+    assert.equal(displayRows.filter((message: any) => JSON.stringify(message).includes('deterministic BTW idle answer')).length, 1);
+    assert.equal(authority.busy, false);
+    assert.equal(authority.queue.length, 0);
+    assert.equal(stub.history.length, 0, 'Main catalog stub never hydrates Worker authority');
+    assert.equal(sent.length, 4, 'each committed display row receives one attachment broadcast');
+    assert.ok(sent.every(item => item.conversationId === 'btw-room'
+      && item.options.excludePlatforms.includes('webui') && item.options.turnFinal === undefined));
+    const projection = fixture.supervisor.projectionRegistry.get(sessionId)?.projection;
+    assert.equal(projection?.messageCount, authority.history.length);
+    assert.equal(projection?.busy, false);
+    assert.equal(projection?.queueLength, 0);
+  } finally {
+    await fs.outputFile(path.join(root, 'state', `hold-release-${sessionId}`), '1').catch(() => {});
+    await fs.outputFile(path.join(root, 'state', `btw-release-busy-${sessionId}`), '1').catch(() => {});
+    await fs.outputFile(path.join(root, 'state', `btw-release-idle-${sessionId}`), '1').catch(() => {});
+    await Promise.allSettled([turn, busyBtw, idleBtw].filter(Boolean) as Promise<any>[]);
+    fixture.transport.close();
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    sessionManager.getAllSessions().delete(sessionId);
+    unregisterChannel(channelId); resetChannelsForTests(); setChannelsStoreForTests(null);
     await fs.remove(root);
   }
 });

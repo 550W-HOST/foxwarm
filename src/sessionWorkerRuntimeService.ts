@@ -46,12 +46,18 @@ export type SessionWorkerHistoryMutationResult = {
 export type SessionWorkerToolNoiseCompactionResult =
   | { empty: true; projection: SessionWorkerProjection }
   | { empty: false; result: ToolNoiseCompactionResult; projection: SessionWorkerProjection };
+export type SessionWorkerBtwResult = {
+  text: string;
+  toolDenied: boolean;
+  projection: SessionWorkerProjection;
+};
 
-export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 7, {
+export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 8, {
   loadProjection: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
   retry: rpcMethod<{ source?: QueueSource }, SessionWorkerProjection>(),
   dequeue: rpcMethod<Record<string, never>, SessionWorkerDequeueResult>(),
+  runBtw: rpcMethod<{ message: string }, SessionWorkerBtwResult>(),
   compactAwaited: rpcMethod<{ request: CompactionRequest }, { compacted: boolean; projection: SessionWorkerProjection }>(),
   compactToolMessages: rpcMethod<{ keepPercent?: number }, SessionWorkerToolNoiseCompactionResult>(),
   updateSettings: rpcMethod<{ patch: SessionWorkerSettingsPatch }, SessionWorkerSettingsResult>(),
@@ -101,6 +107,15 @@ export function createSessionWorkerRuntimeServiceHandler(
         throw new RpcError('SESSION_WORKER_DEQUEUE_INVALID', 'dequeue takes an empty request object.');
       }
       return host.dequeue();
+    },
+    async runBtw(input) {
+      gate.assertActive();
+      if (!input || typeof input !== 'object' || Array.isArray(input)
+        || Object.keys(input).length !== 1 || typeof input.message !== 'string' || !input.message.trim()
+        || Buffer.byteLength(input.message, 'utf8') > 1024 * 1024) {
+        throw new RpcError('SESSION_WORKER_BTW_INVALID', 'runBtw takes one non-empty bounded message string.');
+      }
+      return host.runBtw(input.message);
     },
     async setPresentationSubscription(input) {
       gate.assertActive();

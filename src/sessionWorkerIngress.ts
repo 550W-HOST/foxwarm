@@ -242,6 +242,11 @@ export class SessionWorkerIngressCoordinator {
     return this.supervisor.dequeueActivated(expected.sessionId, expected);
   }
 
+  async runBtw(requestedSessionId: string, message: string) {
+    const expected = await this.ensureWorkerOwner(requestedSessionId);
+    return this.supervisor.runBtwActivated(expected.sessionId, expected, message);
+  }
+
   async compactToolMessages(requestedSessionId: string, keepPercent?: number) {
     const expected = await this.ensureWorkerOwner(requestedSessionId);
     return this.supervisor.compactToolMessagesActivated(expected.sessionId, expected, keepPercent);

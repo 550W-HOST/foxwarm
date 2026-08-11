@@ -10,7 +10,7 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 
 ## Key exports
 
-- `sessionRuntimeServiceDescriptor` — version-5 request/event descriptor.
+- `sessionRuntimeServiceDescriptor` — version-6 request/event descriptor.
 - `createSessionRuntimeServiceHandler()` — local authoritative handler over current session-manager operations.
 - `initializeSessionRuntime()` / `shutdownSessionRuntime()` — local service lifecycle and bounded drain.
 - `listSessions()`, `getSession()`, `getHistory()` — immutable local or exact current-Worker projections/snapshots; list requests carry SQL-backed `limit`/`offset` and return a maintained total.
@@ -22,6 +22,7 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 - `enqueue()`, `queueEvent()`, `updateSettings()`, `control()` — high-level mutation commands.
 - `submitAndRun()` — closed ensure-or-spawn Worker ingress; registers one ephemeral full-source context, ensures or spawns the exact Worker owner, submits one durable mailbox item, and returns bounded committed completion.
 - `requestCompaction()` — placement-aware compaction request; local placement keeps SessionManager behavior, while an exact idle Worker uses one awaited fixed forward operation and never a mailbox item.
+- `runBtw()` — placement-neutral side request; local placement uses the BTW adapter and Worker placement ensures the exact owner and invokes its fixed runtime operation.
 - `deleteMessages()`, `clearHistory()`, `forceIndex()`, `refreshSnapshot()`, `notifyManualForkCreated()` — typed exact-owner operations used by normal command/WebUI/lifecycle paths without Main authority hydration.
 - `normalizeSessionWorkerIngressRequest()` — fixed exact-key/plain-data request and QueueItem normalizer with a 1 MiB serialized bound; only its rebuilt clone may reach coordination/storage.
 - `startEvents()`, `subscribe()` — cloned history/list/state event publication.
@@ -33,6 +34,7 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 - **Queue commands:** canonical `QueueItem` enqueue and typed background/trigger/onboot event insertion.
 - **Settings:** worker-owned model, child model, cwd, node, verbose, and compact-threshold updates use the exact Session owner; display name is a Main-owned catalog/presentation update and is never persisted through Worker authority.
 - **Controls:** stop uses the closed supervisor/Worker interrupt path. The internal `retry` action backing public Continue ensures the exact Worker owner and runs the canonical continuation turn (`parts:null`) directly inside that owner, with an optional serialized QueueSource registered against the live Main channel context for ordinary final-delivery parity; it creates no second queue/mailbox intent, and the exact runner rejects completed/waiting history before claiming busy. For the current call, only transport unavailable/send-failed/closed loss is normalized to `SESSION_WORKER_RETRY_OUTCOME_UNKNOWN`: continuation may already be committed/delivered, so callers warn and require a history check rather than claiming failure or running it automatically again. Serialized handler `RPC_CANCELLED` and `RPC_DEADLINE_EXCEEDED` remain definite; the call does not currently supply a caller signal or deadline. Dequeue ensures the exact Worker and invokes its typed stop-then-run control: busy signaling bypasses the serialized tail, pending durable ingress joins at the stop-override safe point, and idle queued work uses the canonical runner. Local placement retains the same result shape and semantics.
+- **BTW:** validates one bounded message and routes it to the local adapter or exact Worker owner. The Worker snapshot/provider/display ordering is canonical in [D-process-topology-btw-side-request](../threads/process-topology-and-rpc.md#d-process-topology-btw-side-request).
 - **Events:** ordered history, list, and targeted state updates cloned from session-manager callbacks; Worker-aware state events always overlay the exact current projection rather than emitting stale semantic fields from the Main stub.
 
 ## Behavior and invariants

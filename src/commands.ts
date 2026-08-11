@@ -9,7 +9,7 @@ import * as tools from './tools';
 import { APP_CONFIG_PATH, getDefaultChannelIdByType, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import { buildSessionStatusInfo, formatSessionStatus } from './sessionStatus';
-import { BTW_USAGE, runBtwRequest } from './btw';
+import { BTW_USAGE } from './btw';
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from './weixin/api';
 import { ensureNodePairingToken } from './nodes/bootstrapInfo';
 import { getChannelRuntimeStatus, restartManagedChannel } from './channelRuntime';
@@ -79,11 +79,7 @@ export const COMMANDS: Record<string, CommandDef> = {
         ctx.reply(BTW_USAGE)
         return
       }
-      if (sessionRuntime.getSessionRuntimeStatus().placement === 'worker') {
-        ctx.reply('⚠️ `/btw` is not available while Session-worker placement is enabled.')
-        return
-      }
-      void runBtwRequest(sessionId, message).catch((err: any) => {
+      void sessionRuntime.runBtw(sessionId, message).catch((err: any) => {
         logger.error({ err, sessionId }, 'BTW background request failed')
       })
       ctx.reply('📝 BTW request started. I’ll post the result here when it finishes.')

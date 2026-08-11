@@ -758,6 +758,71 @@ test('dequeue during post-tool ingestion leaves new rows for the same outer acti
   }
 });
 
+test('idle worker BTW snapshots exact owner state, persists cache lineage, and appends one display-only result per outcome', async () => {
+  const initial = baseSession('worker-btw-idle');
+  initial.history = [{ role: 'user', parts: [{ text: 'immutable owner prefix' }] }];
+  initial.nextMessageSeq = 2;
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  let executeToolsCalled = false;
+  let readDurable!: () => Record<string, any>;
+  let hotOwner!: Session;
+  let calls = 0;
+  const deliveries: Array<{ source: any; text: string }> = [];
+  (llm as any).executeTools = async () => { executeToolsCalled = true; throw new Error('BTW must not execute tools'); };
+  (llm as any).chat = async (parts: any, snapshot: Session, _iteration: number, options: any) => {
+    calls += 1;
+    assert.notEqual(snapshot, hotOwner);
+    assert.deepEqual(snapshot.history, hotOwner.history);
+    assert.equal(snapshot.promptCacheKey, hotOwner.promptCacheKey);
+    assert.equal(readDurable().promptCacheKey, snapshot.promptCacheKey, 'legacy prompt-cache identity is durable before the snapshot provider starts');
+    assert.equal(options.purpose, 'btw');
+    assert.equal(options.notifySessionEvents, false);
+    assert.equal(options.registerAbortController, false);
+    snapshot.history[0].parts[0].text = 'mutated detached prefix';
+    assert.equal(hotOwner.history[0].parts[0].text, 'immutable owner prefix');
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    if (calls === 2) {
+      const call = { id: 'btw-denied', name: 'exec', args: { command: 'false' } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+      return { toolCalls: [call], allParts: [{ functionCall: call }] };
+    }
+    if (calls === 3) throw new Error('idle BTW provider failed');
+    await options.appendMessage({ role: 'model', parts: [{ text: 'idle BTW answer' }] });
+    return { text: 'idle BTW answer', modelId: 'provider/model', virtualModelKey: 'route', allParts: [{ text: 'idle BTW answer' }] };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, session, readDurable: read }) => {
+      hotOwner = session; readDurable = read;
+      const success = await host.runBtw('idle success');
+      const denied = await host.runBtw('idle denied');
+      const failed = await host.runBtw('idle error');
+      assert.equal(success.toolDenied, false);
+      assert.equal(denied.toolDenied, true);
+      assert.equal(failed.toolDenied, false);
+      assert.equal(executeToolsCalled, false);
+      const durable = read();
+      assert.equal(durable.history.length, 4);
+      assert.equal(durable.history[0].parts[0].text, 'immutable owner prefix');
+      assert.ok(durable.history.slice(1).every((message: any) => message.modelVisible === false && message.__meta.noticeType === 'btw'));
+      assert.equal(durable.history[1].__meta.modelId, 'provider/model');
+      assert.equal(durable.history[1].__meta.virtualModelKey, 'route');
+      assert.match(durable.history[1].parts[0].text, /idle BTW answer/);
+      assert.match(durable.history[2].parts[0].text, /BTW aborted/);
+      assert.match(durable.history[2].parts[0].text, /`exec`/);
+      assert.match(durable.history[3].parts[0].text, /BTW error/);
+      assert.match(durable.history[3].parts[0].text, /idle BTW provider failed/);
+      assert.equal(success.projection.messageCount, 2);
+      assert.equal(failed.projection.messageCount, 4);
+      assert.equal(deliveries.length, 3);
+      assert.ok(deliveries.every(item => item.source.platform === 'btw' && item.source.channelUserId === 'btw'));
+    }, false, undefined, undefined, async (source, text) => { deliveries.push({ source, text }); });
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+  }
+});
+
 test('bound worker host closes reminders, awaits automatic compaction, and rejects background commits', async () => {
   const compactSession = baseSession('exact-worker-compact'); compactSession.compactThresholdTokens = 10;
   await withLocalHost(compactSession, async ({ turnHost, session, readDurable }) => {

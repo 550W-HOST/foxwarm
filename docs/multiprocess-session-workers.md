@@ -39,6 +39,7 @@ The implementation has a substantial real-child foundation, but Session-worker p
 | Turn execution | `SessionWorkerHost` invokes the same `SessionTurnRunner` used by local placement. There is no reduced Worker-only turn state machine. |
 | Publication | Full bounded committed projections are awaited after authoritative writes. There is no persisted `stateRevision`. |
 | History and compaction | Detached authoritative history reads, synchronous awaited layered compaction, and serialized exact-owner `/compact tools` rewriting are implemented and tested. Background compact jobs remain unsupported. |
+| BTW side requests | `/btw` snapshots the exact owner and runs provider work without tools, streams, or turn abort registration. Busy Worker provider work may overlap the active turn; one display-only result append/persist/projection waits for the owner lane and then broadcasts through Main's existing attachment path. |
 | Final delivery | Main-owned committed-final delivery carries a serialized QueueSource and makes one delivery attempt after commit/publication. There is no outbox or automatic retry. |
 | Tool placement | Fixed Main reverse services cover management, Node execution, file delivery, final delivery, MCP, vector, and publication. Cross-session recall/archive reads, Main-owned agent/session creation, and node bootstrap/pairing now use the exact-source-fenced Main-management facade; current-session/current-agent recall remains Worker-owned. Identity conversion/move and agent-wide inheritance/isolation changes remain pre-effect fenced. |
 | Normal ingress | `MessageRouter` routes ordinary busy/idle channel/WebUI input through the closed ensure/spawn/append/run ingress operation (`submitEnsuringWorker`), and all Main-side enqueue producers share the same durable boundary. Exact fenced stop, dequeue, and canonical retry use closed exact-owner operations. Dequeue signals an active owner immediately and continues pending durable input through the same action loop; retry creates no mailbox item or second queue and rejects active overlap. Managed sessions remain unavailable. |
@@ -74,6 +75,7 @@ Keep Session workers off for observation deployments that may need to return to 
 - The Worker owns hot Session state, provider/tool loop work, the local archive/journal handles, and its process-local `ExecRuntime`.
 - Main does not receive full history, prompt serialization, mutable Session references, callbacks, or tool output through a generic payload broker.
 - Safe-point layered compaction is synchronous and reuses the existing history engine. `/compact tools` is a separate serialized exact-owner history rewrite. Neither creates a compact mailbox item or a background compact state machine.
+- BTW uses the same provider/tool schema against a detached exact snapshot, suppresses stream/abort hooks, denies returned tool calls, and serializes only its final display-only append. It has no mailbox item or pending-result protocol.
 
 ### Main-owned services
 

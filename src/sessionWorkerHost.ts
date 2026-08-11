@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { buildBtwDisplayResult, cloneSessionForBtw, ensureBtwPromptCacheKey, executeBtwRequest } from './btw';
 import { logger } from './common';
 import { STATE_DIR, getAgentDir } from './config';
 import { createExecRuntime, type ExecRuntime } from './execManager';
@@ -25,7 +26,7 @@ import type { SessionWorkerIdentity } from './sessionWorkerControlService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
 import { isQueueItem, type CompactionRequest, type Message, type QueueItem, type QueueSource, type Session, type SessionStreamEvent } from './types';
 import { buildTimestampedSystemMessageParts } from './utils/systemMessageParts';
-import type { SessionWorkerDequeueResult, SessionWorkerHistoryMutationResult, SessionWorkerSettings, SessionWorkerSettingsPatch, SessionWorkerSettingsResult, SessionWorkerToolNoiseCompactionResult } from './sessionWorkerRuntimeService';
+import type { SessionWorkerBtwResult, SessionWorkerDequeueResult, SessionWorkerHistoryMutationResult, SessionWorkerSettings, SessionWorkerSettingsPatch, SessionWorkerSettingsResult, SessionWorkerToolNoiseCompactionResult } from './sessionWorkerRuntimeService';
 
 export type SessionWorkerHostDependencies = {
   persistence?: SessionWorkerPersistenceDependencies;
@@ -148,6 +149,57 @@ export class SessionWorkerHost {
         throw error;
       }
     });
+  }
+
+  async runBtw(message: string): Promise<SessionWorkerBtwResult> {
+    await this.ensureLoaded();
+    await this.ensureHealthy();
+
+    // A normal active turn establishes its prompt-cache lineage before the
+    // provider call. Legacy idle owners may still lack one; serialize its
+    // first creation and persistence before taking the detached snapshot.
+    const snapshot = this.session!.promptCacheKey
+      ? cloneSessionForBtw(this.session!)
+      : await this.serialize(async () => {
+        await this.ensureHealthy(); await this.fenceMutation();
+        if (ensureBtwPromptCacheKey(this.session!)) await this.persistOwner();
+        return cloneSessionForBtw(this.session!);
+      });
+
+    // Provider work touches only the detached snapshot. In particular, it is
+    // deliberately outside runTail so a BTW request can overlap a busy owner;
+    // the supervisor's accepted-call count keeps the worker alive meanwhile.
+    const result = await executeBtwRequest(snapshot, message);
+    const committed = await this.serialize(async () => {
+      await this.ensureHealthy(); await this.fenceMutation();
+      const owner = this.session!;
+      const before = captureSessionSemanticState(owner);
+      const display = buildBtwDisplayResult(result);
+      try {
+        await appendSessionMessagesForSession(owner, [display.message], () => this.persistOwner(), () => {});
+        this.forwardAppendedMessages([display.message]);
+        return { text: display.text, projection: buildSessionWorkerProjection(owner) };
+      } catch (error) {
+        if (!this.isResyncError(error)) restoreSessionSemanticState(owner, before);
+        throw error;
+      }
+    });
+
+    // Existing intermediate delivery is the attachment-broadcast facade: it
+    // excludes WebUI, whose display-only row arrived through presentation or
+    // the committed projection. The source is deliberately transport-neutral
+    // because BTW broadcasts to attachments rather than replying to one turn.
+    if (this.dependencies.deliverIntermediateText) {
+      try {
+        await this.dependencies.deliverIntermediateText(
+          { platform: 'btw', channelUserId: 'btw' },
+          committed.text,
+        );
+      } catch (error) {
+        logger.error({ err: error, sessionId: this.identity.sessionId }, 'BTW attachment broadcast failed');
+      }
+    }
+    return { ...committed, toolDenied: result.toolDenied };
   }
 
   async updateSettings(patch: SessionWorkerSettingsPatch): Promise<SessionWorkerSettingsResult> {

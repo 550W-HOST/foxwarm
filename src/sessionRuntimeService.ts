@@ -20,6 +20,7 @@ import { normalizeSessionWorkerIngressRequest } from './sessionWorkerIngress';
 import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
 import { sessionCatalogStore } from './session/catalogStore';
+import { runBtwRequest } from './btw';
 
 export type SessionRuntimeTokenTotalsDto = {
   cachedTokens: number;
@@ -102,6 +103,7 @@ export type SessionRuntimeSnapshotResultDto = {
 export type SessionRuntimeForkNotificationResultDto = {
   result: 'appended' | 'queued';
 };
+export type SessionRuntimeBtwResultDto = { text: string; toolDenied: boolean };
 
 export type SessionRuntimeControlAction = 'stop' | 'dequeue' | 'retry';
 export type SessionRuntimeControlResultDto = {
@@ -129,7 +131,7 @@ export type SessionListProjectionBatchDto = {
   revision: string;
 };
 
-export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 5, {
+export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 6, {
   getSession: rpcMethod<{ sessionId: string }, { session: SessionRuntimeSessionDto | null }>(),
   listSessions: rpcMethod<{ limit?: number; offset?: number }, { sessions: SessionRuntimeSessionDto[]; total: number }>(),
   getSessionListProjections: rpcMethod<{ sessionIds: string[]; includeVolatile?: boolean; currentOwnersOnly?: boolean }, SessionListProjectionBatchDto>(),
@@ -137,6 +139,7 @@ export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime
   enqueue: rpcMethod<{ sessionId: string; item: QueueItem }, { accepted: true }>(),
   submitAndRun: rpcMethod<{ sessionId: string; item: QueueItem }, SessionWorkerIngressResult>(),
   requestCompaction: rpcMethod<{ sessionId: string; keepPercent?: number; toolNoise?: boolean }, SessionRuntimeCompactionResultDto>(),
+  runBtw: rpcMethod<{ sessionId: string; message: string }, SessionRuntimeBtwResultDto>(),
   queueEvent: rpcMethod<{
     sessionId: string;
     text: string;
@@ -562,6 +565,20 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         return { kind: 'tool-noise', result: await sessionManager.compactSessionToolMessages(selection.canonicalId, input.keepPercent) };
       }
       return { kind: 'local', ...await sessionManager.requestSessionCompaction(selection.canonicalId, { keepPercent: input.keepPercent }) };
+    },
+    async runBtw(input) {
+      const requestedId = normalizeSessionId(input.sessionId);
+      if (typeof input.message !== 'string' || !input.message.trim()
+        || Buffer.byteLength(input.message, 'utf8') > 1024 * 1024) {
+        throw new RpcError('SESSION_RUNTIME_INVALID_BTW', 'BTW message must be a non-empty bounded string.');
+      }
+      if (options?.worker) {
+        const selection = await ensureWorkerSelection(requestedId);
+        if (!options.worker.ingress) throw new RpcError('SESSION_WORKER_BTW_UNAVAILABLE', 'Session-worker BTW is unavailable.', true);
+        const result = await options.worker.ingress.runBtw(selection.canonicalId, input.message);
+        return { text: result.text, toolDenied: result.toolDenied };
+      }
+      return runBtwRequest(requestedId, input.message);
     },
     async queueEvent(input) {
       const sessionId = normalizeSessionId(input.sessionId);
