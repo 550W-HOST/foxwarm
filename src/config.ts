@@ -112,6 +112,7 @@ export type AsrServiceConfig = {
 export const DEFAULT_SESSION_WORKER_IDLE_SECONDS = 60;
 export const MIN_SESSION_WORKER_IDLE_SECONDS = 1;
 export const MAX_SESSION_WORKER_IDLE_SECONDS = 86_400;
+export const DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS = 24;
 
 export type SessionWorkersConfig = boolean | {
   enabled?: boolean;
@@ -121,6 +122,16 @@ export type SessionWorkersConfig = boolean | {
 export type NormalizedSessionWorkersConfig = {
   enabled: boolean;
   idleSeconds: number;
+};
+
+export type VectorMaintenanceConfig = {
+  enabled?: boolean;
+  retentionHours?: number;
+};
+
+export type NormalizedVectorMaintenanceConfig = {
+  enabled: boolean;
+  retentionHours: number;
 };
 
 export function normalizeSessionWorkersConfig(value: unknown): NormalizedSessionWorkersConfig {
@@ -171,9 +182,38 @@ export function normalizeDbWorkersEnabled(value: unknown): boolean {
   return value;
 }
 
+export function normalizeVectorMaintenanceConfig(value: unknown): NormalizedVectorMaintenanceConfig {
+  if (value === undefined) {
+    return { enabled: true, retentionHours: DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS };
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('app config `vectorMaintenance` must be an object.');
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    throw new Error('app config `vectorMaintenance.enabled` must be a boolean.');
+  }
+  const retentionHours = raw.retentionHours === undefined
+    ? DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS
+    : raw.retentionHours;
+  if (typeof retentionHours !== 'number') {
+    throw new Error('app config `vectorMaintenance.retentionHours` must be a number.');
+  }
+  if (!Number.isInteger(retentionHours) || retentionHours < 1) {
+    throw new Error('app config `vectorMaintenance.retentionHours` must be a positive integer.');
+  }
+
+  return {
+    enabled: raw.enabled !== false,
+    retentionHours,
+  };
+}
+
 export type AppConfig = {
   sessionWorkers?: SessionWorkersConfig;
   dbWorkers?: boolean;
+  vectorMaintenance?: VectorMaintenanceConfig;
   bot?: {
     name?: string;
     enableWebUI?: boolean;
@@ -352,6 +392,7 @@ export const SESSION_WORKERS_CONFIG = normalizeSessionWorkersConfig(APP_CONFIG.s
 export const SESSION_WORKERS_ENABLED = SESSION_WORKERS_CONFIG.enabled;
 export const SESSION_WORKER_IDLE_SECONDS = SESSION_WORKERS_CONFIG.idleSeconds;
 export const DB_WORKERS_ENABLED = normalizeDbWorkersEnabled(APP_CONFIG.dbWorkers);
+export const VECTOR_MAINTENANCE_CONFIG = normalizeVectorMaintenanceConfig(APP_CONFIG.vectorMaintenance);
 export const BOT_NAME = APP_CONFIG.bot?.name || 'foxwarm';
 export const ENABLE_TUI = APP_CONFIG.bot?.enableTUI === true || process.argv.includes('--tui');
 export const TELEGRAM_CONFIG: TelegramConfig = (getDefaultChannelConfigByType<TelegramConfig>('telegram', APP_CONFIG)?.config || {}) as TelegramConfig;

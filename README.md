@@ -230,7 +230,15 @@ bot:
   enableTrigger: true
 llm:
   ollamaBaseUrl: http://localhost:11434
+vectorMaintenance:
+  enabled: true
+  retentionHours: 24
 ```
+
+LanceDB maintenance is enabled by default. It compacts fragmented vector data
+and removes table versions older than the configured positive whole-hour
+retention window; the default is 24 hours. Set `vectorMaintenance.enabled` to
+`false` to disable it. These settings are read at process startup.
 
 ## Models (`state/models.yaml`)
 

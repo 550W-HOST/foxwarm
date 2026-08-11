@@ -9,6 +9,7 @@ import {
   loadModelsConfigFromObject,
   normalizeDbWorkersEnabled,
   normalizeSessionWorkersConfig,
+  normalizeVectorMaintenanceConfig,
 } from './config';
 
 export type ProviderSetupDraft = {
@@ -85,6 +86,7 @@ export function validateAppConfigYaml(rawYaml: string): AppConfig {
   }
   normalizeSessionWorkersConfig(config.sessionWorkers);
   normalizeDbWorkersEnabled(config.dbWorkers);
+  normalizeVectorMaintenanceConfig(config.vectorMaintenance);
   return config;
 }
 

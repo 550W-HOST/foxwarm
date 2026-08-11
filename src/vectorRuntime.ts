@@ -3,8 +3,13 @@ import fs from 'fs-extra';
 import path from 'path';
 import { Message } from './types';
 import { estimateTokenCount } from './tokenCount';
-import { DB_DIR, OLLAMA_BASE_URL, SESSION_LOGS_DIR } from './config';
+import { DB_DIR, OLLAMA_BASE_URL, SESSION_LOGS_DIR, VECTOR_MAINTENANCE_CONFIG } from './config';
 import { logger } from './common';
+import {
+    FairTableOperationGate,
+    VectorMaintenanceCoordinator,
+    VectorMaintenanceTrigger,
+} from './vectorMaintenance';
 import { formatMessageText } from './utils/messageFormat';
 import { isModelVisibleMessage } from './session/messageVisibility';
 import type { ExtractedMemoryFact, MemoryFactAttribution, MemoryFactKind } from './session/compactPlan';
@@ -39,12 +44,22 @@ const SEGMENT_OVERLAP_MAX_MESSAGE_TOKENS = 400;
 const ARCHIVE_INDEX_MIN_PENDING_MESSAGES = 50;
 const ARCHIVE_INDEX_MIN_PENDING_TOKENS = 8000;
 const RAW_REBUILD_BATCH_SEGMENT_LIMIT = Math.max(1, Number(process.env.FOXWARM_VECTOR_RAW_REBUILD_BATCH_SEGMENTS || 16));
+const VECTOR_MAINTENANCE_MUTATION_CHECK_EVERY = 128;
+const VECTOR_MAINTENANCE_MAX_OLD_VERSIONS = 512;
+const VECTOR_MAINTENANCE_MAX_SMALL_FRAGMENTS = 256;
+const VECTOR_MAINTENANCE_DELAY_MS = 60_000;
+const VECTOR_MAINTENANCE_PERIODIC_MS = 24 * 60 * 60_000;
+const VECTOR_MAINTENANCE_RETRY_MS = 60 * 60_000;
 
 let connection: any;
 let table: any;
 const indexingChains = new Map<string, Promise<number>>();
 const archiveIndexBatchStates = new Map<string, SessionArchiveBatchState>();
 let startupBackfillPromise: Promise<void> | null = null;
+let startupWorkCompleted = false;
+let shuttingDown = false;
+let tableOperationGate = new FairTableOperationGate();
+let maintenanceCoordinator: VectorMaintenanceCoordinator | undefined;
 
 type VectorRow = {
     id: string;
@@ -163,6 +178,102 @@ type ArchiveIndexBatchDecision = {
     pendingEstimatedTokens: number;
     reason?: 'message-threshold' | 'token-threshold' | 'block-pending';
 };
+
+type VectorTableMaintenanceSnapshot = {
+    versionCount: number;
+    oldVersionCount: number;
+    numRows: number;
+    totalBytes: number;
+    numFragments: number;
+    numSmallFragments: number;
+};
+
+async function readVectorTableMaintenanceSnapshot(cleanupOlderThan: Date): Promise<VectorTableMaintenanceSnapshot> {
+    const [stats, versions] = await Promise.all([
+        table.stats(),
+        table.listVersions(),
+    ]);
+    return {
+        versionCount: versions.length,
+        oldVersionCount: versions.filter((version: any) => (
+            new Date(version.timestamp).getTime() < cleanupOlderThan.getTime()
+        )).length,
+        numRows: Number(stats.numRows) || 0,
+        totalBytes: Number(stats.totalBytes) || 0,
+        numFragments: Number(stats.fragmentStats?.numFragments) || 0,
+        numSmallFragments: Number(stats.fragmentStats?.numSmallFragments) || 0,
+    };
+}
+
+async function runVectorMaintenanceCheck(triggers: VectorMaintenanceTrigger[]): Promise<void> {
+    await tableOperationGate.runExclusive(async () => {
+        if (!table || shuttingDown) {
+            return;
+        }
+        const startedAt = Date.now();
+        const cleanupOlderThan = new Date(
+            startedAt - (VECTOR_MAINTENANCE_CONFIG.retentionHours * 60 * 60_000),
+        );
+        const before = await readVectorTableMaintenanceSnapshot(cleanupOlderThan);
+        const shouldOptimize = before.numSmallFragments >= VECTOR_MAINTENANCE_MAX_SMALL_FRAGMENTS
+            || before.oldVersionCount >= VECTOR_MAINTENANCE_MAX_OLD_VERSIONS
+            || (triggers.includes('periodic') && before.oldVersionCount > 0);
+        if (!shouldOptimize) {
+            logger.debug({ triggers, ...before }, 'LanceDB maintenance check skipped below thresholds');
+            return;
+        }
+
+        logger.info({
+            triggers,
+            retentionHours: VECTOR_MAINTENANCE_CONFIG.retentionHours,
+            cleanupOlderThan: cleanupOlderThan.toISOString(),
+            ...before,
+        }, 'Starting LanceDB maintenance');
+
+        try {
+            const result = await table.optimize({ cleanupOlderThan });
+            const after = await readVectorTableMaintenanceSnapshot(cleanupOlderThan);
+            logger.info({
+                triggers,
+                retentionHours: VECTOR_MAINTENANCE_CONFIG.retentionHours,
+                durationMs: Date.now() - startedAt,
+                before,
+                after,
+                compaction: result.compaction,
+                prune: result.prune,
+            }, 'Completed LanceDB maintenance');
+        } catch (error) {
+            logger.warn({
+                err: error,
+                triggers,
+                retentionHours: VECTOR_MAINTENANCE_CONFIG.retentionHours,
+                durationMs: Date.now() - startedAt,
+                before,
+            }, 'LanceDB maintenance failed');
+            throw error;
+        }
+    });
+}
+
+function createMaintenanceCoordinator(): VectorMaintenanceCoordinator {
+    return new VectorMaintenanceCoordinator({
+        enabled: VECTOR_MAINTENANCE_CONFIG.enabled,
+        mutationCheckEvery: VECTOR_MAINTENANCE_MUTATION_CHECK_EVERY,
+        delayMs: VECTOR_MAINTENANCE_DELAY_MS,
+        periodicMs: VECTOR_MAINTENANCE_PERIODIC_MS,
+        retryMs: VECTOR_MAINTENANCE_RETRY_MS,
+        runCheck: runVectorMaintenanceCheck,
+        onError: (error, triggers) => {
+            logger.warn({ err: error, triggers, retryMs: VECTOR_MAINTENANCE_RETRY_MS }, 'Scheduled LanceDB maintenance check will retry');
+        },
+    });
+}
+
+async function runTableMutation<T>(run: () => Promise<T>): Promise<T> {
+    const result = await run();
+    maintenanceCoordinator?.recordMutation();
+    return result;
+}
 
 function escapeFilterValue(value: string): string {
     return value.replace(/'/g, "''");
@@ -630,31 +741,33 @@ async function indexMemoryFactsFromCompaction(input: CompactMemoryFactIndexInput
     if (rows.length === 0) {
         return 0;
     }
-    if (!table) {
-        throw new Error('Vector table is not initialized.');
-    }
+    return tableOperationGate.runRegular(async () => {
+        if (!table) {
+            throw new Error('Vector table is not initialized.');
+        }
 
-    const hydratedRows: VectorRow[] = [];
-    for (const row of rows) {
-        const vector = await getEmbedding(row.chunk_text);
-        hydratedRows.push({ ...row, vector });
-    }
+        const hydratedRows: VectorRow[] = [];
+        for (const row of rows) {
+            const vector = await getEmbedding(row.chunk_text);
+            hydratedRows.push({ ...row, vector });
+        }
 
-    for (const row of hydratedRows) {
-        await table.delete(`id = '${escapeFilterValue(row.id)}'`);
-    }
-    await table.add(hydratedRows);
+        for (const row of hydratedRows) {
+            await runTableMutation(() => table.delete(`id = '${escapeFilterValue(row.id)}'`));
+        }
+        await runTableMutation(() => table.add(hydratedRows));
 
-    logger.info({
-        sessionId: input.sessionId,
-        factCount: hydratedRows.length,
-        sourceStartSeq: input.sourceStartSeq,
-        sourceEndSeq: input.sourceEndSeq,
-        blockId: input.blockId,
-        blockLevel: input.blockLevel,
-    }, 'Indexed compact memory facts');
+        logger.info({
+            sessionId: input.sessionId,
+            factCount: hydratedRows.length,
+            sourceStartSeq: input.sourceStartSeq,
+            sourceEndSeq: input.sourceEndSeq,
+            blockId: input.blockId,
+            blockLevel: input.blockLevel,
+        }, 'Indexed compact memory facts');
 
-    return hydratedRows.length;
+        return hydratedRows.length;
+    });
 }
 
 async function getEmbedding(text: string) {
@@ -727,8 +840,15 @@ async function setSessionArchiveCheckpoint(sessionId: string, checkpoint: { last
 }
 
 function startStartupArchiveVectorBackfill(): Promise<void> {
+    if (startupWorkCompleted) {
+        return Promise.resolve();
+    }
     if (!startupBackfillPromise) {
-        startupBackfillPromise = runStartupArchiveVectorBackfill().finally(() => {
+        startupBackfillPromise = (async () => {
+            await maintenanceCoordinator?.runStartupCheck();
+            await runStartupArchiveVectorBackfill();
+            startupWorkCompleted = true;
+        })().finally(() => {
             startupBackfillPromise = null;
         });
     }
@@ -865,7 +985,7 @@ async function replaceIndexedArchiveTail(sessionId: string, rewindStartSeq: numb
         };
     }
 
-    await table.delete(`session_id = '${escapeFilterValue(sessionId)}' AND memory_kind = 'raw' AND start_seq >= ${rewindStartSeq}`);
+    await runTableMutation(() => table.delete(`session_id = '${escapeFilterValue(sessionId)}' AND memory_kind = 'raw' AND start_seq >= ${rewindStartSeq}`));
 
     const segments = buildArchiveSegments(targetLines);
     const segmentRows = segments.map(segment => ({
@@ -895,7 +1015,7 @@ async function replaceIndexedArchiveTail(sessionId: string, rewindStartSeq: numb
         }
 
         if (hydratedRows.length > 0) {
-            await table.add(hydratedRows);
+            await runTableMutation(() => table.add(hydratedRows));
         }
 
         processedSegments += batchEntries.length;
@@ -971,9 +1091,9 @@ async function appendIndexedBlocks(_sessionId: string, lastIndexedBlockId: numbe
         // after the Lance commit but before the SQLite checkpoint cannot
         // duplicate rows when startup backfill retries the same block.
         for (const row of hydratedRows) {
-            await table.delete(`id = '${escapeFilterValue(row.id)}'`);
+            await runTableMutation(() => table.delete(`id = '${escapeFilterValue(row.id)}'`));
         }
-        await table.add(hydratedRows);
+        await runTableMutation(() => table.add(hydratedRows));
     }
 
     return {
@@ -983,7 +1103,7 @@ async function appendIndexedBlocks(_sessionId: string, lastIndexedBlockId: numbe
     };
 }
 
-async function indexSessionArchiveInternal(sessionId: string, latestSeqHint?: number, latestBlockIdHint?: number): Promise<number> {
+async function indexSessionArchiveUnderLease(sessionId: string, latestSeqHint?: number, latestBlockIdHint?: number): Promise<number> {
     const checkpoint = getSessionArchiveCheckpoint(sessionId);
     const lastIndexedSeq = checkpoint.lastIndexedSeq;
     const lastIndexedBlockId = checkpoint.lastIndexedBlockId;
@@ -1106,6 +1226,12 @@ async function indexSessionArchiveInternal(sessionId: string, latestSeqHint?: nu
     });
 
     return nextLastIndexedSeq;
+}
+
+async function indexSessionArchiveInternal(sessionId: string, latestSeqHint?: number, latestBlockIdHint?: number): Promise<number> {
+    return tableOperationGate.runRegular(
+        () => indexSessionArchiveUnderLease(sessionId, latestSeqHint, latestBlockIdHint),
+    );
 }
 
 function queueArchiveIndexRun(sessionId: string, targetLatestSeqHint?: number, targetLatestBlockIdHint?: number): Promise<number> {
@@ -1538,6 +1664,10 @@ async function clipResultToLineageBoundary(result: any, options?: SearchOptions)
 
 async function search(query: string, limit = 5, format = true, options?: SearchOptions) {
     const vector = await getEmbedding(query);
+    return tableOperationGate.runRegular(() => searchWithVector(vector, limit, format, options));
+}
+
+async function searchWithVector(vector: number[], limit = 5, format = true, options?: SearchOptions) {
     const results: any[] = [];
     const candidateLimit = options?.includeRegex || options?.excludeRegex || options?.preferBlocks
         ? Math.max(getMemorySearchCandidateCount(limit) * 2, 40)
@@ -1623,6 +1753,10 @@ async function search(query: string, limit = 5, format = true, options?: SearchO
 }
 
 async function getContextAround(timestamp: number, limit = 10) {
+    return tableOperationGate.runRegular(() => getContextAroundUnderLease(timestamp, limit));
+}
+
+async function getContextAroundUnderLease(timestamp: number, limit = 10) {
     const ts = Number(timestamp);
     const lower = ts - 1800000;
     const upper = ts + 1800000;
@@ -1674,6 +1808,9 @@ async function init() {
     if (table) {
         return;
     }
+    shuttingDown = false;
+    startupWorkCompleted = false;
+    tableOperationGate = new FairTableOperationGate();
     await fs.ensureDir(DB_PATH);
     await fs.ensureDir(SESSION_LOGS_DIR);
     await initArchiveStore();
@@ -1718,12 +1855,17 @@ async function init() {
         }
     }
 
+    maintenanceCoordinator = createMaintenanceCoordinator();
+    maintenanceCoordinator.start();
+
     void startStartupArchiveVectorBackfill().catch((err) => {
         logger.error({ err }, 'Startup archive vector backfill failed');
     });
 }
 
 async function shutdown(): Promise<void> {
+    shuttingDown = true;
+    await maintenanceCoordinator?.shutdown();
     const activeWork = [
         ...(startupBackfillPromise ? [startupBackfillPromise] : []),
         ...indexingChains.values(),
@@ -1741,6 +1883,8 @@ async function shutdown(): Promise<void> {
     indexingChains.clear();
     archiveIndexBatchStates.clear();
     startupBackfillPromise = null;
+    startupWorkCompleted = false;
+    maintenanceCoordinator = undefined;
 }
 
 // Compatibility wrapper during migration away from history-based indexing.
