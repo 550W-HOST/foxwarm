@@ -275,6 +275,17 @@ async function runTableMutation<T>(run: () => Promise<T>): Promise<T> {
     return result;
 }
 
+async function upsertVectorRowsById(rows: VectorRow[]): Promise<void> {
+    if (rows.length === 0) {
+        return;
+    }
+    await runTableMutation(() => table
+        .mergeInsert('id')
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute(rows));
+}
+
 function escapeFilterValue(value: string): string {
     return value.replace(/'/g, "''");
 }
@@ -752,10 +763,7 @@ async function indexMemoryFactsFromCompaction(input: CompactMemoryFactIndexInput
             hydratedRows.push({ ...row, vector });
         }
 
-        for (const row of hydratedRows) {
-            await runTableMutation(() => table.delete(`id = '${escapeFilterValue(row.id)}'`));
-        }
-        await runTableMutation(() => table.add(hydratedRows));
+        await upsertVectorRowsById(hydratedRows);
 
         logger.info({
             sessionId: input.sessionId,
@@ -1087,13 +1095,9 @@ async function appendIndexedBlocks(_sessionId: string, lastIndexedBlockId: numbe
     }
 
     if (hydratedRows.length > 0) {
-        // Block row IDs are deterministic. Delete before append so a crash
-        // after the Lance commit but before the SQLite checkpoint cannot
-        // duplicate rows when startup backfill retries the same block.
-        for (const row of hydratedRows) {
-            await runTableMutation(() => table.delete(`id = '${escapeFilterValue(row.id)}'`));
-        }
-        await runTableMutation(() => table.add(hydratedRows));
+        // Block row IDs are deterministic. One atomic upsert keeps a retry
+        // after the Lance commit but before the SQLite checkpoint idempotent.
+        await upsertVectorRowsById(hydratedRows);
     }
 
     return {

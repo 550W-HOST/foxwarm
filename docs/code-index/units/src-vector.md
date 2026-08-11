@@ -1,6 +1,6 @@
 # Unit: src-vector
 
-Files: src/vector.ts, src/vectorRuntime.ts, src/vectorMaintenance.ts, src/vectorService.ts, src/vectorServiceDescriptor.ts, src/vectorFacadeProxy.ts, src/vectorServiceManager.ts, src/vectorWorker.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.lineage.test.ts, src/vector.memoryFacts.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.segmentBuilder.test.ts, src/vectorMaintenance.test.ts, src/vectorMaintenanceRuntime.test.ts, src/vectorService.smoke.test.ts, src/vectorServiceManager.test.ts, src/vectorExternalPlacement.test.ts, src/vectorPlacementConcurrency.test.ts
+Files: src/vector.ts, src/vectorRuntime.ts, src/vectorMaintenance.ts, src/vectorService.ts, src/vectorServiceDescriptor.ts, src/vectorFacadeProxy.ts, src/vectorServiceManager.ts, src/vectorWorker.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.lineage.test.ts, src/vector.memoryFacts.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.segmentBuilder.test.ts, src/vector.upsert.test.ts, src/vectorMaintenance.test.ts, src/vectorMaintenanceRuntime.test.ts, src/vectorService.smoke.test.ts, src/vectorServiceManager.test.ts, src/vectorExternalPlacement.test.ts, src/vectorPlacementConcurrency.test.ts
 
 ## Purpose
 
@@ -30,6 +30,7 @@ Provides one asynchronous vector facade with local and supervised-child placemen
 - Schedule threshold: 50 pending messages or 8,000 pending estimated tokens.
 - Raw rebuild batch size is selectable through the documented vector rebuild environment override.
 - Automatic LanceDB maintenance is enabled by default with 24-hour version retention. Raw configuration accepts the designated boolean/object toggle and normalizes before owner use; internal checks run at startup, after bounded mutation volume, and periodically; optimization starts only at the internal version/fragment thresholds. General toggle shape is canonical in [D-config-feature-toggle-shorthand](./src-config.md#d-config-feature-toggle-shorthand).
+- Deterministic block and compact-fact rows use one atomic ID-keyed merge per hydrated batch, so crash retries update or insert without per-row delete versions. Raw-tail replacement keeps its separate range-delete and bounded-add checkpoint sequence.
 
 ## Search behavior
 
@@ -46,7 +47,7 @@ Model-facing `contentFilter` and final preview filtering are owned by the shared
 ## Indexing behavior
 
 - Raw archive records become overlapping segment rows; block summaries become one row per block.
-- Block rows use deterministic IDs and delete-before-append replacement, so retrying after a Lance commit but before its SQLite checkpoint does not create duplicates.
+- Block rows use deterministic IDs and one atomic ID-keyed merge per hydrated batch, so retrying after a Lance commit but before its SQLite checkpoint updates the same rows instead of creating duplicates.
 - Compact facts use deterministic normalized-text IDs scoped to their creating block and encode fact kind/attribution, block identity/level, and that block's raw source range in existing columns.
 - Inherited fact rows use the block fork cap. Legacy null-block facts require their entire raw range to precede the message fork cap and are discarded rather than clipped if they cross it.
 - Raw rebuild writes bounded batches and advances a safe checkpoint after each completed batch.
