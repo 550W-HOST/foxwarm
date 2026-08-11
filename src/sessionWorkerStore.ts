@@ -219,6 +219,15 @@ export class SessionWorkerStore {
     return Number((this.getDb().prepare('SELECT COUNT(*) AS count FROM session_worker_mailbox').get() as any).count);
   }
 
+  countPendingIntents(sessionId: string): number {
+    sessionId = this.sessionId(sessionId);
+    const cursor = this.getOwnership(sessionId).mailboxCursor;
+    return Number((this.getDb().prepare(`
+      SELECT COUNT(*) AS count FROM session_worker_mailbox
+      WHERE session_id=? AND id>? AND applied_at IS NULL
+    `).get(sessionId, cursor) as any).count);
+  }
+
   listSessionsWithPendingIntents(): string[] {
     const rows = this.getDb().prepare(`
       SELECT DISTINCT m.session_id AS sessionId

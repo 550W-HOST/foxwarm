@@ -1016,7 +1016,13 @@ export class SessionTurnRunner {
         // point so compatible follow-ups received during the provider request
         // participate in the same canonical runner semantics as local queues.
         await this.host.ingestPendingQueue?.(session);
-        const providerTimeQueue = this.inspectLeadingCompatibleQueuedTurnInputs(session, turnBoundary);
+        // Dequeue may arrive while the awaited Worker ingestion is publishing
+        // its newly hot queue. Do not fold those rows into the current provider
+        // result after the stop override has claimed them for the outer loop.
+        const stopOverrideAfterProviderIngest = !!session.meta?.runQueuedAfterStop;
+        const providerTimeQueue = stopOverrideAfterProviderIngest
+          ? { hasInput: false, latestSource: undefined }
+          : this.inspectLeadingCompatibleQueuedTurnInputs(session, turnBoundary);
         if (providerTimeQueue.latestSource) {
           turnSource = providerTimeQueue.latestSource;
           turnChannelOptions = this.getTurnChannelOptions(undefined, turnSource);
@@ -1169,6 +1175,23 @@ export class SessionTurnRunner {
         }
 
         await this.host.ingestPendingQueue?.(session);
+        // This is the second ingestion-to-consume boundary in a tool
+        // iteration. Dequeue can signal while the awaited ingestion is in
+        // flight; recheck before inspecting or consuming compatible rows so
+        // turn finalization clears the override and the same outer busy claim
+        // selects those rows exactly once.
+        if (session.meta?.runQueuedAfterStop) {
+          stoppedByUser = true;
+          await this.host.saveSession(session);
+          if (iterationTextHandled) {
+            await this.finishTurnAfterIntermediate(session, turnSource, broadcast, turnChannelOptions);
+          } else {
+            await this.deliverProviderResultText(
+              session, options.sourceCtx, turnSource, '_[Execution stopped by user]_', false, broadcast, turnChannelOptions,
+            );
+          }
+          break;
+        }
         const toolTimeSource = this.inspectLeadingCompatibleQueuedTurnInputs(session, turnBoundary).latestSource;
         if (toolTimeSource) {
           turnSource = toolTimeSource;
@@ -1256,6 +1279,13 @@ export class SessionTurnRunner {
         catch (releaseError) { if (fencedMaintenanceDirect) throw releaseError; throw fencedMaintenanceError; }
         if (!fencedMaintenanceDirect) throw fencedMaintenanceError;
         return 'suppress-trailing-handoff';
+      }
+      // Worker ingress can become durable while a provider/tool phase is in
+      // flight. Explicit dequeue owns a stop override, so ingest at this exact
+      // boundary before the same outer action loop scans the queue. Local
+      // placement already has live queue state and its hook is absent/no-op.
+      if (session.meta?.runQueuedAfterStop) {
+        await this.host.ingestPendingQueue?.(session);
       }
       const runQueuedAfterStop = !!session.meta?.runQueuedAfterStop;
       if (session.meta?.runQueuedAfterStop) {

@@ -3,10 +3,16 @@ import type { SessionWorkerProjection } from './sessionWorkerPersistence';
 import type { SessionWorkerActivationGate } from './sessionWorkerControlService';
 import type { SessionWorkerHost } from './sessionWorkerHost';
 import type { CompactionRequest, QueueSource } from './types';
+import type { ToolNoiseCompactionResult } from './session/history';
 import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
 
 export type SessionWorkerIdleStatus = { busy: boolean; queueLength: number; runningExecCount: number };
 export type SessionWorkerInterruptResult = { stopping: boolean; abortedInFlight: boolean };
+export type SessionWorkerDequeueResult = {
+  queuedItems: number;
+  stoppedCurrent: boolean;
+  abortedInFlight: boolean;
+};
 export type SessionWorkerSettingsPatch = {
   cwd?: string | null;
   model?: string | null;
@@ -37,12 +43,17 @@ export type SessionWorkerHistoryMutationResult = {
   agentName?: string;
   projection: SessionWorkerProjection;
 };
+export type SessionWorkerToolNoiseCompactionResult =
+  | { empty: true; projection: SessionWorkerProjection }
+  | { empty: false; result: ToolNoiseCompactionResult; projection: SessionWorkerProjection };
 
-export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 6, {
+export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 7, {
   loadProjection: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
   retry: rpcMethod<{ source?: QueueSource }, SessionWorkerProjection>(),
+  dequeue: rpcMethod<Record<string, never>, SessionWorkerDequeueResult>(),
   compactAwaited: rpcMethod<{ request: CompactionRequest }, { compacted: boolean; projection: SessionWorkerProjection }>(),
+  compactToolMessages: rpcMethod<{ keepPercent?: number }, SessionWorkerToolNoiseCompactionResult>(),
   updateSettings: rpcMethod<{ patch: SessionWorkerSettingsPatch }, SessionWorkerSettingsResult>(),
   deleteMessages: rpcMethod<{ num: number }, SessionWorkerHistoryMutationResult>(),
   clearHistory: rpcMethod<Record<string, never>, SessionWorkerHistoryMutationResult>(),
@@ -83,6 +94,13 @@ export function createSessionWorkerRuntimeServiceHandler(
         throw new RpcError('SESSION_WORKER_INTERRUPT_INVALID', 'interrupt takes an empty request object.');
       }
       return host.interrupt();
+    },
+    async dequeue(input) {
+      gate.assertActive();
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 0) {
+        throw new RpcError('SESSION_WORKER_DEQUEUE_INVALID', 'dequeue takes an empty request object.');
+      }
+      return host.dequeue();
     },
     async setPresentationSubscription(input) {
       gate.assertActive();
@@ -197,6 +215,18 @@ export function createSessionWorkerRuntimeServiceHandler(
         const value = request[key]; if (value !== undefined && (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 16_384)) throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', `${key} must be a bounded string.`);
       }
       return host.compactAwaited(structuredClone(request));
+    },
+    async compactToolMessages(input) {
+      gate.assertActive();
+      if (!input || typeof input !== 'object' || Array.isArray(input)
+        || Object.keys(input).some(key => key !== 'keepPercent')) {
+        throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', 'Tool-noise compaction takes an optional keepPercent.');
+      }
+      if (input.keepPercent !== undefined
+        && (!Number.isFinite(input.keepPercent) || input.keepPercent <= 0 || input.keepPercent > 1)) {
+        throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', 'keepPercent must be greater than zero and at most one.');
+      }
+      return host.compactToolMessages(input.keepPercent);
     },
   };
 }

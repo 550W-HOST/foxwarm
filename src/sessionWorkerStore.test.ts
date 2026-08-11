@@ -32,6 +32,7 @@ test('strict stable mailbox JSON round-trips across reopen and rejects invalid v
     const reopened = new SessionWorkerStore(dbPath); reopened.open();
     assert.deepEqual(reopened.listPendingIntents('s')[0].payload, payload);
     assert.equal(reopened.countMailboxIntents(), 1);
+    assert.equal(reopened.countPendingIntents('s'), 1);
     reopened.close();
     const rawDb = new DatabaseSync(dbPath);
     const rawPayload = (rawDb.prepare('SELECT payload_json FROM session_worker_mailbox WHERE session_id=? AND intent_id=?').get('s', 'same') as any).payload_json;
@@ -87,6 +88,7 @@ test('generation incarnation activation and ordered mailbox acknowledgement fail
     store.acknowledgeMailboxPrefix({ sessionId: 'agent/session', generation: 1, incarnationId: 'inc-1',
       expectedCursor: first.id, upToId: second.id });
     assert.deepEqual(store.listPendingIntents('agent/session').map(item => item.id), [third.id]);
+    assert.equal(store.countPendingIntents('agent/session'), 1);
     store.markExitObserved('agent/session', 1, 'inc-1', 'stopped');
     assert.equal(store.beginGeneration('agent/session', 'inc-2').generation, 2);
     store.close();

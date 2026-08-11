@@ -237,6 +237,16 @@ export class SessionWorkerIngressCoordinator {
     return this.supervisor.updateSettingsActivated(expected.sessionId, expected, patch);
   }
 
+  async dequeueEnsuringWorker(requestedSessionId: string) {
+    const expected = await this.ensureWorkerOwner(requestedSessionId);
+    return this.supervisor.dequeueActivated(expected.sessionId, expected);
+  }
+
+  async compactToolMessages(requestedSessionId: string, keepPercent?: number) {
+    const expected = await this.ensureWorkerOwner(requestedSessionId);
+    return this.supervisor.compactToolMessagesActivated(expected.sessionId, expected, keepPercent);
+  }
+
   async deleteMessages(requestedSessionId: string, num: number): Promise<SessionWorkerHistoryMutationResult> {
     const expected = await this.ensureWorkerOwner(requestedSessionId);
     return this.supervisor.deleteMessagesActivated(expected.sessionId, expected, num);

@@ -679,6 +679,85 @@ test('exec completion is serialized after a failed turn and remains one durable 
   });
 });
 
+test('dequeue during post-tool ingestion leaves new rows for the same outer action loop', async () => {
+  const initial = baseSession('worker-dequeue-tool-phase');
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+  let storeRef: SessionWorkerStore | undefined;
+  let chatCalls = 0;
+  const finalDeliveries: Array<{ text: string; outcome: string }> = [];
+  (llm as any).chat = async (parts: any, _session: Session, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    chatCalls += 1;
+    if (chatCalls === 1) {
+      const call = { id: 'held-tool', name: 'session', args: { action: 'status' } };
+      await options.appendMessage({ role: 'model', parts: [{ text: 'tool phase text' }, { functionCall: call }] });
+      return { text: 'tool phase text', toolCalls: [call], allParts: [{ text: 'tool phase text' }, { functionCall: call }] };
+    }
+    await options.appendMessage({ role: 'model', parts: [{ text: 'queued turn final' }] });
+    return { text: 'queued turn final' };
+  };
+  (llm as any).executeTools = async () => {
+    storeRef!.enqueueIntent(initial.id, 'queued-during-tool', 'enqueue', {
+      type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'queued after tool' }],
+    });
+    return {
+      role: 'tool',
+      parts: [{ functionResponse: { tool_use_id: 'held-tool', name: 'session', response: { output: 'ok' } } }],
+    };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, session, turnHost, readDurable }) => {
+      storeRef = store;
+      const originalIngest = turnHost.ingestPendingQueue.bind(turnHost);
+      let ingestCalls = 0;
+      let postToolIngested!: () => void;
+      let releasePostToolIngest!: () => void;
+      const postToolIngest = new Promise<void>(resolve => { postToolIngested = resolve; });
+      const postToolRelease = new Promise<void>(resolve => { releasePostToolIngest = resolve; });
+      turnHost.ingestPendingQueue = async (owner: Session) => {
+        ingestCalls += 1;
+        await originalIngest(owner);
+        if (ingestCalls === 2) {
+          postToolIngested();
+          await postToolRelease;
+        }
+      };
+      store.enqueueIntent(initial.id, 'initial-tool-turn', 'enqueue', {
+        type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'start held tool' }],
+      });
+      const turn = host.runPending(8);
+      await postToolIngest;
+      assert.equal(session.queue.length, 1, 'second ingestion has made the durable input hot but has not returned to queue consumption');
+      assert.deepEqual(await host.dequeue(), {
+        queuedItems: 1, stoppedCurrent: true, abortedInFlight: false,
+      });
+      assert.equal(readDurable().queue.length, 1, 'dequeue leaves the newly ingested row queued while the safe point is paused');
+      releasePostToolIngest();
+      await turn;
+      for (let index = 0; index < 40 && readDurable().busy; index += 1) await new Promise(resolve => setTimeout(resolve, 5));
+      const durable = readDurable();
+      assert.equal(durable.busy, false);
+      assert.equal(durable.queue.length, 0);
+      assert.equal(durable.stopping, false);
+      assert.equal(durable.meta.runQueuedAfterStop, undefined);
+      assert.equal(JSON.stringify(durable.history).split('queued after tool').length - 1, 1);
+      assert.equal(JSON.stringify(durable.history).split('queued turn final').length - 1, 1);
+      assert.equal(chatCalls, 2);
+      assert.equal(ingestCalls, 4, 'post-tool recheck leaves the row for finalization and the next outer source turn');
+      assert.deepEqual(finalDeliveries, [
+        { text: '_[Execution stopped by user]_', outcome: 'response' },
+        { text: 'queued turn final', outcome: 'response' },
+      ]);
+    }, true, undefined, async (_source, text, outcome) => {
+      finalDeliveries.push({ text, outcome });
+    });
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+  }
+});
+
 test('bound worker host closes reminders, awaits automatic compaction, and rejects background commits', async () => {
   const compactSession = baseSession('exact-worker-compact'); compactSession.compactThresholdTokens = 10;
   await withLocalHost(compactSession, async ({ turnHost, session, readDurable }) => {

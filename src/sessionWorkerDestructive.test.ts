@@ -83,10 +83,13 @@ test('closed stop interrupts a fenced worker turn and mirrors stopping catalog-o
     const idleAuthority = JSON.parse(await fs.readFile(path.join(root, 'state', 'sessions', `${sessionId2}.json`), 'utf8'));
     assert.equal(idleAuthority.stopping, true, 'idle interrupt still persists the stopping flag transactionally');
 
-    // dequeue remains unsupported. Retry is closed, but an active Worker call
-    // rejects immediately rather than queuing a second retry behind it.
-    await assert.rejects(() => fixture.runtime.call('control', { sessionId, action: 'dequeue' }),
-      (error: any) => error?.code === 'SESSION_WORKER_CONTROL_UNSUPPORTED' && error?.retryable === true);
+    // With no queued work, dequeue preserves the local no-op contract and does
+    // not alter the already-stopped current turn.
+    assert.deepEqual(await fixture.runtime.call('control', { sessionId, action: 'dequeue' }), {
+      action: 'dequeue', queuedItems: 0, stoppedCurrent: false, abortedInFlight: false,
+    });
+    // Retry is closed, but an active Worker call rejects immediately rather
+    // than queuing a second retry behind it.
     await assert.rejects(() => fixture.runtime.call('control', { sessionId, action: 'retry' }),
       (error: any) => error?.code === 'SESSION_WORKER_RETRY_BUSY' && error?.retryable === true);
   } finally {
@@ -270,6 +273,148 @@ test('interrupt aborts a slow provider request and ends the turn with stopped se
     await fixture.supervisor.shutdown(3_000).catch(() => {});
     fixture.store.close();
     sessionManager.getAllSessions().delete(sessionId);
+    await fs.remove(root);
+  }
+});
+
+test('dequeue aborts a busy provider and the same worker action loop consumes queued work once', async () => {
+  const sessionId = `mc-dequeue-${Date.now()}`;
+  const idleSessionId = `${sessionId}-idle`;
+  const emptySessionId = `${sessionId}-empty`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-dequeue-'));
+  const fixture = makeFixture(root, { FOXWARM_TEST_SLOW_PROVIDER: '1', FOXWARM_TEST_SLOW_SESSION: sessionId });
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  const idle = baseSession(idleSessionId);
+  idle.queue.push({ type: 'user', parts: [{ text: 'idle queued input' }] });
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  await fs.outputJson(path.join(root, 'state', 'sessions', `${idleSessionId}.json`), serializeSessionHistoryPayload(idle));
+  await fs.outputJson(path.join(root, 'state', 'sessions', `${emptySessionId}.json`), serializeSessionHistoryPayload(baseSession(emptySessionId)));
+  try {
+    sessionManager.getAllSessions().set(sessionId, baseSession(sessionId));
+    sessionManager.getAllSessions().set(idleSessionId, { ...idle, queue: [] });
+    sessionManager.getAllSessions().set(emptySessionId, baseSession(emptySessionId));
+    await fixture.supervisor.reconcileStartupOwnerships();
+    const turn = fixture.ingress.submitEnsuringWorker(sessionId, {
+      type: 'user', parts: [{ text: 'slow dequeue question' }],
+    });
+    await waitFor(() => fs.pathExists(path.join(root, 'state', `slow-started-${sessionId}`)));
+    await fixture.ingress.enqueueEnsuringWorker(sessionId, {
+      type: 'user', parts: [{ text: 'queued dequeue follow-up' }],
+    });
+
+    const started = Date.now();
+    assert.deepEqual(await fixture.runtime.call('control', { sessionId, action: 'dequeue' }), {
+      action: 'dequeue', queuedItems: 1, stoppedCurrent: true, abortedInFlight: true,
+    });
+    assert.ok(Date.now() - started < 2_000, 'busy dequeue signals immediately instead of waiting behind the turn');
+    await turn;
+    await waitFor(async () => {
+      const authority = await fs.readJson(statePath);
+      return authority.busy === false && authority.queue.length === 0
+        && JSON.stringify(authority.history).includes('deterministic child answer');
+    });
+
+    const authority = await fs.readJson(statePath);
+    const text = JSON.stringify(authority.history);
+    assert.equal(text.split('slow dequeue question').length - 1, 1);
+    assert.equal(text.split('queued dequeue follow-up').length - 1, 1);
+    assert.equal(text.split('deterministic child answer').length - 1, 1, 'queued work produces one final answer');
+    assert.equal(authority.stopping, false);
+    assert.equal(authority.meta.runQueuedAfterStop, undefined);
+    assert.equal(authority.history.length, 3, 'the aborted provider contributes no duplicate model/final row');
+
+    assert.deepEqual(await fixture.runtime.call('control', { sessionId: idleSessionId, action: 'dequeue' }), {
+      action: 'dequeue', queuedItems: 1, stoppedCurrent: false, abortedInFlight: false,
+    });
+    const idleAuthority = await fs.readJson(path.join(root, 'state', 'sessions', `${idleSessionId}.json`));
+    assert.equal(idleAuthority.queue.length, 0);
+    assert.equal(JSON.stringify(idleAuthority.history).split('idle queued input').length - 1, 1);
+    assert.equal(JSON.stringify(idleAuthority.history).split('deterministic child answer').length - 1, 1);
+
+    assert.deepEqual(await fixture.runtime.call('control', { sessionId: emptySessionId, action: 'dequeue' }), {
+      action: 'dequeue', queuedItems: 0, stoppedCurrent: false, abortedInFlight: false,
+    });
+  } finally {
+    fixture.transport.close();
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    sessionManager.getAllSessions().delete(sessionId);
+    sessionManager.getAllSessions().delete(idleSessionId);
+    sessionManager.getAllSessions().delete(emptySessionId);
+    await fs.remove(root);
+  }
+});
+
+test('tool-noise compaction is serialized behind a busy worker turn and persists the exact projection', async () => {
+  const sessionId = `mc-tool-compact-${Date.now()}`;
+  const emptySessionId = `${sessionId}-empty`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-tool-compact-'));
+  const fixture = makeFixture(root, { FOXWARM_TEST_HOLD_PROVIDER: '1', FOXWARM_TEST_HOLD_SESSION: sessionId });
+  const initial = baseSession(sessionId);
+  const oversized = 'large-tool-payload '.repeat(2_000);
+  initial.history = [
+    { role: 'user', parts: [{ text: 'old tool request' }], __meta: { seq: 1, timestamp: 1 } },
+    { role: 'model', parts: [{ functionCall: { id: 'large-call', name: 'read', args: { payload: oversized }, rawArgsText: JSON.stringify({ payload: oversized }) } }], __meta: { seq: 2, timestamp: 2 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'large-call', name: 'read', response: { output: oversized } } }], __meta: { seq: 3, timestamp: 3 } },
+    { role: 'user', parts: [{ text: 'recent tail' }], __meta: { seq: 4, timestamp: 4 } },
+  ] as any;
+  initial.contextFrontier = [1, 2, 3, 4].map(seq => ({ kind: 'message' as const, seq }));
+  initial.nextMessageSeq = 5;
+  initial.historyVersion = 2;
+  initial.meta.messageCount = 4;
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  const emptyStatePath = path.join(root, 'state', 'sessions', `${emptySessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(initial));
+  await fs.outputJson(emptyStatePath, serializeSessionHistoryPayload(baseSession(emptySessionId)));
+  try {
+    sessionManager.getAllSessions().set(sessionId, { ...initial, history: [] });
+    sessionManager.getAllSessions().set(emptySessionId, baseSession(emptySessionId));
+    await fixture.supervisor.reconcileStartupOwnerships();
+    const turn = fixture.ingress.submitEnsuringWorker(sessionId, {
+      type: 'user', parts: [{ text: 'busy turn before compact tools' }],
+    });
+    await waitFor(() => fs.pathExists(path.join(root, 'state', `hold-started-${sessionId}`)));
+
+    let compactSettled = false;
+    const compact = fixture.runtime.call('requestCompaction', {
+      sessionId, keepPercent: 0.5, toolNoise: true,
+    }).finally(() => { compactSettled = true; });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(compactSettled, false, 'history transform waits behind the busy exact-owner lane');
+    assert.match(JSON.stringify((await fs.readJson(statePath)).history), /large-tool-payload/,
+      'no concurrent history mutation occurs while the provider turn is active');
+
+    await fs.outputFile(path.join(root, 'state', `hold-release-${sessionId}`), '1');
+    await turn;
+    const result: any = await compact;
+    assert.equal(result.kind, 'tool-noise');
+    assert.equal(result.result.replacedFunctionCalls, 1);
+    assert.equal(result.result.replacedFunctionResponses, 1);
+    assert.equal(result.result.touchedMessages, 2);
+
+    const authority = await fs.readJson(statePath);
+    assert.equal(authority.history[1].parts[0].functionCall.args.__compacted, true);
+    assert.equal(authority.history[2].parts[0].functionResponse.response.__compacted, true);
+    assert.equal(JSON.stringify(authority.history).includes('large-tool-payload'), false);
+    assert.equal(authority.queue.length, 0);
+    assert.equal(authority.busy, false);
+    const projection = fixture.supervisor.projectionRegistry.get(sessionId)?.projection;
+    assert.equal(projection?.messageCount, authority.history.length);
+    assert.equal(projection?.queueLength, 0);
+    assert.equal(projection?.busy, false);
+
+    const emptyBefore = await fs.readFile(emptyStatePath);
+    assert.deepEqual(await fixture.runtime.call('requestCompaction', {
+      sessionId: emptySessionId, keepPercent: 0.5, toolNoise: true,
+    }), { kind: 'empty' });
+    assert.deepEqual(await fs.readFile(emptyStatePath), emptyBefore,
+      'empty tool-noise compaction has no persistence side effect');
+  } finally {
+    fixture.transport.close();
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    sessionManager.getAllSessions().delete(sessionId);
+    sessionManager.getAllSessions().delete(emptySessionId);
     await fs.remove(root);
   }
 });

@@ -547,8 +547,12 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         : workerSelection(requestedId);
       if (selection.kind === 'unavailable') throw new RpcError('SESSION_WORKER_COMPACTION_UNAVAILABLE', 'Committed Worker state is unavailable.', true);
       if (selection.kind === 'worker') {
-        if (input.toolNoise) return { kind: 'unsupported', message: 'Tool-noise compaction is not supported by Session-worker placement yet.' };
         if (!options?.worker?.ingress) throw new RpcError('SESSION_WORKER_COMPACTION_UNAVAILABLE', 'Session-worker compaction is unavailable.', true);
+        if (input.toolNoise) {
+          const result = await options.worker.ingress.compactToolMessages(selection.canonicalId, input.keepPercent);
+          if (!('result' in result)) return { kind: 'empty' };
+          return { kind: 'tool-noise', result: result.result };
+        }
         const result = await options.worker.ingress.compactAwaited(selection.canonicalId, { keepPercent: input.keepPercent });
         return { kind: 'worker', completed: true, compacted: result.compacted, messageCount: result.messageCount };
       }
@@ -814,6 +818,12 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
           return { action: 'retry' };
         }
         if (input.source !== undefined) throw new RpcError('SESSION_RUNTIME_INVALID_CONTROL', 'source is supported only for retry.');
+        if (input.action === 'dequeue') {
+          if (!options.worker.ingress) throw new RpcError('SESSION_WORKER_OPERATION_UNAVAILABLE', 'Session-worker dequeue is unavailable.', true);
+          const selection = await ensureWorkerSelection(sessionId);
+          const dequeued = await options.worker.ingress.dequeueEnsuringWorker(selection.canonicalId);
+          return { action: 'dequeue', ...dequeued };
+        }
         const selection = workerSelection(sessionId);
         if (selection.kind !== 'local') {
           if (input.action === 'stop' && options.worker.supervisor) {
@@ -835,7 +845,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
             }
             return { action: 'stop', abortedInFlight: false };
           }
-          throw new RpcError('SESSION_WORKER_CONTROL_UNSUPPORTED', 'dequeue is not supported by Session-worker placement yet.', true);
+          throw new RpcError('SESSION_WORKER_CONTROL_UNSUPPORTED', 'Session-worker control is unsupported.', true);
         }
       }
       if (input.action === 'stop') {

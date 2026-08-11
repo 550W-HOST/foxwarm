@@ -237,6 +237,23 @@ export class SessionWorkerSupervisor {
     }
   }
 
+  async compactToolMessagesActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+    keepPercent?: number,
+  ) {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      return await runtime.call('compactToolMessages', keepPercent === undefined ? {} : { keepPercent });
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
+  }
+
   async updateSettingsActivated(
     sessionId: string,
     expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
@@ -363,6 +380,22 @@ export class SessionWorkerSupervisor {
     try {
       const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
       return await runtime.call('interrupt', {});
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
+  }
+
+  async dequeueActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+  ) {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      return await runtime.call('dequeue', {});
     } finally {
       entry.activeCalls -= 1;
       if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);

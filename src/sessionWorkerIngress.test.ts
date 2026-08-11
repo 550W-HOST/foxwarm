@@ -92,9 +92,10 @@ test('idle Main runtime compacts a real Worker archive through the canonical awa
     const liveEntry = (supervisor as any).entries.get(sessionId); liveEntry.activeCalls = 1;
     await assert.rejects(() => requestCompaction(sessionId, 0.3), (error: any) => error?.code === 'SESSION_WORKER_COMPACTION_BUSY');
     liveEntry.activeCalls = 0;
-    assert.deepEqual(await requestCompaction(sessionId, 0.3, true), {
-      kind: 'unsupported', message: 'Tool-noise compaction is not supported by Session-worker placement yet.',
-    });
+    const toolNoise = await requestCompaction(sessionId, 0.3, true);
+    assert.equal(toolNoise.kind, 'tool-noise');
+    assert.equal(toolNoise.kind === 'tool-noise' ? toolNoise.result.replacedFunctionCalls : -1, 0);
+    assert.equal(toolNoise.kind === 'tool-noise' ? toolNoise.result.replacedFunctionResponses : -1, 0);
     assert.equal(mainSemanticCalls, 0); assert.equal(sourceContexts.size, 0);
     const sessionsAfter = await fs.pathExists(SESSIONS_FILE) ? await fs.readFile(SESSIONS_FILE) : null; assert.deepEqual(sessionsAfter, sessionsBefore);
   } finally {

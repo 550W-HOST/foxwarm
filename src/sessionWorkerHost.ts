@@ -8,7 +8,7 @@ import type { CurrentSessionTurnEffects } from './llm';
 import { RpcError } from './rpc';
 import { initArchiveStore } from './session/archiveStore';
 import { refreshSessionSnapshotForSession } from './session/agentMetadata';
-import { clearSession, deleteMessages, forceIndexSession, getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSessionCompactionRequest, type SessionHistoryDeps } from './session/history';
+import { clearSession, compactToolMessages as compactSessionToolMessages, deleteMessages, forceIndexSession, getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSessionCompactionRequest, type SessionHistoryDeps } from './session/history';
 import { getManagedSessionState } from './session/managedState';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './session/metadataStore';
 import { applyQueuedItemToWaitState, appendSessionMessagesForSession, buildManualForkNotificationMessage, startSessionWaitForSession, updateSessionBusyStateForSession } from './sessionManager';
@@ -25,7 +25,7 @@ import type { SessionWorkerIdentity } from './sessionWorkerControlService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
 import { isQueueItem, type CompactionRequest, type Message, type QueueItem, type QueueSource, type Session, type SessionStreamEvent } from './types';
 import { buildTimestampedSystemMessageParts } from './utils/systemMessageParts';
-import type { SessionWorkerHistoryMutationResult, SessionWorkerSettings, SessionWorkerSettingsPatch, SessionWorkerSettingsResult } from './sessionWorkerRuntimeService';
+import type { SessionWorkerDequeueResult, SessionWorkerHistoryMutationResult, SessionWorkerSettings, SessionWorkerSettingsPatch, SessionWorkerSettingsResult, SessionWorkerToolNoiseCompactionResult } from './sessionWorkerRuntimeService';
 
 export type SessionWorkerHostDependencies = {
   persistence?: SessionWorkerPersistenceDependencies;
@@ -56,13 +56,14 @@ export class SessionWorkerHost {
   private presentationTail: Promise<void> = Promise.resolve();
   private coalescedStreamEvents = new Map<string, SessionStreamEvent>();
   private streamCoalesceTimer?: ReturnType<typeof setTimeout>;
+  private mailboxIntentsAppliedInFlight = 0;
 
   constructor(
     private readonly identity: SessionWorkerIdentity,
-    store: SessionWorkerStore,
+    private readonly store: SessionWorkerStore,
     private readonly dependencies: SessionWorkerHostDependencies = {},
   ) {
-    this.persistence = new SessionWorkerPersistence(store, dependencies.persistence);
+    this.persistence = new SessionWorkerPersistence(this.store, dependencies.persistence);
     // Presentation-only publication: runtime phase transitions
     // (requesting-model/running-tool/idle) are transient process-local state
     // that is never written to authority. Without this wiring the updates only
@@ -128,6 +129,24 @@ export class SessionWorkerHost {
       if (owner.busy || owner.queue.length || getManagedSessionState(owner)) throw new RpcError('SESSION_WORKER_COMPACTION_BUSY', 'Session worker is not idle for awaited compaction.', true);
       const compacted = await this.runExactCompaction(request, 'explicit');
       return { compacted, projection: buildSessionWorkerProjection(owner) };
+    });
+  }
+
+  async compactToolMessages(keepPercent?: number): Promise<SessionWorkerToolNoiseCompactionResult> {
+    return this.serialize(async () => {
+      await this.ensureLoaded(); await this.ensureHealthy(); await this.fenceMutation();
+      const session = this.session!;
+      if (session.history.length === 0) {
+        return { empty: true, projection: buildSessionWorkerProjection(session) };
+      }
+      const before = captureSessionSemanticState(session);
+      try {
+        const result = await compactSessionToolMessages(this.historyDeps(), session.id, keepPercent);
+        return { empty: false, result, projection: buildSessionWorkerProjection(session) };
+      } catch (error) {
+        if (!this.isResyncError(error)) restoreSessionSemanticState(session, before);
+        throw error;
+      }
     });
   }
 
@@ -290,6 +309,45 @@ export class SessionWorkerHost {
     return { stopping: true, abortedInFlight };
   }
 
+  async dequeue(): Promise<SessionWorkerDequeueResult> {
+    // Like interrupt(), the busy signal must not wait behind the active turn's
+    // serialized host operation. The canonical outer action loop observes
+    // runQueuedAfterStop and continues the existing queue under the same claim.
+    await this.ensureLoaded();
+    await this.ensureHealthy();
+    const session = this.session!;
+    // Ordinary Worker ingress may already be durable in the exact owner's
+    // mailbox while the active provider/tool phase has not reached its next
+    // ingestion safe point. Count that owned pending input here so dequeue can
+    // signal the current turn; the runner ingests it at the stop override safe
+    // point before its existing outer action loop selects the next turn.
+    const pendingNotYetHot = Math.max(
+      0,
+      this.store.countPendingIntents(session.id) - this.mailboxIntentsAppliedInFlight,
+    );
+    const queuedItems = (session.queue?.length || 0) + pendingNotYetHot;
+    if (queuedItems === 0) {
+      return { queuedItems, stoppedCurrent: false, abortedInFlight: false };
+    }
+    if (session.busy) {
+      const controller = this.activeAbort;
+      session.stopping = true;
+      session.meta.runQueuedAfterStop = true;
+      controller?.abort();
+      void this.serialize(async () => {
+        await this.fenceMutation();
+        await this.persistOwner();
+      }).catch(error => logger.error({ err: error, sessionId: this.identity.sessionId }, 'Session worker dequeue persistence failed'));
+      return { queuedItems, stoppedCurrent: true, abortedInFlight: !!controller };
+    }
+
+    // Idle dequeue follows the same canonical queue runner. It is serialized
+    // with history/settings operations and creates neither a mailbox record nor
+    // a second runner.
+    await this.runPending(4096);
+    return { queuedItems, stoppedCurrent: false, abortedInFlight: false };
+  }
+
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
     this.serializedPending += 1;
     const run = this.runTail.then(operation).finally(() => { this.serializedPending -= 1; });
@@ -325,24 +383,33 @@ export class SessionWorkerHost {
     const session = this.session!;
     this.assertSupportedQueue(session);
     const mailboxCursorBefore = session.lastAppliedMailboxId || 0;
-    await this.persistence.applyAndPersistPendingPrefix(
-      session,
-      this.identity.generation,
-      this.identity.incarnationId,
-      limit,
-      (owner, intents) => {
-        if (intents.some(intent => isQueueItem(intent.payload) && intent.payload.type === 'compact-commit')) {
-          throw new RpcError('SESSION_WORKER_QUEUE_UNSUPPORTED', 'Managed-session and compact-commit queues are not supported by the Session worker yet.', true);
-        }
-        for (const intent of intents) {
-          if (intent.kind !== 'enqueue' || !isQueueItem(intent.payload)) {
-            throw new RpcError('SESSION_WORKER_INVALID_QUEUE_ITEM', 'Session worker mailbox payload is not a current QueueItem.');
+    try {
+      await this.persistence.applyAndPersistPendingPrefix(
+        session,
+        this.identity.generation,
+        this.identity.incarnationId,
+        limit,
+        (owner, intents) => {
+          // The callback mutates the hot queue before the awaited JSON write
+          // and SQLite acknowledgement finish. Dequeue can run during that
+          // window, so remember which still-pending rows are already reflected
+          // in the hot queue and do not double-count them.
+          this.mailboxIntentsAppliedInFlight = intents.length;
+          if (intents.some(intent => isQueueItem(intent.payload) && intent.payload.type === 'compact-commit')) {
+            throw new RpcError('SESSION_WORKER_QUEUE_UNSUPPORTED', 'Managed-session and compact-commit queues are not supported by the Session worker yet.', true);
           }
-          const transition = applyQueuedItemToWaitState(owner, structuredClone(intent.payload));
-          if (transition.action === 'enqueue') owner.queue.push(...transition.items);
+          for (const intent of intents) {
+            if (intent.kind !== 'enqueue' || !isQueueItem(intent.payload)) {
+              throw new RpcError('SESSION_WORKER_INVALID_QUEUE_ITEM', 'Session worker mailbox payload is not a current QueueItem.');
+            }
+            const transition = applyQueuedItemToWaitState(owner, structuredClone(intent.payload));
+            if (transition.action === 'enqueue') owner.queue.push(...transition.items);
+          }
         }
-      },
-    );
+      );
+    } finally {
+      this.mailboxIntentsAppliedInFlight = 0;
+    }
     if ((session.lastAppliedMailboxId || 0) !== mailboxCursorBefore) await this.publishCurrent();
   }
 
