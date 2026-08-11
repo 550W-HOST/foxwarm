@@ -836,6 +836,39 @@ test('embedded model filter selects one result and keeps the accessible Setup br
     assert.ok(popupLayout.right <= popupLayout.viewportWidth)
     assert.ok(popupLayout.settingsRight <= popupLayout.filterLeft)
     assert.ok(popupLayout.filterRight <= popupLayout.right)
+    const integratedEffortLayout = await chatFrame.$eval('[data-model-selector-header="true"]', (header) => {
+      const headerRect = header.getBoundingClientRect()
+      const selects = Array.from(header.querySelectorAll('select')).map((select) => {
+        const rect = select.getBoundingClientRect()
+        const style = getComputedStyle(select)
+        const canvas = document.createElement('canvas')
+        const context = canvas.getContext('2d')
+        if (context) context.font = style.font
+        const selectedLabel = select.selectedOptions[0]?.label || ''
+        const textWidth = context?.measureText(selectedLabel).width || 0
+        const description = select.getAttribute('aria-describedby')
+        return {
+          width: rect.width,
+          left: rect.left,
+          right: rect.right,
+          fontSize: Number.parseFloat(style.fontSize),
+          selectedLabel,
+          readable: textWidth + 28 <= rect.width,
+          description: description ? document.getElementById(description)?.textContent : '',
+        }
+      })
+      return { height: headerRect.height, left: headerRect.left, right: headerRect.right, selects }
+    })
+    assert.ok(integratedEffortLayout.height <= 52)
+    assert.equal(integratedEffortLayout.selects.length, 2)
+    assert.ok(integratedEffortLayout.selects.every(({ left, right, width }) => left >= integratedEffortLayout.left && right <= integratedEffortLayout.right && width >= 76))
+    assert.ok(integratedEffortLayout.selects.every(({ fontSize }) => fontSize === 16))
+    assert.deepEqual(integratedEffortLayout.selects.map(({ selectedLabel }) => selectedLabel), ['Per leaf', 'Per leaf'])
+    assert.ok(integratedEffortLayout.selects.every(({ readable }) => readable))
+    assert.deepEqual(integratedEffortLayout.selects.map(({ description }) => description), [
+      'Current effort: default (per leaf)',
+      'Child effort: follow/default (per leaf)',
+    ])
 
     const updatesBefore = modelUpdateRequests.length
     await filter.type('LEAF')
@@ -884,15 +917,21 @@ test('embedded model filter selects one result and keeps the accessible Setup br
     const currentEffort = await chatFrame.waitForSelector('select[aria-label="Current effort"]')
     assert.equal(await currentEffort.evaluate(select => select.value), 'max')
     assert.equal(await currentEffort.$eval('option[value=""]', option => option.textContent), 'default (per leaf)')
+    assert.equal(await currentEffort.$eval('option[value=""]', option => option.label), 'Per leaf')
     assert.deepEqual(await currentEffort.$eval('option[value="max"]', option => ({ text: option.textContent, disabled: option.disabled })), {
       text: 'max (unavailable; using per-leaf default)', disabled: true,
     })
+    assert.equal(await currentEffort.$eval('option[value="max"]', option => option.label), 'Max ⚠')
+    assert.equal(await currentEffort.evaluate(select => select.title), 'Current effort: max (unavailable; using per-leaf default)')
     const childEffort = await chatFrame.waitForSelector('select[aria-label="Child effort"]')
     assert.equal(await childEffort.evaluate(select => select.value), 'max')
     assert.equal(await childEffort.$eval('option[value=""]', option => option.textContent), 'follow/default (per leaf)')
+    assert.equal(await childEffort.$eval('option[value=""]', option => option.label), 'Per leaf')
     assert.deepEqual(await childEffort.$eval('option[value="max"]', option => ({ text: option.textContent, disabled: option.disabled })), {
       text: 'max (unavailable; using per-leaf default)', disabled: true,
     })
+    assert.equal(await childEffort.$eval('option[value="max"]', option => option.label), 'Max ⚠')
+    assert.equal(await childEffort.evaluate(select => select.title), 'Child effort: max (unavailable; using per-leaf default)')
 
     const effortUpdatesBefore = modelUpdateRequests.length
     await currentEffort.select('low')
@@ -938,14 +977,87 @@ test('embedded model filter selects one result and keeps the accessible Setup br
   }
 })
 
+test('default desktop model effort header stays compact and readable', async () => {
+  const desktopPage = await browser.newPage()
+  await desktopPage.setViewport({ width: 900, height: 700 })
+  await attachRequestMocks(desktopPage)
+  try {
+    await desktopPage.goto(`${baseUrl}/normal/#session/model-effort-default-desktop`, { waitUntil: 'networkidle2' })
+    const modelButton = await desktopPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
+    await modelButton.click()
+    await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    await desktopPage.click('button[title="leaf/model-a"]')
+    await desktopPage.waitForFunction(() => document.querySelector('select[aria-label="Current effort"]')?.title === 'Current effort: default (high)')
+    const layout = await desktopPage.$eval('[data-model-selector-header="true"]', (header) => Array.from(header.querySelectorAll('select')).map((select) => {
+      const rect = select.getBoundingClientRect()
+      const style = getComputedStyle(select)
+      const canvas = document.createElement('canvas')
+      const context = canvas.getContext('2d')
+      if (context) context.font = style.font
+      const selectedLabel = select.selectedOptions[0]?.label || ''
+      const description = select.getAttribute('aria-describedby')
+      return {
+        width: rect.width,
+        fontSize: Number.parseFloat(style.fontSize),
+        selectedLabel,
+        readable: (context?.measureText(selectedLabel).width || 0) + 28 <= rect.width,
+        title: select.title,
+        description: description ? document.getElementById(description)?.textContent : '',
+      }
+    }))
+    assert.deepEqual(layout.map(({ selectedLabel }) => selectedLabel), ['Default', 'Follow'])
+    assert.ok(layout.every(({ fontSize }) => fontSize === 11))
+    assert.ok(layout.every(({ width }) => width >= 104))
+    assert.ok(layout.every(({ readable }) => readable))
+    assert.deepEqual(layout.map(({ title }) => title), [
+      'Current effort: default (high)',
+      'Child effort: follow/default (high)',
+    ])
+    assert.deepEqual(layout.map(({ description }) => description), [
+      'Current effort: default (high)',
+      'Child effort: follow/default (high)',
+    ])
+  } finally {
+    await desktopPage.close()
+  }
+})
+
 test('normal Chat keeps the icon-only model settings callback and singleton Setup focus', async () => {
   const normalPage = await browser.newPage()
   await attachRequestMocks(normalPage)
   try {
+    await normalPage.evaluateOnNewDocument(() => {
+      try { localStorage.setItem('foxwarm_ui_theme_style_v1', '550a') } catch {}
+    })
     await normalPage.goto(`${baseUrl}/normal/#session/model-filter-normal`, { waitUntil: 'networkidle2' })
     const modelButton = await normalPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
     await modelButton.click()
     await normalPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    const themeLayout = await normalPage.$eval('[data-model-selector-popup="true"]', (popup) => {
+      const current = popup.querySelector('select[aria-label="Current effort"]')
+      const child = popup.querySelector('select[aria-label="Child effort"]')
+      const header = popup.querySelector('[data-model-selector-header="true"]')
+      return {
+        theme: document.documentElement.getAttribute('data-foxwarm-ui-style'),
+        popupWidth: popup.getBoundingClientRect().width,
+        headerContainsCurrent: !!header?.contains(current),
+        headerContainsChild: !!header?.contains(child),
+        currentWidth: current?.getBoundingClientRect().width || 0,
+        childWidth: child?.getBoundingClientRect().width || 0,
+        currentFontSize: current ? Number.parseFloat(getComputedStyle(current).fontSize) : 0,
+        currentLabel: current?.selectedOptions[0]?.label || '',
+        childLabel: child?.selectedOptions[0]?.label || '',
+      }
+    })
+    assert.equal(themeLayout.theme, '550a')
+    assert.ok(themeLayout.popupWidth <= 500)
+    assert.equal(themeLayout.headerContainsCurrent, true)
+    assert.equal(themeLayout.headerContainsChild, true)
+    assert.ok(themeLayout.currentWidth >= 104)
+    assert.ok(themeLayout.childWidth >= 104)
+    assert.ok(themeLayout.currentFontSize <= 11)
+    assert.equal(themeLayout.currentLabel, 'Per leaf')
+    assert.equal(themeLayout.childLabel, 'Per leaf')
     const configure = await normalPage.waitForSelector('button[aria-label="Configure models"]')
     assert.equal((await configure.evaluate((button) => button.textContent || '')).trim(), '')
     await configure.click()
