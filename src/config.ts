@@ -237,7 +237,6 @@ export type AppConfig = {
     compactBlockForceCompactFraction?: number;
     compactMessageForceCompactFraction?: number;
     maxOutput?: number;
-    thinkingBudget?: number;
     openaiBaseUrl?: string;
     openaiApiKey?: string;
     anthropicBaseUrl?: string;
@@ -485,7 +484,6 @@ export const COMPACT_MESSAGE_FORCE_COMPACT_FRACTION = APP_CONFIG.llm?.compactMes
 
 // TODO: move to models config
 export const MAX_OUTPUT = APP_CONFIG.llm?.maxOutput || 16384;
-export const THINKING_BUDGET = APP_CONFIG.llm?.thinkingBudget || 10000;
 
 // Models configuration
 export function resolveDataModelsConfigPath(dataRoot: string = DATA_ROOT_DIR): string {
@@ -514,6 +512,21 @@ export type OpenAIWebSearchOptions = {
 };
 
 export type OpenAIWebSearchConfig = boolean | OpenAIWebSearchOptions;
+
+export const MODEL_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type ModelEffort = (typeof MODEL_EFFORTS)[number];
+export const DEFAULT_MODEL_EFFORT: ModelEffort = 'high';
+
+export type ModelEffortConfig = {
+  allowed?: ModelEffort[];
+  default?: ModelEffort;
+};
+
+export type NormalizedModelEffortConfig = {
+  allowed: ModelEffort[];
+  /** Concrete entries always have a default. Virtual entries expose only the derived union. */
+  default?: ModelEffort;
+};
 
 export type NormalizedOpenAIWebSearchConfig = Omit<OpenAIWebSearchOptions, 'enabled'> & {
   enabled: boolean;
@@ -604,6 +617,7 @@ function mergeOpenAIWebSearchConfig(
 
 export type ModelConfigOverride = {
   contextLimit?: number;
+  effort?: ModelEffortConfig;
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
   webSearch?: OpenAIWebSearchConfig;
@@ -619,6 +633,7 @@ export type ProviderConfigEntry = {
   baseUrl?: string;
   apiKey?: string;
   contextLimit?: number;
+  effort?: ModelEffortConfig;
   asyncCompact?: boolean;
   requestCompression?: 'gzip' | 'br';
   extraFields?: Record<string, any>;
@@ -647,6 +662,7 @@ export type ModelConfigEntry = {
   baseUrl?: string;
   apiKey?: string;
   contextLimit?: number;
+  effort?: NormalizedModelEffortConfig;
   asyncCompact?: boolean;
   requestCompression?: 'gzip' | 'br';
   extraFields?: Record<string, any>;
@@ -714,6 +730,51 @@ function deepMergeObjects<T extends Record<string, any> | undefined>(base: T, ov
   }
 
   return result as T;
+}
+
+function normalizeEffortValue(value: unknown, label: string): ModelEffort {
+  if (typeof value !== 'string' || !MODEL_EFFORTS.includes(value as ModelEffort)) {
+    throw new Error(`${label} must be one of: ${MODEL_EFFORTS.join(', ')}.`);
+  }
+  return value as ModelEffort;
+}
+
+function normalizeEffortAllowed(value: unknown, label: string): ModelEffort[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${label} must be a non-empty array.`);
+  }
+  const allowed = value.map((item, index) => normalizeEffortValue(item, `${label}[${index}]`));
+  if (new Set(allowed).size !== allowed.length) {
+    throw new Error(`${label} must not contain duplicate values.`);
+  }
+  const selected = new Set(allowed);
+  return MODEL_EFFORTS.filter(effort => selected.has(effort));
+}
+
+export function normalizeModelEffortConfig(
+  value: unknown,
+  inherited?: NormalizedModelEffortConfig,
+  label = 'models config `effort`',
+): NormalizedModelEffortConfig {
+  if (value !== undefined && !isPlainObject(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  const raw = (value || {}) as Record<string, unknown>;
+  const allowed = raw.allowed === undefined
+    ? [...(inherited?.allowed || MODEL_EFFORTS)]
+    : normalizeEffortAllowed(raw.allowed, `${label}.allowed`);
+  const defaultEffort = raw.default === undefined
+    ? (inherited?.default || DEFAULT_MODEL_EFFORT)
+    : normalizeEffortValue(raw.default, `${label}.default`);
+  if (!allowed.includes(defaultEffort)) {
+    throw new Error(`${label}.default \`${defaultEffort}\` must be included in ${label}.allowed.`);
+  }
+  return { allowed, default: defaultEffort };
+}
+
+export function getConcreteModelEffortConfig(entry: Pick<ModelConfigEntry, 'effort'>): Required<NormalizedModelEffortConfig> {
+  const normalized = normalizeModelEffortConfig(entry.effort);
+  return { allowed: normalized.allowed, default: normalized.default || DEFAULT_MODEL_EFFORT };
 }
 
 function getProviderType(providerEntry: ProviderConfigEntry): string {
@@ -796,6 +857,16 @@ function applyProviderDefaults(providerEntry: ProviderConfigEntry): ProviderConf
 
 function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderConfigEntry, modelId: string, modelOverride?: ModelConfigOverride): ModelConfigEntry {
   const resolvedProviderEntry = applyProviderDefaults(providerEntry);
+  const providerEffort = normalizeModelEffortConfig(
+    resolvedProviderEntry.effort,
+    undefined,
+    `Provider \`${providerKey}\` effort`,
+  );
+  const effort = normalizeModelEffortConfig(
+    modelOverride?.effort,
+    providerEffort,
+    `Model \`${providerKey}/${modelId}\` effort`,
+  );
   const webSearch = mergeOpenAIWebSearchConfig(
     resolvedProviderEntry.webSearch,
     modelOverride?.webSearch,
@@ -808,6 +879,7 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
     baseUrl: resolvedProviderEntry.baseUrl,
     apiKey: resolvedProviderEntry.apiKey,
     contextLimit: modelOverride?.contextLimit ?? resolvedProviderEntry.contextLimit,
+    effort,
     asyncCompact: resolvedProviderEntry.asyncCompact,
     requestCompression: resolvedProviderEntry.requestCompression,
     extraHeaders: {
@@ -889,6 +961,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
     'extraFields',
     'extraHeaders',
     'contextLimit',
+    'effort',
     'asyncCompact',
     'webSearch',
   ];
@@ -959,6 +1032,11 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
 
     const contextLimit = Math.min(...leafEntries.map(entry => entry.contextLimit || CONTEXT_LIMIT));
     const asyncCompact = leafEntries.every(entry => entry.asyncCompact !== false);
+    const allowedEffortSet = new Set<ModelEffort>();
+    for (const entry of leafEntries) {
+      for (const effort of getConcreteModelEffortConfig(entry).allowed) allowedEffortSet.add(effort);
+    }
+    const allowedEfforts = MODEL_EFFORTS.filter(effort => allowedEffortSet.has(effort));
     const fingerprint = hashConfigValue({
       strategy: providerType,
       targets,
@@ -974,6 +1052,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
           requestCompression: entry.requestCompression || null,
           contextLimit: entry.contextLimit ?? CONTEXT_LIMIT,
           asyncCompact: entry.asyncCompact !== false,
+          effort: getConcreteModelEffortConfig(entry),
           apiKeyHash: hashConfigValue(entry.apiKey || ''),
           extraFieldsHash: hashConfigValue(entry.extraFields || {}),
           extraHeadersHash: hashConfigValue(entry.extraHeaders || {}),
@@ -988,6 +1067,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
       providerType,
       model: '',
       contextLimit,
+      effort: { allowed: allowedEfforts },
       asyncCompact,
       virtualRouting: {
         strategy: providerType,

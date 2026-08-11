@@ -9,7 +9,7 @@ Owns pure, public-safe Draft-07 schema objects for Foxwarm Models and App config
 
 ## Key exports
 
-- `MODELS_CONFIG_SCHEMA` — advisory models/provider/virtual-routing structure aligned with tolerant backend readers.
+- `MODELS_CONFIG_SCHEMA` — advisory models/provider/virtual-routing structure aligned with tolerant backend readers, including provider/model `{ allowed, default }` effort configuration.
 - `APP_CONFIG_SCHEMA` — advisory worker placement, bot, LLM, paths, channels (the five managed types including `qqbot`, plus QQ credential and bounded inbound-media limit key suggestions), and ASR structure.
 - `KNOWN_PROVIDER_TYPES` — known concrete protocol and virtual-routing values while custom provider types remain permitted.
 
@@ -17,7 +17,7 @@ The package exports these through `@foxwarm/shared/configSchemas`; browser bundl
 
 ## Behavior
 
-- Objects contain descriptions, types, current and retained legacy spellings, and permissive unknown-property behavior; they contain no configuration values or credentials. Concrete model/provider entries document optional OpenAI Responses `webSearch` boolean/object settings while virtual routing entries reject provider request settings. The app schema documents the same explicit boolean/object form for `vectorMaintenance`; the general shorthand contract is [D-config-feature-toggle-shorthand](./src-config.md#d-config-feature-toggle-shorthand).
+- Objects contain descriptions, types, current and retained legacy spellings, and permissive unknown-property behavior; they contain no configuration values or credentials. Concrete model/provider entries document first-class effort capabilities/default and optional OpenAI Responses `webSearch` boolean/object settings while virtual routing entries reject provider request settings. The app schema documents the same explicit boolean/object form for `vectorMaintenance`; the removed `llm.thinkingBudget` key is no longer suggested. The general shorthand contract is [D-config-feature-toggle-shorthand](./src-config.md#d-config-feature-toggle-shorthand).
 - Models `default` remains optional, virtual strategy conditions honor current `providerType` precedence and legacy `provider`, and backend-tolerant headers remain permissive.
 - No schema endpoint, remote reference, file association, editor model URI, or dynamic completion logic lives here.
 - WebUI owns its in-memory URI/file-match wrappers and unsaved-document completion provider. Code's filesystem extension owns exact authoritative master-URI association and supplies serialized local content to Red Hat YAML.

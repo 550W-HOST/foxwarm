@@ -268,6 +268,29 @@ Provider notes:
 - `anthropic` uses Anthropic-compatible requests
 - OpenAI-compatible local gateways can be configured by changing `baseUrl` and model ids. `apiKey` may be left empty if your gateway does not require one.
 
+Provider and model entries can declare first-class effort capabilities and a
+default. When omitted, all six levels are allowed and `high` is the default:
+
+```yaml
+providers:
+  openai:
+    providerType: openai-responses
+    effort:
+      allowed: [none, low, medium, high, xhigh, max]
+      default: high
+    models:
+      - gpt-5.6-sol
+      - id: gpt-5.6-terra
+        effort:
+          allowed: [low, medium, high, xhigh]
+          default: high
+```
+
+A model-level `allowed` list replaces the provider list; omitted fields inherit
+from the provider, and the resolved default must remain allowed. Requests use
+the concrete model default when no effort is selected or when a virtual route
+selects a leaf that does not allow the requested level.
+
 Responses models can opt into OpenAI's hosted web search without a separate
 Foxwarm model request:
 

@@ -30,6 +30,7 @@ Canonical image messages remain blob-reference-only until the provider request b
 - `anthropic` uses Anthropic Messages.
 - `session-hash` and `failover` resolve strict concrete leaves before provider serialization. Canonical contract: [model routing](../threads/model-routing.md).
 - Provider configuration/default/override rules are canonical in [src-config](../units/src-config.md#model-resolution).
+- Provider-neutral effort selection and concrete-attempt fallback/mapping are canonical in [model routing](../threads/model-routing.md#d-model-routing-effort).
 
 ## Invariants
 

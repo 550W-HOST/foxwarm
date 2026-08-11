@@ -15,7 +15,9 @@ Two virtual `providerType` values are supported:
 
 A virtual entry uses `targets`, containing model lookup keys that resolve strictly to concrete leaves in the same models-config snapshot. Canonical identity is an actual expansion key, so slash-containing model IDs remain exact and a single-model bare alias and qualified key resolve to the same leaf. Version 1 rejects empty targets, unknown targets, self references, virtual-to-virtual references, and aliases that resolve to the same canonical concrete target. `session-hash` accepts one or more targets; `failover` requires at least two.
 
-Virtual entries do not accept `models`, legacy `model`, `baseUrl`, `apiKey`, `requestCompression`, `extraFields`, `extraHeaders`, `webSearch`, `contextLimit`, or `asyncCompact`. `session-hash` also rejects failover-only threshold/cooldown fields. Concrete entries reject virtual routing fields. Provider entries must be plain objects, and failover threshold/cooldown values are positive integers. Request connection and serialization fields always come from the selected concrete leaf.
+Virtual entries do not accept `models`, legacy `model`, `baseUrl`, `apiKey`, `requestCompression`, `extraFields`, `extraHeaders`, `webSearch`, `contextLimit`, `effort`, or `asyncCompact`. `session-hash` also rejects failover-only threshold/cooldown fields. Concrete entries reject virtual routing fields. Provider entries must be plain objects, and failover threshold/cooldown values are positive integers. Request connection and serialization fields always come from the selected concrete leaf.
+
+Concrete provider/model entries may configure first-class `effort: { allowed, default }`. Omission allows `none`, `low`, `medium`, `high`, `xhigh`, and `max` with default `high`. Model-level fields inherit the provider values except that an explicit model `allowed` list replaces the provider list; the resolved default must be included. Virtual entries cannot configure effort and expose the ordered union of reachable concrete levels.
 
 The resolved virtual model reports:
 
@@ -30,8 +32,9 @@ The resolved virtual model reports:
 1. `requestLlmOnce` resolves one models-config snapshot and one prompt-cache routing key for the entire outer request.
 2. A concrete model uses its resolved entry directly. A virtual model selects one concrete target for the current attempt.
 3. Every outer attempt rebuilds the selected leaf's URL, credentials, headers, payload, request compression, provider serializer, stream collector, and response parser. Historical model reasoning is compatibility-filtered against that attempt's canonical concrete destination.
-4. A successful result records the concrete provider-qualified model ID. The session's selected model remains the virtual key.
-5. Retry callbacks retain the compatibility `maxRetries` field, whose value is the total attempt limit. The default total attempt limit is six.
+4. One optional provider-neutral requested effort is captured for the outer request. Each concrete attempt uses it when allowed by that leaf, otherwise it falls back to that leaf's configured default. An omitted request also uses each selected leaf's default.
+5. A successful result records the concrete provider-qualified model ID. The session's selected model remains the virtual key.
+6. Retry callbacks retain the compatibility `maxRetries` field, whose value is the total attempt limit. The default total attempt limit is six.
 
 Virtual providers add no retry loop of their own. The one LLM outer loop remains the owner of attempts, delay, abort handling, diagnostics, and terminal `LlmRequestError` creation.
 
@@ -112,6 +115,12 @@ Session hashing uses stable SHA-256 rendezvous hashing namespaced by the virtual
 ### D-model-routing-outer-attempts
 
 There is one outer LLM attempt loop, with six total attempts by default. Each virtual attempt selects a leaf and rebuilds the complete concrete request; virtual providers do not contain another retry loop. Compatibility surfaces retain the historical `maxRetries` field name even though it means total attempts.
+
+### D-model-routing-effort
+
+[2026-08-11] Model effort is one provider-neutral request setting with canonical values `none`, `low`, `medium`, `high`, `xhigh`, and `max`. Concrete provider/model configuration owns `{ allowed, default }`; omission allows all values and defaults to `high`. A model-level allowed list replaces the provider list, while a virtual model derives the ordered union of its concrete leaves and cannot define its own request override.
+
+The requested effort is captured once per outer request. Each physical attempt uses it only when the selected concrete leaf allows it, otherwise that leaf's default is used; omission also uses the leaf default. OpenAI Responses maps to `reasoning.effort`, OpenAI Chat Completions to `reasoning_effort`, and Anthropic-format providers to `output_config.effort`. `none` uses OpenAI's native value and disables Anthropic thinking while omitting Anthropic output effort. First-class mapping is applied after expanded `extraFields` without mutating configuration, so it is authoritative over known effort paths while preserving unrelated custom fields. The former global numeric thinking budget is removed.
 
 ### D-model-routing-failover-health
 

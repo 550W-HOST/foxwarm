@@ -211,6 +211,53 @@ test('failover uses outer attempts A x5 then rebuilds a clean Anthropic request 
   }
 });
 
+test('virtual attempts preserve requested effort and fall back independently to each concrete leaf default', async () => {
+  const config = loadModelsConfigFromObject({
+    default: 'route',
+    providers: {
+      openaiLeaf: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://effort-openai.test/v1',
+        effort: { allowed: ['low', 'high'], default: 'low' },
+        models: ['chat'],
+      },
+      anthropicLeaf: {
+        providerType: 'anthropic',
+        baseUrl: 'https://effort-anthropic.test',
+        effort: { allowed: ['medium', 'max'], default: 'max' },
+        models: ['claude'],
+      },
+      route: {
+        providerType: 'failover',
+        targets: ['openaiLeaf/chat', 'anthropicLeaf/claude'],
+        failureThreshold: 1,
+      },
+    },
+  });
+  assert.deepEqual(config.models.route.effort, { allowed: ['low', 'medium', 'high', 'max'] });
+
+  const originalPost = axios.post;
+  const calls: Array<{ url: string; body: any }> = [];
+  (axios as any).post = async (url: string, body: any) => {
+    calls.push({ url, body });
+    if (calls.length === 1) throw new Error('force cross-provider retry');
+    return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }] } };
+  };
+
+  try {
+    const result = await withImmediateRetryTimers(() => requestLlmOnce({
+      ...baseRequest('route', 2),
+      modelsConfigOverride: config,
+      effort: 'xhigh',
+    }));
+    assert.equal(calls[0].body.reasoning_effort, 'low');
+    assert.equal(calls[1].body.output_config.effort, 'max');
+    assert.equal(result.modelId, 'anthropicLeaf/claude');
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('virtual failover re-filters historical reasoning for each concrete attempt', async () => {
   const originalPost = axios.post;
   const calls: Array<{ url: string; body: any }> = [];

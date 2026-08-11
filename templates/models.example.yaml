@@ -21,11 +21,14 @@ providers:
     # requestCompression: gzip  # or: br
     # Optional provider-level defaults for all models in this entry.
     # contextLimit: 200000
+    # First-class effort defaults to all six levels with `high` selected when omitted.
+    # Model object entries may override this; a model-level `allowed` list replaces
+    # the provider list, and its inherited/default value must remain allowed.
+    # effort:
+    #   allowed: [none, low, medium, high, xhigh, max]
+    #   default: high
     # extraHeaders:
     #   x-provider-default: enabled
-    # extraFields:
-    #   reasoning:
-    #     effort: medium
     models:
       - gpt-5.6-sol
       - gpt-5.6-terra
