@@ -1022,6 +1022,71 @@ test('exact turn owner rejects continuation after a completed model answer', asy
   }
 });
 
+test('exact turn owner rejects continuation after a successful effective bare wait', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('continue_effective_bare_wait_session');
+  const originalChat = llm.chat;
+  let chatCalls = 0;
+  const waitCall = {
+    id: 'continue-effective-bare-wait',
+    name: 'wait',
+    args: { reason: 'finished', timeoutSeconds: 0, waitAllSessions: [] as string[], waitExecIds: [] as string[] },
+  };
+  await sessionManager.appendSessionMessages(session, [
+    { role: 'model', parts: [{ functionCall: waitCall }] },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: waitCall.id, name: 'wait', response: { output: 'waiting' } } }] },
+  ]);
+  (llm as any).chat = async () => { chatCalls += 1; throw new Error('must not run'); };
+
+  try {
+    await assert.rejects(
+      () => router.processSessionRetry(session.id),
+      (error: any) => error?.code === 'SESSION_CONTINUATION_NOT_AVAILABLE'
+        && /no interrupted turn/i.test(error.message),
+    );
+    assert.equal(chatCalls, 0);
+    assert.equal(session.busy, false);
+    assert.equal(session.history.length, 2);
+  } finally {
+    (llm as any).chat = originalChat;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('exact turn owner admits continuation after a wait with malformed recognized args', async () => {
+  const router = new MessageRouter() as any;
+  const session = await createRouterQueueTestSession('continue_malformed_wait_args_session');
+  const originalChat = llm.chat;
+  let chatCalls = 0;
+  const waitCall = {
+    id: 'continue-malformed-wait-args',
+    name: 'wait',
+    args: { reason: null } as any,
+  };
+  await sessionManager.appendSessionMessages(session, [
+    { role: 'model', parts: [{ functionCall: waitCall }] },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: waitCall.id, name: 'wait', response: { output: 'waiting' } } }] },
+  ]);
+  (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
+    chatCalls += 1;
+    assert.equal(parts, null);
+    await appendMockChatMessages(activeSession, parts, [{ text: 'continued after malformed wait args' }]);
+    return { text: 'continued after malformed wait args', allParts: [{ text: 'continued after malformed wait args' }] };
+  };
+
+  try {
+    await router.processSessionRetry(session.id);
+    assert.equal(chatCalls, 1);
+    assert.equal(session.busy, false);
+    assert.equal(session.history.some(message => message.parts.some(part => part.text === 'continued after malformed wait args')), true);
+  } finally {
+    (llm as any).chat = originalChat;
+    sessionManager.clearActiveSessionRuntimeState(session.id);
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
 test('exact turn owner suppresses continuation while a parameterized wait is active', async () => {
   const router = new MessageRouter() as any;
   const session = await createRouterQueueTestSession('continue_waiting_session');

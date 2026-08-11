@@ -55,13 +55,19 @@ function hasSuccessfulResponse(response: FunctionResponse): boolean {
   return response.response?.error === undefined || response.response?.error === null;
 }
 
-function hasOnlyBareWaitArgs(args: Record<string, any> | undefined): boolean {
-  if (!args || typeof args !== 'object' || Array.isArray(args)) return true;
-  return Object.keys(args).every(key => key === 'reason');
+function hasOnlyEffectiveBareWaitArgs(args: Record<string, any> | undefined): boolean {
+  if (args === undefined) return true;
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) return false;
+  return Object.entries(args).every(([key, value]) => {
+    if (key === 'reason') return typeof value === 'string';
+    if (key === 'timeoutSeconds') return value === 0;
+    if (key === 'waitAllSessions' || key === 'waitExecIds') return Array.isArray(value) && value.length === 0;
+    return false;
+  });
 }
 
 function isTerminalCompletionCall(call: FunctionCall): boolean {
-  if (call.name === 'wait') return hasOnlyBareWaitArgs(call.args);
+  if (call.name === 'wait') return hasOnlyEffectiveBareWaitArgs(call.args);
   return (call.name === 'send_to_session' || call.name === 'create_child_session')
     && call.args?.waitAfterHandoff === true;
 }
