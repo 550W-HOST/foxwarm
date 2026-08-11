@@ -29,7 +29,7 @@ Provides one asynchronous vector facade with local and supervised-child placemen
 - Raw segment target: about 1,200 tokens with about 400 tokens of overlap.
 - Schedule threshold: 50 pending messages or 8,000 pending estimated tokens.
 - Raw rebuild batch size is selectable through the documented vector rebuild environment override.
-- Automatic LanceDB maintenance is enabled by default with 24-hour version retention. Internal checks run at startup, after bounded mutation volume, and periodically; optimization starts only at the internal version/fragment thresholds.
+- Automatic LanceDB maintenance is enabled by default with 24-hour version retention. Raw configuration accepts the designated boolean/object toggle and normalizes before owner use; internal checks run at startup, after bounded mutation volume, and periodically; optimization starts only at the internal version/fragment thresholds. General toggle shape is canonical in [D-config-feature-toggle-shorthand](./src-config.md#d-config-feature-toggle-shorthand).
 
 ## Search behavior
 

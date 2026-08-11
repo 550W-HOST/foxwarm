@@ -25,11 +25,12 @@ test('sessionWorkers defaults off while dbWorkers defaults on', () => {
 
 test('vectorMaintenance defaults on with a validated retention window', () => {
   assert.deepEqual(normalizeVectorMaintenanceConfig({}), { enabled: true, retentionHours: 24 });
+  assert.deepEqual(normalizeVectorMaintenanceConfig(true), { enabled: true, retentionHours: 24 });
+  assert.deepEqual(normalizeVectorMaintenanceConfig(false), { enabled: false, retentionHours: 24 });
   assert.deepEqual(normalizeVectorMaintenanceConfig({ enabled: false, retentionHours: 48 }), {
     enabled: false,
     retentionHours: 48,
   });
-  assert.throws(() => normalizeVectorMaintenanceConfig(false), /vectorMaintenance.*object/);
   assert.throws(() => normalizeVectorMaintenanceConfig({ enabled: 'yes' }), /enabled.*boolean/);
   assert.throws(() => normalizeVectorMaintenanceConfig({ retentionHours: '24' }), /retentionHours.*number/);
   assert.throws(() => normalizeVectorMaintenanceConfig({ retentionHours: 0 }), /positive integer/);
@@ -66,9 +67,12 @@ test('sessionWorkers idleSeconds accepts the documented inclusive range', () => 
 });
 
 test('app YAML validation rejects invalid worker switch shapes', () => {
-  assert.deepEqual(validateAppConfigYaml('sessionWorkers: {}\ndbWorkers: false\nvectorMaintenance:\n  retentionHours: 48\n'), {
+  assert.deepEqual(validateAppConfigYaml('sessionWorkers: {}\ndbWorkers: false\nvectorMaintenance: false\n'), {
     sessionWorkers: {},
     dbWorkers: false,
+    vectorMaintenance: false,
+  });
+  assert.deepEqual(validateAppConfigYaml('vectorMaintenance:\n  retentionHours: 48\n'), {
     vectorMaintenance: { retentionHours: 48 },
   });
   assert.throws(() => validateAppConfigYaml('sessionWorkers: yes\n'), /sessionWorkers.*boolean or object/);
@@ -76,6 +80,6 @@ test('app YAML validation rejects invalid worker switch shapes', () => {
   assert.throws(() => validateAppConfigYaml('sessionWorkers:\n  idleSeconds: true\n'), /idleSeconds.*number/);
   assert.throws(() => validateAppConfigYaml('sessionWorkers:\n  idleSeconds: "60"\n'), /idleSeconds.*number/);
   assert.throws(() => validateAppConfigYaml('dbWorkers: child\n'), /dbWorkers.*boolean/);
-  assert.throws(() => validateAppConfigYaml('vectorMaintenance: yes\n'), /vectorMaintenance.*object/);
+  assert.throws(() => validateAppConfigYaml('vectorMaintenance: maybe\n'), /vectorMaintenance.*boolean or object/);
   assert.throws(() => validateAppConfigYaml('vectorMaintenance:\n  retentionHours: 0\n'), /positive integer/);
 });

@@ -8,8 +8,9 @@ The first production-routed child-process service on this boundary is the LanceD
 
 ## Configuration
 
-- `sessionWorkers` defaults off. It accepts `false`, `true`, or an object. Supplying an object enables the mode unless `enabled:false`; `idleSeconds` defaults to 60 and is bounded from 1 through 86,400 seconds.
+- `sessionWorkers` defaults off. It accepts `false`, `true`, or an object; its designated toggle shape follows [D-config-feature-toggle-shorthand](../units/src-config.md#d-config-feature-toggle-shorthand), while `idleSeconds` defaults to 60 and is bounded from 1 through 86,400 seconds.
 - `dbWorkers` defaults on. In the current scope it controls only the LanceDB/vector owner. Archive and LLM-request-journal SQLite stores are not moved behind that worker.
+- `vectorMaintenance` defaults on with a 24-hour retention window and accepts the same designated boolean/object configuration shape; its exact-owner execution contract is [D-vector-owner-maintenance](../units/src-vector.md#d-vector-owner-maintenance).
 - Both placement switches are read at startup. Saving configuration does not hot-migrate a live service between processes.
 
 ## Runtime boundary

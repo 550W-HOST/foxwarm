@@ -127,7 +127,7 @@ export type NormalizedSessionWorkersConfig = {
 export type VectorMaintenanceConfig = {
   enabled?: boolean;
   retentionHours?: number;
-};
+} | boolean;
 
 export type NormalizedVectorMaintenanceConfig = {
   enabled: boolean;
@@ -186,8 +186,14 @@ export function normalizeVectorMaintenanceConfig(value: unknown): NormalizedVect
   if (value === undefined) {
     return { enabled: true, retentionHours: DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS };
   }
+  if (value === false) {
+    return { enabled: false, retentionHours: DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS };
+  }
+  if (value === true) {
+    return { enabled: true, retentionHours: DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS };
+  }
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('app config `vectorMaintenance` must be an object.');
+    throw new Error('app config `vectorMaintenance` must be a boolean or object.');
   }
 
   const raw = value as Record<string, unknown>;
@@ -497,7 +503,7 @@ export type OpenAIWebSearchUserLocation = {
   timezone?: string;
 };
 
-export type OpenAIWebSearchConfig = {
+export type OpenAIWebSearchOptions = {
   /** Opt in to the hosted Responses API web search tool. */
   enabled?: boolean;
   /** Select automatic or required Responses tool use when search is enabled. */
@@ -506,6 +512,95 @@ export type OpenAIWebSearchConfig = {
   allowedDomains?: string[];
   userLocation?: OpenAIWebSearchUserLocation;
 };
+
+export type OpenAIWebSearchConfig = boolean | OpenAIWebSearchOptions;
+
+export type NormalizedOpenAIWebSearchConfig = Omit<OpenAIWebSearchOptions, 'enabled'> & {
+  enabled: boolean;
+};
+
+export function normalizeOpenAIWebSearchConfig(value: unknown): NormalizedOpenAIWebSearchConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === true || value === false) {
+    return { enabled: value };
+  }
+  if (!isPlainObject(value)) {
+    throw new Error('models config `webSearch` must be a boolean or object.');
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    throw new Error('models config `webSearch.enabled` must be a boolean.');
+  }
+
+  const normalized: NormalizedOpenAIWebSearchConfig = {
+    enabled: raw.enabled !== false,
+  };
+  if (raw.toolChoice !== undefined) {
+    if (raw.toolChoice !== 'auto' && raw.toolChoice !== 'required') {
+      throw new Error('models config `webSearch.toolChoice` must be `auto` or `required`.');
+    }
+    normalized.toolChoice = raw.toolChoice;
+  }
+  if (raw.searchContextSize !== undefined) {
+    if (raw.searchContextSize !== 'low' && raw.searchContextSize !== 'medium' && raw.searchContextSize !== 'high') {
+      throw new Error('models config `webSearch.searchContextSize` must be `low`, `medium`, or `high`.');
+    }
+    normalized.searchContextSize = raw.searchContextSize;
+  }
+  if (raw.allowedDomains !== undefined) {
+    if (!Array.isArray(raw.allowedDomains)) {
+      throw new Error('models config `webSearch.allowedDomains` must be an array of strings.');
+    }
+    const allowedDomains = raw.allowedDomains.map((domain, index) => {
+      if (typeof domain !== 'string' || domain.trim().length === 0) {
+        throw new Error(`models config \`webSearch.allowedDomains[${index}]\` must be a non-empty string.`);
+      }
+      return domain.trim();
+    });
+    normalized.allowedDomains = allowedDomains;
+  }
+  if (raw.userLocation !== undefined) {
+    if (!isPlainObject(raw.userLocation)) {
+      throw new Error('models config `webSearch.userLocation` must be an object.');
+    }
+    const rawLocation = raw.userLocation as Record<string, unknown>;
+    if (rawLocation.type !== undefined && rawLocation.type !== 'approximate') {
+      throw new Error('models config `webSearch.userLocation.type` must be `approximate`.');
+    }
+    const userLocation: OpenAIWebSearchUserLocation = {};
+    if (rawLocation.type !== undefined) userLocation.type = 'approximate';
+    for (const key of ['country', 'city', 'region', 'timezone'] as const) {
+      const locationValue = rawLocation[key];
+      if (locationValue !== undefined) {
+        if (typeof locationValue !== 'string') {
+          throw new Error(`models config \`webSearch.userLocation.${key}\` must be a string.`);
+        }
+        userLocation[key] = locationValue.trim();
+      }
+    }
+    normalized.userLocation = userLocation;
+  }
+
+  return normalized;
+}
+
+function mergeOpenAIWebSearchConfig(
+  baseValue: OpenAIWebSearchConfig | undefined,
+  overrideValue: OpenAIWebSearchConfig | undefined,
+): NormalizedOpenAIWebSearchConfig | undefined {
+  const base = normalizeOpenAIWebSearchConfig(baseValue);
+  if (overrideValue === undefined) {
+    return base;
+  }
+  const override = normalizeOpenAIWebSearchConfig(overrideValue)!;
+  return {
+    ...(base || {}),
+    ...override,
+  };
+}
 
 export type ModelConfigOverride = {
   contextLimit?: number;
@@ -556,7 +651,7 @@ export type ModelConfigEntry = {
   requestCompression?: 'gzip' | 'br';
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
-  webSearch?: OpenAIWebSearchConfig;
+  webSearch?: NormalizedOpenAIWebSearchConfig;
   virtualRouting?: VirtualModelRoutingConfig;
 };
 
@@ -701,7 +796,7 @@ function applyProviderDefaults(providerEntry: ProviderConfigEntry): ProviderConf
 
 function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderConfigEntry, modelId: string, modelOverride?: ModelConfigOverride): ModelConfigEntry {
   const resolvedProviderEntry = applyProviderDefaults(providerEntry);
-  const webSearch = deepMergeObjects(
+  const webSearch = mergeOpenAIWebSearchConfig(
     resolvedProviderEntry.webSearch,
     modelOverride?.webSearch,
   );

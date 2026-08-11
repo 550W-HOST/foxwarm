@@ -237,8 +237,10 @@ vectorMaintenance:
 
 LanceDB maintenance is enabled by default. It compacts fragmented vector data
 and removes table versions older than the configured positive whole-hour
-retention window; the default is 24 hours. Set `vectorMaintenance.enabled` to
-`false` to disable it. These settings are read at process startup.
+retention window; the default is 24 hours. `vectorMaintenance: true` enables
+the defaults, `vectorMaintenance: false` disables maintenance, and an object
+enables it unless `enabled: false` while allowing `retentionHours` tuning.
+These settings are read at process startup.
 
 ## Models (`state/models.yaml`)
 
@@ -286,7 +288,10 @@ providers:
 Foxwarm appends the hosted search tool beside its normal function tools. The
 completed search item is kept only for replay to the same concrete model, and
 the WebUI displays returned URL citations as clickable sources. Hosted search
-is not enabled for compact planning or setup-test requests.
+is not enabled for compact planning or setup-test requests. `webSearch: true`
+enables the default settings, `webSearch: false` disables it, and an object
+enables it unless `enabled: false`; model-level values merge tuning fields from
+their provider while overriding the inherited enabled state.
 
 For stable session routing and ordered failover, see
 [Virtual models](docs/virtual-models.md).

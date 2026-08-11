@@ -8,7 +8,7 @@ import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
-import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, OpenAIWebSearchConfig } from './config';
+import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig } from './config';
 import * as nodeExecution from './nodeExecution';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
@@ -1962,7 +1962,7 @@ export function classifyHttpFailure(statusCode: number, body: any): { retryable:
     return { retryable: true, countable: false };
 }
 
-function buildOpenAIWebSearchTool(config: OpenAIWebSearchConfig | undefined): Record<string, any> | undefined {
+function buildOpenAIWebSearchTool(config: NormalizedOpenAIWebSearchConfig | undefined): Record<string, any> | undefined {
     if (config?.enabled !== true) {
         return undefined;
     }
@@ -2018,7 +2018,7 @@ function buildConcreteRequestPlan(options: {
     const webSearchConfig = useOpenAIResponsesApi
         && request.purpose !== 'compact-plan'
         && request.purpose !== 'setup-test'
-        ? modelEntry.webSearch
+        ? normalizeOpenAIWebSearchConfig(modelEntry.webSearch)
         : undefined;
     const webSearchTool = buildOpenAIWebSearchTool(webSearchConfig);
     const webSearchToolChoice = webSearchTool

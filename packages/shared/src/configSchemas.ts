@@ -37,7 +37,7 @@ const positiveInteger = {
   minimum: 1,
 }
 
-const openaiWebSearchConfig = {
+const openaiWebSearchOptions = {
   type: 'object',
   additionalProperties: true,
   description: 'Opt-in OpenAI Responses hosted web search settings. Ignored by non-Responses providers.',
@@ -58,6 +58,14 @@ const openaiWebSearchConfig = {
       },
     },
   },
+}
+
+const openaiWebSearchConfig = {
+  oneOf: [
+    { type: 'boolean' },
+    openaiWebSearchOptions,
+  ],
+  description: 'Opt-in OpenAI Responses hosted web search settings. Use true/false for defaults or an object for tuning. Ignored by non-Responses providers.',
 }
 
 const modelOverrideProperties = {
@@ -262,6 +270,20 @@ export const APP_CONFIG_SCHEMA = {
     dbWorkers: {
       type: 'boolean',
       description: 'Run the LanceDB/vector owner in a child process. Defaults to true and requires restart.',
+    },
+    vectorMaintenance: {
+      oneOf: [
+        { type: 'boolean' },
+        {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            enabled: { type: 'boolean' },
+            retentionHours: { type: 'integer', minimum: 1 },
+          },
+        },
+      ],
+      description: 'Automatic LanceDB maintenance. Use true/false for default retention or an object to tune retentionHours. Requires restart.',
     },
     bot: {
       type: 'object',

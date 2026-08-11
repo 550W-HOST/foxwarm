@@ -35,6 +35,7 @@ providers:
   # Use `openai-completions` when you explicitly need the older /chat/completions API.
   # To enable hosted web search, first change providerType to openai-responses.
   # It is not sent for compact/setup-test requests:
+  # webSearch: true  # or false, for default settings
   # webSearch:
   #   enabled: true
   #   toolChoice: auto  # or: required
