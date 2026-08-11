@@ -63,7 +63,7 @@ test('thinking status is blue and animated, with active queue continuation and c
 
   assert.match(html, /data-processing-runtime-state="requesting-model"/)
   assert.match(html, /bg-blue-50/)
-  assert.match(html, /thinking · compaction • 2 queued messages will be inserted after this model response/)
+  assert.match(html, /Thinking\.\.\. · compaction • 2 queued messages will be inserted after this model response/)
   assert.equal((html.match(/animate-bounce/g) || []).length, 3)
   assert.match(html, />Stop<\/button>/)
   assert.match(html, />Run queued<\/button>/)
@@ -140,7 +140,7 @@ test('idle queue keeps its pending action and canonical idle overrides legacy bu
 
   const legacyBusyHtml = render({ sessionBusy: true })
   assert.match(legacyBusyHtml, /data-processing-runtime-state="requesting-model"/)
-  assert.match(legacyBusyHtml, /thinking/)
+  assert.match(legacyBusyHtml, /Thinking\.\.\./)
   assert.match(legacyBusyHtml, />Stop<\/button>/)
 })
 

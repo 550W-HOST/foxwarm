@@ -31,6 +31,9 @@ const ProcessingStatus = memo(function ProcessingStatus({
   const runtimeStateName = runtimeState?.state || (sessionBusy ? 'requesting-model' : 'idle')
   const showRuntimeStatus = runtimeStateName !== 'idle' && !loading
   const runtimeSummary = getRuntimeStateSummary(runtimeState, sessionBusy)
+  const visibleRuntimeSummary = runtimeStateName === 'requesting-model'
+    ? runtimeSummary.replace(/^thinking\b/, 'Thinking...')
+    : runtimeSummary
   const isActive = runtimeStateName === 'requesting-model' || runtimeStateName === 'running-tool'
   const tone = runtimeStateName === 'running-tool'
     ? {
@@ -81,7 +84,7 @@ const ProcessingStatus = memo(function ProcessingStatus({
                   </span>
                 )}
                 <span className={`text-sm ${tone.text}`}>
-                  {runtimeSummary}{queuedContinuation ? ` • ${queuedContinuation}` : ''}
+                  {visibleRuntimeSummary}{queuedContinuation ? ` • ${queuedContinuation}` : ''}
                 </span>
                 {(isActive || sessionQueueLength > 0) && (
                   <div className={`ml-auto flex items-center gap-1 ${tone.controls}`}>
