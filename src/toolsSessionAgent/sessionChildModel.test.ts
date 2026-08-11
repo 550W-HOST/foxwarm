@@ -57,12 +57,14 @@ test('create_session tool accepts explicit model override', async () => {
       agentName: 'main',
       sessionName,
       model: secondary,
+      effort: 'max',
     }, { sessionId: parentSessionId, session: parent });
 
     assert.match(String(result), /Model:/);
+    assert.match(String(result), /Effort: raw=max, effective=max/);
     const created = await sessionManager.getSession(createdSessionId);
     assert.equal(created.model, secondary);
-    assert.equal(created.effort, 'none');
+    assert.equal(created.effort, 'max');
   } finally {
     await sessionManager.deleteSession(createdSessionId).catch(() => {});
     await sessionManager.deleteSession(parentSessionId).catch(() => {});

@@ -1,6 +1,6 @@
 # Unit: src-session-manager
 
-Files: src/sessionManager.ts, src/session/modelEffortSettings.ts, src/session/modelEffortSettings.test.ts, src/session/sessionIdAllocation.test.ts
+Files: src/sessionManager.ts, src/session/modelEffortSettings.ts, src/session/modelEffortSettings.test.ts, src/session/modelEffortPresentation.ts, src/session/modelEffortPresentation.test.ts, src/session/sessionIdAllocation.test.ts
 
 ## Purpose
 
@@ -42,6 +42,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 
 - `forkSession`, `createChildSession`, `resolveSpawnedSessionModelEffort`, `setSessionParent`, `updateChildSessionParentIds`, `getChildSessionIds`, `getCanonicalChildSessionIds`, `collectSessionDescendants` — lineage, model/effort spawn inheritance, explicit parent links, and canonical lifecycle traversal. Fork/child creation rejects a claimed source or parent at lifecycle entry before detached-provider, hydration, prompt-cache, or allocation effects, then rechecks before the child commit. `forkSession`/`createChildSession` accept a trusted `sourceOverride` snapshot so the Main management facade can fork a worker-fenced parent from a strictly read-only detached authority read without hydrating or persisting it.
 - `normalizeProspectiveSessionModelEffortSettings` / `applyNormalizedSessionModelEffortSettings` — one models-config snapshot and one mutation step for current plus future-child model/effort pairs; explicit effort is strict and stale inherited effort clears.
+- `buildSessionModelEffortPresentation` — derives public raw/effective current and child effort, allowed sets, concrete defaults, virtual per-leaf default markers, and tolerant fallback presentation from one models-config snapshot.
 - `sendToSession`, `notifyManualForkCreated` — inter-session and manual-fork events.
 - `createAgentWithMainSession`, `createSessionInAgent`, `moveSessionToTarget`, `setAgentInherit`, `setAgentIsolation`, `refreshSessionSnapshot` — façade over agent operations. Under Worker placement, creation of new lifetimes remains Main-owned; same-source agent creation may consume one matching detached read-only source override for inherited model/node/agent-memory identity without hydrating the catalog stub. Existing-session identity conversion/move, another-source creation, and agent-wide snapshot-affecting inheritance/isolation changes fail before effects until a closed ownership path exists.
 - `getAgentMetadata`, `getAgentInheritanceChain`, `getAgentIsolationNode`, `isAgentIsolated`, `isSessionEffectivelyIsolated` — agent metadata access.

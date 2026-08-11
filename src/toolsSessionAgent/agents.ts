@@ -2,7 +2,7 @@ import fs from 'fs-extra';
 import * as llm from '../llm';
 import * as sessionManager from '../sessionManager';
 import { AGENTS_DIR } from '../config';
-import { resolveModelConfig } from '../config';
+import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
 import { requireNotIsolated } from '../isolatedCheck';
 import { executeMainManagementTool } from '../mainManagementTools';
 import { RpcError } from '../rpc';
@@ -285,7 +285,8 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
     message += `\nSystem prompt files: ${systemPromptFiles.length > 0 ? systemPromptFiles.join(', ') : '(none)'}`;
   }
   const createdSession = await sessionManager.getSession(result.sessionId);
-  const { currentKey } = resolveModelConfig(createdSession.model);
-  message += `\nModel: ${currentKey}`;
+  const presentation = buildSessionModelEffortPresentation(createdSession);
+  message += `\nModel: ${presentation.modelKey}`;
+  message += `\nEffort: raw=${presentation.effort.raw || 'unset'}, effective=${presentation.effort.effective}`;
   return message;
 }

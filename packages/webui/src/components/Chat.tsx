@@ -137,6 +137,14 @@ type SessionListRecord = {
   defaultModelKey?: string
   childModelDefault?: string | null
   effectiveChildModelKey?: string
+  effort?: string | null
+  effectiveEffort?: string
+  effortAllowed?: string[]
+  effortDefault?: string | null
+  childEffortDefault?: string | null
+  effectiveChildEffort?: string
+  childEffortAllowed?: string[]
+  childModelEffortDefault?: string | null
   isolated?: boolean
 }
 
@@ -1052,6 +1060,32 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     }
   }, [sessionId])
 
+  const updateSessionEffort = useCallback(async (effort: string | null) => {
+    setModelBusy(true); setModelError(null)
+    try {
+      const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/model`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ effort }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || `Failed to update effort (${res.status})`)
+      setSessionRecord(previous => ({ ...(previous || { id: sessionId }), ...data }))
+    } catch (error) { setModelError(error instanceof Error ? error.message : 'Failed to update effort'); throw error }
+    finally { setModelBusy(false) }
+  }, [sessionId])
+
+  const updateChildEffort = useCallback(async (effort: string | null) => {
+    setModelBusy(true); setModelError(null)
+    try {
+      const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/child-model`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ childEffortDefault: effort }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || `Failed to update child effort (${res.status})`)
+      setSessionRecord(previous => ({ ...(previous || { id: sessionId }), ...data }))
+    } catch (error) { setModelError(error instanceof Error ? error.message : 'Failed to update child effort'); throw error }
+    finally { setModelBusy(false) }
+  }, [sessionId])
+
   useEffect(() => {
     connectSSE()
 
@@ -1692,10 +1726,20 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         defaultModelKey={sessionRecord?.defaultModelKey}
         childModelDefault={sessionRecord?.childModelDefault || null}
         effectiveChildModelKey={sessionRecord?.effectiveChildModelKey}
+        effort={sessionRecord?.effort || null}
+        effectiveEffort={sessionRecord?.effectiveEffort}
+        effortAllowed={sessionRecord?.effortAllowed || []}
+        effortDefault={sessionRecord?.effortDefault || null}
+        childEffortDefault={sessionRecord?.childEffortDefault || null}
+        effectiveChildEffort={sessionRecord?.effectiveChildEffort}
+        childEffortAllowed={sessionRecord?.childEffortAllowed || []}
+        childModelEffortDefault={sessionRecord?.childModelEffortDefault || null}
         modelBusy={modelBusy}
         modelError={modelError}
         onChangeModel={updateSessionModel}
         onChangeChildModel={updateChildModel}
+        onChangeEffort={updateSessionEffort}
+        onChangeChildEffort={updateChildEffort}
         onRefreshModels={fetchModels}
         modelsRefreshing={modelsRefreshing}
         onOpenModelSettings={onOpenModelSettings || (() => {})}

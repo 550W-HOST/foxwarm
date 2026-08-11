@@ -4,13 +4,30 @@ import { nodesManager } from '../nodes/manager';
 import { listApprovedNodes, listPendingPairings } from '../nodes/registry';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
-import { COMPACT_PERCENT, HTTP_PORT, resolveModelConfig } from '../config';
+import { COMPACT_PERCENT, HTTP_PORT, MODEL_EFFORTS, resolveModelConfig, type ModelEffort } from '../config';
 import { commandSessionMessageCount, type CommandSession } from './types';
 
 export function formatTimerDate(timestamp?: number | null): string {
   if (!timestamp) return 'n/a'
   const date = new Date(timestamp)
   return Number.isNaN(date.getTime()) ? 'n/a' : date.toISOString()
+}
+
+export function parseEffortFlag(tokens: string[]): { remaining: string[]; present: boolean; effort?: ModelEffort; error?: string } {
+  const remaining: string[] = [];
+  let present = false;
+  let effort: ModelEffort | undefined;
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index] !== '--effort') { remaining.push(tokens[index]); continue; }
+    if (present) return { remaining, present, error: '--effort may be specified only once.' };
+    present = true;
+    const raw = tokens[++index]?.trim().toLowerCase();
+    if (!raw) return { remaining, present, error: '--effort requires a value.' };
+    if (raw === 'default' || raw === 'unset') effort = undefined;
+    else if (MODEL_EFFORTS.includes(raw as ModelEffort)) effort = raw as ModelEffort;
+    else return { remaining, present, error: `Effort must be one of: ${MODEL_EFFORTS.join(', ')}, default, or unset.` };
+  }
+  return { remaining, present, effort };
 }
 
 export function parseTimerFlags(tokens: string[]) {

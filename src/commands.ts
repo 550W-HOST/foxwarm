@@ -6,13 +6,14 @@ import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
 import * as skills from './skills';
 import * as tools from './tools';
-import { APP_CONFIG_PATH, getDefaultChannelIdByType, readAppConfigFile, resolveModelConfig, writeAppConfigFile, WEIXIN_CONFIG } from './config';
+import { APP_CONFIG_PATH, getDefaultChannelIdByType, readAppConfigFile, writeAppConfigFile, WEIXIN_CONFIG } from './config';
 import { formatSessionMessagesPreview } from './utils/messagePreview';
 import { buildSessionStatusInfo, formatSessionStatus } from './sessionStatus';
 import { BTW_USAGE } from './btw';
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from './weixin/api';
 import { ensureNodePairingToken } from './nodes/bootstrapInfo';
 import { getChannelRuntimeStatus, restartManagedChannel } from './channelRuntime';
+import { buildSessionModelEffortPresentation } from './session/modelEffortPresentation';
 
 // Re-export types
 export { CommandDef, CommandAutocompleteNode, CommandAutocomplete, literalNode, placeholderNode } from './commands/types';
@@ -33,7 +34,7 @@ import { handleTimerCommand } from './commands/timerCmd';
 import { handleChannelCommand } from './commands/channelCmd';
 
 // Import helpers
-import { handleCompactCommand, getDisplayModelKeys, resolveCommandModelSelection, buildNodePairHelp, buildNodeListReply } from './commands/helpers';
+import { handleCompactCommand, getDisplayModelKeys, resolveCommandModelSelection, buildNodePairHelp, buildNodeListReply, parseEffortFlag } from './commands/helpers';
 
 const messagesUsage = 'Usage: `/messages <num>` | `/messages <start> <end>`'
 const deleteMessagesUsage = 'Usage: `/delete-messages <num>` (positive: delete oldest, negative: delete newest)'
@@ -438,35 +439,44 @@ export const COMMANDS: Record<string, CommandDef> = {
     }
   },
   '/model': {
-    description: 'List or switch model. `args: [name|default]`',
+    description: 'Inspect or switch model and effort. `args: [name|default] [--effort <level|default|unset>]`',
     requiresSession: true,
     autocomplete: { children: MODEL_AUTOCOMPLETE },
     handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
-      const { defaultKey, currentKey } = resolveModelConfig(session.model)
-      const modelKeys = getDisplayModelKeys(session.model)
-      if (args.length === 0) {
-        let resp = `🤖 *Models*\n\n`
-        resp += modelKeys.map(k => {
-          const tags: string[] = []
-          if (k === defaultKey) tags.push('default')
-          if (k === currentKey) tags.push('current')
-          const suffix = tags.length ? ` (${tags.join(', ')})` : ''
-          return `- \`${k}\`${suffix}`
-        }).join('\n')
-        ctx.reply(resp)
-        return
+      const inspectOnly = args.length === 0
+      const parsed = parseEffortFlag(args)
+      if (parsed.error) { ctx.reply(`❌ ${parsed.error}`); return }
+      if (parsed.remaining.length > 1) { ctx.reply('Usage: /model [name|default] [--effort <level|default|unset>]'); return }
+      const patch: Record<string, any> = {}
+      if (parsed.present) patch.effort = parsed.effort ?? null
+      const target = parsed.remaining[0]
+      if (target) {
+        if (target === 'default') patch.model = null
+        else {
+          const resolved = resolveCommandModelSelection(target, session.model)
+          if (resolved.error) { ctx.reply(resolved.error); return }
+          patch.model = resolved.key
+        }
       }
-      const target = args[0]
-      if (target === 'default') {
-        await sessionRuntime.updateSettings(sessionId, { model: null })
-        ctx.reply('✅ Model reset to default.')
-        return
+      if (Object.keys(patch).length > 0) await sessionRuntime.updateSettings(sessionId, patch)
+      const current = await sessionRuntime.getSession(sessionId)
+      if (!current) return
+      const view = buildSessionModelEffortPresentation(current)
+      const lines = [
+        '🤖 *Model / Effort*',
+        `- model: \`${view.modelKey}\` (raw: ${view.model ? `\`${view.model}\`` : 'default'})`,
+        `- effort: raw=${view.effort.raw || 'unset'}, effective=${view.effort.effective}`,
+        `- allowed: ${view.effort.allowed.join(', ')}`,
+        `- model default: ${view.effort.defaultEffort || 'per-leaf default'}`,
+      ]
+      if (inspectOnly) {
+        lines.push('', '*Models*', ...getDisplayModelKeys(current.model).map(key => {
+          const tags = [key === view.defaultModelKey ? 'default' : '', key === view.modelKey ? 'current' : ''].filter(Boolean)
+          return `- \`${key}\`${tags.length ? ` (${tags.join(', ')})` : ''}`
+        }))
       }
-      const resolved = resolveCommandModelSelection(target, session.model)
-      if (resolved.error) { ctx.reply(resolved.error); return }
-      await sessionRuntime.updateSettings(sessionId, { model: resolved.key })
-      ctx.reply(`✅ Model switched to \`${resolved.key}\`.`)
+      ctx.reply(lines.join('\n'))
     }
   },
   '/delete-messages': {

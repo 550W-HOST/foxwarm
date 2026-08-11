@@ -127,6 +127,36 @@ async function attachRequestMocks(targetPage, options = {}) {
   let mockModelsRawYaml = options.oobe ? '' : statusPayload.models.rawYaml
   let mockConfigRawYaml = statusPayload.config.rawYaml
   let mockOobe = !!options.oobe
+  let mockSessionModel = 'route'
+  let mockSessionEffort = null
+  let mockChildModel = null
+  let mockChildEffort = null
+  const allowedEffortsFor = (model) => model === 'leaf/model-b'
+    ? ['medium', 'max']
+    : model === 'route' ? ['none', 'low', 'medium', 'high'] : ['none', 'low', 'high']
+  const isVirtualModel = (model) => model === 'route' || model === 'sticky'
+  const effectiveEffortFor = (raw, model) => raw && allowedEffortsFor(model).includes(raw)
+    ? raw
+    : isVirtualModel(model) ? 'default' : (model === 'leaf/model-b' ? 'medium' : 'high')
+  const buildMockSessionState = (id) => {
+    const childModel = mockChildModel || mockSessionModel
+    return {
+      id,
+      model: mockSessionModel === 'route' ? null : mockSessionModel,
+      modelKey: mockSessionModel,
+      defaultModelKey: 'route',
+      effort: mockSessionEffort,
+      effectiveEffort: effectiveEffortFor(mockSessionEffort, mockSessionModel),
+      effortAllowed: allowedEffortsFor(mockSessionModel),
+      effortDefault: isVirtualModel(mockSessionModel) ? null : (mockSessionModel === 'leaf/model-b' ? 'medium' : 'high'),
+      childModelDefault: mockChildModel,
+      effectiveChildModelKey: childModel,
+      childEffortDefault: mockChildEffort,
+      effectiveChildEffort: effectiveEffortFor(mockChildEffort || mockSessionEffort, childModel),
+      childEffortAllowed: allowedEffortsFor(childModel),
+      childModelEffortDefault: isVirtualModel(childModel) ? null : (childModel === 'leaf/model-b' ? 'medium' : 'high'),
+    }
+  }
   await targetPage.setRequestInterception(true)
   targetPage.on('request', (request) => {
     const url = new URL(request.url())
@@ -153,10 +183,10 @@ async function attachRequestMocks(targetPage, options = {}) {
         defaultKey: 'route',
         currentKey: 'route',
         models: [
-          { key: 'leaf/model-a', label: 'leaf/model-a', isVirtual: false },
-          { key: 'leaf/model-b', label: 'leaf/model-b', isVirtual: false },
-          { key: 'sticky', label: 'sticky', isVirtual: true },
-          { key: 'route', label: 'route', isVirtual: true },
+          { key: 'leaf/model-a', label: 'leaf/model-a', isVirtual: false, allowedEfforts: ['none', 'low', 'high'], defaultEffort: 'high' },
+          { key: 'leaf/model-b', label: 'leaf/model-b', isVirtual: false, allowedEfforts: ['medium', 'max'], defaultEffort: 'medium' },
+          { key: 'sticky', label: 'sticky', isVirtual: true, allowedEfforts: ['none', 'low', 'high'], defaultEffort: null },
+          { key: 'route', label: 'route', isVirtual: true, allowedEfforts: ['none', 'low', 'medium', 'high'], defaultEffort: null },
         ],
       })
       return
@@ -190,12 +220,23 @@ async function attachRequestMocks(targetPage, options = {}) {
     if (/\/api\/sessions\/[^/]+\/model$/.test(url.pathname) && request.method() === 'POST') {
       const body = JSON.parse(request.postData() || '{}')
       modelUpdateRequests.push({ path: url.pathname, body })
-      void respondJson(request, {
-        id: decodeURIComponent(url.pathname.split('/').at(-2) || ''),
-        model: body.model || null,
-        modelKey: body.model || 'route',
-        defaultModelKey: 'route',
-      })
+      if (Object.prototype.hasOwnProperty.call(body, 'model')) {
+        mockSessionModel = body.model || 'route'
+        if (options.staleEffort) {
+          mockSessionEffort = 'max'
+          mockChildEffort = 'max'
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(body, 'effort')) mockSessionEffort = body.effort || null
+      void respondJson(request, buildMockSessionState(decodeURIComponent(url.pathname.split('/').at(-2) || '')))
+      return
+    }
+    if (/\/api\/sessions\/[^/]+\/child-model$/.test(url.pathname) && request.method() === 'POST') {
+      const body = JSON.parse(request.postData() || '{}')
+      modelUpdateRequests.push({ path: url.pathname, body })
+      if (Object.prototype.hasOwnProperty.call(body, 'childModelDefault')) mockChildModel = body.childModelDefault || null
+      if (Object.prototype.hasOwnProperty.call(body, 'childEffortDefault')) mockChildEffort = body.childEffortDefault || null
+      void respondJson(request, buildMockSessionState(decodeURIComponent(url.pathname.split('/').at(-2) || '')))
       return
     }
     if (url.pathname.endsWith('/api/sessions')) {
@@ -752,7 +793,7 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
 test('embedded model filter selects one result and keeps the accessible Setup bridge', async () => {
   const hostPage = await browser.newPage()
   await hostPage.setViewport({ width: 390, height: 700 })
-  await attachRequestMocks(hostPage)
+  await attachRequestMocks(hostPage, { staleEffort: true })
   const nonce = '0123456789abcdef0123456789abcdef'
   try {
     await hostPage.goto(`${baseUrl}/preview/host`, { waitUntil: 'networkidle2' })
@@ -840,6 +881,36 @@ test('embedded model filter selects one result and keeps the accessible Setup br
     await chatFrame.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     assert.equal(await reopenedFilter.evaluate((input) => input.value), '')
     assert.equal(await chatFrame.$$eval('button[title="leaf/model-a"], button[title="leaf/model-b"], button[title="sticky"], button[title="route"]', (buttons) => buttons.length), 4)
+    const currentEffort = await chatFrame.waitForSelector('select[aria-label="Current effort"]')
+    assert.equal(await currentEffort.evaluate(select => select.value), 'max')
+    assert.equal(await currentEffort.$eval('option[value=""]', option => option.textContent), 'default (per leaf)')
+    assert.deepEqual(await currentEffort.$eval('option[value="max"]', option => ({ text: option.textContent, disabled: option.disabled })), {
+      text: 'max (unavailable; using per-leaf default)', disabled: true,
+    })
+    const childEffort = await chatFrame.waitForSelector('select[aria-label="Child effort"]')
+    assert.equal(await childEffort.evaluate(select => select.value), 'max')
+    assert.equal(await childEffort.$eval('option[value=""]', option => option.textContent), 'follow/default (per leaf)')
+    assert.deepEqual(await childEffort.$eval('option[value="max"]', option => ({ text: option.textContent, disabled: option.disabled })), {
+      text: 'max (unavailable; using per-leaf default)', disabled: true,
+    })
+
+    const effortUpdatesBefore = modelUpdateRequests.length
+    await currentEffort.select('low')
+    const effortDeadline = Date.now() + 5_000
+    while (modelUpdateRequests.length === effortUpdatesBefore && Date.now() < effortDeadline) await new Promise(resolve => setTimeout(resolve, 50))
+    assert.deepEqual(modelUpdateRequests.at(-1), {
+      path: '/preview/api/sessions/embedded%2Fchat/model',
+      body: { effort: 'low' },
+    })
+    await childEffort.select('none')
+    const childEffortDeadline = Date.now() + 5_000
+    while (modelUpdateRequests.at(-1)?.body?.childEffortDefault !== 'none' && Date.now() < childEffortDeadline) await new Promise(resolve => setTimeout(resolve, 50))
+    assert.deepEqual(modelUpdateRequests.at(-1), {
+      path: '/preview/api/sessions/embedded%2Fchat/child-model',
+      body: { childEffortDefault: 'none' },
+    })
+    await chatFrame.waitForFunction(() => document.querySelector('button[aria-haspopup="dialog"]')?.textContent?.includes('low'))
+    assert.ok((await modelButton.evaluate(button => button.textContent || '')).includes('child follow · none'))
     const reopenedConfigure = await chatFrame.waitForSelector('button[aria-label="Configure models"]')
     await reopenedConfigure.click()
     await hostPage.waitForFunction(() => window.embedMessages.some((message) => message?.type === 'open-setup'))

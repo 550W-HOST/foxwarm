@@ -55,7 +55,7 @@ Owns one mounted session's committed history, queued preview, runtime/model snap
 - History/SSE/Debug/CTX image parts use authenticated deployment-relative blob API paths and contain no base64 or legacy filesystem path. Timeline rendering owns the safe-raster/download distinction; canonical persistence/provider/retention behavior is [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - Timeline defaults to a recent subset with explicit full expansion.
 - Horizontal containment remains on the chat/timeline boundaries while tables/output own intentional inner scrolling.
-- Chat fetches model options on mount and again whenever the composer popup opens. A latest-request gate owns options, errors, and loading state, so stale successes/failures/finalizers cannot overwrite a newer refresh. The popup's settings action is passed upward; normal Chat delegates to App and embedded Chat emits the fixed Code-host message.
+- Chat fetches model options on mount and again whenever the composer popup opens. A latest-request gate owns options, errors, and loading state, so stale successes/failures/finalizers cannot overwrite a newer refresh. Current and child model/effort callbacks post property-presence patches to the existing model endpoints and replace local state from the canonical response, so backend normalization always wins. The popup's settings action is passed upward; normal Chat delegates to App and embedded Chat emits the fixed Code-host message. Canonical effort semantics: [D-model-routing-effort](../threads/model-routing.md#d-model-routing-effort).
 
 ## Dependencies
 

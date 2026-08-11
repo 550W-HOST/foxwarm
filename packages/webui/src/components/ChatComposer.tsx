@@ -16,6 +16,8 @@ export type ModelOption = {
   label: string
   isDefault?: boolean
   contextLimit?: number | null
+  allowedEfforts?: string[]
+  defaultEffort?: string | null
 }
 
 interface ChatComposerProps {
@@ -29,11 +31,21 @@ interface ChatComposerProps {
   defaultModelKey?: string
   childModelDefault?: string | null
   effectiveChildModelKey?: string
+  effort?: string | null
+  effectiveEffort?: string
+  effortAllowed?: string[]
+  effortDefault?: string | null
+  childEffortDefault?: string | null
+  effectiveChildEffort?: string
+  childEffortAllowed?: string[]
+  childModelEffortDefault?: string | null
   modelBusy?: boolean
   modelsRefreshing?: boolean
   modelError?: string | null
   onChangeModel: (model: string | null) => Promise<void>
   onChangeChildModel: (model: string | null) => Promise<void>
+  onChangeEffort: (effort: string | null) => Promise<void>
+  onChangeChildEffort: (effort: string | null) => Promise<void>
   onRefreshModels: () => Promise<void>
   onOpenModelSettings: () => void
   sendKeyMode?: 'modEnter' | 'enter'
@@ -76,11 +88,21 @@ function ModelSelector({
   defaultModelKey,
   childModelDefault,
   effectiveChildModelKey,
+  effort,
+  effectiveEffort,
+  effortAllowed = [],
+  effortDefault,
+  childEffortDefault,
+  effectiveChildEffort,
+  childEffortAllowed = [],
+  childModelEffortDefault,
   busy,
   refreshing,
   error,
   onChangeModel,
   onChangeChildModel,
+  onChangeEffort,
+  onChangeChildEffort,
   onRefreshModels,
   onOpenModelSettings,
 }: {
@@ -90,11 +112,21 @@ function ModelSelector({
   defaultModelKey?: string
   childModelDefault?: string | null
   effectiveChildModelKey?: string
+  effort?: string | null
+  effectiveEffort?: string
+  effortAllowed?: string[]
+  effortDefault?: string | null
+  childEffortDefault?: string | null
+  effectiveChildEffort?: string
+  childEffortAllowed?: string[]
+  childModelEffortDefault?: string | null
   busy: boolean
   refreshing: boolean
   error?: string | null
   onChangeModel: (model: string | null) => Promise<void>
   onChangeChildModel: (model: string | null) => Promise<void>
+  onChangeEffort: (effort: string | null) => Promise<void>
+  onChangeChildEffort: (effort: string | null) => Promise<void>
   onRefreshModels: () => Promise<void>
   onOpenModelSettings: () => void
 }) {
@@ -113,6 +145,20 @@ function ModelSelector({
     () => filterModelOptions(options, filterQuery, defaultModelKey),
     [defaultModelKey, filterQuery, options],
   )
+  const currentCapability = options.find(option => option.key === (currentModelKey || defaultModelKey))
+  const childCapability = options.find(option => option.key === effectiveChildModelKey)
+  const currentAllowedEfforts = currentCapability?.allowedEfforts || effortAllowed
+  const currentConfiguredDefault = currentCapability ? currentCapability.defaultEffort : effortDefault
+  const childAllowedEfforts = childCapability?.allowedEfforts || childEffortAllowed
+  const childConfiguredDefault = childCapability ? childCapability.defaultEffort : childModelEffortDefault
+  const currentStaleEffort = effort && !currentAllowedEfforts.includes(effort) ? effort : null
+  const childStaleEffort = childEffortDefault && !childAllowedEfforts.includes(childEffortDefault) ? childEffortDefault : null
+  const currentFallbackLabel = effectiveEffort === 'default'
+    ? 'per-leaf default'
+    : (effectiveEffort || currentConfiguredDefault || 'per-leaf default')
+  const childFallbackLabel = effectiveChildEffort === 'default'
+    ? 'per-leaf default'
+    : (effectiveChildEffort || childConfiguredDefault || 'per-leaf default')
 
   const toggleOpen = useCallback(() => {
     if (open) {
@@ -278,11 +324,11 @@ function ModelSelector({
         aria-expanded={open}
       >
         <span className="shrink-0 text-gray-500 dark:text-gray-400">Model</span>
-        <span className="min-w-0 truncate" title={currentModelKey || defaultModelKey || 'model'}>{currentModelKey || defaultModelKey || 'model'}</span>
-        {childModelDefault && (
+        <span className="min-w-0 truncate" title={currentModelKey || defaultModelKey || 'model'}>{currentModelKey || defaultModelKey || 'model'} · {effectiveEffort || effort || 'default'}</span>
+        {(childModelDefault || childEffortDefault) && (
           <>
             <span className="hidden shrink-0 text-gray-400 dark:text-gray-500 sm:inline">/</span>
-            <span className="hidden min-w-0 truncate text-gray-500 dark:text-gray-400 sm:inline" title={childModelDefault}>child {childModelDefault}</span>
+            <span className="hidden min-w-0 truncate text-gray-500 dark:text-gray-400 sm:inline" title={childModelDefault || 'follow'}>child {childModelDefault || 'follow'} · {effectiveChildEffort || childEffortDefault || 'default'}</span>
           </>
         )}
         {(busy || refreshing) && <span className="shrink-0 text-gray-400 dark:text-gray-500">…</span>}
@@ -304,7 +350,7 @@ function ModelSelector({
             <div className="px-2 py-2 text-center">Current</div>
             <div className="px-2 py-2 text-center">Child</div>
           </div>
-          <div className="overflow-y-auto" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 114 : 78) : undefined }}>
+          <div className="overflow-y-auto" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 180 : 144) : undefined }}>
             {renderRow({
               key: null,
               label: 'default / follow',
@@ -320,6 +366,24 @@ function ModelSelector({
               currentChecked: sessionModel === option.key,
               childChecked: childModelDefault === option.key,
             }))}
+          </div>
+          <div className="grid grid-cols-2 gap-2 border-t border-gray-200 px-3 py-2 text-xs dark:border-gray-700">
+            <label className="flex min-w-0 flex-col gap-1 text-gray-600 dark:text-gray-300">
+              <span>Current effort</span>
+              <select aria-label="Current effort" disabled={busy} value={effort || ''} onChange={(event) => void onChangeEffort(event.target.value || null).catch(() => {})} className="h-8 rounded border border-gray-200 bg-white px-2 dark:border-gray-700 dark:bg-gray-950">
+                <option value="">default ({currentFallbackLabel === 'per-leaf default' ? 'per leaf' : currentFallbackLabel})</option>
+                {currentStaleEffort && <option value={currentStaleEffort} disabled>{currentStaleEffort} (unavailable; using {currentFallbackLabel})</option>}
+                {currentAllowedEfforts.map(level => <option key={level} value={level}>{level}</option>)}
+              </select>
+            </label>
+            <label className="flex min-w-0 flex-col gap-1 text-gray-600 dark:text-gray-300">
+              <span>Child effort</span>
+              <select aria-label="Child effort" disabled={busy} value={childEffortDefault || ''} onChange={(event) => void onChangeChildEffort(event.target.value || null).catch(() => {})} className="h-8 rounded border border-gray-200 bg-white px-2 dark:border-gray-700 dark:bg-gray-950">
+                <option value="">follow/default ({childFallbackLabel === 'per-leaf default' ? 'per leaf' : childFallbackLabel})</option>
+                {childStaleEffort && <option value={childStaleEffort} disabled>{childStaleEffort} (unavailable; using {childFallbackLabel})</option>}
+                {childAllowedEfforts.map(level => <option key={level} value={level}>{level}</option>)}
+              </select>
+            </label>
           </div>
           {error && <div className="border-t border-red-100 px-3 py-2 text-xs text-red-600 dark:border-red-900/50 dark:text-red-300">{error}</div>}
           <div className="flex min-w-0 items-center gap-1.5 border-t border-gray-200 p-1.5 dark:border-gray-700">
@@ -366,11 +430,21 @@ const ChatComposer = memo(function ChatComposer({
   defaultModelKey,
   childModelDefault,
   effectiveChildModelKey,
+  effort,
+  effectiveEffort,
+  effortAllowed,
+  effortDefault,
+  childEffortDefault,
+  effectiveChildEffort,
+  childEffortAllowed,
+  childModelEffortDefault,
   modelBusy = false,
   modelsRefreshing = false,
   modelError,
   onChangeModel,
   onChangeChildModel,
+  onChangeEffort,
+  onChangeChildEffort,
   onRefreshModels,
   onOpenModelSettings,
   sendKeyMode = 'modEnter',
@@ -1303,11 +1377,21 @@ const ChatComposer = memo(function ChatComposer({
               defaultModelKey={defaultModelKey}
               childModelDefault={childModelDefault}
               effectiveChildModelKey={effectiveChildModelKey}
+              effort={effort}
+              effectiveEffort={effectiveEffort}
+              effortAllowed={effortAllowed}
+              effortDefault={effortDefault}
+              childEffortDefault={childEffortDefault}
+              effectiveChildEffort={effectiveChildEffort}
+              childEffortAllowed={childEffortAllowed}
+              childModelEffortDefault={childModelEffortDefault}
               busy={modelBusy}
               refreshing={modelsRefreshing}
               error={modelError}
               onChangeModel={onChangeModel}
               onChangeChildModel={onChangeChildModel}
+              onChangeEffort={onChangeEffort}
+              onChangeChildEffort={onChangeChildEffort}
               onRefreshModels={onRefreshModels}
               onOpenModelSettings={onOpenModelSettings}
             />

@@ -20,7 +20,8 @@ import { deleteSessionLifecycle } from '../sessionDeletion';
 import type { SessionRuntimeSessionDto } from '../sessionRuntime';
 import { buildSessionRuntimeSessionDto } from '../sessionRuntimeService';
 import { sessionCatalogStore } from '../session/catalogStore';
-import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, getActiveModelsConfigPath, readAppConfigFile, resolveModelConfig } from '../config';
+import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, getActiveModelsConfigPath, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort } from '../config';
+import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
 import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
@@ -428,18 +429,22 @@ function getWeixinSetupConfig(body: any = {}) {
   };
 }
 
-function buildWebUiModelStatus(session: { model?: string | null; childModelDefault?: string | null }) {
-  const { defaultKey, currentKey } = resolveModelConfig(session.model || undefined);
-  const effectiveSpawnModel = typeof session.childModelDefault === 'string' && session.childModelDefault.trim()
-    ? session.childModelDefault.trim()
-    : (typeof session.model === 'string' && session.model.trim() ? session.model.trim() : undefined);
-  const { currentKey: effectiveChildModelKey } = resolveModelConfig(effectiveSpawnModel);
+function buildWebUiModelStatus(session: Pick<Session, 'model' | 'effort' | 'childModelDefault' | 'childEffortDefault'>) {
+  const presentation = buildSessionModelEffortPresentation(session);
   return {
-    model: typeof session.model === 'string' && session.model.trim() ? session.model.trim() : null,
-    modelKey: currentKey,
-    defaultModelKey: defaultKey,
-    childModelDefault: typeof session.childModelDefault === 'string' && session.childModelDefault.trim() ? session.childModelDefault.trim() : null,
-    effectiveChildModelKey,
+    model: presentation.model,
+    modelKey: presentation.modelKey,
+    defaultModelKey: presentation.defaultModelKey,
+    effort: presentation.effort.raw,
+    effectiveEffort: presentation.effort.effective,
+    effortAllowed: presentation.effort.allowed,
+    effortDefault: presentation.effort.defaultEffort,
+    childModelDefault: presentation.childModelDefault,
+    effectiveChildModelKey: presentation.effectiveChildModelKey,
+    childEffortDefault: presentation.childEffort.raw,
+    effectiveChildEffort: presentation.childEffort.effective,
+    childEffortAllowed: presentation.childEffort.allowed,
+    childModelEffortDefault: presentation.childEffort.defaultEffort,
   };
 }
 
@@ -495,7 +500,7 @@ function sendSessionListQueryError(res: express.Response, error: any, logMessage
   res.status(status).json({ error: error?.message || logMessage, ...(code ? { code } : {}) });
 }
 
-function buildWebUiModelsPayload(currentModel?: string) {
+export function buildWebUiModelsPayload(currentModel?: string) {
   const { modelsConfig, defaultKey, currentKey } = resolveModelConfig(currentModel);
   const displayModels = modelsConfig.displayModels || Object.keys(modelsConfig.models || {});
   return {
@@ -511,9 +516,22 @@ function buildWebUiModelsPayload(currentModel?: string) {
         providerType: entry?.providerType || null,
         isVirtual: !!entry?.virtualRouting,
         targets: entry?.virtualRouting?.targets || [],
+        allowedEfforts: [...(entry?.effort?.allowed || MODEL_EFFORTS)],
+        defaultEffort: entry?.virtualRouting ? null : (entry?.effort?.default || 'high'),
       };
     }),
   };
+}
+
+function normalizeWebUiEffortSelection(value: unknown): ModelEffort | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== 'string') throw new Error('effort must be a canonical effort string or null.');
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || ['default', 'unset'].includes(normalized)) return undefined;
+  if (!MODEL_EFFORTS.includes(normalized as ModelEffort)) {
+    throw new Error(`effort must be one of: ${MODEL_EFFORTS.join(', ')}, default, unset, or null.`);
+  }
+  return normalized as ModelEffort;
 }
 
 function normalizeWebUiModelSelection(value: unknown): string | undefined {
@@ -1432,8 +1450,13 @@ export class WebUIChannel implements Channel {
               return res.status(404).json({ error: 'Session not found' });
             }
 
-            const model = req.body?.clear === true ? undefined : normalizeWebUiModelSelection(req.body?.model);
-            const updated = await sessionRuntime.updateSettings(session.id, { model: model || null });
+            const body = req.body || {};
+            const patch: Record<string, any> = {};
+            if (body.clear === true && !Object.prototype.hasOwnProperty.call(body, 'model')) patch.model = null;
+            if (Object.prototype.hasOwnProperty.call(body, 'model')) patch.model = normalizeWebUiModelSelection(body.model) || null;
+            if (Object.prototype.hasOwnProperty.call(body, 'effort')) patch.effort = normalizeWebUiEffortSelection(body.effort) || null;
+            if (Object.keys(patch).length === 0) throw new Error('model and/or effort is required.');
+            const updated = await sessionRuntime.updateSettings(session.id, patch);
             this.broadcastSessionListUpdate();
             res.json({ success: true, sessionId: session.id, ...buildWebUiModelStatus(updated.session) });
           } catch (e: any) {
@@ -1454,8 +1477,15 @@ export class WebUIChannel implements Channel {
               return res.status(404).json({ error: 'Session not found' });
             }
 
-            const model = req.body?.clear === true ? undefined : normalizeWebUiModelSelection(req.body?.model);
-            const result = await sessionRuntime.updateSettings(session.id, { childModelDefault: model || null });
+            const body = req.body || {};
+            const patch: Record<string, any> = {};
+            if (body.clear === true && !Object.prototype.hasOwnProperty.call(body, 'childModelDefault') && !Object.prototype.hasOwnProperty.call(body, 'model')) patch.childModelDefault = null;
+            if (Object.prototype.hasOwnProperty.call(body, 'childModelDefault')) patch.childModelDefault = normalizeWebUiModelSelection(body.childModelDefault) || null;
+            else if (Object.prototype.hasOwnProperty.call(body, 'model')) patch.childModelDefault = normalizeWebUiModelSelection(body.model) || null;
+            if (Object.prototype.hasOwnProperty.call(body, 'childEffortDefault')) patch.childEffortDefault = normalizeWebUiEffortSelection(body.childEffortDefault) || null;
+            else if (Object.prototype.hasOwnProperty.call(body, 'effort')) patch.childEffortDefault = normalizeWebUiEffortSelection(body.effort) || null;
+            if (Object.keys(patch).length === 0) throw new Error('childModelDefault and/or childEffortDefault is required.');
+            const result = await sessionRuntime.updateSettings(session.id, patch);
             this.broadcastSessionListUpdate();
             res.json({ success: true, sessionId: result.session.id, ...buildWebUiModelStatus(result.session) });
           } catch (e: any) {

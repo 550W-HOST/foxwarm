@@ -39,6 +39,9 @@ export const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
             literalNode('--model', 'Explicit model for the new session', {
               children: [placeholderNode('<model>', 'Model key or partial model name')],
             }),
+            literalNode('--effort', 'Explicit effort for the new session', {
+              children: [placeholderNode('<level>', 'none, low, medium, high, xhigh, or max')],
+            }),
             literalNode('--system-prompt-file', 'Add one file to the new session memory-source list', {
               children: [placeholderNode('<path>', 'Agent-relative, absolute, or ~/ file path')],
             }),
@@ -47,13 +50,14 @@ export const SESSION_AUTOCOMPLETE: CommandAutocompleteNode[] = [
       }),
     ],
   }),
-  literalNode('child-model', 'Get/set the current session child default model', {
-    usage: '/session child-model [model|default|clear|unset]',
+  literalNode('child-model', 'Get/set child model and effort defaults', {
+    usage: '/session child-model [model|default] [--effort <level|default|unset>]',
     children: [
       literalNode('default', 'Follow the current session model again'),
       literalNode('clear', 'Alias of default'),
       literalNode('unset', 'Alias of default'),
       placeholderNode('[model]', 'Model key or partial model name'),
+      literalNode('--effort', 'Set or clear child effort default', { children: [placeholderNode('<level|default|unset>', 'Canonical effort or default')] }),
     ],
   }),
   literalNode('fork', 'Fork the current session'),
@@ -193,8 +197,9 @@ export const MESSAGES_AUTOCOMPLETE: CommandAutocompleteNode[] = [
 ]
 
 export const MODEL_AUTOCOMPLETE: CommandAutocompleteNode[] = [
-  literalNode('default', 'Reset to the default model'),
-  placeholderNode('<name>', 'Model name or partial model name'),
+  literalNode('default', 'Reset to the default model', { children: [literalNode('--effort', 'Set or clear effort', { children: [placeholderNode('<level|default|unset>', 'Canonical effort or default')] })] }),
+  literalNode('--effort', 'Set or clear effort without changing model', { children: [placeholderNode('<level|default|unset>', 'none, low, medium, high, xhigh, max, default, or unset')] }),
+  placeholderNode('<name>', 'Model name or partial model name', { children: [literalNode('--effort', 'Set effort atomically', { children: [placeholderNode('<level|default|unset>', 'Canonical effort or default')] })] }),
 ]
 
 export const DELETE_MESSAGES_AUTOCOMPLETE: CommandAutocompleteNode[] = [

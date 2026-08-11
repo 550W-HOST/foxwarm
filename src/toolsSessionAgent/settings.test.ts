@@ -82,20 +82,18 @@ test('own-session settings and snapshot use the detached owner and one persist h
     assert.equal(persistCount, 4);
 
     const { currentKey } = resolveModelConfig(session.model);
-    assert.equal(await tool_set_session_child_model({}, ctx),
-      `Session \`${session.id}\` child default model status:\noverride: inherit current session model\ncurrent session model: \`${currentKey}\`\neffective spawned-session model: \`${currentKey}\``);
+    const initialChildStatus = await tool_set_session_child_model({}, ctx);
+    assert.ok(initialChildStatus.includes(`Session \`${session.id}\` child model/effort defaults:`));
+    assert.ok(initialChildStatus.includes(`effective model: \`${currentKey}\``));
     assert.equal(persistCount, 4);
-    assert.equal(await tool_set_session_child_model({ model: currentKey }, ctx),
-      `Session \`${session.id}\` child default model updated.\noverride: \`${currentKey}\`\neffective spawned-session model: \`${currentKey}\``);
+    assert.match(await tool_set_session_child_model({ model: currentKey }, ctx), /child default model updated/i);
     assert.equal(session.childModelDefault, currentKey);
     assert.equal(persistCount, 5);
     await tool_set_session_child_model({ model: currentKey }, ctx);
     assert.equal(persistCount, 5);
-    assert.equal(await tool_set_session_child_model({}, ctx),
-      `Session \`${session.id}\` child default model status:\noverride: \`${currentKey}\`\ncurrent session model: \`${currentKey}\`\neffective spawned-session model: \`${currentKey}\``);
+    assert.ok((await tool_set_session_child_model({}, ctx)).includes(`model override: \`${currentKey}\``));
     assert.equal(persistCount, 5);
-    assert.equal(await tool_set_session_child_model({ clear: true }, ctx),
-      `Session \`${session.id}\` child default model cleared.\nNow inheriting the current session model path (effective spawn model: \`${currentKey}\`).`);
+    assert.match(await tool_set_session_child_model({ clear: true }, ctx), /child default model cleared/i);
     assert.equal(session.childModelDefault, undefined);
     assert.equal(persistCount, 6);
     await tool_set_session_child_model({ clear: true }, ctx);
@@ -117,6 +115,36 @@ test('own-session settings and snapshot use the detached owner and one persist h
     sessionManagerModule.saveSession = originals.managerSave;
     sessionManagerModule.refreshSessionSnapshot = originals.managerRefresh;
   }
+});
+
+test('child settings reject contradictory model clear and clear effort only through effort presence', async () => {
+  const session = createDetachedSession(`detached_child_effort_contract_${Date.now()}`);
+  const { currentKey } = resolveModelConfig(session.model);
+  session.childModelDefault = currentKey;
+  session.childEffortDefault = 'high';
+  let persistCount = 0;
+  const ctx: any = {
+    sessionId: session.id,
+    session,
+    persistCurrentSession: async () => { persistCount += 1; },
+  };
+
+  await assert.rejects(
+    () => tool_set_session_child_model({ clear: true, model: currentKey }, ctx),
+    /clear=true cannot be combined with model/,
+  );
+  assert.equal(session.childModelDefault, currentKey);
+  assert.equal(session.childEffortDefault, 'high');
+  assert.equal(persistCount, 0);
+
+  await tool_set_session_child_model({ clear: true, effort: 'none' }, ctx);
+  assert.equal(session.childModelDefault, undefined);
+  assert.equal(session.childEffortDefault, 'none');
+  assert.equal(persistCount, 1);
+
+  await tool_set_session_child_model({ effort: 'unset' }, ctx);
+  assert.equal(session.childEffortDefault, undefined);
+  assert.equal(persistCount, 2);
 });
 
 test('detached settings skip a failing persist hook for no-ops and call it once for changes', async () => {

@@ -10,7 +10,7 @@ A rich chat composer component for the web UI that handles text input with slash
 ## Key Exports
 
 - `ChatComposer` — memoized React component (default export) providing the full chat input experience
-- `ModelOption` — type describing a selectable model (key, label, isDefault, contextLimit)
+- `ModelOption` — type describing a selectable model plus allowed/default effort capability metadata
 - `filterModelOptions` / `formatModelLabel` — exact natural-text filtering and visible-label formatting for model candidates
 
 ## Function Index
@@ -20,7 +20,7 @@ A rich chat composer component for the web UI that handles text input with slash
 | `persistDraft(sessionId, value)` | ~62 | Saves or removes draft text in localStorage |
 | `formatModelLabel(option, defaultModelKey)` | ~67 | Formats a model option label with default indicator |
 | `filterModelOptions(options, query, defaultModelKey?)` | modelFilter.ts | Case-insensitive visible-label/id substring filter that preserves server order |
-| `ModelSelector(props)` | ~80–350 | Popup component for filtering/selecting current and child models or opening model settings |
+| `ModelSelector(props)` | ~80–390 | Popup component for filtering/selecting current and child models, selecting their effort overrides, or opening model settings |
 | `updatePopupPosition()` | ~97–120 | Calculates fixed positioning for the model selector popup |
 | `applyCurrentModel(model)` | ~140 | Calls onChangeModel unless busy |
 | `applyChildModel(model)` | ~145 | Calls onChangeChildModel unless busy |
@@ -58,13 +58,14 @@ A rich chat composer component for the web UI that handles text input with slash
 - The filter performs a case-insensitive substring match against each candidate's currently visible label and model id without fuzzy reordering. The default/follow row and the server's option order/current/child semantics remain unchanged.
 - Enter in the filter selects the current model only when exactly one actual candidate remains, reusing the existing current-model callback and closing the popup. Zero/multiple candidates and IME composition Enter are no-ops.
 - Opening the model popup requests a fresh `/api/models` list through Chat, so long-lived/multi-pane composers do not keep stale choices. The footer's icon-only, labeled Configure Models button delegates to App rather than changing location itself; the adjacent filter owns the remaining width and the popup remains viewport-clamped on mobile.
+- The trigger shows the effective current effort and shows the future-child pair when either a child model or child effort override exists. The popup keeps the existing current/child model rows and adds compact current/child effort selects; each select is limited to the freshly loaded selected/effective model capability (falling back to the session projection). Virtual unset is labeled `per leaf`, never as a synthetic `default` effort. If the backend returns a stale raw override outside the allowed set, the select keeps it visibly selected as a disabled unavailable option, states the authoritative effective fallback, and offers only valid recovery choices. Canonical semantics: [D-model-routing-effort](../threads/model-routing.md#d-model-routing-effort).
 - Adds semantic CSS hooks (`foxwarm-chat-composer-inner`, `foxwarm-chat-composer-form`, `foxwarm-chat-composer-textarea`, `foxwarm-attachment-chip`) used by optional UI style layers such as 550A; these hooks should not change composer behavior or draft/attachment data flow. The inner wrapper keeps the ordinary centered 64rem composer geometry in wide panes; Chat-owned container CSS can reserve a desktop context-overview clearance in constrained per-pane layouts without altering mobile behavior.
 
 ## Integration
 
 - Consumed by the chat view, receiving session state, model configuration, and callbacks for sending messages, changing models, and transcribing audio.
 - Relies on `chatShared` utilities for slash-command logic and textarea auto-resize.
-- Model changes propagate up through `onChangeModel`/`onChangeChildModel` to session management. Model refresh and settings navigation propagate through `onRefreshModels`/`onOpenModelSettings`; canonical navigation behavior is [D-webui-model-settings-navigation](../modules/webui.md#d-webui-model-settings-navigation).
+- Model/effort changes propagate up through paired callbacks to the existing session model and child-model endpoints. Model refresh and settings navigation propagate through `onRefreshModels`/`onOpenModelSettings`; canonical navigation behavior is [D-webui-model-settings-navigation](../modules/webui.md#d-webui-model-settings-navigation).
 - Attachments and text are bundled and sent via `onSend` to the parent message-handling layer.
 
 ## Design decisions

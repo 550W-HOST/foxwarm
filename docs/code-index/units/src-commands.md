@@ -1,6 +1,6 @@
 # Unit: src-commands
 
-Files: src/commands.ts (facade), src/commands/types.ts, src/commands/autocomplete.ts, src/commands/helpers.ts, src/commands/sessionCmd.ts, src/commands/sessionCmd.test.ts, src/commands/continueCommand.test.ts, src/commands/agentCmd.ts, src/commands/timerCmd.ts, src/commands/channelCmd.ts, src/commandHandler.ts
+Files: src/commands.ts (facade), src/commands/types.ts, src/commands/autocomplete.ts, src/commands/helpers.ts, src/commands/sessionCmd.ts, src/commands/sessionCmd.test.ts, src/commands/modelEffortCommand.test.ts, src/commands/continueCommand.test.ts, src/commands/agentCmd.ts, src/commands/timerCmd.ts, src/commands/channelCmd.ts, src/commandHandler.ts
 Secondary files: src/session/sessionIdAllocation.test.ts
 
 ## Purpose
@@ -33,6 +33,7 @@ All `*_AUTOCOMPLETE` constants: TIMER, BTW, SESSION, AGENT, SKILL, NODE, MESSAGE
 | `parseTimerMessage(tokens)` | Extracts message text after `--` separator |
 | `parseSessionMoveTarget(rawTarget)` | Parses `<id>` or `<agent>/<id>` move target |
 | `parseCompactThresholdInput(raw)` | Parses compact threshold value (supports `Nk` suffix) |
+| `parseEffortFlag(tokens)` | Removes and validates one canonical `--effort` flag while preserving whether unset/default was explicitly requested |
 | `getDisplayModelKeys(currentModel)` | Returns model keys for display |
 | `resolveCommandModelSelection(input, currentModel)` | Resolves partial model name to full key |
 | `formatChannelInfo(ctx)` | Formats current channel identifiers and state |
@@ -46,6 +47,7 @@ All `*_AUTOCOMPLETE` constants: TIMER, BTW, SESSION, AGENT, SKILL, NODE, MESSAGE
 | Function | Description |
 |----------|-------------|
 | `formatSessionListChannels(channelKeys)` | Formats the optional `/session list` channel line after excluding attachment keys whose exact prefix is `webui:`. |
+| `parseSessionCreateFlags(tokens)` | Strictly parses one optional model, one optional canonical effort, and repeatable system-prompt-file flags without consuming another flag as a value. |
 | `handleSessionCommand(ctx, args, sessionId, session)` | Dispatches /session subcommands (list, new, create, fork, delete, clear, rename, move, parent, archive, etc.) |
 
 ### commands/agentCmd.ts — /agent handler
@@ -97,11 +99,11 @@ Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /continue, /node,
 - Session-requiring commands automatically resolve the active session from the channel/conversation binding; if none exists, they short-circuit with an error message.
 - Timer commands enforce permission checks for isolated agents before creating timers.
 - `/config` can modify persistent app config (model settings, WeChat credentials) and triggers channel restarts when relevant config changes.
-- `/session create` supports `--model` and `--system-prompt-file` flags for customizing new sessions.
+- `/model` inspects or atomically updates the current model/effort pair; `/session child-model` does the same for future-child defaults. `--effort default|unset` clears only the relevant raw effort while `none` remains explicit. `/session create` uses one complete serial parse for optional single `--model`, optional single canonical `--effort`, and repeatable `--system-prompt-file`; unknown/positional extras, duplicate single flags, missing values, and flag tokens used as values fail before model resolution or creation. Canonical effort semantics: [D-model-routing-effort](../threads/model-routing.md#d-model-routing-effort).
 - `/session new`, `/session create`, `/session fork`, `/fork`, and `/attach` await durable channel attachment after creating/resolving the target; they do not report success after an attachment write failure. Canonical semantics: [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 - `/session move <target> [--parent <parent-session-id>]` preserves the incoming parent when the flag is omitted and intentionally reparents after the identity move when supplied. `/session unparent` remains the explicit detach surface. Canonical semantics: [D-lifecycle-identity-move-relations](../threads/session-lifecycle.md#d-lifecycle-identity-move-relations).
 - `/channel` subcommands can start/stop/restart managed channel processes and toggle security settings like `dangerouslyAllowAllUsers`.
-- `/status` delegates to `src/sessionStatus`, sharing status fields/formatting with `session({ action: "status" })`: session/agent identity, agent dir, parent id, model, message count, token/image estimate, last usage (including optional provider-reported reasoning tokens within output), last message time, auto-compact threshold, current node, current cwd/default cwd, busy/queue state, and recent child sessions.
+- `/status` delegates to `src/sessionStatus`, sharing status fields/formatting with `session({ action: "status" })`: session/agent identity, agent dir, parent id, model plus raw/effective current and child effort, message count, token/image estimate, last usage (including optional provider-reported reasoning tokens within output), last message time, auto-compact threshold, current node, current cwd/default cwd, busy/queue state, and recent child sessions.
 - `/search` delegates to `recall({ vector_query })` rather than the removed `search_vector` tool, so command output uses the same archive back-resolution and preview renderer as agent recall.
 - `/skill list` shows visible skills and entry-document counts; `/skill show <skill>` loads the skill entry document and lists resource paths without eagerly reading those resources.
 - `/node remove <node-id>` refuses reserved ids such as `master`, removes only approved-node credentials (not pending pair approval/rejection flow), and closes/unregisters the online runtime node if present.
@@ -120,5 +122,7 @@ Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /continue, /node,
 
 - [2026-07-02] `/status` and the model-facing `session({ action: "status" })` tool share `src/sessionStatus` as their common status information source/formatter so command and tool output stay field-equivalent.
 - [2026-07-10] `/session list` should hide `webui:` attachment entries from its user-facing channel line while preserving Telegram, WeWork, Discord, and other channel entries. This is display-only filtering and must not mutate channel attachment state or affect WebUI routing.
+
+- [2026-08-11] `/session create` owns one strict serial flag grammar after `<agent> <session>`: one optional `--model`, one optional canonical `--effort`, and repeatable `--system-prompt-file`. Reject malformed or extra tokens before any resolution or creation side effect rather than combining independent scans.
 
 - [2026-07-12] The user-facing fork command syntax is `/fork [suffix] [message]`: suffix is an optional ASCII-safe child-session suffix, and message is all remaining raw text after the suffix delimiter, including internal spaces and newlines. Omitted suffix uses the existing generated-session suffix behavior; there is no ambiguous legacy `/fork [message]` interpretation.

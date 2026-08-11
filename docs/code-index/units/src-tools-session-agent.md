@@ -106,7 +106,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 |----------|-------------|
 | `tool_set_goal` | Sets or clears the session goal |
 | `tool_set_session_compact_threshold` | Reads or updates the trusted passed owner's compaction threshold, with the existing SessionRuntime path for other/legacy targets |
-| `tool_set_session_child_model` | Reads or updates the trusted passed owner's child-model default, with the existing SessionRuntime path for other/legacy targets |
+| `tool_set_session_child_model` | Reads or atomically updates the trusted passed owner's future-child model/effort defaults, with the existing SessionRuntime path for other/legacy targets |
 | `tool_update_session_snapshot` | Refreshes a trusted passed owner's prompt snapshot directly, or uses the existing ID-based path for other/legacy targets |
 
 ### toolsSessionAgent/sessionCrud.ts — Session lifecycle
@@ -120,7 +120,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 ### src/sessionStatus.ts — Shared session status/list formatting
 | Function | Description |
 |----------|-------------|
-| `buildSessionStatusInfo` | Builds the shared status data used by `/status` and `session({action:"status"})`: agent/session identity, agent dir, parent id, model, message count, token/image estimate, last usage (including an optional provider-reported reasoning component), last message time, effective auto-compact threshold, current node connectivity, cwd/default cwd, busy/queue state, and recent child sessions. |
+| `buildSessionStatusInfo` | Builds the shared status data used by `/status` and `session({action:"status"})`: agent/session identity, agent dir, parent id, model plus raw/effective current and child effort, message count, token/image estimate, last usage, effective auto-compact threshold, current node connectivity, cwd/default cwd, busy/queue state, and recent child sessions. |
 | `formatSessionStatus` | Formats status info for command/tool output. |
 | `formatSessionListRow` | Shared row formatter reused by status child-session rows and session list output. |
 | `buildSessionListOutput` | Formats the old list_sessions-style paginated list for `session({action:"list"})`. |
@@ -167,6 +167,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `delete_session` defaults to one target and shares the Main-owned lifecycle orchestrator with WebUI and `/session delete`. It detaches surviving direct children, preserves channel/busy/claim revalidation, and may tear down another exact Worker target through the fixed reverse operation. The canonical current source or any alias resolving to it is rejected before target preparation; there is no self-destruct protocol. Canonical semantics: [D-lifecycle-descendant-actions](../threads/session-lifecycle.md#d-lifecycle-descendant-actions).
 - `move_session` reports the previous/resulting parent after identity success. If its optional post-move parent write fails, the result explicitly says the identity move committed and the requested parent was not confirmed; canonical semantics: [D-lifecycle-identity-move-relations](../threads/session-lifecycle.md#d-lifecycle-identity-move-relations).
 - Goal setting normalizes text, resolves remind-every defaults, and persists to session state.
+- `create_child_session` and `create_session` accept model-facing canonical effort overrides. `set_session_child_model` uses property presence to inspect or atomically change future-child model/effort defaults. Legacy `clear:true` remains strictly model-only, cannot be combined with a supplied `model`, and may still accompany an independent effort update; effort clears only through `effort:"default"|"unset"`. Canonical semantics: [D-model-routing-effort](../threads/model-routing.md#d-model-routing-effort).
 - `tool_compact_session` starts async-capable snapshot planning immediately without a compact-planning queue item; for a busy `asyncCompact:false` target it reports that the target must become idle first. Only ready compact commits use the queue safe point.
 - Timer create/update delegates to the `timers` module and returns formatted summaries; list/delete remain scoped by current or explicit session ID.
 
