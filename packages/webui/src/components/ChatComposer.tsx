@@ -302,6 +302,7 @@ function ModelSelector({
     <div
       key={row.key || '__default__'}
       className="grid grid-cols-[minmax(0,1fr)_minmax(5.5rem,7.5rem)_minmax(5.5rem,7.5rem)] items-stretch border-t border-gray-100 text-xs first:border-t-0 dark:border-gray-800"
+      data-model-selector-row="true"
     >
       <button
         type="button"
@@ -370,42 +371,10 @@ function ModelSelector({
             data-model-selector-header="true"
           >
             <div className="flex items-center px-3 py-2">Model id</div>
-            <label className="flex min-w-0 flex-col gap-0.5 border-l border-gray-200/80 px-1.5 py-1 dark:border-gray-700/80">
-              <span className="text-center text-[10px] leading-3">Current</span>
-              <select
-                aria-label="Current effort"
-                aria-describedby={`${effortDescriptionId}-current`}
-                disabled={busy}
-                value={effort || ''}
-                onChange={(event) => void onChangeEffort(event.target.value || null).catch(() => {})}
-                className="foxwarm-model-effort-select h-6 w-full min-w-0 rounded-md border border-gray-200 bg-white/90 px-1 text-[11px] font-medium normal-case tracking-normal text-gray-700 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-900/90 dark:text-gray-200 dark:focus:border-blue-500 dark:focus:ring-blue-700"
-                title={`Current effort: ${currentStaleFullLabel || (effort || currentDefaultFullLabel)}`}
-              >
-                <option value="" label={currentDefaultShortLabel} title={currentDefaultFullLabel}>{currentDefaultFullLabel}</option>
-                {currentStaleEffort && <option value={currentStaleEffort} label={`${formatEffortLabel(currentStaleEffort)} ⚠`} title={currentStaleFullLabel || undefined} aria-label={currentStaleFullLabel || undefined} disabled>{currentStaleFullLabel}</option>}
-                {currentAllowedEfforts.map(level => <option key={level} value={level} label={formatEffortLabel(level)} title={level}>{level}</option>)}
-              </select>
-              <span id={`${effortDescriptionId}-current`} className="sr-only">Current effort: {currentStaleFullLabel || (effort || currentDefaultFullLabel)}</span>
-            </label>
-            <label className="flex min-w-0 flex-col gap-0.5 border-l border-gray-200/80 px-1.5 py-1 dark:border-gray-700/80">
-              <span className="text-center text-[10px] leading-3">Child</span>
-              <select
-                aria-label="Child effort"
-                aria-describedby={`${effortDescriptionId}-child`}
-                disabled={busy}
-                value={childEffortDefault || ''}
-                onChange={(event) => void onChangeChildEffort(event.target.value || null).catch(() => {})}
-                className="foxwarm-model-effort-select h-6 w-full min-w-0 rounded-md border border-gray-200 bg-white/90 px-1 text-[11px] font-medium normal-case tracking-normal text-gray-700 outline-none focus:border-purple-400 focus:ring-1 focus:ring-purple-300 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-900/90 dark:text-gray-200 dark:focus:border-purple-500 dark:focus:ring-purple-700"
-                title={`Child effort: ${childStaleFullLabel || (childEffortDefault || childDefaultFullLabel)}`}
-              >
-                <option value="" label={childDefaultShortLabel} title={childDefaultFullLabel}>{childDefaultFullLabel}</option>
-                {childStaleEffort && <option value={childStaleEffort} label={`${formatEffortLabel(childStaleEffort)} ⚠`} title={childStaleFullLabel || undefined} aria-label={childStaleFullLabel || undefined} disabled>{childStaleFullLabel}</option>}
-                {childAllowedEfforts.map(level => <option key={level} value={level} label={formatEffortLabel(level)} title={level}>{level}</option>)}
-              </select>
-              <span id={`${effortDescriptionId}-child`} className="sr-only">Child effort: {childStaleFullLabel || (childEffortDefault || childDefaultFullLabel)}</span>
-            </label>
+            <div className="flex items-center justify-center border-l border-gray-200/80 px-2 py-2 text-center dark:border-gray-700/80">Current</div>
+            <div className="flex items-center justify-center border-l border-gray-200/80 px-2 py-2 text-center dark:border-gray-700/80">Child</div>
           </div>
-          <div className="overflow-y-auto" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 138 : 104) : undefined }}>
+          <div className="overflow-y-auto" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 144 : 110) : undefined }}>
             {renderRow({
               key: null,
               label: 'default / follow',
@@ -423,6 +392,44 @@ function ModelSelector({
             }))}
           </div>
           {error && <div className="border-t border-red-100 px-3 py-2 text-xs text-red-600 dark:border-red-900/50 dark:text-red-300">{error}</div>}
+          <div
+            className="grid grid-cols-[minmax(0,1fr)_minmax(5.5rem,7.5rem)_minmax(5.5rem,7.5rem)] items-stretch border-t border-gray-200 bg-gray-50/70 text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-700 dark:bg-gray-800/70 dark:text-gray-400"
+            data-model-effort-footer="true"
+          >
+            <div className="flex items-center px-3 py-1.5">Effort</div>
+            <label className="flex min-w-0 items-center border-l border-gray-200/80 px-1.5 py-1 dark:border-gray-700/80">
+              <select
+                aria-label="Current effort"
+                aria-describedby={`${effortDescriptionId}-current`}
+                disabled={busy}
+                value={effort || ''}
+                onChange={(event) => void onChangeEffort(event.target.value || null).catch(() => {})}
+                className="foxwarm-model-effort-select h-6 w-full min-w-0 rounded-md border border-gray-200 bg-white/90 px-1 text-[11px] font-medium normal-case tracking-normal text-gray-700 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-900/90 dark:text-gray-200 dark:focus:border-blue-500 dark:focus:ring-blue-700"
+                title={`Current effort: ${currentStaleFullLabel || (effort || currentDefaultFullLabel)}`}
+              >
+                <option value="" label={currentDefaultShortLabel} title={currentDefaultFullLabel}>{currentDefaultFullLabel}</option>
+                {currentStaleEffort && <option value={currentStaleEffort} label={`${formatEffortLabel(currentStaleEffort)} ⚠`} title={currentStaleFullLabel || undefined} aria-label={currentStaleFullLabel || undefined} disabled>{currentStaleFullLabel}</option>}
+                {currentAllowedEfforts.map(level => <option key={level} value={level} label={formatEffortLabel(level)} title={level}>{level}</option>)}
+              </select>
+              <span id={`${effortDescriptionId}-current`} className="sr-only">Current effort: {currentStaleFullLabel || (effort || currentDefaultFullLabel)}</span>
+            </label>
+            <label className="flex min-w-0 items-center border-l border-gray-200/80 px-1.5 py-1 dark:border-gray-700/80">
+              <select
+                aria-label="Child effort"
+                aria-describedby={`${effortDescriptionId}-child`}
+                disabled={busy}
+                value={childEffortDefault || ''}
+                onChange={(event) => void onChangeChildEffort(event.target.value || null).catch(() => {})}
+                className="foxwarm-model-effort-select h-6 w-full min-w-0 rounded-md border border-gray-200 bg-white/90 px-1 text-[11px] font-medium normal-case tracking-normal text-gray-700 outline-none focus:border-purple-400 focus:ring-1 focus:ring-purple-300 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-900/90 dark:text-gray-200 dark:focus:border-purple-500 dark:focus:ring-purple-700"
+                title={`Child effort: ${childStaleFullLabel || (childEffortDefault || childDefaultFullLabel)}`}
+              >
+                <option value="" label={childDefaultShortLabel} title={childDefaultFullLabel}>{childDefaultFullLabel}</option>
+                {childStaleEffort && <option value={childStaleEffort} label={`${formatEffortLabel(childStaleEffort)} ⚠`} title={childStaleFullLabel || undefined} aria-label={childStaleFullLabel || undefined} disabled>{childStaleFullLabel}</option>}
+                {childAllowedEfforts.map(level => <option key={level} value={level} label={formatEffortLabel(level)} title={level}>{level}</option>)}
+              </select>
+              <span id={`${effortDescriptionId}-child`} className="sr-only">Child effort: {childStaleFullLabel || (childEffortDefault || childDefaultFullLabel)}</span>
+            </label>
+          </div>
           <div className="flex min-w-0 items-center gap-1.5 border-t border-gray-200 p-1.5 dark:border-gray-700">
             <button
               type="button"

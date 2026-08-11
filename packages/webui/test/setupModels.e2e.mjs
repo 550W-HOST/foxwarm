@@ -836,9 +836,16 @@ test('embedded model filter selects one result and keeps the accessible Setup br
     assert.ok(popupLayout.right <= popupLayout.viewportWidth)
     assert.ok(popupLayout.settingsRight <= popupLayout.filterLeft)
     assert.ok(popupLayout.filterRight <= popupLayout.right)
-    const integratedEffortLayout = await chatFrame.$eval('[data-model-selector-header="true"]', (header) => {
-      const headerRect = header.getBoundingClientRect()
-      const selects = Array.from(header.querySelectorAll('select')).map((select) => {
+    const alignedEffortLayout = await chatFrame.$eval('[data-model-selector-popup="true"]', (popup) => {
+      const header = popup.querySelector('[data-model-selector-header="true"]')
+      const footer = popup.querySelector('[data-model-effort-footer="true"]')
+      const row = popup.querySelector('[data-model-selector-row="true"]')
+      if (!header || !footer || !row) throw new Error('model selector table rows are missing')
+      const columnRects = (element) => Array.from(element.children).map((child) => {
+        const rect = child.getBoundingClientRect()
+        return { left: rect.left, right: rect.right, width: rect.width }
+      })
+      const selects = Array.from(footer.querySelectorAll('select')).map((select) => {
         const rect = select.getBoundingClientRect()
         const style = getComputedStyle(select)
         const canvas = document.createElement('canvas')
@@ -857,15 +864,35 @@ test('embedded model filter selects one result and keeps the accessible Setup br
           description: description ? document.getElementById(description)?.textContent : '',
         }
       })
-      return { height: headerRect.height, left: headerRect.left, right: headerRect.right, selects }
+      return {
+        headerLabels: Array.from(header.children).map((child) => child.textContent?.trim()),
+        headerSelectCount: header.querySelectorAll('select').length,
+        footerLabel: footer.firstElementChild?.textContent?.trim(),
+        footerImmediatelyAboveSearch: !!footer.nextElementSibling?.querySelector('input[aria-label="Filter models"]'),
+        headerColumns: columnRects(header),
+        footerColumns: columnRects(footer),
+        rowColumns: columnRects(row),
+        footerHeight: footer.getBoundingClientRect().height,
+        selects,
+      }
     })
-    assert.ok(integratedEffortLayout.height <= 52)
-    assert.equal(integratedEffortLayout.selects.length, 2)
-    assert.ok(integratedEffortLayout.selects.every(({ left, right, width }) => left >= integratedEffortLayout.left && right <= integratedEffortLayout.right && width >= 76))
-    assert.ok(integratedEffortLayout.selects.every(({ fontSize }) => fontSize === 16))
-    assert.deepEqual(integratedEffortLayout.selects.map(({ selectedLabel }) => selectedLabel), ['Per leaf', 'Per leaf'])
-    assert.ok(integratedEffortLayout.selects.every(({ readable }) => readable))
-    assert.deepEqual(integratedEffortLayout.selects.map(({ description }) => description), [
+    assert.deepEqual(alignedEffortLayout.headerLabels, ['Model id', 'Current', 'Child'])
+    assert.equal(alignedEffortLayout.headerSelectCount, 0)
+    assert.equal(alignedEffortLayout.footerLabel, 'Effort')
+    assert.equal(alignedEffortLayout.footerImmediatelyAboveSearch, true)
+    assert.ok(alignedEffortLayout.footerHeight <= 36)
+    assert.equal(alignedEffortLayout.selects.length, 2)
+    for (let index = 0; index < 3; index += 1) {
+      assert.ok(Math.abs(alignedEffortLayout.headerColumns[index].left - alignedEffortLayout.footerColumns[index].left) <= 1)
+      assert.ok(Math.abs(alignedEffortLayout.headerColumns[index].right - alignedEffortLayout.footerColumns[index].right) <= 1)
+      assert.ok(Math.abs(alignedEffortLayout.rowColumns[index].left - alignedEffortLayout.footerColumns[index].left) <= 1)
+      assert.ok(Math.abs(alignedEffortLayout.rowColumns[index].right - alignedEffortLayout.footerColumns[index].right) <= 1)
+    }
+    assert.ok(alignedEffortLayout.selects.every(({ left, right, width }, index) => left >= alignedEffortLayout.footerColumns[index + 1].left && right <= alignedEffortLayout.footerColumns[index + 1].right && width >= 76))
+    assert.ok(alignedEffortLayout.selects.every(({ fontSize }) => fontSize === 16))
+    assert.deepEqual(alignedEffortLayout.selects.map(({ selectedLabel }) => selectedLabel), ['Per leaf', 'Per leaf'])
+    assert.ok(alignedEffortLayout.selects.every(({ readable }) => readable))
+    assert.deepEqual(alignedEffortLayout.selects.map(({ description }) => description), [
       'Current effort: default (per leaf)',
       'Child effort: follow/default (per leaf)',
     ])
@@ -977,7 +1004,7 @@ test('embedded model filter selects one result and keeps the accessible Setup br
   }
 })
 
-test('default desktop model effort header stays compact and readable', async () => {
+test('default desktop model effort footer stays compact and table-aligned', async () => {
   const desktopPage = await browser.newPage()
   await desktopPage.setViewport({ width: 900, height: 700 })
   await attachRequestMocks(desktopPage)
@@ -988,32 +1015,59 @@ test('default desktop model effort header stays compact and readable', async () 
     await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     await desktopPage.click('button[title="leaf/model-a"]')
     await desktopPage.waitForFunction(() => document.querySelector('select[aria-label="Current effort"]')?.title === 'Current effort: default (high)')
-    const layout = await desktopPage.$eval('[data-model-selector-header="true"]', (header) => Array.from(header.querySelectorAll('select')).map((select) => {
-      const rect = select.getBoundingClientRect()
-      const style = getComputedStyle(select)
-      const canvas = document.createElement('canvas')
-      const context = canvas.getContext('2d')
-      if (context) context.font = style.font
-      const selectedLabel = select.selectedOptions[0]?.label || ''
-      const description = select.getAttribute('aria-describedby')
+    const layout = await desktopPage.$eval('[data-model-selector-popup="true"]', (popup) => {
+      const header = popup.querySelector('[data-model-selector-header="true"]')
+      const footer = popup.querySelector('[data-model-effort-footer="true"]')
+      const row = popup.querySelector('[data-model-selector-row="true"]')
+      if (!header || !footer || !row) throw new Error('model selector table rows are missing')
+      const columns = (element) => Array.from(element.children).map((child) => {
+        const rect = child.getBoundingClientRect()
+        return { left: rect.left, right: rect.right }
+      })
+      const headerColumns = columns(header)
+      const footerColumns = columns(footer)
+      const rowColumns = columns(row)
+      const selects = Array.from(footer.querySelectorAll('select')).map((select) => {
+        const rect = select.getBoundingClientRect()
+        const style = getComputedStyle(select)
+        const canvas = document.createElement('canvas')
+        const context = canvas.getContext('2d')
+        if (context) context.font = style.font
+        const selectedLabel = select.selectedOptions[0]?.label || ''
+        const description = select.getAttribute('aria-describedby')
+        return {
+          width: rect.width,
+          fontSize: Number.parseFloat(style.fontSize),
+          selectedLabel,
+          readable: (context?.measureText(selectedLabel).width || 0) + 28 <= rect.width,
+          title: select.title,
+          description: description ? document.getElementById(description)?.textContent : '',
+        }
+      })
       return {
-        width: rect.width,
-        fontSize: Number.parseFloat(style.fontSize),
-        selectedLabel,
-        readable: (context?.measureText(selectedLabel).width || 0) + 28 <= rect.width,
-        title: select.title,
-        description: description ? document.getElementById(description)?.textContent : '',
+        selects,
+        aligned: footerColumns.every((column, index) => (
+          Math.abs(column.left - headerColumns[index].left) <= 1
+          && Math.abs(column.right - headerColumns[index].right) <= 1
+          && Math.abs(column.left - rowColumns[index].left) <= 1
+          && Math.abs(column.right - rowColumns[index].right) <= 1
+        )),
+        headerLabels: Array.from(header.children).map((child) => child.textContent?.trim()),
+        footerLabel: footer.firstElementChild?.textContent?.trim(),
       }
-    }))
-    assert.deepEqual(layout.map(({ selectedLabel }) => selectedLabel), ['Default', 'Follow'])
-    assert.ok(layout.every(({ fontSize }) => fontSize === 11))
-    assert.ok(layout.every(({ width }) => width >= 104))
-    assert.ok(layout.every(({ readable }) => readable))
-    assert.deepEqual(layout.map(({ title }) => title), [
+    })
+    assert.equal(layout.aligned, true)
+    assert.deepEqual(layout.headerLabels, ['Model id', 'Current', 'Child'])
+    assert.equal(layout.footerLabel, 'Effort')
+    assert.deepEqual(layout.selects.map(({ selectedLabel }) => selectedLabel), ['Default', 'Follow'])
+    assert.ok(layout.selects.every(({ fontSize }) => fontSize === 11))
+    assert.ok(layout.selects.every(({ width }) => width >= 104))
+    assert.ok(layout.selects.every(({ readable }) => readable))
+    assert.deepEqual(layout.selects.map(({ title }) => title), [
       'Current effort: default (high)',
       'Child effort: follow/default (high)',
     ])
-    assert.deepEqual(layout.map(({ description }) => description), [
+    assert.deepEqual(layout.selects.map(({ description }) => description), [
       'Current effort: default (high)',
       'Child effort: follow/default (high)',
     ])
@@ -1037,27 +1091,47 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
       const current = popup.querySelector('select[aria-label="Current effort"]')
       const child = popup.querySelector('select[aria-label="Child effort"]')
       const header = popup.querySelector('[data-model-selector-header="true"]')
+      const footer = popup.querySelector('[data-model-effort-footer="true"]')
+      const row = popup.querySelector('[data-model-selector-row="true"]')
+      const columns = (element) => element ? Array.from(element.children).map((cell) => {
+        const rect = cell.getBoundingClientRect()
+        return { left: rect.left, right: rect.right }
+      }) : []
+      const headerColumns = columns(header)
+      const footerColumns = columns(footer)
+      const rowColumns = columns(row)
       return {
         theme: document.documentElement.getAttribute('data-foxwarm-ui-style'),
         popupWidth: popup.getBoundingClientRect().width,
         headerContainsCurrent: !!header?.contains(current),
         headerContainsChild: !!header?.contains(child),
+        footerContainsCurrent: !!footer?.contains(current),
+        footerContainsChild: !!footer?.contains(child),
         currentWidth: current?.getBoundingClientRect().width || 0,
         childWidth: child?.getBoundingClientRect().width || 0,
         currentFontSize: current ? Number.parseFloat(getComputedStyle(current).fontSize) : 0,
         currentLabel: current?.selectedOptions[0]?.label || '',
         childLabel: child?.selectedOptions[0]?.label || '',
+        aligned: footerColumns.length === 3 && footerColumns.every((column, index) => (
+          Math.abs(column.left - headerColumns[index].left) <= 1
+          && Math.abs(column.right - headerColumns[index].right) <= 1
+          && Math.abs(column.left - rowColumns[index].left) <= 1
+          && Math.abs(column.right - rowColumns[index].right) <= 1
+        )),
       }
     })
     assert.equal(themeLayout.theme, '550a')
     assert.ok(themeLayout.popupWidth <= 500)
-    assert.equal(themeLayout.headerContainsCurrent, true)
-    assert.equal(themeLayout.headerContainsChild, true)
+    assert.equal(themeLayout.headerContainsCurrent, false)
+    assert.equal(themeLayout.headerContainsChild, false)
+    assert.equal(themeLayout.footerContainsCurrent, true)
+    assert.equal(themeLayout.footerContainsChild, true)
     assert.ok(themeLayout.currentWidth >= 104)
     assert.ok(themeLayout.childWidth >= 104)
     assert.ok(themeLayout.currentFontSize <= 11)
     assert.equal(themeLayout.currentLabel, 'Per leaf')
     assert.equal(themeLayout.childLabel, 'Per leaf')
+    assert.equal(themeLayout.aligned, true)
     const configure = await normalPage.waitForSelector('button[aria-label="Configure models"]')
     assert.equal((await configure.evaluate((button) => button.textContent || '')).trim(), '')
     await configure.click()
