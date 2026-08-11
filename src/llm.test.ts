@@ -110,7 +110,13 @@ function makeResponsesWebSearchStream(): PassThrough {
     stream.write(`data: ${JSON.stringify({
       type: 'response.completed',
       response: {
-        output: [],
+        // Hosted Responses may omit the streamed search call from this
+        // condensed final output. The collector must not merge these entries
+        // by their compact ordinal positions.
+        output: [
+          { type: 'reasoning', summary: [] },
+          { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Hello', annotations: [citation] }] },
+        ],
         usage: { input_tokens: 1, output_tokens: 1 },
       },
     })}\n\n`);
@@ -325,6 +331,8 @@ test('OpenAI Responses parsing persists native web search output and URL annotat
       'web_search_call',
       'Hello',
     ]);
+    assert.equal(result.allParts?.filter(part => typeof part.text === 'string').length, 1);
+    assert.equal(result.allParts?.filter(part => part.providerMeta?.openaiResponses?.outputItem).length, 1);
     assert.equal(result.allParts?.[0].providerMeta?.openaiResponses?.sourceModelId, 'fixture/gpt-5.6');
     assert.deepEqual(result.allParts?.[1].providerMeta?.openaiResponses?.annotations, [{
       type: 'url_citation',

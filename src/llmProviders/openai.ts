@@ -697,22 +697,37 @@ export async function collectOpenAIResponsesStream(
             }
 
             const completedItems = Array.isArray(completedOutput) ? completedOutput : [];
-            const streamedByIndex = new Map(streamedEntries.map(entry => [entry.outputIndex, entry.item]));
-            const maxLength = Math.max(
-                completedItems.length,
-                streamedEntries.reduce((max, entry) => Math.max(max, entry.outputIndex + 1), 0),
-            );
-            return Array.from({ length: maxLength }, (_, index) => {
-                const streamedItem = streamedByIndex.get(index);
-                const completedItem = completedItems[index];
-                if (streamedItem && completedItem) {
-                    // The completed payload is authoritative when it contains
-                    // a final value; the streamed item fills fields omitted by
-                    // compatible gateways and preserves streamed annotations.
-                    return mergeResponseOutputItem(streamedItem, completedItem);
-                }
-                return completedItem || streamedItem;
-            }).filter(Boolean);
+            const isPositionallyAligned = streamedEntries.length === completedItems.length
+                && streamedEntries.every((entry, index) => {
+                    if (entry.outputIndex !== index) {
+                        return false;
+                    }
+                    const streamedItem = entry.item;
+                    const completedItem = completedItems[index];
+                    if (!streamedItem || !completedItem || typeof streamedItem.type !== 'string' || streamedItem.type !== completedItem.type) {
+                        return false;
+                    }
+                    const streamedId = streamedItem.id || streamedItem.call_id;
+                    const completedId = completedItem.id || completedItem.call_id;
+                    return !streamedId || !completedId || streamedId === completedId;
+                });
+
+            if (!isPositionallyAligned) {
+                // Hosted Responses tools may be present in the streamed
+                // output-item sequence but omitted from response.completed's
+                // compact output array. In that case ordinal merging would
+                // attach the final message to an earlier search call and
+                // duplicate the text. The stream's indexed order is the
+                // authoritative sequence whenever alignment is unproven.
+                return streamedEntries.map(entry => entry.item);
+            }
+
+            return streamedEntries.map((entry, index) => {
+                // The completed payload is authoritative when the complete
+                // arrays are proven aligned; the streamed item fills fields
+                // omitted by compatible gateways and preserves annotations.
+                return mergeResponseOutputItem(entry.item, completedItems[index]);
+            });
         };
 
         const handleEvent = (event: any) => {
@@ -887,7 +902,6 @@ export async function collectOpenAIResponsesStream(
             appendDecodedText(decoder.end());
             finish(() => {
                 if (completedResponse) {
-                    completedResponse.output = mergeCompletedOutputItems(completedResponse.output);
                     resolve(completedResponse);
                     return;
                 }

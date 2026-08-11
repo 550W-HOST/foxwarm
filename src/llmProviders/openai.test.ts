@@ -359,6 +359,105 @@ test('collectOpenAIResponsesStream preserves web search calls and streamed URL a
   ]);
 });
 
+test('collectOpenAIResponsesStream keeps streamed order when completed output condenses hosted items', async () => {
+  const citation = {
+    type: 'url_citation',
+    start_index: 0,
+    end_index: 5,
+    url: 'https://example.com/article',
+    title: 'Example article',
+  };
+  const stream = makeStream([
+    {
+      type: 'response.output_item.added',
+      output_index: 0,
+      item: { type: 'reasoning', id: 'rs_0' },
+    },
+    {
+      type: 'response.output_item.added',
+      output_index: 1,
+      item: { type: 'web_search_call', id: 'ws_sparse', status: 'in_progress' },
+    },
+    {
+      type: 'response.output_item.done',
+      output_index: 1,
+      item: {
+        type: 'web_search_call',
+        id: 'ws_sparse',
+        status: 'completed',
+        action: { type: 'search', query: 'example query' },
+      },
+    },
+    {
+      type: 'response.output_item.added',
+      output_index: 2,
+      item: { type: 'reasoning', id: 'rs_2' },
+    },
+    {
+      type: 'response.output_item.added',
+      output_index: 3,
+      item: { type: 'message', id: 'msg_sparse', role: 'assistant', content: [] },
+    },
+    {
+      type: 'response.content_part.added',
+      output_index: 3,
+      content_index: 0,
+      part: { type: 'output_text', text: '' },
+    },
+    {
+      type: 'response.output_text.delta',
+      output_index: 3,
+      content_index: 0,
+      delta: 'Hello',
+    },
+    {
+      type: 'response.output_text.annotation.added',
+      output_index: 3,
+      content_index: 0,
+      annotation_index: 0,
+      annotation: citation,
+    },
+    {
+      type: 'response.output_text.done',
+      output_index: 3,
+      content_index: 0,
+      text: 'Hello',
+    },
+    {
+      type: 'response.output_item.done',
+      output_index: 3,
+      item: {
+        type: 'message',
+        id: 'msg_sparse',
+        role: 'assistant',
+        status: 'completed',
+        content: [{ type: 'output_text', text: 'Hello', annotations: [citation] }],
+      },
+    },
+    {
+      type: 'response.completed',
+      response: {
+        // This compact payload omits the hosted search call and the second
+        // reasoning item, matching the provider shape seen in production.
+        output: [
+          { type: 'reasoning', summary: [{ type: 'summary_text', text: 'Planning' }] },
+          { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Hello', annotations: [citation] }] },
+        ],
+      },
+    },
+    '[DONE]',
+  ]);
+
+  const response = await collectOpenAIResponsesStream(stream, new AbortController().signal);
+  assert.deepEqual(response.output.map((item: any) => item.type), ['reasoning', 'web_search_call', 'reasoning', 'message']);
+  assert.equal(response.output.filter((item: any) => item.type === 'message').length, 1);
+  assert.equal(response.output[1].id, 'ws_sparse');
+  assert.deepEqual(response.output[1].action, { type: 'search', query: 'example query' });
+  assert.equal(response.output[3].id, 'msg_sparse');
+  assert.equal(response.output[3].content[0].text, 'Hello');
+  assert.deepEqual(response.output[3].content[0].annotations, [citation]);
+});
+
 test('collectOpenAIResponsesStream reports raw SSE body and blocks', async () => {
   const stream = makeStream([
     {
