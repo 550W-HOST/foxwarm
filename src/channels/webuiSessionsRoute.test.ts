@@ -1,9 +1,16 @@
 import test from 'node:test';
+import { sessionCatalogStore } from '../session/catalogStore';
+
+test.before(() => {
+  if (!sessionCatalogStore.exists()) sessionCatalogStore.initializeEmpty();
+  else sessionCatalogStore.open();
+});
 import assert from 'node:assert/strict';
 import { HttpServer, setHttpServer } from '../httpServer';
 import * as sessionManager from '../sessionManager';
 import { setWebUiDeleteLifecycleTestHookForTests, WebUIChannel } from './webuiChannel';
-import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot } from '../session/metadataStore';
+import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload } from '../session/metadataStore';
+import { markSessionCatalogStub } from '../sessionRuntimeState';
 import type { Session } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
 import fs from 'fs-extra';
@@ -124,6 +131,283 @@ test('WebUI creation routes create agents and random or custom sessions', async 
     }
     await sessionManager.setAgentInherit(agentId, undefined).catch(() => {});
     await fs.remove(getAgentDir(agentId));
+  }
+});
+
+test('WebUI list uses catalog queue count for a lightweight stub, then exact hydration wins', async () => {
+  const sessionId = makeSessionId('webui_catalog_queue');
+  const session = await sessionManager.getSession(sessionId);
+  session.queue = [1, 2, 3].map(index => ({ type: 'background', parts: [{ text: `catalog ${index}` }] }));
+  await sessionManager.saveSession(sessionId);
+  session.queue = [];
+  markSessionCatalogStub(session, 3);
+  await fs.writeJson(getSessionHistoryFilePath(sessionId), serializeSessionHistoryPayload({
+    ...session,
+    queue: [{ type: 'background', parts: [{ text: 'authority wins' }] }],
+  } as Session));
+
+  const port = 34700 + Math.floor(Math.random() * 400);
+  const server = new HttpServer(port, 'queue-token');
+  setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token: 'queue-token', enableTrigger: false, enableWebUI: true });
+  await server.start();
+  const readListed = async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sessions`, { headers: { Authorization: 'Bearer queue-token' } });
+    assert.equal(response.status, 200);
+    return ((await response.json() as any).sessions as any[]).find(item => item.id === sessionId);
+  };
+  try {
+    const stub = await readListed();
+    assert.equal(stub.queueLength, 3);
+    assert.equal(stub.runtimeState.queueLength, 3);
+    assert.equal(stub.runtimeState.state, 'idle');
+    assert.equal(stub.runtimeState.busy, false);
+    await sessionManager.getSession(sessionId);
+    const hydrated = await readListed();
+    assert.equal(hydrated.queueLength, 1);
+    assert.equal(hydrated.runtimeState.queueLength, 1);
+    assert.equal(hydrated.runtimeState.state, 'idle');
+    assert.equal(hydrated.runtimeState.busy, false);
+  } finally {
+    await server.stop(); setHttpServer(null);
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+  }
+});
+
+test('bounded session-list routes preserve tree modes, focus paths, aliases, search, architecture, and descendant preview', async () => {
+  const prefix = makeSessionId('webui_bounded'); const agent = `${prefix}_agent`;
+  const ids = { root: `${prefix}_root`, child: `${prefix}_child`, child2: `${prefix}_child2`, deep: `${prefix}_deep`,
+    pinned: `${prefix}_pinned`, dangling: `${prefix}_dangling`, volatile: `${prefix}_volatile` };
+  const cross = { childB: `${prefix}_cross_b`, deepA: `${prefix}_cross_a` };
+  const now = Date.now();
+  const configure = async (id: string, values: Partial<Session>) => {
+    const session = await sessionManager.getSession(id); Object.assign(session, values); session.agent = agent;
+    session.meta = { ...session.meta, lastMessageTime: (values.meta as any)?.lastMessageTime || now };
+    await sessionManager.saveSession(id);
+  };
+  await configure(ids.root, { displayName: `${prefix} Search Display`, aliases: [`${prefix}_unique`, `${prefix}_shared`], sidebarOrder: 1, meta: { lastMessageTime: now } });
+  await configure(ids.child, { parentSessionId: ids.root, aliases: [`${prefix}_shared`], sidebarOrder: 1, meta: { lastMessageTime: now - 1 } });
+  await configure(ids.child2, { parentSessionId: ids.root, sidebarOrder: 2, meta: { lastMessageTime: now - 2 } });
+  await configure(ids.deep, { parentSessionId: ids.child, meta: { lastMessageTime: now - 3 } });
+  await configure(ids.pinned, { parentSessionId: ids.root, pinned: true, meta: { lastMessageTime: now - 4 } });
+  await configure(ids.dangling, { parentSessionId: `${prefix}_missing`, meta: { lastMessageTime: now - 5 } });
+  await configure(ids.volatile, { meta: { lastMessageTime: 1 } });
+  const volatile = sessionManager.getAllSessions().get(ids.volatile)!; volatile.meta.lastMessageTime = now + 1000; volatile.busy = true;
+
+  const port = 34900 + Math.floor(Math.random() * 300); const token = 'bounded-list-token';
+  const server = new HttpServer(port, token); setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true }); await server.start();
+  const request = (route: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${port}${route}`, {
+    ...init, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...init.headers },
+  });
+  try {
+    let response = await request(`/api/session-list/sidebar?mode=default&limit=100&childLimit=1&focusSessionId=${encodeURIComponent(ids.deep)}`);
+    assert.equal(response.status, 200); const sidebar = await response.json() as any;
+    assert.equal(sidebar.version, 1); assert.ok(sidebar.sessions.some((item: any) => item.id === ids.root));
+    assert.ok(sidebar.sessions.some((item: any) => item.id === ids.pinned), 'pinned child is presentation-elevated');
+    assert.ok(sidebar.sessions.some((item: any) => item.id === ids.dangling), 'dangling canonical parent projects as root');
+    assert.equal(sidebar.sessions.find((item: any) => item.id === ids.pinned).parentSessionId, ids.root, 'elevation does not mutate real parent');
+    assert.equal(sidebar.sessions.find((item: any) => item.id === ids.dangling).parentSessionId, null);
+    assert.deepEqual(sidebar.presentationPaths[ids.deep], [ids.root, ids.child, ids.deep]);
+    assert.deepEqual(sidebar.forcedChildren[ids.root], [ids.child]);
+    assert.ok(sidebar.pathContext.some((item: any) => item.session?.id === ids.root));
+    const rootChildren = sidebar.children.find((item: any) => item.parentSessionId === ids.root);
+    assert.equal(rootChildren.sessions.length, 1); assert.equal(rootChildren.total, 2); assert.ok(rootChildren.nextCursor);
+
+    response = await request('/api/session-list/sidebar?mode=flat-time&limit=100');
+    const flat = await response.json() as any; assert.ok(flat.sessions.some((item: any) => item.id === ids.deep), 'flat mode ignores real parents');
+    response = await request('/api/session-list/sidebar?mode=time&limit=2');
+    const volatilePage = await response.json() as any; assert.ok(volatilePage.sessions.some((item: any) => item.id === ids.volatile),
+      'an unsaved newly-recent active local projection enters the bounded page before sorting');
+
+    response = await request('/api/session-list/children', { method: 'POST', body: JSON.stringify({ mode: 'default', limit: 10,
+      parents: [{ parentSessionId: ids.root, cursor: rootChildren.nextCursor }] }) });
+    assert.equal(response.status, 200); const continued = await response.json() as any;
+    assert.deepEqual(continued.children[0].sessions.map((item: any) => item.id), [ids.child2]);
+
+    response = await request('/api/session-list/by-id', { method: 'POST', body: JSON.stringify({ ids: [`${prefix}_unique`, `${prefix}_shared`], includePaths: true }) });
+    const byId = await response.json() as any; assert.equal(byId.results[0].resolution.kind, 'alias');
+    assert.equal(byId.results[0].session.id, ids.root); assert.equal(byId.results[1].resolution.kind, 'ambiguous');
+
+    response = await request(`/api/session-list/search?q=${encodeURIComponent('search display')}&limit=10`);
+    const search = await response.json() as any; assert.ok(search.sessions.some((item: any) => item.id === ids.root));
+
+    await configure(cross.childB, { parentSessionId: ids.root, meta: { lastMessageTime: now - 10 } });
+    const crossB = sessionManager.getAllSessions().get(cross.childB)!; crossB.agent = `${agent}_b`; await sessionManager.saveSessionCatalogEntries([cross.childB]);
+    await configure(cross.deepA, { parentSessionId: cross.childB, meta: { lastMessageTime: now - 11 } });
+
+    response = await request(`/api/session-list/architecture?agent=${encodeURIComponent(agent)}&limit=100&childLimit=10`);
+    const architecture = await response.json() as any; assert.equal(architecture.version, 1);
+    assert.ok(architecture.agentCounts.some((item: any) => item.agent === agent && item.count === 8));
+    assert.ok(architecture.roots.sessions.every((item: any) => item.agent === agent));
+    assert.ok(architecture.roots.sessions.some((item: any) => item.id === cross.deepA), 'A→B→A descendant becomes an A forest root');
+    assert.equal(architecture.roots.sessions.some((item: any) => item.id === ids.pinned), false, 'pinned same-agent child is not a real forest root');
+    assert.ok((architecture.children.find((item: any) => item.parentSessionId === ids.root)?.sessions || [])
+      .some((item: any) => item.id === ids.pinned), 'Architecture preserves pinned child real relation');
+    assert.ok(!(architecture.children.find((item: any) => item.parentSessionId === ids.root)?.sessions || [])
+      .some((item: any) => item.id === cross.childB), 'agent child preview excludes other-agent children');
+    response = await request('/api/session-list/children', { method: 'POST', body: JSON.stringify({ mode: 'time', agent,
+      parents: [{ parentSessionId: ids.root }] }) });
+    const agentChildren = await response.json() as any;
+    assert.ok(agentChildren.children[0].sessions.every((item: any) => item.agent === agent));
+    assert.equal(agentChildren.children[0].sessions.some((item: any) => item.id === cross.childB), false);
+
+    response = await request(`/api/session-list/descendants/${encodeURIComponent(ids.root)}?limit=10`);
+    const descendants = await response.json() as any; assert.equal(descendants.previewOnly, true); assert.equal(descendants.total, 6);
+    const deepBusy = sessionManager.getAllSessions().get(ids.deep)!; deepBusy.busy = true; await sessionManager.saveSessionCatalogEntries([ids.deep]);
+    response = await request('/api/session-list/descendant-activity', { method: 'POST', body: JSON.stringify({ ids: [ids.root, `${prefix}_unique`, ids.child, ids.deep] }) });
+    const activity = await response.json() as any;
+    assert.equal(activity.results.find((item: any) => item.requestedId === `${prefix}_unique`).sessionId, ids.root);
+    assert.equal(activity.results.find((item: any) => item.requestedId === `${prefix}_unique`).busy, 1, 'unique aliases resolve before activity projection');
+    assert.deepEqual(Object.fromEntries(activity.results.filter((item: any) => item.requestedId !== `${prefix}_unique`).map((item: any) => [item.sessionId, item.busy])), {
+      [ids.root]: 1, [ids.child]: 1, [ids.deep]: 0,
+    }, 'busy descendant badges use authoritative recursive ancestry and exclude the row itself');
+    const childCycle = sessionManager.getAllSessions().get(ids.child)!; childCycle.parentSessionId = ids.deep; deepBusy.parentSessionId = ids.child;
+    await sessionManager.saveSessionCatalogEntries([ids.child, ids.deep]);
+    response = await request('/api/session-list/descendant-activity', { method: 'POST', body: JSON.stringify({ ids: [ids.child, ids.deep] }) });
+    const cycleActivity = await response.json() as any;
+    assert.deepEqual(Object.fromEntries(cycleActivity.results.map((item: any) => [item.sessionId, item.busy])), { [ids.child]: 1, [ids.deep]: 0 },
+      'A↔B cycles terminate and never count the busy row as its own descendant');
+    childCycle.parentSessionId = ids.root; deepBusy.parentSessionId = ids.child; await sessionManager.saveSessionCatalogEntries([ids.child, ids.deep]);
+    deepBusy.busy = false;
+    response = await request('/api/session-list/descendant-activity', { method: 'POST', body: JSON.stringify({ ids: [ids.root] }) });
+    assert.equal(((await response.json()) as any).results[0].busy, 0, 'current exact local idle projection overrides stale catalog busy');
+    await sessionManager.saveSessionCatalogEntries([ids.deep]);
+
+    response = await request('/api/session-list/sidebar?mode=time&limit=1'); const timePage = await response.json() as any;
+    assert.ok(timePage.nextCursor);
+    const root = sessionManager.getAllSessions().get(ids.root)!; root.meta.lastMessageTime = now + 100; await sessionManager.saveSession(ids.root);
+    response = await request(`/api/session-list/sidebar?mode=time&limit=1&cursor=${encodeURIComponent(timePage.nextCursor)}`);
+    const resetPage = await response.json() as any; assert.equal(resetPage.reset, true, 'catalog mutations reset stateless cursors');
+    response = await request(`/api/session-list/sidebar?mode=default&limit=1&cursor=${encodeURIComponent(timePage.nextCursor)}`);
+    assert.equal(response.status, 400, 'cursor scope/mode mismatches fail strictly');
+    assert.equal((await request('/api/session-list/search?q=x&limit=bad')).status, 400);
+    assert.equal((await request('/api/session-list/by-id', { method: 'POST', body: JSON.stringify({ ids: ids.root }) })).status, 400);
+    assert.equal((await request('/api/session-list/by-id', { method: 'POST', body: JSON.stringify({ ids: [ids.root], extra: true }) })).status, 400);
+    assert.equal((await request('/api/session-list/children', { method: 'POST', body: JSON.stringify({ mode: 'time', limit: '10', parents: [] }) })).status, 400);
+    assert.equal((await request('/api/session-list/children', { method: 'POST', body: JSON.stringify({ mode: 'time', parents: [{ parentSessionId: ids.root, extra: true }] }) })).status, 400);
+  } finally {
+    await server.stop(); setHttpServer(null);
+    volatile.busy = false;
+    for (const id of [cross.deepA, cross.childB, ids.deep, ids.child, ids.child2, ids.pinned, ids.dangling, ids.volatile, ids.root]) await sessionManager.deleteSession(id).catch(() => {});
+  }
+});
+
+test('sidebar focus query keeps comma IDs, repeatable focus values, and a complete 105-deep render path', async () => {
+  const prefix = makeSessionId('webui_focus_deep'); const rootId = `${prefix},comma`;
+  const ids = [rootId, ...Array.from({ length: 105 }, (_, index) => `${prefix}_d${String(index + 1).padStart(3, '0')}`)];
+  const sessions = ids.map((id, index) => ({
+    id, agent: `${prefix}_agent`, aliases: [], parentSessionId: index ? ids[index - 1] : undefined,
+    history: [], contextFrontier: [], persistentMemorySnapshot: '', systemPromptFiles: [],
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false, queue: [], meta: { lastMessageTime: ids.length - index, messageCount: 0 }, currentNode: 'master',
+  } as Session));
+  for (const session of sessions) sessionManager.getAllSessions().set(session.id, session);
+  sessionCatalogStore.upsertMany(sessions as any[]);
+  const port = 40500 + Math.floor(Math.random() * 100); const token = 'deep-focus-token';
+  const server = new HttpServer(port, token); setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true }); await server.start();
+  try {
+    const params = new URLSearchParams({ mode: 'default', limit: '100', childLimit: '5' });
+    params.append('focusSessionId', rootId); params.append('focusSessionId', ids.at(-1)!);
+    const response = await fetch(`http://127.0.0.1:${port}/api/session-list/sidebar?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(response.status, 200); const payload = await response.json() as any;
+    assert.deepEqual(payload.presentationPaths[rootId], [rootId], 'comma is literal ID content, not a CSV separator');
+    assert.equal(payload.presentationPaths[ids.at(-1)!].length, 106);
+    assert.deepEqual(payload.presentationPaths[ids.at(-1)!], ids);
+    assert.equal(new Set(payload.pathContext.map((item: any) => item.session?.id).filter(Boolean)).size, 106,
+      'all accepted path rows have renderable projections across exact-helper chunks');
+    const tooMany = new URLSearchParams({ mode: 'default' });
+    for (let index = 0; index < 9; index++) tooMany.append('focusSessionId', ids[index]);
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/session-list/sidebar?${tooMany}`, { headers: { Authorization: `Bearer ${token}` } })).status, 400);
+  } finally {
+    await server.stop(); setHttpServer(null); sessionCatalogStore.deleteMany(ids);
+    for (const id of ids) sessionManager.getAllSessions().delete(id);
+  }
+});
+
+test('bounded cursor and volatile union share SQLite BINARY UTF-8 tie ordering', async () => {
+  const prefix = makeSessionId('webui_binary'); const ids = [`${prefix}_A`, `${prefix}_a`, `${prefix}_\uE000`, `${prefix}_😀`];
+  const future = 8_000_000_000_000_000;
+  for (const id of ids) {
+    const session = await sessionManager.getSession(id); session.pinned = true; session.meta.lastMessageTime = future;
+    await sessionManager.saveSession(id);
+  }
+  const volatile = sessionManager.getAllSessions().get(ids[3])!; volatile.busy = true;
+  const port = 40700 + Math.floor(Math.random() * 100); const token = 'binary-token'; const server = new HttpServer(port, token);
+  setHttpServer(server); new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true }); await server.start();
+  const get = (route: string) => fetch(`http://127.0.0.1:${port}${route}`, { headers: { Authorization: `Bearer ${token}` } });
+  try {
+    let response = await get('/api/session-list/sidebar?mode=flat-time&limit=2'); const first = await response.json() as any;
+    assert.deepEqual(first.sessions.map((item: any) => item.id), ids.slice(0, 2)); assert.ok(first.nextCursor);
+    response = await get(`/api/session-list/sidebar?mode=flat-time&limit=2&cursor=${encodeURIComponent(first.nextCursor)}`);
+    const second = await response.json() as any; assert.deepEqual(second.sessions.map((item: any) => item.id), ids.slice(2));
+    assert.equal(new Set([...first.sessions, ...second.sessions].map((item: any) => item.id)).size, 4, 'no tie skip or duplicate');
+  } finally {
+    volatile.busy = false; await server.stop(); setHttpServer(null);
+    for (const id of ids) await sessionManager.deleteSession(id).catch(() => {});
+  }
+});
+
+test('restart catalog stubs preserve sanitized timer, waitAll, and exec presentation until hydration', async () => {
+  const ids = {
+    timer: makeSessionId('webui_wait_timer'),
+    waitAll: makeSessionId('webui_wait_all'),
+    exec: makeSessionId('webui_wait_exec'),
+  };
+  const waits: Record<string, any> = {
+    [ids.timer]: { id: 'timer-wait', startedAt: 100, reason: 'timer reason', timeoutSeconds: 30 },
+    [ids.waitAll]: {
+      id: 'all-wait', startedAt: 200,
+      waitAll: {
+        sessions: ['child-a', 'child-b'], satisfiedSessions: ['child-a'],
+        deferredQueue: [{ type: 'background', parts: [{ text: 'private deferred body' }] }],
+      },
+    },
+    [ids.exec]: { id: 'exec-wait', startedAt: 300, waitExecIds: ['exec-a', 'exec-b'] },
+  };
+  for (const id of Object.values(ids)) {
+    const session = await sessionManager.getSession(id);
+    session.meta = { lastMessageTime: Date.now(), wait: waits[id] } as Session['meta'];
+    await sessionManager.saveSession(id);
+  }
+  const timer = sessionManager.getAllSessions().get(ids.timer)!;
+  await fs.writeJson(getSessionHistoryFilePath(ids.timer), serializeSessionHistoryPayload({
+    ...timer,
+    meta: { ...timer.meta, wait: { id: 'authority-exec-wait', startedAt: 400, waitExecIds: ['authority-exec'] } },
+  } as Session));
+  await sessionManager.loadSessions();
+
+  const port = 35100 + Math.floor(Math.random() * 300);
+  const server = new HttpServer(port, 'wait-token');
+  setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token: 'wait-token', enableTrigger: false, enableWebUI: true });
+  await server.start();
+  const list = async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sessions`, { headers: { Authorization: 'Bearer wait-token' } });
+    assert.equal(response.status, 200);
+    return (await response.json() as any).sessions as any[];
+  };
+  try {
+    const initial = await list();
+    const timerStub = initial.find(item => item.id === ids.timer);
+    assert.equal(timerStub.runtimeState.state, 'waiting'); assert.equal(timerStub.runtimeState.waiting.waitingFor, 'timer');
+    assert.equal(timerStub.runtimeState.waiting.timeoutSeconds, 30);
+    const waitAllStub = initial.find(item => item.id === ids.waitAll);
+    assert.equal(waitAllStub.runtimeState.waiting.waitingFor, 'sessions');
+    assert.deepEqual(waitAllStub.runtimeState.waiting.waitAllSessions, ['child-a', 'child-b']);
+    assert.deepEqual(waitAllStub.runtimeState.waiting.satisfiedSessions, ['child-a']);
+    const execStub = initial.find(item => item.id === ids.exec);
+    assert.equal(execStub.runtimeState.waiting.waitingFor, 'exec');
+    assert.deepEqual(execStub.runtimeState.waiting.waitExecIds, ['exec-a', 'exec-b']);
+
+    await sessionManager.getSession(ids.timer);
+    const hydrated = (await list()).find(item => item.id === ids.timer);
+    assert.equal(hydrated.runtimeState.waiting.waitingFor, 'exec');
+    assert.deepEqual(hydrated.runtimeState.waiting.waitExecIds, ['authority-exec']);
+  } finally {
+    await server.stop(); setHttpServer(null);
+    for (const id of Object.values(ids)) await sessionManager.deleteSession(id).catch(() => {});
   }
 });
 
@@ -342,6 +626,79 @@ test('WebUI history route returns queued preview messages separately from commit
     session.busy = false;
     await sessionManager.deleteSession(sessionId).catch(() => {});
     if (blobId) await fs.remove(resolveImageBlobPath(blobId));
+  }
+});
+
+test('WebUI session projections and settings routes use the local SessionRuntime DTO seam', async () => {
+  const sessionId = makeSessionId('webui_session_runtime_routes');
+  const session = await sessionManager.getSession(sessionId);
+  session.model = 'legacy/model';
+  session.childModelDefault = 'legacy/child';
+  session.cwd = '/tmp/before-runtime-route';
+  session.displayName = 'Before Runtime Route';
+  await sessionManager.saveSession(sessionId);
+
+  const port = 35000 + Math.floor(Math.random() * 300);
+  const token = 'session-runtime-route-token';
+  const server = new HttpServer(port, token);
+  setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
+  await server.start();
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+  try {
+    const cwdRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/cwd`, {
+      method: 'POST', headers, body: JSON.stringify({ cwd: '/tmp/after-runtime-route' }),
+    });
+    assert.equal(cwdRes.status, 200);
+    assert.deepEqual(await cwdRes.json(), {
+      success: true,
+      changed: true,
+      previous: '/tmp/before-runtime-route',
+      cwd: '/tmp/after-runtime-route',
+    });
+
+    const modelRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/model`, {
+      method: 'POST', headers, body: JSON.stringify({ clear: true }),
+    });
+    assert.equal(modelRes.status, 200);
+    const modelPayload = await modelRes.json() as any;
+    assert.equal(modelPayload.model, null);
+
+    const childModelRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/child-model`, {
+      method: 'POST', headers, body: JSON.stringify({ clear: true }),
+    });
+    assert.equal(childModelRes.status, 200);
+    const childModelPayload = await childModelRes.json() as any;
+    assert.equal(childModelPayload.childModelDefault, null);
+
+    const nameRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/name`, {
+      method: 'POST', headers, body: JSON.stringify({ name: 'After Runtime Route' }),
+    });
+    assert.equal(nameRes.status, 200);
+    assert.equal((await nameRes.json() as any).displayName, 'After Runtime Route');
+
+    const stateRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/state`, { headers });
+    const statePayload = await stateRes.json() as any;
+    assert.equal(statePayload.session.cwd, '/tmp/after-runtime-route');
+    assert.equal(statePayload.session.model, null);
+    assert.equal(statePayload.session.childModelDefault, null);
+    assert.equal(statePayload.session.displayName, 'After Runtime Route');
+
+    const listPayload = await (await fetch(`http://127.0.0.1:${port}/api/sessions`, { headers })).json() as any;
+    assert.equal(listPayload.sessions.find((item: any) => item.id === sessionId)?.cwd, '/tmp/after-runtime-route');
+    const treePayload = await (await fetch(`http://127.0.0.1:${port}/api/agents/tree`, { headers })).json() as any;
+    assert.equal(treePayload.agents.find((item: any) => item.id === sessionId)?.displayName, 'After Runtime Route');
+
+    const persisted = await sessionManager.getExistingSession(sessionId);
+    assert.equal(persisted?.cwd, '/tmp/after-runtime-route');
+    assert.equal(persisted?.model, undefined);
+    assert.equal(persisted?.childModelDefault, undefined);
+    assert.equal(persisted?.displayName, 'After Runtime Route');
+  } finally {
+    await server.stop();
+    setHttpServer(null);
+    await sessionManager.deleteSession(sessionId).catch(() => {});
   }
 });
 
@@ -600,6 +957,38 @@ test('WebUI global SSE broadcasts every session creation path used by the sideba
     for (const sessionId of createdSessionIds.reverse()) {
       await sessionManager.deleteSession(sessionId).catch(() => {});
     }
+  }
+});
+
+test('global SSE sends bounded watched-row deltas plus catalog invalidation without a global list payload', async () => {
+  const sessionId = makeSessionId('webui_global_delta'); const port = 40900 + Math.floor(Math.random() * 100);
+  const token = 'global-delta-token'; const server = new HttpServer(port, token); setHttpServer(server);
+  const channel = new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
+  const created = await sessionManager.createEmptySession(sessionId); assert.equal(created.created, true); await server.start();
+  const alias = `${sessionId}_alias`; sessionManager.getAllSessions().get(sessionId)!.aliases = [alias];
+  await sessionManager.saveSessionCatalogEntries([sessionId]);
+  let sse: ReturnType<typeof createSseDataReader> | null = null;
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sessions/stream?sessionId=${encodeURIComponent(alias)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200);
+    const session = sessionManager.getAllSessions().get(sessionId)!; session.busy = true;
+    channel.broadcastSessionStateUpdate(sessionId);
+    sse = createSseDataReader(response.body!);
+    assert.equal((await sse.read()).type, 'connected');
+    const initial = await sse.read(); assert.equal(initial.type, 'session-list-delta');
+    assert.deepEqual(initial.sessions.map((item: any) => item.id), [sessionId]); assert.equal(initial.sessions[0].history, undefined); assert.equal(initial.sessions[0].busy, false);
+    const delta = await sse.read(); assert.equal(delta.type, 'session-list-delta'); assert.equal(delta.sessions[0].busy, true);
+    channel.broadcastSessionListUpdate();
+    const invalidation = await sse.read(); assert.equal(invalidation.type, 'sessions-updated'); assert.equal(invalidation.catalogInvalidated, true);
+    assert.equal(typeof invalidation.eventId, 'number'); assert.equal(typeof invalidation.presentationRevision, 'string');
+    await sse.cancel(); sse = null; await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal((channel as any).globalSseClients.length, 0, 'disconnect cleanup removes the client before any later bootstrap/keepalive work');
+  } finally {
+    await sse?.cancel().catch(() => {}); await server.stop(); setHttpServer(null);
+    const session = sessionManager.getAllSessions().get(sessionId); if (session) session.busy = false;
+    await sessionManager.deleteSession(sessionId).catch(() => {});
   }
 });
 

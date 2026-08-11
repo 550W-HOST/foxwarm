@@ -1,11 +1,11 @@
 # Unit: WebUI Chat
 
-Files: packages/webui/src/components/Chat.tsx, packages/webui/src/components/SessionDebugModal.tsx, packages/webui/src/components/ContextScrollbar.tsx, packages/webui/src/components/contextScrollbarModel.ts, packages/webui/src/chatHistoryState.ts, packages/webui/src/chatViewportState.ts, packages/webui/src/sessionHeader.ts, packages/webui/src/modelOptionsLoader.ts, packages/webui/test/debugSnapshot.e2e.mjs, packages/webui/test/chatHistoryState.test.mjs, packages/webui/test/chatHistoryLoading.e2e.mjs, packages/webui/test/chatViewportState.test.mjs, packages/webui/test/contextScrollbarModel.test.mjs, packages/webui/test/contextScrollbar.e2e.mjs, packages/webui/test/sessionHeader.test.mjs, packages/webui/test/modelOptionsLoader.test.mjs, packages/webui/test/sessionHeader.e2e.mjs, packages/webui/test/scrollState.e2e.mjs, packages/webui/test/streamFollow.e2e.mjs
-Secondary files: packages/webui/src/contextScrollbarSettings.ts
+Files: packages/webui/src/components/Chat.tsx, packages/webui/src/components/SessionDebugModal.tsx, packages/webui/src/components/ContextScrollbar.tsx, packages/webui/src/components/contextScrollbarModel.ts, packages/webui/src/chatHistoryState.ts, packages/webui/src/chatViewportState.ts, packages/webui/src/sessionContinuation.ts, packages/webui/src/sessionHeader.ts, packages/webui/src/modelOptionsLoader.ts, packages/webui/test/sessionContinuation.test.mjs, packages/webui/test/debugSnapshot.e2e.mjs, packages/webui/test/chatHistoryState.test.mjs, packages/webui/test/chatHistoryLoading.e2e.mjs, packages/webui/test/chatViewportState.test.mjs, packages/webui/test/contextScrollbarModel.test.mjs, packages/webui/test/contextScrollbar.e2e.mjs, packages/webui/test/sessionHeader.test.mjs, packages/webui/test/modelOptionsLoader.test.mjs, packages/webui/test/sessionHeader.e2e.mjs, packages/webui/test/scrollState.e2e.mjs, packages/webui/test/streamFollow.e2e.mjs
+Secondary files: packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/contextScrollbarSettings.ts
 
 ## Purpose
 
-Owns one mounted session's committed history, queued preview, runtime/model snapshot, per-session SSE, message upload/send, stop/dequeue/retry commands, ASR, debug view, scroll/viewport state, and the desktop context overview scrollbar.
+Owns one mounted session's committed history, queued preview, runtime/model snapshot, per-session SSE, message upload/send, stop/dequeue/continue commands, ASR, debug view, scroll/viewport state, and the desktop context overview scrollbar.
 
 ## Export
 
@@ -24,8 +24,8 @@ Owns one mounted session's committed history, queued preview, runtime/model snap
   5. starts `POST /api/sessions/:id/message`; busy/queued sends instead schedule targeted history refresh for queue preview.
 - Manually typed slash commands use the same POST route but omit optimistic history and `clientMessageId`, matching command dispatch's non-persisted user-input boundary.
 - `sendSessionCommand(command)` posts `{ text: command }` to the same message route without optimistic user history.
-- `handleStop`, `handleRunQueued`, and `handleRetryLlmNotice` send `/stop`, `/dequeue`, and `/retry` respectively. After Stop completes, the backend converts queued message/event previews into committed history rows without running them; normal SSE/history reconciliation removes the preview and inserts the canonical rows.
-- There are no current message-index edit/delete/retry handlers in this component.
+- `handleStop`, `handleRunQueued`, and `handleContinue` send `/stop`, `/dequeue`, and `/continue` respectively. After Stop completes, the backend converts queued message/event previews into committed history rows without running them; normal SSE/history reconciliation removes the preview and inserts the canonical rows.
+- There are no current message-index edit/delete/regenerate handlers in this component.
 - ASR appends `/asr/transcribe` or `/asr/stream` to the deployment-relative `API_BASE_PATH`. `getAsrStreamUrl()` builds `${window.location.origin}${API_BASE_PATH}/asr/stream` and switches the HTTP(S) prefix to WS(S); it does not call `makeWebSocketUrl`.
 
 ## Per-session state and streaming
@@ -35,7 +35,7 @@ Owns one mounted session's committed history, queued preview, runtime/model snap
 - Streaming assistant deltas form a temporary synthetic message.
 - Persisted user events replace their matching optimistic row in place by `clientMessageId`; all persisted updates prefer stable client/seq/id metadata before legacy timestamp dedupe. A later failed POST removes only an unreconciled optimistic row. An in-flight history request replays newer SSE rows and preserves unmatched pending sends before it can commit. Post-request `session-state` fields and model-stream drafts stay stream-owned; a mismatched queue preview waits for one coalesced trailing refresh. Deletion invalidates/aborts history and clears pending refresh work. Same-session refresh triggers reuse that request and request at most one trailing refresh; deletion, session replacement, and unmount abort it.
 - Temporary command-response rows remain browser-local but are reinserted at their existing mounted-timeline anchors after internal history snapshots. They clear on page refresh/remount and remain excluded from persistence, model context, queue preview, archive/search, and ContextScrollbar committed history.
-- Canonical `runtimeState` drives active display with legacy busy fallback only when runtime state is absent.
+- Canonical `runtimeState` drives the timeline status with legacy busy fallback only when runtime state is absent. Thinking and running-tool states use their shared blue/purple animated summaries and retain Stop; waiting uses the amber shared summary with one static dot and no Stop. Queued work adds state-specific continuation text and retains Run queued, while idle queued work keeps the pending action. Only canonical idle state may show `Turn interrupted` with Continue, derived from committed history by `sessionContinuation.ts`; temporary/optimistic/streaming rows and queued/nested timelines never drive it. The exact history contract and backend revalidation are canonical in [D-pipeline-control-commands](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
 - Queue previews remain a separate render-only timeline and never enter committed messages.
 
 ## Viewport behavior

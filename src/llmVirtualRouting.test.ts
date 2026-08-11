@@ -211,6 +211,58 @@ test('failover uses outer attempts A x5 then rebuilds a clean Anthropic request 
   }
 });
 
+test('virtual failover re-filters historical reasoning for each concrete attempt', async () => {
+  const originalPost = axios.post;
+  const calls: Array<{ url: string; body: any }> = [];
+  (axios as any).post = async (url: string, body: any) => {
+    calls.push({ url, body });
+    if (calls.length === 1) throw new Error('first concrete leaf unavailable');
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: { content: [{ type: 'text', text: 'fallback ok' }] },
+    };
+  };
+
+  try {
+    const request = {
+      ...baseRequest('fastFallback', 2),
+      contents: [
+        {
+          role: 'model' as const,
+          parts: [
+            { thinking: 'leaf A reasoning', providerMeta: { thinkingSummaries: ['leaf A summary'], encryptedThinking: 'leaf A encrypted', signature: 'leaf A signature' } },
+            { text: 'shared answer' },
+          ],
+          providerMeta: { providerSpecificFields: { reasoning_signature: 'leaf A opaque' }, sourceModelId: 'openaiLeaf/chat-model' },
+          __meta: { modelId: 'openaiLeaf/chat-model' },
+        },
+        { role: 'user' as const, parts: [{ text: 'continue' }] },
+      ],
+    };
+    const result = await withImmediateRetryTimers(() => requestLlmOnce(request));
+    assert.equal(result.modelId, 'anthropicLeaf/claude-model');
+    assert.equal(calls.length, 2);
+
+    const firstPayload = calls[0].body;
+    assert.equal(firstPayload.messages[0].reasoning_content, 'leaf A reasoning');
+    assert.deepEqual(firstPayload.messages[0].provider_specific_fields, { reasoning_signature: 'leaf A opaque' });
+    assert.equal(JSON.stringify(firstPayload).includes('__meta'), false);
+
+    const secondPayload = JSON.parse(zlib.gunzipSync(calls[1].body).toString('utf8'));
+    const secondSerialized = JSON.stringify(secondPayload);
+    assert.equal(secondSerialized.includes('shared answer'), true);
+    assert.equal(secondSerialized.includes('leaf A reasoning'), false);
+    assert.equal(secondSerialized.includes('leaf A summary'), false);
+    assert.equal(secondSerialized.includes('leaf A encrypted'), false);
+    assert.equal(secondSerialized.includes('leaf A signature'), false);
+    assert.equal(secondSerialized.includes('__meta'), false);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('virtual routing requests the actual qualified leaf when a model id contains the provider prefix and slash', async () => {
   const originalPost = axios.post;
   const slashModels = loadModelsConfigFromObject({

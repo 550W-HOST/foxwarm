@@ -19,7 +19,7 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 ## Public interfaces
 
 - `nodeTools`, `CLI_NODE_CAPABILITIES`.
-- shared file read/write core and node transfer/path helpers.
+- shared low-level native file/process backends, file read/write semantic core, and node transfer/path helpers.
 - patch parsing/content-application functions plus per-operation change-count summaries.
 - `PersistentExecManager` and shared timeout/cwd resolution.
 - `truncateOutputForDisplay`.
@@ -33,7 +33,7 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 - Patch matching normalizes LF internally, restores original line endings, and refuses ambiguous exact replacements.
 - Master and node patch results share per-file add/update counts; the exact counting and display contract is canonical in [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
 - Write refuses overwrite by default and creates parents only with `createDirs=true`; it attempts the real write before enriching parent errors.
-- Master and node wrappers reuse shared file/cwd/timeout semantics rather than independently approximating them.
+- Master and node wrappers reuse shared file/cwd/timeout semantics rather than independently approximating them; local target-specific system calls sit behind the small file/process contracts described by the canonical unit/thread decisions.
 - Exec cwd expands home, must exist, and must be a directory before spawn.
 - Finite exec timeouts above the runtime maximum clamp with a separate warning; invalid/below-minimum values reject.
 - Persistent exec owns atomic status/log/cwd metadata, can reconcile registry awareness after restart, and uses bounded binary-safe excerpts for oversized logs; canonical details: [D-persistent-exec-bounded-log-excerpts](../units/shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts).

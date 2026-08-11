@@ -19,6 +19,7 @@ import {
   THREAD_CARD_HEADER_ROW_CLASS,
   ToolTag,
   type Message,
+  type OpenAIResponsesAnnotation,
   type ToolTagItem,
   type ViewMode,
 } from './chatShared'
@@ -45,8 +46,6 @@ interface ChatTimelineProps {
   isMobile: boolean
   groupTools: boolean
   showUsageBadge: boolean
-  retryableLlmRetryNotice?: Message | null
-  onRetryLlmNotice?: () => void
   onOpenCodeFile?: OpenCodeFileHandler
   onOpenCodeCommit?: OpenCodeCommitHandler
   nestedDepth?: number
@@ -471,7 +470,52 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
   )
 })
 
-const AssistantTextCard = memo(function AssistantTextCard({ text, message, showRetryButton, onRetry, onOpenCodeCommit }: { text: string; message: Message; showRetryButton?: boolean; onRetry?: () => void; onOpenCodeCommit?: OpenCodeCommitHandler }) {
+type WebSearchCitation = {
+  url: string
+  title: string
+}
+
+const normalizeWebSearchCitation = (annotation: OpenAIResponsesAnnotation): WebSearchCitation | null => {
+  if (!annotation || typeof annotation !== 'object') return null
+  const nested = annotation.url_citation && typeof annotation.url_citation === 'object' ? annotation.url_citation : annotation
+  const url = typeof nested.url === 'string' ? nested.url.trim() : ''
+  if (!/^https?:\/\//i.test(url)) return null
+  const title = typeof nested.title === 'string' && nested.title.trim() ? nested.title.trim() : url
+  return { url, title }
+}
+
+const WebSearchCitationLinks = memo(function WebSearchCitationLinks({ annotations }: { annotations?: OpenAIResponsesAnnotation[] }) {
+  const citations = useMemo(() => {
+    const unique = new Map<string, WebSearchCitation>()
+    for (const annotation of annotations || []) {
+      const citation = normalizeWebSearchCitation(annotation)
+      if (citation && !unique.has(citation.url)) unique.set(citation.url, citation)
+    }
+    return [...unique.values()]
+  }, [annotations])
+
+  if (citations.length === 0) return null
+  return (
+    <div className="my-2 flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-gray-400" onClick={handleMarkdownLinkClick}>
+      <span className="font-semibold">Sources:</span>
+      {citations.map((citation, index) => (
+        <a
+          key={citation.url}
+          data-web-search-citation
+          href={citation.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={citation.title}
+          className="max-w-full truncate text-blue-600 underline hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+        >
+          [{index + 1}] {citation.title}
+        </a>
+      ))}
+    </div>
+  )
+})
+
+const AssistantTextCard = memo(function AssistantTextCard({ text, message, annotations, onOpenCodeCommit }: { text: string; message: Message; annotations?: OpenAIResponsesAnnotation[]; onOpenCodeCommit?: OpenCodeCommitHandler }) {
   const [viewMode, setViewMode] = useState<ViewMode>('rendered')
   const [copied, setCopied] = useState(false)
   const copyResetTimeoutRef = useRef<number | null>(null)
@@ -538,22 +582,12 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, showR
               {segment.raw}
             </pre>
           ))}
+          <WebSearchCitationLinks annotations={annotations} />
         </div>
       ) : viewMode === 'raw' ? (
         <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-gray-900 dark:text-gray-100">{text}</pre>
       ) : (
         <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-gray-900 dark:text-gray-100">{jsonText}</pre>
-      )}
-      {showRetryButton && (
-        <div className="mb-2 mt-2 flex justify-end">
-          <button
-            type="button"
-            onClick={(event) => { event.preventDefault(); event.stopPropagation(); onRetry?.() }}
-            className="rounded border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 transition-colors hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-300 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50 dark:focus:ring-red-800"
-          >
-            Retry
-          </button>
-        </div>
       )}
     </div>
   )
@@ -578,8 +612,6 @@ interface MessageRowProps {
   onExpandGroup: (groupKey: string) => void
   sessionId: string
   nestedDepth: number
-  showRetryButton: boolean
-  onRetryLlmNotice?: () => void
   onOpenCodeFile?: OpenCodeFileHandler
   onOpenCodeCommit?: OpenCodeCommitHandler
   renderNestedMessages: (messages: Message[], keyPrefix: string, nestedDepth: number) => ReactNode
@@ -604,8 +636,6 @@ const MessageRow = memo(function MessageRow({
   onExpandGroup,
   sessionId,
   nestedDepth,
-  showRetryButton,
-  onRetryLlmNotice,
   onOpenCodeFile,
   onOpenCodeCommit,
   renderNestedMessages,
@@ -680,7 +710,7 @@ const MessageRow = memo(function MessageRow({
               if (contextBlock && partIdx === firstTextPartIndex && part.text) {
                 return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} />
               }
-              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} showRetryButton={showRetryButton} onRetry={onRetryLlmNotice} onOpenCodeCommit={onOpenCodeCommit} />
+              return <AssistantTextCard key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} />
             })}
             <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />
             {groupTools && showToolGroupSummary && !groupExpanded && !keepToolGroupExpanded && (
@@ -712,14 +742,12 @@ const MessageRow = memo(function MessageRow({
   prev.groupExpanded === next.groupExpanded &&
   prev.sessionId === next.sessionId &&
   prev.nestedDepth === next.nestedDepth &&
-  prev.showRetryButton === next.showRetryButton &&
-  prev.onRetryLlmNotice === next.onRetryLlmNotice &&
   prev.onOpenCodeFile === next.onOpenCodeFile &&
   prev.onOpenCodeCommit === next.onOpenCodeCommit &&
   prev.renderNestedMessages === next.renderNestedMessages
 ))
 
-const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, retryableLlmRetryNotice, onRetryLlmNotice, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
+const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
 
   const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number) => (
@@ -938,8 +966,6 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
             onExpandGroup={handleExpandGroup}
             sessionId={sessionId}
             nestedDepth={nestedDepth}
-            showRetryButton={nestedDepth === 0 && msg === retryableLlmRetryNotice}
-            onRetryLlmNotice={onRetryLlmNotice}
             onOpenCodeFile={onOpenCodeFile}
             onOpenCodeCommit={onOpenCodeCommit}
             renderNestedMessages={renderNestedMessages}

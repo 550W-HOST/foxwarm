@@ -9,6 +9,7 @@ test('block indexing creates exactly one vector row and truncates only embedding
   process.env.FOXWARM_DATA_DIR = tempRoot;
 
   const config = await import('./config');
+  const migrations = await import('./migrations');
   const vector = await import('./vector');
   const tokenCount = await import('./tokenCount');
 
@@ -46,6 +47,7 @@ test('block indexing creates exactly one vector row and truncates only embedding
   ];
 
   await fs.outputFile(archivePath, `${records.map(record => JSON.stringify(record)).join('\n')}\n`);
+  await migrations.runStartupMigrations();
 
   const summary = 'block-summary '.repeat(900);
   const row = await vector.createRowFromBlockRecord({

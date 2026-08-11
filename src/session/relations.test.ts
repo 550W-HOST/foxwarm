@@ -33,7 +33,7 @@ test('setSessionParent rejects descendant parent cycles', async () => {
     setSessionParent({
       getExistingSession: async (sessionId: string) => sessions.get(sessionId) || null,
       saveSession: async () => {},
-      saveSessionsMetadata: async () => {},
+      saveSessionCatalogEntries: async () => {},
       notifySessionListUpdated: () => {},
     }, parent.id, grandchild.id),
     /parent cycle/,
@@ -58,7 +58,7 @@ test('setSessionParent canonicalizes ancestor aliases before cycle checks', asyn
         return sessions.get(sessionId) || null;
       },
       saveSession: async () => {},
-      saveSessionsMetadata: async () => {},
+      saveSessionCatalogEntries: async () => {},
       notifySessionListUpdated: () => {},
     }, child.id, requestedParent.id),
     /parent cycle/,

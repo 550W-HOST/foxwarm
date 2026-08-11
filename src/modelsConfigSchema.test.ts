@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadModelsConfigFromObject } from './config';
+import { loadModelsConfigFromObject, normalizeOpenAIWebSearchConfig } from './config';
 
 test('legacy root models + entry model list schema still works', () => {
   const parsed = loadModelsConfigFromObject({
@@ -101,6 +101,88 @@ test('new providers root + models object list applies model overrides and merge 
       provider: true,
     },
   });
+});
+
+test('OpenAI web search boolean/object settings normalize and merge at model level', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'openai/model-a',
+    providers: {
+      openai: {
+        providerType: 'openai-responses',
+        baseUrl: 'https://example.test/v1',
+        webSearch: {
+          enabled: false,
+          toolChoice: 'auto',
+          searchContextSize: 'high',
+          allowedDomains: ['base.example'],
+          userLocation: { country: 'CN', city: 'Shenzhen' },
+        },
+        models: [
+          {
+            id: 'model-a',
+            webSearch: {
+              enabled: true,
+              toolChoice: 'required',
+              allowedDomains: ['example.com'],
+            },
+          },
+          { id: 'model-b', webSearch: false },
+          { id: 'model-c', webSearch: { toolChoice: 'required' } },
+          { id: 'model-d', webSearch: { enabled: false, searchContextSize: 'low' } },
+        ],
+      },
+      providerTrue: {
+        providerType: 'openai-responses',
+        webSearch: true,
+        models: ['model-e'],
+      },
+      providerFalse: {
+        providerType: 'openai-responses',
+        webSearch: false,
+        models: ['model-f'],
+      },
+    },
+  });
+
+  assert.deepEqual(parsed.models['openai/model-a'].webSearch, {
+    enabled: true,
+    toolChoice: 'required',
+    searchContextSize: 'high',
+    allowedDomains: ['example.com'],
+    userLocation: { country: 'CN', city: 'Shenzhen' },
+  });
+  assert.deepEqual(parsed.models['openai/model-b'].webSearch, {
+    enabled: false,
+    toolChoice: 'auto',
+    searchContextSize: 'high',
+    allowedDomains: ['base.example'],
+    userLocation: { country: 'CN', city: 'Shenzhen' },
+  });
+  assert.deepEqual(parsed.models['openai/model-c'].webSearch, {
+    enabled: true,
+    toolChoice: 'required',
+    searchContextSize: 'high',
+    allowedDomains: ['base.example'],
+    userLocation: { country: 'CN', city: 'Shenzhen' },
+  });
+  assert.deepEqual(parsed.models['openai/model-d'].webSearch, {
+    enabled: false,
+    toolChoice: 'auto',
+    searchContextSize: 'low',
+    allowedDomains: ['base.example'],
+    userLocation: { country: 'CN', city: 'Shenzhen' },
+  });
+  assert.deepEqual(parsed.models['providerTrue/model-e'].webSearch, { enabled: true });
+  assert.deepEqual(parsed.models['providerFalse/model-f'].webSearch, { enabled: false });
+});
+
+test('OpenAI web search normalizer validates supported tuning fields', () => {
+  assert.deepEqual(normalizeOpenAIWebSearchConfig(true), { enabled: true });
+  assert.deepEqual(normalizeOpenAIWebSearchConfig(false), { enabled: false });
+  assert.deepEqual(normalizeOpenAIWebSearchConfig({}), { enabled: true });
+  assert.throws(() => normalizeOpenAIWebSearchConfig('enabled'), /boolean or object/);
+  assert.throws(() => normalizeOpenAIWebSearchConfig({ toolChoice: 'never' }), /toolChoice/);
+  assert.throws(() => normalizeOpenAIWebSearchConfig({ allowedDomains: [''] }), /allowedDomains/);
 });
 
 test('single-model provider entries still expose provider key alias and keep displayModels behavior', () => {
@@ -320,6 +402,7 @@ test('route fingerprint deterministically covers resolved concrete request plans
     (() => { const value = structuredClone(raw); value.providers.leaf.extraFields.nested.a = 9; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); value.providers.leaf.contextLimit = 2000; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); value.providers.leaf.asyncCompact = false; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); (value.providers.leaf as any).webSearch = { enabled: true }; return fingerprint(value); })(),
   ];
   assert.ok(changedFingerprints.every(value => value !== baseFingerprint));
 
@@ -383,7 +466,7 @@ test('provider entries and concrete/virtual routing fields are strictly separate
     default: 'virtual',
     providers: { concrete, virtual: entry },
   });
-  for (const field of ['contextLimit', 'asyncCompact']) {
+  for (const field of ['contextLimit', 'asyncCompact', 'webSearch']) {
     assert.throws(
       () => parseVirtual({ providerType: 'session-hash', targets: ['concrete'], [field]: field === 'contextLimit' ? 1000 : true }),
       new RegExp(`forbids field .*${field}`),

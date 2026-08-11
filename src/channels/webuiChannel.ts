@@ -15,6 +15,10 @@ import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOp
 import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
+import * as sessionRuntime from '../sessionRuntime';
+import type { SessionRuntimeSessionDto } from '../sessionRuntime';
+import { buildSessionRuntimeSessionDto } from '../sessionRuntimeService';
+import { sessionCatalogStore } from '../session/catalogStore';
 import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, getActiveModelsConfigPath, readAppConfigFile, resolveModelConfig } from '../config';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
@@ -26,12 +30,26 @@ import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClie
 import { getSessionHistoryFilePath } from '../session/metadataStore';
 import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
 import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
-import type { Message, MessagePart, QueueItem } from '../types';
+import type { Message, MessagePart, QueueItem, Session } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
 import { registerVscodeWebRoutes } from '../vscodeWebRoutes';
 import { externalizeMessages, externalizeQueueItems, getSafeRasterMimeType, resolveImageBlobPath } from '../imageBlobs';
 import { nodesManager } from '../nodes/manager';
 import { listApprovedNodes } from '../nodes/registry';
+import {
+  assertExactDto,
+  boundedBodyLimit,
+  boundedQueryLimit,
+  normalizeSessionListMode,
+  optionalQueryString,
+  queryArchitecture,
+  queryChildrenContinuations,
+  queryChildrenPreviews,
+  queryDescendants,
+  queryExactSessions,
+  querySessionListPage,
+  repeatedFocusIds,
+} from '../webuiSessionListQueries';
 
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 const MAX_QUEUED_PREVIEW_ITEMS = 20;
@@ -409,9 +427,12 @@ function getWeixinSetupConfig(body: any = {}) {
   };
 }
 
-function buildWebUiModelStatus(session: { model?: string; childModelDefault?: string }) {
-  const { defaultKey, currentKey } = resolveModelConfig(session.model);
-  const { currentKey: effectiveChildModelKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session));
+function buildWebUiModelStatus(session: { model?: string | null; childModelDefault?: string | null }) {
+  const { defaultKey, currentKey } = resolveModelConfig(session.model || undefined);
+  const effectiveSpawnModel = typeof session.childModelDefault === 'string' && session.childModelDefault.trim()
+    ? session.childModelDefault.trim()
+    : (typeof session.model === 'string' && session.model.trim() ? session.model.trim() : undefined);
+  const { currentKey: effectiveChildModelKey } = resolveModelConfig(effectiveSpawnModel);
   return {
     model: typeof session.model === 'string' && session.model.trim() ? session.model.trim() : null,
     modelKey: currentKey,
@@ -428,15 +449,49 @@ function buildWebUiSessionState(session: any) {
     aliases: session.aliases || [],
     busy: session.busy || false,
     busyStartedAt: typeof session.busyStartedAt === 'number' ? session.busyStartedAt : null,
-    queueLength: session.queue?.length || 0,
-    runtimeState: sessionManager.buildSessionRuntimeState(session),
+    queueLength: typeof session.queueLength === 'number' ? session.queueLength : (session.queue?.length || 0),
+    runtimeState: session.runtimeState || sessionManager.buildSessionRuntimeState(session),
     displayName: session.displayName || null,
     archived: session.archived || false,
     currentNode: session.currentNode || 'master',
     cwd: session.cwd || null,
     ...buildWebUiModelStatus(session),
-    isolated: sessionManager.isSessionEffectivelyIsolated(session),
+    isolated: typeof session.isolated === 'boolean'
+      ? session.isolated
+      : sessionManager.isSessionEffectivelyIsolated(session),
   };
+}
+
+function buildWebUiSessionListProjection(session: SessionRuntimeSessionDto) {
+  return {
+    ...buildWebUiSessionState(session),
+    messageCount: session.messageCount,
+    lastMessageTime: session.lastMessageTime,
+    parentSessionId: session.parentSessionId,
+    pinned: session.pinned,
+    sidebarOrder: session.sidebarOrder,
+    tokenUsage: {
+      cachedTokens: session.tokenUsage.cachedTokens,
+      inputTokens: session.tokenUsage.inputTokens,
+      outputTokens: session.tokenUsage.outputTokens,
+    },
+  };
+}
+
+function mapSessionListQueryPayload(value: any): any {
+  if (Array.isArray(value)) return value.map(mapSessionListQueryPayload);
+  if (!value || typeof value !== 'object') return value;
+  if (typeof value.id === 'string' && value.runtimeState && value.tokenUsage) return buildWebUiSessionListProjection(value);
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'rows')
+    .map(([key, entry]) => [key, mapSessionListQueryPayload(entry)]));
+}
+
+function sendSessionListQueryError(res: express.Response, error: any, logMessage: string): void {
+  const code = typeof error?.code === 'string' ? error.code : undefined;
+  const status = code === 'SESSION_NOT_FOUND' ? 404
+    : code?.includes('INVALID') || code === 'SESSION_ALIAS_AMBIGUOUS' ? 400 : 500;
+  if (status === 500) logger.error({ err: error }, logMessage);
+  res.status(status).json({ error: error?.message || logMessage, ...(code ? { code } : {}) });
 }
 
 function buildWebUiModelsPayload(currentModel?: string) {
@@ -554,10 +609,11 @@ function getWebUiSidebarSiblings(parentSessionId: string | null, excludeSessionI
     .sort(compareWebUiSidebarSessions);
 }
 
-function writeWebUiSidebarOrder(sessions: any[]): void {
+function writeWebUiSidebarOrder(sessions: any[]): string[] {
   sessions.forEach((session, index) => {
     session.sidebarOrder = (index + 1) * 1000;
   });
+  return sessions.map(session => session.id);
 }
 
 async function resolveOptionalSessionId(sessionId: unknown, label: string): Promise<string | null | undefined> {
@@ -568,7 +624,7 @@ async function resolveOptionalSessionId(sessionId: unknown, label: string): Prom
   }
   const trimmed = sessionId.trim();
   if (!trimmed) return null;
-  const session = await sessionManager.getExistingSession(trimmed);
+  const session = sessionManager.getSessionCatalog(trimmed);
   if (!session) {
     const error = new Error(`${label} session "${trimmed}" was not found.`);
     (error as any).statusCode = 404;
@@ -590,7 +646,7 @@ async function assertNoSidebarParentCycle(childSessionId: string, targetParentSe
   const seen = new Set<string>([childSessionId]);
   let cursorParentId: string | null = targetParentSessionId;
   while (cursorParentId) {
-    const cursorParent = await sessionManager.getExistingSession(cursorParentId);
+    const cursorParent = sessionManager.getSessionCatalog(cursorParentId);
     if (!cursorParent) break;
     const canonicalCursorId = cursorParent.id;
     if (seen.has(canonicalCursorId)) {
@@ -628,7 +684,24 @@ export class WebUIChannel implements Channel {
   private enableWebUI: boolean;
   private enableTrigger: boolean;
   private sseClients: Map<string, express.Response[]> = new Map(); // sessionId -> clients
+  private presentationSubscriptionListener?: (sessionId: string, active: boolean) => void;
+
+  /** Main→worker transient presentation subscription bridge (Session-worker placement). */
+  setPresentationSubscriptionListener(listener: ((sessionId: string, active: boolean) => void) | undefined): void {
+    this.presentationSubscriptionListener = listener;
+  }
+
+  hasPresentationSubscribers(sessionId: string): boolean {
+    return (this.sseClients.get(sessionId)?.length || 0) > 0;
+  }
   private globalSseClients: express.Response[] = []; // Global clients for session list updates
+  private globalSseSessionIds = new WeakMap<express.Response, Set<string>>();
+  private globalSseInitialization = new WeakMap<express.Response, {
+    pending: Map<string, { sessions: any[]; deletedIds: string[] }>;
+    invalidation: string | null;
+    initializing: boolean;
+  }>();
+  private globalSseInvalidationEventId = 0;
 
   private async streamPathDownload(resolvedPath: string, res: express.Response): Promise<void> {
     const stat = await fs.stat(resolvedPath);
@@ -701,7 +774,7 @@ export class WebUIChannel implements Channel {
 
             logger.info({ trigger: true, text, sessionId: finalSessionId }, 'External trigger received');
 
-            await sessionManager.queueSessionEvent(finalSessionId, text, 'trigger');
+            await sessionRuntime.queueEvent(finalSessionId, text, 'trigger');
             res.json({ success: true, message: 'Triggered' });
           } catch (e: any) {
             logger.error({ err: e }, 'Trigger error');
@@ -1068,11 +1141,11 @@ export class WebUIChannel implements Channel {
               inherit: inheritAgent,
               createMainSession: true,
             });
-            const session = await sessionManager.getExistingSession(result.mainSessionId);
+            const session = sessionManager.getSessionCatalog(result.mainSessionId);
             if (session) {
               const rootSiblings = getWebUiSidebarSiblings(null, session.id);
-              writeWebUiSidebarOrder([session, ...rootSiblings]);
-              await sessionManager.saveSessionsMetadata();
+              const changedIds = writeWebUiSidebarOrder([session, ...rootSiblings]);
+              await sessionManager.saveSessionCatalogEntries(changedIds);
             }
             this.broadcastSessionListUpdate();
             res.status(201).json({ success: true, agentId, sessionId: result.mainSessionId });
@@ -1086,13 +1159,168 @@ export class WebUIChannel implements Channel {
         },
       });
 
-      // Get all sessions
+      httpServerInstance.addRoute({
+        path: '/api/session-list/sidebar', method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.query, ['mode','limit','childLimit','cursor','focusSessionId'], 'sidebar query');
+            const mode = normalizeSessionListMode(req.query.mode);
+            const limit = boundedQueryLimit(req.query.limit, 50, 100);
+            const childLimit = boundedQueryLimit(req.query.childLimit, 5, 20);
+            const cursor = optionalQueryString(req.query.cursor, 'cursor', 4096);
+            const focusIds = repeatedFocusIds(req.query.focusSessionId);
+            const roots = await querySessionListPage({ mode, limit, cursor, roots: true });
+            const children = mode === 'flat-time' ? { revision: roots.revision, children: [] }
+              : await queryChildrenPreviews(roots.sessions.map(session => session.id), mode, childLimit);
+            const focus = focusIds.length ? await queryExactSessions(focusIds, true)
+              : { results: [] as any[], paths: {} as Record<string, string[]> };
+            const forcedChildren: Record<string, string[]> = {};
+            for (const pathIds of Object.values(focus.paths || {}) as string[][]) {
+              for (let index = 0; index + 1 < pathIds.length; index++) {
+                const children = (forcedChildren[pathIds[index]] ||= []);
+                if (!children.includes(pathIds[index + 1])) children.push(pathIds[index + 1]);
+              }
+            }
+            const pathContextIds = [...new Set((Object.values(focus.paths || {}) as string[][]).flat())];
+            const pathContext = { results: [] as any[] };
+            for (let index = 0; index < pathContextIds.length; index += 100) {
+              pathContext.results.push(...(await queryExactSessions(pathContextIds.slice(index, index + 100), false)).results);
+            }
+            res.json(mapSessionListQueryPayload({ ...roots, children: children.children, focus: focus.results,
+              presentationPaths: focus.paths || {}, pathContext: pathContext.results, forcedChildren }));
+          } catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list sidebar query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/children', method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.body, ['mode','limit','parents','agent'], 'children request');
+            const mode = normalizeSessionListMode(req.body?.mode);
+            const limit = boundedBodyLimit(req.body?.limit, 10, 20);
+            if (req.body.agent !== undefined && (typeof req.body.agent !== 'string' || !req.body.agent || req.body.agent.length > 128)) {
+              return res.status(400).json({ error: 'agent is invalid.', code: 'SESSION_LIST_AGENT_INVALID' });
+            }
+            const agent = req.body.agent as string | undefined;
+            if (agent && mode !== 'time') return res.status(400).json({ error: 'agent-scoped children require time mode.', code: 'SESSION_LIST_MODE_INVALID' });
+            const result = await queryChildrenContinuations(req.body?.parents, mode, limit, agent);
+            res.json(mapSessionListQueryPayload(result));
+          } catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list children query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/by-id', method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.body, ['ids','includePaths'], 'by-id request');
+            if (req.body.includePaths !== undefined && typeof req.body.includePaths !== 'boolean') {
+              return res.status(400).json({ error: 'includePaths must be boolean.', code: 'SESSION_LIST_DTO_INVALID' });
+            }
+            res.json(mapSessionListQueryPayload(await queryExactSessions(req.body.ids, req.body.includePaths === true)));
+          }
+          catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list by-id query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/architecture', method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.query, ['agent','limit','childLimit','cursor'], 'architecture query');
+            const agent = optionalQueryString(req.query.agent, 'agent', 128);
+            const result = await queryArchitecture({ agent, limit: boundedQueryLimit(req.query.limit, 50, 100),
+              childLimit: boundedQueryLimit(req.query.childLimit, 10, 20), cursor: optionalQueryString(req.query.cursor, 'cursor', 4096) });
+            res.json(mapSessionListQueryPayload(result));
+          } catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list architecture query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/descendant-activity', method: 'POST',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.body, ['ids'], 'descendant activity request');
+            if (!Array.isArray(req.body?.ids) || req.body.ids.length > 100
+              || req.body.ids.some((id: unknown) => typeof id !== 'string' || !id || id.length > 512)) {
+              return res.status(400).json({ error: 'ids must contain at most 100 bounded Session IDs.', code: 'SESSION_LIST_IDS_INVALID' });
+            }
+            const requestedIds = [...new Set(req.body.ids as string[])];
+            const resolved = requestedIds.map(requestedId => ({ requestedId, resolution: sessionCatalogStore.resolveId(requestedId) }));
+            const canonicalIds = [...new Set(resolved.flatMap(item => item.resolution.kind === 'exact' || item.resolution.kind === 'alias' ? [item.resolution.sessionId] : []))];
+            const catalogBusyIds = sessionCatalogStore.listBusySessionIds();
+            const current = new Map<string, SessionRuntimeSessionDto>();
+            const batches = catalogBusyIds.length ? Array.from({ length: Math.ceil(catalogBusyIds.length / 200) }, (_, index) => catalogBusyIds.slice(index * 200, index * 200 + 200)) : [[]];
+            for (let index = 0; index < batches.length; index++) {
+              const projections = await sessionRuntime.getSessionListProjections(batches[index], index === 0, true);
+              for (const session of projections.sessions) current.set(session.id, session);
+            }
+            const currentBusyIds = [...current.values()].filter(session => session.runtimeState?.state === 'requesting-model'
+              || session.runtimeState?.state === 'running-tool' || session.busy).map(session => session.id);
+            const counts = sessionCatalogStore.getBusyDescendantCounts(canonicalIds, currentBusyIds);
+            res.json({ version: 1, results: resolved.map(item => {
+              const canonicalId = item.resolution.kind === 'exact' || item.resolution.kind === 'alias' ? item.resolution.sessionId : null;
+              return { requestedId: item.requestedId, sessionId: canonicalId, resolution: item.resolution, busy: canonicalId ? counts.get(canonicalId) || 0 : 0 };
+            }) });
+          } catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed descendant activity query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/descendants/:sessionId', method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.query, ['limit'], 'descendant query');
+            if (typeof req.params.sessionId !== 'string' || !req.params.sessionId || req.params.sessionId.length > 512) {
+              return res.status(400).json({ error: 'sessionId is invalid.', code: 'SESSION_LIST_SESSION_ID_INVALID' });
+            }
+            res.json(mapSessionListQueryPayload(await queryDescendants(req.params.sessionId,
+            boundedQueryLimit(req.query.limit, 20, 100)))); }
+          catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list descendant query');
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/session-list/search', method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            assertExactDto(req.query, ['q','limit'], 'search query');
+            const query = (optionalQueryString(req.query.q, 'q', 256) || '').trim();
+            if (!query) return res.status(400).json({ error: 'q must contain 1 to 256 characters.', code: 'SESSION_LIST_SEARCH_INVALID' });
+            const limit = boundedQueryLimit(req.query.limit, 50, 100);
+            const normalized = query.toLowerCase();
+            const sessions = (await sessionRuntime.listSessions()).map(buildWebUiSessionListProjection);
+            const matches = sessions.filter((session: any) => [session.displayName,session.id,...(session.aliases || []),session.agent,
+              session.currentNode,session.cwd,session.model,session.modelKey,session.defaultModelKey,session.childModelDefault,
+              session.effectiveChildModelKey].filter(value => typeof value === 'string' && value.trim()).some(value => value.toLowerCase().includes(normalized)));
+            res.json({ version: 1, query, sessions: matches.slice(0, limit), hasMore: matches.length > limit, candidateCount: sessions.length });
+          } catch (e: any) {
+            sendSessionListQueryError(res, e, 'Failed session-list search');
+          }
+        },
+      });
+
+      // Legacy compatibility: Get all sessions.
       httpServerInstance.addRoute({
         path: '/api/sessions',
         method: 'GET',
         handler: async (_req: express.Request, res: express.Response) => {
           try {
-            const allSessions = sessionManager.getAllSessions();
+            const runtimeSessions = await sessionRuntime.listSessions();
+            const allSessions = new Map(runtimeSessions.map(session => [session.id, session]));
             
             // Build parent-to-children map
             const childrenMap = buildChildrenMap(allSessions);
@@ -1100,18 +1328,16 @@ export class WebUIChannel implements Channel {
             const sessions = Array.from(allSessions.entries())
               .map(([id, session]) => ({
                 ...buildWebUiSessionState(session),
-                messageCount: session.meta?.messageCount ?? session.history.length,
-                lastMessageTime: session.meta?.lastMessageTime ?? (session.history.length > 0 
-                  ? session.history[session.history.length - 1].__meta?.timestamp || 0
-                  : 0),
+                messageCount: session.messageCount,
+                lastMessageTime: session.lastMessageTime,
                 parentSessionId: session.parentSessionId || null,
                 childSessions: childrenMap.get(id) || [],
                 pinned: session.pinned || false,
                 sidebarOrder: getWebUiSidebarOrder(session) ?? null,
                 tokenUsage: {
-                  cachedTokens: session.stats?.totalCachedTokens || 0,
-                  inputTokens: session.stats?.totalInputTokens || 0,
-                  outputTokens: session.stats?.totalOutputTokens || 0,
+                  cachedTokens: session.tokenUsage.cachedTokens,
+                  inputTokens: session.tokenUsage.inputTokens,
+                  outputTokens: session.tokenUsage.outputTokens,
                 },
               }))
               .sort((a, b) => b.lastMessageTime - a.lastMessageTime); // Sort by lastMessageTime descending
@@ -1152,11 +1378,11 @@ export class WebUIChannel implements Channel {
               sessionId = result.sessionId;
             }
 
-            const session = await sessionManager.getExistingSession(sessionId);
+            const session = sessionManager.getSessionCatalog(sessionId);
             if (!session) throw new Error(`Created session "${sessionId}" could not be loaded.`);
             const rootSiblings = getWebUiSidebarSiblings(null, session.id);
-            writeWebUiSidebarOrder([session, ...rootSiblings]);
-            await sessionManager.saveSessionsMetadata();
+            const changedIds = writeWebUiSidebarOrder([session, ...rootSiblings]);
+            await sessionManager.saveSessionCatalogEntries(changedIds);
 
             this.broadcastSessionListUpdate();
 
@@ -1183,13 +1409,13 @@ export class WebUIChannel implements Channel {
           try {
             const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
             const cwd = typeof req.body?.cwd === 'string' ? req.body.cwd : undefined;
-            const result = await sessionManager.setSessionCwd(sessionId, cwd);
+            const result = await sessionRuntime.updateSettings(sessionId, { cwd: cwd || null });
             this.broadcastSessionListUpdate();
             res.json({
               success: true,
-              changed: result.changed,
-              previous: result.previous || null,
-              cwd: result.current || null,
+              changed: result.changed.includes('cwd'),
+              previous: result.previous.cwd,
+              cwd: result.current.cwd,
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session cwd');
@@ -1204,21 +1430,15 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
-            const session = await sessionManager.getExistingSession(sessionId);
+            const session = await sessionRuntime.getSession(sessionId);
             if (!session) {
               return res.status(404).json({ error: 'Session not found' });
             }
 
             const model = req.body?.clear === true ? undefined : normalizeWebUiModelSelection(req.body?.model);
-            if (model !== undefined) {
-              session.model = model;
-            } else {
-              delete session.model;
-            }
-
-            await sessionManager.saveSession(session.id);
+            const updated = await sessionRuntime.updateSettings(session.id, { model: model || null });
             this.broadcastSessionListUpdate();
-            res.json({ success: true, sessionId: session.id, ...buildWebUiModelStatus(session) });
+            res.json({ success: true, sessionId: session.id, ...buildWebUiModelStatus(updated.session) });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session model');
             res.status(400).json({ error: e.message });
@@ -1232,16 +1452,15 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = Array.isArray(req.params.sessionId) ? req.params.sessionId[0] : req.params.sessionId;
-            const session = await sessionManager.getExistingSession(sessionId);
+            const session = await sessionRuntime.getSession(sessionId);
             if (!session) {
               return res.status(404).json({ error: 'Session not found' });
             }
 
             const model = req.body?.clear === true ? undefined : normalizeWebUiModelSelection(req.body?.model);
-            await sessionManager.setSessionChildModelDefault(session.id, model);
-            const updated = await sessionManager.getExistingSession(session.id) || session;
+            const result = await sessionRuntime.updateSettings(session.id, { childModelDefault: model || null });
             this.broadcastSessionListUpdate();
-            res.json({ success: true, sessionId: updated.id, ...buildWebUiModelStatus(updated) });
+            res.json({ success: true, sessionId: result.session.id, ...buildWebUiModelStatus(result.session) });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session child model');
             res.status(400).json({ error: e.message });
@@ -1360,7 +1579,8 @@ export class WebUIChannel implements Channel {
         method: 'GET',
         handler: async (_req: express.Request, res: express.Response) => {
           try {
-            const allSessions = sessionManager.getAllSessions();
+            const runtimeSessions = await sessionRuntime.listSessions();
+            const allSessions = new Map(runtimeSessions.map(session => [session.id, session]));
 
             const childrenMap = buildChildrenMap(allSessions);
             
@@ -1369,11 +1589,11 @@ export class WebUIChannel implements Channel {
               id,
               displayName: session.displayName || id,
               busy: session.busy || false,
-              queueLength: session.queue?.length || 0,
+              queueLength: session.queueLength,
               parentSessionId: session.parentSessionId || null,
               childSessions: childrenMap.get(id) || [],
-              messageCount: session.meta?.messageCount ?? session.history.length,
-              lastMessageTime: session.meta?.lastMessageTime ?? 0,
+              messageCount: session.messageCount,
+              lastMessageTime: session.lastMessageTime,
               archived: session.archived || false
             }));
             
@@ -1430,7 +1650,9 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
-            await sessionManager.getExistingSession(sessionId);
+            if (!sessionManager.getSessionCatalog(sessionId)) {
+              return res.status(404).json({ error: 'Session not found' });
+            }
             const resolvedPath = getSessionHistoryFilePath(sessionId);
             if (!await fs.pathExists(resolvedPath)) {
               return res.status(404).json({ error: 'Session file not found' });
@@ -1450,7 +1672,7 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
-            const session = await sessionManager.getExistingSession(sessionId);
+            const session = await sessionRuntime.getSession(sessionId);
             if (!session) {
               return res.status(404).json({ error: 'Session not found' });
             }
@@ -1468,24 +1690,20 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
-            const session = await sessionManager.getExistingSession(sessionId);
-            if (!session) {
+            const snapshot = await sessionRuntime.getHistory(sessionId);
+            if (!snapshot) {
               return res.status(404).json({ error: 'Session not found' });
             }
-            const queuedMessages = buildQueuedPreviewMessages(session.queue);
-            const webUiHistory = await materializeWebUiMessages(session.history);
-            if (webUiHistory.changed) {
-              session.history = webUiHistory.canonicalMessages;
-              await sessionManager.saveSession(session.id);
-            }
+            const queuedMessages = buildQueuedPreviewMessages(snapshot.queue);
+            const webUiHistory = await materializeWebUiMessages(snapshot.messages);
             res.json({
-              session: buildWebUiSessionState(session),
+              session: buildWebUiSessionState(snapshot.session),
               messages: webUiHistory.messages,
-              persistentMemorySnapshot: session.persistentMemorySnapshot || '',
+              persistentMemorySnapshot: snapshot.persistentMemorySnapshot,
               queuedMessages,
-              queueLength: session.queue?.length || 0,
+              queueLength: snapshot.session.queueLength,
               queuedPreviewLimit: MAX_QUEUED_PREVIEW_ITEMS,
-              queuedPreviewOmittedCount: Math.max(0, (session.queue?.length || 0) - queuedMessages.length),
+              queuedPreviewOmittedCount: Math.max(0, snapshot.session.queueLength - queuedMessages.length),
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to get history');
@@ -1534,26 +1752,22 @@ export class WebUIChannel implements Channel {
           try {
             const sessionId = req.params.sessionId as string;
             const { name } = req.body;
-            const session = await sessionManager.getExistingSession(sessionId);
+            const session = await sessionRuntime.getSession(sessionId);
 
             if (!session) {
               return res.status(404).json({ error: 'Session not found' });
             }
 
-            if (typeof name === 'string' && name.trim()) {
-              session.displayName = name.trim();
-            } else {
-              session.displayName = undefined;
-            }
-
-            await sessionManager.saveSession(session.id);
+            const result = await sessionRuntime.updateSettings(session.id, {
+              displayName: typeof name === 'string' && name.trim() ? name.trim() : null,
+            });
 
             this.broadcastSessionListUpdate();
 
             res.json({
               success: true,
               sessionId: session.id,
-              displayName: session.displayName || null,
+              displayName: result.session.displayName,
             });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to update session display name');
@@ -1569,7 +1783,7 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const sessionId = req.params.sessionId as string;
-            const session = await sessionManager.getExistingSession(sessionId);
+            const session = sessionManager.getSessionCatalog(sessionId);
 
             if (!session) {
               return res.status(404).json({ error: 'Session not found' });
@@ -1585,7 +1799,7 @@ export class WebUIChannel implements Channel {
               delete session.pinned;
             }
 
-            await sessionManager.saveSessionsMetadata();
+            await sessionManager.saveSessionCatalogEntries([session.id]);
             this.broadcastSessionListUpdate();
             res.json({ success: true, sessionId: session.id, pinned: !!session.pinned });
           } catch (e: any) {
@@ -1602,7 +1816,7 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           try {
             const requestedSessionId = req.params.sessionId as string;
-            const session = await sessionManager.getExistingSession(requestedSessionId);
+            const session = sessionManager.getSessionCatalog(requestedSessionId);
             if (!session) return res.status(404).json({ error: 'Session not found' });
 
             const archived = req.body?.archived !== false;
@@ -1666,7 +1880,7 @@ export class WebUIChannel implements Channel {
           const body = req.body || {};
 
           try {
-            const movingSession = await sessionManager.getExistingSession(requestedSessionId);
+            const movingSession = sessionManager.getSessionCatalog(requestedSessionId);
             if (!movingSession) {
               res.status(404).json({
                 error: `Session "${requestedSessionId}" was not found, so it cannot be moved.`,
@@ -1731,7 +1945,7 @@ export class WebUIChannel implements Channel {
             }
 
             const anchorSession = anchorSessionId
-              ? await sessionManager.getExistingSession(anchorSessionId)
+              ? sessionManager.getSessionCatalog(anchorSessionId)
               : null;
 
             const parentProvided = Object.prototype.hasOwnProperty.call(body, 'parentSessionId');
@@ -1764,7 +1978,7 @@ export class WebUIChannel implements Channel {
               await sessionManager.setSessionParent(movingSession.id, targetParentSessionId || undefined);
             }
 
-            const latestMovingSession = await sessionManager.getExistingSession(movingSession.id);
+            const latestMovingSession = sessionManager.getSessionCatalog(movingSession.id);
             if (!latestMovingSession) {
               res.status(404).json({
                 error: `Session "${movingSession.id}" disappeared while moving.`,
@@ -1788,8 +2002,9 @@ export class WebUIChannel implements Channel {
               return;
             }
 
+            const changedCatalogIds = new Set<string>([latestMovingSession.id]);
             if (previousParentSessionId !== targetParentSessionId) {
-              writeWebUiSidebarOrder(getWebUiSidebarSiblings(previousParentSessionId, latestMovingSession.id));
+              for (const id of writeWebUiSidebarOrder(getWebUiSidebarSiblings(previousParentSessionId, latestMovingSession.id))) changedCatalogIds.add(id);
             }
 
             const targetSiblingsWithoutMoving = getWebUiSidebarSiblings(targetParentSessionId, latestMovingSession.id);
@@ -1825,9 +2040,9 @@ export class WebUIChannel implements Channel {
 
             const targetSiblings = [...targetSiblingsWithoutMoving];
             targetSiblings.splice(Math.max(0, Math.min(insertIndex, targetSiblings.length)), 0, latestMovingSession);
-            writeWebUiSidebarOrder(targetSiblings);
+            for (const id of writeWebUiSidebarOrder(targetSiblings)) changedCatalogIds.add(id);
 
-            await sessionManager.saveSessionsMetadata();
+            await sessionManager.saveSessionCatalogEntries(changedCatalogIds);
             this.broadcastSessionListUpdate();
 
             res.json({
@@ -1868,7 +2083,7 @@ export class WebUIChannel implements Channel {
           const operation = targetParentId ? 'move-up' : 'promote-to-root';
 
           try {
-            const childSession = await sessionManager.getExistingSession(sessionId);
+            const childSession = sessionManager.getSessionCatalog(sessionId);
             if (!childSession) {
               res.status(404).json({
                 error: `Session "${sessionId}" was not found, so it cannot be promoted.`,
@@ -1882,7 +2097,7 @@ export class WebUIChannel implements Channel {
 
             let targetParentBusy: boolean | undefined;
             if (targetParentId) {
-              const targetParentSession = await sessionManager.getExistingSession(targetParentId);
+              const targetParentSession = sessionManager.getSessionCatalog(targetParentId);
               if (!targetParentSession) {
                 res.status(404).json({
                   error: `Target parent session "${targetParentId}" was not found, so session "${childSession.id}" cannot be moved there.`,
@@ -1931,21 +2146,22 @@ export class WebUIChannel implements Channel {
                   return;
                 }
                 seenAncestors.add(cursorParentId);
-                const cursorParent = await sessionManager.getExistingSession(cursorParentId);
+                const cursorParent = sessionManager.getSessionCatalog(cursorParentId);
                 if (!cursorParent) break;
                 cursorParentId = cursorParent.parentSessionId || undefined;
               }
             }
 
             const result = await sessionManager.setSessionParent(sessionId, targetParentId);
-            const movedSession = await sessionManager.getExistingSession(result.childSessionId);
+            const movedSession = sessionManager.getSessionCatalog(result.childSessionId);
+            const changedCatalogIds = new Set<string>([result.childSessionId]);
 
             if (movedSession) {
               const previousParentSessionId = result.previousParentSessionId || null;
               const nextParentSessionId = result.parentSessionId || null;
 
               if (previousParentSessionId !== nextParentSessionId) {
-                writeWebUiSidebarOrder(getWebUiSidebarSiblings(previousParentSessionId, movedSession.id));
+                for (const id of writeWebUiSidebarOrder(getWebUiSidebarSiblings(previousParentSessionId, movedSession.id))) changedCatalogIds.add(id);
               }
 
               const targetSiblingsWithoutMoving = getWebUiSidebarSiblings(nextParentSessionId, movedSession.id);
@@ -1955,10 +2171,10 @@ export class WebUIChannel implements Channel {
               const insertIndex = previousParentIndex >= 0 ? previousParentIndex + 1 : 0;
               const targetSiblings = [...targetSiblingsWithoutMoving];
               targetSiblings.splice(insertIndex, 0, movedSession);
-              writeWebUiSidebarOrder(targetSiblings);
+              for (const id of writeWebUiSidebarOrder(targetSiblings)) changedCatalogIds.add(id);
             }
 
-            await sessionManager.saveSessionsMetadata();
+            await sessionManager.saveSessionCatalogEntries(changedCatalogIds);
 
             this.broadcastSessionListUpdate();
 
@@ -1997,7 +2213,7 @@ export class WebUIChannel implements Channel {
           const includeDescendants = req.body?.includeDescendants === true;
           let deleteClaimId: string | undefined;
           try {
-            const rootSession = await sessionManager.getExistingSession(requestedSessionId);
+            const rootSession = sessionManager.getSessionCatalog(requestedSessionId);
             if (!rootSession) return res.status(404).json({ error: 'Session not found' });
 
             const relationTree = includeDescendants
@@ -2061,7 +2277,7 @@ export class WebUIChannel implements Channel {
               targetSessionIds: [...targetSessionIds],
             });
 
-            const currentRootSession = await sessionManager.getExistingSession(rootSession.id);
+            const currentRootSession = sessionManager.getSessionCatalog(rootSession.id);
             if (!currentRootSession) {
               return res.status(409).json({
                 error: 'The session tree changed while preparing deletion. Retry the delete request.',
@@ -2094,8 +2310,11 @@ export class WebUIChannel implements Channel {
               .getChannelsBySession(sessionId)
               .filter(channel => channel.channelId !== 'webui')
               .map(channel => ({ sessionId, ...channel })));
-            const revalidatedBusySessionIds = targetSessionIds.filter(sessionId => sessionManager.getAllSessions().get(sessionId)?.busy);
-            const revalidatedQueuedSessionIds = targetSessionIds.filter(sessionId => (sessionManager.getAllSessions().get(sessionId)?.queue?.length || 0) > 0);
+            // Placement-neutral revalidation: worker-fenced stubs only mirror
+            // busy/queue at handback, so check the projection-overlaid DTOs.
+            const runtimeById = new Map((await sessionRuntime.listSessions()).map(session => [session.id, session]));
+            const revalidatedBusySessionIds = targetSessionIds.filter(sessionId => runtimeById.get(sessionId)?.busy);
+            const revalidatedQueuedSessionIds = targetSessionIds.filter(sessionId => (runtimeById.get(sessionId)?.queueLength || 0) > 0);
             if (revalidatedChannelBlockers.length > 0 || revalidatedBusySessionIds.length > 0 || revalidatedQueuedSessionIds.length > 0) {
               return res.status(409).json({
                 error: 'The session tree became active or channel-blocked while preparing deletion. Retry the delete request.',
@@ -2183,7 +2402,7 @@ export class WebUIChannel implements Channel {
             return;
           }
 
-          const session = await sessionManager.getExistingSession(requestedSessionId);
+          const session = await sessionRuntime.getSession(requestedSessionId);
           if (!session) {
             res.status(404).json({ error: 'Session not found' });
             return;
@@ -2198,10 +2417,12 @@ export class WebUIChannel implements Channel {
           res.flushHeaders(); // Flush headers immediately
           
           // Add client to list
-          if (!this.sseClients.has(sessionId)) {
+          const hadClients = this.sseClients.has(sessionId);
+          if (!hadClients) {
             this.sseClients.set(sessionId, []);
           }
           this.sseClients.get(sessionId)!.push(res);
+          if (!hadClients) this.presentationSubscriptionListener?.(sessionId, true);
           
           // logger.info({ sessionId, clientCount: this.sseClients.get(sessionId)!.length }, 'SSE client connected');
           
@@ -2233,6 +2454,7 @@ export class WebUIChannel implements Channel {
               }
               if (clients.length === 0) {
                 this.sseClients.delete(sessionId);
+                this.presentationSubscriptionListener?.(sessionId, false);
               }
             }
             // logger.info({ sessionId }, 'SSE client disconnected');
@@ -2262,27 +2484,60 @@ export class WebUIChannel implements Channel {
           
           // Add to global clients
           this.globalSseClients.push(res);
+          const rawSessionIds = req.query.sessionId;
+          const requestedSessionIds = (Array.isArray(rawSessionIds) ? rawSessionIds : rawSessionIds === undefined ? [] : [rawSessionIds])
+            .filter((value): value is string => typeof value === 'string' && !!value && value.length <= 512).slice(0, 100);
+          const subscribedIds = new Set(requestedSessionIds);
+          for (const requestedId of requestedSessionIds) {
+            const resolution = sessionCatalogStore.resolveId(requestedId);
+            if (resolution.kind === 'exact' || resolution.kind === 'alias') subscribedIds.add(resolution.sessionId);
+          }
+          this.globalSseSessionIds.set(res, subscribedIds);
+          const initialization: { pending: Map<string, { sessions: any[]; deletedIds: string[] }>; invalidation: string | null; initializing: boolean } = {
+            pending: new Map(), invalidation: null, initializing: true,
+          };
+          this.globalSseInitialization.set(res, initialization);
+          let closed = false;
+          let keepAliveInterval: NodeJS.Timeout | null = null;
+          req.on('close', () => {
+            if (closed) return;
+            closed = true;
+            if (keepAliveInterval) clearInterval(keepAliveInterval);
+            const index = this.globalSseClients.indexOf(res);
+            if (index !== -1) this.globalSseClients.splice(index, 1);
+          });
           
           // Send initial ping
           res.write('data: {"type":"connected"}\n\n');
+          if (requestedSessionIds.length) {
+            const initial = await queryExactSessions(requestedSessionIds, false);
+            if (closed) return;
+            const sessions = initial.results.flatMap(item => item.session ? [mapSessionListQueryPayload(item.session)] : []);
+            const deletedIds = initial.results.filter(item => !item.session).map(item => item.requestedId);
+            const canonicalSubscriptions = this.globalSseSessionIds.get(res)!;
+            for (const session of sessions) if (typeof session.id === 'string') canonicalSubscriptions.add(session.id);
+            res.write(`data: ${JSON.stringify({ type: 'session-list-delta', sessions, deletedIds })}\n\n`);
+          }
+          initialization.initializing = false;
+          for (const [pendingSessionId, pending] of initialization.pending) {
+            if (!this.globalSseSessionIds.get(res)?.has(pendingSessionId)) continue;
+            res.write(`data: ${JSON.stringify({ type: 'session-list-delta', ...pending })}\n\n`);
+          }
+          initialization.pending.clear();
+          if (initialization.invalidation) {
+            res.write(`data: ${initialization.invalidation}\n\n`);
+            initialization.invalidation = null;
+          }
           
           // Keep-alive ping
-          const keepAliveInterval = setInterval(() => {
+          if (closed) return;
+          keepAliveInterval = setInterval(() => {
             try {
               res.write(': keep-alive\n\n');
             } catch (e) {
-              clearInterval(keepAliveInterval);
+              if (keepAliveInterval) clearInterval(keepAliveInterval);
             }
           }, 30000);
-          
-          // Remove on disconnect
-          req.on('close', () => {
-            clearInterval(keepAliveInterval);
-            const index = this.globalSseClients.indexOf(res);
-            if (index !== -1) {
-              this.globalSseClients.splice(index, 1);
-            }
-          });
           
           res;
         },
@@ -2562,7 +2817,7 @@ export class WebUIChannel implements Channel {
               ? req.body.clientMessageId
               : undefined;
 
-            const existingSession = await sessionManager.getExistingSession(sessionId);
+            const existingSession = sessionManager.getSessionCatalog(sessionId);
             if (!existingSession) {
               return res.status(404).json({ error: 'Session not found' });
             }
@@ -2795,18 +3050,20 @@ export class WebUIChannel implements Channel {
     }
   }
 
-  broadcastSessionStateUpdate(sessionId: string) {
+  broadcastSessionStateUpdate(sessionId: string, runtimeSession?: SessionRuntimeSessionDto | null) {
     const clients = this.sseClients.get(sessionId);
-    if (!clients || clients.length === 0) {
-      return;
-    }
 
-    const session = sessionManager.getAllSessions().get(sessionId);
+    // The production event bridge supplies an immutable DTO. The live-map
+    // fallback remains only for direct compatibility callers and existing
+    // route tests that invoke this method without an event payload.
+    const session = runtimeSession === undefined
+      ? sessionManager.getAllSessions().get(sessionId)
+      : runtimeSession;
     const data = session
       ? JSON.stringify({ type: 'session-state', session: buildWebUiSessionState(session) })
       : JSON.stringify({ type: 'session-deleted', sessionId });
 
-    clients.forEach(client => {
+    (clients || []).forEach(client => {
       try {
         client.write(`data: ${data}\n\n`);
         if (!session) {
@@ -2819,14 +3076,34 @@ export class WebUIChannel implements Channel {
 
     if (!session) {
       this.sseClients.delete(sessionId);
+      this.presentationSubscriptionListener?.(sessionId, false);
+    }
+
+    const listDelta = session ? [buildWebUiSessionListProjection(runtimeSession === undefined
+      ? buildSessionRuntimeSessionDto(session as Session) : session as SessionRuntimeSessionDto)] : [];
+    for (const client of this.globalSseClients) {
+      const initialization = this.globalSseInitialization.get(client);
+      if (initialization?.initializing) {
+        if (this.globalSseSessionIds.get(client)?.has(sessionId)) {
+          initialization.pending.set(sessionId, { sessions: listDelta, deletedIds: session ? [] : [sessionId] });
+        }
+        continue;
+      }
+      if (!this.globalSseSessionIds.get(client)?.has(sessionId)) continue;
+      try { client.write(`data: ${JSON.stringify({ type: 'session-list-delta', sessions: listDelta,
+        deletedIds: session ? [] : [sessionId] })}\n\n`); }
+      catch (e) { logger.error({ err: e, sessionId }, 'Failed to send bounded global Session delta'); }
     }
   }
 
   // Broadcast session list update to all global SSE clients
   broadcastSessionListUpdate() {
     if (this.globalSseClients.length > 0) {
-      const data = JSON.stringify({ type: 'sessions-updated' });
+      const data = JSON.stringify({ type: 'sessions-updated', catalogInvalidated: true,
+        eventId: ++this.globalSseInvalidationEventId, presentationRevision: sessionCatalogStore.getPresentationRevision() });
       this.globalSseClients.forEach(client => {
+        const initialization = this.globalSseInitialization.get(client);
+        if (initialization?.initializing) { initialization.invalidation = data; return; }
         try {
           client.write(`data: ${data}\n\n`);
         } catch (e) {

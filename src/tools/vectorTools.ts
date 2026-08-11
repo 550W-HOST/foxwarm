@@ -15,7 +15,12 @@ export async function resolveMemorySearchOptions(
         throw new Error('recall vector_query requires an active session context.');
     }
 
-    const session = await sessionManager.getSession(ctx.sessionId);
+    const trustedSession = (ctx.persistCurrentSession || ctx.detachedReadOnlySession === true)
+        && ctx.session
+        && ctx.session.id === ctx.sessionId
+        ? ctx.session
+        : undefined;
+    const session = trustedSession || await sessionManager.getSession(ctx.sessionId);
     const agentName = session.agent || 'main';
     const effectiveIsolated = sessionManager.isSessionEffectivelyIsolated(session);
 
@@ -54,7 +59,9 @@ export async function resolveMemorySearchOptions(
     }
 
     if (request.targetSessionId) {
-        const targetSession = await sessionManager.getExistingSession(request.targetSessionId);
+        const targetSession = request.targetSessionId === session.id || (session.aliases || []).includes(request.targetSessionId)
+            ? session
+            : sessionManager.getSessionCatalog(request.targetSessionId);
         if (!targetSession) {
             throw new Error(`Session \`${request.targetSessionId}\` not found.`);
         }

@@ -51,7 +51,21 @@ export type ActiveSessionRuntimeStateInput = Omit<SessionRuntimeState, 'queueLen
 type RuntimeStateUpdateCallback = (sessionId: string) => void;
 
 const activeRuntimeStates = new Map<string, ActiveSessionRuntimeStateInput>();
+const catalogStubQueueLengths = new WeakMap<Session, number>();
 let updateCallback: RuntimeStateUpdateCallback | undefined;
+
+export function markSessionCatalogStub(session: Session, queueLength: number): void {
+  catalogStubQueueLengths.set(session, Math.max(0, Math.floor(queueLength)));
+}
+
+export function clearSessionCatalogStub(session: Session): void {
+  catalogStubQueueLengths.delete(session);
+}
+
+export function getEffectiveSessionQueueLength(session: Session): number {
+  const catalogCount = catalogStubQueueLengths.get(session);
+  return catalogCount === undefined ? (Array.isArray(session.queue) ? session.queue.length : 0) : catalogCount;
+}
 
 function normalizeStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
@@ -125,7 +139,7 @@ function mergeActiveState(session: Session, active: ActiveSessionRuntimeStateInp
   return {
     ...active,
     since: active.since || active.tool?.startedAt || Date.now(),
-    queueLength: session.queue?.length || 0,
+    queueLength: getEffectiveSessionQueueLength(session),
     busy: true,
   };
 }
@@ -162,7 +176,7 @@ export function getActiveSessionRuntimeState(sessionId: string): ActiveSessionRu
 }
 
 export function buildSessionRuntimeState(session: Session): SessionRuntimeState {
-  const queueLength = session.queue?.length || 0;
+  const queueLength = getEffectiveSessionQueueLength(session);
   const active = getActiveSessionRuntimeState(session.id);
   if (active) {
     return mergeActiveState(session, active);

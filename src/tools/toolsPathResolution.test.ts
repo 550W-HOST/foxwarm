@@ -5,7 +5,7 @@ import path from 'path';
 import { getAgentDir, getAgentMemoryDir } from '../config';
 import * as sessionManager from '../sessionManager';
 import { checkToolPermission } from '../isolatedCheck';
-import { read, write, edit, apply_patch, apply_patch_memory, copy_between_nodes, definitions, modelFacingDefinitions, submit_compact_plan, callTool } from '../tools';
+import { read, write, edit, apply_patch, apply_patch_memory, delete_memory, copy_between_nodes, definitions, modelFacingDefinitions, submit_compact_plan, callTool } from '../tools';
 
 test('submit_compact_plan is present in regular tool definitions and guarded outside compact flow', async () => {
   assert.ok(definitions.some(def => def.name === 'submit_compact_plan'));
@@ -366,6 +366,30 @@ test('apply_patch_memory is restricted to the current agent memory directory and
     );
   } finally {
     await fs.remove(path.dirname(fullPath));
+  }
+});
+
+test('delete_memory removes a symlink to a directory without removing its target', async () => {
+  const memoryDir = getAgentMemoryDir('main');
+  const unique = `delete-memory-symlink-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const relativeLink = `${unique}.link`;
+  const linkPath = path.join(memoryDir, relativeLink);
+  const targetDir = path.join(getAgentDir('main'), '.temp', `${unique}.target`);
+  const targetFile = path.join(targetDir, 'keep.txt');
+  try {
+    await fs.ensureDir(memoryDir);
+    await fs.ensureDir(targetDir);
+    await fs.writeFile(targetFile, 'keep');
+    await fs.symlink(targetDir, linkPath, 'dir');
+
+    await delete_memory({ filePath: relativeLink }, { session: { agent: 'main' } } as any);
+
+    assert.equal(await fs.pathExists(linkPath), false);
+    assert.equal(await fs.pathExists(targetDir), true);
+    assert.equal(await fs.readFile(targetFile, 'utf8'), 'keep');
+  } finally {
+    await fs.remove(linkPath);
+    await fs.remove(targetDir);
   }
 });
 

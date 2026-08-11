@@ -1,7 +1,6 @@
 import { PanelLeftOpen, Plus } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import { getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
-import { compareSessionListSessions } from '../sessionListPresentation'
 
 interface CollapsedSidebarProps {
   sessions: Session[]
@@ -28,7 +27,6 @@ export default function CollapsedSidebar({
 }: CollapsedSidebarProps) {
   const rootSessions = sessions
     .filter((s) => (s.pinned || !s.parentSessionId) && !s.archived)
-    .sort((a, b) => compareSessionListSessions(a, b, 'default'))
 
   return (
     <div className="h-full w-12 flex flex-col items-center bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">

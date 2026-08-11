@@ -48,6 +48,7 @@ test('app config schema suggests all managed channel types and QQ credential key
   assert.deepEqual(channel.properties.type.anyOf[0].enum, ['telegram', 'matrix', 'wework', 'weixin', 'qqbot'])
   assert.equal(channel.properties.appId.type, 'string')
   assert.equal(channel.properties.clientSecret.type, 'string')
+  assert.equal(channel.properties.requireMention.type, 'boolean')
   assert.equal(channel.properties.media.properties.imageMaxBytes.maximum, 20971520)
   assert.equal(channel.properties.media.properties.fileMaxBytes.maximum, 209715200)
   assert.match(channel.properties.media.properties.fileMaxBytes.description, /100 MiB/)
@@ -55,6 +56,9 @@ test('app config schema suggests all managed channel types and QQ credential key
   assert.equal(channel.properties.media.properties.maxAttachments.maximum, 16)
   assert.equal(channel.properties.allowedUsers.items.type, 'string')
   assert.equal(channel.properties.allowAllUsers.type, 'boolean')
+  const vectorMaintenance = schemas.APP_CONFIG_SCHEMA.properties.vectorMaintenance
+  assert.equal(vectorMaintenance.oneOf.some((entry) => entry.type === 'boolean'), true)
+  assert.equal(vectorMaintenance.oneOf.find((entry) => entry.type === 'object').properties.retentionHours.minimum, 1)
 
   assert.equal(validateAppConfigSchema({
     channels: {
@@ -66,12 +70,16 @@ test('app config schema suggests all managed channel types and QQ credential key
         type: 'qqbot',
         appId: 'app-id',
         clientSecret: 'secret',
+        requireMention: false,
         allowedUsers: ['openid'],
         media: { imageMaxBytes: 20971520, fileMaxBytes: 52428800, maxTotalBytes: 209715200, maxAttachments: 8 },
       },
       custom: { type: 'company-channel', customField: true },
     },
   }), true)
+  assert.equal(validateAppConfigSchema({ vectorMaintenance: true }), true)
+  assert.equal(validateAppConfigSchema({ vectorMaintenance: false }), true)
+  assert.equal(validateAppConfigSchema({ vectorMaintenance: { retentionHours: 48 } }), true)
 })
 
 test('WebUI schema wrappers reuse the shared canonical schema objects without a duplicate copy', async () => {
@@ -90,8 +98,17 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
         current: {
           providerType: 'openai-completions',
           models: ['model-a'],
+          webSearch: true,
           extraHeaders: { nested: { supportedByLoader: true }, numeric: 42 },
           customExtension: { enabled: true },
+        },
+      },
+    },
+    {
+      providers: {
+        modelOverride: {
+          providerType: 'openai-responses',
+          models: [{ id: 'model-a', webSearch: false }],
         },
       },
     },
@@ -160,6 +177,11 @@ test('models schema suggests known provider types while accepting custom strings
   assert.equal(failoverRule.properties.targets.minItems, 2)
   assert.equal(provider.properties.failureThreshold.minimum, 1)
   assert.equal(provider.properties.cooldownMs.minimum, 1)
+  assert.equal(provider.properties.webSearch.oneOf.some((entry) => entry.type === 'boolean'), true)
+  const webSearchOptions = provider.properties.webSearch.oneOf.find((entry) => entry.type === 'object')
+  assert.equal(webSearchOptions.properties.enabled.type, 'boolean')
+  assert.deepEqual(webSearchOptions.properties.toolChoice.enum, ['auto', 'required'])
+  assert.equal(provider.allOf[0].then.not.anyOf.some((rule) => rule.required.includes('webSearch')), true)
 })
 
 test('dynamic models suggestions use the current document and exclude virtual targets', () => {

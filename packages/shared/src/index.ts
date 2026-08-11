@@ -5,6 +5,8 @@ export * from './execCwd';
 export * from './persistentExec';
 export * from './tokenCount';
 export * from './fileToolCore';
+export * from './fileOperations';
+export * from './processOperations';
 export * from './nodeTools';
 export * from './webuiToolRendering';
 export * from './outputTruncation';

@@ -8,6 +8,8 @@ export interface MessagePart {
     thinkingSummaries?: string[]; // OpenAI Responses
     encryptedThinking?: string;  // OpenAI Responses
     signature?: string; // kimi-k2.5
+    /** Ordered, concrete-model-scoped OpenAI Responses output metadata. */
+    openaiResponses?: OpenAIResponsesPartMeta;
   };
   functionCall?: FunctionCall;
   functionResponse?: FunctionResponse;
@@ -16,6 +18,17 @@ export interface MessagePart {
   inlineDataRef?: InlineDataRef;
   imageMeta?: ImageMeta;
   [key: string]: any;  // Allow additional properties for flexibility
+}
+
+/**
+ * Opaque OpenAI Responses output metadata which must be replayed only to the
+ * concrete model that produced it. The output item is kept on a MessagePart
+ * so provider output ordering survives the provider-neutral history shape.
+ */
+export interface OpenAIResponsesPartMeta {
+  sourceModelId: string;
+  outputItem?: Record<string, any>;
+  annotations?: Array<Record<string, any>>;
 }
 
 export interface FunctionCall {
@@ -244,6 +257,7 @@ export interface QueueSource {
   senderId?: string;
   weworkStreamId?: string; // WeWork intelligent-bot stream id for binding channel broadcasts to the originating turn
   qqbotMessageId?: string; // QQ Bot inbound msg_id for binding a passive reply to the originating turn
+  preferDirectReply?: boolean; // Persisted routing intent; true targets the originating live reply path when available
 }
 
 export interface QueueItem {
@@ -317,6 +331,8 @@ export interface Session {
   parentSessionId?: string; // Parent session ID for child sessions
   goalState?: SessionGoalState; // Session-local goal reminder configuration
   compactThresholdTokens?: number; // Optional per-session auto-compact threshold override in tokens
+  /** Last durable session-worker mailbox row incorporated into this authoritative state file. */
+  lastAppliedMailboxId?: number;
   broadcast?: SessionBroadcast; // Broadcast message to all attached channels (fire-and-forget)
 }
 

@@ -1,6 +1,6 @@
 # Unit: webui-small-components
 
-Files: packages/webui/src/components/ContentHeader.tsx, packages/webui/src/components/ContextMenu.tsx, packages/webui/src/components/AgentCreationMenu.tsx, packages/webui/src/agentCreation.ts, packages/webui/src/components/CreateTabButton.tsx, packages/webui/src/components/CodeLaunchButton.tsx, packages/webui/src/components/NodeTargetSelect.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/components/ReasoningCard.tsx, packages/webui/src/components/ReloadAppButton.tsx, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/SpecialBlock.tsx, packages/webui/src/components/SyntaxHighlightedText.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/utils/languages.ts, packages/webui/test/imageParts.e2e.mjs, packages/webui/test/specialBlocks.e2e.mjs
+Files: packages/webui/src/components/ContentHeader.tsx, packages/webui/src/components/ContextMenu.tsx, packages/webui/src/components/AgentCreationMenu.tsx, packages/webui/src/agentCreation.ts, packages/webui/src/components/CreateTabButton.tsx, packages/webui/src/components/CodeLaunchButton.tsx, packages/webui/src/components/NodeTargetSelect.tsx, packages/webui/src/launcherDraft.ts, packages/webui/src/components/ImageParts.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/components/ReasoningCard.tsx, packages/webui/src/components/ReloadAppButton.tsx, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/SpecialBlock.tsx, packages/webui/src/components/SyntaxHighlightedText.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/utils/languages.ts, packages/webui/test/processingStatus.test.mjs, packages/webui/test/imageParts.e2e.mjs, packages/webui/test/launcherDraft.test.mjs, packages/webui/test/specialBlocks.e2e.mjs
 Secondary files: packages/webui/src/components/CollapsedSidebar.tsx
 
 ## Purpose
@@ -18,7 +18,7 @@ A collection of small, reusable React UI components and utility functions for th
 - `CodeLaunchButton` — Sidebar split button for opening Code at a remembered node/path and controlling the global new-browser-tab default
 - `NodeTargetSelect` — Shared capability-aware Code/terminal node selector
 - `ImageParts` — Renders safe image attachments from legacy inline data or current authenticated blob URLs
-- `ProcessingStatus` — Animated status indicators for busy/queued/loading states
+- `ProcessingStatus` — Canonical thinking/tool/waiting status indicator plus queued/loading actions
 - `ReasoningCard` — Collapsible card displaying AI reasoning/thinking content with markdown rendering
 - `ReloadAppButton` — Button that clears service workers and caches before hard-reloading
 - `Sidebar` — Main application sidebar with session list, navigation, and settings
@@ -40,9 +40,10 @@ A collection of small, reusable React UI components and utility functions for th
 | `AgentCreationMenu({ ... })` | (AgentCreationMenu.tsx) | Renders the creation dropdown plus agent/session modal flows shared by desktop and mobile expanded sidebars |
 | `buildSessionCreationBody(agentId, sessionId)` | (agentCreation.ts) | Omits blank session IDs so random backend naming remains authoritative |
 | `CreateTabButton({ ... })` | ~50–110 | Split button with dropdown form for custom terminal tab creation |
+| `selectLauncherDraftNode(draft, nodeId)` | `launcherDraft.ts` | Preserve a same-node draft or reset a changed node's path to `/` |
 | `ImageItem({ part, label })` | `ImageParts.tsx` | Resolves deployment-relative blob URLs, enforces safe-raster inline policy, and reports load failure |
 | `ImageParts({ ... })` | `ImageParts.tsx` | Renders a grid of image thumbnails or download-only attachment links |
-| `ProcessingStatus({ ... })` | ~10–50 | Shows animated bounce dots and status text for session processing states |
+| `ProcessingStatus({ ... })` | ~15–145 | Shows canonical thinking/tool/waiting summaries, state-specific dots and queue actions, with legacy busy fallback |
 | `extractOpenAIReasoningSummaryTitles(text)` | ~55–68 | Extracts bold-formatted summary titles from reasoning text |
 | `getReasoningPreview(text)` | ~70–75 | Returns collapsed preview text for reasoning card header |
 | `ReasoningCard({ ... })` | ~78–120 | Expandable card rendering markdown reasoning with debounce support |
@@ -77,6 +78,7 @@ A collection of small, reusable React UI components and utility functions for th
 - `ReasoningCard` debounces content updates, detects OpenAI-style bold summary titles for collapsed preview, and renders full markdown when expanded.
 - `ReasoningCard` exposes semantic CSS hooks (`foxwarm-reasoning-card`, `foxwarm-reasoning-card-*`, `foxwarm-reasoning-thread-line`, `foxwarm-reasoning-header`, `foxwarm-reasoning-tag`, `foxwarm-reasoning-preview`, `foxwarm-reasoning-body`) so optional UI style layers can retheme reasoning surfaces without duplicating reasoning rendering logic.
 - `ImageParts` renders PNG/JPEG/GIF/WebP through direct same-origin authenticated URLs with lazy loading, exposes active/unsafe formats as download links, and shows an explicit unavailable state for transport-marked legacy failures or load errors. Canonical persistence and transport behavior: [image blob lifecycle](../threads/image-blob-lifecycle.md).
+- `ProcessingStatus` uses the shared runtime summary, but presents the requesting-model label as `Thinking...`: thinking is blue and animated, running tools are purple and animated, and waiting is amber with one static dot and no Stop action. Active states retain Stop, queued work retains Run queued and explains whether insertion follows the current tool call/model response or session resume, and idle queued work stays a pending action. An idle incomplete turn is an amber static `Turn interrupted` status with Continue; when queue work also exists it keeps the pending count, Run queued, and queued preview. Continue never appears while loading, active, or waiting. The loading indicator remains independent and unchanged.
 - In 550A, both finished and processing Reasoning cards use the neutral panel/input/hover/border/text grammar; processing may use the stronger neutral hover surface but does not claim the blue semantic allocation reserved for System cards. The canonical color allocation is [D-webui-thread-card-color-allocation](./webui-chat-timeline.md#d-webui-thread-card-color-allocation).
 - `hardReloadApp` performs a destructive cache/service-worker purge before triggering `window.location.reload()`.
 - `SyntaxHighlightedText` performs client-side regex tokenization without external highlighting libraries; classification is heuristic-based per language.
@@ -84,6 +86,7 @@ A collection of small, reusable React UI components and utility functions for th
 - `CreateTabButton` manages local dropdown state with click-outside detection and syncs terminal defaults from props via effects; it no longer displays a session/default-context hint because terminal creation is cwd/node-based.
 - Its fixed 20rem dropdown also has a viewport-relative maximum width so the same split button remains usable inside the narrow Code-embedded sidebar.
 - Main `CreateTabButton` and `CodeLaunchButton` selectors show approved offline/incompatible nodes disabled, preserve a stale selected node as unavailable, and apply service-specific requirements through `NodeTargetSelect`. The Code-embedded leaf does not receive the selectable node list because its fixed host message has no target fields.
+- Selecting a different node in either main launcher dropdown updates the local draft node and resets its draft path to `/`; switching again resets again, while rerenders, node-list refreshes, same-node selections, and external default synchronization do not trigger this reset or persist the draft. Code also clears its local path error on an actual node change.
 - `CodeLaunchButton` validates absolute POSIX paths before opening, shows inline errors for invalid input, and exposes controlled node/path/open-mode callbacks so `App` owns global persistence.
 
 ## Integration

@@ -1110,7 +1110,7 @@ export function initArchiveStoreSync(): void {
  *
  * Deleted live sessions intentionally keep their append-only archive records.
  * Callers that allocate new session ids must therefore treat an archived id as
- * reserved even when it no longer exists in sessions.json or state/sessions/.
+ * reserved even when it no longer exists in catalog.sqlite or state/sessions/.
  */
 export async function hasArchivedSessionId(sessionId: string): Promise<boolean> {
   if (typeof sessionId !== 'string' || sessionId.length === 0) {

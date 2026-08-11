@@ -7,11 +7,11 @@ import CollapsedSidebar from './components/CollapsedSidebar'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchPane from './components/WorkbenchPane'
 import VscodeWebFrameHost, { type VscodeWebFrameHostHandle } from './components/VscodeWebFrameHost'
-import type { Session, SessionMoveRequest } from './components/SessionListCore'
+import type { SessionMoveRequest } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { isSessionRuntimeActive } from './sessionRuntimeState'
 import { useSessionIdleNotifications } from './sessionIdleNotifications'
-import { applyLatestSessionListRequest, createLatestSessionListRequestGate, createSessionListRefreshScheduler, type SessionListRefreshScheduler } from './sessionListRefresh'
+import { useBoundedSessionList } from './boundedSessionList'
 import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchTab } from './workbench/types'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
@@ -437,8 +437,6 @@ function isRestorableRouteTabId(tabId: string): boolean {
 function App() {
   const initialRoute = getHashState()
 
-  const [sessions, setSessions] = useState<Session[]>([])
-  const { idleNotificationModes, toggleIdleNotificationMode } = useSessionIdleNotifications(sessions)
   const [agents, setAgents] = useState<AgentSummary[]>([])
   const [route, setRoute] = useState<RouteState>(initialRoute)
   const [setupOobe, setSetupOobe] = useState(false)
@@ -503,11 +501,6 @@ function App() {
   const darkMode = themeMode === 'dark' || (themeMode === 'auto' && systemPrefersDark)
   const [draggingItem, setDraggingItem] = useState<{ type: 'tab' | 'session'; id: string; title: string } | null>(null)
 
-  const globalSSERef = useRef<EventSource | null>(null)
-  const sessionListRequestGateRef = useRef(createLatestSessionListRequestGate())
-  const sessionListRefreshSchedulerRef = useRef<SessionListRefreshScheduler | null>(null)
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const reconnectDelayRef = useRef<number>(1000)
   const pendingRouteTabIdRef = useRef<string | null>(null)
   const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
@@ -529,13 +522,29 @@ function App() {
   const currentContextSessionId = focusedActiveTab?.type === 'chat'
     ? focusedActiveTab.sessionId
     : loadStoredLastVisitedSession()
+  const exactSessionIds = useMemo(() => allTabs.flatMap(tab => isChatTab(tab) ? [tab.sessionId] : []), [allTabs])
+  const boundedSessions = useBoundedSessionList({ focusIds: currentContextSessionId ? [currentContextSessionId] : [], exactIds: exactSessionIds, includeGlobalSummary: true })
+  const collapsedSessions = useBoundedSessionList({ focusIds: currentContextSessionId ? [currentContextSessionId] : [],
+    rootLimit: 20, childLimit: 1, includeIdleWatches: false })
+  const sessions = boundedSessions.knownSessions
+  const sidebarSessions = boundedSessions.sessions
+  const { idleNotificationModes, toggleIdleNotificationMode } = useSessionIdleNotifications(sessions)
+  const boundedPresentation = {
+    serverOrdered: true as const, hasMoreRoots: boundedSessions.hasMoreRoots, childPages: boundedSessions.childPages,
+    descendantBusy: boundedSessions.descendantBusy, invalidationVersion: boundedSessions.invalidationVersion,
+    onModeChange: boundedSessions.setMode, onFilterChange: boundedSessions.setQuery,
+    onLoadMoreRoots: () => { void boundedSessions.loadMoreRoots() },
+    onLoadMoreChildren: (sessionId: string) => { void boundedSessions.loadMoreChildren(sessionId) },
+    onExpandBranch: (sessionId: string) => { void boundedSessions.expandBranch(sessionId) },
+    onCollapseBranch: boundedSessions.collapseBranch,
+  }
   const currentContextSessionRecord = sessions.find((session) => session.id === currentContextSessionId || session.aliases?.includes(currentContextSessionId))
   const currentView: AppView = focusedActiveTab?.type === 'agents'
     ? 'agents'
     : focusedActiveTab?.type === 'setup'
       ? 'setup'
       : 'session'
-  const busyCount = useMemo(() => sessions.filter((session) => isSessionRuntimeActive(session)).length, [sessions])
+  const busyCount = boundedSessions.globalSummary?.busy ?? sessions.filter((session) => isSessionRuntimeActive(session)).length
 
   const fetchWebUiSettings = async () => {
     try {
@@ -651,24 +660,7 @@ function App() {
     }
   }, [setupOobe, route.tabId])
 
-  const fetchSessions = async () => {
-    try {
-      await applyLatestSessionListRequest(
-        sessionListRequestGateRef.current,
-        async () => {
-          const res = await fetch(`${API_BASE_PATH}/sessions`)
-          if (!res.ok) return null
-          const data = await res.json()
-          return Array.isArray(data.sessions) ? data.sessions as Session[] : []
-        },
-        nextSessions => {
-          if (nextSessions) setSessions(nextSessions)
-        },
-      )
-    } catch (error) {
-      console.error('Failed to fetch sessions:', error)
-    }
-  }
+  const fetchSessions = boundedSessions.refresh
 
   const fetchAgents = async () => {
     try {
@@ -725,68 +717,13 @@ function App() {
     }
   }
 
-  const connectGlobalSSE = () => {
-    if (globalSSERef.current) {
-      globalSSERef.current.close()
-      globalSSERef.current = null
-    }
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current)
-      reconnectTimeoutRef.current = null
-    }
-
-    const es = new EventSource(`${API_BASE_PATH}/sessions/stream`)
-    es.onopen = () => {
-      reconnectDelayRef.current = 1000
-    }
-    es.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        if (data.type === 'sessions-updated') {
-          sessionListRefreshSchedulerRef.current?.requestRefresh()
-        }
-      } catch (error) {
-        console.error('Failed to parse SSE message:', error)
-      }
-    }
-    es.onerror = () => {
-      es.close()
-      if (es.readyState === EventSource.CLOSED) {
-        const delay = Math.min(reconnectDelayRef.current, 30000)
-        reconnectTimeoutRef.current = setTimeout(() => {
-          void fetchSessions().then(() => connectGlobalSSE())
-          void fetchActiveTerminals()
-          reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000)
-        }, delay)
-      }
-    }
-    globalSSERef.current = es
-  }
-
   useEffect(() => {
-    const sessionListRefreshScheduler = createSessionListRefreshScheduler(async () => {
-      await Promise.all([fetchSessions(), fetchAgents(), fetchActiveTerminals()])
-    })
-    sessionListRefreshSchedulerRef.current = sessionListRefreshScheduler
-    void fetchSessions()
     void fetchAgents()
     void fetchSetupStatus()
     void fetchWebUiSettings()
     void fetchActiveTerminals()
     void fetchNodeTargets()
-    connectGlobalSSE()
-    return () => {
-      sessionListRefreshScheduler.dispose()
-      if (sessionListRefreshSchedulerRef.current === sessionListRefreshScheduler) {
-        sessionListRefreshSchedulerRef.current = null
-      }
-      globalSSERef.current?.close()
-      globalSSERef.current = null
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current)
-        reconnectTimeoutRef.current = null
-      }
-    }
+    return undefined
   }, [])
 
   useEffect(() => {
@@ -1500,7 +1437,6 @@ function App() {
       return (
         <Suspense fallback={<LazyViewFallback label="Loading agents…" />}>
           <ArchitectureView
-            sessions={sessions}
             currentSession={currentContextSessionId}
             onSelectSession={openChatTab}
             onBack={onBack}
@@ -1824,7 +1760,7 @@ function App() {
     if (showSessionList) {
       return renderWithVscodeFrame(renderWorkbenchSurface(
         <SessionList
-          sessions={sessions}
+          sessions={sidebarSessions}
           agents={agents}
           currentSession={currentContextSessionId}
           currentView={currentView}
@@ -1863,6 +1799,7 @@ function App() {
           onCreateSession={handleCreateSession}
           idleNotificationModes={idleNotificationModes}
           onToggleIdleNotificationMode={toggleIdleNotificationMode}
+          bounded={boundedPresentation}
         />,
       ))
     }
@@ -1883,7 +1820,7 @@ function App() {
       {!sidebarCollapsed ? (
         <div className="relative h-full shrink-0" style={{ width: sidebarWidth }}>
           <Sidebar
-            sessions={sessions}
+            sessions={sidebarSessions}
             agents={agents}
             currentSession={currentContextSessionId}
             currentView={currentView}
@@ -1924,6 +1861,7 @@ function App() {
             isPeek={false}
             idleNotificationModes={idleNotificationModes}
             onToggleIdleNotificationMode={toggleIdleNotificationMode}
+            bounded={boundedPresentation}
           />
           <div
             className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize bg-transparent transition hover:bg-blue-400/40"
@@ -1932,7 +1870,7 @@ function App() {
         </div>
       ) : (
         <CollapsedSidebar
-          sessions={sessions}
+          sessions={collapsedSessions.sessions}
           currentSession={currentContextSessionId}
           onSelectSession={openChatTab}
           onCreateSession={handleQuickCreateSession}

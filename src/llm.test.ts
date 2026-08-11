@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import axios from 'axios';
 import { PassThrough } from 'node:stream';
 
-import { DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
+import { createDefaultCurrentSessionEffects, CurrentSessionEffects, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
 import { LOGS_DIR } from './config';
 import { formatDate } from './logRotation';
 import type { Message, Session } from './types';
@@ -13,6 +13,10 @@ import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot } from './sess
 import { putImageBlob, resolveImageBlobPath } from './imageBlobs';
 import fs from 'fs-extra';
 import { reconstructLlmRequest, setLlmRequestJournalFaultInjectorForTests } from './llmRequestJournal';
+import { LocalSessionTurnHost } from './sessionTurnRunner';
+import * as tools from './tools';
+import * as llmModule from './llm';
+import { nodesManager } from './nodes/manager';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -57,6 +61,64 @@ function makeResponsesStream(text = 'ok', usage: Record<string, unknown> = {
     stream.write(`data: ${JSON.stringify({
       type: 'response.completed',
       response: { output: [], usage },
+    })}\n\n`);
+    stream.write('data: [DONE]\n\n');
+    stream.end();
+  });
+  return stream;
+}
+
+function makeResponsesWebSearchStream(): PassThrough {
+  const citation = {
+    type: 'url_citation',
+    start_index: 0,
+    end_index: 5,
+    url: 'https://example.com/article',
+    title: 'Example article',
+  };
+  const stream = new PassThrough();
+  process.nextTick(() => {
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.output_item.added',
+      output_index: 0,
+      item: { type: 'web_search_call', id: 'ws_123', status: 'completed', action: { type: 'search', query: 'example query' } },
+    })}\n\n`);
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.output_item.added',
+      output_index: 1,
+      item: { type: 'message', role: 'assistant', content: [] },
+    })}\n\n`);
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.content_part.added',
+      output_index: 1,
+      content_index: 0,
+      part: { type: 'output_text', text: '' },
+    })}\n\n`);
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.output_text.done',
+      output_index: 1,
+      content_index: 0,
+      text: 'Hello',
+    })}\n\n`);
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.output_text.annotation.added',
+      output_index: 1,
+      content_index: 0,
+      annotation_index: 0,
+      annotation: citation,
+    })}\n\n`);
+    stream.write(`data: ${JSON.stringify({
+      type: 'response.completed',
+      response: {
+        // Hosted Responses may omit the streamed search call from this
+        // condensed final output. The collector must not merge these entries
+        // by their compact ordinal positions.
+        output: [
+          { type: 'reasoning', summary: [] },
+          { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Hello', annotations: [citation] }] },
+        ],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
     })}\n\n`);
     stream.write('data: [DONE]\n\n');
     stream.end();
@@ -161,6 +223,129 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
   }
 });
 
+test('OpenAI Responses opt-in web search is appended to Foxwarm tools and excluded from compact plans', async () => {
+  const originalPost = axios.post;
+  const capturedBodies: any[] = [];
+  const model = {
+    providerKey: 'fixture',
+    providerType: 'openai-responses',
+    baseUrl: 'https://fixture.example',
+    apiKey: '',
+    model: 'gpt-5.6',
+    extraFields: {},
+    extraHeaders: {},
+    webSearch: {
+      enabled: true,
+      toolChoice: 'required',
+      searchContextSize: 'high',
+      allowedDomains: ['example.com'],
+      userLocation: { city: 'Shenzhen', country: 'CN' },
+    },
+  } as any;
+
+  (axios as any).post = async (_url: string, data: any) => {
+    capturedBodies.push(data);
+    return { status: 200, statusText: 'OK', headers: {}, data: makeResponsesStream() };
+  };
+
+  try {
+    await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'search this' }] }],
+      systemPrompt: '',
+      modelEntryOverride: model,
+      toolDefinitions: [{ name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } }],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+    await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'compact this' }] }],
+      systemPrompt: '',
+      modelEntryOverride: model,
+      purpose: 'compact-plan',
+      toolDefinitions: [{ name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } }],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+    await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'disabled search' }] }],
+      systemPrompt: '',
+      modelEntryOverride: { ...model, webSearch: { enabled: false, toolChoice: 'required' } },
+      toolDefinitions: [{ name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } }],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.deepEqual(capturedBodies[0].tools, [
+      { type: 'function', name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } },
+      {
+        type: 'web_search',
+        search_context_size: 'high',
+        filters: { allowed_domains: ['example.com'] },
+        user_location: { type: 'approximate', country: 'CN', city: 'Shenzhen' },
+      },
+    ]);
+    assert.equal(capturedBodies[0].tool_choice, 'required');
+    assert.deepEqual(capturedBodies[1].tools, [
+      { type: 'function', name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } },
+    ]);
+    assert.equal(capturedBodies[1].tool_choice, 'auto');
+    assert.deepEqual(capturedBodies[2].tools, [
+      { type: 'function', name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } },
+    ]);
+    assert.equal(capturedBodies[2].tool_choice, 'auto');
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('OpenAI Responses parsing persists native web search output and URL annotations with the producing model', async () => {
+  const originalPost = axios.post;
+  const model = {
+    providerKey: 'fixture',
+    providerType: 'openai-responses',
+    baseUrl: 'https://fixture.example',
+    apiKey: '',
+    model: 'gpt-5.6',
+    extraFields: {},
+    extraHeaders: {},
+  } as any;
+  (axios as any).post = async () => ({
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    data: makeResponsesWebSearchStream(),
+  });
+
+  try {
+    const result = await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'search this' }] }],
+      systemPrompt: '',
+      modelEntryOverride: model,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    assert.equal(result.toolCalls?.length, 0);
+    assert.deepEqual(result.allParts?.map(part => part.providerMeta?.openaiResponses?.outputItem?.type || part.text), [
+      'web_search_call',
+      'Hello',
+    ]);
+    assert.equal(result.allParts?.filter(part => typeof part.text === 'string').length, 1);
+    assert.equal(result.allParts?.filter(part => part.providerMeta?.openaiResponses?.outputItem).length, 1);
+    assert.equal(result.allParts?.[0].providerMeta?.openaiResponses?.sourceModelId, 'fixture/gpt-5.6');
+    assert.deepEqual(result.allParts?.[1].providerMeta?.openaiResponses?.annotations, [{
+      type: 'url_citation',
+      start_index: 0,
+      end_index: 5,
+      url: 'https://example.com/article',
+      title: 'Example article',
+    }]);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('a post-response journal failure never retries a successful provider generation', async () => {
   const originalPost = axios.post;
   let callCount = 0;
@@ -237,6 +422,159 @@ test('all provider protocols hydrate canonical image refs only in outbound paylo
   } finally {
     (axios as any).post = originalPost;
     if (ref.blobId) await fs.remove(resolveImageBlobPath(ref.blobId));
+  }
+});
+
+test('all provider protocols filter historical reasoning only for a proven different concrete model', async t => {
+  const originalPost = axios.post;
+  const destinationModelId = 'fixture/destination';
+  const history: Message[] = [
+    { role: 'user', parts: [{ text: 'history start' }], __meta: { timestamp: 1, seq: 1 } },
+    {
+      role: 'model',
+      parts: [
+        { thinking: 'same thinking', providerMeta: { thinkingSummaries: ['same summary'], encryptedThinking: 'same encrypted', signature: 'same signature' } },
+        {
+          providerMeta: {
+            openaiResponses: {
+              sourceModelId: destinationModelId,
+              outputItem: { type: 'web_search_call', id: 'same-search', status: 'completed' },
+            },
+          },
+        },
+        {
+          text: 'same citation text',
+          providerMeta: {
+            openaiResponses: {
+              sourceModelId: destinationModelId,
+              annotations: [{ type: 'url_citation', url: 'https://same.example' }],
+            },
+          },
+        },
+        { text: 'same text' },
+      ],
+      providerMeta: { providerSpecificFields: { reasoning_signature: 'same opaque' }, sourceModelId: destinationModelId },
+      __meta: { modelId: destinationModelId, timestamp: 2, seq: 2, usage: { cachedTokens: 0, inputTokens: 1, outputTokens: 1, reasoningTokens: 1 } },
+    },
+    { role: 'user', parts: [{ text: 'different follows' }] },
+    {
+      role: 'model',
+      parts: [
+        { thinking: 'different thinking', providerMeta: { thinkingSummaries: ['different summary'], encryptedThinking: 'different encrypted', signature: 'different signature' } },
+        {
+          providerMeta: {
+            openaiResponses: {
+              sourceModelId: destinationModelId,
+              outputItem: { type: 'web_search_call', id: 'different-search', status: 'completed' },
+            },
+          },
+        },
+        {
+          text: 'different citation text',
+          providerMeta: {
+            openaiResponses: {
+              sourceModelId: destinationModelId,
+              annotations: [{ type: 'url_citation', url: 'https://different.example' }],
+            },
+          },
+        },
+        { text: 'different text' },
+      ],
+      // Deliberately conflicts with the authoritative message provenance: a
+      // different message model must remove the whole opaque metadata object.
+      providerMeta: { providerSpecificFields: { reasoning_signature: 'different opaque' }, sourceModelId: destinationModelId },
+      __meta: { modelId: 'other/old-model', timestamp: 3, seq: 3 },
+    },
+    { role: 'user', parts: [{ text: 'legacy follows' }] },
+    {
+      role: 'model',
+      parts: [
+        { thinking: 'legacy thinking', providerMeta: { thinkingSummaries: ['legacy summary'], encryptedThinking: 'legacy encrypted', signature: 'legacy signature' } },
+        { text: 'legacy text' },
+      ],
+      providerMeta: { providerSpecificFields: { reasoning_signature: 'legacy opaque' }, sourceModelId: destinationModelId },
+    },
+    { role: 'model', parts: [{ thinking: 'pure different thinking', providerMeta: { thinkingSummaries: ['pure different summary'], encryptedThinking: 'pure different encrypted', signature: 'pure different signature' } }], __meta: { modelId: 'other/old-model' } },
+    {
+      role: 'model',
+      parts: [
+        { thinking: 'mixed different thinking', providerMeta: { thinkingSummaries: ['mixed different summary'], encryptedThinking: 'mixed different encrypted', signature: 'mixed different signature' } },
+        { text: 'mixed different text' },
+        { functionCall: { id: 'call_filter', name: 'read', args: { filePath: 'README.md' } } },
+      ],
+      providerMeta: { providerSpecificFields: { reasoning_signature: 'mixed different opaque' }, sourceModelId: destinationModelId },
+      __meta: { modelId: 'other/old-model' },
+    },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'call_filter', name: 'read', response: { output: 'tool output' } } }] },
+  ];
+  const originalHistory = structuredClone(history);
+  const captured = new Map<string, any>();
+  const models = {
+    responses: { providerKey: 'fixture', providerType: 'openai-responses', baseUrl: 'https://fixture.example', apiKey: '', model: 'destination', extraFields: {}, extraHeaders: {} },
+    chat: { providerKey: 'fixture', providerType: 'openai-completions', baseUrl: 'https://fixture.example', apiKey: '', model: 'destination', extraFields: {}, extraHeaders: {} },
+    anthropic: { providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'destination', extraFields: {}, extraHeaders: {} },
+  } as const;
+
+  try {
+    await t.test('OpenAI Responses', async () => {
+      (axios as any).post = async (_url: string, data: any) => {
+        captured.set('responses', data);
+        return { status: 200, statusText: 'OK', headers: {}, data: makeResponsesStream() };
+      };
+      await requestLlmOnce({ contents: history, systemPrompt: '', modelEntryOverride: models.responses as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    });
+    await t.test('OpenAI Chat Completions', async () => {
+      (axios as any).post = async (_url: string, data: any) => {
+        captured.set('chat', data);
+        return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream() };
+      };
+      await requestLlmOnce({ contents: history, systemPrompt: '', modelEntryOverride: models.chat as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    });
+    await t.test('Anthropic Messages', async () => {
+      (axios as any).post = async (_url: string, data: any) => {
+        captured.set('anthropic', data);
+        return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }] } };
+      };
+      await requestLlmOnce({ contents: history, systemPrompt: '', modelEntryOverride: models.anthropic as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    });
+
+    assert.deepEqual(history, originalHistory, 'attempt filtering must not mutate caller or persisted history');
+    for (const payload of captured.values()) {
+      const serialized = JSON.stringify(payload);
+      assert.equal(serialized.includes('__meta'), false);
+      assert.equal(serialized.includes('same thinking') || serialized.includes('same summary'), true);
+      assert.equal(serialized.includes('legacy thinking') || serialized.includes('legacy summary'), true);
+      assert.equal(serialized.includes('different thinking'), false);
+      assert.equal(serialized.includes('different summary'), false);
+      assert.equal(serialized.includes('different encrypted'), false);
+      assert.equal(serialized.includes('different signature'), false);
+      assert.equal(serialized.includes('different opaque'), false);
+      assert.equal(serialized.includes('pure different'), false);
+      assert.equal(serialized.includes('mixed different thinking'), false);
+      assert.equal(serialized.includes('different text'), true);
+      assert.equal(serialized.includes('mixed different text'), true);
+      assert.equal(serialized.includes('call_filter'), true);
+      assert.equal(serialized.includes('tool output'), true);
+    }
+
+    const responseReasoning = captured.get('responses').input.filter((item: any) => item.type === 'reasoning');
+    assert.deepEqual(responseReasoning.map((item: any) => item.encrypted_content), ['same encrypted', 'legacy encrypted']);
+    const responseSerialized = JSON.stringify(captured.get('responses').input);
+    assert.match(responseSerialized, /same-search/);
+    assert.match(responseSerialized, /https:\/\/same\.example/);
+    assert.doesNotMatch(responseSerialized, /different-search/);
+    assert.doesNotMatch(responseSerialized, /https:\/\/different\.example/);
+
+    const chatAssistants = captured.get('chat').messages.filter((message: any) => message.role === 'assistant');
+    assert.equal(chatAssistants.length, 4, 'the known-different reasoning-only model message is omitted');
+    assert.deepEqual(chatAssistants.filter((message: any) => message.reasoning_content).map((message: any) => message.reasoning_content), ['same thinking', 'legacy thinking']);
+    assert.deepEqual(chatAssistants.filter((message: any) => message.provider_specific_fields).map((message: any) => message.provider_specific_fields.reasoning_signature), ['same opaque', 'legacy opaque']);
+    assert.equal(chatAssistants.some((message: any) => Array.isArray(message.tool_calls) && message.tool_calls[0]?.id === 'call_filter'), true);
+
+    const anthropicBlocks = captured.get('anthropic').messages.flatMap((message: any) => Array.isArray(message.content) ? message.content : []);
+    assert.deepEqual(anthropicBlocks.filter((block: any) => block.type === 'thinking').map((block: any) => block.signature), ['same signature', 'legacy signature']);
+  } finally {
+    (axios as any).post = originalPost;
   }
 });
 
@@ -358,6 +696,309 @@ test('chat persists a provider-reported reasoning component on model message usa
   } finally {
     (axios as any).post = originalPost;
   }
+});
+
+test('LocalSessionTurnHost runs detached normal chat through explicit current-session effects', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession(makeId('detached_turn_effects'));
+  const appended: Message[] = [];
+  const events: any[] = [];
+  const registered: AbortController[] = [];
+  const cleared: AbortController[] = [];
+  let persistCount = 0;
+  const originalHotEffects = {
+    appendSessionMessage: sessionManager.appendSessionMessage,
+    getAllSessions: sessionManager.getAllSessions,
+    saveSession: sessionManager.saveSession,
+    notifySessionEvent: sessionManager.notifySessionEvent,
+    registerSessionAbortController: sessionManager.registerSessionAbortController,
+    clearSessionAbortController: sessionManager.clearSessionAbortController,
+  };
+  const unexpectedGlobalEffect = () => { throw new Error('detached chat touched global current-session hot state'); };
+  class StatefulEffects implements CurrentSessionEffects {
+    placement = 'local' as const;
+    async appendMessage(target: Session, message: Message) {
+      assert.equal(this, effects);
+      assert.equal(target, session);
+      appended.push(message);
+      target.history.push(message);
+    }
+    async persistSession(target: Session) {
+      assert.equal(this, effects);
+      assert.equal(target, session);
+      persistCount += 1;
+    }
+    notifySessionEvent(sessionId: string, event: any) {
+      assert.equal(this, effects);
+      assert.equal(sessionId, session.id);
+      events.push(event);
+    }
+    registerAbortController(sessionId: string, controller: AbortController) {
+      assert.equal(this, effects);
+      assert.equal(sessionId, session.id);
+      registered.push(controller);
+    }
+    clearAbortController(sessionId: string, controller: AbortController) {
+      assert.equal(this, effects);
+      assert.equal(sessionId, session.id);
+      cleared.push(controller);
+    }
+    async clearWaitById() { return false; }
+  }
+  const effects = new StatefulEffects();
+
+  (axios as any).post = async () => ({
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    data: makeChatCompletionStream('detached answer'),
+  });
+  (sessionManager as any).appendSessionMessage = unexpectedGlobalEffect;
+  (sessionManager as any).getAllSessions = unexpectedGlobalEffect;
+  (sessionManager as any).saveSession = unexpectedGlobalEffect;
+  (sessionManager as any).notifySessionEvent = unexpectedGlobalEffect;
+  (sessionManager as any).registerSessionAbortController = unexpectedGlobalEffect;
+  (sessionManager as any).clearSessionAbortController = unexpectedGlobalEffect;
+
+  try {
+    assert.equal(await sessionManager.getExistingSession(session.id), null);
+    const result = await new LocalSessionTurnHost(effects).chat([{ text: 'detached hello' }], session, 0, {
+      toolDefinitions: [],
+    });
+    assert.equal(result.text, 'detached answer');
+    assert.deepEqual(appended.map(message => message.role), ['user', 'model']);
+    assert.equal(persistCount, 1);
+    assert.equal(events.some(event => event.type === 'model-stream-reset'), true);
+    assert.equal(events.some(event => event.type === 'model-stream-update'), true);
+    assert.equal(registered.length, 1);
+    assert.deepEqual(cleared, registered);
+    assert.equal(await sessionManager.getExistingSession(session.id), null);
+  } finally {
+    (axios as any).post = originalPost;
+    Object.assign(sessionManager, originalHotEffects);
+  }
+});
+
+test('LocalSessionTurnHost uses one caller effects owner while explicit append remains highest priority', async () => {
+  const session = createOpenAITestSession(makeId('turn_effects_precedence'));
+  const originalChat = (llmModule as any).chat;
+  const hostAppends: Message[] = [];
+  const callerAppends: Message[] = [];
+  const explicitAppends: Message[] = [];
+  const makeEffects = (target: Message[]): CurrentSessionEffects => ({
+    placement: 'local',
+    appendMessage: async (_session, message) => { target.push(message); },
+    persistSession: async () => {},
+    notifySessionEvent: () => {},
+    registerAbortController: () => {},
+    clearAbortController: () => {},
+    clearWaitById: async () => false,
+  });
+  const hostEffects = makeEffects(hostAppends);
+  const callerEffects = makeEffects(callerAppends);
+  (llmModule as any).chat = async (_parts: any, _session: Session, _iteration: number, options: any) => {
+    assert.equal(options.currentSessionEffects, callerEffects);
+    await options.appendMessage({ role: 'user', parts: [{ text: 'probe' }] });
+    return { text: 'ok' };
+  };
+
+  try {
+    const host = new LocalSessionTurnHost(hostEffects);
+    await host.chat(null, session, 0, { currentSessionEffects: callerEffects });
+    assert.equal(hostAppends.length, 0);
+    assert.equal(callerAppends.length, 1);
+
+    await host.chat(null, session, 0, {
+      currentSessionEffects: callerEffects,
+      appendMessage: async message => { explicitAppends.push(message); },
+    });
+    assert.equal(callerAppends.length, 1);
+    assert.equal(explicitAppends.length, 1);
+  } finally {
+    (llmModule as any).chat = originalChat;
+  }
+});
+
+test('LocalSessionTurnHost clears explicit wait through injected effects when a sibling tool fails', async () => {
+  const sessionId = makeId('turn_effects_wait_clear');
+  const session = await sessionManager.getSession(sessionId);
+  const originalWait = (tools as any).wait;
+  const cleared: Array<{ sessionId: string | undefined; waitId: string }> = [];
+  const effects = {
+    ...createDefaultCurrentSessionEffects(),
+    cleared,
+    async clearWaitById(targetId: string | undefined, waitId: string) {
+      this.cleared.push({ sessionId: targetId, waitId });
+      return true;
+    },
+  };
+  (tools as any).wait = async () => ({
+    output: 'ok',
+    __toolLoopControl: { stopCurrentTurn: true },
+    __toolPostAction: { explicitWaitId: 'detached-wait-token' },
+  });
+
+  try {
+    const message = await new LocalSessionTurnHost(effects).executeTools([
+      { id: 'explicit-wait', name: 'wait', args: {} },
+      { id: 'sibling-error', name: 'read', args: { filePath: `/missing-effects-${Date.now()}` } },
+    ], { sessionId, session }, session);
+    assert.deepEqual(cleared, [{ sessionId, waitId: 'detached-wait-token' }]);
+    assert.equal((message as any).__toolLoopControl, undefined);
+  } finally {
+    (tools as any).wait = originalWait;
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('LocalSessionTurnHost executes detached read and set_goal without global source-session lookup', async () => {
+  const session = createOpenAITestSession(makeId('detached_tool_owner'));
+  session.agent = 'main';
+  const dirPath = await fs.mkdtemp('/tmp/foxwarm-detached-tools-');
+  const filePath = `${dirPath}/probe.txt`;
+  await fs.writeFile(filePath, 'detached read ok');
+  assert.equal(sessionManager.getAllSessions().has(session.id), false);
+
+  const originals = {
+    getSession: sessionManager.getSession,
+    getExistingSession: sessionManager.getExistingSession,
+    saveSession: sessionManager.saveSession,
+    getCurrentNode: nodesManager.getCurrentNode,
+  };
+  const unexpectedLookup = () => { throw new Error('detached tool execution touched the global source-session map'); };
+  (sessionManager as any).getSession = unexpectedLookup;
+  (sessionManager as any).getExistingSession = unexpectedLookup;
+  (sessionManager as any).saveSession = unexpectedLookup;
+  (nodesManager as any).getCurrentNode = unexpectedLookup;
+  let persisted = 0;
+  const effects = createDefaultCurrentSessionEffects();
+  effects.persistSession = async target => {
+    assert.equal(target, session);
+    persisted += 1;
+  };
+
+  try {
+    const message = await new LocalSessionTurnHost(effects).executeTools([
+      { id: 'detached-goal', name: 'set_goal', args: { goal: 'Keep detached ownership', remindEvery: 7 } },
+      { id: 'detached-read', name: 'read', args: { filePath } },
+    ], { sessionId: session.id, session }, session);
+    assert.deepEqual(session.goalState && {
+      goal: session.goalState.goal,
+      remindEvery: session.goalState.remindEvery,
+      anchorSeq: session.goalState.anchorSeq,
+    }, { goal: 'Keep detached ownership', remindEvery: 7, anchorSeq: 0 });
+    assert.equal(persisted, 1);
+    assert.deepEqual(message.parts[0].functionResponse?.response, { output: 'ok' });
+    assert.match(String((message.parts[1].functionResponse?.response as any)?.output), /detached read ok/);
+    assert.equal(sessionManager.getAllSessions().has(session.id), false);
+  } finally {
+    Object.assign(sessionManager, {
+      getSession: originals.getSession,
+      getExistingSession: originals.getExistingSession,
+      saveSession: originals.saveSession,
+    });
+    (nodesManager as any).getCurrentNode = originals.getCurrentNode;
+    await fs.remove(dirPath);
+  }
+});
+
+test('executeTools without effects resolves and uses the exact global source Session', async () => {
+  const sessionId = makeId('legacy_tool_context');
+  const session = await sessionManager.getSession(sessionId);
+  const ownerDir = await fs.mkdtemp('/tmp/foxwarm-legacy-owner-');
+  const cloneDir = await fs.mkdtemp('/tmp/foxwarm-legacy-clone-');
+  session.cwd = ownerDir;
+  session.currentNode = 'master';
+  await sessionManager.saveSession(sessionId);
+  await fs.writeFile(`${ownerDir}/probe.txt`, 'authoritative owner read');
+  await fs.writeFile(`${cloneDir}/probe.txt`, 'untrusted clone read');
+  const clone = { ...session, cwd: cloneDir };
+  const originalGetCurrentNode = nodesManager.getCurrentNode;
+  const originalImageWrite = (tools as any).image_write_to_file;
+  (nodesManager as any).getCurrentNode = () => { throw new Error('legacy owner routing re-read current node'); };
+  (tools as any).image_write_to_file = async (_args: any, ctx: any) => {
+    assert.equal(ctx.session, session);
+    assert.equal(ctx.session.cwd, ownerDir);
+    assert.equal(ctx.runtimeNodeId, 'remote-explicit');
+    return 'explicit owner route';
+  };
+
+  try {
+    const message = await llmModule.executeTools([
+      { id: 'legacy-read', name: 'read', args: { filePath: 'probe.txt' } },
+      { id: 'legacy-explicit', name: 'image_write_to_file', args: { id: 'image-id', filePath: '/tmp/image.png', node: 'remote-explicit' } },
+    ], { sessionId, session: clone }, clone as any);
+    assert.match(String((message.parts[0].functionResponse?.response as any)?.output), /authoritative owner read/);
+    assert.doesNotMatch(String((message.parts[0].functionResponse?.response as any)?.output), /untrusted clone read/);
+    assert.deepEqual(message.parts[1].functionResponse?.response, { output: 'explicit owner route' });
+  } finally {
+    (nodesManager as any).getCurrentNode = originalGetCurrentNode;
+    (tools as any).image_write_to_file = originalImageWrite;
+    await fs.remove(ownerDir);
+    await fs.remove(cloneDir);
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('executeTools without effects cannot bypass authoritative isolation with a same-ID clone', async () => {
+  const sessionId = makeId('legacy_isolated_owner');
+  const agentName = makeId('legacy_isolated_agent');
+  const session = await sessionManager.getSession(sessionId);
+  session.agent = agentName;
+  session.currentNode = 'master';
+  await sessionManager.saveSession(sessionId);
+  await sessionManager.setAgentMetadata(agentName, { isolated: true, isolatedNode: 'bound-node' });
+  const clone = { ...session, agent: 'main', currentNode: 'master' };
+
+  try {
+    const message = await llmModule.executeTools([
+      { id: 'isolated-clone-read', name: 'read', args: { filePath: '/tmp/outside-owner.txt' } },
+    ], { sessionId, session: clone }, clone as any);
+    assert.match(String((message.parts[0].functionResponse?.response as any)?.error), /[Ii]solated/);
+  } finally {
+    await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
+test('executeTools rejects effects/source owner mismatch before lookup or effects', async () => {
+  const owner = createOpenAITestSession(makeId('effects_owner_a'));
+  owner.cwd = '/owner-a-cwd';
+  const sourceId = makeId('effects_source_b');
+  const originalGetExistingSession = sessionManager.getExistingSession;
+  const originalGetCurrentNode = nodesManager.getCurrentNode;
+  (sessionManager as any).getExistingSession = () => { throw new Error('mismatch performed source lookup'); };
+  (nodesManager as any).getCurrentNode = () => { throw new Error('mismatch performed node lookup'); };
+  let effectCalls = 0;
+  const effects = createDefaultCurrentSessionEffects();
+  effects.persistSession = async () => { effectCalls += 1; };
+  effects.clearWaitById = async () => { effectCalls += 1; return false; };
+
+  try {
+    await assert.rejects(
+      () => new LocalSessionTurnHost(effects).executeTools([
+        { id: 'mismatch-read', name: 'read', args: { filePath: 'probe.txt' } },
+      ], { sessionId: sourceId, session: owner }, owner),
+      new RegExp(`source session .*${sourceId}.* does not match authoritative Session .*${owner.id}`),
+    );
+    assert.equal(effectCalls, 0);
+  } finally {
+    (sessionManager as any).getExistingSession = originalGetExistingSession;
+    (nodesManager as any).getCurrentNode = originalGetCurrentNode;
+  }
+});
+
+test('executeTools without effects rejects a missing source without creating it', async () => {
+  const missingId = makeId('missing_tool_owner');
+  const clone = createOpenAITestSession(missingId);
+  assert.equal(sessionManager.getAllSessions().has(missingId), false);
+  await assert.rejects(
+    () => llmModule.executeTools([
+      { id: 'missing-read', name: 'read', args: { filePath: '/tmp/missing-owner.txt' } },
+    ], { sessionId: missingId, session: clone }, clone),
+    new RegExp(`source session .*${missingId}.* was not found`),
+  );
+  assert.equal(sessionManager.getAllSessions().has(missingId), false);
 });
 
 test('chat persists streamed provider-specific fields and only the same concrete model receives them later', async () => {
@@ -838,7 +1479,7 @@ test('chat propagates final request failure without appending fake Error model t
   }
 });
 
-test('chat strips session message __meta, including context block metadata, before provider request', async () => {
+test('chat journals only historical concrete model provenance and strips all __meta from provider payloads', async () => {
   const originalPost = axios.post;
   let capturedBody: any = null;
   const session = createOpenAITestSession('context_block_meta_strip_session');
@@ -848,6 +1489,10 @@ test('chat strips session message __meta, including context block metadata, befo
     parts: [{ text: '[CTX-BLOCK L1 B#3 raw#1-#2] summary' }],
     __meta: {
       timestamp: 123,
+      seq: 7,
+      modelId: 'anthropic/claude-sonnet-4-5',
+      virtualModelKey: 'fallback',
+      usage: { cachedTokens: 1, inputTokens: 2, outputTokens: 3, reasoningTokens: 1 },
       contextBlock: {
         id: 3,
         level: 1,
@@ -874,7 +1519,7 @@ test('chat strips session message __meta, including context block metadata, befo
   };
 
   try {
-    await chat(null, session, 0, {
+    const result = await chat(null, session, 0, {
       appendMessage: async (message: Message) => { session.history.push(message); },
       toolDefinitions: [],
       notifySessionEvents: false,
@@ -886,6 +1531,15 @@ test('chat strips session message __meta, including context block metadata, befo
       content: '[CTX-BLOCK L1 B#3 raw#1-#2] summary',
     }]);
     assert.equal(JSON.stringify(capturedBody).includes('contextBlock'), false);
+    assert.equal(JSON.stringify(capturedBody).includes('__meta'), false);
+    const reconstructed = await reconstructLlmRequest(result.llmRequestId!);
+    assert.equal(reconstructed.completeness, 'complete');
+    if (reconstructed.completeness === 'complete') {
+      assert.deepEqual(reconstructed.messages[0].__meta, { modelId: 'anthropic/claude-sonnet-4-5' });
+      assert.equal(JSON.stringify(reconstructed.messages[0]).includes('contextBlock'), false);
+      assert.equal(JSON.stringify(reconstructed.messages[0]).includes('reasoningTokens'), false);
+      assert.equal(JSON.stringify(reconstructed.messages[0]).includes('virtualModelKey'), false);
+    }
   } finally {
     (axios as any).post = originalPost;
   }

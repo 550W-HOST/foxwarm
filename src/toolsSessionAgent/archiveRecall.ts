@@ -1,4 +1,5 @@
 import * as sessionManager from '../sessionManager';
+import { executeMainManagementTool } from '../mainManagementTools';
 import { formatArchiveBlockContextText, formatArchiveBlockTimeRange, getArchiveBlockEndTimestamp, getArchiveBlockStartTimestamp, renderBlockMessage, type ArchiveBlockRecord } from '../session/layeredContext';
 import type { ArchiveMessageRecord } from '../session/archive';
 import type { Message, Session } from '../types';
@@ -15,7 +16,7 @@ import {
 } from '../contextPreviewRenderer';
 import { truncateUnicodeSafe } from '../utils/unicode';
 import { formatLocalTimestamp } from '../utils/localTime';
-import { requireNotIsolated, checkArchivedReadPermission } from '../isolatedCheck';
+import { requireNotIsolated, requireNotIsolatedForSession, checkArchivedReadPermission, checkArchivedReadPermissionForSession } from '../isolatedCheck';
 import { resolveMemorySearchOptions } from '../tools/vectorTools';
 import {
   ToolArgs,
@@ -666,10 +667,22 @@ function formatSessionExecutionState(session: Session): string {
 
 export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContext) {
   assertNoRemovedQueryArg(args, 'get_session_messages');
-  await requireNotIsolated(ctx, 'get_session_messages');
   const { sessionId, start, count } = args;
+  const trustedSession = ctx?.persistCurrentSession
+    && ctx.session
+    && ctx.sessionId === ctx.session.id
+    && (ctx.session.id === sessionId || ctx.session.aliases?.includes(sessionId))
+    ? ctx.session
+    : undefined;
+  // Cross-session reads are Main-owned (detached authority read for fenced
+  // targets); a worker reaches them through the fixed main-management facade.
+  if (!trustedSession && ctx?.sessionPlacement === 'session-worker') {
+    return executeMainManagementTool('get_session_messages', args, ctx);
+  }
+  if (trustedSession) requireNotIsolatedForSession(trustedSession, 'get_session_messages');
+  else await requireNotIsolated(ctx as any, 'get_session_messages');
 
-  const session = await sessionManager.getExistingSession(sessionId);
+  const session = trustedSession || await sessionManager.getExistingSession(sessionId);
   if (!session) {
     return `Session \`${sessionId}\` not found.`;
   }
@@ -695,7 +708,9 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
   actualStart = Math.max(0, Math.min(actualStart, totalMessages));
   actualCount = Math.min(actualCount, totalMessages - actualStart);
 
-  const messages = await sessionManager.getSessionMessages(sessionId, actualStart, actualCount);
+  const messages: Message[] = trustedSession
+    ? trustedSession.history.slice(actualStart, actualStart + actualCount)
+    : await sessionManager.getSessionMessages(sessionId, actualStart, actualCount);
 
   if (messages.length === 0) {
     return `${executionState}\n\nNo messages found in session \`${sessionId}\` (total: ${totalMessages} messages).`;
@@ -739,7 +754,13 @@ export async function tool_get_session_messages(args: ToolArgs, ctx?: ToolContex
 
 export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolContext) {
   const targetSessionId = args.sessionId || ctx?.sessionId;
-  await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_messages');
+  const exactOwner = ctx?.sessionPlacement === 'session-worker' && ctx.session
+    && (targetSessionId === ctx.session.id || ctx.session.aliases?.includes(targetSessionId));
+  if (ctx?.sessionPlacement === 'session-worker' && !exactOwner) {
+    return executeMainManagementTool('get_archived_messages', args, ctx);
+  }
+  if (exactOwner) checkArchivedReadPermissionForSession(ctx!.session, targetSessionId, 'get_archived_messages');
+  else await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_messages');
 
   if (!targetSessionId) {
     throw new Error('sessionId is required when there is no current session context.');
@@ -773,7 +794,13 @@ export async function tool_get_archived_messages(args: ToolArgs, ctx?: ToolConte
 
 export async function tool_get_archived_blocks(args: ToolArgs, ctx?: ToolContext) {
   const targetSessionId = args.sessionId || ctx?.sessionId;
-  await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_blocks');
+  const exactOwner = ctx?.sessionPlacement === 'session-worker' && ctx.session
+    && (targetSessionId === ctx.session.id || ctx.session.aliases?.includes(targetSessionId));
+  if (ctx?.sessionPlacement === 'session-worker' && !exactOwner) {
+    return executeMainManagementTool('get_archived_blocks', args, ctx);
+  }
+  if (exactOwner) checkArchivedReadPermissionForSession(ctx!.session, targetSessionId, 'get_archived_blocks');
+  else await checkArchivedReadPermission(ctx || {}, targetSessionId, 'get_archived_blocks');
 
   if (!targetSessionId) {
     throw new Error('sessionId is required when there is no current session context.');
@@ -1008,7 +1035,7 @@ export async function renderContextBlockExpansion(args: {
     throw contextBlockExpansionError('sessionId is required.', 400, 'SESSION_ID_REQUIRED');
   }
 
-  const session = await sessionManager.getExistingSession(targetSessionId);
+  const session = sessionManager.getSessionCatalog(targetSessionId);
   if (!session) {
     throw contextBlockExpansionError(`Session \`${targetSessionId}\` not found.`, 404, 'SESSION_NOT_FOUND');
   }
@@ -1187,6 +1214,15 @@ async function buildRecallVectorQuery(
 }
 
 export async function tool_recall(args: ToolArgs = {}, ctx?: ToolContext) {
+  args = { ...args };
+  if (typeof args.sessionId === 'string') {
+    const sessionId = args.sessionId.trim();
+    if (sessionId) args.sessionId = sessionId; else delete args.sessionId;
+  }
+  if (typeof args.agentName === 'string') {
+    const agentName = args.agentName.trim();
+    if (agentName) args.agentName = agentName; else delete args.agentName;
+  }
   assertNoRemovedQueryArg(args, 'recall');
   assertNoLegacyRecallArgs(args);
   const targetSessionId = args.sessionId || ctx?.sessionId;
@@ -1194,7 +1230,19 @@ export async function tool_recall(args: ToolArgs = {}, ctx?: ToolContext) {
     throw new Error('sessionId is required when there is no current session context.');
   }
 
-  await checkArchivedReadPermission(ctx || {}, targetSessionId, 'recall');
+  const trustedSession = ctx?.persistCurrentSession
+    && ctx.session
+    && ctx.sessionId === ctx.session.id
+    && (targetSessionId === ctx.session.id || (ctx.session.aliases || []).includes(targetSessionId))
+    ? ctx.session
+    : undefined;
+  const requestedAgent = typeof args.agentName === 'string' ? args.agentName : undefined;
+  if (ctx?.sessionPlacement === 'session-worker'
+    && (!trustedSession || (requestedAgent && requestedAgent !== (ctx.session?.agent || 'main')))) {
+    return executeMainManagementTool('recall', args, ctx);
+  }
+  if (trustedSession) checkArchivedReadPermissionForSession(trustedSession, targetSessionId, 'recall');
+  else await checkArchivedReadPermission(ctx || {}, targetSessionId, 'recall');
 
   const { budget: previewLength } = normalizeContextPreviewBudget(args.previewLength, RECALL_DEFAULT_PREVIEW_LENGTH);
   const renderOptions: ContextPreviewRenderOptions = {

@@ -4,11 +4,16 @@
 
 Infrastructure owns process bootstrap, HTTP/WebSocket hosting, configuration, shared runtime types and utilities, skills, timers, terminal routing, packaging, and developer-facing command entry points. It provides stable services used by feature modules without owning their domain behavior.
 
+Optional local/child service placement and its shared RPC boundary are canonical in [process topology and RPC](../threads/process-topology-and-rpc.md).
+
 Speech recognition is integrated as an external service boundary: Foxwarm sends audio plus optional context and receives text. Service credentials and deployment topology are runtime configuration, never code-index content.
 
 ## Key units
 
 - [src-index](../units/src-index.md) — application bootstrap and subsystem wiring.
+- [src-rpc](../units/src-rpc.md) — typed local/child service contracts, cloning, lifecycle, cancellation, and events.
+- [src-session-worker-runtime](../units/src-session-worker-runtime.md) — per-session process supervision and durable ownership/mailbox foundation.
+- [src-session-worker-publication](../units/src-session-worker-publication.md) — awaited complete committed projection publication and Main lifecycle staleness coordinator.
 - [src-http-server](../units/src-http-server.md) — authenticated HTTP and WebSocket server.
 - [src-config](../units/src-config.md) — YAML configuration loading, validation, paths, and migrations.
 - [src-misc](../units/src-misc.md) — logging, retries, ASR client, JSON arguments, and node transfer helpers.

@@ -72,6 +72,8 @@ export type QQBotConfig = {
   enabled?: boolean;
   appId?: string;
   clientSecret?: string;
+  /** Whether QQ group messages require an @mention before routing. */
+  requireMention?: boolean;
   allowedUsers?: string[];
   allowAllUsers?: boolean;
   guestAgent?: GuestAgentConfig;
@@ -107,7 +109,117 @@ export type AsrServiceConfig = {
   key?: string;
 };
 
+export const DEFAULT_SESSION_WORKER_IDLE_SECONDS = 60;
+export const MIN_SESSION_WORKER_IDLE_SECONDS = 1;
+export const MAX_SESSION_WORKER_IDLE_SECONDS = 86_400;
+export const DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS = 24;
+
+export type SessionWorkersConfig = boolean | {
+  enabled?: boolean;
+  idleSeconds?: number;
+};
+
+export type NormalizedSessionWorkersConfig = {
+  enabled: boolean;
+  idleSeconds: number;
+};
+
+export type VectorMaintenanceConfig = {
+  enabled?: boolean;
+  retentionHours?: number;
+} | boolean;
+
+export type NormalizedVectorMaintenanceConfig = {
+  enabled: boolean;
+  retentionHours: number;
+};
+
+export function normalizeSessionWorkersConfig(value: unknown): NormalizedSessionWorkersConfig {
+  if (value === undefined || value === false) {
+    return { enabled: false, idleSeconds: DEFAULT_SESSION_WORKER_IDLE_SECONDS };
+  }
+  if (value === true) {
+    return { enabled: true, idleSeconds: DEFAULT_SESSION_WORKER_IDLE_SECONDS };
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('app config `sessionWorkers` must be a boolean or object.');
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    throw new Error('app config `sessionWorkers.enabled` must be a boolean.');
+  }
+  const rawIdleSeconds = raw.idleSeconds;
+  let idleSeconds = DEFAULT_SESSION_WORKER_IDLE_SECONDS;
+  if (rawIdleSeconds !== undefined) {
+    if (typeof rawIdleSeconds !== 'number') {
+      throw new Error('app config `sessionWorkers.idleSeconds` must be a number.');
+    }
+    idleSeconds = rawIdleSeconds;
+  }
+  if (!Number.isInteger(idleSeconds)
+    || idleSeconds < MIN_SESSION_WORKER_IDLE_SECONDS
+    || idleSeconds > MAX_SESSION_WORKER_IDLE_SECONDS) {
+    throw new Error(
+      `app config \`sessionWorkers.idleSeconds\` must be an integer between ${MIN_SESSION_WORKER_IDLE_SECONDS} and ${MAX_SESSION_WORKER_IDLE_SECONDS}.`,
+    );
+  }
+
+  return {
+    // Supplying an object opts in unless it explicitly disables the worker.
+    enabled: raw.enabled !== false,
+    idleSeconds,
+  };
+}
+
+export function normalizeDbWorkersEnabled(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  if (typeof value !== 'boolean') {
+    throw new Error('app config `dbWorkers` must be a boolean.');
+  }
+  return value;
+}
+
+export function normalizeVectorMaintenanceConfig(value: unknown): NormalizedVectorMaintenanceConfig {
+  if (value === undefined) {
+    return { enabled: true, retentionHours: DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS };
+  }
+  if (value === false) {
+    return { enabled: false, retentionHours: DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS };
+  }
+  if (value === true) {
+    return { enabled: true, retentionHours: DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS };
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('app config `vectorMaintenance` must be a boolean or object.');
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    throw new Error('app config `vectorMaintenance.enabled` must be a boolean.');
+  }
+  const retentionHours = raw.retentionHours === undefined
+    ? DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS
+    : raw.retentionHours;
+  if (typeof retentionHours !== 'number') {
+    throw new Error('app config `vectorMaintenance.retentionHours` must be a number.');
+  }
+  if (!Number.isInteger(retentionHours) || retentionHours < 1) {
+    throw new Error('app config `vectorMaintenance.retentionHours` must be a positive integer.');
+  }
+
+  return {
+    enabled: raw.enabled !== false,
+    retentionHours,
+  };
+}
+
 export type AppConfig = {
+  sessionWorkers?: SessionWorkersConfig;
+  dbWorkers?: boolean;
+  vectorMaintenance?: VectorMaintenanceConfig;
   bot?: {
     name?: string;
     enableWebUI?: boolean;
@@ -184,6 +296,8 @@ function resolveDataRootDir(): string {
 export const DATA_ROOT_DIR = resolveDataRootDir();
 export const STATE_DIR = path.join(DATA_ROOT_DIR, 'state');
 export const ARCHIVE_DB_PATH = path.join(STATE_DIR, 'archive-store.sqlite');
+export const CATALOG_DB_PATH = path.join(STATE_DIR, 'catalog.sqlite');
+export const SESSION_RUNTIME_DB_PATH = path.join(STATE_DIR, 'session-runtime.sqlite');
 export const SESSION_ID_RESERVATIONS_LOG_PATH = path.join(STATE_DIR, 'session-id-reservations.jsonl');
 export const SESSION_ID_MOVE_JOURNAL_PATH = path.join(STATE_DIR, 'session-id-move-pending.json');
 
@@ -279,6 +393,12 @@ function resolvePathValue(value: string | undefined, fallback: string): string {
 }
 
 export const APP_CONFIG = loadAppConfig();
+
+export const SESSION_WORKERS_CONFIG = normalizeSessionWorkersConfig(APP_CONFIG.sessionWorkers);
+export const SESSION_WORKERS_ENABLED = SESSION_WORKERS_CONFIG.enabled;
+export const SESSION_WORKER_IDLE_SECONDS = SESSION_WORKERS_CONFIG.idleSeconds;
+export const DB_WORKERS_ENABLED = normalizeDbWorkersEnabled(APP_CONFIG.dbWorkers);
+export const VECTOR_MAINTENANCE_CONFIG = normalizeVectorMaintenanceConfig(APP_CONFIG.vectorMaintenance);
 export const BOT_NAME = APP_CONFIG.bot?.name || 'foxwarm';
 export const ENABLE_TUI = APP_CONFIG.bot?.enableTUI === true || process.argv.includes('--tui');
 export const TELEGRAM_CONFIG: TelegramConfig = (getDefaultChannelConfigByType<TelegramConfig>('telegram', APP_CONFIG)?.config || {}) as TelegramConfig;
@@ -375,10 +495,118 @@ export function resolveDataModelsConfigPath(dataRoot: string = DATA_ROOT_DIR): s
 export const DEFAULT_MODELS_CONFIG_PATH = resolveDataModelsConfigPath();
 export const MODELS_CONFIG_TEMPLATE_PATH = path.join(BASE_DIR, 'templates', 'models.example.yaml');
 
+export type OpenAIWebSearchUserLocation = {
+  type?: 'approximate';
+  country?: string;
+  city?: string;
+  region?: string;
+  timezone?: string;
+};
+
+export type OpenAIWebSearchOptions = {
+  /** Opt in to the hosted Responses API web search tool. */
+  enabled?: boolean;
+  /** Select automatic or required Responses tool use when search is enabled. */
+  toolChoice?: 'auto' | 'required';
+  searchContextSize?: 'low' | 'medium' | 'high';
+  allowedDomains?: string[];
+  userLocation?: OpenAIWebSearchUserLocation;
+};
+
+export type OpenAIWebSearchConfig = boolean | OpenAIWebSearchOptions;
+
+export type NormalizedOpenAIWebSearchConfig = Omit<OpenAIWebSearchOptions, 'enabled'> & {
+  enabled: boolean;
+};
+
+export function normalizeOpenAIWebSearchConfig(value: unknown): NormalizedOpenAIWebSearchConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === true || value === false) {
+    return { enabled: value };
+  }
+  if (!isPlainObject(value)) {
+    throw new Error('models config `webSearch` must be a boolean or object.');
+  }
+
+  const raw = value as Record<string, unknown>;
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    throw new Error('models config `webSearch.enabled` must be a boolean.');
+  }
+
+  const normalized: NormalizedOpenAIWebSearchConfig = {
+    enabled: raw.enabled !== false,
+  };
+  if (raw.toolChoice !== undefined) {
+    if (raw.toolChoice !== 'auto' && raw.toolChoice !== 'required') {
+      throw new Error('models config `webSearch.toolChoice` must be `auto` or `required`.');
+    }
+    normalized.toolChoice = raw.toolChoice;
+  }
+  if (raw.searchContextSize !== undefined) {
+    if (raw.searchContextSize !== 'low' && raw.searchContextSize !== 'medium' && raw.searchContextSize !== 'high') {
+      throw new Error('models config `webSearch.searchContextSize` must be `low`, `medium`, or `high`.');
+    }
+    normalized.searchContextSize = raw.searchContextSize;
+  }
+  if (raw.allowedDomains !== undefined) {
+    if (!Array.isArray(raw.allowedDomains)) {
+      throw new Error('models config `webSearch.allowedDomains` must be an array of strings.');
+    }
+    const allowedDomains = raw.allowedDomains.map((domain, index) => {
+      if (typeof domain !== 'string' || domain.trim().length === 0) {
+        throw new Error(`models config \`webSearch.allowedDomains[${index}]\` must be a non-empty string.`);
+      }
+      return domain.trim();
+    });
+    normalized.allowedDomains = allowedDomains;
+  }
+  if (raw.userLocation !== undefined) {
+    if (!isPlainObject(raw.userLocation)) {
+      throw new Error('models config `webSearch.userLocation` must be an object.');
+    }
+    const rawLocation = raw.userLocation as Record<string, unknown>;
+    if (rawLocation.type !== undefined && rawLocation.type !== 'approximate') {
+      throw new Error('models config `webSearch.userLocation.type` must be `approximate`.');
+    }
+    const userLocation: OpenAIWebSearchUserLocation = {};
+    if (rawLocation.type !== undefined) userLocation.type = 'approximate';
+    for (const key of ['country', 'city', 'region', 'timezone'] as const) {
+      const locationValue = rawLocation[key];
+      if (locationValue !== undefined) {
+        if (typeof locationValue !== 'string') {
+          throw new Error(`models config \`webSearch.userLocation.${key}\` must be a string.`);
+        }
+        userLocation[key] = locationValue.trim();
+      }
+    }
+    normalized.userLocation = userLocation;
+  }
+
+  return normalized;
+}
+
+function mergeOpenAIWebSearchConfig(
+  baseValue: OpenAIWebSearchConfig | undefined,
+  overrideValue: OpenAIWebSearchConfig | undefined,
+): NormalizedOpenAIWebSearchConfig | undefined {
+  const base = normalizeOpenAIWebSearchConfig(baseValue);
+  if (overrideValue === undefined) {
+    return base;
+  }
+  const override = normalizeOpenAIWebSearchConfig(overrideValue)!;
+  return {
+    ...(base || {}),
+    ...override,
+  };
+}
+
 export type ModelConfigOverride = {
   contextLimit?: number;
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
+  webSearch?: OpenAIWebSearchConfig;
 };
 
 export type ProviderModelListItem = string | ({ id: string } & ModelConfigOverride);
@@ -395,6 +623,7 @@ export type ProviderConfigEntry = {
   requestCompression?: 'gzip' | 'br';
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
+  webSearch?: OpenAIWebSearchConfig;
   targets?: string[];
   failureThreshold?: number;
   cooldownMs?: number;
@@ -422,6 +651,7 @@ export type ModelConfigEntry = {
   requestCompression?: 'gzip' | 'br';
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
+  webSearch?: NormalizedOpenAIWebSearchConfig;
   virtualRouting?: VirtualModelRoutingConfig;
 };
 
@@ -566,6 +796,10 @@ function applyProviderDefaults(providerEntry: ProviderConfigEntry): ProviderConf
 
 function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderConfigEntry, modelId: string, modelOverride?: ModelConfigOverride): ModelConfigEntry {
   const resolvedProviderEntry = applyProviderDefaults(providerEntry);
+  const webSearch = mergeOpenAIWebSearchConfig(
+    resolvedProviderEntry.webSearch,
+    modelOverride?.webSearch,
+  );
   return {
     providerKey,
     canonicalModelKey: modelId ? `${providerKey}/${modelId}` : providerKey,
@@ -584,6 +818,7 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
       resolvedProviderEntry.extraFields || {},
       modelOverride?.extraFields || {},
     ) || {},
+    ...(webSearch && Object.keys(webSearch).length > 0 ? { webSearch } : {}),
   };
 }
 
@@ -655,6 +890,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
     'extraHeaders',
     'contextLimit',
     'asyncCompact',
+    'webSearch',
   ];
 
   for (const [virtualKey, providerEntry, providerType] of virtualEntries) {
@@ -741,6 +977,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
           apiKeyHash: hashConfigValue(entry.apiKey || ''),
           extraFieldsHash: hashConfigValue(entry.extraFields || {}),
           extraHeadersHash: hashConfigValue(entry.extraHeaders || {}),
+          webSearchHash: hashConfigValue(entry.webSearch || {}),
         };
       }),
     });

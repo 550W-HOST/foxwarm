@@ -7,6 +7,9 @@ import {
   getActiveModelsConfigPath,
   ProviderConfigEntry,
   loadModelsConfigFromObject,
+  normalizeDbWorkersEnabled,
+  normalizeSessionWorkersConfig,
+  normalizeVectorMaintenanceConfig,
 } from './config';
 
 export type ProviderSetupDraft = {
@@ -81,6 +84,9 @@ export function validateAppConfigYaml(rawYaml: string): AppConfig {
   if (config.channels !== undefined && !isPlainObject(config.channels)) {
     throw new Error('app config `channels` must be a YAML object.');
   }
+  normalizeSessionWorkersConfig(config.sessionWorkers);
+  normalizeDbWorkersEnabled(config.dbWorkers);
+  normalizeVectorMaintenanceConfig(config.vectorMaintenance);
   return config;
 }
 
@@ -240,7 +246,7 @@ export function buildModelsConfigFromSetupForm(body: any, existingConfig: any = 
     if (isVirtual) {
       const targets = splitModelIds(hasOwn(draft, 'targets') ? draft.targets : existingProvider.targets);
       nextProvider.targets = targets;
-      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'contextLimit', 'asyncCompact'] as const) {
+      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'asyncCompact'] as const) {
         delete nextProvider[field];
       }
       if (providerType === 'session-hash') {

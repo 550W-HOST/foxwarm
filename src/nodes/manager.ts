@@ -8,9 +8,11 @@ import crypto from 'crypto';
 import { logger } from '../common';
 import { NodeTransferFilePayload, NodeTransferWriteResult, readNodeTransferFile, writeNodeTransferFile } from '../nodeFileTransfer';
 import * as sessionManager from '../sessionManager';
+import * as sessionRuntime from '../sessionRuntime';
 import { WebSocket } from 'ws';
 import { isReservedNodeId } from './registry';
 import { adaptLegacyRemoteNodeToolResult } from './legacyToolResultCompatibility';
+import { NODE_ENVIRONMENT_BUILTIN_NAMES } from '../tools/placement';
 
 interface ToolDefinition {
   name: string;
@@ -84,47 +86,7 @@ export class NodesManager {
   }
 
   private setupTools() {
-    // Register available tools
-    this.tools = new Set([
-      'read',
-      'write',
-      'edit',
-      'read_memory',
-      'write_memory',
-      'edit_memory',
-      'delete_memory',
-      'apply_patch_memory',
-      'apply_patch',
-      'delete_file',
-      'exec',
-      'get_memory_context',
-      'create_child_session',
-      'create_agent',
-      'create_session',
-      'set_agent_inherit',
-      'send_to_session',
-      'wait',
-      'submit_compact_plan',
-      'session',
-      'skill',
-      'get_session_messages',
-      'get_archived_messages',
-      'get_archived_blocks',
-      'recall',
-      'delete_session',
-      'set_session_child_model',
-      'set_session_compact_threshold',
-      'stop_session',
-      'compact_session',
-      'browse_open',
-      'browse_list',
-      'browse_get',
-      'browse_close',
-      'browse_interact',
-      'search_tools',
-      'call_tool',
-      'copy_between_nodes',
-    ]);
+    this.tools = new Set(NODE_ENVIRONMENT_BUILTIN_NAMES);
   }
 
   /**
@@ -304,7 +266,8 @@ export class NodesManager {
    * Get current node for a session
    */
   async getCurrentNode(sessionId: string): Promise<string | null> {
-    const session = await sessionManager.getSession(sessionId);
+    const session = sessionManager.getSessionCatalog(sessionId);
+    if (!session) return null;
     return session.currentNode || null;
   }
 
@@ -342,11 +305,13 @@ export class NodesManager {
    */
   listNodesWithTools(): Array<{ id: string; type: string; tools: ToolDefinition[] }> {
     return Array.from(this.nodes.values())
-      .filter((node) => node.type !== 'master' && node.capabilities)
+      .filter((node) => node.type === 'master' || node.capabilities)
       .map((node) => ({
         id: node.id,
         type: node.type,
-        tools: node.capabilities?.tools || []
+        tools: node.type === 'master'
+          ? [...node.tools].map(name => this.getToolDefinition(name)).filter(Boolean)
+          : (node.capabilities?.tools || [])
       }));
   }
 
@@ -466,7 +431,8 @@ export class NodesManager {
       throw new Error(`Node \`${nodeId}\` not found`);
     }
 
-    const session = await sessionManager.getSession(sessionId);
+    const session = sessionManager.getSessionCatalog(sessionId);
+    if (!session) throw new Error(`Session \`${sessionId}\` not found`);
     
     if (!node.tools.has(toolName)) {
       throw new Error(`Tool \`${toolName}\` not available on node \`${nodeId}\``);
@@ -552,7 +518,8 @@ export class NodesManager {
   }
 
   async readFileFromNode(nodeId: string, filePath: string, sessionId: string): Promise<NodeTransferFilePayload> {
-    const session = await sessionManager.getSession(sessionId);
+    const session = sessionManager.getSessionCatalog(sessionId);
+    if (!session) throw new Error(`Session \`${sessionId}\` not found`);
     const agentName = session.agent || 'main';
     const restrictToAgentDir = sessionManager.isSessionEffectivelyIsolated(session) && nodeId === 'master';
 
@@ -595,7 +562,8 @@ export class NodesManager {
   }
 
   async writeFileToNode(nodeId: string, filePath: string, dataBase64: string, overwrite: boolean, sessionId: string): Promise<NodeTransferWriteResult> {
-    const session = await sessionManager.getSession(sessionId);
+    const session = sessionManager.getSessionCatalog(sessionId);
+    if (!session) throw new Error(`Session \`${sessionId}\` not found`);
     const agentName = session.agent || 'main';
     const restrictToAgentDir = sessionManager.isSessionEffectivelyIsolated(session) && nodeId === 'master';
 
@@ -673,7 +641,7 @@ export class NodesManager {
   }
 
   private async assertNodeOwnsSessionForEvent(nodeId: string, sessionId: string): Promise<void> {
-    const session = await sessionManager.getExistingSession(sessionId);
+    const session = await sessionRuntime.getSession(sessionId);
     if (!session) {
       throw new Error(`Target session "${sessionId}" not found.`);
     }
@@ -700,7 +668,7 @@ export class NodesManager {
   }
 
   private async assertNodeCanAccessSession(nodeId: string, sessionId: string, action: string): Promise<any> {
-    const session = await sessionManager.getExistingSession(sessionId);
+    const session = await sessionRuntime.getSession(sessionId);
     if (!session) {
       throw new Error(`Target session "${sessionId}" not found.`);
     }
@@ -716,12 +684,12 @@ export class NodesManager {
     return {
       id: session.id,
       displayName: session.displayName,
-      messageCount: session.meta?.messageCount || session.history?.length || 0,
-      lastMessageTime: session.meta?.lastMessageTime || null,
+      messageCount: session.messageCount ?? session.meta?.messageCount ?? session.history?.length ?? 0,
+      lastMessageTime: session.lastMessageTime ?? session.meta?.lastMessageTime ?? null,
       currentNode: session.currentNode,
       cwd: session.cwd,
       busy: session.busy,
-      queueLength: session.queue?.length || 0,
+      queueLength: session.queueLength ?? session.queue?.length ?? 0,
     };
   }
 
@@ -749,23 +717,26 @@ export class NodesManager {
 
   async listSessionsForNode(nodeId: string) {
     const summaries = [];
-    for (const item of sessionManager.listSessions()) {
-      const session = await sessionManager.getExistingSession(item.id);
-      if (session && this.nodeCanAccessSession(nodeId, session)) {
-        summaries.push(this.summarizeSession(session));
-      }
+    for (const session of await sessionRuntime.listSessions()) {
+      if (this.nodeCanAccessSession(nodeId, session)) summaries.push(this.summarizeSession(session));
     }
     return summaries;
   }
 
   async getSessionHistoryForNode(nodeId: string, sessionId: string, count = 30) {
-    const session = await this.assertNodeCanAccessSession(nodeId, sessionId, 'read history for');
-    const totalMessages = session.history?.length || 0;
+    const catalogSession = await this.assertNodeCanAccessSession(nodeId, sessionId, 'read history for');
+    const runtimeSession = await sessionRuntime.getSession(catalogSession.id);
+    if (!runtimeSession || !this.nodeCanAccessSession(nodeId, runtimeSession)) {
+      throw new Error(`Node "${nodeId}" cannot read history for session "${sessionId}" because the session assignment changed.`);
+    }
+    const snapshot = await sessionRuntime.getHistory(catalogSession.id);
+    if (!snapshot) throw new Error(`Target session "${sessionId}" not found.`);
+    const totalMessages = snapshot.messages.length;
     const safeCount = Math.max(1, Math.min(100, Number(count) || 30));
     const start = Math.max(0, totalMessages - safeCount);
-    const messages = await sessionManager.getSessionMessages(session.id, start, safeCount);
+    const messages = snapshot.messages.slice(start, start + safeCount);
     return {
-      session: this.summarizeSession(session),
+      session: this.summarizeSession(snapshot.session),
       totalMessages,
       messages: messages.map((message, offset) => this.serializeSessionMessage(message, start + offset)),
     };

@@ -45,19 +45,19 @@ Maintains the in-memory view of connected nodes and routes tool/file/session req
 ## Dependencies
 
 - `ws` — WebSocket connection objects for remote nodes.
-- `../sessionManager` — session lookup, isolation metadata, queueing node-originated events.
+- `../sessionManager` / `../sessionRuntime` — catalog/isolation metadata, projection-aware current assignment and history reads, and queueing node-originated events.
 - `../nodeFileTransfer` — master-side read/write transfer helpers.
 - `./registry` — reserved node-id checks for runtime registration.
 - `../tools` (lazy require) — local tool implementations and definitions.
 
 ## Behavior
 
-- `master` is always present in the runtime node map and cannot be disconnected by `disconnectNode`.
+- `master` is always present in the runtime node map and cannot be disconnected by `disconnectNode`. Its advertised model-tool set and discovery schemas are derived from canonical `NODE_ENVIRONMENT_BUILTIN_NAMES`, not a handwritten broad list.
 - Registering a remote node with an already-online id closes the previous WebSocket and replaces runtime capabilities.
 - Remote tool calls, file transfers, and backend service requests are tracked by generated ids and time out if no response arrives. Service timers are cleared on reply/disconnect. Fixed commands avoid per-keystroke response state; authenticated service events are dispatched to registered listeners.
 - Node disconnect emits `node-unavailable` to each advertised service before removal, allowing terminal bridges to close clients while leaving detached node-owned PTYs eligible for rediscovery after a same-process reconnect.
 - `disconnectNode` is used by administrative `/node remove` and `/node move` flows so deleting or renaming approved credentials also removes online runtime state and rejects pending work for the old node id.
-- Node-originated session access is allowed only when the target session's `currentNode` matches the node id or the session's agent is isolated and bound to that node.
+- Node-originated session access is allowed only when the target session's projection-aware `currentNode` matches the node id or the session's agent is isolated and bound to that node. Main does not authorize an event from a stale Worker catalog setting.
 - Local/master execution passes `__runtimeNodeId` through tool context when needed, then strips it from user-visible tool args.
 - Remote dispatch normally reads current session routing at call time. A direct parallel-exec segment may pass its one captured current-node/cwd snapshot so all calls in that segment route consistently even if live session metadata changes while they run.
 - Remote model-tool responses pass through one isolated compatibility adapter before their pending call resolves. Master-local and MCP results never enter this adapter. The adapter's complete deletion contract is canonical in [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
@@ -66,7 +66,8 @@ Maintains the in-memory view of connected nodes and routes tool/file/session req
 
 - `src/nodes/websocket.ts` registers authenticated node sockets with `registerNodeWithTools`, forwards responses/events into this manager, and unregisters sockets on close/error.
 - `src/commands.ts` uses `nodesManager` for `/node` list/switch/remove/move runtime behavior.
-- `src/tools/nodeTools.ts`, `src/tools/unifiedSearch.ts`, `src/llm.ts`, and channel/file helpers query the singleton for node availability and remote execution.
+- `src/nodeExecutionService.ts` validates the closed model-tool forwarding request before calling `executeTool`; `src/llm.ts`, dynamic node tools, and ToolScript use that service for remote execution. Main-local node management/listing and channel/file helpers continue to query the singleton directly.
+- `src/tools/nodeTools.ts` and `src/tools/unifiedSearch.ts` use the fixed Node facade where Session-worker placement requires Main-owned topology or execution.
 - The WebUI node-summary route combines `listNodeServiceSummaries()` with approved registry records so launch selectors can distinguish online capabilities from offline snapshots.
 
 ## Design Decisions

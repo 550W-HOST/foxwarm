@@ -1,5 +1,12 @@
 import { ChannelContext } from '../channel';
-import { Session } from '../types';
+import type { Session } from '../types';
+import type { SessionRuntimeSessionDto } from '../sessionRuntimeService';
+
+export type CommandSession = Session | SessionRuntimeSessionDto;
+
+export function commandSessionMessageCount(session: CommandSession): number {
+  return 'messageCount' in session ? session.messageCount : session.history.length;
+}
 
 export type CommandDef = {
   description: string
@@ -7,7 +14,7 @@ export type CommandDef = {
   requiresSession?: boolean
   showInTelegram?: boolean
   autocomplete?: CommandAutocomplete
-  handler: (ctx: ChannelContext, args: string[], sessionId?: string, session?: Session, rawArgs?: string) => Promise<void>
+  handler: (ctx: ChannelContext, args: string[], sessionId?: string, session?: CommandSession, rawArgs?: string) => Promise<void>
 }
 
 export type CommandAutocompleteNode = {

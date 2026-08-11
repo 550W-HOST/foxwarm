@@ -11,7 +11,7 @@ interface SessionAgentOpsDeps {
   assertSessionIdAvailableForNewLifetime: (sessionId: string) => Promise<void>;
   createSession: (sessionId: string, sessionData: any) => Promise<void>;
   saveSession: (sessionId: string) => Promise<void>;
-  saveSessionsMetadata: () => Promise<void>;
+  saveSessionCatalogEntries: (sessionIds: string[]) => Promise<void>;
   saveChannels: () => Promise<void>;
   updateAliasCache: (aliases: string[], realId: string) => void;
   updateChildSessionParentIds: (oldParentSessionId: string, newParentSessionId: string) => Promise<string[]>;
@@ -116,6 +116,7 @@ function assertSafeJournalSessionId(sessionId: string, fieldName: string): void 
 
 export async function recoverPendingSessionIdentityMove(
   moveSessionArchiveIndex: (oldSessionId: string, newSessionId: string) => Promise<void>,
+  catalog?: { load: () => Promise<any>; replace: (data: any) => Promise<void> },
 ): Promise<'none' | 'finished' | 'rolled-back'> {
   if (!await fs.pathExists(SESSION_ID_MOVE_JOURNAL_PATH)) return 'none';
   const record = await fs.readJson(SESSION_ID_MOVE_JOURNAL_PATH) as Partial<PendingSessionIdentityMove>;
@@ -152,7 +153,9 @@ export async function recoverPendingSessionIdentityMove(
   if (oldSessionId === newSessionId) {
     throw new Error('Pending session identity move journal cannot use the same source and target ID.');
   }
-  const metadata = await fs.pathExists(SESSIONS_FILE) ? await fs.readJson(SESSIONS_FILE) : { sessions: {} };
+  const metadata = catalog
+    ? await catalog.load()
+    : await fs.pathExists(SESSIONS_FILE) ? await fs.readJson(SESSIONS_FILE) : { sessions: {} };
   const sessionsData = metadata.sessions && typeof metadata.sessions === 'object' ? metadata.sessions : metadata;
 
   const rewriteChannels = async (from: string, to: string): Promise<void> => {
@@ -223,7 +226,8 @@ export async function recoverPendingSessionIdentityMove(
     restoredHistory.aliases = [...(record.oldAliases || [])];
     await writeJsonAtomically(restoredHistoryPath, restoredHistory);
   }
-  await writeJsonAtomically(SESSIONS_FILE, metadata);
+  if (catalog) await catalog.replace(metadata);
+  else await writeJsonAtomically(SESSIONS_FILE, metadata);
   await rewriteChannels(newSessionId, oldSessionId);
   renameSessionArchiveStoreForRecovery(newSessionId, oldSessionId);
   await moveSessionArchiveIndex(newSessionId, oldSessionId);
@@ -363,7 +367,7 @@ async function renameSessionIdentity(options: {
 
     identityMoveFaultInjector?.('before-target-persistence', oldRealId, targetSessionId);
     await deps.saveSession(targetSessionId);
-    await deps.saveSessionsMetadata();
+    await deps.saveSessionCatalogEntries([oldRealId, targetSessionId]);
     await deps.saveChannels();
     pendingMove.phase = 'finishing';
     await writePendingSessionIdentityMove(pendingMove);
@@ -415,7 +419,7 @@ async function renameSessionIdentity(options: {
     for (const [channelKey] of originalAttachments) attachments.set(channelKey, originalAttachments.get(channelKey)!);
     deps.updateAliasCache(oldAliases, oldRealId);
     await attemptRollback('source session persistence', () => deps.saveSession(oldRealId));
-    await attemptRollback('session metadata persistence', () => deps.saveSessionsMetadata());
+    await attemptRollback('session metadata persistence', () => deps.saveSessionCatalogEntries([oldRealId, targetSessionId]));
     await attemptRollback('channel persistence', () => deps.saveChannels());
     if (ownsTargetAgentDirectory && rollbackErrors.length === 0) {
       await attemptRollback(`target agent directory removal ${targetAgent}`, () => fs.remove(getAgentDir(targetAgent)));
@@ -507,6 +511,7 @@ export async function createAgentWithMainSession(options: {
   agentName: string;
   inheritMemory?: boolean;
   sourceSessionId?: string;
+  sourceSessionOverride?: Session;
   convertSessionId?: string;
   initialMemoryFiles?: Record<string, string>;
   displayName?: string;
@@ -525,6 +530,7 @@ export async function createAgentWithMainSession(options: {
     agentName,
     inheritMemory = false,
     sourceSessionId,
+    sourceSessionOverride,
     convertSessionId,
     initialMemoryFiles,
     displayName,
@@ -546,7 +552,7 @@ export async function createAgentWithMainSession(options: {
     await deps.assertSessionIdAvailableForNewLifetime(mainSessionId);
   }
 
-  const sourceSession = sourceSessionId ? await deps.getSession(sourceSessionId) : undefined;
+  const sourceSession = sourceSessionOverride || (sourceSessionId ? await deps.getSession(sourceSessionId) : undefined);
   const sourceAgentName = sourceSession?.agent || 'main';
   const { agentDir } = await initializeAgentDirectory({
     agentName,

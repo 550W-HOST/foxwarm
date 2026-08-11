@@ -1,11 +1,15 @@
 ---
 name: web-search
-description: Search recent/public web information with OpenAI Responses web_search first; formerly ask-gemini, with Gemini fallback configuration preserved.
+description: Fallback-only recent/public web search via OpenAI Responses or Gemini; do not load or run when the current model/provider already has built-in/native web search or from an isolated session/environment.
 ---
 
 # web-search
 
 `web-search` is the renamed replacement for the old `ask-gemini` skill. Use it when you need recent or external public information that may be newer than the model's built-in knowledge.
+
+## Boundary: fallback only
+
+Do not load or run this skill when the current model/provider already exposes built-in/native web search; use that capability directly instead. Do not use this skill from an isolated session or environment.
 
 ## First step: run the script
 

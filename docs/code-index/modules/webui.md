@@ -17,6 +17,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - [webui-terminal](../units/webui-terminal.md) — xterm browser client.
 - [webui-editor](../units/webui-editor.md), [small components](../units/webui-small-components.md).
 - [src-channels-webui](../units/src-channels-webui.md) — authenticated HTTP/SSE/upload/setup/terminal routes.
+- Session list/state/history/settings routes and session update streams consume immutable SessionRuntime DTOs; destructive lifecycle and channel-attachment routes retain their explicit manager-owned coordination boundary.
 - [VS Code Web routes](../units/src-vscode-web-routes.md) and [extensions](../units/vscode-web-extensions.md).
 
 ## URL and transport boundaries
@@ -72,11 +73,11 @@ Chat, terminal, Agents, Setup, and Code use one tab/pane workbench. Agents and S
 
 ### D-webui-node-aware-launchers
 
-[2026-08-05] Main-WebUI Code and terminal launch options use the authenticated public node summary and preserve explicit node identity. Terminal choices require an online `vscode-pty` service; Code choices require online `vscode-fs`, while Git remains optional. Offline, incompatible, and stale selected nodes stay visible and disabled in selectors and are never silently replaced with `master`. A Chat header terminal uses that session's `currentNode` and cwd without showing a selector; desktop lower-pane reuse requires the same normalized node and cwd. The main Code launch target remains a browser-local preference, while session/tool/commit Code actions retain their own node targets. Code still uses the single persistent multi-root workbench defined by [D-code-persistent-workspace](../threads/code-integration.md#d-code-persistent-workspace), and all remote operations retain the fixed-service boundary in [D-code-fixed-remote-services](../threads/code-integration.md#d-code-fixed-remote-services).
+[2026-08-10] Main-WebUI Code and terminal launch options use the authenticated public node summary and preserve explicit node identity. Terminal choices require an online `vscode-pty` service; Code choices require online `vscode-fs`, while Git remains optional. Offline, incompatible, and stale selected nodes stay visible and disabled in selectors and are never silently replaced with `master`. Selecting a different node in either main launcher dropdown resets that dropdown's draft path to the neutral absolute POSIX root `/`; this is selection-driven draft behavior only, with no per-node path cache or persistence before submission. A Chat header terminal uses that session's `currentNode` and cwd without showing a selector; desktop lower-pane reuse requires the same normalized node and cwd. The main Code launch target remains a browser-local preference, while session/tool/commit Code actions retain their own node targets. Code still uses the single persistent multi-root workbench defined by [D-code-persistent-workspace](../threads/code-integration.md#d-code-persistent-workspace), and all remote operations retain the fixed-service boundary in [D-code-fixed-remote-services](../threads/code-integration.md#d-code-fixed-remote-services).
 
 ### D-webui-session-stream-ownership
 
-Mounted Chat owns per-session state/stream. Global list streaming remains for list-wide UI and never substitutes for Chat runtime state.
+Mounted Chat owns per-session state/stream. The global list stream carries catalog invalidation plus bounded deltas for explicitly subscribed loaded/current/open/watch rows; it never sends an all-Session payload and never substitutes for Chat runtime state. Browser cache/query completeness is canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
 
 ### D-webui-history-bootstrap
 

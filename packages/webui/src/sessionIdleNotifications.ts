@@ -148,6 +148,7 @@ export function useSessionIdleNotifications(sessions: SessionIdleNotificationSes
       modesRef.current = next
       if (typeof localStorage !== 'undefined') {
         writeSessionIdleNotificationModes(localStorage, next)
+        window.dispatchEvent(new Event('foxwarm-idle-watch-changed'))
       }
       return next
     })

@@ -92,7 +92,7 @@ export function discardPendingCompactWork(sessionId: string): void {
   compactJobStates.delete(sessionId);
 }
 
-type SessionHistoryDeps = {
+export type SessionHistoryDeps = {
   getSessionById: (sessionId: string) => Session | undefined;
   getExistingSession: (sessionId: string) => Promise<Session | null>;
   saveSession: (sessionId: string) => Promise<void>;

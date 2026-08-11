@@ -56,6 +56,7 @@ test('startup backfill runs in background and advances raw checkpoints batch-by-
 
   try {
     const config = await import('./config');
+    const migrations = await import('./migrations');
     const archiveStore = await import('./session/archiveStore');
     const vector = await import('./vector');
 
@@ -76,6 +77,7 @@ test('startup backfill runs in background and advances raw checkpoints batch-by-
       },
     }, { spaces: 2 });
 
+    await migrations.runStartupMigrations();
     await archiveStore.initArchiveStore();
 
     const expectedRowCount = vector.buildArchiveSegments(lines).flatMap(vector.createRowsFromSegment).length;
@@ -84,21 +86,21 @@ test('startup backfill runs in background and advances raw checkpoints batch-by-
     const initDurationMs = Date.now() - initStartedAt;
 
     assert.ok(initDurationMs < 500, `init should not block on background backfill (took ${initDurationMs}ms)`);
-    assert.equal(vector.getArchiveIndexStatus(sessionId).lastIndexedSeq, 0, 'checkpoint should start at zero before the first batch commits');
+    assert.equal((await vector.getArchiveIndexStatus(sessionId)).lastIndexedSeq, 0, 'checkpoint should start at zero before the first batch commits');
 
-    await waitUntil(() => {
-      const status = vector.getArchiveIndexStatus(sessionId);
+    await waitUntil(async () => {
+      const status = await vector.getArchiveIndexStatus(sessionId);
       return status.lastIndexedSeq > 0 && status.lastIndexedSeq < lines.length;
     }, 10000);
 
-    const intermediateStatus = vector.getArchiveIndexStatus(sessionId);
+    const intermediateStatus = await vector.getArchiveIndexStatus(sessionId);
     assert.ok(intermediateStatus.lastIndexedSeq > 0, 'expected partial raw checkpoint advancement during long rebuild');
     assert.ok(intermediateStatus.lastIndexedSeq < lines.length, 'intermediate checkpoint should be visible before rebuild completion');
     assert.ok(intermediateStatus.tailStartSeq > 0, 'tail checkpoint should also advance during partial rebuild');
 
     await vector.waitForStartupArchiveVectorBackfill();
 
-    const finalStatus = vector.getArchiveIndexStatus(sessionId);
+    const finalStatus = await vector.getArchiveIndexStatus(sessionId);
     assert.equal(finalStatus.lastIndexedSeq, lines.length, 'final raw checkpoint should reach the latest archive seq');
     assert.ok(finalStatus.tailStartSeq > 0, 'final tail checkpoint should be persisted');
     assert.ok(embeddingRequestCount >= expectedRowCount, 'expected embeddings to be requested for rebuilt raw rows');

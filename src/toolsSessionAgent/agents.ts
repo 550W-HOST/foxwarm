@@ -4,6 +4,8 @@ import * as sessionManager from '../sessionManager';
 import { AGENTS_DIR } from '../config';
 import { resolveModelConfig } from '../config';
 import { requireNotIsolated } from '../isolatedCheck';
+import { executeMainManagementTool } from '../mainManagementTools';
+import { RpcError } from '../rpc';
 import {
   ToolArgs,
   ToolContext,
@@ -11,6 +13,14 @@ import {
 } from './helpers';
 
 export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
+  if (ctx?.sessionPlacement === 'session-worker') {
+    if (args.convertSession === true) throw new RpcError('SESSION_WORKER_TOOL_UNAVAILABLE', 'create_agent source conversion is unavailable in Session-worker placement.', true);
+    if (args.sourceSessionId && ctx.session
+      && args.sourceSessionId !== ctx.session.id && !ctx.session.aliases?.includes(args.sourceSessionId)) {
+      throw new RpcError('SESSION_WORKER_TOOL_UNAVAILABLE', 'create_agent from another source session is unavailable in Session-worker placement.', true);
+    }
+    return executeMainManagementTool('create_agent', args, ctx);
+  }
   await requireNotIsolated(ctx, 'create_agent');
   const {
     agentName,
@@ -34,6 +44,7 @@ export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
     agentName,
     inheritMemory,
     sourceSessionId: sourceId,
+    sourceSessionOverride: ctx.session && (sourceId === ctx.session.id || ctx.session.aliases?.includes(sourceId)) ? ctx.session : undefined,
     convertSessionId: convertSession ? sourceId : undefined,
     currentNode: ctx.session?.currentNode,
     model: ctx.session?.model,
@@ -227,6 +238,7 @@ export async function tool_move_session(args: ToolArgs, ctx: ToolContext) {
 }
 
 export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
+  if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('create_session', args, ctx);
   await requireNotIsolated(ctx, 'create_session');
   const { agentName, sessionName, displayName, parentSessionId } = args;
   const requestedModel = normalizeToolModelKey(args.model);

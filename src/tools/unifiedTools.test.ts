@@ -2,11 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as mcpClient from '../mcpClient';
 import { nodesManager } from '../nodes/manager';
+import * as sessionManager from '../sessionManager';
+import { executeTools } from '../llm';
+import * as nodeExecution from '../nodeExecution';
+import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
 import {
   call_mcp,
   call_tool,
   definitions,
-  MASTER_ONLY_TOOL_NAMES,
   mcp_config,
   modelFacingDefinitions,
   search_tools,
@@ -136,6 +139,32 @@ test('call_tool can invoke hidden builtin browse_list', async () => {
   assert.match(String(result), /no tabs open/i);
 });
 
+test('direct and unified builtin dispatch keep session-owner tools local under a remote currentNode', async () => {
+  const sessionId = `placement_parity_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const session = await sessionManager.getSession(sessionId);
+  session.currentNode = 'unreachable-placement-test-node';
+  await sessionManager.saveSession(sessionId);
+
+  try {
+    const direct = await executeTools([{
+      id: 'placement-direct',
+      name: 'set_session_compact_threshold',
+      args: { thresholdTokens: 1234 },
+    }], { sessionId, session }, session);
+    assert.equal(direct.parts[0].functionResponse?.response.error, undefined);
+    assert.equal((await sessionManager.getSession(sessionId)).compactThresholdTokens, 1234);
+
+    const unified: any = await call_tool({
+      toolId: 'builtin:set_session_compact_threshold',
+      args: { thresholdTokens: 2345 },
+    }, { sessionId, session });
+    assert.equal(unified.error, undefined);
+    assert.equal((await sessionManager.getSession(sessionId)).compactThresholdTokens, 2345);
+  } finally {
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
 test('call_tool rejects missing args wrapper with a caller-level error', async () => {
   await assert.rejects(
     () => call_tool(
@@ -195,6 +224,7 @@ test('mcp_config schema exposes envJson and headersJson fallbacks', () => {
 });
 
 test('mcp_config parses envJson and headersJson string-map fallbacks', async () => {
+  await sessionManager.getSession('main');
   const originalUpsertServer = mcpClient.upsertServer;
   const captured: any[] = [];
   (mcpClient as any).upsertServer = async (name: string, config: any) => {
@@ -208,12 +238,13 @@ test('mcp_config parses envJson and headersJson string-map fallbacks', async () 
       transport: 'stdio',
       envJson: JSON.stringify({ API_KEY: 'secret' }),
       headersJson: JSON.stringify({ 'X-Test': 'ok' }),
-    });
+    }, { sessionId: 'main' });
 
     assert.match(String(result), /json-fallback-test/);
     assert.equal(captured.length, 1);
     assert.deepEqual(captured[0].config.env, { API_KEY: 'secret' });
     assert.deepEqual(captured[0].config.headers, { 'X-Test': 'ok' });
+    assert.equal(Object.prototype.hasOwnProperty.call(captured[0].config, 'url'), false);
   } finally {
     (mcpClient as any).upsertServer = originalUpsertServer;
   }
@@ -232,6 +263,7 @@ test('mcp_config rejects non-string values from envJson', async () => {
 });
 
 test('mcp_config can disable an existing server without repeating its connection config', async () => {
+  await sessionManager.getSession('main');
   const originalSetServerEnabled = mcpClient.setServerEnabled;
   const captured: Array<{ name: string; enable: boolean }> = [];
   (mcpClient as any).setServerEnabled = async (name: string, enable: boolean) => {
@@ -239,7 +271,7 @@ test('mcp_config can disable an existing server without repeating its connection
   };
 
   try {
-    const result = await mcp_config({ name: 'existing-server', enable: false });
+    const result = await mcp_config({ name: 'existing-server', enable: false }, { sessionId: 'main' });
     assert.equal(String(result), 'MCP server "existing-server" disabled.');
     assert.deepEqual(captured, [{ name: 'existing-server', enable: false }]);
   } finally {
@@ -404,6 +436,7 @@ test('call_tool passes parsed MCP JSON text results through as structured values
 });
 
 test('legacy call_mcp wrapper returns normalized MCP values without re-stringifying', async () => {
+  await sessionManager.getSession('main');
   const originalCallTool = mcpClient.callTool;
 
   try {
@@ -415,7 +448,7 @@ test('legacy call_mcp wrapper returns normalized MCP values without re-stringify
       server: 'github',
       tool: 'search_repos',
       args: { query: 'foxwarm' },
-    });
+    }, { sessionId: 'main' });
 
     assert.deepEqual(result, [{ name: 'foxwarm' }]);
   } finally {
@@ -425,10 +458,12 @@ test('legacy call_mcp wrapper returns normalized MCP values without re-stringify
 
 test('search_tools and call_tool cover remote node tools', async () => {
   const originalListNodesWithTools = nodesManager.listNodesWithTools;
-  const originalExecuteNodeTool = nodesManager.executeNodeTool;
+  const originalExecuteTool = nodesManager.executeTool;
   const originalGetCurrentNode = nodesManager.getCurrentNode;
+  const originalGetNode = nodesManager.getNode;
 
   try {
+    await sessionManager.getSession('main');
     (nodesManager as any).listNodesWithTools = () => ([
       {
         id: 'android-node',
@@ -463,7 +498,10 @@ test('search_tools and call_tool cover remote node tools', async () => {
         ],
       },
     ]);
-    (nodesManager as any).executeNodeTool = async (nodeId: string, tool: string, args: Record<string, any>, sessionId: string) => ({
+    (nodesManager as any).getNode = (nodeId: string) => nodeId === 'android-node'
+      ? { id: nodeId, ws: {}, tools: new Set(['android_screenshot']) }
+      : undefined;
+    (nodesManager as any).executeTool = async (nodeId: string, tool: string, args: Record<string, any>, sessionId: string) => ({
       ok: true,
       nodeId,
       tool,
@@ -520,8 +558,94 @@ test('search_tools and call_tool cover remote node tools', async () => {
     assert.equal(defaultNodeSearchResult.tools.some((tool: any) => tool.nodeId === 'other-node'), false);
   } finally {
     (nodesManager as any).listNodesWithTools = originalListNodesWithTools;
-    (nodesManager as any).executeNodeTool = originalExecuteNodeTool;
+    (nodesManager as any).executeTool = originalExecuteTool;
     (nodesManager as any).getCurrentNode = originalGetCurrentNode;
+    (nodesManager as any).getNode = originalGetNode;
+  }
+});
+
+test('master Node discovery and dynamic calls expose only canonical node-environment builtins and bypass RPC', async () => {
+  const sourceId = `master_node_source_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const isolatedId = `master_node_isolated_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const isolatedAgent = `master_node_agent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const source = await sessionManager.getSession(sourceId);
+  source.currentNode = 'master';
+  await sessionManager.saveSession(sourceId);
+  const isolated = await sessionManager.getSession(isolatedId);
+  isolated.agent = isolatedAgent;
+  isolated.currentNode = 'bound-remote';
+  await sessionManager.saveSession(isolatedId);
+  const originalRemoteExecute = (nodeExecution as any).executeRemoteNodeTool;
+  let remoteCalls = 0;
+
+  try {
+    (nodeExecution as any).executeRemoteNodeTool = async () => {
+      remoteCalls += 1;
+      throw new Error('master calls must not enter node execution RPC');
+    };
+    const discovered: any = await search_tools({
+      sources: ['node'],
+      nodeId: 'master',
+      includeSchema: true,
+      limit: 200,
+    }, { sessionId: sourceId, session: source });
+    assert.deepEqual(
+      [...discovered.tools.map((tool: any) => tool.name)].sort(),
+      [...NODE_ENVIRONMENT_BUILTIN_NAMES].sort(),
+    );
+    assert.equal(discovered.tools.every((tool: any) => tool.toolId === `node:master/${tool.name}`), true);
+
+    const byId: any = await call_tool({
+      toolId: 'node:master/read',
+      args: { filePath: `${process.cwd()}/package.json`, startLine: 1, endLine: 1 },
+    }, { sessionId: sourceId, session: source });
+    const explicit: any = await call_tool({
+      source: 'node',
+      nodeId: 'master',
+      name: 'read',
+      args: { filePath: `${process.cwd()}/package.json`, startLine: 1, endLine: 1 },
+    }, { sessionId: sourceId, session: source });
+    assert.equal(byId.error, undefined);
+    assert.equal(explicit.error, undefined);
+    assert.equal(remoteCalls, 0);
+
+    await assert.rejects(
+      () => call_tool({ source: 'node', nodeId: 'master', name: 'list_agents', args: {} }, { sessionId: sourceId, session: source }),
+      /not available on node `master`/,
+    );
+
+    await sessionManager.setAgentMetadata(isolatedAgent, { isolated: true, isolatedNode: 'bound-remote' });
+    await assert.rejects(
+      () => call_tool({ source: 'node', nodeId: 'master', name: 'read', args: { filePath: 'x' } }, { sessionId: isolatedId, session: isolated }),
+      /Isolated session can only call tools on its bound\/current node/,
+    );
+
+    const forwarded: any[] = [];
+    (nodeExecution as any).executeRemoteNodeTool = async (...args: any[]) => {
+      remoteCalls += 1;
+      forwarded.push(args);
+      return { remote: true, toolName: args[2] };
+    };
+    source.currentNode = 'remote-a';
+    await sessionManager.saveSession(sourceId);
+    assert.deepEqual(
+      await call_tool({ toolId: 'builtin:read', args: { filePath: 'remote.txt' } }, { sessionId: sourceId, session: source }),
+      { remote: true, toolName: 'read' },
+    );
+    assert.deepEqual(
+      await call_tool({ source: 'node', nodeId: 'remote-a', name: 'dynamic_probe', args: {} }, { sessionId: sourceId, session: source }),
+      { remote: true, toolName: 'dynamic_probe' },
+    );
+    assert.equal(remoteCalls, 2);
+    assert.deepEqual(forwarded.map(call => [call[0], call[1], call[2]]), [
+      [sourceId, 'remote-a', 'read'],
+      [sourceId, 'remote-a', 'dynamic_probe'],
+    ]);
+  } finally {
+    (nodeExecution as any).executeRemoteNodeTool = originalRemoteExecute;
+    await sessionManager.setAgentMetadata(isolatedAgent, { isolated: false }).catch(() => {});
+    await sessionManager.deleteSession(sourceId).catch(() => false);
+    await sessionManager.deleteSession(isolatedId).catch(() => false);
   }
 });
 
@@ -598,12 +722,10 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
   assert.equal(modelFacingDefinitions.some(def => def.name === 'session'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'skill'), true);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'node'), true);
-  for (const removedName of ['update_session_name', 'list_skills', 'load_skill', 'list_nodes', 'change_current_node']) {
+  for (const removedName of ['delete_file', 'update_session_name', 'list_skills', 'load_skill', 'list_nodes', 'change_current_node']) {
     assert.equal(definitions.some(def => def.name === removedName), false, `${removedName} should be removed from the builtin registry`);
   }
   assert.equal(definitions.some(def => def.name === 'list_sessions'), false);
-  assert.equal(MASTER_ONLY_TOOL_NAMES.includes('session'), true);
-  assert.equal(MASTER_ONLY_TOOL_NAMES.includes('list_sessions'), false);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'wait'), true);
   assert.equal(definitions.some(def => def.name === 'set_todo'), false);
   assert.equal(modelFacingDefinitions.some(def => def.name === 'end_turn'), false);
@@ -699,7 +821,6 @@ test('default model-facing tool names and serialized schema size stay consolidat
     'edit_memory',
     'delete_memory',
     'apply_patch_memory',
-    'delete_file',
     'copy_between_nodes',
     'image_crop',
     'image_write_to_file',
@@ -724,7 +845,7 @@ test('default model-facing tool names and serialized schema size stay consolidat
   ]);
 
   const serializedBytes = Buffer.byteLength(JSON.stringify(modelFacingDefinitions), 'utf8');
-  assert.equal(serializedBytes, 34_752);
+  assert.equal(serializedBytes, 34_296);
   assert.ok(serializedBytes < 38_069, 'serialized default schema should stay below the pre-consolidation baseline');
 });
 
@@ -755,7 +876,7 @@ test('consolidated resource tool schemas expose their approved actions', () => {
 });
 
 test('builtin file/browser tool schemas no longer expose node selector parameters', () => {
-  for (const name of ['read', 'write', 'edit', 'apply_patch', 'delete_file', 'browse_open', 'browse_list', 'browse_get', 'browse_close', 'browse_interact']) {
+  for (const name of ['read', 'write', 'edit', 'apply_patch', 'browse_open', 'browse_list', 'browse_get', 'browse_close', 'browse_interact']) {
     const def = definitions.find(entry => entry.name === name);
     assert.ok(def, `${name} should exist`);
     assert.equal(Object.prototype.hasOwnProperty.call(def?.parameters?.properties || {}, 'node'), false, `${name} should not expose node parameter`);

@@ -11,6 +11,7 @@ LLM owns model/provider configuration consumption, prompt snapshots, provider se
 - [src-model-routing](../units/src-model-routing.md) — virtual target selection and process-local failover health.
 - [src-llm-openai](../units/src-llm-openai.md) — OpenAI Responses/Chat Completions conversion and stream collectors.
 - [src-mcp-client](../units/src-mcp-client.md) — MCP config, connection lifecycle, discovery, invocation, and result normalization.
+- [src-mcp-external-service](../units/src-mcp-external-service.md) — fixed local RPC ownership boundary used by all current MCP callers.
 - [src-config](../units/src-config.md) — canonical provider/model expansion and path/default resolution.
 
 ## Public interfaces
@@ -24,7 +25,7 @@ LLM owns model/provider configuration consumption, prompt snapshots, provider se
 
 Canonical image messages remain blob-reference-only until the provider request boundary; clone-only hydration and diagnostic redaction are owned by [image blob lifecycle](../threads/image-blob-lifecycle.md).
 
-- `openai` and `openai-responses` use the Responses API.
+- `openai` and `openai-responses` use the Responses API; concrete models may opt into the hosted `web_search` tool, whose completed output items remain provider-owned and model-scoped.
 - `openai-completions` uses Chat Completions.
 - `anthropic` uses Anthropic Messages.
 - `session-hash` and `failover` resolve strict concrete leaves before provider serialization. Canonical contract: [model routing](../threads/model-routing.md).

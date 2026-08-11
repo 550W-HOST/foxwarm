@@ -230,7 +230,17 @@ bot:
   enableTrigger: true
 llm:
   ollamaBaseUrl: http://localhost:11434
+vectorMaintenance:
+  enabled: true
+  retentionHours: 24
 ```
+
+LanceDB maintenance is enabled by default. It compacts fragmented vector data
+and removes table versions older than the configured positive whole-hour
+retention window; the default is 24 hours. `vectorMaintenance: true` enables
+the defaults, `vectorMaintenance: false` disables maintenance, and an object
+enables it unless `enabled: false` while allowing `retentionHours` tuning.
+These settings are read at process startup.
 
 ## Models (`state/models.yaml`)
 
@@ -257,6 +267,31 @@ Provider notes:
 - `openai` and `openai-responses` use `/responses`
 - `anthropic` uses Anthropic-compatible requests
 - OpenAI-compatible local gateways can be configured by changing `baseUrl` and model ids. `apiKey` may be left empty if your gateway does not require one.
+
+Responses models can opt into OpenAI's hosted web search without a separate
+Foxwarm model request:
+
+```yaml
+providers:
+  openai:
+    providerType: openai-responses
+    baseUrl: https://api.openai.com/v1
+    apiKey: your-openai-key
+    webSearch:
+      enabled: true
+      toolChoice: auto       # or: required
+      searchContextSize: medium
+    models:
+      - gpt-5.6
+```
+
+Foxwarm appends the hosted search tool beside its normal function tools. The
+completed search item is kept only for replay to the same concrete model, and
+the WebUI displays returned URL citations as clickable sources. Hosted search
+is not enabled for compact planning or setup-test requests. `webSearch: true`
+enables the default settings, `webSearch: false` disables it, and an object
+enables it unless `enabled: false`; model-level values merge tuning fields from
+their provider while overriding the inherited enabled state.
 
 For stable session routing and ordered failover, see
 [Virtual models](docs/virtual-models.md).
@@ -519,6 +554,7 @@ foxwarm/
 - [Multica Bridge POC](docs/multica-bridge.md)
 - [Vector Memory](docs/vector-memory.md)
 - [Development](docs/development.md)
+- [Multiprocess Session Workers](docs/multiprocess-session-workers.md)
 - [ToolScript examples](examples/toolscript/README.md)
 
 ## Development

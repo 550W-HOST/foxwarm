@@ -159,10 +159,33 @@ export const getToolResponseStatus = (resp: FunctionResponse): 'success' | 'erro
   return 'success'
 }
 
+export interface OpenAIResponsesAnnotation {
+  type?: string
+  start_index?: number
+  end_index?: number
+  url?: string
+  title?: string
+  url_citation?: {
+    url?: string
+    title?: string
+    start_index?: number
+    end_index?: number
+  }
+}
+
+export interface MessagePartProviderMeta {
+  openaiResponses?: {
+    annotations?: OpenAIResponsesAnnotation[]
+    outputItem?: Record<string, unknown>
+    sourceModelId?: string
+  }
+}
+
 export interface MessagePart {
   text?: string
   system?: string
   thinking?: string
+  providerMeta?: MessagePartProviderMeta
   functionCall?: FunctionCall
   functionResponse?: FunctionResponse
   toolUseId?: string

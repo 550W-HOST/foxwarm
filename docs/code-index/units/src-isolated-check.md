@@ -1,6 +1,7 @@
 # Unit: src-isolated-check
 
 Files: src/isolatedCheck.ts
+Secondary files: src/isolatedCheck.test.ts
 
 ## Purpose
 
@@ -9,31 +10,37 @@ Enforces the current isolation boundary for tool execution, master-side paths, c
 ## Key exports
 
 - `checkToolPermission(toolName, sessionId, executionNode?, toolArgs?)` — evaluate an isolated session's tool call against the current isolated rule set.
+- `checkToolPermissionForSession(session, toolName, executionNode?, toolArgs?)` — evaluate the same rules from an already-authoritative current Session without loading the global session map.
 - `checkPathAccess(fullPath, agentName)` — restrict master-side filesystem access to the isolated agent's own directory.
 - `requireNotIsolated(sessionIdOrCtx, operation)` — reject operations that are unavailable to isolated sessions.
+- `requireNotIsolatedForSession(session, operation)` — apply the identical denial to an already-authoritative passed Session without an ID lookup.
 - `checkArchivedReadPermission(...)` — restrict archive inspection to sessions under the same agent.
+- `checkArchivedReadPermissionForSession(...)` — apply the same archive-read policy to an exact passed current Session or persisted alias without loading the source-session map.
 - `checkChannelPermission(...)` — restrict direct channel sends to attached channel targets.
 - `checkSendFilePermission(...)` — restrict file delivery to the current isolated session or its attached channel.
 - `checkTimerPermission(...)` — restrict timer targets and new-session creation.
+- `checkTimerPermissionForSession(session, options)` — passed-Session owner for the timer special case; the ID form loads then delegates.
 
 ## Function index
 
 | Stable symbol | Responsibility |
 |---|---|
-| `checkToolPermission` | Resolves effective isolation node context, handles copy/timer special cases, and evaluates `buildIsolatedToolRules` |
+| `checkToolPermission` / `checkToolPermissionForSession` | Resolve effective isolation node context, handle copy/timer special cases, and evaluate `buildIsolatedToolRules` from either an ID-loaded or already-authoritative Session |
 | `resolvePermissionPath` | Expands and normalizes a path against the agent directory |
 | `isPathWithinAgentDir` | Tests master-side containment |
 | `checkCopyBetweenNodesPermission` | Restricts source/target nodes and master paths |
 | `checkPathAccess` | Enforces the master agent-directory boundary |
 | `requireNotIsolated` | Shared hard guard for unsupported isolated operations |
+| `requireNotIsolatedForSession` | Same hard guard for a passed current Session; the ID/context entry loads when needed and delegates |
 | `checkArchivedReadPermission` | Same-agent archive-read guard |
+| `checkArchivedReadPermissionForSession` | Passed-owner/archive-alias form of the same guard; other targets stay on the ID-based path |
 | `checkChannelPermission` | Attached-channel guard |
 | `checkSendFilePermission` | File target guard |
 | `checkTimerPermission` | Timer and new-session guard |
 
 ## Dependencies
 
-- `sessionManager` for session state, effective isolation, channel attachment, and agent isolation node lookup.
+- `sessionManager` for ID-based session loading and channel attachment; passed-Session checks read isolation metadata directly from `session/agentMetadata`.
 - `config` for agent directory resolution.
 - `permissions` for `buildIsolatedToolRules` and first-match rule evaluation.
 - `utils/pathResolve` for home-path expansion.
@@ -42,6 +49,7 @@ Enforces the current isolation boundary for tool execution, master-side paths, c
 
 - Non-isolated sessions return early from isolation-only checks.
 - `checkToolPermission` uses the resolved execution node. `copy_between_nodes` and timer tools have additional domain-specific validation before generic rule evaluation.
+- The ID-based tool/timer entry points retain existing missing-session behavior and delegate loaded Sessions to the same passed-Session implementation, keeping errors and allow/deny outcomes identical.
 - An isolated session may use master filesystem paths only inside its own agent directory.
 - Cross-node copy is limited to master and the session's bound/current node; any master-side source or target path must remain inside the agent directory.
 - Archive reads are read-only and limited to sessions owned by the caller's agent.

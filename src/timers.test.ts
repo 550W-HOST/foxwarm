@@ -20,11 +20,11 @@ import {
 import * as sessionManager from './sessionManager';
 import { getAgentDir } from './config';
 import {
-  tool_create_timer,
-  tool_delete_timer,
-  tool_list_timers,
-  tool_update_timer,
-} from './toolsSessionAgent';
+  create_timer as tool_create_timer,
+  delete_timer as tool_delete_timer,
+  list_timers as tool_list_timers,
+  update_timer as tool_update_timer,
+} from './tools';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-timers-store-'));

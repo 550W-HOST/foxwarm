@@ -2,7 +2,8 @@ import path from 'path';
 import crypto from 'crypto';
 import sharp from 'sharp';
 import * as sessionManager from './sessionManager';
-import { ImageMeta, InlineData, Message, MessagePart } from './types';
+import { readArchiveMessages } from './session/archive';
+import { ImageMeta, InlineData, Message, MessagePart, Session } from './types';
 import { readImageRef } from './imageBlobs';
 
 export interface NormalizedToolResultImage {
@@ -256,22 +257,22 @@ function findImagePartInMessage(message: Message | undefined, imageId: string): 
   return null;
 }
 
-export async function resolveImageById(sessionId: string, imageId: string): Promise<ResolvedImage> {
-  const session = await sessionManager.getExistingSession(sessionId);
-  if (session) {
-    for (let index = session.history.length - 1; index >= 0; index -= 1) {
-      const match = findImagePartInMessage(session.history[index], imageId);
-      if (!match) continue;
-      const resolved = await buildResolvedImageFromPart(match);
-      if (resolved) {
-        return resolved;
-      }
+async function resolveImageFromArchive(sessionId: string, imageId: string): Promise<ResolvedImage | null> {
+  const archivedMessages = await readArchiveMessages(sessionId);
+  for (let index = archivedMessages.length - 1; index >= 0; index -= 1) {
+    const match = findImagePartInMessage(archivedMessages[index].message, imageId);
+    if (!match) continue;
+    const resolved = await buildResolvedImageFromPart(match);
+    if (resolved) {
+      return resolved;
     }
   }
+  return null;
+}
 
-  const archivedMessages = await sessionManager.getArchivedMessages(sessionId, {});
-  for (let index = archivedMessages.records.length - 1; index >= 0; index -= 1) {
-    const match = findImagePartInMessage(archivedMessages.records[index].message, imageId);
+export async function resolveImageForSession(session: Session, imageId: string): Promise<ResolvedImage> {
+  for (let index = session.history.length - 1; index >= 0; index -= 1) {
+    const match = findImagePartInMessage(session.history[index], imageId);
     if (!match) continue;
     const resolved = await buildResolvedImageFromPart(match);
     if (resolved) {
@@ -279,11 +280,23 @@ export async function resolveImageById(sessionId: string, imageId: string): Prom
     }
   }
 
+  const archived = await resolveImageFromArchive(session.id, imageId);
+  if (archived) return archived;
+
+  throw new Error(`Image id \`${imageId}\` not found in session \`${session.id}\`.`);
+}
+
+export async function resolveImageById(sessionId: string, imageId: string): Promise<ResolvedImage> {
+  const session = await sessionManager.getExistingSession(sessionId);
+  if (session) return resolveImageForSession(session, imageId);
+
+  const archived = await resolveImageFromArchive(sessionId, imageId);
+  if (archived) return archived;
+
   throw new Error(`Image id \`${imageId}\` not found in session \`${sessionId}\`.`);
 }
 
-export async function cropImageById(sessionId: string, imageId: string, crop: { x: number; y: number; width: number; height: number }): Promise<{ inlineData: InlineData; imageMeta: Omit<ImageMeta, 'imageId'> }> {
-  const resolved = await resolveImageById(sessionId, imageId);
+async function cropResolvedImage(resolved: ResolvedImage, imageId: string, crop: { x: number; y: number; width: number; height: number }): Promise<{ inlineData: InlineData; imageMeta: Omit<ImageMeta, 'imageId'> }> {
   const { x, y, width, height } = crop;
   if (![x, y, width, height].every(value => Number.isInteger(value))) {
     throw new Error('image_crop requires integer x, y, width, and height values.');
@@ -329,4 +342,12 @@ export async function cropImageById(sessionId: string, imageId: string, crop: { 
       sha256: crypto.createHash('sha256').update(extracted.data).digest('hex'),
     },
   };
+}
+
+export async function cropImageForSession(session: Session, imageId: string, crop: { x: number; y: number; width: number; height: number }): Promise<{ inlineData: InlineData; imageMeta: Omit<ImageMeta, 'imageId'> }> {
+  return cropResolvedImage(await resolveImageForSession(session, imageId), imageId, crop);
+}
+
+export async function cropImageById(sessionId: string, imageId: string, crop: { x: number; y: number; width: number; height: number }): Promise<{ inlineData: InlineData; imageMeta: Omit<ImageMeta, 'imageId'> }> {
+  return cropResolvedImage(await resolveImageById(sessionId, imageId), imageId, crop);
 }

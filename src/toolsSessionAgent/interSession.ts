@@ -12,7 +12,7 @@ import {
   buildSendFileResult,
 } from './helpers';
 import * as sessionManager from '../sessionManager';
-import * as timers from '../timers';
+import { scheduleMainWaitTimeout } from '../mainManagementTools';
 import { logger } from '../common';
 import { requireNotIsolated, checkChannelPermission, checkSendFilePermission } from '../isolatedCheck';
 import { COMPACT_PLAN_TOOL_NAME } from '../session/compactPlan';
@@ -32,7 +32,8 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
   }
 
   const currentSessionId = ctx.sessionId;
-  const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork, { node });
+  const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork,
+    { node, sourceOverride: (ctx as any).sourceOverride });
 
   if (message) {
     if (waitAfterHandoff === true) {
@@ -88,17 +89,20 @@ export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
   let explicitWaitId: string | undefined;
 
   if (ctx?.sessionId) {
-    const waitState = await sessionManager.startSessionWait(ctx.sessionId, {
+    const waitOptions = {
       reason: typeof reason === 'string' ? reason : undefined,
       timeoutSeconds,
       waitAllSessions,
       waitExecIds,
-    });
+    };
+    const waitState = ctx.persistCurrentSession && ctx.session?.id === ctx.sessionId
+      ? await sessionManager.startSessionWaitForSession(ctx.session, waitOptions, ctx.persistCurrentSession)
+      : await sessionManager.startSessionWait(ctx.sessionId, waitOptions);
     explicitWaitId = waitState.id;
 
     if (timeoutSeconds !== undefined) {
-      await timers.createWaitTimeoutTimer({
-        sessionId: ctx.sessionId,
+      await scheduleMainWaitTimeout({
+        sourceSessionId: ctx.sessionId,
         waitId: waitState.id,
         timeoutSeconds,
       });
@@ -134,7 +138,7 @@ export async function tool_send_to_channel(args: ToolArgs, ctx?: ToolContext) {
   return `Message sent to channel target \`${channelTargetId}\``;
 }
 
-export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
+export async function executeSendFileMain(args: ToolArgs, ctx?: ToolContext) {
   const { sessionId, channelTargetId, filePath } = args;
   const hasSessionId = isNonEmptyString(sessionId);
   const normalizedChannelTargetId = isNonEmptyString(channelTargetId)
@@ -215,4 +219,23 @@ export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
   }
 
   return buildSendFileResult(output, file);
+}
+
+export async function tool_send_file(args: ToolArgs, ctx?: ToolContext) {
+  if (ctx?.sessionPlacement !== 'session-worker') return await executeSendFileMain(args, ctx);
+  if (!ctx.sessionId || !ctx.session || ctx.session.id !== ctx.sessionId) throw new Error('send_file requires exact session context.');
+  const { deliverFile } = await import('../fileDelivery');
+  const currentNode = ctx.session.currentNode || 'master';
+  const runtimeNodeId = ctx.runtimeNodeId || currentNode;
+  return await deliverFile({
+    sourceSessionId: ctx.sessionId,
+    intent: {
+      ...(isNonEmptyString(args.sessionId) ? { sessionId: args.sessionId.trim() } : {}),
+      ...(isNonEmptyString(args.channelTargetId) ? { channelTargetId: args.channelTargetId.trim() } : {}),
+      filePath: isNonEmptyString(args.filePath) ? args.filePath.trim() : args.filePath,
+      ...(isNonEmptyString(args.caption) ? { caption: args.caption.trim() } : {}),
+      ...(isNonEmptyString(args.text) ? { text: args.text.trim() } : {}),
+    },
+    routing: { runtimeNodeId, currentNode, ...(typeof ctx.session.cwd === 'string' && ctx.session.cwd ? { cwd: ctx.session.cwd } : {}) },
+  });
 }

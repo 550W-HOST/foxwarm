@@ -16,12 +16,13 @@ async function loadTypeScriptModule(relativePath) {
 
 const notifications = await loadTypeScriptModule('../src/sessionIdleNotifications.ts')
 
-function session(id, { busy = false, state } = {}) {
+function session(id, { busy = false, state, queueLength = 0 } = {}) {
   return {
     id,
     displayName: `Session ${id}`,
     busy,
-    ...(state ? { runtimeState: { state, queueLength: 0, busy: state === 'requesting-model' || state === 'running-tool' } } : {}),
+    queueLength,
+    ...(state ? { runtimeState: { state, queueLength, busy: state === 'requesting-model' || state === 'running-tool' } } : {}),
   }
 }
 
@@ -50,6 +51,15 @@ test('idle notification tracker arms an already-busy session and uses legacy bus
 
   tracker.arm(session('waiting', { busy: true, state: 'waiting' }))
   assert.deepEqual(tracker.observe([session('waiting', { state: 'idle' })], modes), [])
+})
+
+test('queue-only canonical idle state never arms or fires an idle notification', () => {
+  const tracker = new notifications.SessionIdleNotificationTracker()
+  const modes = { queued: 'always' }
+
+  tracker.arm(session('queued', { state: 'idle', queueLength: 2 }))
+  assert.deepEqual(tracker.observe([session('queued', { state: 'idle', queueLength: 2 })], modes), [])
+  assert.deepEqual(tracker.observe([session('queued', { state: 'idle' })], modes), [])
 })
 
 test('idle notification tracker seeds a first accepted snapshot without a notification', () => {

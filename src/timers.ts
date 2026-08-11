@@ -4,6 +4,7 @@ import schedule, { Job } from 'node-schedule';
 import { TIMERS_FILE, getAgentDir } from './config';
 import { logger } from './common';
 import * as sessionManager from './sessionManager';
+import * as sessionRuntime from './sessionRuntime';
 import type { Session } from './types';
 import { DiskJsonData } from './utils/diskJsonData';
 import { formatLocalTimestamp } from './utils/localTime';
@@ -188,7 +189,7 @@ async function fireTimer(timerId: string): Promise<void> {
 
   if (timer.waitTimeoutId) {
     try {
-      const targetSession = await sessionManager.getExistingSession(timer.sessionId);
+      const targetSession = sessionManager.getSessionCatalog(timer.sessionId);
       if (!targetSession) {
         throw new Error(`Target session "${timer.sessionId}" not found.`);
       }
@@ -212,7 +213,7 @@ async function fireTimer(timerId: string): Promise<void> {
 
   try {
     if (timer.newSession) {
-      const ownerSession = await sessionManager.getExistingSession(timer.sessionId);
+      const ownerSession = sessionManager.getSessionCatalog(timer.sessionId);
       const agentName = timer.agentName || ownerSession?.agent || 'main';
       if (!await fs.pathExists(getAgentDir(agentName))) {
         throw new Error(`Target agent "${agentName}" not found.`);
@@ -231,7 +232,7 @@ async function fireTimer(timerId: string): Promise<void> {
         'background'
       );
     } else {
-      const targetSession = await sessionManager.getExistingSession(timer.sessionId);
+      const targetSession = sessionManager.getSessionCatalog(timer.sessionId);
       if (!targetSession) {
         throw new Error(`Target session "${timer.sessionId}" not found.`);
       }
@@ -419,7 +420,7 @@ function normalizeCreateArgs(args: {
   };
 }
 
-function normalizeTimerUpdate(existing: SessionTimer, ownerSession: Session | null, args: {
+function normalizeTimerUpdate(existing: SessionTimer, ownerSession: Pick<Session, 'agent' | 'currentNode' | 'model'> | null, args: {
   message?: unknown;
   at?: unknown;
   afterSeconds?: unknown;
@@ -584,12 +585,10 @@ export async function createTimer(args: {
   currentNode?: string;
   model?: string;
 }): Promise<TimerView> {
-  const targetSession = await sessionManager.getExistingSession(args.sessionId);
+  const targetSession = await sessionRuntime.getSession(args.sessionId);
   if (!targetSession) {
     throw new Error(`Session \`${args.sessionId}\` not found.`);
   }
-
-  await sessionManager.saveSession(args.sessionId);
 
   const normalized = normalizeCreateArgs(args);
   const agentName = normalized.newSession
@@ -654,7 +653,7 @@ export async function updateTimer(args: {
     throw new Error(`Timer \`${timerId}\` does not belong to session \`${args.sessionId}\`.`);
   }
 
-  const ownerSession = await sessionManager.getExistingSession(existing.sessionId);
+  const ownerSession = await sessionRuntime.getSession(existing.sessionId);
   if (!ownerSession) {
     throw new Error(`Session \`${existing.sessionId}\` not found.`);
   }
@@ -686,7 +685,7 @@ export async function createWaitTimeoutTimer(args: {
   waitId: string;
   timeoutSeconds: number;
 }): Promise<TimerView> {
-  const targetSession = await sessionManager.getExistingSession(args.sessionId);
+  const targetSession = sessionManager.getSessionCatalog(args.sessionId);
   if (!targetSession) {
     throw new Error(`Session \`${args.sessionId}\` not found.`);
   }

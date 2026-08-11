@@ -81,7 +81,7 @@ Self-test file (`goalReminderSelfTest.ts`):
 - `setSessionGoal` / `clearSessionGoal` are invoked by the `set_goal` tool in `toolsSessionAgent`.
 - Interacts with session persistence via `sessionManager` (saving goalState alongside history).
 - Relies on `childSessionReminder`'s no-action signal detection to suppress reminders when the model signals inactivity.
-- The self-test exercises the full integration path through `MessageRouter.processSessionQueue` and `runSessionTurn`.
+- The self-test exercises the full integration path through the public `MessageRouter.processSessionQueue` owned-entry path.
 
 ## Design Decisions
 

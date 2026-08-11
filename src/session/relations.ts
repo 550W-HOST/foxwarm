@@ -7,14 +7,21 @@ import { formatLocalTimestamp } from '../utils/localTime';
 
 type SessionRelationsDeps = {
   getExistingSession: (sessionId: string) => Promise<Session | null>;
+  /** Catalog-only lookup for relation/permission operations. */
+  getSessionCatalog?: (sessionId: string) => Session | undefined;
   saveSession: (sessionId: string) => Promise<void>;
-  saveSessionsMetadata: () => Promise<void>;
+  saveSessionCatalogEntries: (sessionIds: string[]) => Promise<void>;
   enqueueSessionItem: (sessionId: string, item: QueueItem) => Promise<void>;
   getSessionsMap: () => Map<string, Session>;
   getAgentMetadata: (agentName: string) => AgentMetadata;
   notifySessionListUpdated: () => void;
   assertMutationAllowed: (sessionIds: Array<string | undefined>, operation: string) => void;
 };
+
+function getSessionForRelation(deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'getSessionCatalog'>, sessionId: string): Promise<Session | null> {
+  if (deps.getSessionCatalog) return Promise.resolve(deps.getSessionCatalog(sessionId) || null);
+  return deps.getExistingSession(sessionId);
+}
 
 async function persistSessionMetadataUpdate(
   deps: Pick<SessionRelationsDeps, 'saveSession'>,
@@ -156,7 +163,7 @@ export async function resolveSessionParentId(
 }
 
 export async function setSessionParent(
-  deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'saveSession' | 'saveSessionsMetadata' | 'notifySessionListUpdated'> & Partial<Pick<SessionRelationsDeps, 'assertMutationAllowed'>>,
+  deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'saveSession' | 'saveSessionCatalogEntries' | 'notifySessionListUpdated'> & Partial<Pick<SessionRelationsDeps, 'assertMutationAllowed'>>,
   childSessionId: string,
   parentSessionId?: string
 ): Promise<{
@@ -182,7 +189,7 @@ export async function setSessionParent(
   deps.assertMutationAllowed?.([realChildId, realParentId], realParentId ? 'change parent relations' : 'detach from its parent');
   childSession.parentSessionId = realParentId;
   await persistSessionMetadataUpdate(deps, realChildId, { parentSessionId: realParentId });
-  await deps.saveSessionsMetadata();
+  await deps.saveSessionCatalogEntries([realChildId]);
   deps.notifySessionListUpdated();
 
   return {
@@ -193,7 +200,7 @@ export async function setSessionParent(
 }
 
 export async function updateChildSessionParentIds(
-  deps: Pick<SessionRelationsDeps, 'saveSession' | 'saveSessionsMetadata' | 'getSessionsMap' | 'notifySessionListUpdated'>,
+  deps: Pick<SessionRelationsDeps, 'saveSession' | 'saveSessionCatalogEntries' | 'getSessionsMap' | 'notifySessionListUpdated'>,
   oldParentSessionId: string,
   newParentSessionId: string
 ): Promise<string[]> {
@@ -210,7 +217,7 @@ export async function updateChildSessionParentIds(
   }
 
   if (updatedChildIds.length > 0) {
-    await deps.saveSessionsMetadata();
+    await deps.saveSessionCatalogEntries(updatedChildIds);
     deps.notifySessionListUpdated();
   }
 
@@ -225,11 +232,11 @@ function isDirectSessionLink(a: Session | undefined, b: Session | undefined): bo
 }
 
 async function checkIsolatedPermission(
-  deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'getAgentMetadata'>,
+  deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'getSessionCatalog' | 'getAgentMetadata'>,
   sourceSession: Session | undefined,
   targetSessionId: string
 ): Promise<Session> {
-  const targetSession = await deps.getExistingSession(targetSessionId);
+  const targetSession = await getSessionForRelation(deps, targetSessionId);
   if (!targetSession) {
     throw new Error(`Session "${targetSessionId}" not found.`);
   }
@@ -260,11 +267,11 @@ async function checkIsolatedPermission(
 }
 
 export async function resolvePermittedSessionTarget(
-  deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'getAgentMetadata'>,
+  deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'getSessionCatalog' | 'getAgentMetadata'>,
   targetSessionId: string,
   fromSessionId?: string,
 ): Promise<{ sourceSession?: Session; targetSession: Session; requestedTargetSessionId: string; resolvedTargetSessionId: string }> {
-  const sourceSession = fromSessionId ? await deps.getExistingSession(fromSessionId) : undefined;
+  const sourceSession = fromSessionId ? await getSessionForRelation(deps, fromSessionId) : undefined;
   if (fromSessionId && !sourceSession) {
     throw new Error(`Session "${fromSessionId}" not found.`);
   }
@@ -309,7 +316,7 @@ function resolveSpecialSessionTargetId(targetSessionId: string, sourceSession?: 
 }
 
 export async function sendToSession(
-  deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'getAgentMetadata' | 'enqueueSessionItem'>,
+  deps: Pick<SessionRelationsDeps, 'getExistingSession' | 'getSessionCatalog' | 'getAgentMetadata' | 'enqueueSessionItem'>,
   targetSessionId: string,
   message: string,
   fromSessionId?: string

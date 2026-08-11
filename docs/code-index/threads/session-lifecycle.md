@@ -22,7 +22,7 @@ Canonical façade and child-ID ownership: [session core façade](../modules/sess
 3. `getSession(id)` lazily loads the authoritative per-session history snapshot.
 4. When an embedded `contextFrontier` exists, hydration calls `renderHistoryFromFrontier(session)` or annotates an already matching rendered history.
 5. Accessed legacy live history/queue images are lazily materialized into canonical content-addressed blob references; there is no startup-wide image migration.
-6. The shared metadata file remains a presentation/list index; per-session history owns messages, prompt snapshot/cache key, and frontier.
+6. The shared metadata file remains a main-owned presentation/list index; the per-session JSON owns full semantic state, including messages, queue, wait/managed metadata, prompt snapshot/cache key, frontier, and any session-worker mailbox cursor.
 7. Creation-critical history and metadata writes propagate errors. A known failed creation removes its map/history/archive artifacts so the same uncommitted ID can be retried; ordinary noncritical saves retain best-effort logging behavior.
 
 Canonical data authority: [D-session-core-authoritative-history](../modules/session-core.md#d-session-core-authoritative-history).
@@ -31,7 +31,7 @@ Canonical data authority: [D-session-core-authoritative-history](../modules/sess
 
 - Queue insertion and persisted wait-state transitions live behind the session façade.
 - `MessageRouter.processSessionQueue()` claims the session and runs the provider/tool loop; session core does not own that loop.
-- `resumeBusySessions()` inspects metadata-only busy/queued/managed-inbox state. It clears stale busy fields and appends or deduplicates a restart event, retriggers queued work, and reclaims or wakes persisted managed inboxes/controllers.
+- `resumeBusySessions()` inspects metadata-only busy/queued/managed-inbox state. It clears stale busy fields and appends or deduplicates a restart event, retriggers queued work, and reclaims or wakes persisted managed inboxes/controllers. Under Session-worker placement, residual Main-local busy/queued/managed sessions are logged loudly and skipped rather than executed locally; durable mailbox intents resume through the non-fatal ensure/run path owned by [process topology and RPC](./process-topology-and-rpc.md), and residual local work runs only at the next durable Worker ingress.
 
 Canonical turn flow: [message processing pipeline](./message-processing-pipeline.md).
 

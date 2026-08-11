@@ -1,6 +1,6 @@
 # Unit: webui-chat-timeline
 
-Files: packages/webui/src/components/ChatTimeline.tsx, packages/webui/src/components/ContextBlockCard.tsx, packages/webui/src/retryNotice.ts, packages/webui/test/messageWidth.e2e.mjs, packages/webui/test/retryNotice.test.mjs, packages/webui/test/usageBadgeDetails.e2e.mjs, packages/webui/test/systemMessageCards.e2e.mjs
+Files: packages/webui/src/components/ChatTimeline.tsx, packages/webui/src/components/ContextBlockCard.tsx, packages/webui/test/messageWidth.e2e.mjs, packages/webui/test/usageBadgeDetails.e2e.mjs, packages/webui/test/systemMessageCards.e2e.mjs
 Secondary files: packages/webui/src/components/Chat.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/chatViewportState.ts
 
 ## Purpose
@@ -15,7 +15,6 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 - `ContextBlockCard` — renders CTX-BLOCK model messages as tool/reasoning-style thread cards with local expand/collapse state and the read-only WebUI archive expansion endpoint
 - `ImageParts` — renders safe raster inline data or authenticated blob URLs and exposes unsafe formats as download-only attachments
 - `getContextBlockMetaFromMessage(message)` — pure helper that prefers structured `__meta.contextBlock` metadata and falls back to parsing legacy CTX-BLOCK text only when needed
-- `getRetryableLlmRetryNotice(messages, sessionBusy)` — selects the current session's last committed LLM retry notice only while idle
 
 ## Function Index
 
@@ -23,7 +22,6 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 |----------|----------------|-------------|
 | `getMessageStableKey(msg, idx)` | ~28–34 | Produces a stable key from message metadata or index |
 | `getMessageViewportAnchorKey(message)` | `chatViewportState.ts` | Produces a context-block/seq/id/timestamp anchor key while excluding temporary/synthetic rows. |
-| `getRetryableLlmRetryNotice(messages, sessionBusy)` | `retryNotice.ts` | Returns only an idle session's last committed `llm-retry` notice, without requiring terminal retry metadata. |
 | `toTokenCount(value)` | ~67 | Safely coerces a value to a finite number or null |
 | `normalizeMessageUsage(value)` | ~71–84 | Normalizes various token usage shapes into a standard format |
 | `getModelMessageUsage(msg)` | ~86 | Extracts normalized usage from a model message |
@@ -64,18 +62,15 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 - Model messages with `__meta.contextBlock` render as CTX-BLOCK thread cards, visually distinct from normal assistant bubbles but using the same `ToolTag` + `ThreadLineButton` pattern as tool/reasoning cards. The tag label is just `CTX-BLOCK`; the header line shows metadata (`B#`, level, raw sequence range, and time range when available). The summary markdown is rendered below the header like tool body content and clamped to three lines while collapsed. Clicking the collapsed surface or gutter expands; expanded cards show the full summary plus fetched children/raw messages and collapse via the left gutter or header. Expansion is local React state keyed to the card; switching sessions/reloading clears it and does not modify the `messages` array.
 - CTX-BLOCK expansion has no mode switch: expanding fetches one layer. Block-backed blocks render child CTX-BLOCK messages that can be expanded recursively; message-backed/L1 blocks render their covered raw archive messages. Nested cards naturally create nested thread-line gutters matching tool/reasoning interaction.
 - `MessageRow` decides layout (user right-aligned, model left-aligned), applies view-mode toggling (rendered vs source vs JSON), and conditionally shows copy buttons.
-- Ordinary assistant/model Markdown uses typed output from the shared renderer so complete top-level multiline display LaTeX and exact-language Mermaid fences can render through the shared per-block UI. Nested tokens remain in their original Markdown ancestry. These local controls coexist with, rather than replace, the assistant card's whole-message Rendered/Raw/JSON/copy controls. The canonical parsing, static/network-free Mermaid safety, raw-source, and lazy-loading contract is [D-webui-assistant-special-blocks](./webui-chat-shared.md#d-webui-assistant-special-blocks).
+- Ordinary assistant/model Markdown uses typed output from the shared renderer so complete top-level multiline display LaTeX and exact-language Mermaid fences can render through the shared per-block UI. Nested tokens remain in their original Markdown ancestry. Model text parts carrying OpenAI Responses URL annotations render a visible, deduplicated clickable Sources row beneath the rendered text with symmetric `my-2` vertical spacing; raw/JSON views continue to expose the original message metadata. These local controls coexist with, rather than replace, the assistant card's whole-message Rendered/Raw/JSON/copy controls. The canonical parsing, static/network-free Mermaid safety, raw-source, and lazy-loading contract is [D-webui-assistant-special-blocks](./webui-chat-shared.md#d-webui-assistant-special-blocks).
 - Image parts accept legacy inline data for tolerant rendering and current `inlineDataRef.apiPath` URLs. URL construction uses `makeApiUrl`, preserving deployment subpaths and same-origin authentication. PNG/JPEG/GIF/WebP render with lazy `<img>` loading; active/unsafe formats never enter an image context and use a download link, while load failures show an explicit unavailable state. Canonical contract: [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - User and assistant message surfaces expose semantic CSS hooks (`foxwarm-user-message-bubble`, `foxwarm-user-message-text`, `foxwarm-assistant-message-card`, `foxwarm-assistant-message-markdown`, `foxwarm-assistant-message-raw`) so opt-in UI style layers can restyle the timeline while preserving message grouping, Markdown sanitization, and view-mode behavior.
 - Timeline rows/cards and nested assistant, Reasoning, and CTX-BLOCK flex surfaces use `min-width: 0`/bounded widths so intrinsic Markdown content cannot widen the message or viewport. Top-level desktop model/tool/system rows fill 80% of the timeline, while user messages remain content-sized up to 80%; mobile and nested model/tool/system rows fill their timeline, and nested user messages cap at 85%. The built-CSS contract fixture is `packages/webui/test/messageWidth.e2e.mjs`, including persisted-`user` heavy/non-channel and nested system-card cases. The shared timeline/message-column boundaries also use horizontal-overflow clipping as defense in depth against a future malformed/oversized child; this does not remove nested scroll ownership from intentionally scrollable Markdown tables. Shared Markdown CSS breaks long prose tokens, wraps fenced code with preserved whitespace, and assigns horizontal scrolling only to wide tables; `packages/webui/test/messageOverflow.e2e.mjs` injects a deliberately oversized child.
 - The component is heavily memoized (`memo`) to avoid re-renders on large conversations.
-- The committed Chat timeline may show Retry only on the exact message selected from the current session's committed history by `getRetryableLlmRetryNotice`; queued previews and nested archive timelines receive no retry candidate.
+- `Chat` treats a same-session SSE state change in committed `messageCount` like a queue-length change and schedules the existing coalesced history refresh. This lets Worker projection state drive an exact history GET without placing message bodies in the state event or adding another SSE protocol.
+- Display-only LLM retry notices remain visible as ordinary assistant cards, but ChatTimeline has no inline Retry/Continue action. Continue belongs only to the parent runtime-status bubble under [D-pipeline-control-commands](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
 
 ## Design Decisions
-
-### D-webui-llm-retry-action
-
-[2026-07-29] Show Retry only when the current session is idle and its last committed history message has `__meta.noticeType === 'llm-retry'`. Do not require terminal retry metadata: a non-final notice left last after a stopped request remains retryable. Historical retry notices, queued-preview rows, nested/archive timelines, and independently last messages within those secondary timelines never qualify. Keep a small bottom gap below the button inside the assistant bubble.
 
 - [2026-07-24] The usage badge is the canonical interaction boundary for token detail disclosure. Preserve its existing collapsed compact labels, external desktop lower-right placement/gap, setting gate, and aggregate totals; on mouse/keyboard activation only the badge expands to full labels plus persisted time and routing attribution. Desktop expansion prefers that same external anchor and clamps left only by the amount needed to keep its right edge within the nearest timeline boundary; mobile remains flow layout. A virtual route is displayed as `virtual → concrete`; route/time metadata is never inferred from mutable UI state. For grouped calls, retain aggregation but show all unique routes and a time range rather than assigning the aggregate to one call.
 
@@ -93,7 +88,7 @@ Renders a chat conversation as a vertical timeline of message bubbles, handling 
 ## Integration
 
 - Consumed by a parent chat view that passes the `messages` array and display preferences (`isMobile`, `groupTools`, `showUsageBadge`).
-- Also reused by the chat view for render-only queued preview messages returned separately from committed history; these previews are rendered in a separate `ChatTimeline` instance below the Processing bubble so tool grouping, truncation, and history state do not cross the committed/queued boundary.
+- Also reused by the chat view for render-only queued preview messages returned separately from committed history; these previews are rendered in a separate `ChatTimeline` instance below the runtime-status bubble so tool grouping, truncation, and history state do not cross the committed/queued boundary. The status bubble follows canonical thinking/tool/waiting state and explains when queued messages will be inserted without moving them into committed history.
 - Requires the current `sessionId` prop for CTX-BLOCK expansion fetches: `GET /api/sessions/:sessionId/context-blocks/:blockId/expand`.
 - Delegates tool rendering to `ToolTimelineItems` components which handle individual tool call/response display.
 - Relies on `chatShared` for markdown rendering, link handling, and message classification utilities shared across the chat UI.

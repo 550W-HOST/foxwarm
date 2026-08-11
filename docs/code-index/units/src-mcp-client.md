@@ -14,6 +14,7 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 - `listTools(serverName?)`.
 - `callTool(serverName, tool, args?)`.
 - `upsertServer(name, server)`, `setServerEnabled(name, enable)`.
+- `normalizeManagedMcpServerConfig(server)` — canonical semantic validation of a fully merged managed update before persistence/publication.
 - `getServers()` — raw configured server record for trusted runtime callers.
 - `listServers()` — sorted redacted summaries.
 - `normalizeMcpToolResult(result)` — canonical result cleanup.
@@ -35,6 +36,7 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 ## Transport behavior
 
 - The first runtime read loads and normalizes the durable configuration (including fallback recovery) into one live snapshot. Later list/discovery/call reads use that snapshot; manual file edits remain invisible until process/store reinitialization. Managed writes publish a cloned snapshot only after durable persistence succeeds. Canonical contract: [D-dispatch-mcp-live-configuration](../threads/tool-dispatch.md#d-dispatch-mcp-live-configuration).
+- Managed upsert merges with the current named server and then runs one authoritative transport validator inside `mcpClient`: `stdio` requires a command, all HTTP/SSE/auto placements require a URL, and unknown transports fail before any durable write or live-snapshot publication. Tool wrappers retain argument parsing and user-facing success messages but do not duplicate these semantics.
 - `stdio` requires a command and uses a pooled client keyed by server name plus command/args/env/cwd/stderr signature. A config change selects a new key for later calls; the old keyed entry is not synchronously invalidated and closes through its idle TTL or transport `onclose` path.
 - `streamable-http` and `sse` require a URL and use short-lived standard connections.
 - `auto` tries streamable HTTP and falls back to SSE.
@@ -55,13 +57,13 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 ## Compatibility
 
 - Config accepts legacy `type` as a reader and writes current `transport`.
-- The hidden runtime `call_mcp`/`search_mcp_tools` tools still exist for compatibility. They are not default model recommendations; agents should discover through `search_tools` and invoke through `call_tool`. Both paths call this same client.
+- The hidden runtime `call_mcp`/`search_mcp_tools` tools still exist for compatibility. They are not default model recommendations; agents should discover through `search_tools` and invoke through `call_tool`. Both paths enter the same MCP external service and authoritative client.
 
 ## Integration
 
-- `src/tools/mcpTools.ts` implements the hidden compatibility tools and MCP configuration/list tools.
-- `src/tools/unifiedSearch.ts` implements recommended unified discovery/invocation.
-- ToolScript calls the unified `call_tool` wrapper and receives this client's normalized result.
+- `src/mcpExternalService.ts` is the sole production caller of raw list/discovery/call/config mutation exports. It owns the versioned local service boundary while this unit remains authoritative for the live snapshot, persistence, transports, pooling, and normalization.
+- `src/tools/mcpTools.ts` and `src/tools/unifiedSearch.ts` call the MCP external service for hidden compatibility tools and recommended unified discovery/invocation.
+- ToolScript calls the unified `call_tool` wrapper and receives this client's normalized result through the same service.
 - `MCP_CONFIG_PATH` and durable JSON behavior come from config/utilities.
 
 ## Design decisions

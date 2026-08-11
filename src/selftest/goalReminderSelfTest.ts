@@ -122,12 +122,8 @@ async function main(): Promise<void> {
         return toolResult;
       };
 
-      await (router as any).runSessionTurn(sessionId, {
-        parts: null,
-        queuedItems: [session.queue.shift()],
-        session,
-        preclaimed: true,
-      });
+      await sessionManager.saveSession(sessionId);
+      await router.processSessionQueue(sessionId);
 
       assert.strictEqual(chatCalls, 1);
       assert.strictEqual(session.queue.length, 0);
@@ -187,11 +183,9 @@ async function main(): Promise<void> {
         return { text: 'Normal reply' };
       };
 
-      await (router as any).runSessionTurn(sessionId, {
-        parts: [{ text: 'normal turn' }],
-        session,
-        preclaimed: true,
-      });
+      session.queue.push({ type: 'user', parts: [{ text: 'normal turn' }] });
+      await sessionManager.saveSession(sessionId);
+      await router.processSessionQueue(sessionId);
 
       assert.strictEqual(countGoalReminders(session), 0);
     });
@@ -231,12 +225,8 @@ async function main(): Promise<void> {
         parts: [{ functionResponse: { tool_use_id: 'read-1', name: 'read', response: { output: 'ok' } } }],
       });
 
-      await (router as any).runSessionTurn(sessionId, {
-        parts: null,
-        queuedItems: [session.queue.shift()],
-        session,
-        preclaimed: true,
-      });
+      await sessionManager.saveSession(sessionId);
+      await router.processSessionQueue(sessionId);
 
       assert.strictEqual(chatCalls, 2);
       assert.strictEqual(session.queue.length, 0);

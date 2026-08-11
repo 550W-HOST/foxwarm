@@ -1,6 +1,7 @@
 # Unit: src-wait-tool
 
-Files: src/toolsSessionAgent/waitTool.test.ts
+Files: src/toolsSessionAgent/waitTool.test.ts, src/toolsSessionAgent/detachedWait.test.ts
+Secondary files: src/toolsSessionAgent/interSession.ts
 
 ## Purpose
 
@@ -49,6 +50,8 @@ Tests the `wait` tool functionality, including timeout behavior, `waitAllSession
 - Tests interaction between compact-commit safe-point items and waitAll deferred queues
 - Covers router immediate-reply behavior around commands/authorization and confirms busy user messages are enqueued without a queued/busy acknowledgement.
 - Confirms generic `wait({})` remains supported and derives `idle` through the runtime-state builder while still storing a wait token for wake semantics.
+- The canonical wait owner exposes a passed-Session primitive with an explicit persistence callback. `tool_wait` uses it only for an exact trusted current owner; no-hook and mismatched callers retain the ID-based SessionManager path. Mutation, normalization, deferred-wait rejection, and unconditional persistence ordering are identical.
+- Timeout waits persist the wait first, then call the separate fixed `main-management-tools@1.scheduleWaitTimeout` method with only source ID, wait ID, and positive finite seconds. No-timeout waits require no Main service call.
 - Confirms session clear removes an armed generic wait, and executor coverage verifies that an explicit wait whose stop is suppressed by a sibling error clears only its own token. Flagged handoff integration is covered by `src-tools-session-agent` under [D-pipeline-handoff-wait](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait).
 
 ## Integration

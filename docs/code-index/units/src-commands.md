@@ -1,6 +1,6 @@
 # Unit: src-commands
 
-Files: src/commands.ts (facade), src/commands/types.ts, src/commands/autocomplete.ts, src/commands/helpers.ts, src/commands/sessionCmd.ts, src/commands/sessionCmd.test.ts, src/commands/agentCmd.ts, src/commands/timerCmd.ts, src/commands/channelCmd.ts, src/commandHandler.ts
+Files: src/commands.ts (facade), src/commands/types.ts, src/commands/autocomplete.ts, src/commands/helpers.ts, src/commands/sessionCmd.ts, src/commands/sessionCmd.test.ts, src/commands/continueCommand.test.ts, src/commands/agentCmd.ts, src/commands/timerCmd.ts, src/commands/channelCmd.ts, src/commandHandler.ts
 Secondary files: src/session/sessionIdAllocation.test.ts
 
 ## Purpose
@@ -64,7 +64,7 @@ All `*_AUTOCOMPLETE` constants: TIMER, BTW, SESSION, AGENT, SKILL, NODE, MESSAGE
 | `handleChannelCommand(ctx, args)` | Dispatches /channel subcommands (info, auth, status, start, stop, restart, mode, dangerously-allow-all-users) |
 
 ### src/commands.ts (facade) — COMMANDS object + inline handlers
-Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /retry, /node, /search, /messages, /model, /delete-messages, /verbose, /weixin, /attach, /skill. `/stop` stops the active run and reports that queued inputs will be committed to history without execution; `/dequeue` explicitly runs queued items, stopping the current run first if needed. `/retry` delegates to `sessionManager.retrySession()` and enters the router directly without a queue item or user/system retry message. `/compact` starts async-capable planning immediately; a busy model with `asyncCompact:false` receives a clear unavailable response. `/node remove <node-id>` removes an approved node and closes online runtime state; `/node move <old-id> <new-id>` renames an approved node id, closes the old runtime connection, and tells the operator to update node-side credentials/restart.
+Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /continue, /node, /search, /messages, /model, /delete-messages, /verbose, /weixin, /attach, /skill. `/stop` stops the active run and reports that queued inputs will be committed to history without execution; `/dequeue` explicitly runs queued items, stopping the current run first if needed. `/continue` invokes the internal SessionRuntime retry control without a queue item or model-facing marker; the exact Session owner revalidates interrupted history before running. There is no `/retry` alias. `/compact` starts async-capable planning immediately; a busy model with `asyncCompact:false` receives a clear unavailable response. `/node remove <node-id>` removes an approved node and closes online runtime state; `/node move <old-id> <new-id>` renames an approved node id, closes the old runtime connection, and tells the operator to update node-side credentials/restart.
 
 ### src/commandHandler.ts — Command dispatch
 | Function | Description |
@@ -77,7 +77,8 @@ Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /retry, /node, /s
 - `./channel` — `ChannelContext`, `getChannelId`, `getChannelType`, `getConversationId`
 - `./channelAuth` — `inspectChannelAuthorizationFromContext`, `formatAuthorizationInspection`
 - `./channelRuntime` — `getManagedChannelIds`, `getChannelRuntimeStatus`, `listChannelRuntimeStatuses`, `restartManagedChannel`, `startManagedChannel`, `stopManagedChannel`
-- `./sessionManager` — Session CRUD, channel-session binding, channel config
+- `./sessionRuntime` — placement-neutral status/history, stop/dequeue/retry, settings, history delete/clear/index, snapshot, and fork-notification operations
+- `./sessionManager` — live Session CRUD, channel-session binding, lifecycle, and channel config
 - `./config` — App config paths, model resolution, defaults, read/write config
 - `./sessionStatus` — Shared `/status` and `session({ action: "status" })` status builder/formatter
 - `./skills` / `./tools` — Skill and tool listing/toggling
@@ -92,7 +93,7 @@ Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /retry, /node, /s
 
 ## Behavior
 
-- Each command handler validates arguments, performs the action (often via `sessionManager` or other managers), and replies to the user via `ctx.reply`. `/retry` only sends an immediate channel acknowledgement; it does not create a model-visible retry prompt. `/dequeue` replies with the queued-item count and whether an active LLM request was aborted or a running tool must finish first.
+- Each command handler validates arguments, performs the action (often via SessionRuntime, `sessionManager`, or other managers), and replies to the user via `ctx.reply`. `CommandHandler` resolves the current session through a catalog/projection DTO rather than hydrating Worker authority. `/stop`, `/dequeue`, `/continue`, and `/btw` use SessionRuntime; `/continue` retains the internal `retry` operation name while both local and Worker exact owners enforce current-history availability. `/messages`, `/delete-messages`, `/session clear`, `/index`, model/node/verbose/compact-threshold settings, snapshot refresh, and manual-fork notification use typed placement-neutral operations. Timer commands use SessionRuntime projections for current owner defaults and never save Worker authority in Main. Session identity move/rename and agent-wide inherit/isolation/delete admin remain unavailable while Worker placement is enabled until their exact ownership/lifecycle paths are closed. `/btw` preserves its immediate acknowledgement while the selected owner posts one later display-only result; its Worker behavior is canonical in [D-process-topology-btw-side-request](../threads/process-topology-and-rpc.md#d-process-topology-btw-side-request). `/continue` sends an immediate channel acknowledgement, adds no model-visible prompt, and describes a lost Worker response as an unknown outcome that requires history inspection rather than a definite failure or automatic repeat.
 - Session-requiring commands automatically resolve the active session from the channel/conversation binding; if none exists, they short-circuit with an error message.
 - Timer commands enforce permission checks for isolated agents before creating timers.
 - `/config` can modify persistent app config (model settings, WeChat credentials) and triggers channel restarts when relevant config changes.

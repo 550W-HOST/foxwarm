@@ -127,6 +127,7 @@ export async function handleAgentCommand(ctx: ChannelContext, args: string[]) {
       const agentName = subArgs[0]
       const mode = subArgs[1]
       try {
+        sessionManager.assertAgentMetadataMutationAllowed('Agent isolation changes')
         const result = await sessionManager.setAgentIsolation(agentName, mode === 'off' ? undefined : mode)
         let resp = result.isolated
           ? `✅ Agent "${agentName}" is now isolated on node \`${result.node}\`.`
@@ -152,6 +153,7 @@ export async function handleAgentCommand(ctx: ChannelContext, args: string[]) {
       const inheritAgentName = inheritArg === 'none' ? undefined : inheritArg
 
       try {
+        sessionManager.assertAgentMetadataMutationAllowed('Agent inheritance changes')
         const result = await sessionManager.setAgentInherit(agentName, inheritAgentName)
         const chain = sessionManager.getAgentInheritanceChain(agentName)
         let resp = inheritAgentName
@@ -191,6 +193,7 @@ export async function handleAgentCommand(ctx: ChannelContext, args: string[]) {
       }
 
       try {
+        sessionManager.assertAgentMetadataMutationAllowed('Agent deletion')
         // Delete all sessions for this agent
         const sessionsToDelete = Array.from(sessionManager.getAllSessions().keys())
           .filter(sid => sid.startsWith(`${agentName}/`))

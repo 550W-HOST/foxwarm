@@ -3,11 +3,10 @@ import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
 import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing } from 'lucide-react'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
-import { getSessionRuntimeSummary, getSessionRuntimeStateName, isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
+import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import { compareSessionListSessions, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
 import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
-import { getCanonicalSessionDescendantIds } from '../sessionTreeActions'
 
 export interface Session {
   id: string
@@ -15,7 +14,8 @@ export interface Session {
   messageCount: number
   lastMessageTime: number
   parentSessionId: string | null
-  childSessions: string[]
+  childSessions?: string[]
+  childTotal?: number
   aliases?: string[]
   busy?: boolean
   busyStartedAt?: number | null
@@ -40,9 +40,23 @@ export interface Session {
   }
 }
 
+export interface BoundedSessionListPresentationProps {
+  serverOrdered: true
+  hasMoreRoots: boolean
+  childPages: Map<string, { ids: string[]; total: number; nextCursor: string | null }>
+  descendantBusy: Map<string, number>
+  invalidationVersion: number
+  onModeChange: (mode: SessionListOrderMode) => void
+  onFilterChange: (query: string) => void
+  onLoadMoreRoots: () => void
+  onLoadMoreChildren: (parentSessionId: string) => void
+  onExpandBranch: (parentSessionId: string) => void
+  onCollapseBranch: (parentSessionId: string) => void
+}
+
 interface SessionListCoreProps {
   sessions: Session[]
-  currentSession?: string  // Optional, for highlighting in sidebar
+  currentSession?: string
   onSelectSession: (sessionId: string) => void
   onKeepSession?: (sessionId: string) => void
   toolbarContainerClassName?: string
@@ -50,6 +64,7 @@ interface SessionListCoreProps {
   dragEnabled?: boolean
   idleNotificationModes?: Record<string, SessionIdleNotificationMode>
   onToggleIdleNotificationMode?: (sessionId: string, mode: SessionIdleNotificationMode) => void
+  bounded?: BoundedSessionListPresentationProps
 }
 
 export interface SessionMoveRequest {
@@ -452,7 +467,7 @@ function DraggableSessionRow({
   )
 }
 
-export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, onToggleIdleNotificationMode }: SessionListCoreProps) {
+export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, onToggleIdleNotificationMode, bounded }: SessionListCoreProps) {
   const { active } = useDndContext()
   const [primaryPointerCoarse, setPrimaryPointerCoarse] = useState(() => window.matchMedia?.('(pointer: coarse)').matches ?? false)
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
@@ -472,6 +487,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const [renameSessionId, setRenameSessionId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [renameSubmitting, setRenameSubmitting] = useState(false)
+  const [descendantSummaries, setDescendantSummaries] = useState<Map<string, { total: number; busy: number }>>(new Map())
+  const [descendantSummaryLoading, setDescendantSummaryLoading] = useState<Set<string>>(new Set())
+  const [relationRows, setRelationRows] = useState<Map<string, Session>>(new Map())
+  const relationGenerationRef = useRef(0)
+  const descendantSummaryGenerationRef = useRef(new Map<string, number>())
   const renameInputRef = useRef<HTMLInputElement>(null)
   const sessionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const [pendingFocusSessionId, setPendingFocusSessionId] = useState<string | null>(null)
@@ -494,21 +514,41 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const allowParentDrop = viewMode !== 'flat-time'
 
   const sortSessions = (a: Session, b: Session) => {
+    if (bounded?.serverOrdered) return 0
     return compareSessionListSessions(a, b, viewMode)
   }
 
   const normalizedFilterQuery = filterText.trim().toLowerCase()
+  const boundedOwnershipKey = bounded ? sessions.map(session => session.id).join('\0') : ''
   const isFiltering = normalizedFilterQuery.length > 0
 
-  const sessionMap = useMemo(() => new Map(sessions.map(session => [session.id, session])), [sessions])
+  const sessionMap = useMemo(() => new Map([...relationRows.values(), ...sessions].map(session => [session.id, session])), [sessions, relationRows])
 
-  const getLifecycleDescendantIds = (sessionId: string): string[] => {
+  const loadDescendantSummary = async (sessionId: string) => {
+    const generation = (descendantSummaryGenerationRef.current.get(sessionId) || 0) + 1
+    descendantSummaryGenerationRef.current.set(sessionId, generation)
+    setDescendantSummaryLoading(current => new Set(current).add(sessionId))
     try {
-      return getCanonicalSessionDescendantIds(sessions, sessionId)
-    } catch (error) {
-      console.error('[SESSION TREE] Failed to traverse descendants:', error)
-      return []
-    }
+      const response = await fetch(`${API_BASE_PATH}/session-list/descendants/${encodeURIComponent(sessionId)}?limit=1`)
+      if (!response.ok) return
+      const payload = await response.json()
+      if (descendantSummaryGenerationRef.current.get(sessionId) !== generation) return
+      setDescendantSummaries(current => new Map(current).set(sessionId, {
+        total: Number(payload.total || 0), busy: Number(payload.busy || 0),
+      }))
+    } catch (error) { console.error('Failed to load descendant summary', error) }
+    finally { if (descendantSummaryGenerationRef.current.get(sessionId) === generation) setDescendantSummaryLoading(current => { const next = new Set(current); next.delete(sessionId); return next }) }
+  }
+  const loadRelationParent = async (sessionId: string) => {
+    const generation = ++relationGenerationRef.current
+    const session = sessionMap.get(sessionId); if (!session?.parentSessionId || sessionMap.has(session.parentSessionId)) return
+    try {
+      const response = await fetch(`${API_BASE_PATH}/session-list/by-id`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [session.parentSessionId], includePaths: false }) })
+      if (!response.ok) return
+      const payload = await response.json(); const parent = payload.results?.[0]?.session
+      if (parent && generation === relationGenerationRef.current) setRelationRows(current => new Map(current).set(parent.id, parent))
+    } catch (error) { console.error('Failed to load Session relation context', error) }
   }
 
   const aliasMap = useMemo(() => {
@@ -546,7 +586,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }, [sessions, sessionMap, aliasMap])
 
   const visibleSessionIds = useMemo(() => {
-    if (!isFiltering) {
+    if (!isFiltering || bounded) {
       return null
     }
 
@@ -605,38 +645,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     return map
   }, [visibleSessions, visibleParentMap, viewMode])
 
-  const descendantBusyCountMap = useMemo(() => {
-    const map = new Map<string, number>()
-
-    const countBusyDescendants = (sessionId: string): number => {
-      if (map.has(sessionId)) {
-        return map.get(sessionId) || 0
-      }
-
-      const children = childrenMap.get(sessionId) || []
-      const total = children.reduce((sum, child) => {
-        const childBusy = isSessionRuntimeActive(child) ? 1 : 0
-        return sum + childBusy + countBusyDescendants(child.id)
-      }, 0)
-
-      map.set(sessionId, total)
-      return total
-    }
-
-    for (const session of visibleSessions) {
-      countBusyDescendants(session.id)
-    }
-
-    return map
-  }, [childrenMap, visibleSessions])
-
   const rootSessions = useMemo(
     () => visibleSessions.filter(session => !visibleParentMap.get(session.id)).sort(sortSessions),
     [visibleSessions, visibleParentMap, viewMode]
   )
 
-  const visibleRootSessions = rootSessions.slice(0, visibleRootCount)
-  const hiddenRootCount = rootSessions.length - visibleRootSessions.length
+  const visibleRootSessions = bounded ? rootSessions : rootSessions.slice(0, visibleRootCount)
+  const hiddenRootCount = bounded ? (bounded.hasMoreRoots ? MORE_VISIBLE_ROOTS_STEP : 0) : rootSessions.length - visibleRootSessions.length
 
   const resolvedCurrentSessionId = currentSession ? resolveSessionId(currentSession) || currentSession : undefined
 
@@ -656,7 +671,33 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   useEffect(() => {
     localStorage.setItem(SESSION_LIST_VIEW_MODE_KEY, viewMode)
     setVisibleRootCount(DEFAULT_VISIBLE_ROOTS)
+    bounded?.onModeChange(viewMode)
   }, [viewMode, normalizedFilterQuery])
+
+  useEffect(() => { bounded?.onFilterChange(filterText) }, [filterText, bounded?.onFilterChange])
+  useEffect(() => { if (bounded) setExpandedSessions(new Set()) }, [viewMode, filterText, resolvedCurrentSessionId])
+  useEffect(() => {
+    if (!bounded) return
+    relationGenerationRef.current += 1; setContextMenu(null); setDeleteConfirm(null); setArchiveConfirm(null); setRelationRows(new Map())
+    descendantSummaryGenerationRef.current.clear(); setDescendantSummaries(new Map()); setDescendantSummaryLoading(new Set())
+  }, [viewMode, filterText, resolvedCurrentSessionId, boundedOwnershipKey])
+  useEffect(() => {
+    const active = new Set([contextMenu?.sessionId, deleteConfirm, archiveConfirm].filter((id): id is string => !!id))
+    if (!contextMenu) { relationGenerationRef.current += 1; setRelationRows(new Map()) }
+    setDescendantSummaries(current => new Map([...current].filter(([id]) => active.has(id))))
+    setDescendantSummaryLoading(current => new Set([...current].filter(id => active.has(id))))
+    for (const id of descendantSummaryGenerationRef.current.keys()) if (!active.has(id)) descendantSummaryGenerationRef.current.delete(id)
+  }, [contextMenu?.sessionId, deleteConfirm, archiveConfirm])
+  useEffect(() => {
+    if (!bounded) return
+    descendantSummaryGenerationRef.current.clear()
+    setDescendantSummaries(new Map())
+    setDescendantSummaryLoading(new Set())
+    if (contextMenu) void loadDescendantSummary(contextMenu.sessionId)
+    if (deleteConfirm) void loadDescendantSummary(deleteConfirm)
+    if (archiveConfirm) void loadDescendantSummary(archiveConfirm)
+  }, [bounded?.invalidationVersion])
+  useEffect(() => () => { relationGenerationRef.current += 1; descendantSummaryGenerationRef.current.clear(); sessionRefs.current.clear() }, [])
 
   useEffect(() => {
     if (!resolvedCurrentSessionId) return
@@ -729,12 +770,15 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
   const toggleExpand = (sessionId: string) => {
     const newExpanded = new Set(expandedSessions)
-    if (newExpanded.has(sessionId)) {
+    const wasExpanded = newExpanded.has(sessionId)
+    if (wasExpanded) {
       newExpanded.delete(sessionId)
     } else {
       newExpanded.add(sessionId)
     }
     setExpandedSessions(newExpanded)
+    if (wasExpanded) bounded?.onCollapseBranch(sessionId)
+    else bounded?.onExpandBranch(sessionId)
   }
 
   const cycleViewMode = () => {
@@ -742,10 +786,12 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }
 
   const toggleShowMoreRoots = () => {
+    if (bounded) { bounded.onLoadMoreRoots(); return }
     setVisibleRootCount(current => current >= rootSessions.length ? DEFAULT_VISIBLE_ROOTS : current + MORE_VISIBLE_ROOTS_STEP)
   }
 
   const toggleShowMore = (sessionId: string) => {
+    if (bounded) { bounded.onLoadMoreChildren(sessionId); return }
     setVisibleChildCounts(prev => {
       const next = new Map(prev)
       const currentCount = next.get(sessionId) ?? DEFAULT_VISIBLE_CHILDREN
@@ -771,6 +817,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       y: e.clientY,
       preferredPlacement: 'point',
     })
+    void loadDescendantSummary(sessionId)
+    void loadRelationParent(sessionId)
   }
 
   // Handle menu button click (for mobile)
@@ -793,6 +841,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       },
       preferredPlacement: 'bottom-end',
     })
+    void loadDescendantSummary(sessionId)
+    void loadRelationParent(sessionId)
   }
 
   // API calls
@@ -880,6 +930,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }
 
   const openDeleteDialog = (sessionId: string) => {
+    void loadDescendantSummary(sessionId)
     setDeleteConfirm(sessionId)
     setDeleteIncludeDescendants(false)
     setDeleteError('')
@@ -887,6 +938,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }
 
   const openArchiveDialog = (sessionId: string) => {
+    void loadDescendantSummary(sessionId)
     setArchiveConfirm(sessionId)
     setArchiveIncludeDescendants(false)
     setArchiveError('')
@@ -1022,12 +1074,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
   const renderSession = (session: Session, level: number = 0, parentSession: Session | null = null) => {
     const children = childrenMap.get(session.id) || []
-    const hasChildren = children.length > 0
-    const descendantBusyCount = descendantBusyCountMap.get(session.id) || 0
+    const boundedChildPage = bounded?.childPages.get(session.id)
+    const childTotal = boundedChildPage?.total ?? children.length
+    const hasChildren = childTotal > 0
+    const descendantBusyCount = bounded?.descendantBusy.get(session.id) ?? descendantSummaries.get(session.id)?.busy ?? 0
     const isExpanded = isFiltering || expandedSessions.has(session.id)
     const visibleCount = visibleChildCounts.get(session.id) ?? DEFAULT_VISIBLE_CHILDREN
-    const visibleChildren = children.slice(0, visibleCount)
-    const hiddenCount = children.length - visibleChildren.length
+    const visibleChildren = bounded ? children : children.slice(0, visibleCount)
+    const hiddenCount = Math.max(0, childTotal - visibleChildren.length)
     const contentPaddingLeft = `${12 + level * 16}px`
 
     // Get display ID (with parent prefix removed if applicable)
@@ -1065,9 +1119,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           onClick={() => onSelectSession(session.id)}
           onDoubleClick={() => onKeepSession?.(session.id)}
           onContextMenu={(e) => handleContextMenu(e, session.id)}
-          setRowRef={(node) => {
-            sessionRefs.current.set(session.id, node)
-          }}
+          setRowRef={(node) => { if (node) sessionRefs.current.set(session.id, node); else sessionRefs.current.delete(session.id) }}
           dragEnabled={sessionDragEnabled}
         >
           <>
@@ -1135,7 +1187,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                           )}
                         </svg>
-                        <span>{children.length} {children.length === 1 ? 'child' : 'children'}</span>
+                        <span>{childTotal} {childTotal === 1 ? 'child' : 'children'}</span>
                         {descendantBusyCount > 0 && (
                           <>
                             <span>•</span>
@@ -1171,7 +1223,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 {`▼ Show ${Math.min(hiddenCount, MORE_VISIBLE_CHILDREN_STEP)} more...`}
               </button>
             )}
-            {hiddenCount <= 0 && children.length > DEFAULT_VISIBLE_CHILDREN && (
+            {!bounded && hiddenCount <= 0 && children.length > DEFAULT_VISIBLE_CHILDREN && (
               <button
                 onClick={() => toggleShowMore(session.id)}
                 className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
@@ -1194,7 +1246,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const hasParent = !!session?.parentSessionId
     const parentSession = hasParent ? sessionMap.get(session!.parentSessionId!) : undefined
     const grandparentId = parentSession?.parentSessionId || undefined
-    const descendantCount = getLifecycleDescendantIds(contextMenu.sessionId).length
+    const descendantSummaryKnown = descendantSummaries.has(contextMenu.sessionId) && !descendantSummaryLoading.has(contextMenu.sessionId)
+    const descendantCount = descendantSummaries.get(contextMenu.sessionId)?.total || 0
 
     return [
       {
@@ -1213,6 +1266,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         key: 'archive',
         icon: isArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />,
         label: isArchived ? 'Unarchive' : 'Archive',
+        disabled: !isArchived && !descendantSummaryKnown,
         onSelect: () => {
           if (!isArchived && descendantCount > 0) openArchiveDialog(contextMenu.sessionId)
           else void toggleArchive(contextMenu.sessionId, !isArchived)
@@ -1263,8 +1317,9 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     ] as ContextMenuEntry[]
   })() : []
 
-  const deleteDescendantCount = deleteConfirm ? getLifecycleDescendantIds(deleteConfirm).length : 0
-  const archiveDescendantCount = archiveConfirm ? getLifecycleDescendantIds(archiveConfirm).length : 0
+  const deleteDescendantCount = deleteConfirm ? descendantSummaries.get(deleteConfirm)?.total || 0 : 0
+  const archiveDescendantCount = archiveConfirm ? descendantSummaries.get(archiveConfirm)?.total || 0 : 0
+  const deleteDescendantSummaryLoading = !!deleteConfirm && descendantSummaryLoading.has(deleteConfirm)
   const effectiveDeleteIncludeDescendants = deleteIncludeDescendants && deleteDescendantCount > 0
   const effectiveArchiveIncludeDescendants = archiveIncludeDescendants && archiveDescendantCount > 0
   useEffect(() => {
@@ -1332,7 +1387,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                     {`▼ Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more...`}
                   </button>
                 )}
-                {hiddenRootCount <= 0 && rootSessions.length > DEFAULT_VISIBLE_ROOTS && (
+                {!bounded && hiddenRootCount <= 0 && rootSessions.length > DEFAULT_VISIBLE_ROOTS && (
                   <button
                     onClick={toggleShowMoreRoots}
                     className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
@@ -1430,6 +1485,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               Are you sure you want to delete session <span className="foxwarm-session-delete-session-id font-mono text-sm">{deleteConfirm}</span>?
               This action cannot be undone.
             </p>
+            {deleteDescendantSummaryLoading && <p className="mb-4 text-sm text-gray-500 dark:text-gray-400">Loading descendant summary…</p>}
             {deleteDescendantCount > 0 && (
               <label className="mb-4 flex cursor-pointer items-start gap-2 rounded border border-gray-200 p-3 text-sm text-gray-700 dark:border-gray-700 dark:text-gray-300">
                 <input
@@ -1462,7 +1518,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               <button
                 onClick={() => deleteSession(deleteConfirm, effectiveDeleteIncludeDescendants)}
                 className="foxwarm-session-delete-confirm-button px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
-                disabled={deleteSubmitting}
+                disabled={deleteSubmitting || deleteDescendantSummaryLoading}
               >
                 {deleteSubmitting
                   ? 'Deleting...'

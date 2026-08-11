@@ -20,7 +20,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 
 ### Model configuration
 
-- `ProviderConfigEntry`, `ProviderModelListItem`, `ModelConfigEntry` (including canonical concrete identity), `ModelsConfig`, and virtual routing config types/guards.
+- `ProviderConfigEntry`, `ProviderModelListItem`, `ModelConfigEntry` (including canonical concrete identity and optional OpenAI Responses `webSearch` settings), `ModelsConfig`, and virtual routing config types/guards. Raw `webSearch` provider/model values accept a boolean or an options object; resolved concrete entries contain the normalized object form.
 - `expandModelsConfig`, `loadModelsConfig`, `loadModelsConfigFromObject`, `resolveModelConfig`.
 
 ### Setup configuration
@@ -41,6 +41,15 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 - Agent, skill, and MCP paths may also be selected through their documented app-config fields.
 - The archive moved-ID reservation ledger is explicit durable state at `<data-root>/state/session-id-reservations.jsonl`.
 - The temporary crash-recovery journal for one in-progress identity move is `<data-root>/state/session-id-move-pending.json`.
+- When `sessionWorkers` is enabled, ownership/mailbox coordination uses `<data-root>/state/session-runtime.sqlite`; full semantic session state remains in the authoritative per-session JSON files under `<data-root>/state/sessions/`. Default-disabled startup does not open the Session-worker runtime database, independently of `dbWorkers` placement.
+
+Worker placement is startup configuration:
+
+- `sessionWorkers` is experimental and accepts a boolean or object. Omission/`false` keeps the default in-process session runtime. `true` enables default worker settings. An object enables workers unless `enabled:false`; `idleSeconds` defaults to 60 and accepts numeric YAML integers from 1 through 86,400 (boolean and string coercion is rejected).
+- `dbWorkers` is boolean, defaults to `true`, and currently moves only the LanceDB/vector owner into a child process.
+- `vectorMaintenance` accepts `false`, `true`, or an options object; the normalized default is enabled with positive-integer `retentionHours` defaulting to `24`. Its exact-owner execution contract is canonical in [D-vector-owner-maintenance](src-vector.md#d-vector-owner-maintenance).
+- Worker placement changes require a process restart. Managed channel hot reload does not change process topology.
+- Disabling/draining Session workers does not erase durable Worker lineage. Current-code `sessionWorkers:false` remains supported; after a nonzero cursor, pre-Session-worker code is unsupported as a writer and no lineage-retirement tooling is required. See [D-process-topology-session-worker-downgrade](../threads/process-topology-and-rpc.md#d-process-topology-session-worker-downgrade).
 
 These are selected runtime overrides, not an environment-to-YAML migration.
 
@@ -58,6 +67,9 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 | raw required replacement fraction | `0.2` |
 | max output / thinking budget | `16384` / `10000` |
 | Ollama base URL | loopback port `11434` |
+| Session workers / idle release | disabled / `60` seconds |
+| Vector database worker | enabled |
+| Vector maintenance / version retention | enabled / `24` hours |
 
 ## Model resolution
 
@@ -65,7 +77,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - Preferred provider field is `models`; legacy `model` remains a reader.
 - `providerType` is current; `provider` is a legacy reader.
 - A single-model provider gets both provider-key and provider/model lookup entries; multi-model providers use provider/model keys.
-- Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly.
+- Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly, and `webSearch` settings merge from provider to concrete model override.
 - `openai`, `openai-responses`, and `openai-completions` receive OpenAI defaults; `anthropic` receives Anthropic defaults; custom types must provide their own base URL/protocol-compatible settings.
 - Invalid provider objects, model lists, and cross-strategy fields fail with provider-qualified validation errors.
 - `session-hash` and `failover` entries resolve strict concrete lookup keys, safe context/async-compact values, and a stable full-leaf configuration fingerprint. Their schema and semantics are canonical in [model routing](../threads/model-routing.md).
@@ -74,7 +86,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 
 - App YAML missing at read time yields an empty config.
 - Setup writes validate by parsing through the same current config readers before replacing files.
-- Structured setup accepts virtual target/failover fields; raw virtual YAML remains byte-preserving after validation.
+- Structured setup accepts virtual target/failover fields; raw virtual YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including `webSearch` are removed before the result is reparsed.
 - `writeAppConfigWithChannels` preserves surrounding raw YAML text/comments when possible.
 - Template models config is a read fallback only and logs once; it is not silently copied into mutable state.
 - Code's fixed workspace-root response consumes exported `BASE_DIR`, resolved `DATA_ROOT_DIR`, `APP_CONFIG_PATH`, and `DEFAULT_MODELS_CONFIG_PATH`; it does not introduce a second path resolver. See [D-code-master-workspace-roots](../threads/code-integration.md#d-code-master-workspace-roots) and [D-code-config-schema-assistance](../threads/code-integration.md#d-code-config-schema-assistance).
@@ -82,6 +94,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 ## Compatibility
 
 - `CONFIG_PATH`, model-root `models`, provider `model`, and provider `provider` are documented readers. The removed app-config `paths.modelsConfigPath` and generic `MODELS_CONFIG_PATH` override are not readers.
+- Pre-Session-worker code may read and rewrite a never-enabled/cursor-0 Session, after which the current legacy reader restores cursor `0`. A nonzero Worker lineage is not backward-compatible with old saves because they remove the authoritative JSON cursor while SQLite retains its acknowledgement; current code deliberately fails that SQLite-ahead condition closed.
 - `TRIGGER_PORT`, `WEBUI_PORT`, and `WORKSPACE_DIR` remain exported compatibility aliases.
 - New writes use current YAML shapes; no `.env` migration contract exists.
 
@@ -102,3 +115,11 @@ Persisted external configuration keeps narrow legacy readers while generated set
 ### D-config-models-data-path
 
 The mutable models configuration has one active location: `<data-root>/state/models.yaml`. Runtime reads, Setup diagnostics/OOBE, raw and structured Setup writes, and normal model resolution all use that path. The packaged example may be read only when the active file is missing; it is never the write target. The former `paths.modelsConfigPath` and generic `MODELS_CONFIG_PATH` override remain removed rather than becoming compatibility readers.
+
+### D-config-feature-toggle-shorthand
+
+[2026-08-11] User-approved feature toggles with explicitly designated tuning fields may accept `true`, `false`, or an options object. `true` enables the feature with defaults, `false` disables it, and an object opts in unless it explicitly sets `enabled:false`; normalizers run before inheritance, merge, or runtime use. Model-level `webSearch` booleans override only the inherited enabled state while retaining inherited tuning, and an object without `enabled` opts in while merging its tuning. This shorthand is not generalized to connection or credential objects.
+
+## Canonical ownership
+
+Worker placement defaults and local/child parity are canonical in [process topology and RPC](../threads/process-topology-and-rpc.md#design-decisions).

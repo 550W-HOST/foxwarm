@@ -34,7 +34,7 @@ Core utility functions for durable JSON file persistence with write coalescing a
 | `DiskJsonData.listCandidatePaths()` | ~114 | Primary path + all backup paths |
 | `DiskJsonData.readFromPath(filePath)` | ~118 | Reads and normalizes JSON from a path |
 | `DiskJsonData.loadFirstAvailable()` | ~129 | Tries primary then backups, returns first valid |
-| `DiskJsonData.write(data)` | ~143 | Queues a write, triggers flush loop |
+| `DiskJsonData.write(data)` | ~143 | Queues a write and triggers the flush loop |
 | `DiskJsonData.flushLoop()` | ~162 | Drains pending writes sequentially |
 | `DiskJsonData.resolveWaitersUpTo(requestId)` | ~176 | Resolves promises for completed writes |
 | `DiskJsonData.rejectWaitersUpTo(requestId, error)` | ~186 | Rejects promises for failed writes |

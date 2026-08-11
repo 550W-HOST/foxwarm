@@ -24,6 +24,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 - `isSessionEffectivelyIsolated(session)` — checks if a session's agent is isolated
 - `setAgentMetadata(agentName, meta)` — persists metadata for an agent
 - `refreshSessionSnapshot(deps, sessionId)` — rebuilds a session's system prompt snapshot
+- `refreshSessionSnapshotForSession(session, persistSession)` — rebuilds the same snapshot for an already-established Session owner and persists through its supplied callback
 - `getAgentInheritanceChain(agentName)` — resolves the full inheritance chain
 - `setAgentInherit(deps, agentName, inheritAgentName)` — sets/clears inheritance and refreshes affected sessions
 - `setAgentIsolation(deps, agentName, isolatedNode)` — toggles isolation and updates sessions
@@ -56,6 +57,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 | `isSessionEffectivelyIsolated(session)` | ~119 (agentMetadata) | Delegates to isAgentIsolated via session's agent |
 | `setAgentMetadata(agentName, meta)` | ~124 (agentMetadata) | Normalizes and persists metadata |
 | `refreshSessionSnapshot(deps, sessionId)` | ~129 (agentMetadata) | Rebuilds single session's prompt snapshot |
+| `refreshSessionSnapshotForSession(session, persistSession)` | ~138 (agentMetadata) | Rebuilds a passed Session snapshot and persists through the supplied owner callback; the ID-based entry delegates here |
 | `getAgentInheritanceChain(agentName)` | ~139 (agentMetadata) | Walks inherit links with cycle detection |
 | `setAgentInherit(deps, agentName, inheritAgentName)` | ~155 (agentMetadata) | Sets inheritance, validates cycles, refreshes sessions |
 | `setAgentIsolation(deps, agentName, isolatedNode)` | ~195 (agentMetadata) | Toggles isolation, updates currentNode on sessions |

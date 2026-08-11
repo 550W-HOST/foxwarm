@@ -1,21 +1,25 @@
 import { ToolArgs, ToolContext, UnifiedToolSource } from './helpers';
-import { checkToolPermission } from '../isolatedCheck';
-import * as mcpClient from '../mcpClient';
+import { checkToolPermission, checkToolPermissionForSession } from '../isolatedCheck';
+import * as mcpExternal from '../mcpExternalService';
 import { nodesManager } from '../nodes/manager';
 import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
 import { tool_remote_node } from './nodeTools';
+import { NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './placement';
+import { executeRemoteNodeTool } from '../nodeExecution';
 
 // Forward reference - will be set by the main tools module after definitions are created
 let _definitions: any[] = [];
 let _isToolDirectlyExposedToModel: (toolName: string) => boolean = () => false;
-let _isMasterOnlyToolName: (toolName: string) => boolean = () => false;
 let _getToolPermissionNode: (toolName: string, executionNode: string, targetNode: string) => string = (_t, e) => e;
+let _dispatchBuiltin: (name: string, args: ToolArgs, ctx: ToolContext) => Promise<any> = async () => { throw new Error('Builtin dispatcher not initialized.'); };
+let _guardBuiltin: (name: string, args: ToolArgs, ctx: ToolContext) => void = () => {};
 
-export function setDefinitionsRef(defs: any[], isExposed: (n: string) => boolean, isMasterOnly: (n: string) => boolean, getPermNode: (t: string, e: string, tn: string) => string) {
+export function setDefinitionsRef(defs: any[], isExposed: (n: string) => boolean, getPermNode: (t: string, e: string, tn: string) => string, dispatchBuiltin?: typeof _dispatchBuiltin, guardBuiltin?: typeof _guardBuiltin) {
     _definitions = defs;
     _isToolDirectlyExposedToModel = isExposed;
-    _isMasterOnlyToolName = isMasterOnly;
     _getToolPermissionNode = getPermNode;
+    if (dispatchBuiltin) _dispatchBuiltin = dispatchBuiltin;
+    if (guardBuiltin) _guardBuiltin = guardBuiltin;
 }
 
 export function buildUnifiedToolId(source: UnifiedToolSource, name: string, options: { server?: string; nodeId?: string } = {}): string {
@@ -194,36 +198,43 @@ async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolA
     }
 
     const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition.parameters?.properties || {}, 'node');
+    if (toolName !== 'image_write_to_file') _guardBuiltin(toolName, rawArgs || {}, ctx);
     if (!supportsExplicitNode && rawArgs && Object.prototype.hasOwnProperty.call(rawArgs, 'node')) {
         throw new Error(`Builtin tool \`${toolName}\` does not support node selection. Use call_tool with source=\`node\` for remote-node execution.`);
     }
 
     const sessionId = ctx.sessionId || 'main';
-    const currentNode = ctx.sessionId
-        ? (await nodesManager.getCurrentNode(sessionId) || 'master')
-        : (ctx.session?.currentNode || 'master');
+    const currentNode = typeof ctx.session?.currentNode === 'string' && ctx.session.currentNode.trim()
+        ? ctx.session.currentNode.trim()
+        : (ctx.sessionPlacement === 'session-worker' ? 'master' : (await nodesManager.getCurrentNode(sessionId) || 'master'));
     const targetNode = supportsExplicitNode
         ? normalizeRequestedNodeForToolCall(rawArgs?.node, currentNode)
         : currentNode;
     const toolArgs = { ...(rawArgs || {}) };
     delete toolArgs.node;
 
-    const executionNode = _isMasterOnlyToolName(toolName) ? 'master' : targetNode;
+    const executionNode = resolveBuiltinToolPlacement(toolName, toolArgs, targetNode).executionNode;
     const permissionNode = _getToolPermissionNode(toolName, executionNode, targetNode);
 
-    if (ctx.sessionId) {
+    const dispatchContext = {
+        ...ctx,
+        ...(toolName === 'send_file' || toolName === 'image_write_to_file' ? { runtimeNodeId: targetNode } : {}),
+    };
+    _guardBuiltin(toolName, toolArgs, dispatchContext);
+    if (ctx.session?.id === sessionId) {
+        await checkToolPermissionForSession(ctx.session, toolName, permissionNode, toolArgs);
+    } else if (ctx.sessionId) {
         await checkToolPermission(toolName, sessionId, permissionNode, toolArgs);
     }
 
+    const routingSnapshot = ctx.sessionPlacement === 'session-worker' && executionNode !== 'master'
+        && executionNode === currentNode
+        ? { currentNode, ...(typeof ctx.session?.cwd === 'string' ? { cwd: ctx.session.cwd } : {}) }
+        : undefined;
     if (executionNode !== 'master') {
-        return await nodesManager.executeTool(executionNode, toolName, toolArgs, sessionId);
+        return await executeRemoteNodeTool(sessionId, executionNode, toolName, toolArgs, routingSnapshot);
     }
-
-    if (toolName === 'send_file' || toolName === 'image_write_to_file') {
-        return await nodesManager.executeToolLocally(toolName, { ...toolArgs, __runtimeNodeId: targetNode }, sessionId);
-    }
-
-    return await nodesManager.executeToolLocally(toolName, toolArgs, sessionId);
+    return await _dispatchBuiltin(toolName, toolArgs, dispatchContext);
 }
 
 async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: boolean) {
@@ -243,13 +254,11 @@ async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: 
 }
 
 async function collectMcpUnifiedSearchResults(query: string, includeSchema: boolean, serverFilter: string | undefined, ctx?: ToolContext, warnings?: string[]) {
-    if (ctx?.sessionId) {
-        await checkToolPermission('search_mcp_tools', ctx.sessionId, 'master', { server: serverFilter, query });
-    }
+    if (!ctx?.sessionId) throw new Error('MCP discovery requires session context.');
 
     const servers = serverFilter
         ? [serverFilter]
-        : (await mcpClient.listServers())
+        : (await mcpExternal.listMcpServers(ctx.sessionId))
             .filter(server => server.enabled)
             .map(server => server.name);
 
@@ -257,7 +266,7 @@ async function collectMcpUnifiedSearchResults(query: string, includeSchema: bool
     for (const serverName of servers) {
         let tools: any;
         try {
-            tools = await mcpClient.listTools(serverName);
+            tools = await mcpExternal.listMcpTools(ctx.sessionId, serverName);
         } catch (e: any) {
             warnings?.push(`MCP server ${serverName}: ${e?.message || String(e)}`);
             continue;
@@ -412,22 +421,25 @@ export async function tool_call_tool(args: ToolArgs, ctx: ToolContext) {
         if (!ctx?.sessionId) {
             throw new Error('call_tool for MCP requires session context.');
         }
-        await checkToolPermission('call_mcp', ctx.sessionId, 'master', {
-            server: ref.server,
-            tool: ref.name,
-            args: toolArgs,
-        });
-        return await mcpClient.callTool(ref.server, ref.name, toolArgs);
+        return await mcpExternal.callMcpTool(ctx.sessionId, ref.server, ref.name, toolArgs);
     }
 
     if (!ref.nodeId) {
         throw new Error('call_tool for node source requires nodeId.');
     }
-
-    return await tool_remote_node({
-        action: 'call',
-        nodeId: ref.nodeId,
-        tool: ref.name,
-        args: toolArgs,
-    }, ctx);
+    if (ctx.sessionPlacement !== 'session-worker') {
+        return await tool_remote_node({ action: 'call', nodeId: ref.nodeId, tool: ref.name, args: toolArgs }, ctx);
+    }
+    if (!ctx?.sessionId || ctx.session?.id !== ctx.sessionId) throw new Error('call_tool for node source requires exact session context.');
+    if (ref.nodeId === 'master') {
+        if (!NODE_ENVIRONMENT_BUILTIN_NAMES.includes(ref.name as any)) {
+            throw new Error(`Tool \`${ref.name}\` not available on node \`master\``);
+        }
+        const dispatchContext = { ...ctx, runtimeNodeId: 'master' };
+        _guardBuiltin(ref.name, toolArgs, dispatchContext);
+        await checkToolPermissionForSession(ctx.session, ref.name, 'master', toolArgs);
+        return await _dispatchBuiltin(ref.name, toolArgs, dispatchContext);
+    }
+    await checkToolPermissionForSession(ctx.session, ref.name, ref.nodeId, toolArgs);
+    return await executeRemoteNodeTool(ctx.sessionId, ref.nodeId, ref.name, toolArgs);
 }

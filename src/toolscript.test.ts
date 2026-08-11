@@ -10,9 +10,11 @@ import * as sessionManager from './sessionManager';
 import * as managedSessions from './managedSessions';
 import * as tools from './tools';
 import * as mcpClient from './mcpClient';
+import { nodesManager } from './nodes/manager';
+import * as nodeExecution from './nodeExecution';
 import { getAgentDir, STATE_DIR } from './config';
 import { convertToOpenAIResponsesFormat } from './llmProviders/openai';
-import { tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, forceToolScriptNativeImportFailureForTests, getToolScriptRunForTests, resetToolScriptMontyRuntimeForTests, resetToolScriptRunsForTests } from './toolscript';
+import { ensureToolScriptMontyRuntimeForTests, tool_cancel_toolscript_run, tool_continue_script, tool_get_toolscript_run, tool_list_toolscript_runs, tool_run_script, tool_start_toolscript_run, forceToolScriptNativeImportFailureForTests, getToolScriptRunForTests, resetToolScriptMontyRuntimeForTests, resetToolScriptRunsForTests, setToolScriptMontyRuntimeFactoryForTests, shutdownToolScriptRuntime } from './toolscript';
 import type { Session } from './types';
 
 function makeId(prefix: string): string {
@@ -44,6 +46,47 @@ function latestUserText(session: Session): string {
 }
 
 const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnSUs8AAAAASUVORK5CYII=';
+
+test('ToolScript runtime shutdown owns pending pool creation and is idempotently lazy', async () => {
+  await resetToolScriptMontyRuntimeForTests();
+  let createCalls = 0;
+  let closeCalls = 0;
+  let releaseFirstCreate!: () => void;
+  const firstCreateGate = new Promise<void>(resolve => { releaseFirstCreate = resolve; });
+  await setToolScriptMontyRuntimeFactoryForTests(async () => {
+    createCalls += 1;
+    if (createCalls === 1) await firstCreateGate;
+    return {
+      monty: {} as any,
+      pool: { close: async () => { closeCalls += 1; } },
+    };
+  });
+  try {
+    await shutdownToolScriptRuntime();
+    assert.equal(createCalls, 0, 'shutdown must not create an unused runtime');
+
+    const pendingUse = ensureToolScriptMontyRuntimeForTests();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(createCalls, 1);
+    const firstShutdown = shutdownToolScriptRuntime();
+    const repeatedShutdown = shutdownToolScriptRuntime();
+    assert.equal(firstShutdown, repeatedShutdown, 'concurrent shutdown calls share the exact close');
+    releaseFirstCreate();
+    await Promise.all([pendingUse, firstShutdown, repeatedShutdown]);
+    assert.equal(closeCalls, 1, 'a pool whose creation was pending closes exactly once');
+
+    await ensureToolScriptMontyRuntimeForTests();
+    assert.equal(createCalls, 2, 'later use lazily creates a fresh pool');
+    const recreatedShutdown = shutdownToolScriptRuntime();
+    assert.equal(recreatedShutdown, shutdownToolScriptRuntime());
+    await recreatedShutdown;
+    assert.equal(closeCalls, 2);
+  } finally {
+    releaseFirstCreate();
+    await setToolScriptMontyRuntimeFactoryForTests(null);
+    await resetToolScriptMontyRuntimeForTests();
+  }
+});
 
 test('run_script executes internal call_tool without surfacing nested tool history entries', async () => {
   await resetToolScriptRunsForTests();
@@ -364,6 +407,62 @@ test('run_script supports unified call_tool descriptor shape for builtin tools',
   }
 });
 
+test('run_script nested builtin calls use unified placement for session-owner tools', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_placement');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain(
+    'return call_tool({"toolId": "builtin:set_session_compact_threshold", "args": {"thresholdTokens": 3456}})',
+  ));
+
+  const session = await sessionManager.getSession(sessionId);
+  session.currentNode = 'unreachable-placement-test-node';
+  await sessionManager.saveSession(sessionId);
+
+  try {
+    const toolMessage = await executeTools(
+      [{ id: 'run-script-placement', name: 'run_script', args: { filePath: scriptName } }],
+      { sessionId, session },
+      session,
+    );
+
+    const response = toolMessage.parts[0].functionResponse?.response;
+    assert.equal(response?.status, 'completed');
+    assert.deepEqual(response?.executedTools, ['set_session_compact_threshold']);
+    assert.equal((await sessionManager.getSession(sessionId)).compactThresholdTokens, 3456);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('run_script nested builtin calls use the local main-management service', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_management');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain(
+    'return call_tool({"toolId": "builtin:list_agents", "args": {}})',
+  ));
+  const session = await sessionManager.getSession(sessionId);
+
+  try {
+    const toolMessage = await executeTools(
+      [{ id: 'run-script-management', name: 'run_script', args: { filePath: scriptName } }],
+      { sessionId, session },
+      session,
+    );
+    const response = toolMessage.parts[0].functionResponse?.response;
+    assert.equal(response?.status, 'completed');
+    assert.deepEqual(response?.executedTools, ['list_agents']);
+    assert.match(String(response?.result), /agent/i);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
 test('run_script passes unified MCP and node call_tool descriptors through to tools.call_tool', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_exec_external');
@@ -408,6 +507,79 @@ test('run_script passes unified MCP and node call_tool descriptors through to to
     });
   } finally {
     (tools as any).call_tool = originalCallTool;
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('run_script nested dynamic node call uses the Node execution service', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_node_execution');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain(
+    'return call_tool({"source": "node", "nodeId": "remote-script", "name": "dynamic_probe", "args": {"value": 7}})',
+  ));
+  const session = await sessionManager.getSession(sessionId);
+  const originalGetNode = nodesManager.getNode;
+  const originalExecuteTool = nodesManager.executeTool;
+
+  try {
+    (nodesManager as any).getNode = () => ({ id: 'remote-script', ws: {}, tools: new Set(['dynamic_probe']) });
+    (nodesManager as any).executeTool = async (nodeId: string, toolName: string, args: any, sourceId: string) => ({
+      nodeId,
+      toolName,
+      args,
+      sourceId,
+    });
+    const toolMessage = await executeTools(
+      [{ id: 'run-script-node-execution', name: 'run_script', args: { filePath: scriptName } }],
+      { sessionId, session },
+      session,
+    );
+    const response = toolMessage.parts[0].functionResponse?.response;
+    assert.equal(response?.status, 'completed');
+    assert.deepEqual(response?.executedTools, ['dynamic_probe']);
+    assert.equal(response?.result?.sourceId, sessionId);
+  } finally {
+    (nodesManager as any).getNode = originalGetNode;
+    (nodesManager as any).executeTool = originalExecuteTool;
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('run_script nested remote builtin uses the Node execution service', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_remote_builtin');
+  const scriptName = `${makeId('script')}.py`;
+  await writeScript(scriptName, asMain(
+    'return call_tool({"toolId": "builtin:read", "args": {"filePath": "remote.txt"}})',
+  ));
+  const session = await sessionManager.getSession(sessionId);
+  session.currentNode = 'remote-script';
+  await sessionManager.saveSession(sessionId);
+  const originalRemoteExecute = (nodeExecution as any).executeRemoteNodeTool;
+  let captured: any[] | undefined;
+
+  try {
+    (nodeExecution as any).executeRemoteNodeTool = async (...args: any[]) => {
+      captured = args;
+      return { forwarded: true };
+    };
+    const toolMessage = await executeTools(
+      [{ id: 'run-script-remote-builtin', name: 'run_script', args: { filePath: scriptName } }],
+      { sessionId, session },
+      session,
+    );
+    const response = toolMessage.parts[0].functionResponse?.response;
+    assert.equal(response?.status, 'completed');
+    assert.deepEqual(response?.executedTools, ['read']);
+    assert.equal(response?.result?.forwarded, true);
+    assert.deepEqual(captured?.slice(0, 3), [sessionId, 'remote-script', 'read']);
+  } finally {
+    (nodeExecution as any).executeRemoteNodeTool = originalRemoteExecute;
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
     await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
@@ -673,7 +845,7 @@ test('request_model_without_context uses direct low-level llm request with no to
   const session = await sessionManager.getSession(sessionId);
   session.model = 'anthropic/claude-sonnet-4-5';
   const originalRequestLlmOnce = (llm as any).requestLlmOnce;
-  let captured: { model?: string; systemPrompt?: string; toolDefinitionsLength?: number; inputText?: string; purpose?: string } = {};
+  let captured: { model?: string; systemPrompt?: string; toolDefinitionsLength?: number; inputText?: string; purpose?: string; promptCacheKey?: string } = {};
 
   (llm as any).requestLlmOnce = async (options: any) => {
     captured = {
@@ -682,6 +854,7 @@ test('request_model_without_context uses direct low-level llm request with no to
       toolDefinitionsLength: Array.isArray(options?.toolDefinitions) ? options.toolDefinitions.length : -1,
       inputText: Array.isArray(options?.contents) ? options.contents.flatMap((msg: any) => msg.parts || []).map((part: any) => part.text || '').join('\n') : '',
       purpose: options.purpose,
+      promptCacheKey: options.promptCacheKey,
     };
     return { text: 'pong', toolCalls: [] as any[] };
   };
@@ -695,6 +868,7 @@ test('request_model_without_context uses direct low-level llm request with no to
     assert.equal(captured.toolDefinitionsLength, 0);
     assert.equal(captured.inputText, 'ping');
     assert.equal(captured.purpose, 'toolscript-one-shot');
+    assert.equal(captured.promptCacheKey, session.promptCacheKey);
   } finally {
     (llm as any).requestLlmOnce = originalRequestLlmOnce;
     await resetToolScriptRunsForTests();

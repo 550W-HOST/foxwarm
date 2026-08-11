@@ -85,6 +85,10 @@ test('models setup form preserves unknown provider and model fields', () => {
         extraFields: {
           providerExtra: 'keep',
         },
+        webSearch: {
+          enabled: true,
+          toolChoice: 'auto',
+        },
         models: [
           {
             id: 'gpt-5.2-codex',
@@ -114,6 +118,7 @@ test('models setup form preserves unknown provider and model fields', () => {
   assert.equal(next.providers?.openai.apiKey, 'new-key');
   assert.deepEqual((next.providers?.openai as any).customProviderField, { nested: true });
   assert.deepEqual(next.providers?.openai.extraFields, { providerExtra: 'keep' });
+  assert.deepEqual(next.providers?.openai.webSearch, { enabled: true, toolChoice: 'auto' });
   assert.deepEqual(next.providers?.openai.models?.[0], {
     id: 'gpt-5.2-codex',
     contextLimit: 400000,
@@ -123,6 +128,34 @@ test('models setup form preserves unknown provider and model fields', () => {
 
   const loaded = loadModelsConfigFromObject(next);
   assert.equal(loaded.default, 'openai/gpt-5.2-codex');
+});
+
+test('models setup removes provider-only web search when converting a concrete provider to virtual routing', () => {
+  const next = buildModelsConfigFromSetupForm({
+    defaultModel: 'route',
+    providers: [{
+      id: 'route',
+      providerType: 'session-hash',
+      targets: 'leaf/model-a',
+    }, {
+      id: 'leaf',
+      providerType: 'openai-completions',
+      models: 'model-a',
+    }],
+  }, {
+    default: 'route',
+    providers: {
+      route: {
+        providerType: 'openai-responses',
+        webSearch: { enabled: true },
+        models: ['model-a'],
+      },
+      leaf: { providerType: 'openai-completions', models: ['model-a'] },
+    },
+  });
+
+  assert.equal((next.providers?.route as any).webSearch, undefined);
+  assert.doesNotThrow(() => loadModelsConfigFromObject(next));
 });
 
 test('structured models setup accepts virtual providers and preserves their routing fields', () => {

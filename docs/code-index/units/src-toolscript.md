@@ -14,13 +14,14 @@ Implements persisted foreground/background ToolScript runs in the Monty 0.0.19 P
 - `tool_continue_script(args, ctx)` — resume an agent-input or timeout-checkpoint wait owned by the current session.
 - `tool_list_toolscript_runs`, `tool_get_toolscript_run`, `tool_cancel_toolscript_run` — hidden management handlers.
 - `resumeBackgroundToolScriptRunForManagedSession(args)` — internal managed-event continuation.
+- `shutdownToolScriptRuntime()` — production process-lifecycle close for the lazily created Monty pool; it is safe when unused and preserves persisted run records/snapshots.
 - `forceToolScriptNativeImportFailureForTests`, `getToolScriptRunForTests`, `resetToolScriptMontyRuntimeForTests`, `resetToolScriptRunsForTests` — test-only runtime controls and record inspection.
 
 ToolScript result/run types are internal, not exported TypeScript API types.
 
 ## Host API
 
-- `call_tool(...)` — normalize shorthand or a unified descriptor, dynamically load `./tools`, and invoke the exported `call_tool` handler with the outer `ToolContext`.
+- `call_tool(...)` — normalize shorthand or a unified descriptor, dynamically load `./tools`, and invoke the exported `call_tool` handler with the outer exact `ToolContext`, including its trusted placement/persist hooks.
 - `request_model_without_context(prompt, model?)` — production one-shot model request using the current session as configuration context but not its history.
 - `ask_agent(question)` — persist a snapshot and return an agent continuation.
 - `open_managed_session`, `session_step`, `release_managed_session`, `wait_for_managed_event` — explicit managed-session controller operations.
@@ -43,6 +44,7 @@ Unknown external function names are returned to Monty as runtime exceptions that
 ## Behavior
 
 - Runtime loading is native-first. If the native Monty package cannot be imported or evaluated, Foxwarm logs the native error and loads `@pydantic/monty/wasm`; the direct `@bjorn3/browser_wasi_shim` dependency supplies the WASI host that Monty 0.0.19 does not publish as a runtime dependency.
+- The selected Monty pool is owned by the current Foxwarm OS process. Graceful process shutdown awaits one idempotent pool close, including a creation already in progress; shutdown while unused creates nothing, and a later use after completed shutdown may lazily create a fresh pool. Closing the VM pool never removes persisted ToolScript run records or waiting snapshots.
 - On Node, the WASM fallback runs in-process rather than in the native subprocess pool, so it does not provide the native backend's subprocess crash isolation or hard watchdog. Monty's memory, recursion, and duration limits still apply, and Foxwarm continues to reject OS-function suspensions and mounts so host effects cannot bypass `call_tool`.
 - Default slice timeout is 30 seconds; memory, recursion, and duration limits are passed to Monty. Monty 0.0.19 has no allocation-count limit.
 - Timeout is checked at safe host-call boundaries and does not interrupt an in-progress host call. When exceeded, the run stores the pending return/exception plus snapshot and returns a continuable timeout state.
@@ -54,7 +56,8 @@ Unknown external function names are returned to Monty as runtime exceptions that
 - `activeBackgroundRuns` prevents concurrent execution/resume of one background run.
 - Managed leases acquired by a run are recorded. Controllers normally release them explicitly; cancellation and incompatible-snapshot terminalization perform best-effort cleanup. Failed releases remain recorded so calling `cancel_toolscript_run` on the terminal record retries cleanup.
 - `call_tool` subcalls publish ToolScript progress and are kept in the outer run result/record. They do not append each nested call as ordinary outer-session tool history.
-- `request_model_without_context` uses request-journal purpose `toolscript-one-shot`; its canonical prompt and normalized provider result are durable independently of the outer ToolScript history boundary.
+- In Session-worker placement, managed-session host functions and cleanup of persisted managed leases fail before importing/calling child managed-session state. ToolScript progress emission returns before any child `sessionManager.notifySessionEvent`; transient running/final/error progress may drop until committed publication, while persisted run/subcall state remains authoritative. Ordinary VM/model/ask-agent/timeout and nested already-closed tools remain available; a later fixed managed reverse service owns that deferred closure.
+- `request_model_without_context` uses request-journal purpose `toolscript-one-shot`; it supplies the exact passed owner's prompt-cache key so Worker placement never rehydrates or saves a second child-global Session merely to resolve request identity. Its canonical prompt and normalized provider result are durable independently of the outer ToolScript history boundary.
 - `continue_script` returns stdout produced in that continuation slice; persisted status retains cumulative stdout.
 - `executedTools` is cumulative, while `subCalls`, `hostCallCount`, and `lastHostCall` describe the latest execution slice.
 - Inline image payloads from a final result are promoted to the outer tool result and replaced with compact placeholders inside the textual result.
@@ -92,3 +95,7 @@ Unknown external calls are not described as supported host APIs. The runtime lis
 ### D-toolscript-os-effects-through-tools
 
 [2026-08-03] Foxwarm does not expose Monty OS functions or filesystem mounts. All filesystem, environment, clock, and process effects must pass through `call_tool` so normal session, node, path, and isolation checks remain authoritative.
+
+### D-toolscript-process-lifetime-pool
+
+[2026-08-10] Each Foxwarm OS process owns its lazily created native/WASM Monty pool for that process lifetime. Supported graceful shutdown must await the pool close before process exit or teardown of services used by ToolScript host calls. The close is idempotent, owns a pending creation exactly once, does not create an unused runtime, and leaves persisted runs/snapshots intact; later runtime use may lazily create a new pool.

@@ -8,6 +8,9 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 
 ## Key Exports
 
+- `createExecRuntime(options)` — constructs one isolated application exec runtime around exactly one `PersistentExecManager`
+- `ExecRuntime` / `ExecRuntimeOptions` — closed runtime lifecycle and configurable registry/default-cwd/temp-root providers, including an internal `ProcessOperations` seam
+- `getDefaultExecRuntime()` — read-only access to the factory-built process-default runtime; callers cannot replace or stop it
 - `initializeExecManager(options?)` — bootstraps the persistent exec manager
 - `startPersistentExec(options)` — launches a new tracked shell execution
 - `waitForExecCompletion(execId, timeoutMs)` — blocks until exec finishes or times out
@@ -24,6 +27,7 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 
 | Function | Lines (approx) | Description |
 |----------|---------------|-------------|
+| `createExecRuntime(options)` | factory | Owns one manager, mutable late-bound dispatcher, node default, persistence paths, formatting/cwd delegates, and list without exposing the manager |
 | `completionDispatcher` (default) | ~46–51 | Default completion callback that queues a session system event |
 | `initializeExecManager(options?)` | ~53–58 | Sets custom dispatcher and initializes the underlying manager |
 | `startPersistentExec(options)` | ~60–62 | Delegates exec start to PersistentExecManager with default nodeId |
@@ -43,16 +47,19 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 - `./common` — `logger`
 - `./sessionManager` — `queueSessionSystemEvent`
 - `../packages/shared/dist/persistentExec` — `PersistentExecManager` and related types/constants
+- `../packages/shared/dist/processOperations` — native and injectable process primitives passed to the shared manager
 - `./tools` (test only) — `definitions`, `exec`, `read`
 
 ## Behavior
 
-- Instantiates a singleton `PersistentExecManager` configured with project-specific paths (agent directories, temp dirs, registry file at `STATE_DIR/running-exec.json`).
+- The process-default runtime is itself created by `createExecRuntime`, configured with the unchanged project paths (agent directories, temp dirs, registry file at `STATE_DIR/running-exec.json`) and `master` node default. Every existing exported wrapper delegates to that real factory-built default.
+- Each factory call owns independent manager, dispatcher closure, registry, temp-root providers, process-operations backend, and initialization/reconcile state for the lifetime of its process. The native process backend is the default. There is intentionally no same-process stop/dispose/handoff API at this checkpoint. The reconcile timer is unref'd; a future one-session worker exits only after active execs reach zero or completion notification is handed back, and OS process teardown owns timer cleanup.
 - The default completion dispatcher sends a system event to the session associated with the exec entry; this can be overridden at initialization.
 - All public functions are thin async delegates to the underlying manager instance, adding only the default `nodeId: 'master'`.
 - The exec handler uses shared timeout resolution: finite requests above 60 seconds wait for only 60 seconds, while forwarding the requested/effective warning into either foreground or background-switch result formatting. Oversized persistent logs use the shared bounded excerpt contract rather than full reads; see [D-persistent-exec-bounded-log-excerpts](./shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts). Background-switch footer and live-tree behavior is canonical in [D-persistent-exec-background-timeout-footer-tree](./shared-persistent-exec.md#d-persistent-exec-background-timeout-footer-tree).
 - The registry file persists running exec state to disk for crash recovery.
-- Parallel direct-exec batches still use the same persistent manager. Segment-level cwd synchronization is deferred by the tool wrapper and replayed in model order before later tool barriers; process lifecycle tracking remains per exec ID.
+- Normal `CurrentSessionEffects` carry the process-default runtime into internal ToolContext, while detached owners may supply another process-local factory runtime. One exec call chooses one runtime for start/wait/cwd/format/mark/finalize and never mixes instances. Legacy/direct handler calls retain the existing wrapper-built default fallback.
+- Exact trusted owners use their persistence hook for the unconditional pre-exec save and normalized cwd updates; legacy/no-hook callers retain SessionManager/SessionRuntime. Parallel direct-exec segments replay cwd against that same passed owner in model order before later barriers, so the last model call owns cwd without a global lookup.
 
 ## Integration
 

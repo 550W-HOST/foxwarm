@@ -12,6 +12,7 @@ import {
   truncateProcessCmdline,
   type RunningExecEntry,
 } from './persistentExec';
+import { nativeProcessOperations, type ProcessOperations } from './processOperations';
 
 function buildExecEntry(logPath: string, overrides: Partial<RunningExecEntry> = {}): RunningExecEntry {
   return {
@@ -145,6 +146,51 @@ test('persistent exec co-locates retained scripts and coordination metadata with
   }
 });
 
+test('persistent exec launches and inspects through the injected process operations seam', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-process-ops-'));
+  const calls = { launch: 0, inspect: 0, cwd: 0 };
+  const operations: ProcessOperations = {
+    ...nativeProcessOperations,
+    async launch(request) {
+      calls.launch += 1;
+      return nativeProcessOperations.launch(request);
+    },
+    inspectSnapshot() {
+      calls.inspect += 1;
+      return nativeProcessOperations.inspectSnapshot();
+    },
+    readWorkingDirectory(pid) {
+      calls.cwd += 1;
+      return nativeProcessOperations.readWorkingDirectory(pid);
+    },
+    isRunning(pid) {
+      return nativeProcessOperations.isRunning(pid);
+    },
+  };
+  const manager = new PersistentExecManager({
+    nodeId: 'master',
+    getDefaultCwd: () => root,
+    getExecTempDir: () => path.join(root, 'exec'),
+    processOperations: operations,
+  });
+
+  try {
+    const entry = await manager.startPersistentExec({ command: 'sleep 1', agentName: 'main', nodeId: 'master' });
+    assert.equal(calls.launch, 1);
+    assert.equal(await manager.readLiveExecWorkingDirectory(entry), root);
+    const timeout = await manager.buildBackgroundTimeoutResult(entry, 1);
+    assert.match(timeout, new RegExp(`managed shell-script root PID ${entry.pid}`));
+    assert.equal(calls.cwd, 1);
+    assert.equal(calls.inspect, 1);
+
+    const status = await manager.waitForExecCompletion(entry.id, 10_000);
+    assert.ok(status);
+    await manager.finalizeForegroundExec(entry.id);
+  } finally {
+    await fs.remove(root);
+  }
+});
+
 test('PersistentExecManager serializes concurrent registry mutations', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-'));
   const registryPath = path.join(root, 'running-exec.json');
@@ -206,6 +252,7 @@ test('persistent exec reconciles a dead stale entry after its dated artifact dir
   });
   const deliveries: Array<{ entry: RunningExecEntry; status: unknown }> = [];
   const errors: unknown[] = [];
+  let livenessChecks = 0;
   const manager = new PersistentExecManager({
     registryPath,
     nodeId: 'master',
@@ -213,6 +260,13 @@ test('persistent exec reconciles a dead stale entry after its dated artifact dir
     getExecTempDir: () => path.join(root, 'exec'),
     completionDispatcher: async (deliveredEntry, status) => {
       deliveries.push({ entry: deliveredEntry, status });
+    },
+    processOperations: {
+      ...nativeProcessOperations,
+      isRunning() {
+        livenessChecks += 1;
+        return false;
+      },
     },
     logger: { error: payload => errors.push(payload) },
   });
@@ -224,6 +278,7 @@ test('persistent exec reconciles a dead stale entry after its dated artifact dir
     await manager.initialize();
 
     assert.equal(deliveries.length, 1);
+    assert.equal(livenessChecks, 1);
     assert.equal(deliveries[0].entry.id, entry.id);
     assert.equal((deliveries[0].status as { error?: string }).error, 'Process exited but no status file was written.');
     assert.equal(errors.length, 0);

@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import * as sessionManager from '../sessionManager';
-import { definitions } from '../tools';
-import { tool_send_file, tool_send_to_channel } from '../toolsSessionAgent';
+import { definitions, send_to_channel as tool_send_to_channel } from '../tools';
+import { tool_send_file } from '../toolsSessionAgent';
 
 test('send_to_channel tool schema uses channelTargetId and drops channelId parameter', () => {
   const def = definitions.find(entry => entry.name === 'send_to_channel');
@@ -15,6 +15,8 @@ test('send_to_channel tool schema uses channelTargetId and drops channelId param
 });
 
 test('tool_send_to_channel sends via channelTargetId and no longer accepts channelId arg', async () => {
+  const sourceSessionId = `channel_management_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  await sessionManager.getSession(sourceSessionId);
   const original = sessionManager.sendToChannelTargetId;
   let capturedTarget: string | undefined;
   let capturedMessage: string | undefined;
@@ -25,17 +27,24 @@ test('tool_send_to_channel sends via channelTargetId and no longer accepts chann
       capturedMessage = message;
     };
 
-    const result = await tool_send_to_channel({ channelTargetId: 'mainbot:conversation-42', message: 'hello' });
+    const result = await tool_send_to_channel(
+      { channelTargetId: 'mainbot:conversation-42', message: 'hello' },
+      { sessionId: sourceSessionId },
+    );
     assert.equal(result, 'Message sent to channel target `mainbot:conversation-42`');
     assert.equal(capturedTarget, 'mainbot:conversation-42');
     assert.equal(capturedMessage, 'hello');
 
     await assert.rejects(
-      () => tool_send_to_channel({ channelId: 'mainbot:conversation-42', message: 'legacy' }),
+      () => tool_send_to_channel(
+        { channelId: 'mainbot:conversation-42', message: 'legacy' },
+        { sessionId: sourceSessionId },
+      ),
       /channelTargetId is required/,
     );
   } finally {
     (sessionManager as any).sendToChannelTargetId = original;
+    await sessionManager.deleteSession(sourceSessionId).catch(() => false);
   }
 });
 

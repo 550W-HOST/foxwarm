@@ -1,6 +1,7 @@
 import { ChannelContext, getChannelId, getConversationId } from '../channel';
-import { Session } from '../types';
+import { commandSessionMessageCount, type CommandSession } from './types';
 import * as sessionManager from '../sessionManager';
+import * as sessionRuntime from '../sessionRuntime';
 import { resolveModelConfig } from '../config';
 import { parseSessionMoveArgs, parseCompactThresholdInput, resolveCommandModelSelection } from './helpers';
 
@@ -11,13 +12,13 @@ export function formatSessionListChannels(channelKeys: Iterable<string>): string
     : '';
 }
 
-export async function handleSessionCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: Session) {
-  // Manually get session for subcommands that need it
+export async function handleSessionCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: CommandSession) {
+  // SessionRuntime provides a projection-only view under worker placement.
   if (!sessionId) {
     sessionId = sessionManager.getSessionByChannel(getChannelId(ctx), getConversationId(ctx));
   }
   if (!session && sessionId) {
-    session = await sessionManager.getSession(sessionId);
+    session = await sessionRuntime.getSession(sessionId) || undefined;
   }
   
   const subcommand = args[0]
@@ -46,7 +47,7 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
 
   switch (subcommand) {
     case 'list': {
-      const allSessions = sessionManager.getAllSessions()
+      const runtimeSessions = await sessionRuntime.listSessions()
       const allAttachments = sessionManager.getAllAttachments()
 
       let page = 1
@@ -58,12 +59,7 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
       }
 
       const PAGE_SIZE = 20
-      const sessionEntries = Array.from(allSessions.entries())
-        .sort((a, b) => {
-          const timeA = a[1].meta?.lastMessageTime || 0
-          const timeB = b[1].meta?.lastMessageTime || 0
-          return timeB - timeA
-        })
+      const sessionEntries = runtimeSessions.slice().sort((a, b) => b.lastMessageTime - a.lastMessageTime)
       const totalPages = Math.ceil(sessionEntries.length / PAGE_SIZE)
 
       if (page > totalPages && totalPages > 0) {
@@ -76,15 +72,16 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
       const pageEntries = sessionEntries.slice(startIdx, endIdx)
 
       let resp = `📋 *All Sessions* (Page ${page}/${totalPages || 1})\n\n`
-      for (const [sid, sess] of pageEntries) {
+      for (const sess of pageEntries) {
+        const sid = sess.id
         const attachedChannels = Array.from(allAttachments.entries())
           .filter(([_, info]) => info.sessionId === sid)
           .map(([channelKey, _]) => channelKey)
 
-        const msgCount = sess.meta?.messageCount || sess.history.length
+        const msgCount = sess.messageCount
         const displayName = sess.displayName ? ` (${sess.displayName})` : ''
         const node = sess.currentNode || 'master'
-        const isolated = sessionManager.isSessionEffectivelyIsolated(sess) ? ' isolated' : ''
+        const isolated = sess.isolated ? ' isolated' : ''
         resp += `\`${sid}\`${displayName} - ${msgCount} msgs - node: \`${node}\`${isolated}\n`
         resp += formatSessionListChannels(attachedChannels)
       }
@@ -156,7 +153,8 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
 
         sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
         await sessionManager.attachChannelDurably(getChannelId(ctx), getConversationId(ctx), result.sessionId)
-        const createdSession = await sessionManager.getSession(result.sessionId)
+        const createdSession = await sessionRuntime.getSession(result.sessionId)
+        if (!createdSession) throw new Error(`Created session \`${result.sessionId}\` is unavailable.`)
         const { currentKey } = resolveModelConfig(createdSession.model)
         ctx.reply(`✅ Created session \`${result.sessionId}\` under agent \`${agentName}\` and attached current channel.\nModel: \`${currentKey}\``)
       } catch (e: any) {
@@ -189,9 +187,8 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
 
       const target = subArgs[0].toLowerCase()
       if (target === 'default' || target === 'clear' || target === 'unset') {
-        await sessionManager.setSessionChildModelDefault(sessionId)
-        delete session.childModelDefault
-        const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session))
+        const result = await sessionRuntime.updateSettings(sessionId, { childModelDefault: null })
+        const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(result.session))
         ctx.reply(`✅ Child default model cleared. New child sessions will follow the current session model path (effective: \`${currentKey}\`).`)
         return
       }
@@ -202,8 +199,7 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
         return
       }
 
-      await sessionManager.setSessionChildModelDefault(sessionId, selection.key)
-      session.childModelDefault = selection.key
+      await sessionRuntime.updateSettings(sessionId, { childModelDefault: selection.key })
       ctx.reply(`✅ Child default model set to \`${selection.key}\`.`)
       return
     }
@@ -217,7 +213,7 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
       const forkedSessionId = await sessionManager.forkSession(sessionId, suffix)
       sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
       await sessionManager.attachChannelDurably(getChannelId(ctx), getConversationId(ctx), forkedSessionId)
-      ctx.reply(`✅ Forked child session \`${sessionId}\` → \`${forkedSessionId}\`\nMessages: ${session.history.length}`)
+      ctx.reply(`✅ Forked child session \`${sessionId}\` → \`${forkedSessionId}\`\nMessages: ${commandSessionMessageCount(session)}`)
       break
     }
 
@@ -267,19 +263,17 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
         return
       }
 
-      const prep = await sessionManager.prepareSessionForDestructiveAction(sessionId)
-      if (prep.requiresRetry) {
-        const queueNote = prep.droppedQueueItems > 0
-          ? ` Cleared ${prep.droppedQueueItems} queued item(s).`
+      const cleared = await sessionRuntime.clearHistory(sessionId)
+      if (cleared.requiresRetry) {
+        const queueNote = cleared.droppedQueueItems > 0
+          ? ` Cleared ${cleared.droppedQueueItems} queued item(s).`
           : ''
-        const stopNote = prep.abortedInFlight
+        const stopNote = cleared.abortedInFlight
           ? ' The in-flight LLM request was aborted.'
           : ' It will stop after the current tool call completes.'
         ctx.reply(`🛑 Current session is busy. Stop signal sent.${stopNote}${queueNote} Retry /session clear after it becomes idle.`)
         return
       }
-
-      await sessionManager.clearSession(sessionId)
       ctx.reply('Session cleared.')
       break
     }
@@ -298,13 +292,11 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
 
       try {
         if (newName === '-') {
-          session.displayName = undefined
-          await sessionManager.saveSession(sessionId)
+          await sessionRuntime.updateSettings(sessionId, { displayName: null })
           ctx.reply('✅ Session display name cleared.')
         } else {
-          session.displayName = newName.trim()
-          await sessionManager.saveSession(sessionId)
-          ctx.reply(`✅ Session renamed to "${session.displayName}".`)
+          const result = await sessionRuntime.updateSettings(sessionId, { displayName: newName.trim() })
+          ctx.reply(`✅ Session renamed to "${result.session.displayName}".`)
         }
       } catch (e: any) {
         ctx.reply(`❌ Rename failed: ${e.message}`)
@@ -321,8 +313,8 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
       }
 
       try {
-        const result = await sessionManager.refreshSessionSnapshot(targetSessionId)
-        ctx.reply(`✅ Session \`${result.sessionId}\` snapshot updated.\nAgent: \`${result.agentName}\``)
+        const result = await sessionRuntime.refreshSnapshot(targetSessionId)
+        ctx.reply(`✅ Session \`${targetSessionId}\` snapshot updated.\nAgent: \`${result.agentName}\``)
       } catch (e: any) {
         ctx.reply(`❌ Snapshot update failed: ${e.message}`)
       }
@@ -348,14 +340,22 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
       const rawValue = subArgs[0].trim().toLowerCase()
       try {
         if (rawValue === 'clear' || rawValue === 'unset') {
-          const result = await sessionManager.setSessionCompactThreshold(sessionId)
-          ctx.reply(`✅ Compact threshold override cleared.\nEffective auto-compact threshold: \`${result.effectiveThresholdTokens}\` tokens`)
+          const result = await sessionRuntime.updateSettings(sessionId, { compactThresholdTokens: null })
+          const effective = sessionManager.getEffectiveCompactThresholdTokens({
+            model: result.session.model || undefined,
+            compactThresholdTokens: undefined,
+          })
+          ctx.reply(`✅ Compact threshold override cleared.\nEffective auto-compact threshold: \`${effective}\` tokens`)
           return
         }
 
         const thresholdTokens = parseCompactThresholdInput(subArgs[0])
-        const result = await sessionManager.setSessionCompactThreshold(sessionId, thresholdTokens)
-        ctx.reply(`✅ Compact threshold updated to \`${result.thresholdTokens}\` tokens.\nEffective auto-compact threshold: \`${result.effectiveThresholdTokens}\` tokens`)
+        const result = await sessionRuntime.updateSettings(sessionId, { compactThresholdTokens: thresholdTokens })
+        const effective = sessionManager.getEffectiveCompactThresholdTokens({
+          model: result.session.model || undefined,
+          compactThresholdTokens: result.current.compactThresholdTokens || undefined,
+        })
+        ctx.reply(`✅ Compact threshold updated to \`${result.current.compactThresholdTokens}\` tokens.\nEffective auto-compact threshold: \`${effective}\` tokens`)
       } catch (e: any) {
         ctx.reply(`❌ Compact threshold update failed: ${e.message}`)
       }
@@ -384,12 +384,11 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
         return
       }
 
-      const latestSeq = Math.max(0, (session.nextMessageSeq || 1) - 1)
-      ctx.reply(`🔄 Indexing session archive up to seq ${latestSeq}...`)
+      ctx.reply('🔄 Indexing session archive...')
 
       try {
-        await sessionManager.forceIndexSession(sessionId)
-        ctx.reply(`✅ Archive indexing completed up to seq ${latestSeq}.`)
+        const result = await sessionRuntime.forceIndex(sessionId)
+        ctx.reply(`✅ Archive indexing completed up to seq ${result.latestSeq}.`)
       } catch (e: any) {
         ctx.reply(`❌ Indexing failed: ${e.message}`)
       }
@@ -508,14 +507,13 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
         return
       }
 
-      const targetSession = await sessionManager.getSession(targetSessionId)
+      const targetSession = sessionManager.getSessionCatalog(targetSessionId)
       if (!targetSession) {
         ctx.reply(`❌ Session \`${targetSessionId}\` not found.`)
         return
       }
 
-      targetSession.archived = true
-      await sessionManager.saveSession(targetSessionId)
+      await sessionManager.archiveSession(targetSession.id, true)
 
       ctx.reply(`✅ Session \`${targetSessionId}\` archived.`)
       break
@@ -529,14 +527,13 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
         return
       }
 
-      const targetSession = await sessionManager.getSession(targetSessionId)
+      const targetSession = sessionManager.getSessionCatalog(targetSessionId)
       if (!targetSession) {
         ctx.reply(`❌ Session \`${targetSessionId}\` not found.`)
         return
       }
 
-      targetSession.archived = false
-      await sessionManager.saveSession(targetSessionId)
+      await sessionManager.archiveSession(targetSession.id, false)
 
       ctx.reply(`✅ Session \`${targetSessionId}\` unarchived.`)
       break

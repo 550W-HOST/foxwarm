@@ -8,12 +8,12 @@ import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
-import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry } from './config';
-import { nodesManager } from './nodes/manager';
+import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig } from './config';
+import * as nodeExecution from './nodeExecution';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
-import { checkToolPermission, checkPathAccess } from './isolatedCheck';
+import { checkToolPermissionForSession, checkPathAccess } from './isolatedCheck';
 import { expandHomePath } from './utils/pathResolve';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
@@ -180,7 +180,59 @@ type RequestLlmOnceOptions = {
     timeoutMs?: number;
     onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
     purpose?: LlmRequestPurpose;
+    currentSessionEffects?: CurrentSessionEffects;
 };
+
+/** In-process current-session effects used by the normal turn path. Not an RPC contract. */
+export interface CurrentSessionEffects {
+    placement: 'local' | 'session-worker';
+    appendMessage(session: Session, message: Message): Promise<void>;
+    persistSession(session: Session): Promise<void>;
+    notifySessionEvent(sessionId: string, event: import('./types').SessionStreamEvent): void;
+    registerAbortController(sessionId: string, controller: AbortController): void;
+    clearAbortController(sessionId: string, controller: AbortController): void;
+    clearWaitById(sessionId: string | undefined, waitId: string): Promise<boolean>;
+    execRuntime?: import('./execManager').ExecRuntime;
+}
+
+export interface CurrentSessionTurnEffects extends CurrentSessionEffects {
+    appendMessages(session: Session, messages: Message[]): Promise<void>;
+    updateBusy(session: Session, busy: boolean): Promise<void>;
+    startWait(session: Session, options?: Parameters<typeof sessionManager.startSessionWaitForSession>[1]): Promise<sessionManager.SessionWaitState>;
+    notifyHistoryUpdate(sessionId: string, message: Message): void;
+    setRuntimeState: typeof sessionManager.setActiveSessionRuntimeState;
+    clearRuntimeState: typeof sessionManager.clearActiveSessionRuntimeState;
+}
+
+export function createDefaultCurrentSessionEffects(): CurrentSessionTurnEffects {
+    const clearRuntimeState = (sessionId: string) => sessionManager.clearActiveSessionRuntimeState(sessionId);
+    const persistSession = async (session: Session) => {
+        if (session.id && sessionManager.getAllSessions().get(session.id) === session) {
+            await sessionManager.saveSession(session);
+        }
+    };
+    return {
+        placement: 'local',
+        appendMessage: (session, message) => sessionManager.appendSessionMessage(session, message),
+        appendMessages: (session, messages) => sessionManager.appendSessionMessages(session, messages),
+        persistSession,
+        updateBusy: (session, busy) => {
+            if (busy) sessionManager.assertSessionDestructiveMutationAllowed([session.id], 'start new work');
+            return sessionManager.updateSessionBusyStateForSession(
+                session, busy, () => persistSession(session), clearRuntimeState,
+            );
+        },
+        startWait: (session, options) => sessionManager.startSessionWaitForSession(session, options, () => persistSession(session)),
+        notifyHistoryUpdate: (sessionId, message) => sessionManager.notifyHistoryUpdate(sessionId, message),
+        notifySessionEvent: (sessionId, event) => sessionManager.notifySessionEvent(sessionId, event),
+        setRuntimeState: (sessionId, state) => sessionManager.setActiveSessionRuntimeState(sessionId, state),
+        clearRuntimeState,
+        registerAbortController: (sessionId, controller) => sessionManager.registerSessionAbortController(sessionId, controller),
+        clearAbortController: (sessionId, controller) => sessionManager.clearSessionAbortController(sessionId, controller),
+        clearWaitById: (sessionId, waitId) => sessionManager.clearSessionWaitById(sessionId, waitId),
+        execRuntime: require('./execManager').getDefaultExecRuntime(),
+    };
+}
 
 export type LlmRetryEvent = {
     attempt: number;
@@ -365,19 +417,25 @@ function createModelStreamEventEmitter(args: {
     enabled: boolean;
     sessionId?: string;
     iteration: number;
+    currentSessionEffects?: CurrentSessionEffects;
 }) {
     const streamId = newModelStreamId(args.iteration);
     let latestSnapshot: ModelStreamProgressSnapshot = { reasoning: '', text: '', toolCalls: [] };
     let timer: ReturnType<typeof setTimeout> | null = null;
     let hasPendingUpdate = false;
     let lastSentAt = 0;
+    const notifySessionEvent = (event: import('./types').SessionStreamEvent) => {
+        if (!args.sessionId) return;
+        if (args.currentSessionEffects) args.currentSessionEffects.notifySessionEvent(args.sessionId, event);
+        else sessionManager.notifySessionEvent(args.sessionId, event);
+    };
 
     const notify = () => {
         if (!args.enabled || !args.sessionId) {
             return;
         }
 
-        sessionManager.notifySessionEvent(args.sessionId, {
+        notifySessionEvent({
             type: 'model-stream-update',
             streamId,
             iteration: args.iteration,
@@ -420,7 +478,7 @@ function createModelStreamEventEmitter(args: {
                 clearTimeout(timer);
                 timer = null;
             }
-            sessionManager.notifySessionEvent(args.sessionId, {
+            notifySessionEvent({
                 type: 'model-stream-reset',
                 streamId,
                 iteration: args.iteration,
@@ -1041,6 +1099,62 @@ export function fixToolCalls(contents: Message[]): Message[] {
     return fixed as Message[];
 }
 
+function getHistoricalConcreteModelId(message: Message): string | undefined {
+    const modelId = message.role === 'model' ? message.__meta?.modelId : undefined;
+    return typeof modelId === 'string' && modelId.length > 0 && modelId === modelId.trim()
+        ? modelId
+        : undefined;
+}
+
+/**
+ * Build an attempt-local provider history. Internal message metadata is never
+ * serialized, while model-specific reasoning artifacts are retained only when
+ * their concrete source is absent/legacy or exactly matches this destination.
+ */
+function prepareHistoryForConcreteModel(contents: Message[], destinationModelId: string): Message[] {
+    const prepared: Message[] = [];
+
+    for (const original of contents) {
+        const sourceModelId = getHistoricalConcreteModelId(original);
+        const { __meta: _internalMeta, ...withoutInternalMeta } = original;
+        if (!sourceModelId || sourceModelId === destinationModelId) {
+            prepared.push(withoutInternalMeta);
+            continue;
+        }
+
+        const { providerMeta: _messageProviderMeta, ...withoutProviderMeta } = withoutInternalMeta;
+        const parts = withoutProviderMeta.parts
+            .map(part => {
+                const { thinking: _thinking, providerMeta, ...rest } = part;
+                if (!providerMeta) return rest;
+                const {
+                    thinkingSummaries: _thinkingSummaries,
+                    encryptedThinking: _encryptedThinking,
+                    signature: _signature,
+                    openaiResponses: _openaiResponses,
+                    ...remainingProviderMeta
+                } = providerMeta;
+                return Object.keys(remainingProviderMeta).length > 0
+                    ? { ...rest, providerMeta: remainingProviderMeta }
+                    : rest;
+            })
+            .filter(part => Object.keys(part).length > 0);
+
+        const legacyContent = (withoutProviderMeta as Message & { content?: unknown }).content;
+        const hasLegacyContent = typeof legacyContent === 'string'
+            ? legacyContent.length > 0
+            : Array.isArray(legacyContent)
+            ? legacyContent.length > 0
+            : legacyContent !== undefined && legacyContent !== null;
+        if (parts.length === 0 && !hasLegacyContent) {
+            continue;
+        }
+        prepared.push({ ...withoutProviderMeta, parts });
+    }
+
+    return prepared;
+}
+
 /**
  * Convert internal message format to Anthropic/Minimax format
  * Internal format: { role: 'user'|'model'|'tool', parts: [{ text, functionCall, functionResponse }] }
@@ -1215,11 +1329,13 @@ type PreparedToolCall = {
     toolFn: any;
     toolArgs: Record<string, any>;
     sessionId: string;
+    sourceSession: Session;
     targetNode: string;
     executionNode: string;
     permissionNode: string;
     result?: any;
     sessionSnapshot?: ToolExecutionSnapshot;
+    placementError?: any;
 };
 
 type ExecutedToolCall = PreparedToolCall & {
@@ -1274,31 +1390,45 @@ async function prepareToolCall(
     index: number,
     total: number,
     toolContext: any,
-    session: any,
+    session: Session,
     snapshot?: ToolExecutionSnapshot,
     notifyStart = true,
 ): Promise<PreparedToolCall> {
     const toolFn = (tools as any)[call.name];
     const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const argsPreview = buildToolArgsPreview(call);
-    if (notifyStart) {
-        logger.info({ tool: call.name, args: argsPreview }, 'Executing tool');
-        if (toolContext.broadcast && session.verbose) {
-            toolContext.broadcast(`🛠 *[${call.name}]*: \`${argsPreview}\``, { excludePlatforms: ['webui'] });
-        }
-    }
 
     const toolDefinition = tools.definitions.find((def: any) => def.name === call.name);
     const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition?.parameters?.properties || {}, 'node');
     const nodeParam = supportsExplicitNode ? call.args?.node : undefined;
-    const sessionId = toolContext.sessionId || 'main';
-    const currentNode = snapshot?.currentNode || await nodesManager.getCurrentNode(sessionId) || 'master';
-    const targetNode = normalizeRequestedNode(nodeParam, currentNode);
+    const sessionId = session.id;
+    const currentNode = snapshot?.currentNode || session.currentNode || 'master';
     const toolArgs = { ...call.args };
     if (supportsExplicitNode) delete toolArgs.node;
-    const executionNode = tools.isMasterOnlyToolName(call.name) ? 'master' : targetNode;
+    let placementError: any;
+    if (call.name !== 'image_write_to_file') {
+        try { tools.assertToolAvailableForPlacement(call.name, toolArgs, toolContext); }
+        catch (error) { placementError = error; }
+    }
+    const targetNode = placementError ? currentNode : normalizeRequestedNode(nodeParam, currentNode);
+    const executionNode = tools.resolveBuiltinToolPlacement(call.name, toolArgs, targetNode).executionNode;
     const permissionNode = tools.getToolPermissionNode(call.name, executionNode, targetNode);
-    if (notifyStart) {
+    const guardContext = call.name === 'send_file' || call.name === 'image_write_to_file'
+        ? { ...toolContext, runtimeNodeId: targetNode }
+        : toolContext;
+    if (!placementError) {
+        try { tools.assertToolAvailableForPlacement(call.name, toolArgs, guardContext); }
+        catch (error) { placementError = error; }
+    }
+    const effectiveSnapshot = snapshot || (toolContext.sessionPlacement === 'session-worker'
+        && executionNode !== 'master' && executionNode === currentNode
+        ? { currentNode, ...(typeof session.cwd === 'string' ? { cwd: session.cwd } : {}) }
+        : undefined);
+    if (notifyStart && !placementError) {
+        logger.info({ tool: call.name, args: argsPreview }, 'Executing tool');
+        if (toolContext.broadcast && session.verbose) {
+            toolContext.broadcast(`🛠 *[${call.name}]*: \`${argsPreview}\``, { excludePlatforms: ['webui'] });
+        }
         const startedAt = Date.now();
         await Promise.resolve(toolContext.onToolStart?.({
             id: toolId,
@@ -1318,11 +1448,13 @@ async function prepareToolCall(
         toolFn,
         toolArgs,
         sessionId,
+        sourceSession: session,
         targetNode,
         executionNode,
         permissionNode,
         result: call.argsParseError ? buildInvalidToolArgsResult(call) : undefined,
-        sessionSnapshot: snapshot,
+        sessionSnapshot: effectiveSnapshot,
+        placementError,
     };
 }
 
@@ -1335,15 +1467,16 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
     let deferredExecCwdSync: { nextCwd: string } | undefined;
 
     try {
+        if (prepared.placementError) throw prepared.placementError;
         if (!result?.error) {
-            await checkToolPermission(prepared.call.name, prepared.sessionId, prepared.permissionNode, prepared.toolArgs);
+            await checkToolPermissionForSession(prepared.sourceSession, prepared.call.name, prepared.permissionNode, prepared.toolArgs);
         }
         if (!result?.error && prepared.executionNode !== 'master') {
-            result = normalizeExecutedToolResult(await nodesManager.executeTool(
+            result = normalizeExecutedToolResult(await nodeExecution.executeRemoteNodeTool(
+                prepared.sessionId,
                 prepared.executionNode,
                 prepared.call.name,
                 prepared.toolArgs,
-                prepared.sessionId,
                 prepared.sessionSnapshot,
             ));
         } else if (!result?.error && prepared.toolFn) {
@@ -1353,7 +1486,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
             const localToolContext = prepared.sessionSnapshot
                 ? {
                     ...runtimeContext,
-                    session: { ...toolContext.session, currentNode: prepared.sessionSnapshot.currentNode, cwd: prepared.sessionSnapshot.cwd },
+                    toolExecutionSnapshot: prepared.sessionSnapshot,
                     deferSessionCwdSync: prepared.call.name === 'exec',
                 }
                 : runtimeContext;
@@ -1387,7 +1520,8 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
         imageParts = normalizedImages.imageParts;
         result = normalizedImages.result;
     } catch (error: any) {
-        result = { error: error?.message || String(error) };
+        result = { error: error?.message || String(error), ...(error?.code ? { code: error.code } : {}),
+            ...(error?.retryable === true ? { retryable: true } : {}) };
         imageParts = [];
     }
 
@@ -1443,13 +1577,13 @@ function buildSkippedToolCall(prepared: PreparedToolCall): ExecutedToolCall {
     };
 }
 
-async function replayDeferredExecCwd(execution: ExecutedToolCall): Promise<ExecutedToolCall> {
+async function replayDeferredExecCwd(execution: ExecutedToolCall, toolContext: any): Promise<ExecutedToolCall> {
     if (!execution.deferredExecCwdSync) return execution;
     try {
         const { applyDeferredExecCwdSync } = await import('./tools/execTools');
         return {
             ...execution,
-            result: await applyDeferredExecCwdSync(execution.sessionId, execution.result, execution.deferredExecCwdSync),
+            result: await applyDeferredExecCwdSync(toolContext, execution.result, execution.deferredExecCwdSync),
             deferredExecCwdSync: undefined,
         };
     } catch (error: any) {
@@ -1466,7 +1600,45 @@ async function replayDeferredExecCwd(execution: ExecutedToolCall): Promise<Execu
  * Adjacent direct exec calls share a node/cwd snapshot and run concurrently;
  * every other tool is a serial ordering barrier.
  */
-export async function executeTools(functionCalls: FunctionCall[], toolContext: any, session: any): Promise<Message> {
+export async function executeTools(
+    functionCalls: FunctionCall[],
+    toolContext: any,
+    session: any,
+    options?: { currentSessionEffects?: CurrentSessionEffects },
+): Promise<Message> {
+    const requestedSourceId = typeof toolContext?.sessionId === 'string' && toolContext.sessionId.trim()
+        ? toolContext.sessionId.trim()
+        : undefined;
+    let sourceSession: Session;
+    if (options?.currentSessionEffects) {
+        if (!session || typeof session.id !== 'string' || !session.id.trim()) {
+            throw new Error('Tool execution with current-session effects requires an authoritative Session.');
+        }
+        if (requestedSourceId && requestedSourceId !== session.id) {
+            throw new Error(`Tool execution source session \`${requestedSourceId}\` does not match authoritative Session \`${session.id}\`.`);
+        }
+        sourceSession = session;
+    } else {
+        if (!requestedSourceId) {
+            throw new Error('Tool execution requires a source session ID when current-session effects are absent.');
+        }
+        const existing = await sessionManager.getExistingSession(requestedSourceId);
+        if (!existing) {
+            throw new Error(`Tool execution source session \`${requestedSourceId}\` was not found.`);
+        }
+        sourceSession = existing;
+    }
+    session = sourceSession;
+    toolContext = {
+        ...toolContext,
+        sessionId: sourceSession.id,
+        session: sourceSession,
+        persistCurrentSession: options?.currentSessionEffects
+            ? () => options.currentSessionEffects!.persistSession(sourceSession)
+            : undefined,
+        sessionPlacement: options?.currentSessionEffects?.placement || 'local',
+        ...(options?.currentSessionEffects?.execRuntime ? { execRuntime: options.currentSessionEffects.execRuntime } : {}),
+    };
     const executions: ExecutedToolCall[] = [];
     let cursor = 0;
 
@@ -1489,8 +1661,8 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         const segmentStart = cursor;
         while (cursor < functionCalls.length && functionCalls[cursor].name === 'exec') cursor++;
         const snapshot: ToolExecutionSnapshot = {
-            currentNode: await nodesManager.getCurrentNode(toolContext.sessionId || 'main') || 'master',
-            cwd: typeof session?.cwd === 'string' ? session.cwd : undefined,
+            currentNode: sourceSession.currentNode || 'master',
+            cwd: typeof sourceSession.cwd === 'string' ? sourceSession.cwd : undefined,
         };
         const preparedSegment: PreparedToolCall[] = [];
         for (let index = segmentStart; index < cursor; index++) {
@@ -1505,7 +1677,7 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
         }
         const settled = await runBoundedToolCalls(preparedSegment, toolContext);
         for (let index = 0; index < preparedSegment.length; index++) {
-            executions.push(await replayDeferredExecCwd(settled[index] || buildSkippedToolCall(preparedSegment[index])));
+            executions.push(await replayDeferredExecCwd(settled[index] || buildSkippedToolCall(preparedSegment[index]), toolContext));
         }
     }
 
@@ -1549,7 +1721,11 @@ export async function executeTools(functionCalls: FunctionCall[], toolContext: a
 
     if (stopCurrentTurn && batchHasError) {
         for (const waitId of explicitWaitIds) {
-            await sessionManager.clearSessionWaitById(toolContext.sessionId || session?.id, waitId);
+            if (options?.currentSessionEffects) {
+                await options.currentSessionEffects.clearWaitById(toolContext.sessionId || session?.id, waitId);
+            } else {
+                await sessionManager.clearSessionWaitById(toolContext.sessionId || session?.id, waitId);
+            }
         }
     }
 
@@ -1584,14 +1760,16 @@ export async function chat(
         onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
         purpose?: LlmRequestPurpose;
         turnId?: string;
+        currentSessionEffects?: CurrentSessionEffects;
     },
 ): Promise<ChatResult> {
+    const currentSessionEffects = options?.currentSessionEffects || createDefaultCurrentSessionEffects();
     const appendMessage = async (message: Message) => {
         if (options?.appendMessage) {
             await options.appendMessage(message);
             return;
         }
-        await sessionManager.appendSessionMessage(session, message);
+        await currentSessionEffects.appendMessage(session, message);
     };
 
     // Get persistent context
@@ -1612,13 +1790,17 @@ export async function chat(
     // Convert to appropriate format based on provider
     const contentsForLlm = session.history
         .filter(isModelVisibleMessage)
-        .map(({ __meta, ...msg }: Message) => msg);
+        .map((message: Message): Message => {
+            const { __meta, ...msg } = message;
+            const modelId = getHistoricalConcreteModelId(message);
+            return modelId ? { ...msg, __meta: { modelId } } : msg;
+        });
     const availableToolDefinitions = options?.toolDefinitions
         ?? tools.modelFacingDefinitions;
     const previousPromptCacheKey = session.promptCacheKey;
     const promptCacheKey = ensurePromptCacheKey(session);
-    if (session.id && session.promptCacheKey !== previousPromptCacheKey && sessionManager.getAllSessions().get(session.id) === session) {
-        await sessionManager.saveSession(session.id);
+    if (session.id && session.promptCacheKey !== previousPromptCacheKey) {
+        await currentSessionEffects.persistSession(session);
     }
     const result = await requestLlmOnce({
         contents: contentsForLlm,
@@ -1633,6 +1815,7 @@ export async function chat(
         registerAbortController: options?.registerAbortController,
         onRetry: options?.onRetry,
         purpose: options?.purpose || 'normal-turn',
+        currentSessionEffects: options?.currentSessionEffects,
     });
 
     if (result.usage) {
@@ -1779,6 +1962,39 @@ export function classifyHttpFailure(statusCode: number, body: any): { retryable:
     return { retryable: true, countable: false };
 }
 
+function buildOpenAIWebSearchTool(config: NormalizedOpenAIWebSearchConfig | undefined): Record<string, any> | undefined {
+    if (config?.enabled !== true) {
+        return undefined;
+    }
+
+    const tool: Record<string, any> = { type: 'web_search' };
+    if (config.searchContextSize && ['low', 'medium', 'high'].includes(config.searchContextSize)) {
+        tool.search_context_size = config.searchContextSize;
+    }
+
+    const allowedDomains = Array.isArray(config.allowedDomains)
+        ? config.allowedDomains
+            .filter((domain): domain is string => typeof domain === 'string' && domain.trim().length > 0)
+            .map(domain => domain.trim())
+        : [];
+    if (allowedDomains.length > 0) {
+        tool.filters = { allowed_domains: allowedDomains };
+    }
+
+    if (config.userLocation && typeof config.userLocation === 'object') {
+        const userLocation: Record<string, string> = { type: 'approximate' };
+        for (const key of ['country', 'city', 'region', 'timezone'] as const) {
+            const value = config.userLocation[key];
+            if (typeof value === 'string' && value.trim().length > 0) {
+                userLocation[key] = value.trim();
+            }
+        }
+        tool.user_location = userLocation;
+    }
+
+    return tool;
+}
+
 function buildConcreteRequestPlan(options: {
     request: RequestLlmOnceOptions;
     fixedContents: Message[];
@@ -1794,10 +2010,21 @@ function buildConcreteRequestPlan(options: {
     const apiKey = modelEntry?.apiKey || '';
     const modelName = modelEntry?.model || '';
     const modelId = getModelIdForMetadata(modelEntry, modelKey);
+    const providerContents = prepareHistoryForConcreteModel(fixedContents, modelId);
     const openaiRequestApi = getOpenAIRequestApi(providerType);
     const useOpenAIResponsesApi = openaiRequestApi === 'responses';
     const useOpenAIChatCompletionsApi = openaiRequestApi === 'chat-completions';
     const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatCompletionsApi;
+    const webSearchConfig = useOpenAIResponsesApi
+        && request.purpose !== 'compact-plan'
+        && request.purpose !== 'setup-test'
+        ? normalizeOpenAIWebSearchConfig(modelEntry.webSearch)
+        : undefined;
+    const webSearchTool = buildOpenAIWebSearchTool(webSearchConfig);
+    const webSearchToolChoice = webSearchTool
+        && (webSearchConfig?.toolChoice === 'required' || webSearchConfig?.toolChoice === 'auto')
+        ? webSearchConfig.toolChoice
+        : 'auto';
 
     if (!baseUrl) {
         throw new Error(`Model config \`${modelKey}\` has no baseUrl`);
@@ -1815,7 +2042,7 @@ function buildConcreteRequestPlan(options: {
     let data: any;
 
     if (useOpenAIResponsesApi) {
-        messages = convertToOpenAIResponsesFormatProvider(fixedContents);
+        messages = convertToOpenAIResponsesFormatProvider(providerContents, modelId);
         url = `${baseUrl}/responses`;
         headers = {
             'Content-Type': 'application/json',
@@ -1831,13 +2058,16 @@ function buildConcreteRequestPlan(options: {
             model: modelName,
             instructions: request.systemPrompt,
             input: [...messages],
-            tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
-                type: 'function',
-                name: fd.name,
-                description: fd.description,
-                parameters: fd.parameters,
-            })) : undefined,
-            tool_choice: 'auto',
+            tools: availableToolDefinitions.length > 0 || webSearchTool ? [
+                ...availableToolDefinitions.map(fd => ({
+                    type: 'function',
+                    name: fd.name,
+                    description: fd.description,
+                    parameters: fd.parameters,
+                })),
+                ...(webSearchTool ? [webSearchTool] : []),
+            ] : undefined,
+            tool_choice: webSearchToolChoice,
             parallel_tool_calls: true,
             reasoning: {
                 summary: 'auto',
@@ -1849,7 +2079,7 @@ function buildConcreteRequestPlan(options: {
             stream: true,
         };
     } else if (useOpenAIChatCompletionsApi) {
-        messages = convertToOpenAIFormatProvider(fixedContents, modelId);
+        messages = convertToOpenAIFormatProvider(providerContents, modelId);
         url = `${baseUrl}/chat/completions`;
         headers = {
             'Content-Type': 'application/json',
@@ -1879,7 +2109,7 @@ function buildConcreteRequestPlan(options: {
     } else {
         // Preserve current custom-provider behavior: any concrete provider type
         // not recognized as OpenAI-compatible uses Anthropic serialization.
-        messages = convertToAnthropicFormat(fixedContents, modelEntry);
+        messages = convertToAnthropicFormat(providerContents, modelEntry);
         url = `${baseUrl}/v1/messages`;
         headers = {
             'Content-Type': 'application/json',
@@ -1959,6 +2189,20 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
     if (plan.useOpenAIResponsesApi) {
         const outputItems = Array.isArray(resp?.output) ? resp.output : [];
         for (const item of outputItems) {
+            if (item.type === 'web_search_call') {
+                // Hosted Responses tools are completed by OpenAI inside this
+                // request. Keep the output item for same-model history replay,
+                // but never expose it as a Foxwarm function call.
+                allParts.push({
+                    providerMeta: {
+                        openaiResponses: {
+                            sourceModelId: plan.modelId,
+                            outputItem: item,
+                        },
+                    },
+                });
+                continue;
+            }
             if (item.type === 'reasoning') {
                 const summaryText = Array.isArray(item.summary)
                     ? item.summary.map((entry: any) => entry?.text || entry?.summary || '').filter(Boolean).join('\n')
@@ -1976,7 +2220,20 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
                 for (const contentPart of item.content || []) {
                     if (contentPart.type === 'output_text' && typeof contentPart.text === 'string') {
                         responseText += contentPart.text;
-                        allParts.push({ text: contentPart.text });
+                        const annotations = Array.isArray(contentPart.annotations) && contentPart.annotations.length > 0
+                            ? contentPart.annotations
+                            : undefined;
+                        allParts.push({
+                            text: contentPart.text,
+                            ...(annotations ? {
+                                providerMeta: {
+                                    openaiResponses: {
+                                        sourceModelId: plan.modelId,
+                                        annotations,
+                                    },
+                                },
+                            } : {}),
+                        });
                     } else if (contentPart.type === 'refusal' && typeof contentPart.refusal === 'string') {
                         responseText += contentPart.refusal;
                         allParts.push({ text: contentPart.refusal });
@@ -2149,7 +2406,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     const promptCacheKey = await resolvePromptCacheKeyForRequest(options);
     // A low-level caller may omit the turn identity. Keep one generated value
     // for this whole request so retries expand `${TURN_ID}` consistently;
-    // normal session turns provide their own value from MessageRouter.
+    // normal session turns provide their own value from SessionTurnRunner.
     const turnId = options.turnId || randomUUID();
     // Completeness boundary: all content-addressed canonical inputs and the
     // request manifest are durable before any provider attempt can be sent.
@@ -2176,6 +2433,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         enabled: shouldNotifySessionEvents,
         sessionId: options.sessionId,
         iteration,
+        currentSessionEffects: options.currentSessionEffects,
     });
     let logFiles: LlmInteractionLogFiles | null = null;
     const virtualRequestSelections: Array<{ attempt: number; modelId: string }> = [];
@@ -2191,7 +2449,8 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     };
 
     if (shouldRegisterAbortController) {
-        sessionManager.registerSessionAbortController(options.sessionId!, abortController);
+        if (options.currentSessionEffects) options.currentSessionEffects.registerAbortController(options.sessionId!, abortController);
+        else sessionManager.registerSessionAbortController(options.sessionId!, abortController);
     }
     if (shouldNotifySessionEvents) modelStreamEmitter.reset();
 
@@ -2263,6 +2522,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                 if (requestStartedAt === undefined) {
                     requestStartedAt = performance.now();
                 }
+                logger.debug({ modelKey, iteration, attempt, url: plan.url }, 'Dispatching LLM HTTP request');
                 response = await axios.post(plan.url, plan.requestBody, {
                     headers: { ...plan.headers, ...plan.compressionHeaders },
                     timeout: options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS,
@@ -2427,7 +2687,8 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     } finally {
         modelStreamEmitter.flush();
         if (shouldRegisterAbortController) {
-            sessionManager.clearSessionAbortController(options.sessionId!, abortController);
+            if (options.currentSessionEffects) options.currentSessionEffects.clearAbortController(options.sessionId!, abortController);
+            else sessionManager.clearSessionAbortController(options.sessionId!, abortController);
         }
     }
 

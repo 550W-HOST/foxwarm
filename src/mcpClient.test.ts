@@ -145,6 +145,20 @@ test('managed MCP updates become live only after their durable write succeeds', 
   });
 });
 
+test('managed MCP upsert validates merged transport semantics before publishing', async () => {
+  await withTempDir(async (dirPath) => {
+    setMcpConfigStoreForTests(createMcpConfigStore(path.join(dirPath, 'mcp.json')));
+    await upsertServer('alpha', { url: 'https://example.com/alpha' });
+    await upsertServer('alpha', { description: 'partial update' });
+
+    await assert.rejects(() => upsertServer('bad-stdio', { transport: 'stdio' }), /requires command/i);
+    await assert.rejects(() => upsertServer('bad-http', { transport: 'auto' }), /requires url/i);
+    await assert.rejects(() => upsertServer('bad-transport', { url: 'https://example.com', transport: 'invalid' as any }), /unsupported MCP transport/i);
+
+    assert.deepEqual((await listServers()).map(server => [server.name, server.description]), [['alpha', 'partial update']]);
+  });
+});
+
 test('MCP HTTP headers use the token as a default and let custom headers override it', () => {
   assert.deepEqual(
     buildMcpHttpHeadersForTests({ token: 'token-only' }),

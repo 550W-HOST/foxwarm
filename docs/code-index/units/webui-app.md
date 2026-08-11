@@ -1,7 +1,7 @@
 # Unit: WebUI app
 
 Files: packages/webui/src/App.tsx, packages/webui/src/main.tsx, packages/webui/src/config.ts, packages/webui/src/EmbeddedWebUiApp.tsx, packages/webui/src/embeddedWebUi.ts, packages/webui/src/sessionListRefresh.ts, packages/webui/src/nodeTargets.ts, packages/webui/src/vscodeWeb.ts, packages/webui/src/commitMarker.ts, packages/webui/src/components/CommitMarkerCard.tsx, packages/webui/src/components/VscodeWebFrameHost.tsx, packages/webui/vite.config.ts, packages/webui/test/vscodeWebBridge.test.mjs, packages/webui/test/embeddedWebUi.test.mjs, packages/webui/test/commitMarker.test.mjs, packages/webui/test/codeFrame550aOverlay.e2e.mjs
-Secondary files: packages/webui/src/sessionIdleNotifications.ts, packages/webui/src/components/Chat.tsx, packages/webui/src/components/ChatTimeline.tsx
+Secondary files: packages/webui/src/boundedSessionList.ts, packages/webui/test/boundedSessionList.test.mjs, packages/webui/src/sessionIdleNotifications.ts, packages/webui/src/components/Chat.tsx, packages/webui/src/components/ChatTimeline.tsx
 
 ## Purpose
 
@@ -29,7 +29,8 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 - Workbench supports split panes and drag/reorder for chat, terminal, Agents, Setup, and Code. Closing an active tab advances the hash to the store-selected fallback before hydration can recreate it.
 - `GET /setup/status` controls forced OOBE. Missing models route to `system:setup`; close requests are ignored until status no longer reports OOBE.
 - App owns model-settings navigation from Chat: it activates or creates the singleton `system:setup` tab through the workbench API and increments a transient Models-editor focus request.
-- Initial `GET /sessions` remains immediate. Global `sessions-updated` refresh intents serve Sidebar, Architecture, metadata, terminal list concerns, title counts, and the one root-owned browser idle-notification observer through the fixed-delay coalescing contract in [D-webui-app-global-list-gate](#d-webui-app-global-list-gate); a request gate also prevents an older response overwriting a newer list.
+- `useBoundedSessionList` bootstraps Sidebar through fixed `/session-list/sidebar`, `/children`, `/by-id`, and `/search` calls. It keeps normalized rows plus root/child cursors, focus paths, open tabs, and browser-local idle watches; normal App never GETs the legacy global Session list. Independent request generations reject stale root, child, exact, and search responses.
+- Global `sessions-updated` invalidation refetches only the current root and expanded-child windows through the fixed-delay coalescing contract in [D-webui-app-global-list-gate](#d-webui-app-global-list-gate). Exact watched rows receive immediate SSE deltas. Opening or reopening each replacement/chunked global stream submits the same coalesced refresh intent after connection, closing the invalidation gap while subscriptions are being replaced. Agent and terminal fetches are independent of Session catalog invalidation.
 - Chat per-session runtime/history remains inside Chat.
 - Desktop expanded/collapsed sidebar and mobile shell share the same current tab records.
 - Browser-only theme, UI style, sidebar, send-key, last-tab/session, and Code preferences use local storage. Instance branding comes from server settings.
@@ -41,9 +42,9 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 
 `main.tsx` parses strict nonce-bearing `foxwarmEmbed=sidebar|chat|agents|setup` before mounting normal App:
 
-- sidebar owns its list/global stream and sends fixed open actions;
+- sidebar owns the same bounded list/cache/global stream contract and sends fixed open actions;
 - chat mounts exactly one Chat and session stream;
-- Agents mounts Architecture with required global state;
+- Agents mounts Architecture, which owns its bounded summary/forest queries and stream;
 - Setup mounts SetupView and setup APIs.
 
 Embedded Chat sends `open-setup` with an allowlisted optional Models-focus field. The Code host activates the stable Setup custom editor and sends a separate nonce-bound one-shot `focus-models` message after the Setup leaf reports ready; Embedded Setup converts it to the same transient `SetupView` focus request used by normal App.
@@ -77,7 +78,7 @@ Advance the route/hash to the workbench fallback before a closed active tab can 
 
 ### D-webui-app-global-list-gate
 
-[2026-07-30] Global `sessions-updated` refresh intents use one non-sliding, visibility-aware delay shared by normal App and embedded Sidebar/Agents list-data roots: 1 second when the page is visible and 10 seconds otherwise. Each first idle or trailing arm samples visibility once; later intents and visibility changes do not move an already fixed deadline. Intents received while a refresh is in flight coalesce into exactly one trailing refresh, whose new delay is chosen after the current refresh settles. Scheduled refreshes never overlap, and disposal cancels pending timers and suppresses trailing work. Normal App schedules sessions, agents, and terminals as one refresh group; initial bootstrap remains immediate. Session-list fetches retain their request generation guard so an older response from any other overlapping path cannot overwrite newer state.
+[2026-07-30; updated 2026-08-11] Global `sessions-updated` refresh intents use one non-sliding, visibility-aware delay shared by normal App and embedded Sidebar/Agents list-data roots: 1 second when the page is visible and 10 seconds otherwise. Each first idle or trailing arm samples visibility once; later intents and visibility changes do not move an already fixed deadline. Intents received while a refresh is in flight coalesce into exactly one trailing refresh, whose new delay is chosen after the current refresh settles. Scheduled refreshes never overlap, and disposal cancels pending timers and suppresses trailing work. Initial bounded bootstrap remains immediate. Each newly opened or reconnected global Session-list EventSource batch submits this same coalesced refresh after connection, so an invalidation lost during subscription replacement cannot leave the bounded window stale; sibling batch opens still produce one effective refresh, and unchanged subscription IDs do not reconnect or loop. Session catalog invalidation refetches current bounded list windows only; agent/terminal lists are decoupled. Independent root/child/exact/search generations prevent older responses from overwriting newer state.
 
 ### D-webui-app-leaf-embeds
 

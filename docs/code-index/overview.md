@@ -35,6 +35,7 @@ Remote Nodes and CLI Node runtime
 - **Layered context:** archived raw messages and hierarchical summaries preserve recall while controlling model context size.
 - **Unified tool resolution:** builtins, MCP tools, and node tools share discovery and dispatch surfaces; isolation checks remain enforced at execution boundaries.
 - **Distributed execution:** authenticated nodes expose tools and versioned backend services without becoming the source of session state.
+- **Indexed Main catalog:** identity/topology/list projections use the narrow Main-owned catalog boundary defined by [D-main-catalog-indexed-boundary](./threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
 - **Sandboxed automation:** ToolScript runs in a constrained VM and can suspend at safe host-call boundaries.
 - **Source-first documentation:** this index is a public-safe active map; source and tests remain authoritative.
 
@@ -75,8 +76,10 @@ Remote Nodes and CLI Node runtime
 | [image blob lifecycle](./threads/image-blob-lifecycle.md) | Canonical image persistence, provider hydration, tools, and authenticated browser URLs |
 | [canonical LLM request journal](./threads/llm-request-journal.md) | Content-addressed provider-neutral inputs, attempt provenance, reconstruction, and training boundary |
 | [message processing pipeline](./threads/message-processing-pipeline.md) | Inbound message through LLM/tool loop to final broadcast |
+| [Main catalog storage and indexed queries](./threads/main-catalog-storage-and-indexed-queries.md) | Main-owned identity/topology catalog, migration, indexed access, and bounded list boundaries |
 | [model routing](./threads/model-routing.md) | Concrete/virtual selection, prefix hashing, failover health, attempts, and attribution |
 | [node communication](./threads/node-communication.md) | Pairing, authentication, remote execution, services, and transfer |
+| [process topology and RPC](./threads/process-topology-and-rpc.md) | Configurable local/child service placement and transport-neutral async contracts |
 | [session lifecycle](./threads/session-lifecycle.md) | Creation, persistence, compaction, fork lineage, recovery, and deletion |
 | [streaming pipeline](./threads/streaming-pipeline.md) | Provider deltas through session streams to WebUI rendering |
 | [tool dispatch](./threads/tool-dispatch.md) | Builtin, MCP, and node tool resolution with isolation enforcement |

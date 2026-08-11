@@ -12,8 +12,8 @@ import type { Message, MessagePart, ModelStreamToolCall, SessionStreamEvent, Too
 import SessionDebugModal from './SessionDebugModal'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
+import { isSessionTurnIncomplete } from '../sessionContinuation'
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
-import { getRetryableLlmRetryNotice } from '../retryNotice'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
 import { createLatestRequestGate, runLatestModelOptionsRequest } from '../modelOptionsLoader'
 import {
@@ -237,6 +237,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const pendingSentMessageIdsRef = useRef<Set<string>>(new Set())
   const sessionBusyRef = useRef(false)
   const sessionQueueLengthRef = useRef(0)
+  const sessionMessageCountRef = useRef(0)
   const queuedMessagesRef = useRef<Message[]>([])
   const sessionStateInitializedRef = useRef(false)
   const composerHeightRef = useRef<number | null>(null)
@@ -273,6 +274,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     setSessionQueueLength(0)
     sessionBusyRef.current = false
     sessionQueueLengthRef.current = 0
+    sessionMessageCountRef.current = 0
     queuedMessagesRef.current = []
     pendingSentMessageIdsRef.current.clear()
     sessionStateInitializedRef.current = false
@@ -625,8 +627,10 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     if (!session || typeof session.id !== 'string') return
     const nextBusy = isSessionRuntimeActive(session)
     const nextQueueLength = typeof session.queueLength === 'number' ? session.queueLength : 0
+    const nextMessageCount = typeof session.messageCount === 'number' ? session.messageCount : 0
     sessionBusyRef.current = nextBusy
     sessionQueueLengthRef.current = nextQueueLength
+    sessionMessageCountRef.current = nextMessageCount
     sessionStateInitializedRef.current = true
     setSessionRecord(session)
     setSessionBusy(nextBusy)
@@ -786,11 +790,14 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           historyStateEventVersionRef.current += 1
           const hadSessionState = sessionStateInitializedRef.current
           const previousQueueLength = sessionQueueLengthRef.current
+          const previousMessageCount = sessionMessageCountRef.current
           const nextQueueLength = typeof data.session?.queueLength === 'number' ? data.session.queueLength : 0
+          const nextMessageCount = typeof data.session?.messageCount === 'number' ? data.session.messageCount : 0
           setSessionMissing(false)
           applySessionState(data.session)
           if (hadSessionState && (
             nextQueueLength !== previousQueueLength ||
+            nextMessageCount !== previousMessageCount ||
             (nextQueueLength === 0 && queuedMessagesRef.current.length > 0)
           )) {
             scheduleHistoryRefresh()
@@ -820,6 +827,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           lastKnownTimestampRef.current = 0
           sessionBusyRef.current = false
           sessionQueueLengthRef.current = 0
+          sessionMessageCountRef.current = 0
           queuedMessagesRef.current = []
           es.close()
           eventSourceRef.current = null
@@ -975,6 +983,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
                 lastKnownTimestampRef.current = 0
                 sessionBusyRef.current = false
                 sessionQueueLengthRef.current = 0
+                sessionMessageCountRef.current = 0
                 queuedMessagesRef.current = []
                 eventSourceRef.current = null
                 setConnectionState('disconnected')
@@ -1352,8 +1361,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     void sendSessionCommand('/dequeue')
   }, [sendSessionCommand])
 
-  const handleRetryLlmNotice = useCallback(() => {
-    void sendSessionCommand('/retry')
+  const handleContinue = useCallback(() => {
+    void sendSessionCommand('/continue')
   }, [sendSessionCommand])
 
   const handleTranscribeAudio = useCallback(async (file: File, draftText: string): Promise<AsrTranscribeResult> => {
@@ -1516,10 +1525,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     return modelOptions.find(option => option.key === currentModelKey)?.contextLimit ?? null
   }, [modelOptions, sessionRecord?.modelKey])
 
-  const retryableLlmRetryNotice = useMemo(
-    () => getRetryableLlmRetryNotice(messages, sessionBusy),
-    [messages, sessionBusy],
-  )
+  const turnIncomplete = useMemo(() => isSessionTurnIncomplete(messages), [messages])
 
   return (
     <div ref={chatRootRef} className="foxwarm-chat-root relative flex h-full flex-col overflow-hidden">
@@ -1627,16 +1633,19 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             )}
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full overflow-x-hidden">
               <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} retryableLlmRetryNotice={retryableLlmRetryNotice} onRetryLlmNotice={handleRetryLlmNotice} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
+                <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
               </ToolScriptProgressContext.Provider>
             </div>
             <ProcessingStatus
               sessionBusy={sessionBusy}
+              runtimeState={sessionRecord?.runtimeState}
               sessionQueueLength={sessionQueueLength}
+              turnIncomplete={sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
               loading={loading}
               isMobile={isMobile}
               onStop={handleStop}
               onRunQueued={handleRunQueued}
+              onContinue={handleContinue}
             />
             {queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full overflow-x-hidden" data-queued-preview="true" aria-label="Queued messages">

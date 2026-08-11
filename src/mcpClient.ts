@@ -159,6 +159,18 @@ function sanitizeServerConfig(server: McpServerConfig): McpServerConfig {
   return next;
 }
 
+/** Canonical semantic validator for a fully merged managed configuration. */
+export function normalizeManagedMcpServerConfig(server: McpServerConfig): McpServerConfig {
+  const normalized = sanitizeServerConfig(server);
+  const transport = normalizeTransport(normalized);
+  if (transport === 'stdio') {
+    if (!normalized.command) throw new Error('MCP transport stdio requires command.');
+  } else if (!normalized.url) {
+    throw new Error(`MCP transport ${transport} requires url.`);
+  }
+  return normalized;
+}
+
 export function summarizeServerConfig(name: string, server: McpServerConfig): McpServerSummary {
   const normalized = sanitizeServerConfig(server);
   return {
@@ -635,7 +647,7 @@ export async function callTool(serverName: string | undefined, tool: string, arg
 export async function upsertServer(name: string, server: McpServerConfig) {
   await mutateConfig((config) => {
     config.servers = config.servers || {};
-    config.servers[name] = sanitizeServerConfig({ ...config.servers[name], ...server });
+    config.servers[name] = normalizeManagedMcpServerConfig({ ...config.servers[name], ...server });
   });
 }
 

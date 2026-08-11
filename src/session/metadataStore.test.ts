@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { applySessionHistoryState, collectSessionHistoryFiles, createSessionHistoryStore, createSessionsMetadataStore, serializeSessionHistoryPayload, stripSessionMetadataForSave } from './metadataStore';
+import { collectSessionHistoryFiles, createSessionHistoryStore, createSessionsMetadataStore, prepareSessionSemanticStateForHydration, replaceSessionSemanticState, serializeSessionHistoryPayload } from './metadataStore';
+import { buildSessionCatalogProjection } from './catalogStore';
+import { replaceAuthoritativeSessionState } from './stateHydration';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-session-metadata-store-'));
@@ -104,6 +106,35 @@ test('session history store uses lightweight no-backup config and still round-tr
   });
 });
 
+test('real state-file reader rejects malformed v1 shapes while normalizing only unversioned legacy', async () => {
+  await withTempDir(async dirPath => {
+    const currentPath = path.join(dirPath, 'current.json');
+    const malformedCurrent = { sessionStateVersion: 1, history: 'NOT-ARRAY', contextFrontier: { stale: true } };
+    await fs.writeFile(currentPath, JSON.stringify(malformedCurrent));
+    const target: any = { id: 'current', history: [{ role: 'user', parts: [{ text: 'keep' }] }],
+      persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 0 } };
+    await assert.rejects(() => createSessionHistoryStore(currentPath).readFromPath(), /history must be an array/);
+    assert.equal(target.history[0].parts[0].text, 'keep');
+    assert.deepEqual(JSON.parse(await fs.readFile(currentPath, 'utf8')), malformedCurrent);
+
+    const frontierPath = path.join(dirPath, 'frontier.json');
+    await fs.writeJson(frontierPath, { sessionStateVersion: 1, history: [], contextFrontier: { invalid: true } });
+    await assert.rejects(() => createSessionHistoryStore(frontierPath).readFromPath(), /contextFrontier must be an array/);
+
+    const unknownPath = path.join(dirPath, 'unknown.json');
+    await fs.writeJson(unknownPath, { sessionStateVersion: 99, history: [] });
+    await assert.rejects(() => createSessionHistoryStore(unknownPath).readFromPath(), /Unsupported per-session state format version 99/);
+
+    const legacyPath = path.join(dirPath, 'legacy.json');
+    await fs.writeJson(legacyPath, { history: 'legacy-not-array', contextFrontier: { tolerated: true } });
+    const legacyRaw = await createSessionHistoryStore(legacyPath).readFromPath();
+    assert.deepEqual(legacyRaw?.history, []);
+    assert.equal(Object.prototype.hasOwnProperty.call(legacyRaw, 'contextFrontier'), false);
+    assert.equal(replaceAuthoritativeSessionState(target, legacyRaw!).upgradedLegacy, true);
+    assert.deepEqual(target.history, []);
+  });
+});
+
 test('session history payload embeds context frontier and recovery ignores legacy frontier files', async () => {
   await withTempDir(async (dirPath) => {
     const sessionsDir = path.join(dirPath, 'sessions');
@@ -122,21 +153,27 @@ test('session history payload embeds context frontier and recovery ignores legac
       stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
       busy: false,
       queue: [],
-      meta: { lastMessageTime: 1 },
+      meta: { lastMessageTime: 1, wait: { id: 'wait-1' }, managedSession: { ownerSessionId: 'owner', leaseId: 'lease', revision: 1, pendingInbox: [] } },
       contextFrontier: [{ kind: 'message', seq: 1 }],
+      lastAppliedMailboxId: 7,
     };
     const payload = serializeSessionHistoryPayload(session);
+    assert.equal(payload.sessionStateVersion, 1);
     assert.deepEqual(payload.contextFrontier, [{ kind: 'message', seq: 1 }]);
+    assert.equal(payload.lastAppliedMailboxId, 7);
+    assert.equal(payload.meta.wait.id, 'wait-1');
 
     const target: any = { history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 } };
-    applySessionHistoryState(target, payload);
+    replaceSessionSemanticState(target, prepareSessionSemanticStateForHydration(target, payload).snapshot);
     assert.deepEqual(target.contextFrontier, [{ kind: 'message', seq: 1 }]);
+    assert.equal(target.lastAppliedMailboxId, 7);
+    assert.equal(target.meta.managedSession.leaseId, 'lease');
   });
 });
 
 test('legacy goal end-turn setting loads but is omitted from current writes', () => {
-  const target: any = { history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 } };
-  applySessionHistoryState(target, {
+  const target: any = { id: 'legacy-goal', history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 } };
+  const legacy = {
     goalState: {
       goal: 'Preserve the long-running task',
       remindEvery: 5,
@@ -144,10 +181,27 @@ test('legacy goal end-turn setting loads but is omitted from current writes', ()
       anchorSeq: 3,
       updatedAt: 1,
     },
-  });
+  };
+  replaceSessionSemanticState(target, prepareSessionSemanticStateForHydration(target, legacy).snapshot);
 
   assert.equal(target.goalState.goal, 'Preserve the long-running task');
   assert.equal(target.goalState.remindOnTurnEnd, false);
   assert.equal((serializeSessionHistoryPayload(target).goalState as any).remindOnTurnEnd, undefined);
-  assert.equal((stripSessionMetadataForSave(target).goalState as any).remindOnTurnEnd, undefined);
+  assert.equal(Object.prototype.hasOwnProperty.call(buildSessionCatalogProjection(target), 'goalState'), false);
+});
+
+test('Main hydration preserves catalog-owned identity and topology while authority semantics win', () => {
+  const target: any = {
+    id: 'catalog-id', agent: 'catalog-agent', aliases: ['catalog-alias'], parentSessionId: 'catalog-parent', displayName: 'Catalog name',
+    history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 }, model: 'catalog-model',
+  };
+  const authority: Record<string, any> = {
+    sessionStateVersion: 1, history: [], queue: [], agent: 'authority-agent', aliases: ['authority-alias'],
+    parentSessionId: 'authority-parent', displayName: 'Authority name', model: 'authority-model',
+    stats: {}, meta: { lastMessageTime: 2 },
+  };
+  replaceAuthoritativeSessionState(target, authority, { preserveCatalogFields: true });
+  assert.equal(target.agent, 'catalog-agent'); assert.deepEqual(target.aliases, ['catalog-alias']);
+  assert.equal(target.parentSessionId, 'catalog-parent'); assert.equal(target.displayName, 'Catalog name');
+  assert.equal(target.model, 'authority-model'); assert.equal(target.meta.lastMessageTime, 2);
 });

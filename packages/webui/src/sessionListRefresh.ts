@@ -10,6 +10,10 @@ export type SessionListRefreshScheduler = {
   dispose: () => void
 }
 
+export function requestSessionListStreamOpenResync(scheduler: SessionListRefreshScheduler | null): void {
+  scheduler?.requestRefresh()
+}
+
 type SessionListRefreshSchedulerOptions = {
   getDelayMs?: () => number
   setTimer?: (callback: () => void, delayMs: number) => unknown

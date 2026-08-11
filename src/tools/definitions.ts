@@ -151,18 +151,6 @@ Example:
             }
         },
         {
-            name: 'delete_file',
-            defaultInject: true,
-            description: 'Delete a single file or symlink. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Refuses to delete directories.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    filePath: { type: 'string', description: 'File path. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder.' }
-                },
-                required: ['filePath']
-            }
-        },
-        {
             name: 'copy_between_nodes',
             defaultInject: true,
             description: 'Copy a file between master/remote nodes. Absolute paths and ~/... are accepted when allowed. Relative paths resolve under the current agent folder on each endpoint. Non-isolated sessions have no Foxwarm path restriction; isolated sessions are restricted only when accessing master (to their own agent folder).',

@@ -8,15 +8,17 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 
 1. The LLM returns one or more tool calls in a `ChatResult`.
 2. The message-processing loop schedules the batch in model order. Adjacent direct `exec` calls form a bounded parallel segment; every other direct or unified tool is a serial barrier.
-3. Direct builtins resolve their effective execution node and run the current isolated-session permission checks.
-4. Master-only builtins execute on the master after their tool-local and isolation guards pass.
-5. `search_tools` discovers non-default builtins, MCP tools, and tools advertised by the selected node.
-6. `call_tool` parses a `toolId` or explicit source descriptor and resolves one concrete builtin, MCP, or node target.
-7. MCP calls run through `mcpClient.callTool`; safe text cleanup and MCP image-content promotion occur at that client boundary while non-image content remains structured.
-8. Node calls are sent through `nodesManager` over the authenticated node connection. A node-side approval interceptor may still reject the call. Old node image-result shapes are adapted only at this remote ingress under [D-node-thread-tool-result-compatibility](./node-communication.md#d-node-thread-tool-result-compatibility).
-9. Master and node file wrappers use the shared file-tool core after their own path, context, and isolation handling.
-10. Recognized image payloads are promoted to image parts and receive stable IDs before the remaining text/structured response passes through the oversized-output guard. Successful master/node patch results already carry shared per-file change-count summaries from [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
-11. ToolScript nested calls use the same registered tool surfaces and appear as subcalls of the outer run.
+   The segment carries one process-local ExecRuntime plus the exact current Session persistence hook. Each call keeps all exec lifecycle methods on that runtime; deferred cwd changes replay against the same passed owner in model order.
+3. Direct builtins resolve exhaustive ownership metadata independently from permission policy. Node-environment builtins select the session's current node. Main-local production uses local facades, while Session-worker production borrows reverse Main Management, remote Node, MCP, vector, file, delivery, and presentation facades through the exact Worker source boundary.
+4. A trusted Worker placement guard runs after concrete target resolution but before logging, broadcast/progress, concrete permission checks, or handler initialization. Supported calls then apply isolation checks against that resolved target before the selected handler runs.
+5. The closed Main Management v3 boundary admits exactly 19 operations: messaging, agent listing, timer CRUD, child/session catalog operations, bounded cross-session recall/archive reads, Main-owned agent/session creation, and node bootstrap/pairing. Main-local callers use cloned local RPC; Session Workers use the exact-source/generation-fenced reverse service. Operations needing source settings receive only a detached read-only authority inside Main; no live mutable Session, generic builtin dispatch, callback, or fallback crosses the boundary.
+6. `search_tools` discovers non-default builtins, MCP tools, and tools advertised by the selected node.
+7. `call_tool` parses a `toolId` or explicit source descriptor and resolves one concrete builtin, MCP, or node target. Local builtins use an injected canonical dispatcher with the existing exact ToolContext; Worker explicit master Node calls are restricted to the canonical node-environment set, while Worker remote calls apply exact-owner permissions then use reverse Node execution.
+8. Direct compatibility tools, unified discovery/calls, and ToolScript nested MCP calls enter the fixed `mcp-external@1` facade. Main-local callers use local RPC; a Session worker uses its borrowed reverse client. The exact-source-fenced authoritative Main handler alone calls `mcpClient`; safe text cleanup and MCP image-content promotion still occur at the client boundary while non-image content remains structured.
+9. Direct or unified node-environment builtins resolved to a remote node and dynamic remote Node-domain calls enter the fixed v1 Node execution facade, then use Main's `nodesManager` over the authenticated node connection. Main-local callers use local RPC; a Session worker uses its borrowed reverse client with an exact source fence. Dynamic `node:master/<tool>` calls bypass RPC only for the canonical node-environment set and use the local named handler. The service itself rejects `master`, stale sources, disconnected nodes, isolation-binding violations, and names not currently advertised by a remote node. A node-side approval interceptor may still reject the call. Old node image-result shapes are adapted only at this remote ingress under [D-node-thread-tool-result-compatibility](./node-communication.md#d-node-thread-tool-result-compatibility).
+10. Master and node file wrappers use the shared file-tool core after their own path, context, and isolation handling. That core composes a low-level target-local file backend; local Main and CLI Node use the native backend, while authenticated remote Node execution still performs all primitives on the remote side.
+11. Recognized image payloads are promoted to image parts and receive stable IDs before the remaining text/structured response passes through the oversized-output guard. Successful master/node patch results already carry shared per-file change-count summaries from [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
+12. ToolScript nested calls use the same registered tool surfaces and appear as subcalls of the outer run.
 
 ## Modules involved
 
@@ -34,7 +36,9 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 - [src-isolated-check](../units/src-isolated-check.md)
 - [src-permissions](../units/src-permissions.md)
 - [src-mcp-client](../units/src-mcp-client.md)
+- [src-mcp-external-service](../units/src-mcp-external-service.md)
 - [src-nodes-manager](../units/src-nodes-manager.md)
+- [src-node-execution](../units/src-node-execution.md)
 - [shared-node-tools](../units/shared-node-tools.md)
 - [src-toolscript](../units/src-toolscript.md)
 
@@ -45,9 +49,14 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 - Unified wrappers do not bypass the concrete target's existing guards.
 - Tool output is bounded before it enters model context.
 - MCP configuration reads use one authoritative live snapshot after first load; managed updates persist before replacing that snapshot.
+- MCP list/discovery/call/config operations share one versioned local/reverse facade with source/isolation checks, exact plain-record/JSON DTO validation, cloned results/errors, full call-argument permission parity, redacted summaries, all-server stored-secret error fencing, and terminal drain fencing. Managed transport semantics are validated once by the authoritative Main client before persistence/publication.
 - Recognized image bytes stay in structured image parts rather than entering text excerpts; non-image text, JSON, audio, resource, and blob content remain subject to the normal output budget.
 - MCP and node credentials remain transport/runtime state and are not exposed to the model through tool summaries.
 - Tool batches emit one result for every call and append one tool message only after the batch settles. Image/result parts and function responses remain in original model-call order rather than completion order.
+- Direct builtins and unified builtin calls share `resolveBuiltinToolPlacement`; ToolScript nested calls inherit it through the existing `call_tool` wrapper. A trusted current-session-effects marker—not model arguments or mere Session presence—selects Worker fences. The same argument-normalizing guard runs before direct or unified concrete permissions and returns a stable retryable code even for malformed always-unsupported calls. Unified/ToolScript local calls cannot reconstruct context through child `nodesManager`/`sessionManager`.
+- Worker direct and unified node-environment calls targeting the exact current remote node carry `{currentNode,cwd}` from the authoritative owner; explicit dynamic other-node calls omit cwd. This prevents Main's stale projection from becoming routing authority without leaking cwd to another target.
+- Main Management, remote Node execution, MCP external, bounded vector calls, file delivery, intermediate/final delivery, and presentation events are reverse-wired for the activated WorkerHost through one shared channel. Main Management version 3 retains a fixed 19-operation allowlist: the prior messaging/timer/catalog operations plus cross-session recall/archive reads, Main-owned agent/session creation, and node bootstrap/pairing. It carries no live mutable Session, queue, patch, or callback; operations needing source settings receive one detached read-only authority inside Main. Unsupported operations still fail before effects rather than falling back to Main hydration.
+- The Node execution facade uses local or borrowed reverse transport to one Main handler and accepts dynamic names only inside one authenticated remote node's currently advertised tool set. The colocated `master` execution environment bypasses it and runs the local named handler directly, while master Node discovery exposes exactly the canonical node-environment definitions.
 
 ## Compatibility
 
@@ -63,7 +72,7 @@ Unified discovery and invocation resolve a concrete target before execution. Per
 
 ### D-dispatch-shared-file-semantics
 
-Master and node file tools share read/write semantics while retaining separate transport, path-resolution, and isolation wrappers.
+[2026-08-10] Master and node file tools share read/write/edit/patch semantics while retaining separate transport, path-resolution, and isolation wrappers. The shared semantic core depends only on a small target-local file contract covering stat, offset/count byte reads, directory-entry metadata, whole-file `w`/`wx` writes, mkdir, and remove. Local Main and CLI Node explicitly select the native implementation; authenticated remote Node calls continue executing the same composition inside the Node process rather than pulling file bytes through Main. Keep public tool names, schemas, error/output behavior, content-reference policy, patch partial-application behavior, and path/isolation checks above this seam. Do not turn this checkpoint into a public virtual-filesystem or generic plugin API.
 
 ### D-dispatch-output-boundary
 
@@ -76,6 +85,14 @@ Phase-one batch concurrency is intentionally narrow: only adjacent direct calls 
 ### D-dispatch-mcp-live-configuration
 
 [2026-08-01] The first managed/runtime MCP configuration read establishes one authoritative in-memory snapshot. Subsequent MCP listing, discovery, and calls read that snapshot rather than rereading the backing file. `mcp_config` mutations must persist successfully before replacing the live snapshot, become visible to subsequent MCP operations immediately, and require no Foxwarm restart. Manual backing-file edits do not alter the live snapshot; do not add file watching or an agent-facing manual reload path.
+
+### D-dispatch-node-environment-placement
+
+[2026-08-05] Keep process-placement ownership separate from permission policy and model schemas. The registered node-environment builtins are exactly `read`, `write`, `edit`, `apply_patch`, `exec`, and `browse_*`: they execute directly in the selected local environment when `currentNode=master` and use the authenticated node connection when a remote current node is selected. Unified builtin calls use the same placement boundary. Explicit dynamic `source=node,nodeId=master` calls and master Node discovery are allowed only for this exact canonical set; they invoke the existing local named handler without RPC and cannot turn Main/session/MCP tools into Node calls. `delete_file` is removed from definitions, runtime exports, permissions, and advertised master capabilities without an alias; structured `apply_patch` deletion and explicit `exec` remain available. Compound file/channel/image operations and agent-memory tools are not node-environment primitives merely because they may touch files.
+
+### D-dispatch-worker-exact-owner
+
+[2026-08-06] Session-worker placement is identified only by a trusted in-process current-session-effects marker carried into direct and ToolScript-nested ToolContexts. Safe local builtins must retain the authoritative passed Session/persist hook through the canonical dispatcher and must never fall back to a same-ID child SessionManager or child Main singleton. Reachable operations with a closed Worker or reverse Main boundary use that exact owner/service; operations whose Main topology, cross-session, managed, compaction, or destructive lifecycle boundary is intentionally unsupported remain visible but fail retryably before tool-start observability, concrete permissions, or raw handler initialization. Their guard normalization mirrors handler action/target semantics. Placement is not inferred from user arguments or Session-object presence. Existing current-agent vector recall remains supported from the exact owner's agent filter, while the unscoped legacy `get_memory_context` operation is fenced.
 
 ## Canonical ownership
 

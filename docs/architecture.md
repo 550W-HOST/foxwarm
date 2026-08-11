@@ -31,7 +31,8 @@ State + Memory
   ├─ agents/<agent>/memory/
   ├─ state/token
   ├─ state/node_token
-  ├─ state/sessions*.json
+  ├─ state/catalog.sqlite
+  ├─ state/sessions/          # Per-session semantic authority
   ├─ state/db/
   └─ state/models.yaml
 ```
@@ -148,7 +149,7 @@ state/
   agents.json
   channels.json
   models.yaml
-  sessions.json
+  catalog.sqlite
   sessions/<id>.json
   logs/
   db/

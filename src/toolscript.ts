@@ -10,6 +10,7 @@ import * as sessionManager from './sessionManager';
 import { checkPathAccess } from './isolatedCheck';
 import { resolveObjectArgWithJsonFallback } from './jsonObjectArgs';
 import type { Message, MessagePart, Session, ToolScriptSubCall } from './types';
+import { RpcError } from './rpc';
 
 type ToolArgs = Record<string, any>;
 
@@ -20,7 +21,14 @@ type ToolContext = {
   runtimeNodeId?: string;
   toolScriptRunId?: string;
   toolUseId?: string;
+  sessionPlacement?: 'local' | 'session-worker';
 };
+
+function assertManagedPlacement(ctx: ToolContext): void {
+  if (ctx.sessionPlacement === 'session-worker') {
+    throw new RpcError('SESSION_WORKER_TOOL_UNAVAILABLE', 'SESSION_WORKER_TOOL_UNAVAILABLE: ToolScript managed-session operations are not available in Session-worker placement yet.', true);
+  }
+}
 
 type ToolScriptRunMode = 'foreground' | 'background';
 type ToolScriptRunStatus = 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled';
@@ -173,6 +181,8 @@ const CURRENT_VM_RUNTIME: ToolScriptVmRuntimeIdentity = {
 };
 
 let montyRuntimePromise: Promise<MontyRuntime> | null = null;
+let montyRuntimeShutdownPromise: Promise<void> | null = null;
+let montyRuntimeFactoryForTests: (() => Promise<MontyRuntime>) | null = null;
 let nativeMontyImportFailureForTests: Error | null = null;
 const activeBackgroundRuns = new Set<string>();
 
@@ -256,33 +266,50 @@ function formatRuntimeContext(record: ToolScriptRunRecord, runtimeState: Runtime
   return lines.join('\n');
 }
 
+async function createMontyRuntime(): Promise<MontyRuntime> {
+  if (montyRuntimeFactoryForTests) {
+    return await montyRuntimeFactoryForTests();
+  }
+  let monty: MontyModule;
+  try {
+    monty = await importNativeMonty();
+  } catch (nativeError: any) {
+    logger.warn({ err: nativeError }, 'Monty native runtime unavailable; falling back to WASM runtime');
+    monty = await nativeImport<MontyModule>('@pydantic/monty/wasm');
+  }
+  const pool = await monty.Monty.create();
+  return { monty, pool };
+}
+
 async function getMontyRuntime(): Promise<MontyRuntime> {
+  while (montyRuntimeShutdownPromise) {
+    await montyRuntimeShutdownPromise;
+  }
   if (!montyRuntimePromise) {
-    montyRuntimePromise = (async () => {
-      let monty: MontyModule;
-      try {
-        monty = await importNativeMonty();
-      } catch (nativeError: any) {
-        logger.warn({ err: nativeError }, 'Monty native runtime unavailable; falling back to WASM runtime');
-        monty = await nativeImport<MontyModule>('@pydantic/monty/wasm');
-      }
-      const pool = await monty.Monty.create();
-      return { monty, pool };
-    })();
+    montyRuntimePromise = createMontyRuntime();
   }
   return await montyRuntimePromise;
 }
 
-async function closeMontyRuntime(): Promise<void> {
-  const pending = montyRuntimePromise;
-  montyRuntimePromise = null;
-  if (!pending) {
-    return;
+export function shutdownToolScriptRuntime(): Promise<void> {
+  if (montyRuntimeShutdownPromise) {
+    return montyRuntimeShutdownPromise;
   }
-  try {
-    const runtime = await pending;
-    await runtime.pool.close();
-  } catch {}
+  const pending = montyRuntimePromise;
+  if (!pending) {
+    return Promise.resolve();
+  }
+  montyRuntimePromise = null;
+  let shutdown!: Promise<void>;
+  shutdown = pending
+    .then(runtime => runtime.pool.close())
+    .finally(() => {
+      if (montyRuntimeShutdownPromise === shutdown) {
+        montyRuntimeShutdownPromise = null;
+      }
+    });
+  montyRuntimeShutdownPromise = shutdown;
+  return shutdown;
 }
 
 function runFilePath(runId: string): string {
@@ -782,6 +809,7 @@ async function requestModelWithoutContext(prompt: string, session: Session, mode
     systemPrompt: '',
     model: model || session.model,
     sessionId: session.id,
+    promptCacheKey: llm.ensurePromptCacheKey(session),
     toolDefinitions: [],
     notifySessionEvents: false,
     registerAbortController: false,
@@ -927,6 +955,7 @@ function normalizeManagedSessionStepInput(_positionalArgs: any[], kwargs: Record
 }
 
 function emitToolScriptProgress(ctx: ToolContext, state: RuntimeState): void {
+  if (ctx.sessionPlacement === 'session-worker') return;
   if (!ctx.sessionId || !ctx.toolUseId) return;
   sessionManager.notifySessionEvent(ctx.sessionId, {
     type: 'toolscript-progress',
@@ -1056,6 +1085,7 @@ async function executeScriptHostCall(
   }
 
   if (functionName === 'open_managed_session') {
+    assertManagedPlacement(ctx);
     const ownerSession = getToolScriptSession(ctx, functionName);
     const targetSessionId = requireStringArg(
       getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
@@ -1077,6 +1107,7 @@ async function executeScriptHostCall(
   }
 
   if (functionName === 'session_step') {
+    assertManagedPlacement(ctx);
     const ownerSession = getToolScriptSession(ctx, functionName);
     const targetSessionId = requireStringArg(
       getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
@@ -1128,6 +1159,7 @@ async function executeScriptHostCall(
   }
 
   if (functionName === 'release_managed_session') {
+    assertManagedPlacement(ctx);
     const ownerSession = getToolScriptSession(ctx, functionName);
     const targetSessionId = requireStringArg(
       getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
@@ -1158,6 +1190,7 @@ async function executeScriptHostCall(
   }
 
   if (functionName === 'wait_for_managed_event') {
+    assertManagedPlacement(ctx);
     const targetSessionId = requireStringArg(
       getNamedArg(positionalArgs, kwargs, 0, ['session_id', 'sessionId']),
       'session_id',
@@ -1559,6 +1592,7 @@ export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Pr
     throw new Error(`ToolScript run \`${runId}\` not found.`);
   }
   ensureRunOwnedBySession(record, sessionId);
+  if (record.relatedManagedSessions?.length) assertManagedPlacement(ctx);
   if (record.status !== 'waiting' || !record.snapshotBase64 || !record.waiting || (record.waiting.reason !== 'agent' && record.waiting.reason !== 'timeout')) {
     throw new Error(`ToolScript run \`${runId}\` is not waiting for continue_script.`);
   }
@@ -1631,6 +1665,7 @@ export async function tool_cancel_toolscript_run(args: ToolArgs, ctx: ToolContex
     throw new Error(`ToolScript run \`${runId}\` not found.`);
   }
   ensureRunOwnedBySession(record, sessionId);
+  if (record.relatedManagedSessions?.length) assertManagedPlacement(ctx);
   if (record.status === 'completed' || record.status === 'failed' || record.status === 'cancelled') {
     if (record.relatedManagedSessions?.length) {
       await releaseRelatedManagedSessionLeases(record, 'Failed to retry managed-session cleanup for terminal ToolScript run');
@@ -1696,17 +1731,29 @@ export async function getToolScriptRunForTests(runId: string): Promise<ToolScrip
 }
 
 export async function resetToolScriptMontyRuntimeForTests(): Promise<void> {
-  await closeMontyRuntime();
+  await shutdownToolScriptRuntime().catch(() => {});
+  montyRuntimeFactoryForTests = null;
   nativeMontyImportFailureForTests = null;
 }
 
 export async function forceToolScriptNativeImportFailureForTests(error: Error): Promise<void> {
-  await closeMontyRuntime();
+  await shutdownToolScriptRuntime().catch(() => {});
+  montyRuntimeFactoryForTests = null;
   nativeMontyImportFailureForTests = error;
 }
 
 export async function resetToolScriptRunsForTests(): Promise<void> {
-  await closeMontyRuntime();
+  await shutdownToolScriptRuntime().catch(() => {});
+  montyRuntimeFactoryForTests = null;
   nativeMontyImportFailureForTests = null;
   await fs.remove(TOOLSCRIPT_RUNS_DIR);
+}
+
+export async function setToolScriptMontyRuntimeFactoryForTests(factory: (() => Promise<MontyRuntime>) | null): Promise<void> {
+  await shutdownToolScriptRuntime().catch(() => {});
+  montyRuntimeFactoryForTests = factory;
+}
+
+export async function ensureToolScriptMontyRuntimeForTests(): Promise<void> {
+  await getMontyRuntime();
 }

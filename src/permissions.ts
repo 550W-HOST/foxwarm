@@ -163,7 +163,6 @@ export function buildIsolatedToolRules(agentName: string, sessionId: string, bou
       buildNodeToolRule(agentName, sessionId, 'write', targetNode),
       buildNodeToolRule(agentName, sessionId, 'edit', targetNode),
       buildNodeToolRule(agentName, sessionId, 'apply_patch', targetNode),
-      buildNodeToolRule(agentName, sessionId, 'delete_file', targetNode),
       buildNodeToolRule(agentName, sessionId, 'browse_open', targetNode),
       buildNodeToolRule(agentName, sessionId, 'browse_list', targetNode),
       buildNodeToolRule(agentName, sessionId, 'browse_get', targetNode),
@@ -173,14 +172,6 @@ export function buildIsolatedToolRules(agentName: string, sessionId: string, bou
       buildNodeToolRule(agentName, sessionId, 'send_file', targetNode),
       buildNodeToolRule(agentName, sessionId, 'image_write_to_file', targetNode),
     ]),
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: 'master',
-      tool_name: 'delete_file',
-      tool_args: { filePath: { pathWithinAgent: true } },
-      action: 'accept',
-    },
     {
       agent: agentName,
       session: sessionId,
