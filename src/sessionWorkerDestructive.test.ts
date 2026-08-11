@@ -17,6 +17,9 @@ import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
 import { registerChannel, unregisterChannel, type Channel } from './channel';
 import { attachChannel, createChannelsStore, resetChannelsForTests, saveChannels, setChannelsStoreForTests } from './session/channels';
+import { DATA_ROOT_DIR } from './config';
+import { setBeforeCrossSessionDeletionAdmissionForTests } from './sessionDeletion';
+import type { QueueSource } from './types';
 
 async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -528,6 +531,210 @@ test('worker BTW snapshots a busy owner concurrently and serializes display-only
     sessionManager.getAllSessions().delete(sessionId);
     unregisterChannel(channelId); resetChannelsForTests(); setChannelsStoreForTests(null);
     await fs.remove(root);
+  }
+});
+
+test('worker model delete_session removes local, idle-worker, and busy-worker targets without deleting its source', async () => {
+  const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const sourceId = `mc-delete-source-${nonce}`;
+  const sourceAlias = `${sourceId}-alias`;
+  const localTargetId = `mc-delete-local-${nonce}`;
+  const idleWorkerTargetId = `mc-delete-idle-worker-${nonce}`;
+  const workerSurvivorId = `${idleWorkerTargetId}-child`;
+  const busyWorkerTargetId = `mc-delete-busy-worker-${nonce}`;
+  const root = DATA_ROOT_DIR;
+  const fixture = makeFixture(root, {
+    FOXWARM_TEST_SLOW_PROVIDER: '1',
+    FOXWARM_TEST_SLOW_SESSION: busyWorkerTargetId,
+    FOXWARM_TEST_MAIN_TOOLS_SESSION: sourceId,
+    FOXWARM_TEST_MAIN_TOOLS: JSON.stringify([
+      { id: 'delete-local', name: 'delete_session', args: { sessionId: localTargetId } },
+      { id: 'delete-idle-worker', name: 'delete_session', args: { sessionId: idleWorkerTargetId } },
+      { id: 'delete-busy-worker', name: 'delete_session', args: { sessionId: busyWorkerTargetId } },
+      { id: 'delete-source-alias', name: 'delete_session', args: { sessionId: sourceAlias } },
+    ]),
+  });
+  const ids = [sourceId, localTargetId, idleWorkerTargetId, workerSurvivorId, busyWorkerTargetId];
+  try {
+    await sessionManager.loadSessions();
+    for (const id of ids) {
+      const session = baseSession(id);
+      session.promptCacheKey = `delete-cache-${id}`;
+      if (id === sourceId) session.aliases = [sourceAlias];
+      if (id === workerSurvivorId) session.parentSessionId = idleWorkerTargetId;
+      sessionManager.getAllSessions().set(id, session);
+      await sessionManager.saveSession(id);
+    }
+    sessionManager.setSessionWorkerDeleteHandler(id => teardownSessionWorkerForDelete({ store: fixture.store, supervisor: fixture.supervisor }, id));
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await sessionRuntime.initializeSessionRuntime({
+      worker: { store: fixture.store, registry: fixture.supervisor.projectionRegistry, ingress: fixture.ingress, supervisor: fixture.supervisor },
+    });
+
+    await fixture.ingress.ensureWorkerOwner(idleWorkerTargetId);
+    await fixture.ingress.ensureWorkerOwner(workerSurvivorId);
+    const busyTurn = fixture.ingress.submitEnsuringWorker(busyWorkerTargetId, {
+      type: 'user', parts: [{ text: 'busy target work' }],
+    });
+    await waitFor(() => fs.pathExists(path.join(root, 'state', `slow-started-${busyWorkerTargetId}`)));
+
+    await fixture.ingress.submitEnsuringWorker(sourceId, {
+      type: 'user', parts: [{ text: 'delete the three other targets' }],
+    });
+    await busyTurn;
+
+    const sourceAuthority = await fs.readJson(getSessionHistoryFilePath(sourceId));
+    for (const targetId of [localTargetId, idleWorkerTargetId, busyWorkerTargetId]) {
+      assert.equal(sessionManager.getAllSessions().has(targetId), false, JSON.stringify(sourceAuthority.history));
+      assert.equal(await fs.pathExists(getSessionHistoryFilePath(targetId)), false);
+      assert.equal(fixture.store.findOwnership(targetId), undefined);
+      assert.equal(fixture.store.countPendingIntents(targetId), 0);
+    }
+    assert.equal(sessionManager.getAllSessions().has(sourceId), true);
+    assert.equal(await fs.pathExists(getSessionHistoryFilePath(sourceId)), true);
+    assert.equal(fixture.supervisor.getStatus(sourceId)?.ready, true);
+    assert.equal(fixture.store.findOwnership(sourceId)?.state, 'ready');
+    assert.equal(JSON.stringify(sourceAuthority.history).split('deleted successfully').length - 1, 3);
+    assert.equal(JSON.stringify(sourceAuthority.history).split('Cannot delete current session').length - 1, 1);
+    assert.equal(sourceAuthority.busy, false);
+    assert.equal(sourceAuthority.queue.length, 0);
+
+    assert.equal(sessionManager.getAllSessions().has(workerSurvivorId), true);
+    assert.equal(sessionManager.getSessionCatalog(workerSurvivorId)?.parentSessionId, undefined);
+    assert.equal(fixture.store.findOwnership(workerSurvivorId)?.state, 'ready');
+    await fixture.ingress.submitEnsuringWorker(workerSurvivorId, {
+      type: 'user', parts: [{ text: 'continue after parent deletion' }],
+    });
+    assert.equal(sessionManager.getSessionCatalog(workerSurvivorId)?.parentSessionId, undefined,
+      'later Worker publication must not recreate the deleted parent relation');
+  } finally {
+    sessionManager.setSessionWorkerDeleteHandler(undefined);
+    await sessionRuntime.shutdownSessionRuntime().catch(() => {});
+    fixture.transport.close();
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    for (const id of ids) {
+      sessionManager.getAllSessions().delete(id);
+      await fs.remove(getSessionHistoryFilePath(id)).catch(() => {});
+    }
+    for (const suffix of ['', '-shm', '-wal']) await fs.remove(path.join(root, `session-runtime.sqlite${suffix}`)).catch(() => {});
+  }
+});
+
+test('reciprocal Worker delete_session calls admit one pair and let its surviving source settle', async () => {
+  const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const sourceA = `mc-delete-reciprocal-a-${nonce}`;
+  const sourceB = `mc-delete-reciprocal-b-${nonce}`;
+  const root = DATA_ROOT_DIR;
+  const fixture = makeFixture(root, {
+    FOXWARM_TEST_MAIN_TOOLS_BY_SESSION: JSON.stringify({
+      [sourceA]: [{ id: 'delete-b', name: 'delete_session', args: { sessionId: sourceB } }],
+      [sourceB]: [{ id: 'delete-a', name: 'delete_session', args: { sessionId: sourceA } }],
+    }),
+  });
+  const replies: Array<{ sessionId: string; text: string }> = [];
+  const drainedAuthorities = new Map<string, any>();
+  let releaseAdmissionBarrier!: () => void;
+  const admissionBarrier = new Promise<void>(resolve => { releaseAdmissionBarrier = resolve; });
+  const admissionSources = new Set<string>();
+  setBeforeCrossSessionDeletionAdmissionForTests(async ({ sourceSessionId }) => {
+    admissionSources.add(sourceSessionId);
+    if (admissionSources.size === 2) releaseAdmissionBarrier();
+    await admissionBarrier;
+  });
+  const queueSource = (sessionId: string): QueueSource => ({
+    platform: 'test', channelId: 'reciprocal-delete', channelType: 'test',
+    channelUserId: sessionId, conversationId: sessionId, senderId: sessionId,
+    preferDirectReply: true,
+  });
+  const registrations: Array<() => void> = [];
+  try {
+    await sessionManager.loadSessions();
+    for (const id of [sourceA, sourceB]) {
+      const session = baseSession(id);
+      session.promptCacheKey = `reciprocal-delete-cache-${id}`;
+      sessionManager.getAllSessions().set(id, session);
+      await sessionManager.saveSession(id);
+    }
+    sessionManager.setSessionWorkerDeleteHandler(async id => {
+      const tornDown = await teardownSessionWorkerForDelete({ store: fixture.store, supervisor: fixture.supervisor }, id);
+      if ([sourceA, sourceB].includes(id) && await fs.pathExists(getSessionHistoryFilePath(id))) {
+        drainedAuthorities.set(id, await fs.readJson(getSessionHistoryFilePath(id)));
+      }
+      return tornDown;
+    });
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await sessionRuntime.initializeSessionRuntime({
+      worker: { store: fixture.store, registry: fixture.supervisor.projectionRegistry, ingress: fixture.ingress, supervisor: fixture.supervisor },
+    });
+    await fixture.ingress.ensureWorkerOwner(sourceA);
+    await fixture.ingress.ensureWorkerOwner(sourceB);
+
+    for (const id of [sourceA, sourceB]) {
+      const source = queueSource(id);
+      registrations.push(fixture.sourceContexts.register(id, source, {
+        ...source,
+        reply: async text => { replies.push({ sessionId: id, text }); },
+        sendTyping: async () => {},
+      }));
+    }
+
+    const [turnA, turnB] = await Promise.allSettled([
+      fixture.ingress.submitEnsuringWorker(sourceA, {
+        type: 'user', source: queueSource(sourceA), clientMessageId: `reciprocal-a-${nonce}`,
+        parts: [{ text: 'delete the reciprocal source B' }],
+      }),
+      fixture.ingress.submitEnsuringWorker(sourceB, {
+        type: 'user', source: queueSource(sourceB), clientMessageId: `reciprocal-b-${nonce}`,
+        parts: [{ text: 'delete the reciprocal source A' }],
+      }),
+    ]);
+
+    assert.equal(admissionSources.size, 2, 'both production reverse delete calls reached pair admission');
+    for (const result of [turnA, turnB]) {
+      if (result.status === 'rejected') {
+        assert.fail(`reciprocal turn failed outside the tool result: ${result.reason?.code || result.reason?.message || result.reason}`);
+      }
+    }
+    assert.equal(JSON.stringify([turnA, turnB, replies]).includes('RPC_DRAIN_TIMEOUT'), false);
+    assert.equal(JSON.stringify([turnA, turnB, replies]).includes('RPC_CLOSED'), false);
+
+    const survivingIds = [sourceA, sourceB].filter(id => sessionManager.getSessionCatalog(id));
+    assert.equal(survivingIds.length, 1, 'exactly one reciprocal delete commits');
+    const survivorId = survivingIds[0];
+    const deletedId = survivorId === sourceA ? sourceB : sourceA;
+    const deletedAuthority = drainedAuthorities.get(deletedId);
+    assert.ok(deletedAuthority, 'target teardown observes the drained source authority before deletion');
+    assert.match(JSON.stringify(deletedAuthority.history), /SESSION_DELETE_CONFLICT/);
+    assert.match(JSON.stringify(deletedAuthority.history), /"retryable":true/);
+    assert.ok(replies.some(reply => reply.sessionId === deletedId && reply.text === '_[Execution stopped by user]_'),
+      'the conflicting target commits a terminal turn response before deletion');
+    assert.ok(replies.some(reply => reply.sessionId === survivorId && reply.text === 'deterministic child answer'));
+
+    const survivorAuthority = await fs.readJson(getSessionHistoryFilePath(survivorId));
+    assert.match(JSON.stringify(survivorAuthority.history), /deleted successfully/);
+    assert.equal(survivorAuthority.busy, false);
+    assert.equal(survivorAuthority.queue.length, 0);
+    assert.equal(fixture.supervisor.getStatus(survivorId)?.ready, true);
+    assert.equal(fixture.store.findOwnership(survivorId)?.state, 'ready');
+    assert.equal(sessionManager.getSessionCatalog(deletedId), undefined);
+    assert.equal(await fs.pathExists(getSessionHistoryFilePath(deletedId)), false);
+    assert.equal(fixture.supervisor.getStatus(deletedId), undefined);
+    assert.equal(fixture.store.findOwnership(deletedId), undefined);
+  } finally {
+    releaseAdmissionBarrier();
+    setBeforeCrossSessionDeletionAdmissionForTests(undefined);
+    for (const unregister of registrations) unregister();
+    sessionManager.setSessionWorkerDeleteHandler(undefined);
+    await sessionRuntime.shutdownSessionRuntime().catch(() => {});
+    fixture.transport.close();
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    for (const id of [sourceA, sourceB]) {
+      sessionManager.getAllSessions().delete(id);
+      await fs.remove(getSessionHistoryFilePath(id)).catch(() => {});
+    }
+    for (const suffix of ['', '-shm', '-wal']) await fs.remove(path.join(root, `session-runtime.sqlite${suffix}`)).catch(() => {});
   }
 });
 

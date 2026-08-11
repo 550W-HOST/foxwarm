@@ -122,8 +122,9 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
     assert.equal(authority.history.length, 4, 'a completed Worker answer cannot be continued again');
     assert.equal(replies[4].text, '▶️ Continuing interrupted turn...');
     assert.equal(replies[5].text, '⚠️ Session has no interrupted turn to continue.');
-    await assert.rejects(() => sessionRuntime.control(sessionId, 'dequeue'),
-      (error: any) => error?.code === 'SESSION_WORKER_CONTROL_UNSUPPORTED');
+    assert.deepEqual(await sessionRuntime.control(sessionId, 'dequeue'), {
+      action: 'dequeue', queuedItems: 0, stoppedCurrent: false, abortedInFlight: false,
+    });
     await assert.rejects(() => sessionRuntime.control(`${sessionId}-unknown`, 'retry', makeCtx(replies)),
       (error: any) => error?.code === 'SESSION_WORKER_SESSION_NOT_FOUND');
     assert.equal(store.findOwnership(`${sessionId}-unknown`), undefined);

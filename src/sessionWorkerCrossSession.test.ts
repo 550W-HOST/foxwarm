@@ -135,6 +135,9 @@ test('main-management facade forks read-only, rejects stale generations, and val
   const createdSessions = [parentId, forkChildId];
   try {
     const parent = await sessionManager.getSession(parentId);
+    const staleDeleteTargetId = `${parentId}-stale-delete-target`;
+    await sessionManager.getSession(staleDeleteTargetId);
+    createdSessions.push(staleDeleteTargetId);
     await sessionManager.appendSessionMessage(parentId, { role: 'user', parts: [{ text: 'fork parent message one' }] } as any);
     await sessionManager.appendSessionMessage(parentId, { role: 'model', parts: [{ text: 'fork parent message two' }] } as any);
     const parentJsonPath = getSessionHistoryFilePath(parentId);
@@ -153,9 +156,10 @@ test('main-management facade forks read-only, rejects stale generations, and val
     try {
       await assert.rejects(
         () => new RpcClient(mainManagementToolServiceDescriptor, staleTransport).call('execute',
-          { sourceSessionId: parentId, operation: 'create_child_session', args: { suffix: 'mp-stale' } }),
+          { sourceSessionId: parentId, operation: 'delete_session', args: { sessionId: staleDeleteTargetId } }),
         (error: any) => error?.code === 'MAIN_MANAGEMENT_SOURCE_STALE' && error?.retryable === true,
       );
+      assert.ok(sessionManager.getAllSessions().has(staleDeleteTargetId), 'stale reverse source cannot begin target deletion');
     } finally { staleTransport.close(); }
 
     // Bounded validation: unknown keys and missing suffix are rejected.
@@ -168,7 +172,11 @@ test('main-management facade forks read-only, rejects stale generations, and val
       (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS',
     );
     await assert.rejects(
-      () => client.call('execute', { sourceSessionId: parentId, operation: 'delete_session' as any, args: {} }),
+      () => client.call('execute', { sourceSessionId: parentId, operation: 'delete_session', args: {} }),
+      (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS',
+    );
+    await assert.rejects(
+      () => client.call('execute', { sourceSessionId: parentId, operation: 'move_session' as any, args: {} }),
       (error: any) => error?.code === 'MAIN_MANAGEMENT_OPERATION_NOT_ALLOWED',
     );
     await assert.rejects(

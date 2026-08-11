@@ -5,6 +5,7 @@ import { requireNotIsolated } from '../isolatedCheck';
 import { executeMainManagementTool } from '../mainManagementTools';
 import { ToolArgs, ToolContext } from './helpers';
 import { buildSessionListOutput, buildSessionStatusInfo, formatSessionStatus } from '../sessionStatus';
+import { deleteSessionLifecycle } from '../sessionDeletion';
 
 export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
   const action = typeof args.action === 'string' && args.action.trim()
@@ -37,32 +38,32 @@ export async function tool_session(args: ToolArgs = {}, ctx?: ToolContext) {
 }
 
 export async function tool_delete_session(args: ToolArgs, ctx: ToolContext) {
-  await requireNotIsolated(ctx, 'delete_session');
-  const { sessionId } = args;
-
-  if (ctx && ctx.sessionId === sessionId) {
-    throw new Error('Cannot delete current session. Use /clear to clear history or switch to another session first.');
+  if (ctx?.sessionPlacement === 'session-worker') {
+    return executeMainManagementTool('delete_session', args, ctx);
   }
+  return deleteSessionForSource(args, ctx?.sessionId);
+}
 
-  const prep = await sessionManager.prepareSessionForDestructiveAction(sessionId);
-
-  if (prep.requiresRetry) {
-    const queueNote = prep.droppedQueueItems > 0
-      ? ` Cleared ${prep.droppedQueueItems} queued item(s).`
+export async function deleteSessionForSource(
+  args: ToolArgs,
+  sourceSessionId?: string,
+  assertSourceCurrent?: () => void | Promise<void>,
+) {
+  if (!sourceSessionId) throw new Error('Cannot delete a session without current session context.');
+  await requireNotIsolated(sourceSessionId, 'delete_session');
+  const requestedSessionId = typeof args.sessionId === 'string' ? args.sessionId : '';
+  const result = await deleteSessionLifecycle({ requestedSessionId, sourceSessionId, assertSourceCurrent });
+  if (result.status === 'not-found') return `Session \`${requestedSessionId}\` not found.`;
+  if (result.status === 'busy') {
+    const queueNote = result.droppedQueueItems > 0
+      ? ` Cleared ${result.droppedQueueItems} queued item(s).`
       : '';
-    if (prep.abortedInFlight) {
-      return `Stop signal sent to busy session \`${sessionId}\`. The in-flight LLM request was aborted.${queueNote} Retry delete after the session becomes idle.`;
+    if (result.abortedInFlightCount > 0) {
+      return `Stop signal sent to busy session \`${requestedSessionId}\`. The in-flight LLM request was aborted.${queueNote} Retry delete after the session becomes idle.`;
     }
-    return `Stop signal sent to busy session \`${sessionId}\`. It will stop after the current tool call completes.${queueNote} Retry delete after the session becomes idle.`;
+    return `Stop signal sent to busy session \`${requestedSessionId}\`. It will stop after the current tool call completes.${queueNote} Retry delete after the session becomes idle.`;
   }
-
-  const deleted = await sessionManager.deleteSession(sessionId);
-
-  if (deleted) {
-    return `Session \`${sessionId}\` deleted successfully.`;
-  }
-
-  return `Session \`${sessionId}\` not found.`;
+  return `Session \`${result.deletedSessionIds[0]}\` deleted successfully.`;
 }
 
 function formatDisplayName(name: string | undefined): string {

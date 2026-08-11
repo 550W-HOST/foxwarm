@@ -245,6 +245,7 @@ async function start() {
             sourceContexts,
             (sessionId) => sessionManager.resolveLoadedSessionId(sessionId),
             (sessionId) => !!sessionManager.getSessionCatalog(sessionId),
+            (sessionId, operation, admit) => sessionManager.withSessionDestructiveMutationAdmission([sessionId], operation, admit),
         );
         sessionManager.setSessionWorkerEnqueueSink(
             (sessionId, item) => sessionWorkerIngress!.enqueueEnsuringWorker(sessionId, item).then(() => {}),
@@ -258,7 +259,9 @@ async function start() {
             // full authority into Main merely because this session is idle and
             // has not spawned its first Worker yet.
             if (!catalog) return undefined;
-            await sessionWorkerIngress!.ensureWorkerOwner(sessionId);
+            // fork/createChild already hold SessionManager's non-reentrant
+            // identity lock; use the exact lifecycle-only admission variant.
+            await sessionWorkerIngress!.ensureWorkerOwnerWithinExistingAdmission(sessionId);
             return readDetachedWorkerSession(sessionId, catalog);
         });
         sessionManager.setSessionWorkerFenceChecker(sessionId => {

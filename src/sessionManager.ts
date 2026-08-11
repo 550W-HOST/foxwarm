@@ -72,6 +72,23 @@ async function withSessionIdentityLock<T>(operation: () => Promise<T>): Promise<
   }
 }
 
+/**
+ * Serializes one concrete Session-worker admission against destructive claim
+ * acquisition. The callback must end once the effect is durably admitted
+ * (owner ensured plus mailbox append, or activated call accepted); it must not
+ * await a provider/tool turn to finish.
+ */
+export async function withSessionDestructiveMutationAdmission<T>(
+  sessionIds: Array<string | undefined>,
+  operation: string,
+  admit: () => Promise<T>,
+): Promise<T> {
+  return withSessionIdentityLock(async () => {
+    assertSessionDestructiveMutationAllowed(sessionIds, operation);
+    return admit();
+  });
+}
+
 async function withChannelSessionCreationLock<T>(channelId: string, conversationId: string, operation: () => Promise<T>): Promise<T> {
   const key = JSON.stringify([channelId, conversationId]);
   const previous = channelSessionCreationTails.get(key) || Promise.resolve();
@@ -487,6 +504,7 @@ let destructiveLifecycleClaimSequence = 0;
 export class SessionDestructiveLifecycleClaimError extends Error {
   readonly code = 'SESSION_DELETE_IN_PROGRESS';
   readonly statusCode = 409;
+  readonly retryable = true;
 
   constructor(sessionId: string, operation: string) {
     super(`Session "${sessionId}" is being prepared for deletion and cannot ${operation}. Retry after the delete request finishes.`);
@@ -1459,6 +1477,7 @@ export async function forkSession(sourceSessionId: string, suffix?: string, isCh
 }
 
 async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string; sourceOverride?: Session }): Promise<string> {
+  assertSessionDestructiveMutationAllowed([sourceSessionId], 'receive a new fork session');
   // sourceOverride lets a trusted caller (e.g. the Main management facade)
   // supply a detached read-only snapshot of a worker-owned authority instead
   // of hydrating it into Main. Overrides are never persisted back.
@@ -1618,6 +1637,7 @@ export async function createChildSession(parentSessionId: string, suffix: string
 
 async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string; sourceOverride?: Session }): Promise<string> {
   validateChildSessionSuffix(suffix);
+  assertSessionDestructiveMutationAllowed([parentSessionId], 'receive a new child session');
   if (fork) {
     // Fork from parent (inherit context)
     return await forkSessionUnlocked(parentSessionId, suffix, true, options);
@@ -1692,6 +1712,11 @@ export async function setSessionParent(childSessionId: string, parentSessionId?:
     const child = sessions.get(childSessionId);
     if (!child) throw new Error(`Session \`${childSessionId}\` not found.`);
     const previousParentSessionId = child.parentSessionId;
+    assertSessionDestructiveMutationAllowed(
+      [childSessionId, parentSessionId],
+      parentSessionId ? 'change parent relations' : 'detach from its parent',
+      owningClaimId,
+    );
     child.parentSessionId = parentSessionId;
     await saveSessionCatalogEntries([childSessionId]);
     notifySessionListUpdated();
@@ -2236,6 +2261,7 @@ export async function enqueueSessionItem(sessionId: string, item: QueueItem): Pr
     // ingress boundary. Managed sessions remain explicitly unsupported there;
     // fail closed instead of spawning a worker that must reject them.
     const canonicalSessionId = resolveLoadedSessionId(sessionId);
+    assertSessionDestructiveMutationAllowed([canonicalSessionId], 'accept queued work');
     const stub = sessions.get(canonicalSessionId);
     if (stub && getManagedSessionState(stub as Session)) {
       throw new RpcError('SESSION_WORKER_QUEUE_UNSUPPORTED', 'Managed sessions are not supported by Session-worker placement yet.', true);

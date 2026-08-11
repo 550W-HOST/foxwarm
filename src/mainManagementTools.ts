@@ -135,6 +135,7 @@ export const tool_create_agent = (args: ToolArgs, ctx?: ToolContext) => {
   return executeMainManagementTool('create_agent', args, ctx);
 };
 export const tool_create_session = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('create_session', args, ctx);
+export const tool_delete_session = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('delete_session', args, ctx);
 export const tool_node_bootstrap_info = (args: ToolArgs = {}, ctx?: ToolContext) => executeMainManagementTool('node_bootstrap_info', args, ctx);
 export const tool_node_pair_list = (args: ToolArgs = {}, ctx?: ToolContext) => executeMainManagementTool('node_pair_list', args, ctx);
 export const tool_node_pair_approve = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('node_pair_approve', args, ctx);

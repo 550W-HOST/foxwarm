@@ -129,8 +129,16 @@ async function start(): Promise<void> {
     // parts. They emit real tool calls so the canonical tool loop exercises the
     // facade handoff-wait post-action path (waitAfterHandoff arms the wait).
     const crossSession = String(process.env.FOXWARM_TEST_CROSS_SESSION || '');
-    if (process.env.FOXWARM_TEST_MAIN_TOOLS && chatCount === 1) {
-      return { toolCalls: JSON.parse(process.env.FOXWARM_TEST_MAIN_TOOLS) };
+    const mainToolsBySession = process.env.FOXWARM_TEST_MAIN_TOOLS_BY_SESSION
+      ? JSON.parse(process.env.FOXWARM_TEST_MAIN_TOOLS_BY_SESSION)
+      : undefined;
+    const configuredMainTools = mainToolsBySession?.[session.id]
+      || (process.env.FOXWARM_TEST_MAIN_TOOLS
+        && (!process.env.FOXWARM_TEST_MAIN_TOOLS_SESSION || session.id === process.env.FOXWARM_TEST_MAIN_TOOLS_SESSION)
+        ? JSON.parse(process.env.FOXWARM_TEST_MAIN_TOOLS)
+        : undefined);
+    if (configuredMainTools && chatCount === 1) {
+      return { toolCalls: configuredMainTools };
     }
     if (crossSession.includes('create-child') && chatCount === 1 && !session.id.endsWith('_mp-child')) {
       return { toolCalls: [{ name: 'create_child_session', args: { suffix: 'mp-child', message: 'hello child', waitAfterHandoff: true } }] };

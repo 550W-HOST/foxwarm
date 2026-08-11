@@ -171,6 +171,11 @@ export async function resumeSessionWorkerPendingIntents(
   }
 }
 export type SessionWorkerCompactionResult = { completed: true; compacted: boolean; generation: number; messageCount: number };
+export type SessionWorkerMutationAdmission = <T>(
+  sessionId: string,
+  operation: string,
+  admit: () => Promise<T>,
+) => Promise<T>;
 
 export class SessionWorkerIngressCoordinator {
   constructor(
@@ -179,6 +184,7 @@ export class SessionWorkerIngressCoordinator {
     readonly sourceContexts: SessionWorkerSourceContextRegistry,
     private readonly resolveCanonicalSessionId: (sessionId: string) => string,
     private readonly hasCatalogSession: (sessionId: string) => boolean,
+    private readonly withMutationAdmission: SessionWorkerMutationAdmission = async (_sessionId, _operation, admit) => admit(),
   ) {}
 
   registerSourceContext(sessionId: string, item: QueueItem, context?: ChannelContext): () => void {
@@ -195,22 +201,48 @@ export class SessionWorkerIngressCoordinator {
 
   async submitQueuedInput(requestedSessionId: string, item: QueueItem): Promise<SessionWorkerIngressResult> {
     const { sessionId, item: payload } = this.resolveExact(requestedSessionId, item);
-    const ownership = this.store.findOwnership(sessionId);
-    if (!ownership || ownership.state !== 'ready' || !ownership.incarnationId) {
-      throw new RpcError('SESSION_WORKER_INGRESS_UNAVAILABLE', `Session worker ${sessionId} has no activated durable owner.`, true);
-    }
-    return this.appendAndRun(sessionId, payload, { generation: ownership.generation, incarnationId: ownership.incarnationId });
+    const admitted = await this.withMutationAdmission(sessionId, 'accept queued work', async () => {
+      const ownership = this.store.findOwnership(sessionId);
+      if (!ownership || ownership.state !== 'ready' || !ownership.incarnationId) {
+        throw new RpcError('SESSION_WORKER_INGRESS_UNAVAILABLE', `Session worker ${sessionId} has no activated durable owner.`, true);
+      }
+      const expected = { generation: ownership.generation, incarnationId: ownership.incarnationId };
+      this.supervisor.assertActivatedOwnership(sessionId, expected);
+      const intent = this.store.enqueueIntent(sessionId, crypto.randomUUID(), 'enqueue', payload);
+      return { expected, intentId: intent.id };
+    });
+    return this.runAdmittedIntent(sessionId, admitted.expected, admitted.intentId);
   }
 
   async submitEnsuringWorker(requestedSessionId: string, item: QueueItem): Promise<SessionWorkerIngressResult> {
     const { sessionId, item: payload } = this.resolveExact(requestedSessionId, item);
-    const expected = await this.ensureReadyOwner(sessionId);
-    return this.appendAndRun(sessionId, payload, expected);
+    const admitted = await this.withMutationAdmission(sessionId, 'accept queued work', async () => {
+      const expected = await this.ensureReadyOwner(sessionId);
+      this.supervisor.assertActivatedOwnership(sessionId, expected);
+      const intent = this.store.enqueueIntent(sessionId, crypto.randomUUID(), 'enqueue', payload);
+      return { expected, intentId: intent.id };
+    });
+    return this.runAdmittedIntent(sessionId, admitted.expected, admitted.intentId);
   }
 
   async ensureWorkerOwner(requestedSessionId: string): Promise<{ sessionId: string; generation: number; incarnationId: string }> {
     const sessionId = this.requireLoadedCatalogSession(requestedSessionId);
     if (sessionId !== requestedSessionId) throw new RpcError('SESSION_WORKER_OWNER_INVALID_SESSION', 'Session worker operations require an exact canonical session ID.');
+    return this.withMutationAdmission(sessionId, 'access the exact Session owner', () => this.ensureWorkerOwnerWithinAdmission(sessionId));
+  }
+
+  /**
+   * Exact lifecycle-only variant for callers already holding Main's session
+   * identity/destructive-admission lock (currently fork/child source capture).
+   * It must not be used by ordinary runtime ingress.
+   */
+  async ensureWorkerOwnerWithinExistingAdmission(requestedSessionId: string): Promise<{ sessionId: string; generation: number; incarnationId: string }> {
+    const sessionId = this.requireLoadedCatalogSession(requestedSessionId);
+    if (sessionId !== requestedSessionId) throw new RpcError('SESSION_WORKER_OWNER_INVALID_SESSION', 'Session worker operations require an exact canonical session ID.');
+    return this.ensureWorkerOwnerWithinAdmission(sessionId);
+  }
+
+  private async ensureWorkerOwnerWithinAdmission(sessionId: string): Promise<{ sessionId: string; generation: number; incarnationId: string }> {
     const expected = await this.ensureReadyOwner(sessionId);
     const published = this.supervisor.projectionRegistry.get(sessionId);
     if (!published?.projection || published.generation !== expected.generation || published.incarnationId !== expected.incarnationId) {
@@ -222,59 +254,49 @@ export class SessionWorkerIngressCoordinator {
   async retryEnsuringWorker(requestedSessionId: string, source?: QueueSource): Promise<SessionWorkerProjection> {
     const sessionId = this.requireLoadedCatalogSession(requestedSessionId);
     if (sessionId !== requestedSessionId) throw new RpcError('SESSION_WORKER_RETRY_INVALID', 'Session worker retry requires an exact canonical session ID.');
-    this.supervisor.assertRetryAdmissionAvailable(sessionId);
-    const expected = await this.ensureReadyOwner(sessionId);
-    this.supervisor.assertRetryAdmissionAvailable(sessionId);
-    const published = this.supervisor.projectionRegistry.get(sessionId);
-    if (!published?.projection || published.generation !== expected.generation || published.incarnationId !== expected.incarnationId) {
-      await this.supervisor.loadProjectionActivated(sessionId, expected);
-    }
-    return this.supervisor.retryActivated(sessionId, expected, source);
+    const admitted = await this.withMutationAdmission(sessionId, 'start retry work', async () => {
+      this.supervisor.assertRetryAdmissionAvailable(sessionId);
+      const expected = await this.ensureWorkerOwnerWithinAdmission(sessionId);
+      this.supervisor.assertRetryAdmissionAvailable(sessionId);
+      return { completion: this.supervisor.retryActivated(sessionId, expected, source) };
+    });
+    return admitted.completion;
   }
 
   async updateSettings(requestedSessionId: string, patch: SessionWorkerSettingsPatch): Promise<SessionWorkerSettingsResult> {
-    const expected = await this.ensureWorkerOwner(requestedSessionId);
-    return this.supervisor.updateSettingsActivated(expected.sessionId, expected, patch);
+    return this.invokeEnsuringWorker(requestedSessionId, 'change Session settings', (sessionId, expected) => this.supervisor.updateSettingsActivated(sessionId, expected, patch));
   }
 
   async dequeueEnsuringWorker(requestedSessionId: string) {
-    const expected = await this.ensureWorkerOwner(requestedSessionId);
-    return this.supervisor.dequeueActivated(expected.sessionId, expected);
+    return this.invokeEnsuringWorker(requestedSessionId, 'start queued work', (sessionId, expected) => this.supervisor.dequeueActivated(sessionId, expected));
   }
 
   async runBtw(requestedSessionId: string, message: string) {
-    const expected = await this.ensureWorkerOwner(requestedSessionId);
-    return this.supervisor.runBtwActivated(expected.sessionId, expected, message);
+    return this.invokeEnsuringWorker(requestedSessionId, 'run a side request', (sessionId, expected) => this.supervisor.runBtwActivated(sessionId, expected, message));
   }
 
   async compactToolMessages(requestedSessionId: string, keepPercent?: number) {
-    const expected = await this.ensureWorkerOwner(requestedSessionId);
-    return this.supervisor.compactToolMessagesActivated(expected.sessionId, expected, keepPercent);
+    return this.invokeEnsuringWorker(requestedSessionId, 'start compaction work', (sessionId, expected) => this.supervisor.compactToolMessagesActivated(sessionId, expected, keepPercent));
   }
 
   async deleteMessages(requestedSessionId: string, num: number): Promise<SessionWorkerHistoryMutationResult> {
-    const expected = await this.ensureWorkerOwner(requestedSessionId);
-    return this.supervisor.deleteMessagesActivated(expected.sessionId, expected, num);
+    return this.invokeEnsuringWorker(requestedSessionId, 'delete Session messages', (sessionId, expected) => this.supervisor.deleteMessagesActivated(sessionId, expected, num));
   }
 
   async clearHistory(requestedSessionId: string): Promise<SessionWorkerHistoryMutationResult> {
-    const expected = await this.ensureWorkerOwner(requestedSessionId);
-    return this.supervisor.clearHistoryActivated(expected.sessionId, expected);
+    return this.invokeEnsuringWorker(requestedSessionId, 'clear Session history', (sessionId, expected) => this.supervisor.clearHistoryActivated(sessionId, expected));
   }
 
   async forceIndex(requestedSessionId: string): Promise<SessionWorkerHistoryMutationResult> {
-    const expected = await this.ensureWorkerOwner(requestedSessionId);
-    return this.supervisor.forceIndexActivated(expected.sessionId, expected);
+    return this.invokeEnsuringWorker(requestedSessionId, 'index Session history', (sessionId, expected) => this.supervisor.forceIndexActivated(sessionId, expected));
   }
 
   async refreshSnapshot(requestedSessionId: string): Promise<SessionWorkerHistoryMutationResult> {
-    const expected = await this.ensureWorkerOwner(requestedSessionId);
-    return this.supervisor.refreshSnapshotActivated(expected.sessionId, expected);
+    return this.invokeEnsuringWorker(requestedSessionId, 'refresh the Session snapshot', (sessionId, expected) => this.supervisor.refreshSnapshotActivated(sessionId, expected));
   }
 
   async notifyManualForkCreated(requestedSessionId: string, childSessionId: string, initialMessage?: string): Promise<{ result: 'appended' | 'queued' }> {
-    const expected = await this.ensureWorkerOwner(requestedSessionId);
-    return this.supervisor.notifyManualForkCreatedActivated(expected.sessionId, expected, childSessionId, initialMessage);
+    return this.invokeEnsuringWorker(requestedSessionId, 'receive a new fork session', (sessionId, expected) => this.supervisor.notifyManualForkCreatedActivated(sessionId, expected, childSessionId, initialMessage));
   }
 
   /**
@@ -288,13 +310,16 @@ export class SessionWorkerIngressCoordinator {
    */
   async enqueueEnsuringWorker(requestedSessionId: string, item: QueueItem): Promise<{ sessionId: string; mailboxIntentId: number }> {
     const { sessionId, item: payload } = this.resolveExact(requestedSessionId, item);
-    const expected = await this.ensureReadyOwner(sessionId);
-    this.supervisor.assertActivatedOwnership(sessionId, expected);
-    const intent = this.store.enqueueIntent(sessionId, crypto.randomUUID(), 'enqueue', payload);
-    void this.supervisor.runPendingActivated(sessionId, expected).catch(error => {
+    const admitted = await this.withMutationAdmission(sessionId, 'accept queued work', async () => {
+      const expected = await this.ensureReadyOwner(sessionId);
+      this.supervisor.assertActivatedOwnership(sessionId, expected);
+      const intent = this.store.enqueueIntent(sessionId, crypto.randomUUID(), 'enqueue', payload);
+      return { expected, intentId: intent.id };
+    });
+    void this.supervisor.runPendingActivated(sessionId, admitted.expected).catch(error => {
       logger.error({ err: error, sessionId }, 'Detached session worker runPending failed; durable mailbox work remains retryable');
     });
-    return { sessionId, mailboxIntentId: intent.id };
+    return { sessionId, mailboxIntentId: admitted.intentId };
   }
 
   private async ensureReadyOwner(sessionId: string): Promise<{ generation: number; incarnationId: string }> {
@@ -328,20 +353,32 @@ export class SessionWorkerIngressCoordinator {
     return sessionId;
   }
 
-  private async appendAndRun(
+  private async invokeEnsuringWorker<T>(
+    requestedSessionId: string,
+    operation: string,
+    invoke: (sessionId: string, expected: { generation: number; incarnationId: string }) => Promise<T>,
+  ): Promise<T> {
+    const sessionId = this.requireLoadedCatalogSession(requestedSessionId);
+    if (sessionId !== requestedSessionId) throw new RpcError('SESSION_WORKER_OWNER_INVALID_SESSION', 'Session worker operations require an exact canonical session ID.');
+    const admitted = await this.withMutationAdmission(sessionId, operation, async () => {
+      const expected = await this.ensureWorkerOwnerWithinAdmission(sessionId);
+      return { completion: invoke(sessionId, expected) };
+    });
+    return admitted.completion;
+  }
+
+  private async runAdmittedIntent(
     sessionId: string,
-    payload: QueueItem,
     expected: { generation: number; incarnationId: string },
+    intentId: number,
   ): Promise<SessionWorkerIngressResult> {
-    this.supervisor.assertActivatedOwnership(sessionId, expected);
-    const intent = this.store.enqueueIntent(sessionId, crypto.randomUUID(), 'enqueue', payload);
     const projection = await this.supervisor.runPendingActivated(sessionId, expected);
-    if (projection.lastAppliedMailboxId < intent.id) {
+    if (projection.lastAppliedMailboxId < intentId) {
       throw new RpcError('SESSION_WORKER_INGRESS_AMBIGUOUS', `Session worker ${sessionId} did not confirm the durable mailbox intent.`, true);
     }
     return {
       accepted: true,
-      mailboxIntentId: intent.id,
+      mailboxIntentId: intentId,
       generation: expected.generation,
       lastAppliedMailboxId: projection.lastAppliedMailboxId,
       messageCount: projection.messageCount,
@@ -352,15 +389,18 @@ export class SessionWorkerIngressCoordinator {
   async compactAwaited(requestedSessionId: string, request: CompactionRequest): Promise<SessionWorkerCompactionResult> {
     const sessionId = this.requireLoadedCatalogSession(requestedSessionId);
     if (sessionId !== requestedSessionId) throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', 'Awaited compaction requires an exact canonical session ID.');
-    const ownership = this.store.findOwnership(sessionId);
-    const entry = this.supervisor.projectionRegistry.get(sessionId);
-    if (!ownership || ownership.state !== 'ready' || !ownership.incarnationId || !entry?.projection
-      || entry.generation !== ownership.generation || entry.incarnationId !== ownership.incarnationId) {
-      throw new RpcError('SESSION_WORKER_COMPACTION_UNAVAILABLE', `Session worker ${sessionId} has no exact committed owner.`, true);
-    }
-    if (entry.projection.busy || entry.projection.queueLength !== 0) throw new RpcError('SESSION_WORKER_COMPACTION_BUSY', 'Session worker must be idle with an empty queue.', true);
-    const expected = { generation: ownership.generation, incarnationId: ownership.incarnationId };
-    const result = await this.supervisor.compactAwaitedActivated(sessionId, expected, request);
-    return { completed: true, compacted: result.compacted, generation: ownership.generation, messageCount: result.projection.messageCount };
+    const admitted = await this.withMutationAdmission(sessionId, 'start compaction work', async () => {
+      const ownership = this.store.findOwnership(sessionId);
+      const entry = this.supervisor.projectionRegistry.get(sessionId);
+      if (!ownership || ownership.state !== 'ready' || !ownership.incarnationId || !entry?.projection
+        || entry.generation !== ownership.generation || entry.incarnationId !== ownership.incarnationId) {
+        throw new RpcError('SESSION_WORKER_COMPACTION_UNAVAILABLE', `Session worker ${sessionId} has no exact committed owner.`, true);
+      }
+      if (entry.projection.busy || entry.projection.queueLength !== 0) throw new RpcError('SESSION_WORKER_COMPACTION_BUSY', 'Session worker must be idle with an empty queue.', true);
+      const expected = { generation: ownership.generation, incarnationId: ownership.incarnationId };
+      return { generation: ownership.generation, completion: this.supervisor.compactAwaitedActivated(sessionId, expected, request) };
+    });
+    const result = await admitted.completion;
+    return { completed: true, compacted: result.compacted, generation: admitted.generation, messageCount: result.projection.messageCount };
   }
 }

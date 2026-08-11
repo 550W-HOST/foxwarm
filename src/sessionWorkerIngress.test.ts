@@ -10,10 +10,11 @@ import { shutdownSessionRuntime, initializeSessionRuntime, requestCompaction, su
 import { createSessionRuntimeServiceHandler, sessionRuntimeServiceDescriptor } from './sessionRuntimeService';
 import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
 import { createChannelsStore, attachChannel, resetChannelsForTests, saveChannels, setChannelsStoreForTests } from './session/channels';
-import { serializeSessionHistoryPayload } from './session/metadataStore';
+import { getSessionHistoryFilePath, serializeSessionHistoryPayload } from './session/metadataStore';
 import * as sessionManager from './sessionManager';
 import { normalizeSessionWorkerIngressRequest, SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
 import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
+import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { QueueSource, Session } from './types';
@@ -41,6 +42,90 @@ function sourceContext(source: QueueSource, replies: any[]): ChannelContext {
 const itemFor = (text: string, source: QueueSource, clientMessageId: string) => ({
   type: 'user' as const, source, clientMessageId,
   parts: [{ text, imageMeta: { imageId: `image-${clientMessageId}`, mimeType: 'image/png', width: 2, height: 3 } }],
+});
+
+test('Worker admission that starts before a delete claim cannot spawn or append after the claim', async () => {
+  await sessionManager.loadSessions();
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-claim-crossing-'));
+  const sessionId = `worker-claim-crossing-${Date.now()}`;
+  const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
+  const sourceContexts = new SessionWorkerSourceContextRegistry();
+  const supervisor = new SessionWorkerSupervisor({
+    store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
+    workerEnv: { FOXWARM_DATA_DIR: root },
+  });
+  let releaseAdmission!: () => void;
+  const admissionGate = new Promise<void>(resolve => { releaseAdmission = resolve; });
+  let reachedAdmission!: () => void;
+  const admissionReached = new Promise<void>(resolve => { reachedAdmission = resolve; });
+  const ingress = new SessionWorkerIngressCoordinator(
+    store,
+    supervisor,
+    sourceContexts,
+    id => id,
+    id => id === sessionId,
+    async (id, operation, admit) => {
+      reachedAdmission();
+      await admissionGate;
+      return sessionManager.withSessionDestructiveMutationAdmission([id], operation, admit);
+    },
+  );
+  const session = baseSession(sessionId);
+  sessionManager.getAllSessions().set(sessionId, session);
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(session));
+  const authorityBefore = await fs.readFile(statePath);
+  let claimId: string | undefined;
+  try {
+    await supervisor.reconcileStartupOwnerships();
+    const pending = ingress.enqueueEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'crossing ingress' }] });
+    await admissionReached;
+    claimId = (await sessionManager.claimSessionsForDestructiveLifecycle([sessionId])).claimId;
+    releaseAdmission();
+    await assert.rejects(
+      pending,
+      (error: any) => error?.code === 'SESSION_DELETE_IN_PROGRESS' && error?.retryable === true,
+    );
+    assert.equal(store.findOwnership(sessionId), undefined);
+    assert.equal(store.countMailboxIntents(), 0);
+    assert.equal(supervisor.getStatus(sessionId), undefined);
+    assert.deepEqual(await fs.readFile(statePath), authorityBefore);
+
+    let forkSourceCalls = 0;
+    sessionManager.setSessionWorkerForkSourceProvider(async id => {
+      forkSourceCalls += 1;
+      const catalog = sessionManager.getSessionCatalog(id);
+      if (!catalog) return undefined;
+      await ingress.ensureWorkerOwnerWithinExistingAdmission(id);
+      await fs.copy(statePath, getSessionHistoryFilePath(id));
+      return readDetachedWorkerSession(id, catalog);
+    });
+    await assert.rejects(
+      () => sessionManager.forkSession(sessionId, 'claimed-source-regression'),
+      (error: any) => error?.code === 'SESSION_DELETE_IN_PROGRESS' && error?.retryable === true,
+    );
+    assert.equal(forkSourceCalls, 0, 'claimed source rejects before lifecycle-only Worker admission');
+    assert.equal(store.findOwnership(sessionId), undefined);
+
+    sessionManager.releaseSessionsForDestructiveLifecycle(claimId);
+    claimId = undefined;
+    const forkedId = await Promise.race([
+      sessionManager.forkSession(sessionId, 'identity-lock-regression'),
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('fork source admission deadlocked')), 2_000)),
+    ]);
+    assert.equal(forkSourceCalls, 1);
+    assert.ok(sessionManager.getAllSessions().has(forkedId));
+    await sessionManager.deleteSession(forkedId);
+  } finally {
+    releaseAdmission();
+    sessionManager.setSessionWorkerForkSourceProvider(undefined);
+    if (claimId) sessionManager.releaseSessionsForDestructiveLifecycle(claimId);
+    await supervisor.shutdown(5_000).catch(() => {});
+    store.close();
+    sessionManager.getAllSessions().delete(sessionId);
+    await fs.remove(getSessionHistoryFilePath(sessionId)).catch(() => {});
+    await fs.remove(root);
+  }
 });
 
 test('idle Main runtime compacts a real Worker archive through the canonical awaited plan engine', async () => {

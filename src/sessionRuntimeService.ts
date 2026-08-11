@@ -538,6 +538,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       if (!options?.worker?.ingress) {
         throw new RpcError('SESSION_WORKER_INGRESS_UNAVAILABLE', 'Session-worker ingress is unavailable.', true);
       }
+      sessionManager.assertSessionDestructiveMutationAllowed([normalized.sessionId], 'accept queued work');
       return options.worker.ingress.submitEnsuringWorker(normalized.sessionId, normalized.item);
     },
     async requestCompaction(input) {
@@ -550,6 +551,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         : workerSelection(requestedId);
       if (selection.kind === 'unavailable') throw new RpcError('SESSION_WORKER_COMPACTION_UNAVAILABLE', 'Committed Worker state is unavailable.', true);
       if (selection.kind === 'worker') {
+        sessionManager.assertSessionDestructiveMutationAllowed([selection.canonicalId], 'start compaction work');
         if (!options?.worker?.ingress) throw new RpcError('SESSION_WORKER_COMPACTION_UNAVAILABLE', 'Session-worker compaction is unavailable.', true);
         if (input.toolNoise) {
           const result = await options.worker.ingress.compactToolMessages(selection.canonicalId, input.keepPercent);
@@ -800,6 +802,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         throw new RpcError('SESSION_RUNTIME_INVALID_FORK', 'initialMessage must be a string when supplied.');
       }
       if (options?.worker) {
+        sessionManager.assertSessionDestructiveMutationAllowed([parentSessionId], 'receive a new fork session');
         // The parent event is a semantic history mutation, so it follows the
         // exact parent owner rather than hydrating a Main catalog stub.
         const selection = await ensureWorkerSelection(parentSessionId);
@@ -829,6 +832,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       const sessionId = normalizeSessionId(input.sessionId);
       if (options?.worker) {
         if (input.action === 'retry') {
+          sessionManager.assertSessionDestructiveMutationAllowed([sessionId], 'start retry work');
           if (!options.worker.ingress) throw new RpcError('SESSION_WORKER_OPERATION_UNAVAILABLE', 'Session-worker retry is unavailable.', true);
           const source = input.source === undefined ? undefined : normalizeSessionTurnDeliverySource(input.source);
           await options.worker.ingress.retryEnsuringWorker(sessionId, source);
@@ -836,6 +840,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         }
         if (input.source !== undefined) throw new RpcError('SESSION_RUNTIME_INVALID_CONTROL', 'source is supported only for retry.');
         if (input.action === 'dequeue') {
+          sessionManager.assertSessionDestructiveMutationAllowed([sessionId], 'start queued work');
           if (!options.worker.ingress) throw new RpcError('SESSION_WORKER_OPERATION_UNAVAILABLE', 'Session-worker dequeue is unavailable.', true);
           const selection = await ensureWorkerSelection(sessionId);
           const dequeued = await options.worker.ingress.dequeueEnsuringWorker(selection.canonicalId);

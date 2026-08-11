@@ -36,6 +36,7 @@ export const MAIN_MANAGEMENT_TOOL_OPERATIONS = [
   'recall',
   'create_agent',
   'create_session',
+  'delete_session',
   'node_bootstrap_info',
   'node_pair_list',
   'node_pair_approve',
@@ -51,7 +52,7 @@ export type MainManagementToolResponse = { result: unknown };
 export type ScheduleWaitTimeoutRequest = { sourceSessionId: string; waitId: string; timeoutSeconds: number };
 export type ScheduleWaitTimeoutResponse = { scheduled: true; waitId: string };
 
-export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 3, {
+export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 4, {
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),
   scheduleWaitTimeout: rpcMethod<ScheduleWaitTimeoutRequest, ScheduleWaitTimeoutResponse>(),
 });
@@ -128,6 +129,14 @@ function normalizeCreateChildSessionArgs(args: ToolArgs): ToolArgs {
     throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'create_child_session message must be a string when provided.');
   }
   return args;
+}
+
+function normalizeDeleteSessionArgs(args: ToolArgs): ToolArgs {
+  if (Object.keys(args).length !== 1 || typeof args.sessionId !== 'string' || !args.sessionId.trim()
+    || Buffer.byteLength(args.sessionId, 'utf8') > 256) {
+    throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'delete_session requires exactly one bounded non-empty sessionId.');
+  }
+  return { sessionId: args.sessionId };
 }
 
 export function createMainManagementToolServiceHandler(options: {
@@ -212,6 +221,16 @@ export function createMainManagementToolServiceHandler(options: {
       }
       if (operation === 'get_session_messages') {
         return { result: await invokeGetSessionMessages(args, sourceSessionId) };
+      }
+      if (operation === 'delete_session') {
+        // The reverse source fence is checked at ingress and again by the
+        // operation-specific orchestrator immediately before target teardown
+        // and final graph mutation. No live source Session crosses the RPC.
+        return { result: await sessionCrudTools.deleteSessionForSource(
+          normalizeDeleteSessionArgs(args),
+          sourceSessionId,
+          () => assertExpectedSource(sourceSessionId),
+        ) };
       }
       if (operation === 'create_agent' && args.convertSession === true) {
         throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'create_agent convertSession is unavailable from a Session worker because it mutates the source identity.');

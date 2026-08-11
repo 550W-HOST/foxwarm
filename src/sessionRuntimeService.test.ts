@@ -375,6 +375,16 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     assert.deepEqual(await fs.readFile(authorityPath), authorityBefore);
     assert.equal(JSON.stringify(sessionCatalogStore.get(sessionId)), catalogBefore);
 
+    const { claimId } = await sessionManager.claimSessionsForDestructiveLifecycle([sessionId]);
+    try {
+      await assert.rejects(
+        () => client.call('submitAndRun', { sessionId: alias, item: { type: 'user', parts: [{ text: 'late claimed ingress' }] } }),
+        (error: any) => error?.code === 'SESSION_DELETE_IN_PROGRESS' && error?.retryable === true,
+      );
+    } finally {
+      sessionManager.releaseSessionsForDestructiveLifecycle(claimId);
+    }
+
     const mismatchRegistry = new SessionWorkerProjectionRegistry();
     mismatchRegistry.establish({ sessionId, generation: identity.generation + 1, incarnationId: 'mismatched-incarnation' });
     const mismatchServices = new RpcServiceRegistry();

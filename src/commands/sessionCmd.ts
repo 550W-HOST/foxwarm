@@ -2,6 +2,7 @@ import { ChannelContext, getChannelId, getConversationId } from '../channel';
 import { commandSessionMessageCount, type CommandSession } from './types';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
+import { deleteSessionLifecycle } from '../sessionDeletion';
 import { resolveModelConfig } from '../config';
 import { parseSessionMoveArgs, parseCompactThresholdInput, resolveCommandModelSelection } from './helpers';
 
@@ -225,34 +226,25 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
 
       const targetSessionId = subArgs[0]
 
-      if (targetSessionId === sessionId) {
-        ctx.reply('❌ Cannot delete current session. Use /session clear to clear history or /attach to switch to another session first.')
-        return
-      }
-
       try {
-        const prep = await sessionManager.prepareSessionForDestructiveAction(targetSessionId)
-        if (prep.requiresRetry) {
-          const queueNote = prep.droppedQueueItems > 0
-            ? ` Cleared ${prep.droppedQueueItems} queued item(s).`
+        const result = await deleteSessionLifecycle({ requestedSessionId: targetSessionId, sourceSessionId: sessionId })
+        if (result.status === 'busy') {
+          const queueNote = result.droppedQueueItems > 0
+            ? ` Cleared ${result.droppedQueueItems} queued item(s).`
             : ''
-          const stopNote = prep.abortedInFlight
+          const stopNote = result.abortedInFlightCount > 0
             ? ' The in-flight LLM request was aborted.'
             : ' It will stop after the current tool call completes.'
           ctx.reply(`🛑 Session \`${targetSessionId}\` is busy. Stop signal sent.${stopNote}${queueNote} Retry delete after it becomes idle.`)
           return
         }
+        if (result.status === 'deleted') {
+          ctx.reply(`✅ Session \`${result.deletedSessionIds[0]}\` deleted.`)
+        } else {
+          ctx.reply(`❌ Session \`${targetSessionId}\` not found.`)
+        }
       } catch (e: any) {
         ctx.reply(`❌ ${e.message}`)
-        return
-      }
-
-      const deleted = await sessionManager.deleteSession(targetSessionId)
-
-      if (deleted) {
-        ctx.reply(`✅ Session \`${targetSessionId}\` deleted.`)
-      } else {
-        ctx.reply(`❌ Session \`${targetSessionId}\` not found.`)
       }
       break
     }
