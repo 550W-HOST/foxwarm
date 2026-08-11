@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs-extra';
 import * as sessionManager from '../sessionManager';
-import { resolveModelConfig } from '../config';
+import { getAgentDir, resolveModelConfig } from '../config';
 import { tool_create_child_session, tool_create_session, tool_set_session_child_model } from '../toolsSessionAgent';
 import { Session } from '../types';
 
@@ -50,6 +51,8 @@ test('create_session tool accepts explicit model override', async () => {
 
   try {
     const parent = await ensureSession(parentSessionId, primary);
+    parent.effort = 'none';
+    await sessionManager.saveSession(parent.id);
     const result = await tool_create_session({
       agentName: 'main',
       sessionName,
@@ -59,9 +62,39 @@ test('create_session tool accepts explicit model override', async () => {
     assert.match(String(result), /Model:/);
     const created = await sessionManager.getSession(createdSessionId);
     assert.equal(created.model, secondary);
+    assert.equal(created.effort, 'none');
   } finally {
     await sessionManager.deleteSession(createdSessionId).catch(() => {});
     await sessionManager.deleteSession(parentSessionId).catch(() => {});
+  }
+});
+
+test('agent main-session creation inherits raw current and future-child effort settings from its exact source', async () => {
+  await sessionManager.loadSessions();
+  const { primary } = getTestModels();
+  const parentSessionId = makeId('create_agent_effort_parent');
+  const agentName = makeId('effort_agent');
+  const mainSessionId = `${agentName}/main`;
+  try {
+    const parent = await ensureSession(parentSessionId, primary);
+    parent.effort = 'none';
+    parent.childModelDefault = primary;
+    parent.childEffortDefault = 'max';
+    await sessionManager.saveSession(parent.id);
+    await sessionManager.createAgentWithMainSession({
+      agentName,
+      sourceSessionId: parent.id,
+      sourceSessionOverride: parent,
+    });
+    const created = await sessionManager.getSession(mainSessionId);
+    assert.equal(created.model, primary);
+    assert.equal(created.effort, 'none');
+    assert.equal(created.childModelDefault, primary);
+    assert.equal(created.childEffortDefault, 'max');
+  } finally {
+    await sessionManager.deleteSession(mainSessionId).catch(() => {});
+    await sessionManager.deleteSession(parentSessionId).catch(() => {});
+    await fs.remove(getAgentDir(agentName)).catch(() => {});
   }
 });
 
@@ -148,6 +181,43 @@ test('create_child_session defaults to non-fork when fork is omitted', async () 
   } finally {
     await sessionManager.deleteSession(childSessionId).catch(() => {});
     await sessionManager.deleteSession(parentSessionId).catch(() => {});
+  }
+});
+
+test('forked and non-fork children resolve raw effort without materializing model defaults', async () => {
+  await sessionManager.loadSessions();
+  const { primary } = getTestModels();
+  const parentSessionId = makeId('child_effort_parent');
+  const inheritedId = `${parentSessionId}_inherited`;
+  const explicitId = `${parentSessionId}_explicit`;
+  const forkedId = `${parentSessionId}_forked`;
+  try {
+    const parent = await ensureSession(parentSessionId, primary);
+    parent.effort = 'low';
+    parent.childEffortDefault = 'max';
+    await sessionManager.saveSession(parent.id);
+
+    await sessionManager.createChildSession(parent.id, 'inherited', false, { sourceOverride: parent });
+    const inherited = await sessionManager.getSession(inheritedId);
+    assert.equal(inherited.effort, 'max');
+    assert.equal(inherited.childEffortDefault, 'max');
+
+    await sessionManager.createChildSession(parent.id, 'explicit', false, { effort: 'none', sourceOverride: parent });
+    assert.equal((await sessionManager.getSession(explicitId)).effort, 'none');
+
+    await sessionManager.createChildSession(parent.id, 'forked', true, { sourceOverride: parent });
+    const forked = await sessionManager.getSession(forkedId);
+    assert.equal(forked.effort, 'max');
+    assert.equal(forked.childEffortDefault, 'max');
+
+    delete parent.childEffortDefault;
+    assert.equal(sessionManager.resolveSpawnedSessionEffort(parent), 'low');
+    delete parent.effort;
+    assert.equal(sessionManager.resolveSpawnedSessionEffort(parent), undefined);
+  } finally {
+    for (const id of [inheritedId, explicitId, forkedId, parentSessionId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
   }
 });
 

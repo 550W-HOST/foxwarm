@@ -844,12 +844,14 @@ test('request_model_without_context uses direct low-level llm request with no to
 
   const session = await sessionManager.getSession(sessionId);
   session.model = 'anthropic/claude-sonnet-4-5';
+  session.effort = 'none';
   const originalRequestLlmOnce = (llm as any).requestLlmOnce;
-  let captured: { model?: string; systemPrompt?: string; toolDefinitionsLength?: number; inputText?: string; purpose?: string; promptCacheKey?: string } = {};
+  let captured: { model?: string; effort?: string; systemPrompt?: string; toolDefinitionsLength?: number; inputText?: string; purpose?: string; promptCacheKey?: string } = {};
 
   (llm as any).requestLlmOnce = async (options: any) => {
     captured = {
       model: options.model,
+      effort: options.effort,
       systemPrompt: options.systemPrompt,
       toolDefinitionsLength: Array.isArray(options?.toolDefinitions) ? options.toolDefinitions.length : -1,
       inputText: Array.isArray(options?.contents) ? options.contents.flatMap((msg: any) => msg.parts || []).map((part: any) => part.text || '').join('\n') : '',
@@ -864,6 +866,7 @@ test('request_model_without_context uses direct low-level llm request with no to
     assert.equal(result.status, 'completed');
     assert.deepEqual(result.result, { text: 'pong' });
     assert.equal(captured.model, 'anthropic/claude-sonnet-4-5');
+    assert.equal(captured.effort, 'none');
     assert.equal(captured.systemPrompt, '');
     assert.equal(captured.toolDefinitionsLength, 0);
     assert.equal(captured.inputText, 'ping');

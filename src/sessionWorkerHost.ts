@@ -12,6 +12,10 @@ import { refreshSessionSnapshotForSession } from './session/agentMetadata';
 import { clearSession, compactToolMessages as compactSessionToolMessages, deleteMessages, forceIndexSession, getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSessionCompactionRequest, type SessionHistoryDeps } from './session/history';
 import { getManagedSessionState } from './session/managedState';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './session/metadataStore';
+import {
+  applyNormalizedSessionModelEffortSettings,
+  normalizeProspectiveSessionModelEffortSettings,
+} from './session/modelEffortSettings';
 import { applyQueuedItemToWaitState, appendSessionMessagesForSession, buildManualForkNotificationMessage, startSessionWaitForSession, updateSessionBusyStateForSession } from './sessionManager';
 import { clearActiveSessionRuntimeState, setActiveSessionRuntimeState, setSessionRuntimeStateUpdateCallback } from './sessionRuntimeState';
 import { LocalSessionTurnHost, SessionTurnRunner, type SessionTurnHost } from './sessionTurnRunner';
@@ -210,7 +214,23 @@ export class SessionWorkerHost {
       const before = captureSessionSemanticState(session);
       const changed: string[] = [];
       try {
+        const hasModelEffortMutation = ['model', 'effort', 'childModelDefault', 'childEffortDefault']
+          .some(key => Object.prototype.hasOwnProperty.call(patch, key));
+        if (hasModelEffortMutation) {
+          try {
+            const normalized = normalizeProspectiveSessionModelEffortSettings(session, {
+              ...(Object.prototype.hasOwnProperty.call(patch, 'model') ? { model: patch.model } : {}),
+              ...(Object.prototype.hasOwnProperty.call(patch, 'effort') ? { effort: patch.effort } : {}),
+              ...(Object.prototype.hasOwnProperty.call(patch, 'childModelDefault') ? { childModelDefault: patch.childModelDefault } : {}),
+              ...(Object.prototype.hasOwnProperty.call(patch, 'childEffortDefault') ? { childEffortDefault: patch.childEffortDefault } : {}),
+            });
+            changed.push(...applyNormalizedSessionModelEffortSettings(session, normalized));
+          } catch (error: any) {
+            throw new RpcError('SESSION_WORKER_SETTINGS_INVALID', error?.message || String(error));
+          }
+        }
         for (const key of ['cwd', 'model', 'childModelDefault', 'currentNode'] as const) {
+          if (key === 'model' || key === 'childModelDefault') continue;
           if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
           const value = patch[key];
           const prior = session[key] ?? null;
@@ -229,6 +249,8 @@ export class SessionWorkerHost {
           if (prior !== value) changed.push('verbose');
           session.verbose = value;
         }
+        const settingOrder = ['cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault', 'currentNode', 'compactThresholdTokens', 'verbose'];
+        changed.sort((left, right) => settingOrder.indexOf(left) - settingOrder.indexOf(right));
         if (changed.length > 0) await this.persistOwner();
         return { changed, previous, current: this.settingsSnapshot(session), projection: buildSessionWorkerProjection(session) };
       } catch (error) {
@@ -746,7 +768,9 @@ export class SessionWorkerHost {
     return {
       cwd: session.cwd || null,
       model: session.model || null,
+      effort: session.effort || null,
       childModelDefault: session.childModelDefault || null,
+      childEffortDefault: session.childEffortDefault || null,
       currentNode: session.currentNode || null,
       compactThresholdTokens: typeof session.compactThresholdTokens === 'number' ? session.compactThresholdTokens : null,
       verbose: !!session.verbose,

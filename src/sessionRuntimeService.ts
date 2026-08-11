@@ -21,6 +21,11 @@ import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
 import { sessionCatalogStore } from './session/catalogStore';
 import { runBtwRequest } from './btw';
+import { MODEL_EFFORTS, type ModelEffort } from './config';
+import {
+  applyNormalizedSessionModelEffortSettings,
+  normalizeProspectiveSessionModelEffortSettings,
+} from './session/modelEffortSettings';
 
 export type SessionRuntimeTokenTotalsDto = {
   cachedTokens: number;
@@ -42,7 +47,9 @@ export type SessionRuntimeSessionDto = {
   currentNode: string;
   cwd: string | null;
   model: string | null;
+  effort: ModelEffort | null;
   childModelDefault: string | null;
+  childEffortDefault: ModelEffort | null;
   compactThresholdTokens: number | null;
   isolated: boolean;
   parentSessionId: string | null;
@@ -64,7 +71,9 @@ export type SessionRuntimeHistoryDto = {
 export type SessionRuntimeSettingsPatchDto = {
   cwd?: string | null;
   model?: string | null;
+  effort?: ModelEffort | null;
   childModelDefault?: string | null;
+  childEffortDefault?: ModelEffort | null;
   currentNode?: string | null;
   displayName?: string | null;
   compactThresholdTokens?: number | null;
@@ -131,7 +140,7 @@ export type SessionListProjectionBatchDto = {
   revision: string;
 };
 
-export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 6, {
+export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 7, {
   getSession: rpcMethod<{ sessionId: string }, { session: SessionRuntimeSessionDto | null }>(),
   listSessions: rpcMethod<{ limit?: number; offset?: number }, { sessions: SessionRuntimeSessionDto[]; total: number }>(),
   getSessionListProjections: rpcMethod<{ sessionIds: string[]; includeVolatile?: boolean; currentOwnersOnly?: boolean }, SessionListProjectionBatchDto>(),
@@ -185,9 +194,11 @@ function settingsFromSession(session: Session): SessionRuntimeSettingsDto {
   return {
     cwd: typeof session.cwd === 'string' && session.cwd.trim() ? session.cwd.trim() : null,
     model: typeof session.model === 'string' && session.model.trim() ? session.model.trim() : null,
+    effort: session.effort || null,
     childModelDefault: typeof session.childModelDefault === 'string' && session.childModelDefault.trim()
       ? session.childModelDefault.trim()
       : null,
+    childEffortDefault: session.childEffortDefault || null,
     currentNode: typeof session.currentNode === 'string' && session.currentNode.trim() ? session.currentNode.trim() : null,
     displayName: typeof session.displayName === 'string' && session.displayName.trim() ? session.displayName.trim() : null,
     compactThresholdTokens: typeof session.compactThresholdTokens === 'number' ? session.compactThresholdTokens : null,
@@ -209,6 +220,19 @@ function normalizeNullableSetting(
   return normalized || null;
 }
 
+function normalizeNullableEffortSetting(
+  patch: SessionRuntimeSettingsPatchDto,
+  key: 'effort' | 'childEffortDefault',
+): ModelEffort | null | undefined {
+  if (!Object.prototype.hasOwnProperty.call(patch, key)) return undefined;
+  const value = patch[key];
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string' || !MODEL_EFFORTS.includes(value as ModelEffort)) {
+    throw new RpcError('SESSION_RUNTIME_INVALID_SETTING', `${key} must be one of: ${MODEL_EFFORTS.join(', ')}, or null.`);
+  }
+  return value as ModelEffort;
+}
+
 export function buildSessionRuntimeSessionDto(session: Session): SessionRuntimeSessionDto {
   const messageCount = session.meta?.messageCount ?? session.history.length;
   const lastMessage = session.history[session.history.length - 1];
@@ -227,7 +251,9 @@ export function buildSessionRuntimeSessionDto(session: Session): SessionRuntimeS
     currentNode: session.currentNode || 'master',
     cwd: session.cwd || null,
     model: session.model || null,
+    effort: session.effort || null,
     childModelDefault: session.childModelDefault || null,
+    childEffortDefault: session.childEffortDefault || null,
     compactThresholdTokens: typeof session.compactThresholdTokens === 'number' ? session.compactThresholdTokens : null,
     verbose: !!session.verbose,
     isolated: sessionManager.isSessionEffectivelyIsolated(session),
@@ -263,7 +289,9 @@ export function overlaySessionWorkerProjection(
     currentNode: projection.currentNode,
     cwd: projection.cwd,
     model: projection.model,
+    effort: projection.effort,
     childModelDefault: projection.childModelDefault,
+    childEffortDefault: projection.childEffortDefault,
     compactThresholdTokens: projection.compactThresholdTokens,
     verbose: projection.verbose ?? session.verbose,
     tokenUsage: {
@@ -332,7 +360,8 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
     busy: session.busy, busyStartedAt: session.busyStartedAt, queueLength: session.queueLength,
     runtimeState: session.runtimeState, messageCount: session.messageCount, lastMessageTime: session.lastMessageTime,
     currentNode: session.currentNode, cwd: session.cwd, model: session.model,
-    childModelDefault: session.childModelDefault, compactThresholdTokens: session.compactThresholdTokens,
+    effort: session.effort, childModelDefault: session.childModelDefault,
+    childEffortDefault: session.childEffortDefault, compactThresholdTokens: session.compactThresholdTokens,
     tokenUsage: session.tokenUsage, verbose: session.verbose,
   });
 
@@ -599,7 +628,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       if (!input.patch || typeof input.patch !== 'object' || Array.isArray(input.patch)) {
         throw new RpcError('SESSION_RUNTIME_INVALID_SETTING', 'patch must be an object.');
       }
-      const supportedKeys = new Set(['cwd', 'model', 'childModelDefault', 'currentNode', 'displayName', 'compactThresholdTokens', 'verbose']);
+      const supportedKeys = new Set(['cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault', 'currentNode', 'displayName', 'compactThresholdTokens', 'verbose']);
       const suppliedKeys = Object.keys(input.patch);
       const unknownKey = suppliedKeys.find(key => !supportedKeys.has(key));
       if (unknownKey) {
@@ -610,6 +639,11 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       for (const key of stringKeys) {
         const normalized = normalizeNullableSetting(input.patch, key);
         if (normalized !== undefined) normalizedStrings.set(key, normalized);
+      }
+      const normalizedEfforts = new Map<'effort' | 'childEffortDefault', ModelEffort | null>();
+      for (const key of ['effort', 'childEffortDefault'] as const) {
+        const normalized = normalizeNullableEffortSetting(input.patch, key);
+        if (normalized !== undefined) normalizedEfforts.set(key, normalized);
       }
       let normalizedThreshold: number | null | undefined;
       if (Object.prototype.hasOwnProperty.call(input.patch, 'compactThresholdTokens')) {
@@ -664,6 +698,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
           for (const [key, normalized] of normalizedStrings) {
             if (key !== 'displayName') patch[key] = normalized;
           }
+          for (const [key, normalized] of normalizedEfforts) patch[key] = normalized;
           if (normalizedThreshold !== undefined) patch.compactThresholdTokens = normalizedThreshold;
           if (normalizedVerbose !== undefined) patch.verbose = normalizedVerbose;
           const workerResult = await options.worker.ingress.updateSettings(workerSelectionResult.canonicalId, patch);
@@ -682,7 +717,24 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       const session = await requireSession(settingsSessionId);
       const previous = settingsFromSession(session);
       const changed: Array<keyof SessionRuntimeSettingsPatchDto> = [];
+      const hasModelEffortMutation = ['model', 'effort', 'childModelDefault', 'childEffortDefault']
+        .some(key => Object.prototype.hasOwnProperty.call(input.patch, key));
+      if (hasModelEffortMutation) {
+        let normalized;
+        try {
+          normalized = normalizeProspectiveSessionModelEffortSettings(session, {
+            ...(normalizedStrings.has('model') ? { model: normalizedStrings.get('model')! } : {}),
+            ...(normalizedEfforts.has('effort') ? { effort: normalizedEfforts.get('effort')! } : {}),
+            ...(normalizedStrings.has('childModelDefault') ? { childModelDefault: normalizedStrings.get('childModelDefault')! } : {}),
+            ...(normalizedEfforts.has('childEffortDefault') ? { childEffortDefault: normalizedEfforts.get('childEffortDefault')! } : {}),
+          });
+        } catch (error: any) {
+          throw new RpcError('SESSION_RUNTIME_INVALID_SETTING', error?.message || String(error));
+        }
+        changed.push(...applyNormalizedSessionModelEffortSettings(session, normalized));
+      }
       for (const [key, normalized] of normalizedStrings) {
+        if (key === 'model' || key === 'childModelDefault') continue;
         const prior = settingsFromSession(session)[key];
         if (prior !== normalized) changed.push(key);
         if (normalized === null) delete session[key];
@@ -697,6 +749,11 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         if (!!session.verbose !== normalizedVerbose) changed.push('verbose');
         session.verbose = normalizedVerbose;
       }
+      const settingOrder: Array<keyof SessionRuntimeSettingsPatchDto> = [
+        'cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault',
+        'currentNode', 'displayName', 'compactThresholdTokens', 'verbose',
+      ];
+      changed.sort((left, right) => settingOrder.indexOf(left) - settingOrder.indexOf(right));
       if (changed.length > 0) {
         await sessionManager.saveSession(session.id);
       }

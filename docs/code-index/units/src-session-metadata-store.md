@@ -8,7 +8,7 @@ Manages authoritative per-session JSON serialization/hydration and the compatibi
 
 ## Key Exports
 
-- `serializeSessionHistoryPayload(session)` — writes `sessionStateVersion:1` plus authoritative history and semantic fields, including stats/meta wait/managed state, queue, `contextFrontier`, prompt/cache state, and `lastAppliedMailboxId`; catalog-only channel/sidebar state is excluded
+- `serializeSessionHistoryPayload(session)` — writes `sessionStateVersion:1` plus authoritative history and semantic fields, including raw model/effort settings, stats/meta wait/managed state, queue, `contextFrontier`, prompt/cache state, and `lastAppliedMailboxId`; catalog-only channel/sidebar state is excluded
 - `captureSessionSemanticState()` / `restoreSessionSemanticState()` / `replaceSessionSemanticState()` — one shared semantic-field owner for exact rollback and current-format replace/default behavior
 - `prepareSessionSemanticStateForHydration()` — distinguishes current v1 from unversioned legacy state and seeds only historically catalog-only stats/meta/vector values during the one-time upgrade
 - `normalizeAndValidateSessionAuthorityPayload()` — side-effect-free shared
@@ -77,6 +77,7 @@ Manages authoritative per-session JSON serialization/hydration and the compatibi
 - History-scan rebuild helpers remain available for explicit repair/recovery composition, but normal startup does not silently replace a missing SQLite catalog from authority files because catalog-only topology/presentation fields are not recoverable.
 - Metadata recovery deliberately ignores legacy `*.frontier.json` files so they are not mistaken for sessions named `*.frontier`.
 - Current semantic replacement defaults `currentNode` to `master`, normalizes queue through the current `isQueueItem` boundary, and restores exact pre-apply property presence if an authoritative write fails.
+- Current and legacy validation accepts only canonical effort values; omitted `effort` and `childEffortDefault` remain absent on hydration rather than receiving configured model defaults.
 - Main/catalog-stub hydration preserves catalog-owned agent, aliases, parent,
   and display-name presence while replacing all authority-owned semantics from
   JSON. Worker hydration receives those fields from its detached catalog stub;

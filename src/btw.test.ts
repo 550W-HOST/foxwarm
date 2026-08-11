@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import axios from 'axios';
 import * as llm from './llm';
-import { runBtwRequest, BTW_USAGE } from './btw';
+import { cloneSessionForBtw, runBtwRequest, BTW_USAGE } from './btw';
 import { COMMANDS } from './commands';
 import * as sessionManager from './sessionManager';
 import * as tools from './tools';
@@ -18,6 +18,20 @@ import type { Message, MessagePart, Session } from './types';
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
+
+test('BTW snapshot preserves raw current and future-child effort settings', () => {
+  const source = {
+    id: 'btw-effort', history: [], persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false, queue: [], meta: { lastMessageTime: 0 },
+    effort: 'none', childEffortDefault: 'max', childModelDefault: 'child-model',
+  } as Session;
+  const snapshot = cloneSessionForBtw(source);
+  assert.equal(snapshot.effort, 'none');
+  assert.equal(snapshot.childEffortDefault, 'max');
+  snapshot.effort = 'high';
+  assert.equal(source.effort, 'none');
+});
 
 function makeDeferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: any) => void } {
   let resolve!: (value: T) => void;

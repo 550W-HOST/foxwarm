@@ -13,7 +13,7 @@ Defines the core TypeScript interfaces and type aliases used throughout the syst
 - `MessageProviderMeta` — Message-level opaque provider metadata persisted on assistant messages; JSON-object `providerSpecificFields` carries the OpenAI Chat Completions `provider_specific_fields` (e.g. `reasoning_signature`), and `sourceModelId` scopes their round-trip to the producing concrete model
 - `OpenAIResponsesPartMeta` — Ordered Responses output metadata/annotations scoped to the concrete model that produced the part
 - `Message` — Role-tagged message with parts and metadata
-- `Session` — Full session state including history, queue, stats, model config, and context frontier
+- `Session` — Full session state including history, queue, stats, raw `model`/`effort` plus future-child defaults, and context frontier
 - `QueueItem` / `QueueSource` — Current inbound content/event work plus the `compact-commit` safe-point item and origin metadata. Source metadata can retain WeWork stream IDs and QQ Bot passive-reply message IDs without persisting callbacks; retry and compact planning are not queue types
 - `CompactionRequest` — Planning request options kept separate from queue-item state
 - `isQueueItem(value)` — Runtime guard that accepts only current non-empty queue records so unrecognized persisted records can be discarded generically

@@ -7,7 +7,7 @@ Cross-module lifecycle from public creation through lazy hydration, queued execu
 ## Creation surfaces
 
 - `createEmptySession(sessionId?)` is the simple public façade. It returns an existing session when present or lazily creates/saves an empty one and reports `{ session, created }`.
-- `createSessionInAgent(options)` is the agent-aware public creation surface for a named session with display/node/model/parent/prompt-file options.
+- `createSessionInAgent(options)` is the agent-aware public creation surface for a named session with display/node/model/effort/parent/prompt-file options.
 - `createAgentWithMainSession(options)` owns agent creation plus optional main session.
 - Low-level `createSession(sessionId, sessionData)` accepts a fully constructed session object, ensures its prompt-cache key, installs it in the map, and saves it. It does **not** allocate an ID from an options object.
 - `forkSession` and `createChildSession(parentSessionId, suffix, fork, options)` own fork/non-fork child creation.
@@ -50,6 +50,7 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 - Fork and child allocators skip both live and archived IDs while incrementing their suffix counters.
 - Forks copy the model-visible prefix/frontier/snapshot and inherit prompt-cache/archive lineage only through the fork point.
 - Non-fork children start a fresh model-visible prefix and cache key.
+- Forked and non-fork children resolve raw model effort as explicit effort, parent `childEffortDefault`, parent raw `effort`, then unset; unset never freezes a concrete model default into the child.
 - A manual user fork calls `notifyManualForkCreated` so the parent history records the child even when no initial instruction was supplied.
 
 ## Manual-fork event
@@ -100,6 +101,10 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 ### D-lifecycle-prefix-lineage
 
 Prompt-cache keys follow the model-facing prefix, not session identity. Forks and same-prefix side/compact-planning requests reuse the key; fresh non-fork sessions, successful compact commits, and clear operations use a fresh key.
+
+### D-lifecycle-model-effort-inheritance
+
+[2026-08-11] New Session lifetimes carry model and provider-neutral effort as one prospective pair. Child/fork resolution is explicit effort, parent `childEffortDefault`, parent raw `effort`, then unset; model resolution keeps the existing explicit model, parent child-model default, parent raw model, then global-default path. Inherited unset remains unset so a differently configured child model or virtual leaf chooses its own default. Fork/non-fork creation also preserves the parent's future-child defaults, source-based agent/session creation carries raw effort with model inheritance, and new-session timers snapshot model plus raw effort together. At timer fire, that persisted pair is inherited state and is re-normalized against one current models-config snapshot, preserving compatible concrete/virtual-union effort while clearing config-drift incompatibility to unset rather than rejecting delivery. Newly explicit effort remains strict against the selected concrete capability or virtual union, while stale inherited effort is cleared rather than blocking creation.
 
 ### D-lifecycle-manual-fork-event
 

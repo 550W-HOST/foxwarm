@@ -5,6 +5,7 @@ import { writeAuthoritativeSessionState } from './session/stateFile';
 import { buildSessionRuntimeState, type SessionRuntimeState } from './sessionRuntimeState';
 import { SessionWorkerMailboxIntent, SessionWorkerStore } from './sessionWorkerStore';
 import type { Session, SessionStats } from './types';
+import type { ModelEffort } from './config';
 
 /** Small read-only DTO for a future main-owned delivery path. It owns no catalog write protocol. */
 export type SessionWorkerProjection = {
@@ -20,7 +21,9 @@ export type SessionWorkerProjection = {
   currentNode: string;
   cwd: string | null;
   model: string | null;
+  effort: ModelEffort | null;
   childModelDefault: string | null;
+  childEffortDefault: ModelEffort | null;
   compactThresholdTokens: number | null;
   verbose?: boolean;
 };
@@ -47,7 +50,9 @@ export function buildSessionWorkerProjection(session: Session): SessionWorkerPro
     currentNode: session.currentNode || 'master',
     cwd: session.cwd || null,
     model: session.model || null,
+    effort: session.effort || null,
     childModelDefault: session.childModelDefault || null,
+    childEffortDefault: session.childEffortDefault || null,
     compactThresholdTokens: typeof session.compactThresholdTokens === 'number' ? session.compactThresholdTokens : null,
     verbose: !!session.verbose,
   }));

@@ -46,7 +46,7 @@ Manages scheduled timers that fire messages into sessions — either as one-time
 | `saveTimers()` | ~132 | Persists all timers to disk |
 | `cancelTimerJob(timerId)` | ~136 | Cancels a single scheduled job |
 | `cancelAllJobs()` | ~143 | Cancels all scheduled jobs |
-| `fireTimer(timerId)` | ~148 | Executes timer delivery logic (wait-timeout or session event) |
+| `fireTimer(timerId)` | ~148 | Executes timer delivery logic and revalidates a persisted new-session model/effort snapshot against one current models-config snapshot before lifetime creation |
 | `fireTimerForTests(timerId)` | ~265 | Invokes timer delivery deterministically without waiting for the scheduler |
 | `scheduleTimer(timer)` | ~210 | Schedules a timer via node-schedule (cron or one-time) |
 | `parseAbsoluteTime(at)` | ~245 | Parses a timestamp from number or ISO string |
@@ -75,7 +75,7 @@ Manages scheduled timers that fire messages into sessions — either as one-time
 - `fireTimer` handles two paths: wait-timeout timers deliver via `queueSessionWaitTimeoutEvent` as a pure system event wrapper, while regular timers deliver via `queueSessionSystemEvent` (to existing or newly-created sessions) with the raw timer message wrapped in a single `<foxwarm-message type="timer" ...>...</foxwarm-message>` system part. New-session timers generate/retry names inside the atomic session identity boundary, skipping live and archived candidates.
 - One-time timers are deleted after firing or on delivery failure; cron timers persist and only update `lastTriggeredAt`.
 - Input validation enforces allowed characters in `sessionPrefix`, positive timeout values, and exactly one schedule mode for creates / schedule-changing updates.
-- `createTimer`/`updateTimer` read owner defaults through SessionRuntime projections and never hydrate or save Worker-owned Session authority in Main. `updateTimer` rejects internal wait-timeout timers, verifies optional session ownership scope, preserves omitted fields, supports message/schedule/new-session target edits, and cancels/reschedules the active job so `nextRunAt` reflects the new schedule.
+- `createTimer`/`updateTimer` read owner defaults through SessionRuntime projections and never hydrate or save Worker-owned Session authority in Main. New-session timers snapshot model plus raw effort together. At fire time that persisted pair is inherited state, so it is re-normalized against one current models-config snapshot: compatible effort and virtual-union support remain stored on the child, while config-drift incompatibility clears to unset/default instead of failing delivery. Model edits likewise preserve compatible effort or clear incompatible effort without adding a model-facing timer effort argument. `updateTimer` rejects internal wait-timeout timers, verifies optional session ownership scope, preserves omitted fields, supports message/schedule/new-session target edits, and cancels/reschedules the active job so `nextRunAt` reflects the new schedule.
 - Cron runtime behavior is governed by installed `node-schedule` + `cron-parser`: 5-field and optional-seconds 6-field cron are accepted; `L` works for last day-of-month and last weekday-of-month; `W` is rejected.
 - The persistence layer uses `DiskJsonData` with backups disabled for lightweight writes.
 

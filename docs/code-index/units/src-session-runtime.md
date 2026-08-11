@@ -2,6 +2,8 @@
 
 Files: src/sessionRuntime.ts, src/sessionRuntimeService.ts, src/sessionWorkerSnapshot.ts, src/sessionRuntimeService.test.ts
 
+Secondary files: src/modelEffortProtocolVersions.test.ts
+
 Secondary files: src/sessionWorkerIngress.ts, src/sessionWorkerSupervisor.ts, src/sessionWorkerRuntimeService.ts, src/sessionWorkerSourceContextRegistry.ts, src/sessionWorkerIngress.test.ts, src/sessionWorkerEnsureIngress.test.ts
 
 ## Purpose
@@ -10,7 +12,7 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 
 ## Key exports
 
-- `sessionRuntimeServiceDescriptor` — version-6 request/event descriptor.
+- `sessionRuntimeServiceDescriptor` — version-7 request/event descriptor.
 - `createSessionRuntimeServiceHandler()` — local authoritative handler over current session-manager operations.
 - `initializeSessionRuntime()` / `shutdownSessionRuntime()` — local service lifecycle and bounded drain.
 - `listSessions()`, `getSession()`, `getHistory()` — immutable local or exact current-Worker projections/snapshots; list requests carry SQL-backed `limit`/`offset` and return a maintained total.
@@ -32,7 +34,7 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 
 - **Queries:** bounded list/state projections and full canonical history/queue snapshot for WebUI bootstrap.
 - **Queue commands:** canonical `QueueItem` enqueue and typed background/trigger/onboot event insertion.
-- **Settings:** worker-owned model, child model, cwd, node, verbose, and compact-threshold updates use the exact Session owner; display name is a Main-owned catalog/presentation update and is never persisted through Worker authority.
+- **Settings:** worker-owned model/effort, child model/effort defaults, cwd, node, verbose, and compact-threshold updates use the exact Session owner; display name is a Main-owned catalog/presentation update and is never persisted through Worker authority. Local current/child model-effort pairs normalize atomically, while Worker capability validation runs only inside the exact owner.
 - **Controls:** stop uses the closed supervisor/Worker interrupt path. The internal `retry` action backing public Continue ensures the exact Worker owner and runs the canonical continuation turn (`parts:null`) directly inside that owner, with an optional serialized QueueSource registered against the live Main channel context for ordinary final-delivery parity; it creates no second queue/mailbox intent, and the exact runner rejects completed/waiting history before claiming busy. For the current call, only transport unavailable/send-failed/closed loss is normalized to `SESSION_WORKER_RETRY_OUTCOME_UNKNOWN`: continuation may already be committed/delivered, so callers warn and require a history check rather than claiming failure or running it automatically again. Serialized handler `RPC_CANCELLED` and `RPC_DEADLINE_EXCEEDED` remain definite; the call does not currently supply a caller signal or deadline. Dequeue ensures the exact Worker and invokes its typed stop-then-run control: busy signaling bypasses the serialized tail, pending durable ingress joins at the stop-override safe point, and idle queued work uses the canonical runner. Local placement retains the same result shape and semantics.
 - **BTW:** validates one bounded message and routes it to the local adapter or exact Worker owner. The Worker snapshot/provider/display ordering is canonical in [D-process-topology-btw-side-request](../threads/process-topology-and-rpc.md#d-process-topology-btw-side-request).
 - **Events:** ordered history, list, and targeted state updates cloned from session-manager callbacks; Worker-aware state events always overlay the exact current projection rather than emitting stale semantic fields from the Main stub.

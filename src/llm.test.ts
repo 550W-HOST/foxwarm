@@ -143,6 +143,35 @@ function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+test('chat forwards the raw Session effort override without materializing a configured default', async () => {
+  const originalPost = axios.post;
+  let capturedBody: any;
+  (axios as any).post = async (_url: string, body: any) => {
+    capturedBody = body;
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream('effort ok') };
+  };
+  const session = createOpenAITestSession(makeId('chat_effort'));
+  session.effort = 'none';
+  try {
+    await chat([{ text: 'hello' }], session, 0, {
+      appendMessage: async message => { session.history.push(message); },
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+    assert.equal(capturedBody.reasoning_effort, 'none');
+    delete session.effort;
+    await chat([{ text: 'default' }], session, 1, {
+      appendMessage: async message => { session.history.push(message); },
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+    assert.equal(capturedBody.reasoning_effort, 'high');
+    assert.equal(Object.prototype.hasOwnProperty.call(session, 'effort'), false);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('sanitizeProviderRequestPayload replaces lone surrogates in nested provider payloads', () => {
   const payload = {
     input: [

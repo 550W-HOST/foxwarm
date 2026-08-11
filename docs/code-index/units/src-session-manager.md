@@ -1,6 +1,6 @@
 # Unit: src-session-manager
 
-Files: src/sessionManager.ts, src/session/sessionIdAllocation.test.ts
+Files: src/sessionManager.ts, src/session/modelEffortSettings.ts, src/session/modelEffortSettings.test.ts, src/session/sessionIdAllocation.test.ts
 
 ## Purpose
 
@@ -21,7 +21,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - `getOrCreateSessionForChannel` — per-channel serialized first-session creation and attachment, with an optional guest/session factory and attachment config.
 - `getExistingSession`, `getSession`, `createEmptySession`, `createSession`, `deleteSession`, `archiveSession` — lifecycle operations.
 - `saveSession`, `saveSessionCatalogEntries`, `saveSessionCatalogProjectionStrict`, `loadSessions`, `listSessions`, `getAllSessions`, `getSessionCatalog` — persistence and enumeration. Normal saves commit authority before an exact row/batch catalog projection; fenced Main-only presentation writes preserve the current semantic projection, while Worker handback explicitly commits one complete bounded projection. `getSessionCatalog` is a Main-owned loaded-stub read that never hydrates worker authority.
-- `setSessionCwd`, `setSessionChildModelDefault`, `setSessionCompactThreshold` — persisted session settings.
+- `setSessionCwd`, `setSessionChildModelDefault`, `setSessionCompactThreshold` — persisted session settings; child-model mutation uses the shared atomic model/effort normalizer.
 - `appendSessionMessage`, `appendSessionMessages`, `getSessionMessages` — durable history access. `appendSessionMessagesForSession` exposes the same sequence/image/archive/frontier/persist/notify composition for an exact supplied owner and persistence hook.
 
 ### Queue, wait, and execution coordination
@@ -40,7 +40,8 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 
 ### Relations, agents, and inter-session delivery
 
-- `forkSession`, `createChildSession`, `setSessionParent`, `updateChildSessionParentIds`, `getChildSessionIds`, `getCanonicalChildSessionIds`, `collectSessionDescendants` — lineage, explicit parent links, and canonical lifecycle traversal. Fork/child creation rejects a claimed source or parent at lifecycle entry before detached-provider, hydration, prompt-cache, or allocation effects, then rechecks before the child commit. `forkSession`/`createChildSession` accept a trusted `sourceOverride` snapshot so the Main management facade can fork a worker-fenced parent from a strictly read-only detached authority read without hydrating or persisting it.
+- `forkSession`, `createChildSession`, `resolveSpawnedSessionModelEffort`, `setSessionParent`, `updateChildSessionParentIds`, `getChildSessionIds`, `getCanonicalChildSessionIds`, `collectSessionDescendants` — lineage, model/effort spawn inheritance, explicit parent links, and canonical lifecycle traversal. Fork/child creation rejects a claimed source or parent at lifecycle entry before detached-provider, hydration, prompt-cache, or allocation effects, then rechecks before the child commit. `forkSession`/`createChildSession` accept a trusted `sourceOverride` snapshot so the Main management facade can fork a worker-fenced parent from a strictly read-only detached authority read without hydrating or persisting it.
+- `normalizeProspectiveSessionModelEffortSettings` / `applyNormalizedSessionModelEffortSettings` — one models-config snapshot and one mutation step for current plus future-child model/effort pairs; explicit effort is strict and stale inherited effort clears.
 - `sendToSession`, `notifyManualForkCreated` — inter-session and manual-fork events.
 - `createAgentWithMainSession`, `createSessionInAgent`, `moveSessionToTarget`, `setAgentInherit`, `setAgentIsolation`, `refreshSessionSnapshot` — façade over agent operations. Under Worker placement, creation of new lifetimes remains Main-owned; same-source agent creation may consume one matching detached read-only source override for inherited model/node/agent-memory identity without hydrating the catalog stub. Existing-session identity conversion/move, another-source creation, and agent-wide snapshot-affecting inheritance/isolation changes fail before effects until a closed ownership path exists.
 - `getAgentMetadata`, `getAgentInheritanceChain`, `getAgentIsolationNode`, `isAgentIsolated`, `isSessionEffectivelyIsolated` — agent metadata access.
@@ -91,7 +92,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - Retry and compact planning are not queue insertion paths. Async compact planning starts immediately from a snapshot; a busy `asyncCompact:false` explicit request reports unavailable; ready compact commits alone use the queue safe point.
 - Generic history append persists and notifies only its supplied messages; router-owned goal evaluation is intentionally outside this low-level persistence path.
 - Active `requesting-model` and `running-tool` phases are transient; persisted waits can survive restart.
-- Forks share parent prompt/cache/archive prefix lineage; non-fork children start a fresh prefix.
+- Forks share parent prompt/cache/archive prefix lineage; non-fork children start a fresh prefix. Both follow [D-lifecycle-model-effort-inheritance](../threads/session-lifecycle.md#d-lifecycle-model-effort-inheritance).
 - Session deletion clears runtime/pending compact state, the live map, attachments, session/legacy-frontier files, and shared metadata. Session history clear also removes any armed wait. Deletion currently leaves archive store/log and vector data intact; canonical scope is documented in [session lifecycle](../threads/session-lifecycle.md#archive-and-deletion).
 - `archiveSessions` applies one archived state to an exact canonical ID set with one metadata save; recursive selection/preflight remains owned by the WebUI route. Canonical descendant behavior: [D-lifecycle-descendant-actions](../threads/session-lifecycle.md#d-lifecycle-descendant-actions).
 - Destructive lifecycle claims are non-persisted and delete-only. They drain prior identity-lock work before acquisition, stabilize the selected canonical IDs across parent/child creation, identity move, channel attachment, queue/retry, and busy-start commit boundaries, and allow only the owning shared deletion orchestrator to detach survivors/delete targets. Both local mutation paths and Worker-placement queue-sink/catalog-only relation branches enforce the claim before their actual effect. Rejections carry stable HTTP 409 / retryable `SESSION_DELETE_IN_PROGRESS` semantics. Canonical contract: [D-lifecycle-descendant-actions](../threads/session-lifecycle.md#d-lifecycle-descendant-actions).

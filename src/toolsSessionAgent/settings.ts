@@ -3,6 +3,7 @@ import * as sessionRuntime from '../sessionRuntime';
 import { resolveModelConfig } from '../config';
 import { clearSessionGoal, normalizeGoalText, resolveSessionGoalRemindEvery, setSessionGoal } from '../session/goal';
 import { refreshSessionSnapshotForSession } from '../session/agentMetadata';
+import { applyNormalizedSessionModelEffortSettings, normalizeProspectiveSessionModelEffortSettings } from '../session/modelEffortSettings';
 import type { Session } from '../types';
 import { ToolArgs, ToolContext, normalizeToolModelKey } from './helpers';
 
@@ -130,8 +131,11 @@ export async function tool_set_session_child_model(args: ToolArgs, ctx: ToolCont
       const prior = typeof currentSession.childModelDefault === 'string' && currentSession.childModelDefault.trim()
         ? currentSession.childModelDefault.trim()
         : null;
-      delete currentSession.childModelDefault;
-      if (prior !== null) await ctx.persistCurrentSession!();
+      const changed = applyNormalizedSessionModelEffortSettings(
+        currentSession,
+        normalizeProspectiveSessionModelEffortSettings(currentSession, { childModelDefault: null }),
+      );
+      if (prior !== null || changed.length > 0) await ctx.persistCurrentSession!();
       const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(currentSession));
       return `Session \`${currentSession.id}\` child default model cleared.\nNow inheriting the current session model path (effective spawn model: \`${currentKey}\`).`;
     }
@@ -147,8 +151,11 @@ export async function tool_set_session_child_model(args: ToolArgs, ctx: ToolCont
     const prior = typeof currentSession.childModelDefault === 'string' && currentSession.childModelDefault.trim()
       ? currentSession.childModelDefault.trim()
       : null;
-    currentSession.childModelDefault = normalizedModel;
-    if (prior !== normalizedModel) await ctx.persistCurrentSession!();
+    const changed = applyNormalizedSessionModelEffortSettings(
+      currentSession,
+      normalizeProspectiveSessionModelEffortSettings(currentSession, { childModelDefault: normalizedModel }),
+    );
+    if (prior !== normalizedModel || changed.length > 0) await ctx.persistCurrentSession!();
     const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(currentSession));
     return `Session \`${currentSession.id}\` child default model updated.\noverride: \`${normalizedModel}\`\neffective spawned-session model: \`${currentKey}\``;
   }

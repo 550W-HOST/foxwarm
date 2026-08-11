@@ -1,4 +1,5 @@
 import { isQueueItem } from '../types';
+import { MODEL_EFFORTS, type ModelEffort } from '../config';
 
 export const CURRENT_SESSION_STATE_VERSION = 1;
 
@@ -96,6 +97,12 @@ export function normalizeAndValidateSessionAuthorityPayload(raw: unknown, label 
   if (value.lastAppliedMailboxId !== undefined
     && (!Number.isSafeInteger(value.lastAppliedMailboxId) || value.lastAppliedMailboxId < 0)) {
     throw new Error(`${label} mailbox cursor must be a non-negative safe integer.`);
+  }
+  for (const field of ['effort', 'childEffortDefault'] as const) {
+    if (value[field] !== undefined
+      && (typeof value[field] !== 'string' || !MODEL_EFFORTS.includes(value[field] as ModelEffort))) {
+      throw new Error(`${label} ${field} must be one of: ${MODEL_EFFORTS.join(', ')}.`);
+    }
   }
   return value;
 }

@@ -11,8 +11,8 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 
 - `validateAgentName(agentName)` — validates agent name format
 - `validateSessionName(sessionName)` — validates session name format
-- `createSessionInAgent(options, deps)` — creates a new session scoped to an agent
-- `createAgentWithSession(options, deps)` — creates a new agent directory and its initial session
+- `createSessionInAgent(options, deps)` — creates a new session scoped to an agent with an optional explicit model/effort pair
+- `createAgentWithSession(options, deps)` — creates a new agent directory and its initial session, inheriting source model/effort and future-child defaults when present
 - `moveSessionToTarget(options, deps)` — renames or moves a session across agents
 - `recoverPendingSessionIdentityMove(moveSessionArchiveIndex)` — finishes or reverses the one crash-interrupted identity move before normal session loading
 - `AgentMetadata` (interface) — shape of per-agent config (isolated, isolatedNode, inherit)
@@ -72,6 +72,8 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 - `./archiveStore` — `renameSessionArchiveStore`
 
 ## Behavior
+
+- New lifetime creation normalizes model plus raw effort together; source inheritance never materializes a configured concrete default, and stale inherited effort clears if the selected model no longer supports it. A Main-owned timer may pass its one current models-config snapshot through this internal creation option so fire-time normalization and creation validation cannot observe different configurations; the snapshot is not persisted.
 
 - Agent operations use a dependency-injection pattern (`SessionAgentOpsDeps` / `AgentMetadataDeps`) for session access, enabling testability.
 - `renameSessionIdentity` performs a multi-step atomic-ish rename: updates in-memory maps, moves history/archive/image files plus any leftover legacy frontier file on disk, updates child sessions' parent references, and persists everything.

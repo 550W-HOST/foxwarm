@@ -9,7 +9,7 @@ Owns provider request routing, Anthropic conversion/parsing, session prompt snap
 
 ## Key exports
 
-- `chat(parts, session, iteration?, options?)` — optionally append user parts, request one provider turn from current model-visible history, update stats, and append the model result.
+- `chat(parts, session, iteration?, options?)` — optionally append user parts, request one provider turn from current model-visible history while forwarding the Session's raw optional effort, update stats, and append the model result.
 - `requestLlmOnce(options)` — provider request without automatic session-history orchestration.
 - `executeTools(functionCalls, toolContext, session)` — model-ordered tool batch execution with serial barriers, bounded adjacent direct-exec segments, progress/control folding, and one final tool message.
 - `CurrentSessionEffects`, `CurrentSessionTurnEffects`, and `createDefaultCurrentSessionEffects()` — local-only normal-turn hooks. The provider/tool base carries a trusted local/Session-worker placement marker plus append/persist, stream, abort, and explicit-wait rollback; the runner extension adds canonical append-many, busy, wait, and history/runtime event ownership. They are not DTOs or RPC contracts.

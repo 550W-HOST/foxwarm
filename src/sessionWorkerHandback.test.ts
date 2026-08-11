@@ -119,6 +119,8 @@ test('idle release hands back authority before fence release and refreshes the M
   const fixture = await createFixture(sessionId, { idleMs: 200 });
   const initialAuthority = await fs.readJson(fixture.statePath);
   initialAuthority.verbose = true;
+  initialAuthority.effort = 'none';
+  initialAuthority.childEffortDefault = 'max';
   await fs.writeJson(fixture.statePath, initialAuthority);
   fixture.catalog.set(sessionId, {
     ...baseSession(sessionId), pinned: true, displayName: 'old-name', verbose: false,
@@ -152,6 +154,8 @@ test('idle release hands back authority before fence release and refreshes the M
     assert.equal(stub.pinned, true, 'Main-owned presentation fields are never derived from the authority');
     assert.equal(stub.displayName, 'old-name', 'an authority payload without displayName never erases the Main-owned name');
     assert.equal(stub.verbose, true, 'Worker-owned settings are refreshed from authority before fence release');
+    assert.equal(stub.effort, 'none');
+    assert.equal(stub.childEffortDefault, 'max');
     assert.equal(stub.busy, false); assert.deepEqual(stub.queue, []);
     assert.equal(stub.history.length, 0, 'handback must not hydrate authority history into the Main stub');
     assert.equal(fixture.store.getOwnership(sessionId).mailboxCursor, authority.lastAppliedMailboxId,

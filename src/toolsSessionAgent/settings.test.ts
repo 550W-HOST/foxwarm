@@ -103,12 +103,12 @@ test('own-session settings and snapshot use the detached owner and one persist h
     session.childModelDefault = '   ';
     await tool_set_session_child_model({ clear: true }, ctx);
     assert.equal(session.childModelDefault, undefined);
-    assert.equal(persistCount, 6);
+    assert.equal(persistCount, 7);
 
     assert.equal(await tool_update_session_snapshot({}, ctx),
       `Session \`${session.id}\` snapshot updated.\nAgent: \`main\``);
     assert.notEqual(session.persistentMemorySnapshot, 'stale snapshot');
-    assert.equal(persistCount, 7);
+    assert.equal(persistCount, 8);
   } finally {
     sessionRuntimeModule.getSession = originals.runtimeGet;
     sessionRuntimeModule.updateSettings = originals.runtimeUpdate;

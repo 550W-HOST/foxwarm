@@ -1807,6 +1807,7 @@ export async function chat(
         contents: contentsForLlm,
         systemPrompt,
         model: session.model,
+        effort: session.effort,
         sessionId: session.id,
         promptCacheKey,
         turnId: options?.turnId,

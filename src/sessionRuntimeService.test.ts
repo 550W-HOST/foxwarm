@@ -102,15 +102,19 @@ test('local SessionRuntime DTO seam clones projections and preserves event order
       patch: {
         cwd: '/tmp/runtime-cwd',
         model: 'provider/model',
+        effort: 'none',
         childModelDefault: 'provider/child',
+        childEffortDefault: 'max',
         currentNode: 'node-a',
         displayName: 'Runtime DTO',
         compactThresholdTokens: 4321.9,
       },
     });
-    assert.deepEqual(settings.changed, ['cwd', 'model', 'childModelDefault', 'currentNode', 'displayName', 'compactThresholdTokens']);
+    assert.deepEqual(settings.changed, ['cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault', 'currentNode', 'displayName', 'compactThresholdTokens']);
     assert.equal(settings.previous.cwd, null);
     assert.equal(settings.current.cwd, '/tmp/runtime-cwd');
+    assert.equal(settings.current.effort, 'none');
+    assert.equal(settings.current.childEffortDefault, 'max');
     assert.equal(settings.current.compactThresholdTokens, 4321);
     settings.session.displayName = 'caller-only-name';
     await flushEvents();

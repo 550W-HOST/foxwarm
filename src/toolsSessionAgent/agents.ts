@@ -257,6 +257,12 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
     throw new Error('sessionName is required');
   }
 
+  const spawnedSettings = sessionManager.resolveSpawnedSessionModelEffort(
+    ctx.session,
+    requestedModel,
+    args.effort,
+  );
+
   const result = await sessionManager.createSessionInAgent({
     agentName,
     sessionName,
@@ -264,7 +270,8 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
     parentSessionId,
     systemPromptFiles,
     currentNode: ctx.session?.currentNode,
-    model: sessionManager.resolveSpawnedSessionModel(ctx.session, requestedModel),
+    model: spawnedSettings.model,
+    effort: spawnedSettings.effort,
   });
 
   let message = `Session "${result.sessionId}" created under agent "${agentName}".`;

@@ -124,6 +124,7 @@ test('worker child creation, reply delivery, and facade queries stay Main-owned 
 test('main-management facade forks read-only, rejects stale generations, and validates bounded args', async () => {
   const parentId = `mc-fork-${Date.now()}`;
   const forkChildId = `${parentId}_mp-fork`;
+  const dtoChildId = `${parentId}_dto-child`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-facade-fork-'));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
   const registry = new RpcServiceRegistry();
@@ -132,7 +133,7 @@ test('main-management facade forks read-only, rejects stale generations, and val
   }));
   const transport = new LocalRpcTransport(registry, { maxPendingRequests: 32 });
   const client = new RpcClient(mainManagementToolServiceDescriptor, transport);
-  const createdSessions = [parentId, forkChildId];
+  const createdSessions = [parentId, forkChildId, dtoChildId];
   try {
     const parent = await sessionManager.getSession(parentId);
     const staleDeleteTargetId = `${parentId}-stale-delete-target`;
@@ -183,6 +184,17 @@ test('main-management facade forks read-only, rejects stale generations, and val
       () => client.call('execute', { sourceSessionId: 'someone/else', operation: 'session_list', args: {} }),
       (error: any) => error?.code === 'MAIN_MANAGEMENT_SOURCE_MISMATCH',
     );
+
+    const dtoResult: any = await client.call('execute', {
+      sourceSessionId: parentId,
+      operation: 'create_child_session',
+      args: { suffix: 'dto-child', fork: false, node: 'node-from-worker', model: 'model-from-worker', effort: 'none' },
+    });
+    assert.ok(String(dtoResult?.result).includes(dtoChildId));
+    const dtoChild = await sessionManager.getSession(dtoChildId);
+    assert.equal(dtoChild.currentNode, 'node-from-worker');
+    assert.equal(dtoChild.model, 'model-from-worker');
+    assert.equal(dtoChild.effort, 'none');
 
     // fork=true derives from the authority through a strictly read-only detached read.
     const forkResult: any = await client.call('execute',

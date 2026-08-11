@@ -72,7 +72,7 @@ test('catalog row/batch writes preserve exact aliases, counts, keyset pages, and
   const fixture = await makeStore();
   t.after(async () => { fixture.store.close(); await fs.remove(fixture.root); });
   fixture.store.upsertMany([
-    metadata('a', { aliases: ['shared'], agent: 'alpha', lastMessageTime: 30, parentSessionId: 'dangling', busy: true }),
+    metadata('a', { aliases: ['shared'], agent: 'alpha', lastMessageTime: 30, parentSessionId: 'dangling', busy: true, effort: 'none', childEffortDefault: 'max' }),
     metadata('b', { aliases: ['shared'], agent: 'alpha', lastMessageTime: 20, parentSessionId: 'a', queue: [{ type: 'background' }] }),
     metadata('c', { aliases: ['only-c'], agent: 'beta', lastMessageTime: 10 }),
   ]);
@@ -88,6 +88,11 @@ test('catalog row/batch writes preserve exact aliases, counts, keyset pages, and
   assert.deepEqual(fixture.store.listByAgent('alpha').map(row => row.id), ['a', 'b']);
   assert.deepEqual(fixture.store.listChildren('a').map(row => row.id), ['b']);
   assert.deepEqual(fixture.store.listRecoveryCandidates().map(row => row.id), ['a', 'b']);
+  assert.equal(fixture.store.get('a')?.effort, 'none');
+  assert.equal(fixture.store.get('a')?.childEffortDefault, 'max');
+  const rawEffort = readRawCatalogMetadata(fixture.dbPath, 'a');
+  assert.equal(rawEffort.effort, 'none');
+  assert.equal(rawEffort.childEffortDefault, 'max');
 
   fixture.store.upsertMany([
     metadata('alias-child', { parentSessionId: 'only-c', lastMessageTime: 5 }),

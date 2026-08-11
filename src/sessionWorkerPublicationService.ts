@@ -6,7 +6,7 @@ export type SessionWorkerPublicationIdentity = { sessionId: string; generation: 
 type PublishRequest = SessionWorkerPublicationIdentity & { projection: SessionWorkerProjection };
 export type SessionWorkerProjectionEntry = SessionWorkerPublicationIdentity & { projection?: SessionWorkerProjection; stale: boolean };
 
-export const sessionWorkerPublicationServiceDescriptor = defineRpcService('session-worker-publication', 1, {
+export const sessionWorkerPublicationServiceDescriptor = defineRpcService('session-worker-publication', 2, {
   publishCommitted: rpcMethod<PublishRequest, { applied: true }>(),
 });
 
@@ -24,7 +24,7 @@ function validateProjection(value: unknown, sessionId: string): SessionWorkerPro
   catch { throw new RpcError('SESSION_WORKER_PUBLICATION_INVALID', 'Projection must be an exact plain JSON record.'); }
   if (Buffer.byteLength(json, 'utf8') > 64 * 1024) throw new RpcError('SESSION_WORKER_PUBLICATION_INVALID', 'Projection exceeds 64 KiB.');
   const projection = JSON.parse(json) as any;
-  const keys = ['sessionId','lastAppliedMailboxId','busy','busyStartedAt','queueLength','runtimeState','messageCount','lastMessageTime','stats','currentNode','cwd','model','childModelDefault','compactThresholdTokens'];
+  const keys = ['sessionId','lastAppliedMailboxId','busy','busyStartedAt','queueLength','runtimeState','messageCount','lastMessageTime','stats','currentNode','cwd','model','effort','childModelDefault','childEffortDefault','compactThresholdTokens'];
   if ((Object.keys(projection).length !== keys.length && Object.keys(projection).length !== keys.length + 1)
     || keys.some(key => !Object.prototype.hasOwnProperty.call(projection, key))
     || (Object.prototype.hasOwnProperty.call(projection, 'verbose') && typeof projection.verbose !== 'boolean')) {
@@ -69,7 +69,9 @@ function validateProjection(value: unknown, sessionId: string): SessionWorkerPro
     || !validRuntime || !validStats || runtime.busy !== projection.busy || runtime.queueLength !== projection.queueLength
     || typeof projection.currentNode !== 'string' || !projection.currentNode || projection.currentNode.length > 128
     || !nullableString(projection.cwd, 4096) || !nullableString(projection.model, 512)
+    || !(projection.effort === null || ['none','low','medium','high','xhigh','max'].includes(projection.effort))
     || !nullableString(projection.childModelDefault, 512)
+    || !(projection.childEffortDefault === null || ['none','low','medium','high','xhigh','max'].includes(projection.childEffortDefault))
     || !(projection.compactThresholdTokens === null || safeInt(projection.compactThresholdTokens))) {
     throw new RpcError('SESSION_WORKER_PUBLICATION_INVALID', 'Projection fields are invalid.');
   }

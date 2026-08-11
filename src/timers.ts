@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import schedule, { Job } from 'node-schedule';
-import { TIMERS_FILE, getAgentDir } from './config';
+import { TIMERS_FILE, getAgentDir, loadModelsConfig, MODEL_EFFORTS, type ModelEffort, type ModelsConfig } from './config';
 import { logger } from './common';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
@@ -9,6 +9,7 @@ import type { Session } from './types';
 import { DiskJsonData } from './utils/diskJsonData';
 import { formatLocalTimestamp } from './utils/localTime';
 import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystem } from './utils/promptWrappers';
+import { normalizeProspectiveSessionModelEffortSettings } from './session/modelEffortSettings';
 
 export interface SessionTimer {
   id: string;
@@ -20,6 +21,7 @@ export interface SessionTimer {
   agentName?: string;
   currentNode?: string;
   model?: string;
+  effort?: ModelEffort;
   at?: number;
   cron?: string;
   lastTriggeredAt?: number;
@@ -180,7 +182,7 @@ function cancelAllJobs(): void {
   }
 }
 
-async function fireTimer(timerId: string): Promise<void> {
+async function fireTimer(timerId: string, modelsConfigOverride?: ModelsConfig): Promise<void> {
   const timer = timers.get(timerId);
   if (!timer) {
     return;
@@ -219,11 +221,18 @@ async function fireTimer(timerId: string): Promise<void> {
         throw new Error(`Target agent "${agentName}" not found.`);
       }
 
+      const modelsConfig = modelsConfigOverride || loadModelsConfig();
+      const modelEffort = normalizeProspectiveSessionModelEffortSettings({
+        model: timer.model,
+        effort: timer.effort,
+      }, {}, modelsConfig);
       const prefix = normalizeSessionPrefix(timer.sessionPrefix);
       const { sessionId } = await sessionManager.createSessionInAgentWithAutomaticName({
         agentName,
         currentNode: timer.currentNode,
-        model: timer.model,
+        model: modelEffort.model,
+        effort: modelEffort.effort,
+        modelsConfig,
       }, () => triggeredSessionNameFactory(prefix));
 
       await sessionManager.queueSessionSystemEvent(
@@ -266,8 +275,8 @@ async function fireTimer(timerId: string): Promise<void> {
   await saveTimers();
 }
 
-export async function fireTimerForTests(timerId: string): Promise<void> {
-  await fireTimer(timerId);
+export async function fireTimerForTests(timerId: string, modelsConfigOverride?: ModelsConfig): Promise<void> {
+  await fireTimer(timerId, modelsConfigOverride);
 }
 
 function scheduleTimer(timer: SessionTimer): void {
@@ -420,7 +429,7 @@ function normalizeCreateArgs(args: {
   };
 }
 
-function normalizeTimerUpdate(existing: SessionTimer, ownerSession: Pick<Session, 'agent' | 'currentNode' | 'model'> | null, args: {
+function normalizeTimerUpdate(existing: SessionTimer, ownerSession: Pick<Session, 'agent' | 'currentNode' | 'model' | 'effort'> | null, args: {
   message?: unknown;
   at?: unknown;
   afterSeconds?: unknown;
@@ -473,6 +482,7 @@ function normalizeTimerUpdate(existing: SessionTimer, ownerSession: Pick<Session
     updated.agentName = undefined;
     updated.currentNode = undefined;
     updated.model = undefined;
+    updated.effort = undefined;
     return updated;
   }
 
@@ -491,6 +501,12 @@ function normalizeTimerUpdate(existing: SessionTimer, ownerSession: Pick<Session
   updated.model = normalizeOptionalString(args.model)
     || existing.model
     || ownerSession?.model;
+  const modelEffort = normalizeProspectiveSessionModelEffortSettings({
+    model: updated.model,
+    effort: existing.effort ?? ownerSession?.effort,
+  }, {});
+  updated.model = modelEffort.model;
+  updated.effort = modelEffort.effort;
 
   return updated;
 }
@@ -514,6 +530,9 @@ function validatePersistedTimer(raw: any): SessionTimer | null {
     agentName: typeof raw.agentName === 'string' ? raw.agentName : undefined,
     currentNode: typeof raw.currentNode === 'string' ? raw.currentNode : undefined,
     model: typeof raw.model === 'string' ? raw.model : undefined,
+    effort: typeof raw.effort === 'string' && MODEL_EFFORTS.includes(raw.effort as ModelEffort)
+      ? raw.effort as ModelEffort
+      : undefined,
     lastTriggeredAt: typeof raw.lastTriggeredAt === 'number' ? raw.lastTriggeredAt : undefined,
     waitTimeoutId: typeof raw.waitTimeoutId === 'string' ? raw.waitTimeoutId : undefined,
     waitTimeoutSeconds: typeof raw.waitTimeoutSeconds === 'number' ? raw.waitTimeoutSeconds : undefined,
@@ -584,7 +603,7 @@ export async function createTimer(args: {
   agentName?: unknown;
   currentNode?: string;
   model?: string;
-}): Promise<TimerView> {
+}, modelsConfigOverride?: ModelsConfig): Promise<TimerView> {
   const targetSession = await sessionRuntime.getSession(args.sessionId);
   if (!targetSession) {
     throw new Error(`Session \`${args.sessionId}\` not found.`);
@@ -598,6 +617,10 @@ export async function createTimer(args: {
   if (normalized.newSession && !await fs.pathExists(getAgentDir(agentName!))) {
     throw new Error(`Agent \`${agentName}\` not found.`);
   }
+  const modelEffort = normalizeProspectiveSessionModelEffortSettings({
+    model: normalized.newSession ? (normalized.model || targetSession.model || undefined) : undefined,
+    effort: normalized.newSession ? (targetSession.effort || undefined) : undefined,
+  }, {}, modelsConfigOverride || loadModelsConfig());
 
   const timer: SessionTimer = {
     id: generateTimerId(),
@@ -608,7 +631,8 @@ export async function createTimer(args: {
     sessionPrefix: normalized.newSession ? (normalized.sessionPrefix || 'timer') : undefined,
     agentName,
     currentNode: normalized.newSession ? (args.currentNode || targetSession.currentNode) : undefined,
-    model: normalized.newSession ? (args.model || targetSession.model) : undefined,
+    model: normalized.newSession ? modelEffort.model : undefined,
+    effort: normalized.newSession ? modelEffort.effort : undefined,
     at: normalized.at,
     cron: normalized.cron,
   };
