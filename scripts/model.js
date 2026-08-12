@@ -98,8 +98,9 @@ function loadProductionRuntime() {
 
   const { loadModelsConfig } = require(configPath);
   const { requestLlmOnce } = require(llmPath);
+  const { shutdownLlmRequestJournal } = require(path.join(rootDir, 'lib', 'llmRequestJournal.js'));
   const { runSqliteOnlyArchivesMigration } = require(migrationsPath);
-  return { loadModelsConfig, requestLlmOnce, runSqliteOnlyArchivesMigration };
+  return { loadModelsConfig, requestLlmOnce, runSqliteOnlyArchivesMigration, shutdownLlmRequestJournal };
 }
 
 function readStdin(stream) {
@@ -154,7 +155,9 @@ async function runModelCli(argv, options = {}) {
 
   await runtime.runSqliteOnlyArchivesMigration?.();
 
-  const result = await runtime.requestLlmOnce({
+  let result;
+  try {
+    result = await runtime.requestLlmOnce({
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
     systemPrompt: args.system,
     model: args.model,
@@ -165,7 +168,10 @@ async function runModelCli(argv, options = {}) {
     registerAbortController: false,
     purpose: 'cli',
     timeoutMs: args.timeoutMs,
-  });
+    });
+  } finally {
+    await runtime.shutdownLlmRequestJournal?.();
+  }
 
   if (!result.text || !result.text.trim()) {
     throw new Error('Model returned an empty text response.');

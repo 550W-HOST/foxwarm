@@ -1,11 +1,11 @@
 # Unit: model-cli
 
-Files: scripts/foxwarm.js, scripts/model.js, scripts/model.test.js, scripts/archive.js, scripts/archive.test.js
+Files: scripts/foxwarm.js, scripts/model.js, scripts/model.test.js, scripts/archive.js, scripts/archive.test.js, scripts/storage.js, scripts/storage.test.js, scripts/test-postgres-journal.sh
 Secondary files: package.json, package-lock.json, README.md
 
 ## Purpose
 
-Provides the installable `foxwarm` command, its `model` subcommand for one-shot LLM requests, and its `archive export-jsonl` compatibility exporter. Commands are thin adapters over compiled production modules so provider behavior and SQLite archive semantics do not drift from the server.
+Provides the installable `foxwarm` command, its `model` subcommand for one-shot LLM requests, its backend-neutral `archive export-jsonl` compatibility exporter, and explicit Journal storage copy tooling. Commands are thin adapters over compiled production modules so provider/storage behavior does not drift from the server.
 
 ## Key Exports
 
@@ -16,6 +16,7 @@ Provides the installable `foxwarm` command, its `model` subcommand for one-shot 
 - `loadProductionRuntime()` — loads `lib/config.js` and `lib/llm.js` after selecting CLI-safe logging
 - `CliUsageError` — distinguishes usage failures (exit 2) from runtime/provider failures (exit 1)
 - `runArchiveCli(argv, options?)` — completes the SQLite migration and exports session plus LLM archives as JSONL
+- `runStorageCli(argv, options?)` — requires a quiesced-source acknowledgement and copies one SQLite Journal into an empty configured PostgreSQL Journal, then closes the CLI pool
 
 ## Function Index
 
@@ -49,7 +50,8 @@ Provides the installable `foxwarm` command, its `model` subcommand for one-shot 
 - CLI requests use request-journal purpose `cli`; they are reconstructable even though no session history exists.
 - Model listing and request forwarding accept virtual keys without reimplementing their routing; result JSON continues to report the concrete `modelId`. Canonical contract: [model routing](../threads/model-routing.md).
 - The CLI suppresses console logs and selects synchronous file logging before importing the production runtime. This keeps stdout machine-readable and avoids pino worker shutdown hangs.
-- The top-level dispatcher runs the model handler in-process, so child signal codes cannot be converted accidentally into success.
+- The top-level dispatcher runs handlers in-process. Model, archive, and storage commands close the Journal store before completion.
+- `foxwarm storage journal copy-sqlite-to-postgres --sqlite <path> --source-quiesced` never overwrites a nonempty target and leaves the SQLite source untouched.
 
 ## Tests
 

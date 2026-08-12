@@ -45,7 +45,7 @@ Remote Nodes and CLI Node runtime
 - LLM providers: OpenAI-compatible APIs and Anthropic
 - HTTP/WebSocket: Express and `ws`
 - Frontend: React-compatible Preact build, Monaco, and xterm.js
-- Storage: JSON/JSONL, SQLite, and LanceDB
+- Storage: JSON/JSONL, SQLite, optional PostgreSQL for the LLM Request Journal, and LanceDB
 - Automation: Puppeteer, MCP, ToolScript, and optional `node-pty`
 - Configuration: YAML with targeted legacy-data readers
 

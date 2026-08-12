@@ -11,6 +11,7 @@ Usage: foxwarm <subcommand> [options]
 Subcommands:
   model    Send one prompt through Foxwarm's configured production model stack
   archive  Export SQLite-authoritative archives as compatibility JSONL
+  storage  Copy/verify pluggable storage backends
 
 Options:
   -v, --version   Print version
@@ -32,14 +33,14 @@ async function run(argv, streams = {}) {
     stdout.write(`${pkg.version || 'unknown'}\n`);
     return 0;
   }
-  if (subcommand !== 'model' && subcommand !== 'archive') {
+  if (subcommand !== 'model' && subcommand !== 'archive' && subcommand !== 'storage') {
     stderr.write(`Usage error: Unknown subcommand: ${subcommand}\n`);
     return 2;
   }
 
-  const implementation = subcommand === 'model' ? require('./model.js') : require('./archive.js');
-  const runner = subcommand === 'model' ? implementation.runModelCli : implementation.runArchiveCli;
-  const UsageError = subcommand === 'model' ? implementation.CliUsageError : implementation.ArchiveCliUsageError;
+  const implementation = subcommand === 'model' ? require('./model.js') : subcommand === 'archive' ? require('./archive.js') : require('./storage.js');
+  const runner = subcommand === 'model' ? implementation.runModelCli : subcommand === 'archive' ? implementation.runArchiveCli : implementation.runStorageCli;
+  const UsageError = subcommand === 'model' ? implementation.CliUsageError : subcommand === 'archive' ? implementation.ArchiveCliUsageError : implementation.StorageCliUsageError;
   try {
     return await runner(argv.slice(1), streams);
   } catch (error) {

@@ -40,9 +40,15 @@ async function runArchiveCli(argv, options = {}) {
   const stdout = options.stdout || process.stdout;
   const runtime = options.runtimeLoader ? options.runtimeLoader() : loadRuntime();
   const { output } = parseArgs(argv);
-  await runtime.runSqliteOnlyArchivesMigration();
-  const sessions = await runtime.exportSessionArchivesJsonl(path.join(output, 'sessions'));
-  const llm = await runtime.exportLlmRequestJournalJsonl(path.join(output, 'llm-request-journal.jsonl'));
+  let sessions;
+  let llm;
+  try {
+    await runtime.runSqliteOnlyArchivesMigration();
+    sessions = await runtime.exportSessionArchivesJsonl(path.join(output, 'sessions'));
+    llm = await runtime.exportLlmRequestJournalJsonl(path.join(output, 'llm-request-journal.jsonl'));
+  } finally {
+    await runtime.shutdownLlmRequestJournal?.();
+  }
   stdout.write(`${JSON.stringify({ output, sessions, llm }, null, 2)}\n`);
   return 0;
 }

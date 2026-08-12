@@ -8,7 +8,7 @@ The journal records canonical inputs and observed attempt metadata. It does not 
 
 ## Durable model
 
-The journal uses `state/llm-request-journal.sqlite` as its sole runtime authority. Its dedicated SQLite/WAL database remains isolated from the conversation archive so a short-lived model CLI cannot lock ordinary session archive writes.
+The journal has one Foxwarm-owned async domain interface with a startup-selected SQLite or PostgreSQL implementation. SQLite remains the omission/default at `state/llm-request-journal.sqlite`; PostgreSQL is opt-in for this store only. Archive, catalog, and Session-runtime authorities remain SQLite.
 
 - Prompt strings, complete tool-definition arrays, and individual canonical messages are content-addressed objects.
 - A request manifest references those objects and identifies its purpose, optional session, iteration, requested model key, and a hash of the prompt-cache key.
@@ -34,7 +34,7 @@ Existing session message/block archives remain readable and unchanged. They do n
 
 `foxwarm archive export-jsonl --output <directory>` provides an explicit SQLite-backed compatibility export for training and inspection.
 
-The one-time SQLite-only startup migration streams and strictly verifies any legacy active JSONL before moving it under the migration backup tree. Normal runtime never reads or appends that JSONL. SQLite uses WAL, `synchronous=FULL`, immediate writer transactions, and a bounded busy timeout for concurrent server and short-lived CLI writers. A request manifest and every attempt start commit before the corresponding provider send.
+The one-time SQLite-only startup migration streams and strictly verifies any legacy active JSONL before moving it under the migration backup tree. Normal runtime never reads or appends that JSONL. SQLite uses WAL, `synchronous=FULL`, immediate writer transactions, and a bounded busy timeout for concurrent server and short-lived CLI writers. PostgreSQL uses a bounded lazy `pg` pool, a store-specific authority/schema marker, safe schema identifiers, and a migration advisory lock. A request manifest and every attempt start commit before the corresponding provider send.
 
 Full request/attempt row structure, object type/hash integrity, bounded delta ancestry, and reconstructed message count are checked during import and reconstruction. Corrupt records fail closed and are never labeled complete.
 
@@ -54,7 +54,9 @@ Provider-specific wire replay is explicitly outside this contract. Exact wire ca
 
 The normal journal never stores auth headers or provider-hydrated request payloads and does not claim exact HTTP wire replay. Existing archives remain legacy-partial rather than receiving inferred request records. A post-response journal-result failure is observable but must not re-enter provider retry logic and create a duplicate successful generation.
 
-[2026-08-03] The dedicated SQLite database is the sole runtime authority. Legacy JSONL is a migration-only input that is strictly imported, verified, and moved to migration backup before completion; runtime does not dual-write it. SQLite commits use durable WAL/FULL boundaries, and compatibility JSONL is generated only by explicit export.
+[2026-08-12] The LLM Request Journal alone is pluggable through a Foxwarm-owned domain store. SQLite remains the default and retains the legacy-JSONL migration boundary. PostgreSQL is an explicit startup-only alternative with no fallback or dual-write; canonical JSON remains TEXT and JavaScript millisecond timestamps remain BIGINT. Main establishes the configured authority before Session workers start, while workers and short-lived CLIs may connect directly and close their bounded pools during shutdown.
+
+`foxwarm storage journal copy-sqlite-to-postgres --sqlite <path> --source-quiesced` performs an explicit, empty-target-only cutover copy and full logical verification. It never runs automatically, never modifies the SQLite source, and does not provide automatic rollback after PostgreSQL receives new writes.
 
 ## Modules and units
 

@@ -1,10 +1,10 @@
 # Unit: src-llm-request-journal
 
-Files: src/llmRequestJournal.ts, src/llmRequestJournal.test.ts
+Files: src/llmRequestJournal.ts, src/llmRequestJournalStore.ts, src/llmRequestJournalStoreFactory.ts, src/llmRequestJournalSqliteStore.ts, src/llmRequestJournalPostgresStore.ts, src/llmRequestJournalMigration.ts, src/llmRequestJournalPaths.ts, src/llmRequestJournal.test.ts, src/llmRequestJournalPostgres.integration.test.ts
 
 ## Purpose
 
-Persists and reconstructs provider-neutral canonical LLM requests across session and sessionless callers. It owns content-addressed input objects, bounded checkpoint/delta manifests, physical attempt records, SQLite reconstruction, legacy migration, and compatibility export.
+Persists and reconstructs provider-neutral canonical LLM requests across session and sessionless callers. It owns the backend-neutral domain store, content-addressed input objects, bounded checkpoint/delta manifests, physical attempt records, SQLite/PostgreSQL reconstruction, legacy migration, explicit SQLite-to-PostgreSQL copy/verification, and compatibility export.
 
 Canonical cross-module contract: [canonical LLM request journal](../threads/llm-request-journal.md).
 
@@ -16,25 +16,28 @@ Canonical cross-module contract: [canonical LLM request journal](../threads/llm-
 - `reconstructLlmRequest` — rebuild exact canonical prompt/schema/messages plus attempt records, or report explicit legacy partialness.
 - `listLlmRequestJournal` — bounded discovery by session and purpose with a stable `(createdAt, requestId)` pagination cursor for training/export callers.
 - `canonicalJournalJson`, `hashJournalValue` — deterministic object-key canonicalization and SHA-256 identity.
-- `migrateLegacyLlmRequestJournalToSqlite` — migration-only strict JSONL import and equality verification.
-- `exportLlmRequestJournalJsonl` — bounded, snapshot-consistent SQLite-backed compatibility export with atomic destination replacement.
+- `LlmRequestJournalStore` — Foxwarm-owned async persistence contract; adapters do not expose generic SQL/query-builder APIs.
+- `PostgresLlmRequestJournalStore` / `SqliteLlmRequestJournalStore` — backend implementations with portable deterministic ordering.
+- `migrateLegacyLlmRequestJournalToSqlite` — SQLite-only migration input for strict legacy JSONL import and equality verification.
+- `copySqliteLlmRequestJournalToStore` — quiesced, read-only source copy into an empty PostgreSQL target with full record and reconstruction verification.
+- `exportLlmRequestJournalJsonl` — bounded, snapshot-consistent backend-neutral compatibility export with atomic destination replacement.
 - Test-only fault/reset hooks.
 
 ## Storage and behavior
 
-- The dedicated journal SQLite/WAL database is the sole runtime authority, isolated from ordinary conversation archive locks.
+- SQLite is the default authority. PostgreSQL is an explicit Journal-only alternative selected at startup; there is no fallback, dual-write, or cross-store transaction.
 - Prompt, full tool schema, and each canonical message use type-namespaced SHA-256 object IDs.
 - Same-session manifests use the longest common message prefix against the latest request. Chains checkpoint after a maximum depth of eight.
 - Request records store only a hash of the prompt-cache key.
 - Attempt records store a hash, not the body, of the provider-specific semantic payload.
 - Legacy JSONL is strictly imported only by the startup migration, then moved to path-preserving migration backup. Runtime uses FULL synchronous writer transactions and explicit JSONL export.
 - Request/attempt identity structure, object kind/hash, delta ancestry/depth, and reconstructed message count are verified before a request can be reported complete.
-- SQLite uses a busy timeout for concurrent server/CLI journal writers.
+- SQLite uses a busy timeout for concurrent server/CLI journal writers. PostgreSQL uses a bounded lazy pool (default max 1), store-local migration lock, authority/schema marker, and validated quoted schema identifier.
 - A database-local authority marker prevents a newly recreated empty file from being mistaken for the migrated journal after migration completion.
 
 ## Tests
 
-Tests cover deterministic canonical JSON, checkpoint/delta reconstruction, lossless equal-timestamp pagination, strict migration/retry/conflict handling, SQLite-only runtime and export, independent process/conversation-archive concurrency, malformed/corrupt-record rejection, explicit legacy partialness, post-response non-retry behavior, and assistant request linkage.
+Tests cover deterministic canonical JSON, checkpoint/delta reconstruction, lossless equal-timestamp pagination, strict migration/conflict handling, SQLite default behavior, PostgreSQL real-container request/attempt/reconstruction/export and concurrent writers, corruption/newer-version rejection, unavailable/redacted configuration, empty-target copy verification, explicit legacy partialness, post-response non-retry behavior, and assistant request linkage. `npm run test:postgres-journal` owns the disposable integration container lifecycle.
 
 ## Design decisions
 
