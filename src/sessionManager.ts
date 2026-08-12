@@ -14,6 +14,7 @@ import { RpcError } from './rpc';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import { cloneQueueItem, getManagedSessionState, isManagedSessionLeaseExpired, ManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
 import * as vector from './vector';
+import { VECTOR_ENABLED } from './config';
 import { CATALOG_DB_PATH, CHANNELS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getLegacySessionFrontierPath, type ModelEffort, type ModelsConfig } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
@@ -1828,15 +1829,17 @@ async function saveSessionForSessionCritical(session: Session): Promise<void> {
   await saveSessionCatalogEntriesCritical([session.id]);
 
   // Schedule archive-based vector indexing (non-blocking)
-  const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
-  const latestBlockIdHint = Math.max(0, (session.nextBlockId || 1) - 1);
-  const lastMessage = session.history[session.history.length - 1];
-  const latestMessageTokenEstimate = lastMessage?.__meta?.seq === latestSeqHint
-    ? vector.estimateArchiveMessageTokenCount(lastMessage)
-    : undefined;
+  if (VECTOR_ENABLED) {
+    const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
+    const latestBlockIdHint = Math.max(0, (session.nextBlockId || 1) - 1);
+    const lastMessage = session.history[session.history.length - 1];
+    const latestMessageTokenEstimate = lastMessage?.__meta?.seq === latestSeqHint
+      ? vector.estimateArchiveMessageTokenCount(lastMessage)
+      : undefined;
 
-  vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate, latestBlockIdHint)
-    .catch(err => logger.error({ err, sessionId }, 'Failed to schedule archive indexing'));
+    vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate, latestBlockIdHint)
+      .catch(err => logger.error({ err, sessionId }, 'Failed to schedule archive indexing'));
+  }
 
   // Notify global-list and per-session state consumers.
   notifySessionUpdated(sessionId);

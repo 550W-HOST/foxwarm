@@ -1,50 +1,86 @@
-# Vector 记忆
+# Vector memory
 
-Foxwarm 使用 LanceDB 实现长期记忆与检索增强（RAG）。
+Foxwarm uses LanceDB as an optional semantic retrieval layer over the authoritative session archive.
 
-> 相关归档/lineage 迁移说明见：`docs/archive-store.md`
+For archive and lineage migration details, see `docs/archive-store.md`.
 
-## 作用
+## Purpose
 
-Vector memory 主要用于：
+Vector memory supports:
 
-- 为后续对话提供长期上下文
-- 让模型检索过去的重要消息
-- 支持跨时间的项目回顾、历史查询、上下文恢复
+- semantic retrieval of older session context;
+- project/history recall across long conversations;
+- mixed lookup of raw archive segments, layered compact blocks, and compact-extracted facts.
 
-## 数据位置
+Vector memory is separate from agent-maintained memory files. `agents/<agent>/memory/` contains curated instructions and knowledge, while Vector indexes session archives for semantic lookup.
 
-```text
-state/db/
-```
-
-当前 vector 索引的上游归档主读取层已经切到：
+## Storage and authority
 
 ```text
-state/archive-store.sqlite
+state/archive-store.sqlite   authoritative archive, lineage, and vector checkpoints
+state/db/                    derived LanceDB index
 ```
 
-legacy JSONL archives are migration-only inputs. Current archive writes and reads use SQLite; compatibility JSONL is generated only by explicit export.
+Legacy JSONL archives are migration-only inputs. Current archive reads/writes use SQLite, and compatibility JSONL is produced only by explicit export:
 
-## 基本流程
+```bash
+foxwarm archive export-jsonl --output <directory>
+```
 
-1. 从 archive store 读取 raw messages / layered blocks
-2. 过滤系统噪声 / 不适合索引的内容
-3. 分段 / 分块（segment + chunk）
-4. 生成 embedding
-5. 写入 LanceDB
+The current LanceDB table is `messages_v7`. It contains raw, block, and fact rows with archive source metadata. Model-facing recall reloads the original archived messages or blocks after vector location; embedding chunks are not treated as authoritative history.
 
-## 索引命令
+## Configuration
+
+Vector is disabled by default:
+
+```yaml
+vector: false
+```
+
+Enable it with an OpenAI-compatible API base root. Include the version prefix or custom gateway API path; Foxwarm appends only `/embeddings`:
+
+```yaml
+vector:
+  baseUrl: http://localhost:11434/v1
+```
+
+A Vector object opts in unless it sets `enabled: false`. Enabled Vector requires a nonempty absolute HTTP(S) URL without username, password, query, or fragment components. A custom gateway root such as `https://gateway.example/openai/v1` is preserved exactly apart from trailing-slash removal.
+
+For compatibility, when top-level `vector` is absent, a nonempty legacy `llm.ollamaBaseUrl` still enables Vector. That field historically named the server root, so Foxwarm normalizes it to an API base ending in `/v1` before calling `/embeddings`. Explicit top-level `vector` always wins, and current configuration should use `vector.baseUrl`.
+
+With Vector disabled:
+
+- archive writes and compaction remain fully functional;
+- exact `recall.target` and `get_session_messages` continue to read SQLite;
+- semantic `recall.vector_query` and direct semantic/index operations report that Vector is disabled;
+- LanceDB, embeddings, vector maintenance, startup vector backfill, and the optional vector worker are not started;
+- best-effort indexing hooks become quiet no-ops.
+
+## Indexing and backfill
+
+When enabled, Vector indexing:
+
+1. reads raw messages and layered blocks from the archive store;
+2. excludes display-only/system noise that is not model-visible;
+3. builds bounded overlapping segments or deterministic block/fact rows;
+4. requests embeddings;
+5. writes LanceDB and advances SQLite vector checkpoints.
+
+Startup backfill is asynchronous. Search may be temporarily incomplete while pending checkpoints advance.
+
+Archive checkpoints are independent of archive writes. Raw messages and full block summaries created while Vector is disabled keep the previous checkpoint values and remain pending in `archive-store.sqlite`. After Vector is enabled and Foxwarm restarts, the normal startup backfill compares archive maxima with those checkpoints and indexes those pending raw and block sources. No archive migration or separate recovery protocol is required.
+
+Memory facts created by compaction are formatted into their authoritative block summary, so their text is still included in the later backfilled block row. The current startup backfill does not reconstruct separate `memory_kind: fact` rows for compactions that occurred while Vector was disabled. Semantic searches can therefore still find the fact text through the block, but fact-specific kind/attribution metadata and preference reranking may be incomplete for that disabled period.
+
+The manual session-index command can force pending indexing while Vector is enabled:
 
 ```bash
 /session index
 ```
 
-如果 session 尚有未索引 raw messages 或 new blocks，会把新增内容写入向量数据库。
+## Retrieval
 
-## 检索工具
-
-### 搜索记忆
+Semantic source-backed recall:
 
 ```ts
 recall({
@@ -53,14 +89,9 @@ recall({
 })
 ```
 
-现在 `recall({ vector_query })` 会混合检索：
+`recall({ vector_query })` searches raw segments, compact blocks, and facts, then reloads original archive ranges through the shared preview renderer. Exact target selection and literal result filtering remain separate operations.
 
-- raw archive chunks
-- layered compact blocks
-
-命中后会先根据 vector row 元数据回查原始 archived message/block 范围，再走 recall 的统一 preview renderer（总 `previewLength` 预算、tool 折叠、query/includeRegex/excludeRegex 过滤）。旧的 `search_vector` / `search_memory` 工具已删除。
-
-### 获取时间附近上下文
+Time-near raw context remains available through:
 
 ```ts
 get_memory_context({
@@ -69,54 +100,4 @@ get_memory_context({
 })
 ```
 
-`get_memory_context` 仍保持 **raw-only**，不返回 block 摘要结果。
-
-## mixed row / checkpoint 变化
-
-当前 LanceDB 表使用 `messages_v7`，会同时存两类 row：
-
-- `memory_kind = 'raw'`
-- `memory_kind = 'block'`
-
-block rows 除了文本和向量外，还会带：
-
-- `block_id`
-- `block_level`
-- `raw_start_seq`
-- `raw_end_seq`
-- `source_kind / source_start / source_end`
-
-vector checkpoint 现在主要记录在 SQLite archive store 的 `archive_checkpoints` 中。
-legacy `vector-index-checkpoints-v2.json` 仍可兼容读取并迁移。
-
-## Embedding 配置
-
-默认使用 Ollama：
-
-```bash
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=nomic-embed-text
-```
-
-示例：
-
-```bash
-ollama pull qwen3-embedding:0.6b
-```
-
-## 相关参数
-
-```bash
-CHUNK_SIZE=8000
-OVERLAP_PERCENT=0.1
-EMBEDDING_MAX_LENGTH=4000
-```
-
-## 说明
-
-Vector memory 是长期检索层，不等同于 agent memory 文件：
-
-- `agents/<agent>/memory/`：人工维护的长期指令 / 背景知识
-- `state/archive-store.sqlite`: authoritative archive, lineage, and checkpoint store
-- `foxwarm archive export-jsonl --output <directory>`: explicit compatibility export when JSONL is needed
-- `state/db/`：LanceDB 向量检索库
+`get_memory_context` remains raw-only and does not return block summaries.

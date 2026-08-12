@@ -274,6 +274,20 @@ export const APP_CONFIG_SCHEMA = {
   type: 'object',
   additionalProperties: true,
   properties: {
+    vector: {
+      oneOf: [
+        { const: false },
+        {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            enabled: { type: 'boolean' },
+            baseUrl: { type: 'string', pattern: '^https?://' },
+          },
+        },
+      ],
+      description: 'Optional semantic vector search. Omission or false disables it; an object enables it unless enabled is false and requires an OpenAI-compatible API base URL such as http://host:port/v1. Requires restart.',
+    },
     sessionWorkers: {
       oneOf: [
         { type: 'boolean' },
@@ -321,7 +335,7 @@ export const APP_CONFIG_SCHEMA = {
       type: 'object',
       additionalProperties: true,
       properties: {
-        ollamaBaseUrl: { type: 'string' },
+        ollamaBaseUrl: { type: 'string', description: 'Legacy vector endpoint root. Prefer top-level vector.baseUrl.' },
         contextLimit: { type: 'integer', minimum: 1 },
         compactPercent: { type: 'number', exclusiveMinimum: 0, maximum: 1 },
         compactBlockLevelMinTokens: { type: 'integer', minimum: 1 },

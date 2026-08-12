@@ -39,7 +39,7 @@ Session context owns model-context budgeting, layered compaction, the active con
 - The embedded frontier is the model-visible prefix source of truth and must render into valid messages.
 - A compaction job applies only to a compatible live prefix snapshot.
 - Lineage caps prevent post-fork parent content from reaching a child.
-- Optional memory facts and startup vector backfill are best-effort and never block a compact commit or service readiness.
+- Vector is an optional derived layer that defaults disabled. Optional memory facts and startup vector backfill are best-effort and never block a compact commit or service readiness; raw messages and full block summaries archived while disabled remain pending for later checkpoint-based backfill. Dedicated fact rows are not reconstructed, though fact text remains in block summaries.
 - Display-only messages are excluded from model context, candidate quota denominators, and embeddings.
 - Read-only recall/expansion may update archive import caches but never live history/frontier/queue.
 - Retained branch/log discovery plus the committed moved-ID alias ledger supplies the archive side of exact internal session-ID reservation and canonical historical reads; lifecycle semantics are canonical in [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
@@ -62,7 +62,7 @@ The current frontier is embedded in the authoritative per-session history snapsh
 
 ### D-session-context-best-effort-index
 
-Archive durability does not depend on vector availability. Backfill and compact-fact embedding may lag or fail without pretending that source archive data was lost.
+Archive durability does not depend on vector availability. Backfill and compact-fact embedding may be disabled, lag, or fail without pretending that source archive data was lost. Optional/default-disabled behavior is canonical in [D-context-optional-vector](../threads/context-compaction-and-recall.md#d-context-optional-vector).
 
 ## Open questions
 

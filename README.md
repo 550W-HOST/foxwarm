@@ -228,19 +228,30 @@ bot:
   httpPort: 3001
   enableWebUI: true
   enableTrigger: true
-llm:
-  ollamaBaseUrl: http://localhost:11434
+vector:
+  baseUrl: http://localhost:11434/v1
 vectorMaintenance:
   enabled: true
   retentionHours: 24
 ```
+
+Vector search is disabled by default. Omit `vector` or set `vector: false` to
+keep semantic indexing and recall disabled. Supplying a `vector` object opts in
+unless it sets `enabled: false`; enabled Vector requires an absolute HTTP(S)
+OpenAI-compatible API base URL, including its version/custom API root. Foxwarm
+rejects credentials, query strings, and fragments, and appends only
+`/embeddings`, so a custom gateway may use a value such as
+`https://gateway.example/openai/v1`. The legacy `llm.ollamaBaseUrl` field is
+still read when top-level `vector` is absent, but new configuration should use
+`vector.baseUrl`. Vector, worker placement, and maintenance settings are read
+at process startup.
 
 LanceDB maintenance is enabled by default. It compacts fragmented vector data
 and removes table versions older than the configured positive whole-hour
 retention window; the default is 24 hours. `vectorMaintenance: true` enables
 the defaults, `vectorMaintenance: false` disables maintenance, and an object
 enables it unless `enabled: false` while allowing `retentionHours` tuning.
-These settings are read at process startup.
+Maintenance is a no-op while Vector itself is disabled.
 
 ## Models (`state/models.yaml`)
 

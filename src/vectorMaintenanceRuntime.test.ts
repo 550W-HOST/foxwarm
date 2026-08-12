@@ -9,7 +9,7 @@ test('startup maintenance compacts an existing fragmented table before startup w
   process.env.FOXWARM_DATA_DIR = root;
   await fs.outputFile(
     path.join(root, 'state', 'config.yaml'),
-    'vectorMaintenance:\n  enabled: true\n  retentionHours: 24\n',
+    'vector:\n  baseUrl: http://127.0.0.1:11434/v1\nvectorMaintenance:\n  enabled: true\n  retentionHours: 24\n',
   );
 
   const lancedb = await import('@lancedb/lancedb');

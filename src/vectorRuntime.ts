@@ -3,7 +3,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { Message } from './types';
 import { estimateTokenCount } from './tokenCount';
-import { DB_DIR, OLLAMA_BASE_URL, SESSION_LOGS_DIR, VECTOR_MAINTENANCE_CONFIG } from './config';
+import { DB_DIR, SESSION_LOGS_DIR, VECTOR_BASE_URL, VECTOR_MAINTENANCE_CONFIG } from './config';
 import { logger } from './common';
 import {
     FairTableOperationGate,
@@ -781,10 +781,12 @@ async function indexMemoryFactsFromCompaction(input: CompactMemoryFactIndexInput
 async function getEmbedding(text: string) {
     const truncated = truncateToTokenLimit(text, EMBEDDING_MAX_LENGTH);
     const sanitized = sanitizeEmbeddingInput(truncated);
-    // Keep using the existing OLLAMA_BASE_URL config key for compatibility,
-    // but send embeddings requests through the OpenAI-compatible /v1/embeddings API.
-    const baseUrl = OLLAMA_BASE_URL.replace(/\/+$/, '');
-    const response = await fetch(`${baseUrl}/v1/embeddings`, {
+    if (!VECTOR_BASE_URL) {
+        throw new Error('Vector embedding base URL is not configured.');
+    }
+    const baseUrl = new URL(VECTOR_BASE_URL);
+    baseUrl.pathname = `${baseUrl.pathname.replace(/\/+$/, '')}/embeddings`;
+    const response = await fetch(baseUrl, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',

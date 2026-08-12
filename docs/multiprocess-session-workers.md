@@ -32,7 +32,8 @@ The implementation has a substantial real-child foundation, but Session-worker p
 | Area | Current state |
 | --- | --- |
 | `sessionWorkers` | Defaults off. When enabled, production bootstrap assembles the store/supervisor/ingress and routes the normal-ingress vertical slice through Workers. |
-| `dbWorkers` | Defaults on and currently means only the LanceDB/vector owner. Archive and LLM-request-journal SQLite are not moved behind this worker. |
+| `vector` | Defaults off. When disabled, Session workers do not bind a reverse Vector client and Main does not register the reverse Vector proxy. |
+| `dbWorkers` | Defaults on and currently means only the LanceDB/vector owner when Vector is enabled. Archive and LLM-request-journal SQLite are not moved behind this worker. |
 | Session authority | `state/sessions/<id>.json` is the full semantic authority. Main remains the sole `state/catalog.sqlite` writer. |
 | Ownership | One durable generation/incarnation owns one hot Session. Exact process identity, inert candidates, exit confirmation, and stale-generation fencing are implemented. |
 | Mailbox | Main validates and persists ordinary QueueItems through the closed ensure/spawn exact-owner ingress; JSON replacement precedes mailbox acknowledgement. |

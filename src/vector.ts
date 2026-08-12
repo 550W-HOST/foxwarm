@@ -1,14 +1,18 @@
 import { Message } from './types';
+import { estimateTokenCount } from './tokenCount';
+import { formatMessageText } from './utils/messageFormat';
+import { isModelVisibleMessage } from './session/messageVisibility';
 import { RpcClient, RpcError, type RpcTransport } from './rpc';
 import type { VectorServiceManager } from './vectorServiceManager';
 import type * as runtime from './vectorRuntime';
 import { vectorServiceDescriptor } from './vectorServiceDescriptor';
+import { VECTOR_ENABLED } from './config';
 
 let manager: VectorServiceManager | undefined;
 let externalTransport: RpcTransport | undefined;
 let externalClient: RpcClient<typeof vectorServiceDescriptor> | undefined;
 let externalTerminal = false;
-type VectorPlacement = { kind: 'owned'; useWorker: boolean } | { kind: 'external'; transport: RpcTransport };
+type VectorPlacement = { kind: 'disabled' } | { kind: 'owned'; useWorker: boolean } | { kind: 'external'; transport: RpcTransport };
 let activePlacement: VectorPlacement | undefined;
 let initializingPlacement: VectorPlacement | undefined;
 let initializing: Promise<void> | undefined;
@@ -18,6 +22,7 @@ let managerFactory = async (useWorker: boolean): Promise<VectorServiceManager> =
 };
 
 export type VectorInitOptions = {
+  enabled?: boolean;
   useWorker?: boolean;
   transport?: RpcTransport;
   placement?: 'child-reverse';
@@ -25,11 +30,15 @@ export type VectorInitOptions = {
 
 export async function init(options: VectorInitOptions = {}): Promise<void> {
   if (externalTerminal) throw new RpcError('VECTOR_SHUTTING_DOWN', 'Vector facade is shutting down.', true);
-  const requested: VectorPlacement = options.transport
+  const enabled = options.enabled ?? (options.transport ? true : VECTOR_ENABLED);
+  const requested: VectorPlacement = enabled === false
+    ? { kind: 'disabled' }
+    : options.transport
     ? { kind: 'external', transport: options.transport }
     : { kind: 'owned', useWorker: options.useWorker === true };
   const matches = (placement: VectorPlacement | undefined): boolean => {
     if (!placement || placement.kind !== requested.kind) return false;
+    if (placement.kind === 'disabled') return requested.kind === 'disabled';
     if (placement.kind === 'external') return requested.kind === 'external' && placement.transport === requested.transport;
     return requested.kind === 'owned' && placement.useWorker === requested.useWorker;
   };
@@ -44,6 +53,10 @@ export async function init(options: VectorInitOptions = {}): Promise<void> {
   }
   initializingPlacement = requested;
   initializing = (async () => {
+    if (requested.kind === 'disabled') {
+      activePlacement = requested;
+      return;
+    }
     if (requested.kind === 'external') {
       externalTransport = requested.transport;
       externalClient = new RpcClient(vectorServiceDescriptor, requested.transport);
@@ -62,6 +75,10 @@ export async function init(options: VectorInitOptions = {}): Promise<void> {
 
 export async function shutdown(): Promise<void> {
   if (initializing) await initializing.catch(() => {});
+  if (activePlacement?.kind === 'disabled') {
+    activePlacement = undefined;
+    return;
+  }
   if (externalClient || externalTransport) {
     externalTerminal = true; externalClient = undefined; externalTransport = undefined; activePlacement = undefined; return;
   }
@@ -73,7 +90,8 @@ export async function shutdown(): Promise<void> {
   if (manager === current) { manager = undefined; activePlacement = undefined; }
 }
 
-export function getVectorServiceStatus(): { mode?: 'local' | 'worker' | 'external'; ready: boolean; generation?: number; pid?: number } {
+export function getVectorServiceStatus(): { mode?: 'disabled' | 'local' | 'worker' | 'external'; ready: boolean; generation?: number; pid?: number } {
+  if (activePlacement?.kind === 'disabled') return { mode: 'disabled', ready: false };
   if (externalClient) return { mode: 'external', ready: true };
   return manager?.getStatus() || { ready: false };
 }
@@ -112,6 +130,7 @@ export async function scheduleSessionArchiveIndex(
   latestMessageTokenEstimate?: number,
   latestBlockIdHint?: number,
 ): Promise<number> {
+  if (isDisabled()) return 0;
   const result = await callVector('scheduleIndex', {
     sessionId,
     latestSeqHint,
@@ -135,11 +154,13 @@ export async function indexAllSessionArchives(sessionIds?: string[]): Promise<vo
 }
 
 export async function indexMemoryFactsFromCompaction(input: runtime.CompactMemoryFactIndexInput): Promise<number> {
+  if (isDisabled()) return 0;
   const result = await callVector('indexMemoryFacts', input);
   return result.indexed;
 }
 
 export async function renameSessionArchiveIndex(oldSessionId: string, newSessionId: string): Promise<void> {
+  if (isDisabled()) return;
   if (!manager && !externalClient) {
     // Startup move-journal recovery runs before vector placement starts and
     // touches only archive SQLite checkpoints, never LanceDB.
@@ -150,6 +171,7 @@ export async function renameSessionArchiveIndex(oldSessionId: string, newSession
 }
 
 export async function copySessionArchiveIndexCheckpoint(sourceSessionId: string, targetSessionId: string): Promise<void> {
+  if (isDisabled()) return;
   if (!manager && !externalClient) {
     await localRuntime().copySessionArchiveIndexCheckpoint(sourceSessionId, targetSessionId);
     return;
@@ -169,6 +191,9 @@ async function callVector<MethodName extends Parameters<ReturnType<VectorService
 ): Promise<any> {
   const selectedClient = externalClient || manager?.getClient();
   if (!selectedClient) {
+    if (isDisabled()) {
+      throw new RpcError('VECTOR_DISABLED', 'Vector search is disabled by configuration.', false);
+    }
     throw new RpcError('VECTOR_UNAVAILABLE', 'Vector service has not been initialized.', true);
   }
   try {
@@ -190,6 +215,11 @@ async function callVector<MethodName extends Parameters<ReturnType<VectorService
   }
 }
 
+function isDisabled(): boolean {
+  return activePlacement?.kind === 'disabled'
+    || (!activePlacement && !initializingPlacement && !VECTOR_ENABLED);
+}
+
 // Pure/vector-row helpers remain local and never carry a LanceDB handle.
 function localRuntime(): typeof import('./vectorRuntime') { return require('./vectorRuntime'); }
 export function setVectorServiceManagerFactoryForTests(factory?: (useWorker: boolean) => Promise<VectorServiceManager>): void {
@@ -203,6 +233,15 @@ export const calculateNextSegmentStartIndex: typeof runtime.calculateNextSegment
 export const createRowsFromMemoryFacts: typeof runtime.createRowsFromMemoryFacts = (...args) => localRuntime().createRowsFromMemoryFacts(...args);
 export const createRowsFromSegment: typeof runtime.createRowsFromSegment = (...args) => localRuntime().createRowsFromSegment(...args);
 export const createRowFromBlockRecord: typeof runtime.createRowFromBlockRecord = (...args) => localRuntime().createRowFromBlockRecord(...args);
-export const estimateArchiveMessageTokenCount: typeof runtime.estimateArchiveMessageTokenCount = (...args) => localRuntime().estimateArchiveMessageTokenCount(...args);
+export const estimateArchiveMessageTokenCount: typeof runtime.estimateArchiveMessageTokenCount = (message) => {
+  if (!isModelVisibleMessage(message)) return 0;
+  const text = formatMessageText(message, {
+    includeRolePrefix: true,
+    skipEphemeralSystem: true,
+    skipRagMemorySnippets: true,
+    skipThinking: true,
+  });
+  return text ? estimateTokenCount(text) : 0;
+};
 export const getArchiveIndexBatchDecision: typeof runtime.getArchiveIndexBatchDecision = (...args) => localRuntime().getArchiveIndexBatchDecision(...args);
 export const sanitizeEmbeddingInput: typeof runtime.sanitizeEmbeddingInput = (...args) => localRuntime().sanitizeEmbeddingInput(...args);

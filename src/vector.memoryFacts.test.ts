@@ -7,6 +7,7 @@ import path from 'path';
 test('compact memory fact rows are deduplicated and searchable with regex filters', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-vector-memory-facts-'));
   process.env.FOXWARM_DATA_DIR = tempRoot;
+  await fs.outputFile(path.join(tempRoot, 'state', 'config.yaml'), 'vector:\n  baseUrl: http://127.0.0.1:11434/v1\n');
 
   const originalFetch = global.fetch;
   global.fetch = (async (_input: any, init?: any) => {
@@ -23,7 +24,7 @@ test('compact memory fact rows are deduplicated and searchable with regex filter
 
   try {
     const vector = await import('./vector');
-    await vector.init();
+    await vector.init({ enabled: true });
 
     const rows = vector.createRowsFromMemoryFacts({
       sessionId: 'fact-session',

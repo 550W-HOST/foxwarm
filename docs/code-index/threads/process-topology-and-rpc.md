@@ -9,7 +9,8 @@ The first production-routed child-process service on this boundary is the LanceD
 ## Configuration
 
 - `sessionWorkers` defaults off. It accepts `false`, `true`, or an object; its designated toggle shape follows [D-config-feature-toggle-shorthand](../units/src-config.md#d-config-feature-toggle-shorthand), while `idleSeconds` defaults to 60 and is bounded from 1 through 86,400 seconds.
-- `dbWorkers` defaults on. In the current scope it controls only the LanceDB/vector owner. Archive and LLM-request-journal SQLite stores are not moved behind that worker.
+- `vector` defaults off and is independent from process placement. When disabled, Main and Session workers do not create a vector owner/client or register the reverse vector proxy.
+- `dbWorkers` defaults on. In the current scope it controls only the LanceDB/vector owner when Vector is enabled. Archive and LLM-request-journal SQLite stores are not moved behind that worker.
 - `vectorMaintenance` defaults on with a 24-hour retention window and accepts the same designated boolean/object configuration shape; its exact-owner execution contract is [D-vector-owner-maintenance](../units/src-vector.md#d-vector-owner-maintenance).
 - Both placement switches are read at startup. Saving configuration does not hot-migrate a live service between processes.
 
@@ -29,7 +30,7 @@ The hot turn loop does not move full history, images, or tool output through a c
 
 The vector service owns the LanceDB connection/table, per-session indexing chains, batch state, startup backfill, embedding requests, searches, and vector lifecycle operations. It reads durable archive rows and vector checkpoints directly from the archive SQLite store. Archive durability and exact recall remain independent of vector availability.
 
-With `dbWorkers:false`, the same vector service handler runs locally. With `dbWorkers:true`, a supervised child owns LanceDB and the main process never silently opens a second fallback owner after a worker failure.
+When Vector is enabled, `dbWorkers:false` runs the vector service handler locally and `dbWorkers:true` gives a supervised child ownership of LanceDB. The main process never silently opens a second fallback owner after a worker failure. When Vector is disabled, neither placement is created and `dbWorkers` has no runtime effect.
 
 The production bootstrap completes authoritative session/archive migrations before starting the selected vector owner. Child readiness means LanceDB is open; startup backfill remains asynchronous. The native LanceDB module is loaded lazily only by the selected owner. Unexpected child exit or IPC disconnect makes semantic calls retryably unavailable. A bounded-backoff watchdog starts a new generation only after the prior PID's exit is observed. Graceful shutdown drains accepted calls and active indexing/backfill work before closing LanceDB; if needed, it escalates through SIGTERM and SIGKILL while retaining ownership until exit confirmation.
 
@@ -49,7 +50,7 @@ The fixed committed-final delivery service carries only exact Worker source iden
 
 The MCP external facade likewise retains local RPC for Main-local callers and borrows the worker's shared reverse transport. Its fixed v1 methods cover redacted server summaries, optional-server tool discovery, named calls with cloneable args, and managed upsert/enabled-toggle updates. Direct compatibility tools, unified wrappers, and ToolScript nested calls use the same facade; the exact-source-fenced Main handler alone reaches the authoritative MCP client live snapshot and connection owner. Stored configuration values are never returned and configured secrets remain scrubbed from surfaced errors.
 
-The Session worker's vector facade borrows that same reverse transport. Main registers a bounded proxy handler that calls its already selected `vector.ts` facade, so `dbWorkers:true` still reaches the supervised vector owner and Main never opens another LanceDB. The worker facade does not statically import `vectorRuntime` or `VectorServiceManager`, does not open a local owner, and maps a missing/unavailable reverse service to retryable `VECTOR_UNAVAILABLE` rather than falling back.
+When Vector is enabled, the Session worker's vector facade borrows that same reverse transport. Main registers a bounded proxy handler that calls its already selected `vector.ts` facade, so `dbWorkers:true` still reaches the supervised vector owner and Main never opens another LanceDB. When disabled, Main omits the proxy and the Session worker initializes its local facade in explicit disabled mode instead of treating the missing service as a transport failure. The worker facade never imports `vectorRuntime` or `VectorServiceManager`, opens a local owner, or falls back.
 
 The canonical tool executor resolves one coherent source owner before common tool preparation. `LocalSessionTurnHost` plus `CurrentSessionEffects` may provide an authoritative detached Session without adding it to the process-global map; legacy/direct calls instead load exactly one existing global source by ID and never trust same-ID clones. Current-node routing, isolated permission evaluation, handler context, parallel-exec node/cwd snapshots, and the `set_goal` persist hook share that owner. The activated WorkerHost combines that exact local owner with reverse Main Management/Node/MCP/vector/delivery/presentation facades; unsupported tool branches fail before effects rather than falling back to Main hydration.
 
@@ -73,7 +74,7 @@ SessionRuntime/catalog projection merge and Main-owned lifecycle handoff are now
 
 - Vector indexing is best-effort. A vector-worker failure does not roll back session, archive, or compact commits.
 - Deterministic block rows are replaced before append, making retry after a Lance-commit/checkpoint gap idempotent.
-- Exact archive recall remains available without LanceDB. Semantic search reports a retryable unavailable error while the vector owner restarts.
+- Exact archive recall remains available without LanceDB. Semantic search reports non-retryable `VECTOR_DISABLED` when configured off and retryable unavailability while an enabled owner restarts.
 - Process isolation is intended for fault containment and parallel throughput. It is not a security or sandbox boundary.
 - SQLite locking protects database integrity but does not replace session-generation fencing for semantic ownership.
 

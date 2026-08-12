@@ -46,6 +46,7 @@ import {
     SESSION_WORKERS_ENABLED,
     TELEGRAM_CONFIG,
     TOKEN_FILE,
+    VECTOR_ENABLED,
 } from './config';
 import type { TelegramConfig } from './config';
 import { HttpServer, setHttpServer } from './httpServer';
@@ -295,7 +296,7 @@ async function start() {
     // Initialize the vector owner locally or in its configured child process.
     // Startup readiness means the table is open; archive backfill continues in
     // the background in either placement.
-    await vector.init({ useWorker: DB_WORKERS_ENABLED });
+    await vector.init({ enabled: VECTOR_ENABLED, useWorker: DB_WORKERS_ENABLED });
 
     await initializeExecManager();
 

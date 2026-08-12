@@ -60,6 +60,9 @@ test('app config schema suggests all managed channel types and QQ credential key
   const vectorMaintenance = schemas.APP_CONFIG_SCHEMA.properties.vectorMaintenance
   assert.equal(vectorMaintenance.oneOf.some((entry) => entry.type === 'boolean'), true)
   assert.equal(vectorMaintenance.oneOf.find((entry) => entry.type === 'object').properties.retentionHours.minimum, 1)
+  const vector = schemas.APP_CONFIG_SCHEMA.properties.vector
+  assert.equal(vector.oneOf.some((entry) => entry.const === false), true)
+  assert.equal(vector.oneOf.find((entry) => entry.type === 'object').properties.baseUrl.pattern, '^https?://')
 
   assert.equal(validateAppConfigSchema({
     channels: {
@@ -81,6 +84,9 @@ test('app config schema suggests all managed channel types and QQ credential key
   assert.equal(validateAppConfigSchema({ vectorMaintenance: true }), true)
   assert.equal(validateAppConfigSchema({ vectorMaintenance: false }), true)
   assert.equal(validateAppConfigSchema({ vectorMaintenance: { retentionHours: 48 } }), true)
+  assert.equal(validateAppConfigSchema({ vector: false }), true)
+  assert.equal(validateAppConfigSchema({ vector: { baseUrl: 'https://example.test/openai/v1' } }), true)
+  assert.equal(validateAppConfigSchema({ vector: true }), false)
 })
 
 test('WebUI schema wrappers reuse the shared canonical schema objects without a duplicate copy', async () => {

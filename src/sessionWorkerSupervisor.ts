@@ -20,6 +20,7 @@ import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationS
   SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
 import { createSessionTurnDeliveryServiceHandler, sessionTurnDeliveryServiceDescriptor,
   type ExactFinalSourceContextResolver } from './sessionTurnDelivery';
+import { VECTOR_ENABLED } from './config';
 
 export type SessionWorkerSupervisorOptions = {
   store: SessionWorkerStore;
@@ -533,7 +534,9 @@ export class SessionWorkerSupervisor {
         }));
       }
       reverseRegistry.register(mcpExternalServiceDescriptor, createMcpExternalServiceHandler({ expectedSourceSessionId: sessionId }));
-      reverseRegistry.register(vectorServiceDescriptor, createVectorFacadeProxyHandler());
+      if (VECTOR_ENABLED) {
+        reverseRegistry.register(vectorServiceDescriptor, createVectorFacadeProxyHandler());
+      }
       reverseServer = new ProcessRpcServer(reverseRegistry, {
         generation, peer: child, direction: 'reverse', exitOnDisconnect: false,
       });
