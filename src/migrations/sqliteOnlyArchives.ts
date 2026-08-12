@@ -3,7 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { promises as nodeFs } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { ARCHIVE_DB_PATH, STATE_DIR } from '../config';
+import { ARCHIVE_DB_PATH, LLM_REQUEST_JOURNAL_STORAGE_CONFIG, STATE_DIR } from '../config';
 import { logger } from '../common';
 import { hasArchiveStoreSqliteAuthority, markArchiveStoreSqliteAuthority, migrateLegacySessionArchivesToSqlite, type LegacyArchiveMigrationSource } from '../session/archiveStore';
 import { hasLlmJournalSqliteAuthority, markLlmJournalSqliteAuthority, migrateLegacyLlmRequestJournalToSqlite, type LegacyLlmJournalMigrationSource } from '../llmRequestJournal';
@@ -137,7 +137,7 @@ export async function runSqliteOnlyArchivesMigration(): Promise<SqliteOnlyArchiv
     const state = await readMigrationVersionState(store);
     if (state.migrations[SQLITE_ONLY_ARCHIVES_MIGRATION_ID]?.status === 'completed') {
       if (!await fs.pathExists(ARCHIVE_DB_PATH) || !hasArchiveStoreSqliteAuthority(SQLITE_ONLY_ARCHIVES_MIGRATION_ID)
-        || !hasLlmJournalSqliteAuthority(SQLITE_ONLY_ARCHIVES_MIGRATION_ID)) {
+        || (LLM_REQUEST_JOURNAL_STORAGE_CONFIG.backend === 'sqlite' && !hasLlmJournalSqliteAuthority(SQLITE_ONLY_ARCHIVES_MIGRATION_ID))) {
         throw new Error('SQLite-only archive migration is complete but an authoritative archive database is missing; restore the data directory backup');
       }
       return { migrationId: SQLITE_ONLY_ARCHIVES_MIGRATION_ID, skippedByVersion: true, migratedFiles: 0, skippedFiles: 0, failedFiles: 0 };

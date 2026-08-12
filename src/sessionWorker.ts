@@ -19,6 +19,7 @@ import { initializeSessionWorkerPublication, publishCommitted, shutdownSessionWo
 import { deliverCommittedFinal, deliverIntermediateText, initializeSessionTurnDelivery, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
 import { shutdownToolScriptRuntime } from './toolscript';
 import { VECTOR_ENABLED } from './config';
+import { shutdownLlmRequestJournal } from './llmRequestJournal';
 
 async function start(): Promise<void> {
   const sessionId = process.env.FOXWARM_SESSION_WORKER_SESSION_ID || '';
@@ -73,7 +74,7 @@ async function start(): Promise<void> {
     exitOnDrain: true,
     onDrain: async () => {
       await shutdownToolScriptRuntime();
-      await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownSessionTurnDelivery(), shutdownSessionWorkerPublication(), shutdownSessionWorkerPresentation(), shutdownMcpExternalService(), vector.shutdown()]);
+      await Promise.allSettled([shutdownMainManagementTools(), shutdownNodeExecution(), shutdownFileDelivery(), shutdownSessionTurnDelivery(), shutdownSessionWorkerPublication(), shutdownSessionWorkerPresentation(), shutdownMcpExternalService(), vector.shutdown(), shutdownLlmRequestJournal()]);
       await reverseTransport.drain(); reverseTransport.close(); store.close();
     },
   }).start();

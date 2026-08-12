@@ -21,6 +21,7 @@ import * as nodeExecution from './nodeExecution';
 import * as mcpExternal from './mcpExternalService';
 import * as vector from './vector';
 import { shutdownToolScriptRuntime } from './toolscript';
+import { initLlmRequestJournal, shutdownLlmRequestJournal } from './llmRequestJournal';
 import { registerChannel } from './channel';
 import fs from 'fs-extra';
 import crypto from 'crypto';
@@ -206,6 +207,9 @@ async function start() {
     // Complete authoritative SQLite/data migrations before a vector child is
     // allowed to open archive checkpoints or LanceDB.
     await sessionManager.loadSessions();
+    // Establish and verify the configured Journal authority before Session
+    // workers or channels can accept provider-bound work.
+    await initLlmRequestJournal();
 
     let webuiChannel: WebUIChannel | null = null;
 
@@ -591,6 +595,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down session runtime cleanly'))
             .then(() => vector.shutdown())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down vector service cleanly'))
+            .then(() => shutdownLlmRequestJournal())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down LLM request journal cleanly'))
             .finally(() => process.exit(0));
     });
 }

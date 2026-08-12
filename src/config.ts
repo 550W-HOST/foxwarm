@@ -113,6 +113,10 @@ export const DEFAULT_SESSION_WORKER_IDLE_SECONDS = 60;
 export const MIN_SESSION_WORKER_IDLE_SECONDS = 1;
 export const MAX_SESSION_WORKER_IDLE_SECONDS = 86_400;
 export const DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS = 24;
+export const DEFAULT_LLM_JOURNAL_POSTGRES_SCHEMA = 'foxwarm_llm_journal';
+export const DEFAULT_LLM_JOURNAL_POSTGRES_POOL_MAX = 1;
+export const DEFAULT_LLM_JOURNAL_POSTGRES_CONNECT_TIMEOUT_MS = 5_000;
+export const DEFAULT_LLM_JOURNAL_POSTGRES_IDLE_TIMEOUT_MS = 30_000;
 
 export type SessionWorkersConfig = boolean | {
   enabled?: boolean;
@@ -144,6 +148,87 @@ export type NormalizedVectorConfig = {
   baseUrl?: string;
   source: 'disabled-default' | 'vector' | 'legacy-ollama';
 };
+
+export type LlmRequestJournalPostgresConfig = {
+  connectionStringEnv: string;
+  schema?: string;
+  ssl?: boolean | 'require';
+  poolMax?: number;
+  connectTimeoutMs?: number;
+  idleTimeoutMs?: number;
+};
+
+export type LlmRequestJournalStorageConfig =
+  | { backend?: 'sqlite' }
+  | ({ backend: 'postgres' } & LlmRequestJournalPostgresConfig);
+
+export type NormalizedLlmRequestJournalStorageConfig =
+  | { backend: 'sqlite' }
+  | {
+      backend: 'postgres';
+      connectionString: string;
+      connectionStringEnv: string;
+      schema: string;
+      ssl: boolean;
+      poolMax: number;
+      connectTimeoutMs: number;
+      idleTimeoutMs: number;
+    };
+
+function assertOnlyKeys(raw: Record<string, unknown>, allowed: readonly string[], field: string): void {
+  const unknown = Object.keys(raw).filter(key => !allowed.includes(key));
+  if (unknown.length) throw new Error(`app config \`${field}\` has unknown field(s): ${unknown.join(', ')}.`);
+}
+
+function normalizeBoundedPositiveInteger(value: unknown, fallback: number, field: string, maximum: number): number {
+  const result = value === undefined ? fallback : value;
+  if (typeof result !== 'number' || !Number.isInteger(result) || result < 1 || result > maximum) {
+    throw new Error(`app config \`${field}\` must be an integer between 1 and ${maximum}.`);
+  }
+  return result;
+}
+
+export function normalizeLlmRequestJournalStorageConfig(
+  value: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): NormalizedLlmRequestJournalStorageConfig {
+  if (value === undefined) return { backend: 'sqlite' };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('app config `storage.llmRequestJournal` must be an object.');
+  }
+  const raw = value as Record<string, unknown>;
+  const backend = raw.backend === undefined ? 'sqlite' : raw.backend;
+  if (backend !== 'sqlite' && backend !== 'postgres') {
+    throw new Error('app config `storage.llmRequestJournal.backend` must be `sqlite` or `postgres`.');
+  }
+  if (backend === 'sqlite') {
+    assertOnlyKeys(raw, ['backend'], 'storage.llmRequestJournal');
+    return { backend: 'sqlite' };
+  }
+  assertOnlyKeys(raw, ['backend', 'connectionStringEnv', 'schema', 'ssl', 'poolMax', 'connectTimeoutMs', 'idleTimeoutMs'], 'storage.llmRequestJournal');
+  if (typeof raw.connectionStringEnv !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(raw.connectionStringEnv)) {
+    throw new Error('app config `storage.llmRequestJournal.connectionStringEnv` must name an environment variable.');
+  }
+  const connectionStringEnv = raw.connectionStringEnv;
+  const connectionString = env[connectionStringEnv];
+  if (!connectionString?.trim()) {
+    throw new Error(`PostgreSQL connection environment variable \`${connectionStringEnv}\` for LLM request journal is missing or empty.`);
+  }
+  const schema = raw.schema === undefined ? DEFAULT_LLM_JOURNAL_POSTGRES_SCHEMA : raw.schema;
+  if (typeof schema !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(schema)) {
+    throw new Error('app config `storage.llmRequestJournal.schema` must be a safe PostgreSQL identifier.');
+  }
+  if (raw.ssl !== undefined && typeof raw.ssl !== 'boolean' && raw.ssl !== 'require') {
+    throw new Error('app config `storage.llmRequestJournal.ssl` must be a boolean or `require`.');
+  }
+  return {
+    backend: 'postgres', connectionString: connectionString.trim(), connectionStringEnv, schema,
+    ssl: raw.ssl === true || raw.ssl === 'require',
+    poolMax: normalizeBoundedPositiveInteger(raw.poolMax, DEFAULT_LLM_JOURNAL_POSTGRES_POOL_MAX, 'storage.llmRequestJournal.poolMax', 32),
+    connectTimeoutMs: normalizeBoundedPositiveInteger(raw.connectTimeoutMs, DEFAULT_LLM_JOURNAL_POSTGRES_CONNECT_TIMEOUT_MS, 'storage.llmRequestJournal.connectTimeoutMs', 120_000),
+    idleTimeoutMs: normalizeBoundedPositiveInteger(raw.idleTimeoutMs, DEFAULT_LLM_JOURNAL_POSTGRES_IDLE_TIMEOUT_MS, 'storage.llmRequestJournal.idleTimeoutMs', 600_000),
+  };
+}
 
 function normalizeAbsoluteHttpUrl(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -294,6 +379,9 @@ export function normalizeVectorMaintenanceConfig(value: unknown): NormalizedVect
 }
 
 export type AppConfig = {
+  storage?: {
+    llmRequestJournal?: LlmRequestJournalStorageConfig;
+  };
   vector?: VectorConfig;
   sessionWorkers?: SessionWorkersConfig;
   dbWorkers?: boolean;
@@ -479,6 +567,7 @@ export const SESSION_WORKERS_ENABLED = SESSION_WORKERS_CONFIG.enabled;
 export const SESSION_WORKER_IDLE_SECONDS = SESSION_WORKERS_CONFIG.idleSeconds;
 export const DB_WORKERS_ENABLED = normalizeDbWorkersEnabled(APP_CONFIG.dbWorkers);
 export const VECTOR_MAINTENANCE_CONFIG = normalizeVectorMaintenanceConfig(APP_CONFIG.vectorMaintenance);
+export const LLM_REQUEST_JOURNAL_STORAGE_CONFIG = normalizeLlmRequestJournalStorageConfig(APP_CONFIG.storage?.llmRequestJournal);
 export const BOT_NAME = APP_CONFIG.bot?.name || 'foxwarm';
 export const ENABLE_TUI = APP_CONFIG.bot?.enableTUI === true || process.argv.includes('--tui');
 export const TELEGRAM_CONFIG: TelegramConfig = (getDefaultChannelConfigByType<TelegramConfig>('telegram', APP_CONFIG)?.config || {}) as TelegramConfig;

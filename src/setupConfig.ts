@@ -8,6 +8,7 @@ import {
   ProviderConfigEntry,
   loadModelsConfigFromObject,
   normalizeDbWorkersEnabled,
+  normalizeLlmRequestJournalStorageConfig,
   normalizeSessionWorkersConfig,
   normalizeVectorConfig,
   normalizeVectorMaintenanceConfig,
@@ -89,6 +90,13 @@ export function validateAppConfigYaml(rawYaml: string): AppConfig {
   normalizeDbWorkersEnabled(config.dbWorkers);
   normalizeVectorConfig(config.vector, config.llm?.ollamaBaseUrl);
   normalizeVectorMaintenanceConfig(config.vectorMaintenance);
+  if (config.storage !== undefined && !isPlainObject(config.storage)) {
+    throw new Error('app config `storage` must be a YAML object.');
+  }
+  if (config.storage && Object.keys(config.storage).some(key => key !== 'llmRequestJournal')) {
+    throw new Error('app config `storage` has unknown fields.');
+  }
+  normalizeLlmRequestJournalStorageConfig(config.storage?.llmRequestJournal);
   return config;
 }
 

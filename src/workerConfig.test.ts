@@ -6,6 +6,7 @@ import {
   MAX_SESSION_WORKER_IDLE_SECONDS,
   MIN_SESSION_WORKER_IDLE_SECONDS,
   normalizeDbWorkersEnabled,
+  normalizeLlmRequestJournalStorageConfig,
   normalizeSessionWorkersConfig,
   normalizeVectorConfig,
   normalizeVectorMaintenanceConfig,
@@ -138,4 +139,26 @@ test('app YAML validation rejects invalid worker switch shapes', () => {
   assert.throws(() => validateAppConfigYaml('vector: {}\n'), /vector.baseUrl.*non-empty absolute/);
   assert.throws(() => validateAppConfigYaml('vectorMaintenance: maybe\n'), /vectorMaintenance.*boolean or object/);
   assert.throws(() => validateAppConfigYaml('vectorMaintenance:\n  retentionHours: 0\n'), /positive integer/);
+});
+
+test('LLM request journal storage defaults to SQLite and validates PostgreSQL secrets and bounds', () => {
+  assert.deepEqual(normalizeLlmRequestJournalStorageConfig(undefined, {}), { backend: 'sqlite' });
+  assert.deepEqual(normalizeLlmRequestJournalStorageConfig({ backend: 'sqlite' }, {}), { backend: 'sqlite' });
+  const normalized = normalizeLlmRequestJournalStorageConfig({
+    backend: 'postgres', connectionStringEnv: 'FOXWARM_TEST_PG', schema: 'journal_test',
+    ssl: false, poolMax: 2, connectTimeoutMs: 1000, idleTimeoutMs: 2000,
+  }, { FOXWARM_TEST_PG: 'postgres://secret-user:secret-password@example.test/db' });
+  assert.equal(normalized.backend, 'postgres');
+  if (normalized.backend === 'postgres') {
+    assert.equal(normalized.schema, 'journal_test');
+    assert.equal(normalized.poolMax, 2);
+  }
+  assert.throws(() => normalizeLlmRequestJournalStorageConfig({ backend: 'postgres', connectionStringEnv: 'MISSING' }, {}), /MISSING.*missing or empty/);
+  assert.throws(() => normalizeLlmRequestJournalStorageConfig({ backend: 'postgres', connectionStringEnv: 'PG', schema: 'bad;drop' }, { PG: 'postgres://secret' }), /safe PostgreSQL identifier/);
+  assert.throws(() => normalizeLlmRequestJournalStorageConfig({ backend: 'postgres', connectionStringEnv: 'PG', extra: true }, { PG: 'postgres://secret' }), /unknown field.*extra/);
+  assert.throws(() => normalizeLlmRequestJournalStorageConfig({ backend: 'sqlite', connectionStringEnv: 'PG' }, { PG: 'postgres://secret' }), /unknown field.*connectionStringEnv/);
+  let surfaced = '';
+  try { normalizeLlmRequestJournalStorageConfig({ backend: 'postgres', connectionStringEnv: 'PG', poolMax: 0 }, { PG: 'postgres://secret-user:secret-password@example.test/db' }); }
+  catch (error) { surfaced = String(error); }
+  assert.doesNotMatch(surfaced, /secret-user|secret-password/);
 });
