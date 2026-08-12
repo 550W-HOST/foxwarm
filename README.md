@@ -279,10 +279,15 @@ foxwarm storage journal copy-sqlite-to-postgres \
   --source-quiesced
 ```
 
-The command leaves the SQLite source untouched and verifies every stored
-record plus every request reconstruction. It refuses a nonempty target. There
-is no automatic reverse migration or rollback after PostgreSQL receives new
-writes; retain the quiesced SQLite source as cutover evidence. Use
+The command accepts only the active data root's canonical SQLite Journal,
+leaves that source untouched, and verifies every stored record plus every
+request reconstruction. It refuses a nonempty target. After verified success,
+Foxwarm durably writes a non-secret local one-way cutover marker at
+`state/llm-request-journal-cutover.json`; merely changing YAML back to SQLite
+is then rejected. The marker is part of the active state authority and manual
+deletion is not a supported rollback. There is no automatic reverse
+migration or rollback after PostgreSQL receives new writes; retain a complete
+pre-cutover backup as evidence and recovery material. Use
 `npm run test:postgres-journal` for the disposable Docker-backed integration
 suite; it binds PostgreSQL to a dynamically selected loopback port and removes
 the container/data directory afterward.

@@ -16,6 +16,9 @@ export function canonicalJournalJson(value: unknown): string {
 
 export const LLM_REQUEST_JOURNAL_SCHEMA_VERSION = 1;
 export const LLM_REQUEST_JOURNAL_AUTHORITY = 'foxwarm-llm-request-journal';
+export const LLM_REQUEST_JOURNAL_AUTHORITY_STATE_KEY = 'authority_state';
+export const LLM_REQUEST_JOURNAL_AUTHORITY_STATE_COMPLETE = 'complete';
+export const LLM_REQUEST_JOURNAL_AUTHORITY_STATE_COPYING = 'copying';
 export const MAX_LLM_REQUEST_DELTA_DEPTH = 8;
 
 export type LlmRequestPurpose = 'normal-turn' | 'compact-plan' | 'btw' | 'toolscript-one-shot' | 'cli' | 'setup-test' | 'low-level';
@@ -65,6 +68,8 @@ export interface LlmRequestJournalStore {
   setMetadata(key: string, value: string): Promise<void>;
   withConsistentSnapshot<T>(fn: () => Promise<T>): Promise<T>;
   checkIntegrity(): Promise<void>;
+  beginMigrationCopy?(): Promise<void>;
+  completeMigrationCopy?(): Promise<void>;
   replaceObjectPayloadForTests?(requestId: string, payload: string): Promise<string>;
   replaceRequestMessageCountForTests?(requestId: string, messageCount: number): Promise<number>;
   replaceRequestCreatedAtForTests?(requestIds: string[], createdAt: number): Promise<void>;

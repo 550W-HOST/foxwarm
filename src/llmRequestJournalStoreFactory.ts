@@ -3,6 +3,7 @@ import type { LlmRequestJournalStore } from './llmRequestJournalStore';
 import { PostgresLlmRequestJournalStore } from './llmRequestJournalPostgresStore';
 import { SqliteLlmRequestJournalStore } from './llmRequestJournalSqliteStore';
 import { LLM_REQUEST_JOURNAL_DB_PATH } from './llmRequestJournalPaths';
+import { readLlmRequestJournalCutoverMarker } from './llmRequestJournalCutover';
 
 let store: LlmRequestJournalStore | undefined;
 let initializing: Promise<LlmRequestJournalStore> | undefined;
@@ -10,12 +11,26 @@ let initializing: Promise<LlmRequestJournalStore> | undefined;
 export async function getLlmRequestJournalStore(): Promise<LlmRequestJournalStore> {
   if (store) return store;
   if (!initializing) initializing = (async () => {
+    const cutover = await readLlmRequestJournalCutoverMarker();
+    if (LLM_REQUEST_JOURNAL_STORAGE_CONFIG.backend === 'sqlite' && cutover) {
+      throw new Error('LLM_JOURNAL_SQLITE_RETIRED: a completed PostgreSQL cutover exists; reverse migration is unsupported. Keep PostgreSQL configured or restore a complete pre-cutover backup.');
+    }
+    if (LLM_REQUEST_JOURNAL_STORAGE_CONFIG.backend === 'postgres' && cutover
+      && (cutover.postgres.schema !== LLM_REQUEST_JOURNAL_STORAGE_CONFIG.schema
+        || cutover.postgres.connectionStringEnv !== LLM_REQUEST_JOURNAL_STORAGE_CONFIG.connectionStringEnv)) {
+      throw new Error('Configured PostgreSQL LLM Request Journal does not match the completed local cutover marker.');
+    }
     const created: LlmRequestJournalStore = LLM_REQUEST_JOURNAL_STORAGE_CONFIG.backend === 'postgres'
       ? new PostgresLlmRequestJournalStore(LLM_REQUEST_JOURNAL_STORAGE_CONFIG)
       : new SqliteLlmRequestJournalStore(LLM_REQUEST_JOURNAL_DB_PATH);
-    await created.initialize();
-    store = created;
-    return created;
+    try {
+      await created.initialize();
+      store = created;
+      return created;
+    } catch (error) {
+      await created.close().catch((): void => {});
+      throw error;
+    }
   })();
   try { return await initializing; }
   finally { initializing = undefined; }

@@ -6,9 +6,16 @@ const path = require('path');
 
 class StorageCliUsageError extends Error {}
 
+function printHelp(stream) {
+  stream.write(`foxwarm storage\n\nUsage:\n  foxwarm storage journal copy-sqlite-to-postgres --sqlite <path> --source-quiesced\n\nThe source must be quiesced. The PostgreSQL target must be a fresh empty schema.\nA failed/incomplete copy requires dropping that schema or choosing another fresh schema.\n`);
+}
+
 function parseArgs(argv) {
+  if (!argv.length || argv[0] === '--help' || argv[0] === '-h') return { help: true };
   if (argv[0] !== 'journal') throw new StorageCliUsageError('Expected `journal`.');
+  if (argv[1] === '--help' || argv[1] === '-h') return { help: true };
   if (argv[1] !== 'copy-sqlite-to-postgres') throw new StorageCliUsageError('Expected `copy-sqlite-to-postgres`.');
+  if (argv[2] === '--help' || argv[2] === '-h') return { help: true };
   let sqlite;
   let sourceQuiesced = false;
   for (let index = 2; index < argv.length; index += 1) {
@@ -24,7 +31,7 @@ function parseArgs(argv) {
   }
   if (!sqlite) throw new StorageCliUsageError('--sqlite is required.');
   if (!sourceQuiesced) throw new StorageCliUsageError('--source-quiesced is required; stop all writers before copying.');
-  return { sqlite: path.resolve(sqlite) };
+  return { sqlite: path.resolve(sqlite), help: false };
 }
 
 function loadRuntime() {
@@ -43,15 +50,16 @@ function loadRuntime() {
 
 async function runStorageCli(argv, options = {}) {
   const stdout = options.stdout || process.stdout;
-  const runtime = options.runtimeLoader ? options.runtimeLoader() : loadRuntime();
   const args = parseArgs(argv);
+  if (args.help) { printHelp(stdout); return 0; }
+  const runtime = options.runtimeLoader ? options.runtimeLoader() : loadRuntime();
   if (runtime.LLM_REQUEST_JOURNAL_STORAGE_CONFIG?.backend !== 'postgres') {
     throw new Error('Configure storage.llmRequestJournal.backend as postgres before running this copy.');
   }
   let target;
   try {
     target = await runtime.getLlmRequestJournalStore();
-    const report = await runtime.copySqliteLlmRequestJournalToStore(args.sqlite, target);
+    const report = await runtime.copySqliteLlmRequestJournalToStore(args.sqlite, target, runtime.LLM_REQUEST_JOURNAL_STORAGE_CONFIG);
     stdout.write(`${JSON.stringify({ source: args.sqlite, report }, null, 2)}\n`);
   } finally {
     await runtime.closeLlmRequestJournalStore?.();
@@ -59,4 +67,4 @@ async function runStorageCli(argv, options = {}) {
   return 0;
 }
 
-module.exports = { StorageCliUsageError, loadRuntime, parseArgs, runStorageCli };
+module.exports = { StorageCliUsageError, loadRuntime, parseArgs, printHelp, runStorageCli };

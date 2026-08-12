@@ -320,6 +320,36 @@ export const APP_CONFIG_SCHEMA = {
       ],
       description: 'Automatic LanceDB maintenance. Use true/false for default retention or an object to tune retentionHours. Requires restart.',
     },
+    storage: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        llmRequestJournal: {
+          oneOf: [
+            {
+              type: 'object',
+              additionalProperties: false,
+              properties: { backend: { const: 'sqlite' } },
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              required: ['backend', 'connectionStringEnv'],
+              properties: {
+                backend: { const: 'postgres' },
+                connectionStringEnv: { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_]*$', description: 'Environment-variable name containing the PostgreSQL connection string.' },
+                schema: { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_]{0,62}$', description: 'Dedicated PostgreSQL schema for this Journal.' },
+                ssl: { oneOf: [{ type: 'boolean' }, { const: 'require' }] },
+                poolMax: { type: 'integer', minimum: 1, maximum: 32 },
+                connectTimeoutMs: { type: 'integer', minimum: 1, maximum: 120000 },
+                idleTimeoutMs: { type: 'integer', minimum: 1, maximum: 600000 },
+              },
+            },
+          ],
+          description: 'Startup-only LLM Request Journal backend. Omission keeps SQLite; PostgreSQL credentials are read through connectionStringEnv.',
+        },
+      },
+    },
     bot: {
       type: 'object',
       additionalProperties: true,

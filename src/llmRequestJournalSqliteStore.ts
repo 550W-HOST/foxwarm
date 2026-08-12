@@ -1,6 +1,8 @@
 import fs from 'fs-extra';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
+import { LLM_REQUEST_JOURNAL_DB_PATH } from './llmRequestJournalPaths';
+import { readLlmRequestJournalCutoverMarker } from './llmRequestJournalCutover';
 import {
   type LlmJournalAttemptResultRecord,
   type LlmJournalAttemptStartRecord,
@@ -35,6 +37,10 @@ export class SqliteLlmRequestJournalStore implements LlmRequestJournalStore {
   get rawDatabase(): DatabaseSync { if (!this.db) throw new Error('LLM request journal is not initialized'); return this.db; }
   async initialize(): Promise<void> {
     if (this.db) return;
+    if (path.resolve(this.databasePath) === path.resolve(LLM_REQUEST_JOURNAL_DB_PATH)
+      && await readLlmRequestJournalCutoverMarker()) {
+      throw new Error('LLM_JOURNAL_SQLITE_RETIRED: a completed PostgreSQL cutover exists; reverse migration is unsupported. Keep PostgreSQL configured or restore a complete pre-cutover backup.');
+    }
     if (!this.readOnly) fs.ensureDirSync(path.dirname(this.databasePath));
     this.db = this.readOnly
       ? new DatabaseSync(this.databasePath, { readOnly: true })

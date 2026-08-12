@@ -38,6 +38,7 @@ import {
     ENABLE_TRIGGER,
     ENABLE_WEBUI,
     HTTP_PORT,
+    LLM_REQUEST_JOURNAL_STORAGE_CONFIG,
     getDefaultChannelConfigByType,
     getNormalizedChannelConfigs,
     MAIN_AGENT_MEMORY_DIR,
@@ -210,6 +211,10 @@ async function start() {
     // Establish and verify the configured Journal authority before Session
     // workers or channels can accept provider-bound work.
     await initLlmRequestJournal();
+    logger.info(LLM_REQUEST_JOURNAL_STORAGE_CONFIG.backend === 'postgres'
+        ? { backend: 'postgres', schema: LLM_REQUEST_JOURNAL_STORAGE_CONFIG.schema }
+        : { backend: 'sqlite' },
+      'LLM request journal initialized');
 
     let webuiChannel: WebUIChannel | null = null;
 

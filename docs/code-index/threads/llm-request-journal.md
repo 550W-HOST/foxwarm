@@ -32,7 +32,7 @@ The journal has one Foxwarm-owned async domain interface with a startup-selected
 
 Existing session message/block archives remain readable and unchanged. They do not receive fabricated historical request manifests. `reconstructLlmRequest` reports an unknown/legacy request as `legacy-partial` with named missing facts rather than guessing from current history or prompt snapshots.
 
-`foxwarm archive export-jsonl --output <directory>` provides an explicit SQLite-backed compatibility export for training and inspection.
+`foxwarm archive export-jsonl --output <directory>` provides an explicit backend-neutral compatibility export for training and inspection.
 
 The one-time SQLite-only startup migration streams and strictly verifies any legacy active JSONL before moving it under the migration backup tree. Normal runtime never reads or appends that JSONL. SQLite uses WAL, `synchronous=FULL`, immediate writer transactions, and a bounded busy timeout for concurrent server and short-lived CLI writers. PostgreSQL uses a bounded lazy `pg` pool, a store-specific authority/schema marker, safe schema identifiers, and a migration advisory lock. A request manifest and every attempt start commit before the corresponding provider send.
 
@@ -56,7 +56,7 @@ The normal journal never stores auth headers or provider-hydrated request payloa
 
 [2026-08-12] The LLM Request Journal alone is pluggable through a Foxwarm-owned domain store. SQLite remains the default and retains the legacy-JSONL migration boundary. PostgreSQL is an explicit startup-only alternative with no fallback or dual-write; canonical JSON remains TEXT and JavaScript millisecond timestamps remain BIGINT. Main establishes the configured authority before Session workers start, while workers and short-lived CLIs may connect directly and close their bounded pools during shutdown.
 
-`foxwarm storage journal copy-sqlite-to-postgres --sqlite <path> --source-quiesced` performs an explicit, empty-target-only cutover copy and full logical verification. It never runs automatically, never modifies the SQLite source, and does not provide automatic rollback after PostgreSQL receives new writes.
+`foxwarm storage journal copy-sqlite-to-postgres --sqlite <active-state-path> --source-quiesced` performs an explicit, empty-target-only cutover copy and full logical verification. A target publishes `authority_state: copying` before the first copied batch and changes it to `complete` only after exact-record and canonical reconstruction validation succeeds for both source and target. Ordinary runtime accepts only `complete`; an interrupted/failed copy requires dropping that schema or selecting another fresh empty schema. After PG completion, the command atomically publishes a versioned non-secret local cutover marker under the active state root. That marker retires the SQLite authority: changing YAML back to SQLite fails closed, and a future verified reverse migration is the only normal operation that may replace it. The command never runs automatically, never modifies the SQLite source, and does not provide automatic rollback after PostgreSQL receives new writes.
 
 ## Modules and units
 

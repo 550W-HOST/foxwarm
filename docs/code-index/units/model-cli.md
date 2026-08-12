@@ -32,7 +32,7 @@ Provides the installable `foxwarm` command, its `model` subcommand for one-shot 
 | `writeModelList(config, stream)` | model.js ~125 | Displays resolved model keys without API keys |
 | `runModelCli(argv, options)` | model.js ~138 | Validates model/prompt, calls `requestLlmOnce`, and emits text or JSON |
 | `main(argv)` | model.js ~182 | Converts thrown usage/runtime errors into CLI exit codes |
-| `runArchiveCli(argv, options)` | archive.js | Exports both SQLite-authoritative archive domains to an explicit output directory |
+| `runArchiveCli(argv, options)` | archive.js | Exports SQLite session archives plus the configured Journal backend to an explicit output directory |
 
 ## Dependencies
 
@@ -52,6 +52,7 @@ Provides the installable `foxwarm` command, its `model` subcommand for one-shot 
 - The CLI suppresses console logs and selects synchronous file logging before importing the production runtime. This keeps stdout machine-readable and avoids pino worker shutdown hangs.
 - The top-level dispatcher runs handlers in-process. Model, archive, and storage commands close the Journal store before completion.
 - `foxwarm storage journal copy-sqlite-to-postgres --sqlite <path> --source-quiesced` never overwrites a nonempty target and leaves the SQLite source untouched.
+- Storage help is available without importing runtime configuration. A failed/incomplete copy tells the operator to drop or choose a fresh empty schema.
 
 ## Tests
 

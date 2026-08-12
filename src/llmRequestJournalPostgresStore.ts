@@ -1,6 +1,9 @@
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 import {
   LLM_REQUEST_JOURNAL_AUTHORITY,
+  LLM_REQUEST_JOURNAL_AUTHORITY_STATE_COMPLETE,
+  LLM_REQUEST_JOURNAL_AUTHORITY_STATE_COPYING,
+  LLM_REQUEST_JOURNAL_AUTHORITY_STATE_KEY,
   LLM_REQUEST_JOURNAL_SCHEMA_VERSION,
   type LlmJournalAttemptResultRecord,
   type LlmJournalAttemptStartRecord,
@@ -18,6 +21,35 @@ import {
 import type { NormalizedLlmRequestJournalStorageConfig } from './config';
 
 const MIGRATION_LOCK_KEY = 0x46574a31;
+const REQUIRED_TABLE_COLUMNS: Record<string, Record<string, { type: string; nullable: boolean }>> = {
+  metadata: {
+    key: { type: 'text', nullable: false }, value: { type: 'text', nullable: false },
+  },
+  llm_journal_objects: {
+    object_id: { type: 'text', nullable: false }, object_kind: { type: 'text', nullable: false },
+    payload: { type: 'text', nullable: false }, created_at: { type: 'bigint', nullable: false },
+  },
+  llm_journal_requests: {
+    request_id: { type: 'text', nullable: false }, session_id: { type: 'text', nullable: true }, purpose: { type: 'text', nullable: false },
+    iteration: { type: 'bigint', nullable: false }, created_at: { type: 'bigint', nullable: false }, prompt_object_id: { type: 'text', nullable: false },
+    tool_schema_object_id: { type: 'text', nullable: false }, requested_model_key: { type: 'text', nullable: false },
+    prompt_cache_key_hash: { type: 'text', nullable: false }, message_count: { type: 'bigint', nullable: false },
+    checkpoint_message_ids_json: { type: 'text', nullable: true }, base_request_id: { type: 'text', nullable: true },
+    common_prefix_length: { type: 'bigint', nullable: true }, appended_message_ids_json: { type: 'text', nullable: true },
+    delta_depth: { type: 'bigint', nullable: false },
+  },
+  llm_journal_attempt_starts: {
+    event_id: { type: 'text', nullable: false }, request_id: { type: 'text', nullable: false }, attempt: { type: 'bigint', nullable: false },
+    started_at: { type: 'bigint', nullable: false }, concrete_model_id: { type: 'text', nullable: false },
+    virtual_model_key: { type: 'text', nullable: true }, provider_type: { type: 'text', nullable: false },
+    semantic_payload_sha256: { type: 'text', nullable: false },
+  },
+  llm_journal_attempt_results: {
+    event_id: { type: 'text', nullable: false }, request_id: { type: 'text', nullable: false }, attempt: { type: 'bigint', nullable: false },
+    completed_at: { type: 'bigint', nullable: false }, outcome: { type: 'text', nullable: false },
+    result_json: { type: 'text', nullable: true }, error_json: { type: 'text', nullable: true },
+  },
+};
 
 function quoteIdentifier(value: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value)) throw new Error('Invalid PostgreSQL Journal schema identifier.');
@@ -87,50 +119,83 @@ export class PostgresLlmRequestJournalStore implements LlmRequestJournalStore {
     return result.rows;
   }
 
+  private async validateRequiredSchema(client: PoolClient): Promise<void> {
+    const result = await client.query(`SELECT table_name,column_name,data_type,is_nullable FROM information_schema.columns WHERE table_schema=$1`, [this.config.schema]);
+    const actual = new Map<string, Map<string, { type: string; nullable: boolean }>>();
+    for (const row of result.rows) {
+      let columns = actual.get(row.table_name);
+      if (!columns) { columns = new Map(); actual.set(row.table_name, columns); }
+      columns.set(row.column_name, { type: row.data_type, nullable: row.is_nullable === 'YES' });
+    }
+    for (const [table, expectedColumns] of Object.entries(REQUIRED_TABLE_COLUMNS)) {
+      const columns = actual.get(table);
+      if (!columns) throw new Error(`PostgreSQL LLM request journal required table ${table} is missing; restore it or choose a fresh empty schema.`);
+      for (const [column, expected] of Object.entries(expectedColumns)) {
+        const found = columns.get(column);
+        if (!found || found.type !== expected.type || found.nullable !== expected.nullable) {
+          throw new Error(`PostgreSQL LLM request journal required column ${table}.${column} is missing or incompatible; restore it or choose a fresh empty schema.`);
+        }
+      }
+    }
+  }
+
+  private schemaSqlText(): string {
+    return `
+      CREATE TABLE ${this.schemaSql}.metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE ${this.schemaSql}.llm_journal_objects (
+        object_id TEXT PRIMARY KEY, object_kind TEXT NOT NULL, payload TEXT NOT NULL, created_at BIGINT NOT NULL
+      );
+      CREATE TABLE ${this.schemaSql}.llm_journal_requests (
+        request_id TEXT PRIMARY KEY, session_id TEXT, purpose TEXT NOT NULL, iteration BIGINT NOT NULL, created_at BIGINT NOT NULL,
+        prompt_object_id TEXT NOT NULL, tool_schema_object_id TEXT NOT NULL, requested_model_key TEXT NOT NULL,
+        prompt_cache_key_hash TEXT NOT NULL, message_count BIGINT NOT NULL, checkpoint_message_ids_json TEXT,
+        base_request_id TEXT, common_prefix_length BIGINT, appended_message_ids_json TEXT, delta_depth BIGINT NOT NULL
+      );
+      CREATE INDEX llm_journal_requests_session_created ON ${this.schemaSql}.llm_journal_requests(session_id, created_at, request_id);
+      CREATE TABLE ${this.schemaSql}.llm_journal_attempt_starts (
+        event_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, attempt BIGINT NOT NULL, started_at BIGINT NOT NULL,
+        concrete_model_id TEXT NOT NULL, virtual_model_key TEXT, provider_type TEXT NOT NULL, semantic_payload_sha256 TEXT NOT NULL
+      );
+      CREATE INDEX llm_journal_attempt_starts_request_order ON ${this.schemaSql}.llm_journal_attempt_starts(request_id, attempt, started_at, event_id);
+      CREATE TABLE ${this.schemaSql}.llm_journal_attempt_results (
+        event_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, attempt BIGINT NOT NULL, completed_at BIGINT NOT NULL,
+        outcome TEXT NOT NULL, result_json TEXT, error_json TEXT
+      );
+      CREATE INDEX llm_journal_attempt_results_request_order ON ${this.schemaSql}.llm_journal_attempt_results(request_id, attempt, completed_at, event_id);
+    `;
+  }
+
   async initialize(): Promise<void> {
     if (this.initialized) return;
     const client = await this.getPool().connect();
     try {
       await client.query('BEGIN');
       await client.query('SELECT pg_advisory_xact_lock($1)', [MIGRATION_LOCK_KEY]);
-      await client.query(`CREATE SCHEMA IF NOT EXISTS ${this.schemaSql}`);
-      await client.query(`CREATE TABLE IF NOT EXISTS ${this.schemaSql}.metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-      const metadata = await client.query(`SELECT key,value FROM ${this.schemaSql}.metadata WHERE key IN ('authority','schema_version')`);
-      const values = new Map(metadata.rows.map(row => [row.key, row.value]));
-      const relationCount = await client.query(`SELECT COUNT(*)::bigint AS count FROM information_schema.tables WHERE table_schema=$1 AND table_name LIKE 'llm_journal_%'`, [this.config.schema]);
-      const hasDomainTables = Number(relationCount.rows[0]?.count || 0) > 0;
-      if (!values.size && hasDomainTables) throw new Error('PostgreSQL LLM request journal has tables but no authority marker; refusing initialization.');
-      if (values.size > 0 && (!values.has('authority') || !values.has('schema_version'))) throw new Error('PostgreSQL LLM request journal has an incomplete authority/schema marker.');
-      if (values.get('authority') && values.get('authority') !== LLM_REQUEST_JOURNAL_AUTHORITY) throw new Error('PostgreSQL LLM request journal authority marker does not match Foxwarm.');
-      const version = values.get('schema_version') === undefined ? undefined : Number(values.get('schema_version'));
-      if (version !== undefined && (!Number.isInteger(version) || version !== LLM_REQUEST_JOURNAL_SCHEMA_VERSION)) {
-        throw new Error(`Unsupported PostgreSQL LLM request journal schema version ${values.get('schema_version')}.`);
+      const schemaExists = Number((await client.query(`SELECT COUNT(*)::bigint AS count FROM information_schema.schemata WHERE schema_name=$1`, [this.config.schema])).rows[0]?.count || 0) > 0;
+      const tables = schemaExists
+        ? (await client.query(`SELECT table_name FROM information_schema.tables WHERE table_schema=$1`, [this.config.schema])).rows.map(row => row.table_name)
+        : [];
+      if (!schemaExists || tables.length === 0) {
+        await client.query(`CREATE SCHEMA IF NOT EXISTS ${this.schemaSql}`);
+        await client.query(this.schemaSqlText());
+        await client.query(`INSERT INTO ${this.schemaSql}.metadata(key,value) VALUES ('authority',$1),('schema_version',$2),($3,$4)`, [
+          LLM_REQUEST_JOURNAL_AUTHORITY, String(LLM_REQUEST_JOURNAL_SCHEMA_VERSION),
+          LLM_REQUEST_JOURNAL_AUTHORITY_STATE_KEY, LLM_REQUEST_JOURNAL_AUTHORITY_STATE_COMPLETE,
+        ]);
+      } else {
+        if (!tables.includes('metadata')) throw new Error('PostgreSQL LLM request journal schema is nonempty but has no metadata table; restore it or choose a fresh empty schema.');
+        const metadata = await client.query(`SELECT key,value FROM ${this.schemaSql}.metadata WHERE key IN ('authority','schema_version',$1)`, [LLM_REQUEST_JOURNAL_AUTHORITY_STATE_KEY]);
+        const values = new Map(metadata.rows.map(row => [row.key, row.value]));
+        if (!values.has('authority') || !values.has('schema_version') || !values.has(LLM_REQUEST_JOURNAL_AUTHORITY_STATE_KEY)) throw new Error('PostgreSQL LLM request journal has an incomplete authority/schema marker; restore it or choose a fresh empty schema.');
+        if (values.get('authority') !== LLM_REQUEST_JOURNAL_AUTHORITY) throw new Error('PostgreSQL LLM request journal authority marker does not match Foxwarm.');
+        const version = Number(values.get('schema_version'));
+        if (!Number.isInteger(version) || version !== LLM_REQUEST_JOURNAL_SCHEMA_VERSION) throw new Error(`Unsupported PostgreSQL LLM request journal schema version ${values.get('schema_version')}.`);
+        const state = values.get(LLM_REQUEST_JOURNAL_AUTHORITY_STATE_KEY);
+        if (state !== LLM_REQUEST_JOURNAL_AUTHORITY_STATE_COMPLETE) {
+          throw new Error(`PostgreSQL LLM request journal authority state is ${state || 'missing'}; drop it or choose a fresh empty schema before retrying the copy.`);
+        }
+        await this.validateRequiredSchema(client);
       }
-      if (!values.size) {
-        await client.query(`INSERT INTO ${this.schemaSql}.metadata(key,value) VALUES ('authority',$1),('schema_version',$2)`, [LLM_REQUEST_JOURNAL_AUTHORITY, String(LLM_REQUEST_JOURNAL_SCHEMA_VERSION)]);
-      }
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS ${this.schemaSql}.llm_journal_objects (
-          object_id TEXT PRIMARY KEY, object_kind TEXT NOT NULL, payload TEXT NOT NULL, created_at BIGINT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS ${this.schemaSql}.llm_journal_requests (
-          request_id TEXT PRIMARY KEY, session_id TEXT, purpose TEXT NOT NULL, iteration BIGINT NOT NULL, created_at BIGINT NOT NULL,
-          prompt_object_id TEXT NOT NULL, tool_schema_object_id TEXT NOT NULL, requested_model_key TEXT NOT NULL,
-          prompt_cache_key_hash TEXT NOT NULL, message_count BIGINT NOT NULL, checkpoint_message_ids_json TEXT,
-          base_request_id TEXT, common_prefix_length BIGINT, appended_message_ids_json TEXT, delta_depth BIGINT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS llm_journal_requests_session_created ON ${this.schemaSql}.llm_journal_requests(session_id, created_at, request_id);
-        CREATE TABLE IF NOT EXISTS ${this.schemaSql}.llm_journal_attempt_starts (
-          event_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, attempt BIGINT NOT NULL, started_at BIGINT NOT NULL,
-          concrete_model_id TEXT NOT NULL, virtual_model_key TEXT, provider_type TEXT NOT NULL, semantic_payload_sha256 TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS llm_journal_attempt_starts_request_order ON ${this.schemaSql}.llm_journal_attempt_starts(request_id, attempt, started_at, event_id);
-        CREATE TABLE IF NOT EXISTS ${this.schemaSql}.llm_journal_attempt_results (
-          event_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, attempt BIGINT NOT NULL, completed_at BIGINT NOT NULL,
-          outcome TEXT NOT NULL, result_json TEXT, error_json TEXT
-        );
-        CREATE INDEX IF NOT EXISTS llm_journal_attempt_results_request_order ON ${this.schemaSql}.llm_journal_attempt_results(request_id, attempt, completed_at, event_id);
-      `);
       await client.query('COMMIT');
       this.initialized = true;
     } catch (error) {
@@ -142,6 +207,33 @@ export class PostgresLlmRequestJournalStore implements LlmRequestJournalStore {
   }
 
   async close(): Promise<void> { const pool = this.pool; this.pool = undefined; this.initialized = false; if (pool) await pool.end(); }
+
+  async beginMigrationCopy(): Promise<void> {
+    await this.initialize();
+    const client = await this.getPool().connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1)', [MIGRATION_LOCK_KEY]);
+      const counts = await client.query(`SELECT (SELECT COUNT(*) FROM ${this.schemaSql}.llm_journal_objects)::bigint objects,(SELECT COUNT(*) FROM ${this.schemaSql}.llm_journal_requests)::bigint requests,(SELECT COUNT(*) FROM ${this.schemaSql}.llm_journal_attempt_starts)::bigint attempt_starts,(SELECT COUNT(*) FROM ${this.schemaSql}.llm_journal_attempt_results)::bigint attempt_results`);
+      if (Object.values(counts.rows[0] || {}).some(value => Number(value) !== 0)) throw new Error('PostgreSQL LLM request journal target is not empty; drop it or choose a fresh empty schema.');
+      const updated = await client.query(`UPDATE ${this.schemaSql}.metadata SET value=$1 WHERE key=$2 AND value=$3`, [LLM_REQUEST_JOURNAL_AUTHORITY_STATE_COPYING, LLM_REQUEST_JOURNAL_AUTHORITY_STATE_KEY, LLM_REQUEST_JOURNAL_AUTHORITY_STATE_COMPLETE]);
+      if (updated.rowCount !== 1) throw new Error('PostgreSQL LLM request journal cannot enter copying state.');
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
+    finally { client.release(); }
+  }
+
+  async completeMigrationCopy(): Promise<void> {
+    const client = await this.getPool().connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1)', [MIGRATION_LOCK_KEY]);
+      const updated = await client.query(`UPDATE ${this.schemaSql}.metadata SET value=$1 WHERE key=$2 AND value=$3`, [LLM_REQUEST_JOURNAL_AUTHORITY_STATE_COMPLETE, LLM_REQUEST_JOURNAL_AUTHORITY_STATE_KEY, LLM_REQUEST_JOURNAL_AUTHORITY_STATE_COPYING]);
+      if (updated.rowCount !== 1) throw new Error('PostgreSQL LLM request journal cannot publish complete migration authority.');
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
+    finally { client.release(); }
+  }
 
   async appendRecords(records: LlmJournalRecord[]): Promise<void> {
     await this.initialize();
@@ -201,7 +293,15 @@ export class PostgresLlmRequestJournalStore implements LlmRequestJournalStore {
   async getMetadata(key: string): Promise<string | undefined> { const [row] = await this.query(`SELECT value FROM ${this.schemaSql}.metadata WHERE key=$1`, [key]); return row?.value; }
   async setMetadata(key: string, value: string): Promise<void> { await this.query(`INSERT INTO ${this.schemaSql}.metadata(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, [key, value]); }
   async withConsistentSnapshot<T>(fn: () => Promise<T>): Promise<T> { if (this.snapshotClient) return fn(); const client = await this.getPool().connect(); try { await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY'); this.snapshotClient = client; const result = await fn(); await client.query('COMMIT'); return result; } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; } finally { this.snapshotClient = undefined; client.release(); } }
-  async checkIntegrity(): Promise<void> { const authority = await this.getMetadata('authority'); const version = await this.getMetadata('schema_version'); if (authority !== LLM_REQUEST_JOURNAL_AUTHORITY || version !== String(LLM_REQUEST_JOURNAL_SCHEMA_VERSION)) throw new Error('PostgreSQL LLM request journal authority/schema verification failed.'); }
+  async checkIntegrity(): Promise<void> {
+    const authority = await this.getMetadata('authority');
+    const version = await this.getMetadata('schema_version');
+    const state = await this.getMetadata(LLM_REQUEST_JOURNAL_AUTHORITY_STATE_KEY);
+    if (authority !== LLM_REQUEST_JOURNAL_AUTHORITY || version !== String(LLM_REQUEST_JOURNAL_SCHEMA_VERSION)
+      || ![LLM_REQUEST_JOURNAL_AUTHORITY_STATE_COMPLETE, LLM_REQUEST_JOURNAL_AUTHORITY_STATE_COPYING].includes(state || '')) {
+      throw new Error('PostgreSQL LLM request journal authority/schema verification failed.');
+    }
+  }
   async replaceObjectPayloadForTests(id:string,payload:string){const [row]=await this.query(`SELECT o.object_id,o.payload FROM ${this.schemaSql}.llm_journal_requests r JOIN ${this.schemaSql}.llm_journal_objects o ON o.object_id=r.prompt_object_id WHERE r.request_id=$1`,[id]);if(!row)throw new Error(`Request ${id} not found`);await this.query(`UPDATE ${this.schemaSql}.llm_journal_objects SET payload=$1 WHERE object_id=$2`,[payload,row.object_id]);return row.payload;}
   async replaceRequestMessageCountForTests(id:string,count:number){const [row]=await this.query(`SELECT message_count FROM ${this.schemaSql}.llm_journal_requests WHERE request_id=$1`,[id]);if(!row)throw new Error(`Request ${id} not found`);await this.query(`UPDATE ${this.schemaSql}.llm_journal_requests SET message_count=$1 WHERE request_id=$2`,[count,id]);return number(row.message_count,'message count');}
   async replaceRequestCreatedAtForTests(ids:string[],time:number){for(const id of ids)await this.query(`UPDATE ${this.schemaSql}.llm_journal_requests SET created_at=$1 WHERE request_id=$2`,[time,id]);}

@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { parseArgs, runArchiveCli } = require('./archive.js');
 
-test('archive export CLI validates output and invokes SQLite-backed exporters', async () => {
+test('archive export CLI validates output and invokes archive exporters', async () => {
   assert.throws(() => parseArgs(['export-jsonl']), /--output is required/);
   const calls = [];
   let text = '';

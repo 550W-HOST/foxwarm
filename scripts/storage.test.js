@@ -7,6 +7,16 @@ test('storage copy requires explicit quiesced-source acknowledgement', () => {
   assert.equal(parseArgs(['journal', 'copy-sqlite-to-postgres', '--sqlite', './source.sqlite', '--source-quiesced']).sqlite.endsWith('source.sqlite'), true);
 });
 
+test('storage help does not load runtime configuration', async () => {
+  const stdout = { value: '', write(value) { this.value += value; } };
+  let loaded = false;
+  assert.equal(await runStorageCli(['--help'], { stdout, runtimeLoader: () => { loaded = true; throw new Error('should not load'); } }), 0);
+  assert.equal(loaded, false);
+  assert.match(stdout.value, /fresh empty schema/);
+  assert.equal(await runStorageCli(['journal', '--help'], { stdout, runtimeLoader: () => { loaded = true; throw new Error('should not load'); } }), 0);
+  assert.equal(loaded, false);
+});
+
 test('storage copy dispatches to configured PostgreSQL store and closes it', async () => {
   const calls = [];
   const stdout = { value: '', write(value) { this.value += value; } };

@@ -84,6 +84,11 @@ test('app config schema suggests all managed channel types and QQ credential key
   assert.equal(validateAppConfigSchema({ vectorMaintenance: true }), true)
   assert.equal(validateAppConfigSchema({ vectorMaintenance: false }), true)
   assert.equal(validateAppConfigSchema({ vectorMaintenance: { retentionHours: 48 } }), true)
+  const journal = schemas.APP_CONFIG_SCHEMA.properties.storage.properties.llmRequestJournal
+  assert.equal(journal.oneOf.every((entry) => entry.additionalProperties === false), true)
+  assert.equal(validateAppConfigSchema({ storage: { llmRequestJournal: { backend: 'sqlite' } } }), true)
+  assert.equal(validateAppConfigSchema({ storage: { llmRequestJournal: { backend: 'postgres', connectionStringEnv: 'FOXWARM_PG', schema: 'foxwarm_llm_journal', poolMax: 1 } } }), true)
+  assert.equal(validateAppConfigSchema({ storage: { llmRequestJournal: { backend: 'postgres', connectionStringEnv: 'FOXWARM_PG', typo: true } } }), false)
   assert.equal(validateAppConfigSchema({ vector: false }), true)
   assert.equal(validateAppConfigSchema({ vector: { baseUrl: 'https://example.test/openai/v1' } }), true)
   assert.equal(validateAppConfigSchema({ vector: true }), false)

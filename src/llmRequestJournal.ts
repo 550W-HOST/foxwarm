@@ -124,6 +124,74 @@ async function validateRequestManifest(store: LlmRequestJournalStore, requestId:
   }
 }
 
+export async function reconstructLlmRequestFromStore(store: LlmRequestJournalStore, requestId: string): Promise<ReconstructedLlmRequest> {
+  const request = await store.getRequest(requestId);
+  if (!request) throw new Error(`LLM request journal request ${requestId} not found`);
+  assertRequestRecord(request);
+  await validateRequestManifest(store, requestId);
+  const ids = await reconstructMessageIds(store, requestId);
+  const starts = await store.getAttemptStarts(requestId);
+  const results = await store.getAttemptResults(requestId);
+  const startsByAttempt = new Map<number, AttemptStartRecord>();
+  const resultsByAttempt = new Map<number, AttemptResultRecord>();
+  for (const start of starts) {
+    assertAttemptStartRecord(start);
+    if (start.requestId !== requestId || startsByAttempt.has(start.attempt)) throw new Error(`Invalid or duplicate LLM journal attempt start for ${requestId}`);
+    startsByAttempt.set(start.attempt, start);
+  }
+  for (const result of results) {
+    assertAttemptResultRecord(result);
+    if (result.requestId !== requestId || !startsByAttempt.has(result.attempt) || resultsByAttempt.has(result.attempt)) {
+      throw new Error(`Invalid, orphaned, or duplicate LLM journal attempt result for ${requestId}`);
+    }
+    resultsByAttempt.set(result.attempt, result);
+  }
+  return {
+    requestId,
+    sessionId: request.sessionId,
+    purpose: request.purpose,
+    iteration: request.iteration,
+    createdAt: request.createdAt,
+    systemPrompt: await objectValue<string>(store, request.promptObjectId, 'prompt'),
+    toolDefinitions: await objectValue<ToolDefinition[]>(store, request.toolSchemaObjectId, 'tool-schema'),
+    messages: await Promise.all(ids.map(id => objectValue<Message>(store, id, 'message'))),
+    requestedModelKey: request.requestedModelKey,
+    promptCacheKeyHash: request.promptCacheKeyHash,
+    attempts: starts.map(start => ({ start, result: resultsByAttempt.get(start.attempt) })),
+    completeness: 'complete',
+  };
+}
+
+export async function validateLlmRequestJournalStore(store: LlmRequestJournalStore): Promise<{
+  objects: number; requests: number; attemptStarts: number; attemptResults: number; reconstructedRequests: number;
+}> {
+  return store.withConsistentSnapshot(async () => {
+    const counts = { objects: 0, requests: 0, attemptStarts: 0, attemptResults: 0, reconstructedRequests: 0 };
+    for (const kind of ['object', 'request', 'attempt-start', 'attempt-result'] as const) {
+      let cursor;
+      do {
+        const page = await store.scanRecords(kind, cursor, 500);
+        for (const record of page.records) {
+          assertRecord(record);
+          if (record.kind === 'request') {
+            await reconstructLlmRequestFromStore(store, record.requestId);
+            counts.requests += 1;
+            counts.reconstructedRequests += 1;
+          } else if (record.kind === 'object') {
+            counts.objects += 1;
+          } else {
+            if (!await store.getRequest(record.requestId)) throw new Error(`LLM journal ${record.kind} references missing request ${record.requestId}`);
+            if (record.kind === 'attempt-start') counts.attemptStarts += 1;
+            else counts.attemptResults += 1;
+          }
+        }
+        cursor = page.records.length === 500 ? page.next : undefined;
+      } while (cursor);
+    }
+    return counts;
+  });
+}
+
 export async function initLlmRequestJournal(): Promise<void> { await getLlmRequestJournalStore(); }
 export async function shutdownLlmRequestJournal(): Promise<void> { await closeLlmRequestJournalStore(); }
 
@@ -169,12 +237,7 @@ export async function reconstructLlmRequest(requestId: string): Promise<Reconstr
   const request = await store.getRequest(requestId);
   if (!request) return { requestId, completeness:'legacy-partial', missing:['request-manifest','system-prompt','tool-schema','canonical-messages'] };
   try {
-    assertRequestRecord(request); await validateRequestManifest(store, requestId);
-    const ids = await reconstructMessageIds(store, requestId); const starts = await store.getAttemptStarts(requestId); const results = await store.getAttemptResults(requestId);
-    const startsByAttempt = new Map<number,AttemptStartRecord>(); const resultsByAttempt = new Map<number,AttemptResultRecord>();
-    for (const start of starts) { assertAttemptStartRecord(start); if (start.requestId !== requestId || startsByAttempt.has(start.attempt)) throw new Error(`Invalid or duplicate LLM journal attempt start for ${requestId}`); startsByAttempt.set(start.attempt,start); }
-    for (const result of results) { assertAttemptResultRecord(result); if (result.requestId !== requestId || !startsByAttempt.has(result.attempt) || resultsByAttempt.has(result.attempt)) throw new Error(`Invalid, orphaned, or duplicate LLM journal attempt result for ${requestId}`); resultsByAttempt.set(result.attempt,result); }
-    return { requestId,sessionId:request.sessionId,purpose:request.purpose,iteration:request.iteration,createdAt:request.createdAt,systemPrompt:await objectValue<string>(store,request.promptObjectId,'prompt'),toolDefinitions:await objectValue<ToolDefinition[]>(store,request.toolSchemaObjectId,'tool-schema'),messages:await Promise.all(ids.map(id=>objectValue<Message>(store,id,'message'))),requestedModelKey:request.requestedModelKey,promptCacheKeyHash:request.promptCacheKeyHash,attempts:starts.map(start=>({start,result:resultsByAttempt.get(start.attempt)})),completeness:'complete' };
+    return await reconstructLlmRequestFromStore(store, requestId);
   } catch (error:any) { return { requestId,completeness:'corrupt',errors:[error?.message||String(error)] }; }
 }
 export async function listLlmRequestJournal(options:{sessionId?:string;purpose?:LlmRequestPurpose;limit?:number;before?:LlmRequestJournalCursor}={}):Promise<LlmRequestJournalSummary[]>{const limit=Math.max(1,Math.min(1000,Math.floor(options.limit||100)));return (await getLlmRequestJournalStore()).listRequests({...options,limit});}

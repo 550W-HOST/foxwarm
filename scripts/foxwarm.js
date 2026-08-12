@@ -10,7 +10,7 @@ Usage: foxwarm <subcommand> [options]
 
 Subcommands:
   model    Send one prompt through Foxwarm's configured production model stack
-  archive  Export SQLite-authoritative archives as compatibility JSONL
+  archive  Export session archives and the configured request Journal as JSONL
   storage  Copy/verify pluggable storage backends
 
 Options:
