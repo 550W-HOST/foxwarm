@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getSessionRuntimeStateName, isSessionRuntimeActive, type RuntimeStateSessionLike } from './sessionRuntimeState'
+import { readSessionIdleUnread, SESSION_IDLE_SESSION_DELETED_EVENT, SESSION_IDLE_UNREAD_EVENT, SESSION_IDLE_UNREAD_STORAGE_KEY, shouldMarkSessionIdleUnread, updateStoredSessionIdleUnread, type SessionIdleUnread } from './sessionIdleAttention'
 
 export type SessionIdleNotificationMode = 'once' | 'always'
 
 export interface SessionIdleNotificationSession extends RuntimeStateSessionLike {
   id: string
   displayName?: string
+  aliases?: string[]
 }
 
 type SessionIdleNotificationModes = Record<string, SessionIdleNotificationMode>
@@ -133,14 +135,19 @@ function loadStoredSessionIdleNotificationModes(): SessionIdleNotificationModes 
   return typeof localStorage === 'undefined' ? {} : readSessionIdleNotificationModes(localStorage)
 }
 
-export function useSessionIdleNotifications(sessions: SessionIdleNotificationSession[]) {
+export function useSessionIdleNotifications(sessions: SessionIdleNotificationSession[], options: { visibleSessionIds?: Iterable<string> } = {}) {
   const [modes, setModes] = useState<SessionIdleNotificationModes>(loadStoredSessionIdleNotificationModes)
+  const [unread, setUnread] = useState<SessionIdleUnread>(() => typeof localStorage === 'undefined' ? {} : readSessionIdleUnread(localStorage))
   const modesRef = useRef(modes)
   const sessionsRef = useRef(sessions)
   const trackerRef = useRef(new SessionIdleNotificationTracker())
 
   modesRef.current = modes
   sessionsRef.current = sessions
+  const visibleSessionIds = new Set(options.visibleSessionIds || [])
+  const canonicalVisibleSessionIds = new Set([...visibleSessionIds].map(sessionId => (
+    sessions.find(session => session.id === sessionId || session.aliases?.includes(sessionId))?.id || sessionId
+  )))
 
   const updateModes = useCallback((update: (current: SessionIdleNotificationModes) => SessionIdleNotificationModes) => {
     setModes(current => {
@@ -156,15 +163,72 @@ export function useSessionIdleNotifications(sessions: SessionIdleNotificationSes
 
   useEffect(() => {
     for (const session of trackerRef.current.observe(sessions, modesRef.current)) {
-      if (!showSessionIdleNotification(session)) continue
-      if (modesRef.current[session.id] === 'once') {
+      if (shouldMarkSessionIdleUnread(session.id, canonicalVisibleSessionIds, document.visibilityState) && typeof localStorage !== 'undefined') {
+        const next = updateStoredSessionIdleUnread(localStorage, current => ({ ...current, [session.id]: Date.now() }))
+        setUnread(next)
+        window.dispatchEvent(new Event(SESSION_IDLE_UNREAD_EVENT))
+      }
+      const delivered = showSessionIdleNotification(session)
+      if (delivered && modesRef.current[session.id] === 'once') {
         updateModes(current => {
           const { [session.id]: _removed, ...remaining } = current
           return remaining
         })
       }
     }
-  }, [sessions, updateModes])
+  }, [sessions, updateModes, [...canonicalVisibleSessionIds].join('\0')])
+
+  const acknowledgeSession = useCallback((sessionId: string) => {
+    if (!sessionId || document.visibilityState !== 'visible' || typeof localStorage === 'undefined') return
+    const canonicalId = sessionsRef.current.find(session => session.id === sessionId || session.aliases?.includes(sessionId))?.id || sessionId
+    const next = updateStoredSessionIdleUnread(localStorage, current => {
+      if (!(canonicalId in current)) return current
+      const { [canonicalId]: _removed, ...remaining } = current
+      return remaining
+    })
+    setUnread(next)
+    window.dispatchEvent(new Event(SESSION_IDLE_UNREAD_EVENT))
+  }, [])
+
+  const acknowledgeVisibleSessions = useCallback((sessionIds: Iterable<string>) => {
+    if (document.visibilityState !== 'visible') return
+    for (const sessionId of sessionIds) acknowledgeSession(sessionId)
+  }, [acknowledgeSession])
+
+  const clearDeletedSessions = useCallback((sessionIds: Iterable<string>) => {
+    if (typeof localStorage === 'undefined') return
+    const deleted = new Set(sessionIds)
+    if (deleted.size === 0) return
+    const next = updateStoredSessionIdleUnread(localStorage, current => Object.fromEntries(Object.entries(current).filter(([sessionId]) => !deleted.has(sessionId))))
+    setUnread(next)
+    window.dispatchEvent(new Event(SESSION_IDLE_UNREAD_EVENT))
+  }, [])
+
+  useEffect(() => {
+    const handleDeleted = (event: Event) => {
+      const sessionIds = (event as CustomEvent<{ sessionIds?: unknown }>).detail?.sessionIds
+      if (Array.isArray(sessionIds)) clearDeletedSessions(sessionIds.filter((value): value is string => typeof value === 'string'))
+    }
+    window.addEventListener(SESSION_IDLE_SESSION_DELETED_EVENT, handleDeleted)
+    return () => window.removeEventListener(SESSION_IDLE_SESSION_DELETED_EVENT, handleDeleted)
+  }, [clearDeletedSessions])
+
+  useEffect(() => {
+    const sync = () => { if (typeof localStorage !== 'undefined') setUnread(readSessionIdleUnread(localStorage)) }
+    const handleStorage = (event: StorageEvent) => { if (!event.key || event.key === SESSION_IDLE_UNREAD_STORAGE_KEY) sync() }
+    window.addEventListener('storage', handleStorage)
+    window.addEventListener(SESSION_IDLE_UNREAD_EVENT, sync)
+    return () => { window.removeEventListener('storage', handleStorage); window.removeEventListener(SESSION_IDLE_UNREAD_EVENT, sync) }
+  }, [])
+
+  useEffect(() => {
+    const acknowledgeCurrentVisibility = () => {
+      if (document.visibilityState === 'visible') acknowledgeVisibleSessions(canonicalVisibleSessionIds)
+    }
+    acknowledgeCurrentVisibility()
+    document.addEventListener('visibilitychange', acknowledgeCurrentVisibility)
+    return () => document.removeEventListener('visibilitychange', acknowledgeCurrentVisibility)
+  }, [[...canonicalVisibleSessionIds].join('\0'), acknowledgeVisibleSessions])
 
   const toggleMode = useCallback(async (sessionId: string, mode: SessionIdleNotificationMode) => {
     const currentMode = modesRef.current[sessionId]
@@ -193,5 +257,5 @@ export function useSessionIdleNotifications(sessions: SessionIdleNotificationSes
     updateModes(current => ({ ...current, [sessionId]: mode }))
   }, [updateModes])
 
-  return { idleNotificationModes: modes, toggleIdleNotificationMode: toggleMode }
+  return { idleNotificationModes: modes, toggleIdleNotificationMode: toggleMode, unreadSessionIds: new Set(Object.keys(unread)), acknowledgeSession, acknowledgeVisibleSessions, clearDeletedSessions }
 }

@@ -10,6 +10,7 @@ import VscodeWebFrameHost, { type VscodeWebFrameHostHandle } from './components/
 import type { SessionMoveRequest } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { isSessionRuntimeActive } from './sessionRuntimeState'
+import { selectVisibleSessionIds } from './sessionIdleAttention'
 import { useSessionIdleNotifications } from './sessionIdleNotifications'
 import { useBoundedSessionList } from './boundedSessionList'
 import { useWorkbenchStore } from './workbench/store'
@@ -522,13 +523,21 @@ function App() {
   const currentContextSessionId = focusedActiveTab?.type === 'chat'
     ? focusedActiveTab.sessionId
     : loadStoredLastVisitedSession()
+  const visibleSessionIds = useMemo(() => {
+    const visiblePanes = isMobile ? (focusedPane ? [focusedPane] : paneNodes.slice(0, 1)) : paneNodes
+    const activeSessionIds = visiblePanes.map(pane => {
+      const tab = pane.activeTabId ? tabsById[pane.activeTabId] : null
+      return tab?.type === 'chat' ? tab.sessionId : null
+    })
+    return selectVisibleSessionIds(activeSessionIds, !isMobile || !showSessionList)
+  }, [isMobile, showSessionList, focusedPane, paneNodes, tabsById])
   const exactSessionIds = useMemo(() => allTabs.flatMap(tab => isChatTab(tab) ? [tab.sessionId] : []), [allTabs])
   const boundedSessions = useBoundedSessionList({ focusIds: currentContextSessionId ? [currentContextSessionId] : [], exactIds: exactSessionIds, includeGlobalSummary: true })
   const collapsedSessions = useBoundedSessionList({ focusIds: currentContextSessionId ? [currentContextSessionId] : [],
     rootLimit: 20, childLimit: 1, includeIdleWatches: false })
   const sessions = boundedSessions.knownSessions
   const sidebarSessions = boundedSessions.sessions
-  const { idleNotificationModes, toggleIdleNotificationMode } = useSessionIdleNotifications(sessions)
+  const { idleNotificationModes, toggleIdleNotificationMode, unreadSessionIds, acknowledgeSession } = useSessionIdleNotifications(sessions, { visibleSessionIds })
   const boundedPresentation = {
     serverOrdered: true as const, hasMoreRoots: boundedSessions.hasMoreRoots, childPages: boundedSessions.childPages,
     descendantBusy: boundedSessions.descendantBusy, invalidationVersion: boundedSessions.invalidationVersion,
@@ -874,6 +883,8 @@ function App() {
     if (isMobile) {
       setShowSessionList(false)
     }
+    const tab = useWorkbenchStore.getState().tabsById[tabId]
+    if (tab?.type === 'chat') acknowledgeSession(tab.sessionId)
   }
 
   useLayoutEffect(() => {
@@ -1798,6 +1809,7 @@ function App() {
           onCreateAgent={handleCreateAgent}
           onCreateSession={handleCreateSession}
           idleNotificationModes={idleNotificationModes}
+          unreadSessionIds={unreadSessionIds}
           onToggleIdleNotificationMode={toggleIdleNotificationMode}
           bounded={boundedPresentation}
         />,
@@ -1860,6 +1872,7 @@ function App() {
             onToggleCollapsed={() => setSidebarCollapsed(true)}
             isPeek={false}
             idleNotificationModes={idleNotificationModes}
+            unreadSessionIds={unreadSessionIds}
             onToggleIdleNotificationMode={toggleIdleNotificationMode}
             bounded={boundedPresentation}
           />
@@ -1875,6 +1888,7 @@ function App() {
           onSelectSession={openChatTab}
           onCreateSession={handleQuickCreateSession}
           onToggleCollapsed={() => setSidebarCollapsed(false)}
+          unreadSessionIds={unreadSessionIds}
         />
       )}
       <div className="flex-1 h-full min-h-0 overflow-hidden">

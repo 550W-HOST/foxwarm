@@ -36,7 +36,7 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 - Browser-only theme, UI style, sidebar, send-key, last-tab/session, and Code preferences use local storage. Instance branding comes from server settings.
 - Browser auth storage reads only `foxwarm_token`. The browser E2E helper is exposed only as `window.foxwarmTest`.
 - Main launcher options consume the authenticated node summary. Code persists its standalone node/path target in browser storage; terminal defaults follow the focused session. Session-header terminal placement reuses a lower pane only for the exact normalized node/cwd target and otherwise adds the requested target there.
-- Idle-notification settings are browser-local too. App and the embedded sidebar each observe their accepted list snapshots once; the notification transition contract belongs to [webui-session-list](./webui-session-list.md#design-decisions).
+- Idle-notification settings and unread idle-completion attention are browser-local too. App and the embedded sidebar each observe their accepted list snapshots once; App supplies every actually rendered active split-pane Chat (or the one visible mobile pane), and the canonical transition/storage/acknowledgement contract belongs to [webui-session-list](./webui-session-list.md#design-decisions).
 
 ## Embedded leaf roots
 
@@ -49,7 +49,7 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 
 Embedded Chat sends `open-setup` with an allowlisted optional Models-focus field. The Code host activates the stable Setup custom editor and sends a separate nonce-bound one-shot `focus-models` message after the Setup leaf reports ready; Embedded Setup converts it to the same transient `SetupView` focus request used by normal App.
 
-These are independent roots, not CSS-hidden full App instances. Active-target messages update sidebar selection; a null target clears it.
+These are independent roots, not CSS-hidden full App instances. Active-target messages update sidebar selection; a null target clears it. The same nonce-bound payload may include all active Code Chat editor session IDs so the embedded sidebar can apply the canonical unread visibility contract.
 
 ## Code and commit behavior
 

@@ -74,7 +74,7 @@ A collection of small, reusable React UI components and utility functions for th
 ## Behavior
 
 - `ContextMenu` uses `createPortal` to render outside the component tree, calculates position with `useLayoutEffect`, and auto-dismisses on outside click, Escape, scroll, or resize.
-- `CollapsedSidebar` filters to unarchived root sessions, shows at most 20 avatars, highlights the active session, and displays a busy dot for busy sessions.
+- `CollapsedSidebar` filters to unarchived root sessions, shows at most 20 avatars, highlights the active session, displays the canonical runtime-state dot at top-right, and independently displays unread idle completion at bottom-right with accessible title/name text. The unread contract is canonical in [webui-session-list](./webui-session-list.md#design-decisions).
 - `ReasoningCard` debounces content updates, detects OpenAI-style bold summary titles for collapsed preview, and renders full markdown when expanded.
 - `ReasoningCard` exposes semantic CSS hooks (`foxwarm-reasoning-card`, `foxwarm-reasoning-card-*`, `foxwarm-reasoning-thread-line`, `foxwarm-reasoning-header`, `foxwarm-reasoning-tag`, `foxwarm-reasoning-preview`, `foxwarm-reasoning-body`) so optional UI style layers can retheme reasoning surfaces without duplicating reasoning rendering logic.
 - `ImageParts` renders PNG/JPEG/GIF/WebP through direct same-origin authenticated URLs with lazy loading, exposes active/unsafe formats as download links, and shows an explicit unavailable state for transport-marked legacy failures or load errors. Canonical persistence and transport behavior: [image blob lifecycle](../threads/image-blob-lifecycle.md).

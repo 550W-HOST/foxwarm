@@ -347,6 +347,19 @@ var FoxwarmWebUiController = class {
       return null;
     }
   }
+  getVisibleSessionIds() {
+    const visible = [];
+    for (const group of vscode.window.tabGroups.all) {
+      const input = group.activeTab?.input;
+      if (!input?.uri || input.viewType !== FOXWARM_CHAT_EDITOR_VIEW_TYPE) continue;
+      try {
+        const target = parseEditorTarget(input.uri);
+        if (target.kind === "session" && !visible.includes(target.sessionId)) visible.push(target.sessionId);
+      } catch {
+      }
+    }
+    return visible;
+  }
   publishActiveTarget() {
     const bridge = this.sidebarBridge;
     if (!bridge) return;
@@ -355,7 +368,8 @@ var FoxwarmWebUiController = class {
       version: FOXWARM_EMBED_VERSION,
       nonce: bridge.nonce,
       type: "active-target",
-      target: this.getActiveTarget()
+      target: this.getActiveTarget(),
+      visibleSessionIds: this.getVisibleSessionIds()
     });
   }
   resolveWebviewView(view) {

@@ -15,6 +15,7 @@ async function loadTypeScriptModule(relativePath) {
 }
 
 const notifications = await loadTypeScriptModule('../src/sessionIdleNotifications.ts')
+const attention = await loadTypeScriptModule('../src/sessionIdleAttention.ts')
 
 function session(id, { busy = false, state, queueLength = 0 } = {}) {
   return {
@@ -86,6 +87,62 @@ test('session idle notification preferences accept only known modes and remove e
   assert.equal(values.has(notifications.SESSION_IDLE_NOTIFICATIONS_STORAGE_KEY), false)
 })
 
+test('unread attention storage is versioned, fail-closed, newest-bounded, and merge-updated', () => {
+  const values = new Map()
+  const storage = {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: key => values.delete(key),
+  }
+  values.set(attention.SESSION_IDLE_UNREAD_STORAGE_KEY, JSON.stringify({ version: 2, unread: { bad: 1 } }))
+  assert.deepEqual(attention.readSessionIdleUnread(storage), {})
+  values.set(attention.SESSION_IDLE_UNREAD_STORAGE_KEY, JSON.stringify({ version: 1, unread: { good: 4, negative: -1, text: '5', '': 8 } }))
+  assert.deepEqual(attention.readSessionIdleUnread(storage), { good: 4 })
+  values.set(attention.SESSION_IDLE_UNREAD_STORAGE_KEY, JSON.stringify({ version: 1, unread: { ' padded ': 5, canonical: 6 } }))
+  assert.deepEqual(attention.readSessionIdleUnread(storage), { canonical: 6 })
+  const many = Object.fromEntries(Array.from({ length: 300 }, (_, index) => [`session/${index}`, index]))
+  attention.writeSessionIdleUnread(storage, many)
+  const bounded = attention.readSessionIdleUnread(storage)
+  assert.equal(Object.keys(bounded).length, 256)
+  assert.equal(bounded['session/299'], 299)
+  assert.equal(bounded['session/0'], undefined)
+  attention.updateStoredSessionIdleUnread(storage, current => ({ ...current, newest: 1000 }))
+  assert.equal(attention.readSessionIdleUnread(storage).newest, 1000)
+})
+
+test('normal workbench visibility includes every active split Chat but excludes the mobile list-covered surface', () => {
+  assert.deepEqual(attention.selectVisibleSessionIds(['agent/a', null, 'agent/b', 'agent/a'], true), ['agent/a', 'agent/b'])
+  assert.deepEqual(attention.selectVisibleSessionIds(['agent/a', 'agent/b'], false), [])
+  assert.equal(attention.shouldMarkSessionIdleUnread('agent/a', new Set(['agent/a']), 'visible'), false)
+  assert.equal(attention.shouldMarkSessionIdleUnread('agent/a', new Set(['agent/a']), 'hidden'), true)
+  assert.equal(attention.shouldMarkSessionIdleUnread('agent/a', new Set(['agent/b']), 'visible'), true)
+})
+
+test('unread storage failures fail closed without preventing the in-memory normalized result', () => {
+  const storage = {
+    getItem() { throw new Error('blocked') },
+    setItem() { throw new Error('full') },
+    removeItem() { throw new Error('blocked') },
+  }
+  assert.deepEqual(attention.readSessionIdleUnread(storage), {})
+  assert.deepEqual(attention.writeSessionIdleUnread(storage, { task: 12 }), { task: 12 })
+})
+
+test('bounded session list retains both idle watches and once-disabled unread exact ids', async () => {
+  const source = await readFile(new URL('../src/boundedSessionList.ts', import.meta.url), 'utf8')
+  assert.match(source, /getSessionIdleUnreadIds/)
+  assert.match(source, /currentAttentionIds/)
+  assert.match(source, /SESSION_IDLE_UNREAD_EVENT/)
+  assert.match(source, /chunkBoundedIds\(subscriptionIds, 100\)/)
+  assert.match(source, /dispatchSessionIdleDeleted\(deletedIds\)/)
+  assert.match(source, /dispatchSessionIdleDeleted\(missing\)/)
+  assert.match(source, /\.\.\.unreadIds/)
+  const hook = await readFile(new URL('../src/sessionIdleNotifications.ts', import.meta.url), 'utf8')
+  assert.match(hook, /shouldMarkSessionIdleUnread/)
+  assert.match(hook, /const delivered = showSessionIdleNotification\(session\)/)
+  assert.match(hook, /delivered && modesRef\.current\[session\.id\] === 'once'/)
+})
+
 test('browser notification permission and delivery require granted permission', async () => {
   const previousNotification = globalThis.Notification
   const calls = []
@@ -141,4 +198,10 @@ test('session context menu exposes an accessible once item with a trailing alway
   assert.match(list, /Bell size=\{14\}/)
   assert.match(list, /checked: idleNotificationMode === 'once'/)
   assert.match(list, /trailingControl:/)
+  assert.match(list, /Unread idle completion/)
+  assert.match(list, /result\.deletedSessionIds/)
+  const collapsed = await readFile(new URL('../src/components/CollapsedSidebar.tsx', import.meta.url), 'utf8')
+  assert.match(collapsed, /-top-0\.5 -right-0\.5/)
+  assert.match(collapsed, /-bottom-0\.5 -right-0\.5/)
+  assert.match(collapsed, /Unread idle completion/)
 })

@@ -49,7 +49,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 - Code's Foxwarm sidebar embeds the normal session list/navigation leaf.
 - Session, Agents, and Setup open deterministic read-only custom editors that embed strict leaf roots, not CSS-hidden full App instances.
 - Fixed source/nonce messages open targets and report active target. An ordinary editor clears Foxwarm selection.
-- Current authentication uses same-public-origin cookies. A cross-origin credential exchange for isolated wildcard webview origins is not implemented.
+- Current authentication uses same-public-origin cookies. A cross-origin credential exchange for isolated wildcard webview origins is not implemented. The nonce-bound active-target bridge retains its singular selected target and also carries the deduplicated session IDs of every active Foxwarm Chat editor group for browser-local unread suppression/acknowledgement; that attention contract is canonical in [webui-session-list](../units/webui-session-list.md#design-decisions).
 
 ## Webview deployment
 

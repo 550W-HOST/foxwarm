@@ -31,6 +31,7 @@ test('bounded cache owns exact watches, focus paths, pages, latest generations, 
   assert.match(files.client, /generation !== windowGenerationRef\.current/)
   assert.doesNotMatch(files.client, /slice\(0, 100\)/)
   assert.match(files.client, /createSessionListRefreshScheduler/)
+  assert.match(files.client, /getSessionIdleUnreadIds/)
   assert.match(files.client, /session-list-delta/)
   assert.match(files.client, /sessions-updated/)
   assert.match(files.client, /session-list\/descendant-activity/)

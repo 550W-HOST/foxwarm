@@ -8,6 +8,7 @@ interface CollapsedSidebarProps {
   onSelectSession: (sessionId: string) => void
   onCreateSession: () => void
   onToggleCollapsed: () => void
+  unreadSessionIds?: ReadonlySet<string>
 }
 
 function getSessionInitial(session: Session): string {
@@ -24,6 +25,7 @@ export default function CollapsedSidebar({
   onSelectSession,
   onCreateSession,
   onToggleCollapsed,
+  unreadSessionIds = new Set(),
 }: CollapsedSidebarProps) {
   const rootSessions = sessions
     .filter((s) => (s.pinned || !s.parentSessionId) && !s.archived)
@@ -58,6 +60,7 @@ export default function CollapsedSidebar({
           const runtimeState = getSessionRuntimeStateName(session)
           const activeRuntime = isSessionRuntimeActive(session)
           const showRuntimeIndicator = activeRuntime || runtimeState === 'waiting'
+          const isUnread = unreadSessionIds.has(session.id)
           const indicatorColor = runtimeState === 'running-tool'
             ? 'bg-purple-500'
             : runtimeState === 'waiting'
@@ -68,7 +71,8 @@ export default function CollapsedSidebar({
               key={session.id}
               type="button"
               onClick={() => onSelectSession(session.id)}
-              title={session.displayName || session.id}
+              title={`${session.displayName || session.id}${isUnread ? ' — Unread idle completion' : ''}`}
+              aria-label={`${session.displayName || session.id}${isUnread ? ', Unread idle completion' : ''}`}
               className={`relative flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold transition shrink-0 ${
                 isActive
                   ? 'bg-blue-100 text-blue-700 ring-1 ring-blue-300 dark:bg-blue-900/40 dark:text-blue-200 dark:ring-blue-700'
@@ -77,8 +81,9 @@ export default function CollapsedSidebar({
             >
               {initial}
               {showRuntimeIndicator && (
-                <span className={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-white dark:ring-gray-800 ${indicatorColor}`} />
+                <span aria-hidden="true" className={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-white dark:ring-gray-800 ${indicatorColor}`} />
               )}
+              {isUnread && <span aria-hidden="true" className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-blue-500 ring-1 ring-white dark:ring-gray-800" />}
             </button>
           )
         })}
