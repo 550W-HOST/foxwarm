@@ -173,6 +173,20 @@ async function start(): Promise<void> {
       }
       options.currentSessionEffects.notifySessionEvent(session.id, { type: 'model-stream-reset', streamId: 'test-stream', iteration: 0 } as any);
     }
+    // Production-shaped ordering regression: requestLlmOnce flushes a final
+    // cumulative OpenAI-completions-like frame immediately before chat()
+    // commits the canonical model reasoning/function-call row. The Worker
+    // presentation coalescer must not deliver that frame after the row.
+    if (process.env.FOXWARM_TEST_STREAM_COMMITTED_TOOL === '1'
+      && chatCount === Number(process.env.FOXWARM_TEST_STREAM_COMMITTED_TOOL_AT || '1')) {
+      const call = { id: 'worker-stream-exec', name: 'exec', args: { command: 'printf worker-stream-order' } };
+      options.currentSessionEffects.notifySessionEvent(session.id, {
+        type: 'model-stream-update', streamId: 'committed-tool-stream', iteration: 0,
+        reasoning: 'Starting the process', text: '', toolCalls: [{ index: 0, id: call.id, name: call.name }],
+      } as any);
+      await options.appendMessage({ role: 'model', parts: [{ thinking: 'Starting the process' }, { functionCall: call }] });
+      return { toolCalls: [call], allParts: [{ thinking: 'Starting the process' }, { functionCall: call }] };
+    }
     // Simulates a slow provider request that honors its abort signal, like the
     // real runner: the controller is registered for the in-flight request and
     // the request rejects AbortError when interrupted.

@@ -514,6 +514,11 @@ export class SessionWorkerHost {
   private forwardAppendedMessages(messages: Message[]): void {
     if (!this.presentationSubscribed || !this.dependencies.publishPresentationMessage) return;
     for (const message of messages) {
+      // The LLM emitter flushes its final cumulative frame before chat()
+      // appends the canonical model row. Worker-side coalescing must preserve
+      // that order: otherwise the message clears WebUI's synthetic draft and a
+      // later coalescer timer recreates the now-stale reasoning/tool placeholder.
+      if (message.role === 'model') this.flushCoalescedStreamEvents();
       const copy = JSON.parse(JSON.stringify(message)) as Message;
       this.forwardPresentation(() => this.dependencies.publishPresentationMessage!(copy));
     }
@@ -524,7 +529,10 @@ export class SessionWorkerHost {
   private forwardSessionStreamEvent(event: SessionStreamEvent): void {
     if (!this.presentationSubscribed || !this.dependencies.publishPresentationStream) return;
     if (event.type === 'model-stream-reset') {
-      // Resets are structural (draft lifecycle), forward immediately.
+      // A retry/reset is a structural draft boundary. Preserve any already
+      // emitted cumulative frame before it, and cancel its coalescer timer so
+      // an older update can never reappear after the reset.
+      this.flushCoalescedStreamEvents();
       const copy = JSON.parse(JSON.stringify(event)) as SessionStreamEvent;
       this.forwardPresentation(() => this.dependencies.publishPresentationStream!(copy));
       return;
@@ -544,6 +552,10 @@ export class SessionWorkerHost {
   }
 
   private flushCoalescedStreamEvents(): void {
+    if (this.streamCoalesceTimer) {
+      clearTimeout(this.streamCoalesceTimer);
+      this.streamCoalesceTimer = undefined;
+    }
     if (!this.coalescedStreamEvents.size) return;
     const pending = [...this.coalescedStreamEvents.values()];
     this.coalescedStreamEvents.clear();
