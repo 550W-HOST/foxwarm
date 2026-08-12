@@ -84,7 +84,7 @@ test('a pre-SQLite journal failure blocks the provider-bound request manifest', 
   const sessionId = unique('journal_recovery');
   let capturedRequestId = '';
   setLlmRequestJournalFaultInjectorForTests((phase, record: any) => {
-    if (phase === 'before-sqlite-write' && record.kind === 'request' && record.sessionId === sessionId) {
+    if (phase.startsWith('before-') && record.kind === 'request' && record.sessionId === sessionId) {
       capturedRequestId = record.requestId;
       throw new Error('injected pre-SQLite failure');
     }
