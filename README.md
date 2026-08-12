@@ -279,8 +279,9 @@ foxwarm storage journal copy-sqlite-to-postgres \
   --source-quiesced
 ```
 
-The command accepts only the active data root's canonical SQLite Journal,
-leaves that source untouched, and verifies every stored record plus every
+The command accepts only the active data root's canonical SQLite Journal with
+its completed SQLite-only migration authority marker, leaves that source
+untouched, and verifies every stored record plus every
 request reconstruction. It refuses a nonempty target. After verified success,
 Foxwarm durably writes a non-secret local one-way cutover marker at
 `state/llm-request-journal-cutover.json`; merely changing YAML back to SQLite

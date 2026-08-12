@@ -58,12 +58,10 @@ async function runStorageCli(argv, options = {}) {
   }
   let target;
   try {
-    target = await runtime.getLlmRequestJournalStore();
+    target = runtime.createConfiguredLlmRequestJournalStore();
     const report = await runtime.copySqliteLlmRequestJournalToStore(args.sqlite, target, runtime.LLM_REQUEST_JOURNAL_STORAGE_CONFIG);
     stdout.write(`${JSON.stringify({ source: args.sqlite, report }, null, 2)}\n`);
-  } finally {
-    await runtime.closeLlmRequestJournalStore?.();
-  }
+  } finally { await target?.close?.(); }
   return 0;
 }
 

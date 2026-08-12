@@ -21,6 +21,7 @@ import { SqliteLlmRequestJournalStore } from './llmRequestJournalSqliteStore';
 import { getLlmRequestJournalStore } from './llmRequestJournalStoreFactory';
 import { copySqliteLlmRequestJournalToStore, setLlmJournalCopyFaultInjectorForTests } from './llmRequestJournalMigration';
 import { LLM_REQUEST_JOURNAL_CUTOVER_MARKER_PATH, readLlmRequestJournalCutoverMarker, setLlmRequestJournalCutoverWriteFaultInjectorForTests } from './llmRequestJournalCutover';
+import { LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_KEY, LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_MIGRATION_ID } from './llmRequestJournalStore';
 
 const connectionString = process.env.FOXWARM_POSTGRES_JOURNAL_TEST_URL;
 const schema = process.env.FOXWARM_POSTGRES_JOURNAL_TEST_SCHEMA || '';
@@ -104,6 +105,7 @@ test('SQLite to PostgreSQL CLI copy requires empty target and verifies every rec
       cursor = page.records.length === 100 ? page.next : undefined;
     } while (cursor);
   }
+  await source.setMetadata(LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_KEY, LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_MIGRATION_ID);
   const sourceCounts = await source.getCounts();
   await source.close();
   const migrationSchema = `${schema}_copy`;
@@ -141,7 +143,78 @@ test('SQLite to PostgreSQL CLI copy requires empty target and verifies every rec
   } finally { await target.close(); }
   await assert.rejects(runNode(['scripts/foxwarm.js', 'storage', 'journal', 'copy-sqlite-to-postgres', '--sqlite', sourcePath, '--source-quiesced'], { FOXWARM_CONFIG_PATH: configPath }), /LLM_JOURNAL_SQLITE_RETIRED/);
   await dropSchema(migrationSchema);
+  await assert.rejects(
+    runNode(['-e', `require(${JSON.stringify(path.join(__dirname, 'llmRequestJournal.js'))}).initLlmRequestJournal().then(()=>process.exit(0),e=>{console.error(e.message);process.exit(1)})`], { FOXWARM_CONFIG_PATH: configPath }),
+    /authority required by the completed local cutover marker is missing/,
+  );
+  const authorityPool = new Pool({ connectionString, max: 1 });
+  try {
+    const absent = await authorityPool.query('SELECT COUNT(*)::int AS count FROM information_schema.schemata WHERE schema_name=$1', [migrationSchema]);
+    assert.equal(absent.rows[0].count, 0);
+    await authorityPool.query(`CREATE SCHEMA "${migrationSchema}"`);
+  } finally { await authorityPool.end(); }
+  await assert.rejects(
+    runNode(['-e', `require(${JSON.stringify(path.join(__dirname, 'llmRequestJournal.js'))}).initLlmRequestJournal().then(()=>process.exit(0),e=>{console.error(e.message);process.exit(1)})`], { FOXWARM_CONFIG_PATH: configPath }),
+    /authority required by the completed local cutover marker is missing/,
+  );
+  const emptyPool = new Pool({ connectionString, max: 1 });
+  try {
+    const tables = await emptyPool.query('SELECT COUNT(*)::int AS count FROM information_schema.tables WHERE table_schema=$1', [migrationSchema]);
+    assert.equal(tables.rows[0].count, 0);
+  } finally { await emptyPool.end(); }
+  await dropSchema(migrationSchema);
   await fs.remove(LLM_REQUEST_JOURNAL_CUTOVER_MARKER_PATH);
+});
+
+test('cutover requires the completed active SQLite authority before touching PostgreSQL', { skip: !enabled }, async () => {
+  const sourcePath = path.join(process.env.FOXWARM_DATA_DIR!, 'state', 'llm-request-journal.sqlite');
+  await fs.remove(LLM_REQUEST_JOURNAL_CUTOVER_MARKER_PATH);
+  const source = new SqliteLlmRequestJournalStore(sourcePath);
+  await source.initialize();
+  const originalAuthority = await source.getMetadata(LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_KEY);
+  for (const [suffix, authority] of [['missing', undefined], ['wrong', 'wrong-authority']] as const) {
+    if (authority === undefined) {
+      source.rawDatabase.prepare('DELETE FROM llm_journal_metadata WHERE key=?').run(LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_KEY);
+    } else {
+      await source.setMetadata(LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_KEY, authority);
+    }
+    const targetSchema = `${schema}_source_authority_${suffix}`;
+    await dropSchema(targetSchema);
+    const target = new PostgresLlmRequestJournalStore({ backend:'postgres', connectionString:connectionString!, connectionStringEnv:'FOXWARM_POSTGRES_JOURNAL_TEST_URL', schema:targetSchema, ssl:false, poolMax:1, connectTimeoutMs:5000, idleTimeoutMs:1000 });
+    await assert.rejects(copySqliteLlmRequestJournalToStore(sourcePath, target, { backend:'postgres', connectionString:connectionString!, connectionStringEnv:'FOXWARM_POSTGRES_JOURNAL_TEST_URL', schema:targetSchema, ssl:false, poolMax:1, connectTimeoutMs:5000, idleTimeoutMs:1000 }), /lacks the completed sqlite-only-large-archives-v1 authority marker/);
+    const pool = new Pool({ connectionString, max: 1 });
+    try {
+      const schemas = await pool.query('SELECT COUNT(*)::int AS count FROM information_schema.schemata WHERE schema_name=$1', [targetSchema]);
+      assert.equal(schemas.rows[0].count, 0);
+    } finally { await pool.end(); }
+    assert.equal(await fs.pathExists(LLM_REQUEST_JOURNAL_CUTOVER_MARKER_PATH), false);
+    await target.close();
+  }
+  await source.setMetadata(LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_KEY, originalAuthority || LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_MIGRATION_ID);
+  await source.close();
+});
+
+test('CLI validates SQLite authority before creating the configured PostgreSQL schema', { skip: !enabled }, async () => {
+  const sourcePath = path.join(process.env.FOXWARM_DATA_DIR!, 'state', 'llm-request-journal.sqlite');
+  const source = new SqliteLlmRequestJournalStore(sourcePath);
+  await source.initialize();
+  const originalAuthority = await source.getMetadata(LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_KEY);
+  source.rawDatabase.prepare('DELETE FROM llm_journal_metadata WHERE key=?').run(LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_KEY);
+  await source.close();
+  const targetSchema = `${schema}_cli_source_authority`;
+  await dropSchema(targetSchema);
+  const configPath = path.join(process.env.FOXWARM_DATA_DIR!, 'cli-authority-config.yaml');
+  await fs.writeFile(configPath, `storage:\n  llmRequestJournal:\n    backend: postgres\n    connectionStringEnv: FOXWARM_POSTGRES_JOURNAL_TEST_URL\n    schema: ${targetSchema}\n`);
+  await assert.rejects(runNode(['scripts/foxwarm.js', 'storage', 'journal', 'copy-sqlite-to-postgres', '--sqlite', sourcePath, '--source-quiesced'], { FOXWARM_CONFIG_PATH: configPath }), /lacks the completed sqlite-only-large-archives-v1 authority marker/);
+  const pool = new Pool({ connectionString, max: 1 });
+  try {
+    const schemas = await pool.query('SELECT COUNT(*)::int AS count FROM information_schema.schemata WHERE schema_name=$1', [targetSchema]);
+    assert.equal(schemas.rows[0].count, 0);
+  } finally { await pool.end(); }
+  const restore = new SqliteLlmRequestJournalStore(sourcePath);
+  await restore.initialize();
+  await restore.setMetadata(LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_KEY, originalAuthority || LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_MIGRATION_ID);
+  await restore.close();
 });
 
 test('corrupt source and interrupted copy never publish complete authority or a cutover marker', { skip: !enabled }, async () => {
@@ -222,6 +295,31 @@ test('marked PostgreSQL schema with a missing required table fails closed', { sk
   await assert.rejects(columnReopened.initialize(), /required column llm_journal_requests.message_count is missing or incompatible/);
   await columnReopened.close();
   await dropSchema(columnSchema);
+
+  const constraintSchema = `${schema}_constraint`;
+  await dropSchema(constraintSchema);
+  const constraintInitialized = await configuredStore(constraintSchema);
+  await constraintInitialized.close();
+  const constraintPool = new Pool({ connectionString, max: 1 });
+  try { await constraintPool.query(`ALTER TABLE "${constraintSchema}".llm_journal_objects DROP CONSTRAINT llm_journal_objects_pkey`); } finally { await constraintPool.end(); }
+  const constraintReopened = new PostgresLlmRequestJournalStore({ backend:'postgres', connectionString:connectionString!, connectionStringEnv:'PG', schema:constraintSchema, ssl:false, poolMax:1, connectTimeoutMs:1000, idleTimeoutMs:1000 });
+  await assert.rejects(constraintReopened.initialize(), /required identity constraint llm_journal_objects\(object_id\) is missing or incompatible/);
+  await constraintReopened.close();
+  await dropSchema(constraintSchema);
+
+  const wrongConstraintSchema = `${schema}_wrong_constraint`;
+  await dropSchema(wrongConstraintSchema);
+  const wrongConstraintInitialized = await configuredStore(wrongConstraintSchema);
+  await wrongConstraintInitialized.close();
+  const wrongConstraintPool = new Pool({ connectionString, max: 1 });
+  try {
+    await wrongConstraintPool.query(`ALTER TABLE "${wrongConstraintSchema}".llm_journal_requests DROP CONSTRAINT llm_journal_requests_pkey`);
+    await wrongConstraintPool.query(`ALTER TABLE "${wrongConstraintSchema}".llm_journal_requests ADD CONSTRAINT replacement_request_identity UNIQUE(request_id,created_at)`);
+  } finally { await wrongConstraintPool.end(); }
+  const wrongConstraintReopened = new PostgresLlmRequestJournalStore({ backend:'postgres', connectionString:connectionString!, connectionStringEnv:'PG', schema:wrongConstraintSchema, ssl:false, poolMax:1, connectTimeoutMs:1000, idleTimeoutMs:1000 });
+  await assert.rejects(wrongConstraintReopened.initialize(), /required identity constraint llm_journal_requests\(request_id\) is missing or incompatible/);
+  await wrongConstraintReopened.close();
+  await dropSchema(wrongConstraintSchema);
 });
 
 test('cutover marker publication failure does not retire SQLite or report success', { skip: !enabled }, async () => {

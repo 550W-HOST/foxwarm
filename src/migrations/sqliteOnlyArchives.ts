@@ -8,8 +8,9 @@ import { logger } from '../common';
 import { hasArchiveStoreSqliteAuthority, markArchiveStoreSqliteAuthority, migrateLegacySessionArchivesToSqlite, type LegacyArchiveMigrationSource } from '../session/archiveStore';
 import { hasLlmJournalSqliteAuthority, markLlmJournalSqliteAuthority, migrateLegacyLlmRequestJournalToSqlite, type LegacyLlmJournalMigrationSource } from '../llmRequestJournal';
 import { createMigrationVersionStore, MIGRATION_BACKUP_DIR, readMigrationVersionState } from './state';
+import { LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_MIGRATION_ID } from '../llmRequestJournalStore';
 
-export const SQLITE_ONLY_ARCHIVES_MIGRATION_ID = 'sqlite-only-large-archives-v1';
+export const SQLITE_ONLY_ARCHIVES_MIGRATION_ID = LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_MIGRATION_ID;
 const LOCK_PATH = path.join(STATE_DIR, `${SQLITE_ONLY_ARCHIVES_MIGRATION_ID}.lock`);
 
 type Source = (LegacyArchiveMigrationSource | LegacyLlmJournalMigrationSource) & {

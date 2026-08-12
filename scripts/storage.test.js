@@ -24,11 +24,22 @@ test('storage copy dispatches to configured PostgreSQL store and closes it', asy
     stdout,
     runtimeLoader: () => ({
       LLM_REQUEST_JOURNAL_STORAGE_CONFIG: { backend: 'postgres' },
-      async getLlmRequestJournalStore() { calls.push('store'); return { backend: 'postgres' }; },
+      createConfiguredLlmRequestJournalStore() { calls.push('store'); return { backend: 'postgres', async close() { calls.push('close'); } }; },
       async copySqliteLlmRequestJournalToStore(source) { calls.push(['copy', source]); return { requests: 1 }; },
-      async closeLlmRequestJournalStore() { calls.push('close'); },
     }),
   });
   assert.deepEqual(calls.map(value => Array.isArray(value) ? value[0] : value), ['store', 'copy', 'close']);
   assert.match(stdout.value, /"requests": 1/);
+});
+
+test('storage copy closes a directly-created store when copy fails', async () => {
+  const calls = [];
+  await assert.rejects(runStorageCli(['journal', 'copy-sqlite-to-postgres', '--sqlite', './source.sqlite', '--source-quiesced'], {
+    runtimeLoader: () => ({
+      LLM_REQUEST_JOURNAL_STORAGE_CONFIG: { backend: 'postgres' },
+      createConfiguredLlmRequestJournalStore() { return { backend: 'postgres', async close() { calls.push('close'); } }; },
+      async copySqliteLlmRequestJournalToStore() { throw new Error('copy failed'); },
+    }),
+  }), /copy failed/);
+  assert.deepEqual(calls, ['close']);
 });

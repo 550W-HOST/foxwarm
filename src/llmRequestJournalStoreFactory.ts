@@ -8,6 +8,12 @@ import { readLlmRequestJournalCutoverMarker } from './llmRequestJournalCutover';
 let store: LlmRequestJournalStore | undefined;
 let initializing: Promise<LlmRequestJournalStore> | undefined;
 
+export function createConfiguredLlmRequestJournalStore(options: { requireExistingAuthority?: boolean } = {}): LlmRequestJournalStore {
+  return LLM_REQUEST_JOURNAL_STORAGE_CONFIG.backend === 'postgres'
+    ? new PostgresLlmRequestJournalStore(LLM_REQUEST_JOURNAL_STORAGE_CONFIG, options)
+    : new SqliteLlmRequestJournalStore(LLM_REQUEST_JOURNAL_DB_PATH);
+}
+
 export async function getLlmRequestJournalStore(): Promise<LlmRequestJournalStore> {
   if (store) return store;
   if (!initializing) initializing = (async () => {
@@ -20,9 +26,7 @@ export async function getLlmRequestJournalStore(): Promise<LlmRequestJournalStor
         || cutover.postgres.connectionStringEnv !== LLM_REQUEST_JOURNAL_STORAGE_CONFIG.connectionStringEnv)) {
       throw new Error('Configured PostgreSQL LLM Request Journal does not match the completed local cutover marker.');
     }
-    const created: LlmRequestJournalStore = LLM_REQUEST_JOURNAL_STORAGE_CONFIG.backend === 'postgres'
-      ? new PostgresLlmRequestJournalStore(LLM_REQUEST_JOURNAL_STORAGE_CONFIG)
-      : new SqliteLlmRequestJournalStore(LLM_REQUEST_JOURNAL_DB_PATH);
+    const created = createConfiguredLlmRequestJournalStore({ requireExistingAuthority: !!cutover });
     try {
       await created.initialize();
       store = created;

@@ -2,7 +2,7 @@ import { SqliteLlmRequestJournalStore } from './llmRequestJournalSqliteStore';
 import path from 'node:path';
 import type { LlmJournalRecord, LlmJournalRecordKind, LlmRequestJournalStore } from './llmRequestJournalStore';
 import { LLM_REQUEST_JOURNAL_AUTHORITY, LLM_REQUEST_JOURNAL_AUTHORITY_STATE_COMPLETE, LLM_REQUEST_JOURNAL_AUTHORITY_STATE_KEY, LLM_REQUEST_JOURNAL_SCHEMA_VERSION } from './llmRequestJournalStore';
-import { canonicalJournalJson, reconstructLlmRequestFromStore, validateLlmRequestJournalStore } from './llmRequestJournal';
+import { assertCurrentLlmJournalSqliteAuthority, canonicalJournalJson, reconstructLlmRequestFromStore, validateLlmRequestJournalStore } from './llmRequestJournal';
 import { LLM_REQUEST_JOURNAL_DB_PATH } from './llmRequestJournalPaths';
 import { writeLlmRequestJournalCutoverMarker } from './llmRequestJournalCutover';
 import type { NormalizedLlmRequestJournalStorageConfig } from './config';
@@ -61,10 +61,11 @@ export async function copySqliteLlmRequestJournalToStore(
   const source = new SqliteLlmRequestJournalStore(sqlitePath, true);
   await source.initialize();
   try {
-    await target.initialize();
-    if (!target.beginMigrationCopy || !target.completeMigrationCopy) throw new Error('PostgreSQL LLM request journal target does not support migration authority lifecycle.');
+    assertCurrentLlmJournalSqliteAuthority(sqlitePath);
     await source.checkIntegrity();
     const sourceCounts = await validateLlmRequestJournalStore(source);
+    await target.initialize();
+    if (!target.beginMigrationCopy || !target.completeMigrationCopy) throw new Error('PostgreSQL LLM request journal target does not support migration authority lifecycle.');
     await target.beginMigrationCopy();
     const copied: Record<LlmJournalRecordKind, number> = { object: 0, request: 0, 'attempt-start': 0, 'attempt-result': 0 };
     await source.withConsistentSnapshot(async () => {

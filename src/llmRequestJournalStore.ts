@@ -19,6 +19,8 @@ export const LLM_REQUEST_JOURNAL_AUTHORITY = 'foxwarm-llm-request-journal';
 export const LLM_REQUEST_JOURNAL_AUTHORITY_STATE_KEY = 'authority_state';
 export const LLM_REQUEST_JOURNAL_AUTHORITY_STATE_COMPLETE = 'complete';
 export const LLM_REQUEST_JOURNAL_AUTHORITY_STATE_COPYING = 'copying';
+export const LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_KEY = 'sqlite_authority_migration';
+export const LLM_REQUEST_JOURNAL_SQLITE_AUTHORITY_MIGRATION_ID = 'sqlite-only-large-archives-v1';
 export const MAX_LLM_REQUEST_DELTA_DEPTH = 8;
 
 export type LlmRequestPurpose = 'normal-turn' | 'compact-plan' | 'btw' | 'toolscript-one-shot' | 'cli' | 'setup-test' | 'low-level';

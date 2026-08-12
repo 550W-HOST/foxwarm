@@ -18,6 +18,7 @@ Canonical cross-module contract: [canonical LLM request journal](../threads/llm-
 - `canonicalJournalJson`, `hashJournalValue` — deterministic object-key canonicalization and SHA-256 identity.
 - `LlmRequestJournalStore` — Foxwarm-owned async persistence contract; adapters do not expose generic SQL/query-builder APIs.
 - `PostgresLlmRequestJournalStore` / `SqliteLlmRequestJournalStore` — backend implementations with portable deterministic ordering.
+- `createConfiguredLlmRequestJournalStore` — creates an uninitialized configured adapter so cutover can validate SQLite authority before any target-schema mutation; ordinary runtime initializes it through the singleton factory.
 - `migrateLegacyLlmRequestJournalToSqlite` — SQLite-only migration input for strict legacy JSONL import and equality verification.
 - `copySqliteLlmRequestJournalToStore` — quiesced, read-only source copy into an empty PostgreSQL target; canonical validators run against both stores, and authority is published complete only after verification.
 - `exportLlmRequestJournalJsonl` — bounded, snapshot-consistent backend-neutral compatibility export with atomic destination replacement.
@@ -26,14 +27,14 @@ Canonical cross-module contract: [canonical LLM request journal](../threads/llm-
 ## Storage and behavior
 
 - SQLite is the default authority. PostgreSQL is an explicit Journal-only alternative selected at startup; there is no fallback, dual-write, or cross-store transaction.
-- A successful active-authority SQLite-to-PostgreSQL cutover atomically writes a versioned non-secret local marker. That marker fences canonical SQLite store initialization and must match the configured PostgreSQL schema/environment-variable identity; manual deletion is not a supported rollback.
+- Cutover requires the canonical SQLite store's completed SQLite-only migration authority before PostgreSQL initialization. A successful cutover atomically writes a versioned non-secret local marker; it fences canonical SQLite initialization, requires the matching PostgreSQL authority to keep existing, and makes a missing/empty PG schema an authority-loss failure rather than a fresh install. Manual marker deletion is not a supported rollback.
 - Prompt, full tool schema, and each canonical message use type-namespaced SHA-256 object IDs.
 - Same-session manifests use the longest common message prefix against the latest request. Chains checkpoint after a maximum depth of eight.
 - Request records store only a hash of the prompt-cache key.
 - Attempt records store a hash, not the body, of the provider-specific semantic payload.
 - Legacy JSONL is strictly imported only by the startup migration, then moved to path-preserving migration backup. Runtime uses FULL synchronous writer transactions and explicit JSONL export.
 - Request/attempt identity structure, object kind/hash, delta ancestry/depth, and reconstructed message count are verified before a request can be reported complete.
-- SQLite uses a busy timeout for concurrent server/CLI journal writers. PostgreSQL uses a bounded lazy pool (default max 1), store-local migration lock, validated quoted schema identifier, strict marked-schema table/column verification, and an authority lifecycle of `copying` then `complete` for cutover.
+- SQLite uses a busy timeout for concurrent server/CLI journal writers. PostgreSQL uses a bounded lazy pool (default max 1), store-local migration lock, validated quoted schema identifier, strict marked-schema table/column plus identity-constraint verification, and an authority lifecycle of `copying` then `complete` for cutover.
 - A database-local authority marker prevents a newly recreated empty file from being mistaken for the migrated journal after migration completion.
 
 ## Tests

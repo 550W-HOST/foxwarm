@@ -50,6 +50,13 @@ const REQUIRED_TABLE_COLUMNS: Record<string, Record<string, { type: string; null
     result_json: { type: 'text', nullable: true }, error_json: { type: 'text', nullable: true },
   },
 };
+const REQUIRED_IDENTITY_CONSTRAINTS: Record<string, string[]> = {
+  metadata: ['key'],
+  llm_journal_objects: ['object_id'],
+  llm_journal_requests: ['request_id'],
+  llm_journal_attempt_starts: ['event_id'],
+  llm_journal_attempt_results: ['event_id'],
+};
 
 function quoteIdentifier(value: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value)) throw new Error('Invalid PostgreSQL Journal schema identifier.');
@@ -96,7 +103,10 @@ export class PostgresLlmRequestJournalStore implements LlmRequestJournalStore {
   private snapshotClient?: PoolClient;
   private readonly schemaSql: string;
 
-  constructor(private readonly config: Extract<NormalizedLlmRequestJournalStorageConfig, { backend: 'postgres' }>) {
+  constructor(
+    private readonly config: Extract<NormalizedLlmRequestJournalStorageConfig, { backend: 'postgres' }>,
+    private readonly options: { requireExistingAuthority?: boolean } = {},
+  ) {
     this.schemaSql = quoteIdentifier(config.schema);
   }
 
@@ -135,6 +145,32 @@ export class PostgresLlmRequestJournalStore implements LlmRequestJournalStore {
         if (!found || found.type !== expected.type || found.nullable !== expected.nullable) {
           throw new Error(`PostgreSQL LLM request journal required column ${table}.${column} is missing or incompatible; restore it or choose a fresh empty schema.`);
         }
+      }
+    }
+    const constraints = await client.query(`
+      SELECT tc.table_name,tc.constraint_type,
+        array_agg(kcu.column_name ORDER BY kcu.ordinal_position) AS columns
+      FROM information_schema.table_constraints tc
+      JOIN information_schema.key_column_usage kcu
+        ON kcu.constraint_catalog=tc.constraint_catalog
+       AND kcu.constraint_schema=tc.constraint_schema
+       AND kcu.constraint_name=tc.constraint_name
+       AND kcu.table_name=tc.table_name
+      WHERE tc.table_schema=$1 AND tc.constraint_type IN ('PRIMARY KEY','UNIQUE')
+      GROUP BY tc.table_name,tc.constraint_name,tc.constraint_type
+    `, [this.config.schema]);
+    const identities = new Map<string, string[][]>();
+    for (const row of constraints.rows) {
+      const values = Array.isArray(row.columns) ? row.columns : String(row.columns || '').replace(/^\{|\}$/g, '').split(',').filter(Boolean);
+      const current = identities.get(row.table_name) || [];
+      current.push(values);
+      identities.set(row.table_name, current);
+    }
+    for (const [table, expectedColumns] of Object.entries(REQUIRED_IDENTITY_CONSTRAINTS)) {
+      const found = identities.get(table)?.some(columns => columns.length === expectedColumns.length
+        && columns.every((column, index) => column === expectedColumns[index]));
+      if (!found) {
+        throw new Error(`PostgreSQL LLM request journal required identity constraint ${table}(${expectedColumns.join(',')}) is missing or incompatible; restore it or choose a fresh empty schema.`);
       }
     }
   }
@@ -176,6 +212,9 @@ export class PostgresLlmRequestJournalStore implements LlmRequestJournalStore {
         ? (await client.query(`SELECT table_name FROM information_schema.tables WHERE table_schema=$1`, [this.config.schema])).rows.map(row => row.table_name)
         : [];
       if (!schemaExists || tables.length === 0) {
+        if (this.options.requireExistingAuthority) {
+          throw new Error('PostgreSQL LLM request journal authority required by the completed local cutover marker is missing; restore the PostgreSQL schema from backup.');
+        }
         await client.query(`CREATE SCHEMA IF NOT EXISTS ${this.schemaSql}`);
         await client.query(this.schemaSqlText());
         await client.query(`INSERT INTO ${this.schemaSql}.metadata(key,value) VALUES ('authority',$1),('schema_version',$2),($3,$4)`, [
