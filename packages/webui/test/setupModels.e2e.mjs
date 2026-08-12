@@ -127,6 +127,36 @@ async function attachRequestMocks(targetPage, options = {}) {
   let mockModelsRawYaml = options.oobe ? '' : statusPayload.models.rawYaml
   let mockConfigRawYaml = statusPayload.config.rawYaml
   let mockOobe = !!options.oobe
+  let mockSessionModel = 'route'
+  let mockSessionEffort = null
+  let mockChildModel = null
+  let mockChildEffort = null
+  const allowedEffortsFor = (model) => model === 'leaf/model-b'
+    ? ['medium', 'max']
+    : model === 'route' ? ['none', 'low', 'medium', 'high'] : ['none', 'low', 'high']
+  const isVirtualModel = (model) => model === 'route' || model === 'sticky'
+  const effectiveEffortFor = (raw, model) => raw && allowedEffortsFor(model).includes(raw)
+    ? raw
+    : isVirtualModel(model) ? 'default' : (model === 'leaf/model-b' ? 'medium' : 'high')
+  const buildMockSessionState = (id) => {
+    const childModel = mockChildModel || mockSessionModel
+    return {
+      id,
+      model: mockSessionModel === 'route' ? null : mockSessionModel,
+      modelKey: mockSessionModel,
+      defaultModelKey: 'route',
+      effort: mockSessionEffort,
+      effectiveEffort: effectiveEffortFor(mockSessionEffort, mockSessionModel),
+      effortAllowed: allowedEffortsFor(mockSessionModel),
+      effortDefault: isVirtualModel(mockSessionModel) ? null : (mockSessionModel === 'leaf/model-b' ? 'medium' : 'high'),
+      childModelDefault: mockChildModel,
+      effectiveChildModelKey: childModel,
+      childEffortDefault: mockChildEffort,
+      effectiveChildEffort: effectiveEffortFor(mockChildEffort || mockSessionEffort, childModel),
+      childEffortAllowed: allowedEffortsFor(childModel),
+      childModelEffortDefault: isVirtualModel(childModel) ? null : (childModel === 'leaf/model-b' ? 'medium' : 'high'),
+    }
+  }
   await targetPage.setRequestInterception(true)
   targetPage.on('request', (request) => {
     const url = new URL(request.url())
@@ -153,10 +183,10 @@ async function attachRequestMocks(targetPage, options = {}) {
         defaultKey: 'route',
         currentKey: 'route',
         models: [
-          { key: 'leaf/model-a', label: 'leaf/model-a', isVirtual: false },
-          { key: 'leaf/model-b', label: 'leaf/model-b', isVirtual: false },
-          { key: 'sticky', label: 'sticky', isVirtual: true },
-          { key: 'route', label: 'route', isVirtual: true },
+          { key: 'leaf/model-a', label: 'leaf/model-a', isVirtual: false, allowedEfforts: ['none', 'low', 'high'], defaultEffort: 'high' },
+          { key: 'leaf/model-b', label: 'leaf/model-b', isVirtual: false, allowedEfforts: ['medium', 'max'], defaultEffort: 'medium' },
+          { key: 'sticky', label: 'sticky', isVirtual: true, allowedEfforts: ['none', 'low', 'high'], defaultEffort: null },
+          { key: 'route', label: 'route', isVirtual: true, allowedEfforts: ['none', 'low', 'medium', 'high'], defaultEffort: null },
         ],
       })
       return
@@ -190,12 +220,23 @@ async function attachRequestMocks(targetPage, options = {}) {
     if (/\/api\/sessions\/[^/]+\/model$/.test(url.pathname) && request.method() === 'POST') {
       const body = JSON.parse(request.postData() || '{}')
       modelUpdateRequests.push({ path: url.pathname, body })
-      void respondJson(request, {
-        id: decodeURIComponent(url.pathname.split('/').at(-2) || ''),
-        model: body.model || null,
-        modelKey: body.model || 'route',
-        defaultModelKey: 'route',
-      })
+      if (Object.prototype.hasOwnProperty.call(body, 'model')) {
+        mockSessionModel = body.model || 'route'
+        if (options.staleEffort) {
+          mockSessionEffort = 'max'
+          mockChildEffort = 'max'
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(body, 'effort')) mockSessionEffort = body.effort || null
+      void respondJson(request, buildMockSessionState(decodeURIComponent(url.pathname.split('/').at(-2) || '')))
+      return
+    }
+    if (/\/api\/sessions\/[^/]+\/child-model$/.test(url.pathname) && request.method() === 'POST') {
+      const body = JSON.parse(request.postData() || '{}')
+      modelUpdateRequests.push({ path: url.pathname, body })
+      if (Object.prototype.hasOwnProperty.call(body, 'childModelDefault')) mockChildModel = body.childModelDefault || null
+      if (Object.prototype.hasOwnProperty.call(body, 'childEffortDefault')) mockChildEffort = body.childEffortDefault || null
+      void respondJson(request, buildMockSessionState(decodeURIComponent(url.pathname.split('/').at(-2) || '')))
       return
     }
     if (url.pathname.endsWith('/api/sessions')) {
@@ -752,7 +793,7 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
 test('embedded model filter selects one result and keeps the accessible Setup bridge', async () => {
   const hostPage = await browser.newPage()
   await hostPage.setViewport({ width: 390, height: 700 })
-  await attachRequestMocks(hostPage)
+  await attachRequestMocks(hostPage, { staleEffort: true })
   const nonce = '0123456789abcdef0123456789abcdef'
   try {
     await hostPage.goto(`${baseUrl}/preview/host`, { waitUntil: 'networkidle2' })
@@ -795,6 +836,66 @@ test('embedded model filter selects one result and keeps the accessible Setup br
     assert.ok(popupLayout.right <= popupLayout.viewportWidth)
     assert.ok(popupLayout.settingsRight <= popupLayout.filterLeft)
     assert.ok(popupLayout.filterRight <= popupLayout.right)
+    const alignedEffortLayout = await chatFrame.$eval('[data-model-selector-popup="true"]', (popup) => {
+      const header = popup.querySelector('[data-model-selector-header="true"]')
+      const footer = popup.querySelector('[data-model-effort-footer="true"]')
+      const row = popup.querySelector('[data-model-selector-row="true"]')
+      if (!header || !footer || !row) throw new Error('model selector table rows are missing')
+      const columnRects = (element) => Array.from(element.children).map((child) => {
+        const rect = child.getBoundingClientRect()
+        return { left: rect.left, right: rect.right, width: rect.width }
+      })
+      const selects = Array.from(footer.querySelectorAll('select')).map((select) => {
+        const rect = select.getBoundingClientRect()
+        const style = getComputedStyle(select)
+        const canvas = document.createElement('canvas')
+        const context = canvas.getContext('2d')
+        if (context) context.font = style.font
+        const selectedLabel = select.selectedOptions[0]?.label || ''
+        const textWidth = context?.measureText(selectedLabel).width || 0
+        const description = select.getAttribute('aria-describedby')
+        return {
+          width: rect.width,
+          left: rect.left,
+          right: rect.right,
+          fontSize: Number.parseFloat(style.fontSize),
+          selectedLabel,
+          readable: textWidth + 28 <= rect.width,
+          description: description ? document.getElementById(description)?.textContent : '',
+        }
+      })
+      return {
+        headerLabels: Array.from(header.children).map((child) => child.textContent?.trim()),
+        headerSelectCount: header.querySelectorAll('select').length,
+        footerLabel: footer.firstElementChild?.textContent?.trim(),
+        footerImmediatelyAboveSearch: !!footer.nextElementSibling?.querySelector('input[aria-label="Filter models"]'),
+        headerColumns: columnRects(header),
+        footerColumns: columnRects(footer),
+        rowColumns: columnRects(row),
+        footerHeight: footer.getBoundingClientRect().height,
+        selects,
+      }
+    })
+    assert.deepEqual(alignedEffortLayout.headerLabels, ['Model id', 'Current', 'Child'])
+    assert.equal(alignedEffortLayout.headerSelectCount, 0)
+    assert.equal(alignedEffortLayout.footerLabel, 'Effort')
+    assert.equal(alignedEffortLayout.footerImmediatelyAboveSearch, true)
+    assert.ok(alignedEffortLayout.footerHeight <= 36)
+    assert.equal(alignedEffortLayout.selects.length, 2)
+    for (let index = 0; index < 3; index += 1) {
+      assert.ok(Math.abs(alignedEffortLayout.headerColumns[index].left - alignedEffortLayout.footerColumns[index].left) <= 1)
+      assert.ok(Math.abs(alignedEffortLayout.headerColumns[index].right - alignedEffortLayout.footerColumns[index].right) <= 1)
+      assert.ok(Math.abs(alignedEffortLayout.rowColumns[index].left - alignedEffortLayout.footerColumns[index].left) <= 1)
+      assert.ok(Math.abs(alignedEffortLayout.rowColumns[index].right - alignedEffortLayout.footerColumns[index].right) <= 1)
+    }
+    assert.ok(alignedEffortLayout.selects.every(({ left, right, width }, index) => left >= alignedEffortLayout.footerColumns[index + 1].left && right <= alignedEffortLayout.footerColumns[index + 1].right && width >= 76))
+    assert.ok(alignedEffortLayout.selects.every(({ fontSize }) => fontSize === 16))
+    assert.deepEqual(alignedEffortLayout.selects.map(({ selectedLabel }) => selectedLabel), ['Per leaf', 'Per leaf'])
+    assert.ok(alignedEffortLayout.selects.every(({ readable }) => readable))
+    assert.deepEqual(alignedEffortLayout.selects.map(({ description }) => description), [
+      'Current effort: default (per leaf)',
+      'Child effort: follow/default (per leaf)',
+    ])
 
     const updatesBefore = modelUpdateRequests.length
     await filter.type('LEAF')
@@ -840,6 +941,42 @@ test('embedded model filter selects one result and keeps the accessible Setup br
     await chatFrame.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
     assert.equal(await reopenedFilter.evaluate((input) => input.value), '')
     assert.equal(await chatFrame.$$eval('button[title="leaf/model-a"], button[title="leaf/model-b"], button[title="sticky"], button[title="route"]', (buttons) => buttons.length), 4)
+    const currentEffort = await chatFrame.waitForSelector('select[aria-label="Current effort"]')
+    assert.equal(await currentEffort.evaluate(select => select.value), 'max')
+    assert.equal(await currentEffort.$eval('option[value=""]', option => option.textContent), 'default (per leaf)')
+    assert.equal(await currentEffort.$eval('option[value=""]', option => option.label), 'Per leaf')
+    assert.deepEqual(await currentEffort.$eval('option[value="max"]', option => ({ text: option.textContent, disabled: option.disabled })), {
+      text: 'max (unavailable; using per-leaf default)', disabled: true,
+    })
+    assert.equal(await currentEffort.$eval('option[value="max"]', option => option.label), 'Max ⚠')
+    assert.equal(await currentEffort.evaluate(select => select.title), 'Current effort: max (unavailable; using per-leaf default)')
+    const childEffort = await chatFrame.waitForSelector('select[aria-label="Child effort"]')
+    assert.equal(await childEffort.evaluate(select => select.value), 'max')
+    assert.equal(await childEffort.$eval('option[value=""]', option => option.textContent), 'follow/default (per leaf)')
+    assert.equal(await childEffort.$eval('option[value=""]', option => option.label), 'Per leaf')
+    assert.deepEqual(await childEffort.$eval('option[value="max"]', option => ({ text: option.textContent, disabled: option.disabled })), {
+      text: 'max (unavailable; using per-leaf default)', disabled: true,
+    })
+    assert.equal(await childEffort.$eval('option[value="max"]', option => option.label), 'Max ⚠')
+    assert.equal(await childEffort.evaluate(select => select.title), 'Child effort: max (unavailable; using per-leaf default)')
+
+    const effortUpdatesBefore = modelUpdateRequests.length
+    await currentEffort.select('low')
+    const effortDeadline = Date.now() + 5_000
+    while (modelUpdateRequests.length === effortUpdatesBefore && Date.now() < effortDeadline) await new Promise(resolve => setTimeout(resolve, 50))
+    assert.deepEqual(modelUpdateRequests.at(-1), {
+      path: '/preview/api/sessions/embedded%2Fchat/model',
+      body: { effort: 'low' },
+    })
+    await childEffort.select('none')
+    const childEffortDeadline = Date.now() + 5_000
+    while (modelUpdateRequests.at(-1)?.body?.childEffortDefault !== 'none' && Date.now() < childEffortDeadline) await new Promise(resolve => setTimeout(resolve, 50))
+    assert.deepEqual(modelUpdateRequests.at(-1), {
+      path: '/preview/api/sessions/embedded%2Fchat/child-model',
+      body: { childEffortDefault: 'none' },
+    })
+    await chatFrame.waitForFunction(() => document.querySelector('button[aria-haspopup="dialog"]')?.textContent?.includes('low'))
+    assert.ok((await modelButton.evaluate(button => button.textContent || '')).includes('child follow · none'))
     const reopenedConfigure = await chatFrame.waitForSelector('button[aria-label="Configure models"]')
     await reopenedConfigure.click()
     await hostPage.waitForFunction(() => window.embedMessages.some((message) => message?.type === 'open-setup'))
@@ -867,14 +1004,134 @@ test('embedded model filter selects one result and keeps the accessible Setup br
   }
 })
 
+test('default desktop model effort footer stays compact and table-aligned', async () => {
+  const desktopPage = await browser.newPage()
+  await desktopPage.setViewport({ width: 900, height: 700 })
+  await attachRequestMocks(desktopPage)
+  try {
+    await desktopPage.goto(`${baseUrl}/normal/#session/model-effort-default-desktop`, { waitUntil: 'networkidle2' })
+    const modelButton = await desktopPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
+    await modelButton.click()
+    await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    await desktopPage.click('button[title="leaf/model-a"]')
+    await desktopPage.waitForFunction(() => document.querySelector('select[aria-label="Current effort"]')?.title === 'Current effort: default (high)')
+    const layout = await desktopPage.$eval('[data-model-selector-popup="true"]', (popup) => {
+      const header = popup.querySelector('[data-model-selector-header="true"]')
+      const footer = popup.querySelector('[data-model-effort-footer="true"]')
+      const row = popup.querySelector('[data-model-selector-row="true"]')
+      if (!header || !footer || !row) throw new Error('model selector table rows are missing')
+      const columns = (element) => Array.from(element.children).map((child) => {
+        const rect = child.getBoundingClientRect()
+        return { left: rect.left, right: rect.right }
+      })
+      const headerColumns = columns(header)
+      const footerColumns = columns(footer)
+      const rowColumns = columns(row)
+      const selects = Array.from(footer.querySelectorAll('select')).map((select) => {
+        const rect = select.getBoundingClientRect()
+        const style = getComputedStyle(select)
+        const canvas = document.createElement('canvas')
+        const context = canvas.getContext('2d')
+        if (context) context.font = style.font
+        const selectedLabel = select.selectedOptions[0]?.label || ''
+        const description = select.getAttribute('aria-describedby')
+        return {
+          width: rect.width,
+          fontSize: Number.parseFloat(style.fontSize),
+          selectedLabel,
+          readable: (context?.measureText(selectedLabel).width || 0) + 28 <= rect.width,
+          title: select.title,
+          description: description ? document.getElementById(description)?.textContent : '',
+        }
+      })
+      return {
+        selects,
+        aligned: footerColumns.every((column, index) => (
+          Math.abs(column.left - headerColumns[index].left) <= 1
+          && Math.abs(column.right - headerColumns[index].right) <= 1
+          && Math.abs(column.left - rowColumns[index].left) <= 1
+          && Math.abs(column.right - rowColumns[index].right) <= 1
+        )),
+        headerLabels: Array.from(header.children).map((child) => child.textContent?.trim()),
+        footerLabel: footer.firstElementChild?.textContent?.trim(),
+      }
+    })
+    assert.equal(layout.aligned, true)
+    assert.deepEqual(layout.headerLabels, ['Model id', 'Current', 'Child'])
+    assert.equal(layout.footerLabel, 'Effort')
+    assert.deepEqual(layout.selects.map(({ selectedLabel }) => selectedLabel), ['Default', 'Follow'])
+    assert.ok(layout.selects.every(({ fontSize }) => fontSize === 11))
+    assert.ok(layout.selects.every(({ width }) => width >= 104))
+    assert.ok(layout.selects.every(({ readable }) => readable))
+    assert.deepEqual(layout.selects.map(({ title }) => title), [
+      'Current effort: default (high)',
+      'Child effort: follow/default (high)',
+    ])
+    assert.deepEqual(layout.selects.map(({ description }) => description), [
+      'Current effort: default (high)',
+      'Child effort: follow/default (high)',
+    ])
+  } finally {
+    await desktopPage.close()
+  }
+})
+
 test('normal Chat keeps the icon-only model settings callback and singleton Setup focus', async () => {
   const normalPage = await browser.newPage()
   await attachRequestMocks(normalPage)
   try {
+    await normalPage.evaluateOnNewDocument(() => {
+      try { localStorage.setItem('foxwarm_ui_theme_style_v1', '550a') } catch {}
+    })
     await normalPage.goto(`${baseUrl}/normal/#session/model-filter-normal`, { waitUntil: 'networkidle2' })
     const modelButton = await normalPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
     await modelButton.click()
     await normalPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    const themeLayout = await normalPage.$eval('[data-model-selector-popup="true"]', (popup) => {
+      const current = popup.querySelector('select[aria-label="Current effort"]')
+      const child = popup.querySelector('select[aria-label="Child effort"]')
+      const header = popup.querySelector('[data-model-selector-header="true"]')
+      const footer = popup.querySelector('[data-model-effort-footer="true"]')
+      const row = popup.querySelector('[data-model-selector-row="true"]')
+      const columns = (element) => element ? Array.from(element.children).map((cell) => {
+        const rect = cell.getBoundingClientRect()
+        return { left: rect.left, right: rect.right }
+      }) : []
+      const headerColumns = columns(header)
+      const footerColumns = columns(footer)
+      const rowColumns = columns(row)
+      return {
+        theme: document.documentElement.getAttribute('data-foxwarm-ui-style'),
+        popupWidth: popup.getBoundingClientRect().width,
+        headerContainsCurrent: !!header?.contains(current),
+        headerContainsChild: !!header?.contains(child),
+        footerContainsCurrent: !!footer?.contains(current),
+        footerContainsChild: !!footer?.contains(child),
+        currentWidth: current?.getBoundingClientRect().width || 0,
+        childWidth: child?.getBoundingClientRect().width || 0,
+        currentFontSize: current ? Number.parseFloat(getComputedStyle(current).fontSize) : 0,
+        currentLabel: current?.selectedOptions[0]?.label || '',
+        childLabel: child?.selectedOptions[0]?.label || '',
+        aligned: footerColumns.length === 3 && footerColumns.every((column, index) => (
+          Math.abs(column.left - headerColumns[index].left) <= 1
+          && Math.abs(column.right - headerColumns[index].right) <= 1
+          && Math.abs(column.left - rowColumns[index].left) <= 1
+          && Math.abs(column.right - rowColumns[index].right) <= 1
+        )),
+      }
+    })
+    assert.equal(themeLayout.theme, '550a')
+    assert.ok(themeLayout.popupWidth <= 500)
+    assert.equal(themeLayout.headerContainsCurrent, false)
+    assert.equal(themeLayout.headerContainsChild, false)
+    assert.equal(themeLayout.footerContainsCurrent, true)
+    assert.equal(themeLayout.footerContainsChild, true)
+    assert.ok(themeLayout.currentWidth >= 104)
+    assert.ok(themeLayout.childWidth >= 104)
+    assert.ok(themeLayout.currentFontSize <= 11)
+    assert.equal(themeLayout.currentLabel, 'Per leaf')
+    assert.equal(themeLayout.childLabel, 'Per leaf')
+    assert.equal(themeLayout.aligned, true)
     const configure = await normalPage.waitForSelector('button[aria-label="Configure models"]')
     assert.equal((await configure.evaluate((button) => button.textContent || '')).trim(), '')
     await configure.click()

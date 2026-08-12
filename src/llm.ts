@@ -8,7 +8,7 @@ import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
-import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, THINKING_BUDGET, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig } from './config';
+import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig } from './config';
 import * as nodeExecution from './nodeExecution';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
@@ -167,6 +167,7 @@ type RequestLlmOnceOptions = {
     contents: Message[];
     systemPrompt: string;
     model?: string;
+    effort?: ModelEffort;
     modelEntryOverride?: ModelConfigEntry;
     modelsConfigOverride?: ModelsConfig;
     sessionId?: string;
@@ -1806,6 +1807,7 @@ export async function chat(
         contents: contentsForLlm,
         systemPrompt,
         model: session.model,
+        effort: session.effort,
         sessionId: session.id,
         promptCacheKey,
         turnId: options?.turnId,
@@ -1852,6 +1854,9 @@ type ConcreteRequestPlan = {
     modelKey: string;
     modelId: string;
     providerType: string;
+    requestedEffort?: ModelEffort;
+    effectiveEffort: ModelEffort;
+    effortFallback: boolean;
     url: string;
     headers: Record<string, any>;
     data: any;
@@ -1861,6 +1866,62 @@ type ConcreteRequestPlan = {
     useOpenAIChatCompletionsApi: boolean;
     useStreamingApi: boolean;
 };
+
+function normalizeRequestedEffort(value: unknown): ModelEffort | undefined {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value !== 'string' || !MODEL_EFFORTS.includes(value as ModelEffort)) {
+        throw new Error(`Model effort must be one of: ${MODEL_EFFORTS.join(', ')}.`);
+    }
+    return value as ModelEffort;
+}
+
+function isPlainRequestObject(value: unknown): value is Record<string, any> {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function applyFirstClassEffort(
+    data: Record<string, any>,
+    providerType: string,
+    effort: ModelEffort,
+): void {
+    const openaiRequestApi = getOpenAIRequestApi(providerType);
+    if (openaiRequestApi === 'responses') {
+        const reasoning = isPlainRequestObject(data.reasoning) ? { ...data.reasoning } : {};
+        reasoning.effort = effort;
+        const include = Array.isArray(data.include) ? [...data.include] : [];
+        if (effort === 'none') {
+            delete reasoning.summary;
+            const filteredInclude = include.filter(item => item !== 'reasoning.encrypted_content');
+            if (filteredInclude.length > 0) data.include = filteredInclude;
+            else delete data.include;
+        } else {
+            if (!Object.prototype.hasOwnProperty.call(reasoning, 'summary')) reasoning.summary = 'auto';
+            if (!include.includes('reasoning.encrypted_content')) include.push('reasoning.encrypted_content');
+            data.include = include;
+        }
+        data.reasoning = reasoning;
+        return;
+    }
+    if (openaiRequestApi === 'chat-completions') {
+        data.reasoning_effort = effort;
+        return;
+    }
+
+    if (effort === 'none') {
+        data.thinking = { type: 'disabled' };
+        if (isPlainRequestObject(data.output_config)) {
+            const outputConfig = { ...data.output_config };
+            delete outputConfig.effort;
+            if (Object.keys(outputConfig).length > 0) data.output_config = outputConfig;
+            else delete data.output_config;
+        }
+        return;
+    }
+    data.output_config = {
+        ...(isPlainRequestObject(data.output_config) ? data.output_config : {}),
+        effort,
+    };
+}
 
 class ConcreteAttemptFailure extends Error {
     readonly kind: LlmRetryEvent['kind'];
@@ -2003,8 +2064,9 @@ function buildConcreteRequestPlan(options: {
     promptCacheKey: string;
     turnId: string;
     attempt: number;
+    requestedEffort?: ModelEffort;
 }): ConcreteRequestPlan {
-    const { request, fixedContents, modelEntry, modelKey, promptCacheKey, turnId, attempt } = options;
+    const { request, fixedContents, modelEntry, modelKey, promptCacheKey, turnId, attempt, requestedEffort } = options;
     const providerType = modelEntry?.providerType || 'openai';
     const baseUrl = modelEntry?.baseUrl;
     const apiKey = modelEntry?.apiKey || '';
@@ -2025,17 +2087,17 @@ function buildConcreteRequestPlan(options: {
         && (webSearchConfig?.toolChoice === 'required' || webSearchConfig?.toolChoice === 'auto')
         ? webSearchConfig.toolChoice
         : 'auto';
+    const effortConfig = getConcreteModelEffortConfig(modelEntry);
+    const effectiveEffort = requestedEffort && effortConfig.allowed.includes(requestedEffort)
+        ? requestedEffort
+        : effortConfig.default;
+    const effortFallback = requestedEffort !== undefined && requestedEffort !== effectiveEffort;
 
     if (!baseUrl) {
         throw new Error(`Model config \`${modelKey}\` has no baseUrl`);
     }
 
     const availableToolDefinitions = request.toolDefinitions ?? [];
-    const openaiEffort = THINKING_BUDGET >= 6000 ? 'xhigh'
-        : THINKING_BUDGET >= 4000 ? 'high'
-        : THINKING_BUDGET >= 2000 ? 'medium'
-        : THINKING_BUDGET > 0 ? 'low'
-        : undefined;
     let messages: any;
     let url: string;
     let headers: Record<string, any>;
@@ -2069,12 +2131,9 @@ function buildConcreteRequestPlan(options: {
             ] : undefined,
             tool_choice: webSearchToolChoice,
             parallel_tool_calls: true,
-            reasoning: {
-                summary: 'auto',
-                ...(openaiEffort ? { effort: openaiEffort } : {}),
-            },
+            reasoning: effectiveEffort === 'none' ? undefined : { summary: 'auto' },
             store: false,
-            include: ['reasoning.encrypted_content'],
+            include: effectiveEffort === 'none' ? undefined : ['reasoning.encrypted_content'],
             prompt_cache_key: promptCacheKey,
             stream: true,
         };
@@ -2090,7 +2149,6 @@ function buildConcreteRequestPlan(options: {
             model: modelName,
             max_tokens: MAX_OUTPUT,
             prompt_cache_key: promptCacheKey,
-            reasoning_effort: openaiEffort,
             stream: true,
             stream_options: { include_usage: true },
             messages: [
@@ -2121,7 +2179,6 @@ function buildConcreteRequestPlan(options: {
         data = {
             model: modelName,
             max_tokens: MAX_OUTPUT,
-            thinking: THINKING_BUDGET ? { type: 'enabled', budget_tokens: THINKING_BUDGET } : undefined,
             system: request.systemPrompt,
             messages,
             tools: availableToolDefinitions.length > 0 ? availableToolDefinitions.map(fd => ({
@@ -2138,15 +2195,7 @@ function buildConcreteRequestPlan(options: {
     };
     const extraFields = expandTemplateVariables(modelEntry.extraFields || {}, templateVars);
     Object.assign(data, extraFields);
-    if (useOpenAIResponsesApi && extraFields.reasoning && typeof extraFields.reasoning === 'object') {
-        const { reasoning: extraReasoning } = extraFields;
-        const hasSummaryOverride = Object.prototype.hasOwnProperty.call(extraReasoning, 'summary');
-        data.reasoning = {
-            ...(data.reasoning || {}),
-            ...extraReasoning,
-            summary: hasSummaryOverride ? extraReasoning.summary : ((data.reasoning as any)?.summary || 'auto'),
-        };
-    }
+    applyFirstClassEffort(data, providerType, effectiveEffort);
 
     const sanitizedRequestPayload = sanitizeProviderRequestPayload(data);
     if (sanitizedRequestPayload.replacementCount > 0) {
@@ -2167,6 +2216,9 @@ function buildConcreteRequestPlan(options: {
         modelKey,
         modelId,
         providerType,
+        requestedEffort,
+        effectiveEffort,
+        effortFallback,
         url,
         headers: {
             ...headers,
@@ -2408,6 +2460,10 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     // for this whole request so retries expand `${TURN_ID}` consistently;
     // normal session turns provide their own value from SessionTurnRunner.
     const turnId = options.turnId || randomUUID();
+    // Resolve the provider-neutral requested effort once for this entire outer
+    // request. Each physical concrete attempt may fall back independently to
+    // its leaf default when the selected leaf does not allow that request.
+    const requestedEffort = normalizeRequestedEffort(options.effort);
     // Completeness boundary: all content-addressed canonical inputs and the
     // request manifest are durable before any provider attempt can be sent.
     const { requestId } = await beginLlmRequestJournal({
@@ -2436,7 +2492,13 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         currentSessionEffects: options.currentSessionEffects,
     });
     let logFiles: LlmInteractionLogFiles | null = null;
-    const virtualRequestSelections: Array<{ attempt: number; modelId: string }> = [];
+    const virtualRequestSelections: Array<{
+        attempt: number;
+        modelId: string;
+        requestedEffort?: ModelEffort;
+        effectiveEffort: ModelEffort;
+        effortFallback: boolean;
+    }> = [];
     let requestStartedAt: number | undefined;
 
     const notifyRetry = async (event: LlmRetryEvent): Promise<void> => {
@@ -2479,6 +2541,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                 promptCacheKey,
                 turnId,
                 attempt,
+                requestedEffort,
             });
             await appendLlmAttemptStart({
                 requestId,
@@ -2491,13 +2554,22 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             logger.info({
                 modelKey,
                 providerType: plan.providerType,
+                requestedEffort: plan.requestedEffort || 'default',
+                effectiveEffort: plan.effectiveEffort,
+                effortFallback: plan.effortFallback,
                 iteration,
                 attempt,
                 maxAttempts,
                 ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
             }, 'Requesting LLM');
             if (isVirtualModelConfigEntry(routeEntry)) {
-                virtualRequestSelections.push({ attempt, modelId: plan.modelId });
+                virtualRequestSelections.push({
+                    attempt,
+                    modelId: plan.modelId,
+                    requestedEffort: plan.requestedEffort,
+                    effectiveEffort: plan.effectiveEffort,
+                    effortFallback: plan.effortFallback,
+                });
                 const virtualRequestLog = {
                     virtualModelKey: routeKey,
                     selections: virtualRequestSelections,
@@ -2592,6 +2664,9 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                     responseAttempts.push({
                         attempt,
                         modelId: plan.modelId,
+                        requestedEffort: plan.requestedEffort || 'default',
+                        effectiveEffort: plan.effectiveEffort,
+                        effortFallback: plan.effortFallback,
                         ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
                         kind: 'abort',
                         error: error?.message || String(error),
@@ -2624,6 +2699,9 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                 responseAttempts.push({
                     attempt,
                     modelId: plan.modelId,
+                    requestedEffort: plan.requestedEffort || 'default',
+                    effectiveEffort: plan.effectiveEffort,
+                    effortFallback: plan.effortFallback,
                     ...(isVirtualModelConfigEntry(routeEntry) ? { virtualModelKey: routeKey } : {}),
                     kind: failure.kind,
                     status: failure.status,

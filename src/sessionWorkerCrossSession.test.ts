@@ -124,6 +124,7 @@ test('worker child creation, reply delivery, and facade queries stay Main-owned 
 test('main-management facade forks read-only, rejects stale generations, and validates bounded args', async () => {
   const parentId = `mc-fork-${Date.now()}`;
   const forkChildId = `${parentId}_mp-fork`;
+  const dtoChildId = `${parentId}_dto-child`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-facade-fork-'));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
   const registry = new RpcServiceRegistry();
@@ -132,9 +133,12 @@ test('main-management facade forks read-only, rejects stale generations, and val
   }));
   const transport = new LocalRpcTransport(registry, { maxPendingRequests: 32 });
   const client = new RpcClient(mainManagementToolServiceDescriptor, transport);
-  const createdSessions = [parentId, forkChildId];
+  const createdSessions = [parentId, forkChildId, dtoChildId];
   try {
     const parent = await sessionManager.getSession(parentId);
+    const staleDeleteTargetId = `${parentId}-stale-delete-target`;
+    await sessionManager.getSession(staleDeleteTargetId);
+    createdSessions.push(staleDeleteTargetId);
     await sessionManager.appendSessionMessage(parentId, { role: 'user', parts: [{ text: 'fork parent message one' }] } as any);
     await sessionManager.appendSessionMessage(parentId, { role: 'model', parts: [{ text: 'fork parent message two' }] } as any);
     const parentJsonPath = getSessionHistoryFilePath(parentId);
@@ -153,9 +157,10 @@ test('main-management facade forks read-only, rejects stale generations, and val
     try {
       await assert.rejects(
         () => new RpcClient(mainManagementToolServiceDescriptor, staleTransport).call('execute',
-          { sourceSessionId: parentId, operation: 'create_child_session', args: { suffix: 'mp-stale' } }),
+          { sourceSessionId: parentId, operation: 'delete_session', args: { sessionId: staleDeleteTargetId } }),
         (error: any) => error?.code === 'MAIN_MANAGEMENT_SOURCE_STALE' && error?.retryable === true,
       );
+      assert.ok(sessionManager.getAllSessions().has(staleDeleteTargetId), 'stale reverse source cannot begin target deletion');
     } finally { staleTransport.close(); }
 
     // Bounded validation: unknown keys and missing suffix are rejected.
@@ -168,13 +173,28 @@ test('main-management facade forks read-only, rejects stale generations, and val
       (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS',
     );
     await assert.rejects(
-      () => client.call('execute', { sourceSessionId: parentId, operation: 'delete_session' as any, args: {} }),
+      () => client.call('execute', { sourceSessionId: parentId, operation: 'delete_session', args: {} }),
+      (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS',
+    );
+    await assert.rejects(
+      () => client.call('execute', { sourceSessionId: parentId, operation: 'move_session' as any, args: {} }),
       (error: any) => error?.code === 'MAIN_MANAGEMENT_OPERATION_NOT_ALLOWED',
     );
     await assert.rejects(
       () => client.call('execute', { sourceSessionId: 'someone/else', operation: 'session_list', args: {} }),
       (error: any) => error?.code === 'MAIN_MANAGEMENT_SOURCE_MISMATCH',
     );
+
+    const dtoResult: any = await client.call('execute', {
+      sourceSessionId: parentId,
+      operation: 'create_child_session',
+      args: { suffix: 'dto-child', fork: false, node: 'node-from-worker', model: 'model-from-worker', effort: 'none' },
+    });
+    assert.ok(String(dtoResult?.result).includes(dtoChildId));
+    const dtoChild = await sessionManager.getSession(dtoChildId);
+    assert.equal(dtoChild.currentNode, 'node-from-worker');
+    assert.equal(dtoChild.model, 'model-from-worker');
+    assert.equal(dtoChild.effort, 'none');
 
     // fork=true derives from the authority through a strictly read-only detached read.
     const forkResult: any = await client.call('execute',

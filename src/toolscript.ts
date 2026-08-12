@@ -808,6 +808,7 @@ async function requestModelWithoutContext(prompt: string, session: Session, mode
     }],
     systemPrompt: '',
     model: model || session.model,
+    effort: session.effort,
     sessionId: session.id,
     promptCacheKey: llm.ensurePromptCacheKey(session),
     toolDefinitions: [],

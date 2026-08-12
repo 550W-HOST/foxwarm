@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ArrowUp, Mic, Paperclip, Plus, Settings, Square } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
@@ -16,6 +16,8 @@ export type ModelOption = {
   label: string
   isDefault?: boolean
   contextLimit?: number | null
+  allowedEfforts?: string[]
+  defaultEffort?: string | null
 }
 
 interface ChatComposerProps {
@@ -29,11 +31,21 @@ interface ChatComposerProps {
   defaultModelKey?: string
   childModelDefault?: string | null
   effectiveChildModelKey?: string
+  effort?: string | null
+  effectiveEffort?: string
+  effortAllowed?: string[]
+  effortDefault?: string | null
+  childEffortDefault?: string | null
+  effectiveChildEffort?: string
+  childEffortAllowed?: string[]
+  childModelEffortDefault?: string | null
   modelBusy?: boolean
   modelsRefreshing?: boolean
   modelError?: string | null
   onChangeModel: (model: string | null) => Promise<void>
   onChangeChildModel: (model: string | null) => Promise<void>
+  onChangeEffort: (effort: string | null) => Promise<void>
+  onChangeChildEffort: (effort: string | null) => Promise<void>
   onRefreshModels: () => Promise<void>
   onOpenModelSettings: () => void
   sendKeyMode?: 'modEnter' | 'enter'
@@ -69,6 +81,11 @@ function persistDraft(sessionId: string, value: string) {
   }
 }
 
+function formatEffortLabel(value: string): string {
+  if (value === 'xhigh') return 'XHigh'
+  return value ? value.charAt(0).toUpperCase() + value.slice(1) : value
+}
+
 function ModelSelector({
   options,
   currentModelKey,
@@ -76,11 +93,21 @@ function ModelSelector({
   defaultModelKey,
   childModelDefault,
   effectiveChildModelKey,
+  effort,
+  effectiveEffort,
+  effortAllowed = [],
+  effortDefault,
+  childEffortDefault,
+  effectiveChildEffort,
+  childEffortAllowed = [],
+  childModelEffortDefault,
   busy,
   refreshing,
   error,
   onChangeModel,
   onChangeChildModel,
+  onChangeEffort,
+  onChangeChildEffort,
   onRefreshModels,
   onOpenModelSettings,
 }: {
@@ -90,11 +117,21 @@ function ModelSelector({
   defaultModelKey?: string
   childModelDefault?: string | null
   effectiveChildModelKey?: string
+  effort?: string | null
+  effectiveEffort?: string
+  effortAllowed?: string[]
+  effortDefault?: string | null
+  childEffortDefault?: string | null
+  effectiveChildEffort?: string
+  childEffortAllowed?: string[]
+  childModelEffortDefault?: string | null
   busy: boolean
   refreshing: boolean
   error?: string | null
   onChangeModel: (model: string | null) => Promise<void>
   onChangeChildModel: (model: string | null) => Promise<void>
+  onChangeEffort: (effort: string | null) => Promise<void>
+  onChangeChildEffort: (effort: string | null) => Promise<void>
   onRefreshModels: () => Promise<void>
   onOpenModelSettings: () => void
 }) {
@@ -105,6 +142,7 @@ function ModelSelector({
   const buttonRef = useRef<HTMLButtonElement | null>(null)
   const popupRef = useRef<HTMLDivElement | null>(null)
   const filterInputRef = useRef<HTMLInputElement | null>(null)
+  const effortDescriptionId = useId()
   const filterComposingRef = useRef(false)
   const wasOpenRef = useRef(false)
   const currentIsDefault = !sessionModel
@@ -113,6 +151,34 @@ function ModelSelector({
     () => filterModelOptions(options, filterQuery, defaultModelKey),
     [defaultModelKey, filterQuery, options],
   )
+  const currentCapability = options.find(option => option.key === (currentModelKey || defaultModelKey))
+  const childCapability = options.find(option => option.key === effectiveChildModelKey)
+  const currentAllowedEfforts = currentCapability?.allowedEfforts || effortAllowed
+  const currentConfiguredDefault = currentCapability ? currentCapability.defaultEffort : effortDefault
+  const childAllowedEfforts = childCapability?.allowedEfforts || childEffortAllowed
+  const childConfiguredDefault = childCapability ? childCapability.defaultEffort : childModelEffortDefault
+  const currentStaleEffort = effort && !currentAllowedEfforts.includes(effort) ? effort : null
+  const childStaleEffort = childEffortDefault && !childAllowedEfforts.includes(childEffortDefault) ? childEffortDefault : null
+  const currentFallbackLabel = effectiveEffort === 'default'
+    ? 'per-leaf default'
+    : (effectiveEffort || currentConfiguredDefault || 'per-leaf default')
+  const childFallbackLabel = effectiveChildEffort === 'default'
+    ? 'per-leaf default'
+    : (effectiveChildEffort || childConfiguredDefault || 'per-leaf default')
+  const currentDefaultFullLabel = `default (${currentFallbackLabel === 'per-leaf default' ? 'per leaf' : currentFallbackLabel})`
+  const childDefaultFullLabel = `follow/default (${childFallbackLabel === 'per-leaf default' ? 'per leaf' : childFallbackLabel})`
+  const currentDefaultShortLabel = currentFallbackLabel === 'per-leaf default'
+    ? 'Per leaf'
+    : 'Default'
+  const childDefaultShortLabel = childFallbackLabel === 'per-leaf default'
+    ? 'Per leaf'
+    : 'Follow'
+  const currentStaleFullLabel = currentStaleEffort
+    ? `${currentStaleEffort} (unavailable; using ${currentFallbackLabel})`
+    : null
+  const childStaleFullLabel = childStaleEffort
+    ? `${childStaleEffort} (unavailable; using ${childFallbackLabel})`
+    : null
 
   const toggleOpen = useCallback(() => {
     if (open) {
@@ -128,7 +194,7 @@ function ModelSelector({
   const updatePopupPosition = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect()
     if (!rect) return
-    const width = Math.min(420, Math.max(0, window.innerWidth - 16), Math.max(320, rect.width + 150))
+    const width = Math.min(500, Math.max(0, window.innerWidth - 16), Math.max(360, rect.width + 220))
     const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8))
     const preferredMaxHeight = Math.min(360, Math.max(220, window.innerHeight - 24))
     const spaceAbove = Math.max(0, rect.top - 12)
@@ -235,7 +301,8 @@ function ModelSelector({
   const renderRow = (row: { key: string | null; label: string; title: string; currentChecked: boolean; childChecked: boolean; defaultRow?: boolean }) => (
     <div
       key={row.key || '__default__'}
-      className="grid grid-cols-[minmax(0,1fr)_4.5rem_4rem] items-stretch border-t border-gray-100 text-xs first:border-t-0 dark:border-gray-800"
+      className="grid grid-cols-[minmax(0,1fr)_minmax(5.5rem,7.5rem)_minmax(5.5rem,7.5rem)] items-stretch border-t border-gray-100 text-xs first:border-t-0 dark:border-gray-800"
+      data-model-selector-row="true"
     >
       <button
         type="button"
@@ -278,11 +345,11 @@ function ModelSelector({
         aria-expanded={open}
       >
         <span className="shrink-0 text-gray-500 dark:text-gray-400">Model</span>
-        <span className="min-w-0 truncate" title={currentModelKey || defaultModelKey || 'model'}>{currentModelKey || defaultModelKey || 'model'}</span>
-        {childModelDefault && (
+        <span className="min-w-0 truncate" title={currentModelKey || defaultModelKey || 'model'}>{currentModelKey || defaultModelKey || 'model'} · {effectiveEffort || effort || 'default'}</span>
+        {(childModelDefault || childEffortDefault) && (
           <>
             <span className="hidden shrink-0 text-gray-400 dark:text-gray-500 sm:inline">/</span>
-            <span className="hidden min-w-0 truncate text-gray-500 dark:text-gray-400 sm:inline" title={childModelDefault}>child {childModelDefault}</span>
+            <span className="hidden min-w-0 truncate text-gray-500 dark:text-gray-400 sm:inline" title={childModelDefault || 'follow'}>child {childModelDefault || 'follow'} · {effectiveChildEffort || childEffortDefault || 'default'}</span>
           </>
         )}
         {(busy || refreshing) && <span className="shrink-0 text-gray-400 dark:text-gray-500">…</span>}
@@ -292,19 +359,22 @@ function ModelSelector({
       {open && createPortal(
         <div
           ref={popupRef}
-          className="z-[1000] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900"
+          className="foxwarm-model-selector-popup z-[1000] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900"
           style={popupStyle}
           role="dialog"
           aria-modal="false"
           aria-label="Model selection"
           data-model-selector-popup="true"
         >
-          <div className="grid grid-cols-[minmax(0,1fr)_4.5rem_4rem] border-b border-gray-200 bg-gray-50 px-0 text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
-            <div className="px-3 py-2">Model id</div>
-            <div className="px-2 py-2 text-center">Current</div>
-            <div className="px-2 py-2 text-center">Child</div>
+          <div
+            className="grid grid-cols-[minmax(0,1fr)_minmax(5.5rem,7.5rem)_minmax(5.5rem,7.5rem)] items-stretch border-b border-gray-200 bg-gray-50 px-0 text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
+            data-model-selector-header="true"
+          >
+            <div className="flex items-center px-3 py-2">Model id</div>
+            <div className="flex items-center justify-center border-l border-gray-200/80 px-2 py-2 text-center dark:border-gray-700/80">Current</div>
+            <div className="flex items-center justify-center border-l border-gray-200/80 px-2 py-2 text-center dark:border-gray-700/80">Child</div>
           </div>
-          <div className="overflow-y-auto" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 114 : 78) : undefined }}>
+          <div className="overflow-y-auto" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 144 : 110) : undefined }}>
             {renderRow({
               key: null,
               label: 'default / follow',
@@ -322,6 +392,44 @@ function ModelSelector({
             }))}
           </div>
           {error && <div className="border-t border-red-100 px-3 py-2 text-xs text-red-600 dark:border-red-900/50 dark:text-red-300">{error}</div>}
+          <div
+            className="grid grid-cols-[minmax(0,1fr)_minmax(5.5rem,7.5rem)_minmax(5.5rem,7.5rem)] items-stretch border-t border-gray-200 bg-gray-50/70 text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-700 dark:bg-gray-800/70 dark:text-gray-400"
+            data-model-effort-footer="true"
+          >
+            <div className="flex items-center px-3 py-1.5">Effort</div>
+            <label className="flex min-w-0 items-center border-l border-gray-200/80 px-1.5 py-1 dark:border-gray-700/80">
+              <select
+                aria-label="Current effort"
+                aria-describedby={`${effortDescriptionId}-current`}
+                disabled={busy}
+                value={effort || ''}
+                onChange={(event) => void onChangeEffort(event.target.value || null).catch(() => {})}
+                className="foxwarm-model-effort-select h-6 w-full min-w-0 rounded-md border border-gray-200 bg-white/90 px-1 text-[11px] font-medium normal-case tracking-normal text-gray-700 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-900/90 dark:text-gray-200 dark:focus:border-blue-500 dark:focus:ring-blue-700"
+                title={`Current effort: ${currentStaleFullLabel || (effort || currentDefaultFullLabel)}`}
+              >
+                <option value="" label={currentDefaultShortLabel} title={currentDefaultFullLabel}>{currentDefaultFullLabel}</option>
+                {currentStaleEffort && <option value={currentStaleEffort} label={`${formatEffortLabel(currentStaleEffort)} ⚠`} title={currentStaleFullLabel || undefined} aria-label={currentStaleFullLabel || undefined} disabled>{currentStaleFullLabel}</option>}
+                {currentAllowedEfforts.map(level => <option key={level} value={level} label={formatEffortLabel(level)} title={level}>{level}</option>)}
+              </select>
+              <span id={`${effortDescriptionId}-current`} className="sr-only">Current effort: {currentStaleFullLabel || (effort || currentDefaultFullLabel)}</span>
+            </label>
+            <label className="flex min-w-0 items-center border-l border-gray-200/80 px-1.5 py-1 dark:border-gray-700/80">
+              <select
+                aria-label="Child effort"
+                aria-describedby={`${effortDescriptionId}-child`}
+                disabled={busy}
+                value={childEffortDefault || ''}
+                onChange={(event) => void onChangeChildEffort(event.target.value || null).catch(() => {})}
+                className="foxwarm-model-effort-select h-6 w-full min-w-0 rounded-md border border-gray-200 bg-white/90 px-1 text-[11px] font-medium normal-case tracking-normal text-gray-700 outline-none focus:border-purple-400 focus:ring-1 focus:ring-purple-300 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-900/90 dark:text-gray-200 dark:focus:border-purple-500 dark:focus:ring-purple-700"
+                title={`Child effort: ${childStaleFullLabel || (childEffortDefault || childDefaultFullLabel)}`}
+              >
+                <option value="" label={childDefaultShortLabel} title={childDefaultFullLabel}>{childDefaultFullLabel}</option>
+                {childStaleEffort && <option value={childStaleEffort} label={`${formatEffortLabel(childStaleEffort)} ⚠`} title={childStaleFullLabel || undefined} aria-label={childStaleFullLabel || undefined} disabled>{childStaleFullLabel}</option>}
+                {childAllowedEfforts.map(level => <option key={level} value={level} label={formatEffortLabel(level)} title={level}>{level}</option>)}
+              </select>
+              <span id={`${effortDescriptionId}-child`} className="sr-only">Child effort: {childStaleFullLabel || (childEffortDefault || childDefaultFullLabel)}</span>
+            </label>
+          </div>
           <div className="flex min-w-0 items-center gap-1.5 border-t border-gray-200 p-1.5 dark:border-gray-700">
             <button
               type="button"
@@ -366,11 +474,21 @@ const ChatComposer = memo(function ChatComposer({
   defaultModelKey,
   childModelDefault,
   effectiveChildModelKey,
+  effort,
+  effectiveEffort,
+  effortAllowed,
+  effortDefault,
+  childEffortDefault,
+  effectiveChildEffort,
+  childEffortAllowed,
+  childModelEffortDefault,
   modelBusy = false,
   modelsRefreshing = false,
   modelError,
   onChangeModel,
   onChangeChildModel,
+  onChangeEffort,
+  onChangeChildEffort,
   onRefreshModels,
   onOpenModelSettings,
   sendKeyMode = 'modEnter',
@@ -1303,11 +1421,21 @@ const ChatComposer = memo(function ChatComposer({
               defaultModelKey={defaultModelKey}
               childModelDefault={childModelDefault}
               effectiveChildModelKey={effectiveChildModelKey}
+              effort={effort}
+              effectiveEffort={effectiveEffort}
+              effortAllowed={effortAllowed}
+              effortDefault={effortDefault}
+              childEffortDefault={childEffortDefault}
+              effectiveChildEffort={effectiveChildEffort}
+              childEffortAllowed={childEffortAllowed}
+              childModelEffortDefault={childModelEffortDefault}
               busy={modelBusy}
               refreshing={modelsRefreshing}
               error={modelError}
               onChangeModel={onChangeModel}
               onChangeChildModel={onChangeChildModel}
+              onChangeEffort={onChangeEffort}
+              onChangeChildEffort={onChangeChildEffort}
               onRefreshModels={onRefreshModels}
               onOpenModelSettings={onOpenModelSettings}
             />

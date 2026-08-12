@@ -5,6 +5,7 @@ import type { SessionWorkerHost } from './sessionWorkerHost';
 import type { CompactionRequest, QueueSource } from './types';
 import type { ToolNoiseCompactionResult } from './session/history';
 import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
+import { MODEL_EFFORTS, type ModelEffort } from './config';
 
 export type SessionWorkerIdleStatus = { busy: boolean; queueLength: number; runningExecCount: number };
 export type SessionWorkerInterruptResult = { stopping: boolean; abortedInFlight: boolean };
@@ -16,7 +17,9 @@ export type SessionWorkerDequeueResult = {
 export type SessionWorkerSettingsPatch = {
   cwd?: string | null;
   model?: string | null;
+  effort?: ModelEffort | null;
   childModelDefault?: string | null;
+  childEffortDefault?: ModelEffort | null;
   currentNode?: string | null;
   compactThresholdTokens?: number | null;
   verbose?: boolean;
@@ -24,7 +27,9 @@ export type SessionWorkerSettingsPatch = {
 export type SessionWorkerSettings = {
   cwd: string | null;
   model: string | null;
+  effort: ModelEffort | null;
   childModelDefault: string | null;
+  childEffortDefault: ModelEffort | null;
   currentNode: string | null;
   compactThresholdTokens: number | null;
   verbose: boolean;
@@ -52,7 +57,7 @@ export type SessionWorkerBtwResult = {
   projection: SessionWorkerProjection;
 };
 
-export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 8, {
+export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 9, {
   loadProjection: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
   retry: rpcMethod<{ source?: QueueSource }, SessionWorkerProjection>(),
@@ -132,7 +137,7 @@ export function createSessionWorkerRuntimeServiceHandler(
         || Object.keys(input).length !== 1 || !input.patch || typeof input.patch !== 'object' || Array.isArray(input.patch)) {
         throw new RpcError('SESSION_WORKER_SETTINGS_INVALID', 'updateSettings takes { patch: object }.');
       }
-      const allowed = new Set(['cwd', 'model', 'childModelDefault', 'currentNode', 'compactThresholdTokens', 'verbose']);
+      const allowed = new Set(['cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault', 'currentNode', 'compactThresholdTokens', 'verbose']);
       const keys = Object.keys(input.patch);
       if (keys.some(key => !allowed.has(key))) throw new RpcError('SESSION_WORKER_SETTINGS_INVALID', 'Session worker settings contain unsupported fields.');
       for (const key of ['cwd', 'model', 'childModelDefault', 'currentNode'] as const) {
@@ -140,6 +145,13 @@ export function createSessionWorkerRuntimeServiceHandler(
         const value = input.patch[key];
         if (value !== null && (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 4096)) {
           throw new RpcError('SESSION_WORKER_SETTINGS_INVALID', `${key} must be a bounded string or null.`);
+        }
+      }
+      for (const key of ['effort', 'childEffortDefault'] as const) {
+        if (!Object.prototype.hasOwnProperty.call(input.patch, key)) continue;
+        const value = input.patch[key];
+        if (value !== null && (typeof value !== 'string' || !MODEL_EFFORTS.includes(value as ModelEffort))) {
+          throw new RpcError('SESSION_WORKER_SETTINGS_INVALID', `${key} must be a supported effort or null.`);
         }
       }
       if (Object.prototype.hasOwnProperty.call(input.patch, 'compactThresholdTokens')) {

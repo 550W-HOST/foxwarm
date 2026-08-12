@@ -57,7 +57,9 @@ The cross-module admission and scaling policy is canonical in
   columns plus bounded metadata projection JSON. Queue/managed-inbox, history,
   frontier, prompt-cache, mailbox, goal, prompt-file, and indexing bodies are
   never admitted; only indexed counts and narrowly validated stats, list-meta,
-  vector-position, and sanitized wait-presentation summaries remain. Wait
+  vector-position, and sanitized wait-presentation summaries remain. Raw
+  `effort` and `childEffortDefault` are allowlisted only inside bounded
+  `metadata_json`; no SQL column or schema-version change is introduced. Wait
   presentation is capped to 128 wait-ID characters, 500 reason characters, 64 wait-all/exec targets,
   512 characters per Session ID, and 256 per exec ID; it never contains
   `deferredQueue`, QueueItems, message bodies, or timer payloads.

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import http from 'node:http';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -22,12 +23,14 @@ function makeRecord(sessionId: string, seq: number, text: string) {
   };
 }
 
-async function startEmbeddingServer(): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+async function startEmbeddingServer(): Promise<{ baseUrl: string; paths: string[]; close: () => Promise<void> }> {
+  const paths: string[] = [];
   const server = http.createServer((request, response) => {
     let body = '';
     request.setEncoding('utf8');
     request.on('data', chunk => { body += chunk; });
     request.on('end', () => {
+      paths.push(request.url || '');
       const parsed = JSON.parse(body || '{}');
       const input = String(parsed.input || '');
       const vector = new Array(1024).fill(0);
@@ -44,17 +47,59 @@ async function startEmbeddingServer(): Promise<{ baseUrl: string; close: () => P
   if (!address || typeof address === 'string') throw new Error('Embedding test server did not bind a TCP port.');
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
+    paths,
     close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())),
   };
 }
 
-test('vector facade preserves search behavior in local and child placements', async () => {
+async function assertInvalidRuntimeBaseUrlNeverFetches(baseUrl: string): Promise<void> {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-vector-invalid-url-'));
+  await fs.outputFile(
+    path.join(tempRoot, 'state', 'config.yaml'),
+    `vector:\n  baseUrl: ${JSON.stringify(baseUrl)}\n`,
+  );
+  const configModulePath = require.resolve('./config');
+  const script = `
+let fetchCalls = 0;
+global.fetch = async () => { fetchCalls += 1; throw new Error('fetch must not run'); };
+try {
+  require(${JSON.stringify(configModulePath)});
+  console.log(JSON.stringify({ accepted: true, fetchCalls }));
+} catch (error) {
+  console.log(JSON.stringify({ accepted: false, fetchCalls, message: String(error && error.message || error) }));
+}
+`;
+  const result = spawnSync(process.execPath, ['-e', script], {
+    cwd: __dirname,
+    env: { ...process.env, FOXWARM_DATA_DIR: tempRoot },
+    encoding: 'utf8',
+  });
+  await fs.remove(tempRoot);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout.trim().split('\n').at(-1) || '{}');
+  assert.equal(output.accepted, false);
+  assert.equal(output.fetchCalls, 0);
+  assert.match(String(output.message), /non-empty absolute http\(s\) URL/);
+}
+
+test('invalid credential, query, and fragment API roots fail before any embedding fetch', async () => {
+  for (const baseUrl of [
+    'https://user@example.test/v1',
+    'https://user:pass@example.test/v1',
+    'https://example.test/v1?tenant=one',
+    'https://example.test/v1#embedding',
+  ]) {
+    await assertInvalidRuntimeBaseUrlNeverFetches(baseUrl);
+  }
+});
+
+test('vector facade preserves search behavior and exact API-root embeddings paths in local and child placements', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-vector-service-smoke-'));
   const embedding = await startEmbeddingServer();
   process.env.FOXWARM_DATA_DIR = tempRoot;
   await fs.outputFile(
     path.join(tempRoot, 'state', 'config.yaml'),
-    `llm:\n  ollamaBaseUrl: ${embedding.baseUrl}\n`,
+    `vector:\n  baseUrl: ${embedding.baseUrl}/openai/v1/\n`,
   );
 
   let vector: typeof import('./vector') | undefined;
@@ -86,6 +131,8 @@ test('vector facade preserves search behavior in local and child placements', as
     assert(localHits.some(hit => String(hit.text).includes('local mode alpha')));
     assert.equal(vector.getVectorServiceStatus().mode, 'local');
     await vector.shutdown();
+    assert.ok(embedding.paths.length > 0);
+    assert.deepEqual([...new Set(embedding.paths)], ['/openai/v1/embeddings']);
 
     // Simulate a crash after the Lance block-row commit but before its SQLite
     // checkpoint. The worker retry must replace, not duplicate, the row.

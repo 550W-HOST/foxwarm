@@ -1,9 +1,10 @@
 import fs from 'fs-extra';
 import path from 'path';
 import * as llm from '../llm';
-import { CHANNELS_FILE, getAgentDir, getAgentMemoryDir, getSessionArchiveImagesDir, getSessionArchiveLogPath, getSessionBlockArchiveLogPath, getLegacySessionFrontierPath, SESSION_ID_MOVE_JOURNAL_PATH, SESSIONS_DIR, SESSIONS_FILE } from '../config';
+import { CHANNELS_FILE, getAgentDir, getAgentMemoryDir, getSessionArchiveImagesDir, getSessionArchiveLogPath, getSessionBlockArchiveLogPath, getLegacySessionFrontierPath, SESSION_ID_MOVE_JOURNAL_PATH, SESSIONS_DIR, SESSIONS_FILE, type ModelEffort, type ModelsConfig } from '../config';
 import { Session } from '../types';
 import { commitSessionIdRename, renameSessionArchiveStore, renameSessionArchiveStoreForRecovery } from './archiveStore';
+import { normalizeProspectiveSessionModelEffortSettings } from './modelEffortSettings';
 
 interface SessionAgentOpsDeps {
   getSession: (sessionId: string) => Promise<Session>;
@@ -440,6 +441,8 @@ export async function createSessionInAgent(options: {
   displayName?: string;
   currentNode?: string;
   model?: string;
+  effort?: ModelEffort;
+  modelsConfig?: ModelsConfig;
   parentSessionId?: string;
   systemPromptFiles?: string[];
 }, deps: SessionAgentOpsDeps): Promise<{ sessionId: string }> {
@@ -449,6 +452,8 @@ export async function createSessionInAgent(options: {
     displayName,
     currentNode,
     model,
+    effort,
+    modelsConfig,
     parentSessionId,
     systemPromptFiles,
   } = options;
@@ -476,6 +481,11 @@ export async function createSessionInAgent(options: {
     : undefined;
 
   const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId, systemPromptFiles });
+  const modelEffort = normalizeProspectiveSessionModelEffortSettings(
+    { model, effort },
+    effort === undefined ? {} : { effort },
+    modelsConfig,
+  );
   deps.assertSessionMutationAllowed([parentSessionId], 'receive a new child session');
   await deps.createSession(sessionId, {
     id: sessionId,
@@ -501,7 +511,8 @@ export async function createSessionInAgent(options: {
     nextMessageSeq: 1,
     parentSessionId,
     currentNode: isolatedNode || currentNode || 'master',
-    model,
+    model: modelEffort.model,
+    effort: modelEffort.effort,
   });
 
   return { sessionId };
@@ -517,6 +528,7 @@ export async function createAgentWithMainSession(options: {
   displayName?: string;
   currentNode?: string;
   model?: string;
+  effort?: ModelEffort;
   createMainSession?: boolean;
 }, deps: SessionAgentOpsDeps): Promise<{
   agentDir: string;
@@ -536,6 +548,7 @@ export async function createAgentWithMainSession(options: {
     displayName,
     currentNode,
     model,
+    effort,
     createMainSession = true,
   } = options;
 
@@ -612,6 +625,10 @@ export async function createAgentWithMainSession(options: {
 
   try {
     const snapshot = await llm.buildSessionSystemPromptSnapshot({ agentName, sessionId: mainSessionId });
+    const modelEffort = normalizeProspectiveSessionModelEffortSettings(
+      { model: model ?? sourceSession?.model, effort: effort ?? sourceSession?.effort },
+      effort === undefined ? {} : { effort },
+    );
     await deps.createSession(mainSessionId, {
       id: mainSessionId,
       agent: agentName,
@@ -630,7 +647,10 @@ export async function createAgentWithMainSession(options: {
       vectorIndexPosition: 0,
       nextMessageSeq: 1,
       currentNode: isolatedNode || currentNode || sourceSession?.currentNode || 'master',
-      model: model ?? sourceSession?.model,
+      model: modelEffort.model,
+      effort: modelEffort.effort,
+      childModelDefault: sourceSession?.childModelDefault,
+      childEffortDefault: sourceSession?.childEffortDefault,
     });
   } catch (error) {
     await fs.remove(agentDir).catch(() => {});

@@ -156,18 +156,24 @@ test('session history payload embeds context frontier and recovery ignores legac
       meta: { lastMessageTime: 1, wait: { id: 'wait-1' }, managedSession: { ownerSessionId: 'owner', leaseId: 'lease', revision: 1, pendingInbox: [] } },
       contextFrontier: [{ kind: 'message', seq: 1 }],
       lastAppliedMailboxId: 7,
+      effort: 'none',
+      childEffortDefault: 'max',
     };
     const payload = serializeSessionHistoryPayload(session);
     assert.equal(payload.sessionStateVersion, 1);
     assert.deepEqual(payload.contextFrontier, [{ kind: 'message', seq: 1 }]);
     assert.equal(payload.lastAppliedMailboxId, 7);
     assert.equal(payload.meta.wait.id, 'wait-1');
+    assert.equal(payload.effort, 'none');
+    assert.equal(payload.childEffortDefault, 'max');
 
     const target: any = { history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 } };
     replaceSessionSemanticState(target, prepareSessionSemanticStateForHydration(target, payload).snapshot);
     assert.deepEqual(target.contextFrontier, [{ kind: 'message', seq: 1 }]);
     assert.equal(target.lastAppliedMailboxId, 7);
     assert.equal(target.meta.managedSession.leaseId, 'lease');
+    assert.equal(target.effort, 'none');
+    assert.equal(target.childEffortDefault, 'max');
   });
 });
 
@@ -197,11 +203,23 @@ test('Main hydration preserves catalog-owned identity and topology while authori
   };
   const authority: Record<string, any> = {
     sessionStateVersion: 1, history: [], queue: [], agent: 'authority-agent', aliases: ['authority-alias'],
-    parentSessionId: 'authority-parent', displayName: 'Authority name', model: 'authority-model',
+    parentSessionId: 'authority-parent', displayName: 'Authority name', model: 'authority-model', effort: 'xhigh',
     stats: {}, meta: { lastMessageTime: 2 },
   };
   replaceAuthoritativeSessionState(target, authority, { preserveCatalogFields: true });
   assert.equal(target.agent, 'catalog-agent'); assert.deepEqual(target.aliases, ['catalog-alias']);
   assert.equal(target.parentSessionId, 'catalog-parent'); assert.equal(target.displayName, 'Catalog name');
-  assert.equal(target.model, 'authority-model'); assert.equal(target.meta.lastMessageTime, 2);
+  assert.equal(target.model, 'authority-model'); assert.equal(target.effort, 'xhigh'); assert.equal(target.meta.lastMessageTime, 2);
+});
+
+test('current authorities without effort fields hydrate as canonical unset', () => {
+  const target: any = {
+    id: 'old-current', history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [],
+    meta: { lastMessageTime: 0 }, effort: 'max', childEffortDefault: 'low',
+  };
+  replaceSessionSemanticState(target, prepareSessionSemanticStateForHydration(target, {
+    sessionStateVersion: 1, history: [], persistentMemorySnapshot: '', queue: [],
+  }).snapshot);
+  assert.equal(Object.prototype.hasOwnProperty.call(target, 'effort'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(target, 'childEffortDefault'), false);
 });

@@ -2,9 +2,11 @@ import { RpcError } from './rpc';
 import { captureSessionSemanticState, readSessionHistorySnapshot, restoreSessionSemanticState } from './session/metadataStore';
 import { hydrateAuthoritativeSessionState } from './session/stateHydration';
 import { writeAuthoritativeSessionState } from './session/stateFile';
+import { readSessionAuthorityMailboxCursor } from './session/stateValidation';
 import { buildSessionRuntimeState, type SessionRuntimeState } from './sessionRuntimeState';
 import { SessionWorkerMailboxIntent, SessionWorkerStore } from './sessionWorkerStore';
 import type { Session, SessionStats } from './types';
+import type { ModelEffort } from './config';
 
 /** Small read-only DTO for a future main-owned delivery path. It owns no catalog write protocol. */
 export type SessionWorkerProjection = {
@@ -20,7 +22,9 @@ export type SessionWorkerProjection = {
   currentNode: string;
   cwd: string | null;
   model: string | null;
+  effort: ModelEffort | null;
   childModelDefault: string | null;
+  childEffortDefault: ModelEffort | null;
   compactThresholdTokens: number | null;
   verbose?: boolean;
 };
@@ -47,7 +51,9 @@ export function buildSessionWorkerProjection(session: Session): SessionWorkerPro
     currentNode: session.currentNode || 'master',
     cwd: session.cwd || null,
     model: session.model || null,
+    effort: session.effort || null,
     childModelDefault: session.childModelDefault || null,
+    childEffortDefault: session.childEffortDefault || null,
     compactThresholdTokens: typeof session.compactThresholdTokens === 'number' ? session.compactThresholdTokens : null,
     verbose: !!session.verbose,
   }));
@@ -73,14 +79,14 @@ export class SessionWorkerPersistence {
   ): Promise<Session> {
     const target = this.detachCatalogStub(baseSession);
     const raw = await this.requireState(baseSession.id);
-    const stateCursor = this.stateCursor(raw);
-    this.store.reconcileActivatedMailboxCursor(baseSession.id, generation, incarnationId, stateCursor);
+    const stateCursor = this.readStateCursor(raw, baseSession.id);
+    this.store.reconcileActivatedMailboxCursor(baseSession.id, generation, incarnationId, stateCursor.cursor);
     const { session, imagesCanonicalized, upgradedLegacy } = await hydrateAuthoritativeSessionState(target, raw, {
       preserveCatalogFields: true, adoptAuthorityDisplayNameWhenMissing: true,
     });
     // Legacy image/version canonicalization is a same-cursor rewrite. Cursor
     // recovery above is justified by the already-durable raw JSON payload.
-    if (imagesCanonicalized || upgradedLegacy) await this.writeState(session);
+    if (imagesCanonicalized || upgradedLegacy || stateCursor.defaulted) await this.writeState(session);
     return session;
   }
 
@@ -105,11 +111,12 @@ export class SessionWorkerPersistence {
     incarnationId: string,
   ): Promise<SessionWorkerProjection> {
     const raw = await this.requireState(session.id);
-    this.store.reconcileActivatedMailboxCursor(session.id, generation, incarnationId, this.stateCursor(raw));
+    const stateCursor = this.readStateCursor(raw, session.id);
+    this.store.reconcileActivatedMailboxCursor(session.id, generation, incarnationId, stateCursor.cursor);
     const hydrated = await hydrateAuthoritativeSessionState(session, raw, {
       preserveCatalogFields: true, adoptAuthorityDisplayNameWhenMissing: true,
     });
-    if (hydrated.imagesCanonicalized || hydrated.upgradedLegacy) await this.writeState(session);
+    if (hydrated.imagesCanonicalized || hydrated.upgradedLegacy || stateCursor.defaulted) await this.writeState(session);
     return buildSessionWorkerProjection(session);
   }
 
@@ -123,13 +130,14 @@ export class SessionWorkerPersistence {
     incarnationId: string,
     limit: number,
     apply: (session: Session, intents: SessionWorkerMailboxIntent[]) => Promise<void> | void,
+    upToId?: number,
   ): Promise<SessionWorkerProjection> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 4096) {
       throw new RpcError('SESSION_WORKER_MAILBOX_LIMIT', 'Mailbox prefix limit must be an integer from 1 through 4096.');
     }
     const stateCursor = session.lastAppliedMailboxId || 0;
     const ownership = this.store.reconcileActivatedMailboxCursor(session.id, generation, incarnationId, stateCursor);
-    const intents = this.store.listPendingIntents(session.id, ownership.mailboxCursor, limit);
+    const intents = this.store.listPendingIntents(session.id, ownership.mailboxCursor, limit, upToId);
     if (!intents.length) return buildSessionWorkerProjection(session);
 
     const beforeApply = captureSessionSemanticState(session);
@@ -190,9 +198,10 @@ export class SessionWorkerPersistence {
     return state;
   }
 
-  private stateCursor(state: Record<string, any>): number {
-    return Number.isSafeInteger(state.lastAppliedMailboxId) && state.lastAppliedMailboxId >= 0
-      ? state.lastAppliedMailboxId
-      : 0;
+  private readStateCursor(state: Record<string, any>, sessionId: string) {
+    try { return readSessionAuthorityMailboxCursor(state, `Session authority ${sessionId}.json`); }
+    catch (error: any) {
+      throw new RpcError('SESSION_WORKER_STATE_INVALID', `Cannot hydrate ${sessionId}: ${error?.message || error}`);
+    }
   }
 }

@@ -445,10 +445,59 @@ var positiveInteger = {
   type: "integer",
   minimum: 1
 };
+var openaiWebSearchOptions = {
+  type: "object",
+  additionalProperties: true,
+  description: "Opt-in OpenAI Responses hosted web search settings. Ignored by non-Responses providers.",
+  properties: {
+    enabled: { type: "boolean", description: "Enable the hosted web_search tool for eligible Responses requests." },
+    toolChoice: { enum: ["auto", "required"], description: "Responses tool-selection mode when hosted search is enabled." },
+    searchContextSize: { enum: ["low", "medium", "high"], description: "Amount of search context requested from OpenAI." },
+    allowedDomains: { type: "array", items: { type: "string", minLength: 1 }, description: "Optional domain filter for web search." },
+    userLocation: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        type: { const: "approximate" },
+        country: { type: "string" },
+        city: { type: "string" },
+        region: { type: "string" },
+        timezone: { type: "string" }
+      }
+    }
+  }
+};
+var openaiWebSearchConfig = {
+  oneOf: [
+    { type: "boolean" },
+    openaiWebSearchOptions
+  ],
+  description: "Opt-in OpenAI Responses hosted web search settings. Use true/false for defaults or an object for tuning. Ignored by non-Responses providers."
+};
+var modelEffortConfig = {
+  type: "object",
+  additionalProperties: true,
+  description: "First-class reasoning effort capabilities and default for this provider or model.",
+  properties: {
+    allowed: {
+      type: "array",
+      minItems: 1,
+      uniqueItems: true,
+      items: { enum: ["none", "low", "medium", "high", "xhigh", "max"] },
+      description: "Effort levels accepted for this provider/model. Model-level values replace the provider list."
+    },
+    default: {
+      enum: ["none", "low", "medium", "high", "xhigh", "max"],
+      description: "Effort used when a request does not select one. Defaults to high."
+    }
+  }
+};
 var modelOverrideProperties = {
   contextLimit: { type: "integer", minimum: 1, description: "Context window size in tokens." },
+  effort: modelEffortConfig,
   extraFields: { type: "object", additionalProperties: true, description: "Provider-specific request fields." },
-  extraHeaders: { type: "object", additionalProperties: true, description: "Provider-specific HTTP headers. Values are passed through to the canonical backend loader." }
+  extraHeaders: { type: "object", additionalProperties: true, description: "Provider-specific HTTP headers. Values are passed through to the canonical backend loader." },
+  webSearch: openaiWebSearchConfig
 };
 var modelItem = {
   anyOf: [
@@ -482,10 +531,12 @@ var providerEntry = {
       ]
     },
     contextLimit: modelOverrideProperties.contextLimit,
+    effort: modelEffortConfig,
     asyncCompact: { type: "boolean", description: "Whether background compaction may use this provider." },
     requestCompression: { enum: ["gzip", "br"], description: "Optional request-body compression." },
     extraFields: modelOverrideProperties.extraFields,
     extraHeaders: modelOverrideProperties.extraHeaders,
+    webSearch: modelOverrideProperties.webSearch,
     targets: { type: "array", items: { type: "string", minLength: 1 }, uniqueItems: true, description: "Concrete model keys used by a virtual provider." },
     failureThreshold: { ...positiveInteger, description: "Consecutive failures before a non-final failover target cools down." },
     cooldownMs: { ...positiveInteger, description: "Failover cooldown duration in milliseconds." }
@@ -496,7 +547,7 @@ var providerEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "contextLimit", "asyncCompact", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "contextLimit", "effort", "asyncCompact", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -504,7 +555,7 @@ var providerEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "contextLimit", "asyncCompact"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "contextLimit", "effort", "asyncCompact"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -556,12 +607,25 @@ var channelEntry = {
   properties: {
     type: {
       anyOf: [
-        { enum: ["telegram", "matrix", "wework", "weixin"] },
+        { enum: ["telegram", "matrix", "wework", "weixin", "qqbot"] },
         { type: "string" }
       ],
       description: "Known managed channel type or a custom channel type."
     },
     enabled: { type: "boolean" },
+    appId: { type: "string" },
+    clientSecret: { type: "string" },
+    requireMention: { type: "boolean", description: "Require @mention in QQ groups; defaults to true." },
+    media: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        imageMaxBytes: { type: "integer", minimum: 1, maximum: 20971520, description: "Safe inline-image threshold; larger images fall back to generic files." },
+        fileMaxBytes: { type: "integer", minimum: 1, maximum: 209715200, description: "Bounded inbound/fallback generic-file cap; local QQ sends are additionally capped at 100 MiB." },
+        maxTotalBytes: { type: "integer", minimum: 1, maximum: 209715200 },
+        maxAttachments: { type: "integer", minimum: 1, maximum: 16 }
+      }
+    },
     allowedUsers: { type: "array", items: { type: "string" } },
     guestAgent,
     botToken: { type: "string" },
@@ -609,6 +673,52 @@ var APP_CONFIG_SCHEMA = {
   type: "object",
   additionalProperties: true,
   properties: {
+    vector: {
+      oneOf: [
+        { const: false },
+        {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            enabled: { type: "boolean" },
+            baseUrl: { type: "string", pattern: "^https?://" }
+          }
+        }
+      ],
+      description: "Optional semantic vector search. Omission or false disables it; an object enables it unless enabled is false and requires an OpenAI-compatible API base URL such as http://host:port/v1. Requires restart."
+    },
+    sessionWorkers: {
+      oneOf: [
+        { type: "boolean" },
+        {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            enabled: { type: "boolean" },
+            idleSeconds: { type: "integer", minimum: 1, maximum: 86400 }
+          }
+        }
+      ],
+      description: "Optional per-session process mode. Supplying an object enables it unless enabled is false. Requires restart."
+    },
+    dbWorkers: {
+      type: "boolean",
+      description: "Run the LanceDB/vector owner in a child process. Defaults to true and requires restart."
+    },
+    vectorMaintenance: {
+      oneOf: [
+        { type: "boolean" },
+        {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            enabled: { type: "boolean" },
+            retentionHours: { type: "integer", minimum: 1 }
+          }
+        }
+      ],
+      description: "Automatic LanceDB maintenance. Use true/false for default retention or an object to tune retentionHours. Requires restart."
+    },
     bot: {
       type: "object",
       additionalProperties: true,
@@ -624,7 +734,7 @@ var APP_CONFIG_SCHEMA = {
       type: "object",
       additionalProperties: true,
       properties: {
-        ollamaBaseUrl: { type: "string" },
+        ollamaBaseUrl: { type: "string", description: "Legacy vector endpoint root. Prefer top-level vector.baseUrl." },
         contextLimit: { type: "integer", minimum: 1 },
         compactPercent: { type: "number", exclusiveMinimum: 0, maximum: 1 },
         compactBlockLevelMinTokens: { type: "integer", minimum: 1 },
@@ -633,7 +743,6 @@ var APP_CONFIG_SCHEMA = {
         compactBlockForceCompactFraction: { type: "number", minimum: 0, maximum: 1 },
         compactMessageForceCompactFraction: { type: "number", minimum: 0, maximum: 1 },
         maxOutput: { type: "integer", minimum: 1 },
-        thinkingBudget: { type: "integer", minimum: 0 },
         openaiBaseUrl: { type: "string" },
         openaiApiKey: { type: "string" },
         anthropicBaseUrl: { type: "string" },

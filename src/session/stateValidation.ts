@@ -1,6 +1,12 @@
 import { isQueueItem } from '../types';
+import { MODEL_EFFORTS, type ModelEffort } from '../config';
 
 export const CURRENT_SESSION_STATE_VERSION = 1;
+
+export type SessionAuthorityMailboxCursor = {
+  cursor: number;
+  defaulted: boolean;
+};
 
 function isRecord(value: unknown): value is Record<string, any> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -65,6 +71,19 @@ function validateCurrentFrontier(frontier: unknown[], label: string): void {
   }
 }
 
+/** Strict authority cursor reader. Only a missing legacy value defaults to zero. */
+export function readSessionAuthorityMailboxCursor(
+  value: Record<string, any>,
+  label = 'Per-session state',
+): SessionAuthorityMailboxCursor {
+  const cursor = value.lastAppliedMailboxId;
+  if (cursor === undefined) return { cursor: 0, defaulted: true };
+  if (!Number.isSafeInteger(cursor) || cursor < 0) {
+    throw new Error(`${label} mailbox cursor must be a non-negative safe integer.`);
+  }
+  return { cursor, defaulted: false };
+}
+
 /**
  * Side-effect-free authority reader shared by startup hydration and catalog
  * migration preflight. Unversioned files retain the existing tolerant
@@ -93,9 +112,12 @@ export function normalizeAndValidateSessionAuthorityPayload(raw: unknown, label 
   if (current && value.contextFrontier) validateCurrentFrontier(value.contextFrontier, label);
   if (value.stats !== undefined) validateStats(value.stats, label);
   if (value.meta !== undefined) validateMeta(value.meta, label);
-  if (value.lastAppliedMailboxId !== undefined
-    && (!Number.isSafeInteger(value.lastAppliedMailboxId) || value.lastAppliedMailboxId < 0)) {
-    throw new Error(`${label} mailbox cursor must be a non-negative safe integer.`);
+  readSessionAuthorityMailboxCursor(value, label);
+  for (const field of ['effort', 'childEffortDefault'] as const) {
+    if (value[field] !== undefined
+      && (typeof value[field] !== 'string' || !MODEL_EFFORTS.includes(value[field] as ModelEffort))) {
+      throw new Error(`${label} ${field} must be one of: ${MODEL_EFFORTS.join(', ')}.`);
+    }
   }
   return value;
 }

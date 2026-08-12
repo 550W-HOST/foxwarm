@@ -234,7 +234,9 @@ Example:
                     fork: { type: 'boolean', description: 'Whether to fork (inherit parent context) or create new session. Default: false', default: false },
                     message: { type: 'string', description: 'Optional initial message to send to the child session immediately after creation' },
                     waitAfterHandoff: { type: 'boolean', description: 'After a successful initial message handoff, finish this turn and enter a generic any-event wait. Replies are delivered normally whether this is true or false; this option only controls whether the current turn waits. The wait is not target-filtered or a completion wait. Requires a non-empty message.' },
-                    node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' }
+                    node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' },
+                    model: { type: 'string', description: 'Optional explicit model key for the child session.' },
+                    effort: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], description: 'Optional explicit effort for the child session.' }
                 },
                 required: ['suffix']
             }
@@ -308,7 +310,7 @@ Example:
         {
             name: 'session',
             defaultInject: true,
-            description: 'Get current session status, list sessions, or update a session display name. With no args or action="status", returns current session agent id/name, agent dir, session id, parent session id, token estimate, last usage, auto-compact threshold, current node, current cwd, and recent child sessions. With action="list", returns the paginated session list. With action="update-display-name", sets or clears a session display name.',
+            description: 'Get current session status, list sessions, or update a session display name. With no args or action="status", returns current session agent id/name, agent dir, session id, parent session id, model plus raw/effective current and child effort, token estimate, last usage, auto-compact threshold, current node, current cwd, and recent child sessions. With action="list", returns the paginated session list. With action="update-display-name", sets or clears a session display name.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -438,13 +440,14 @@ Example:
         },
         {
             name: 'set_session_child_model',
-            description: 'Set, clear, or inspect the per-session default model used when this session creates child or related new sessions. When unset, spawned sessions follow the current session model behavior.',
+            description: 'Set, clear, or inspect the per-session default model and effort used for child or related new sessions. Unset values follow the current session model/default effort behavior.',
             parameters: {
                 type: 'object',
                 properties: {
                     sessionId: { type: 'string', description: 'Session ID (optional, defaults to the current session)' },
                     model: { type: 'string', description: 'Model key to use by default for child/new sessions spawned from this session.' },
-                    clear: { type: 'boolean', description: 'If true, clear the override and fall back to following the current session model.' }
+                    effort: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'default', 'unset'], description: 'Effort override, or default/unset to clear it.' },
+                    clear: { type: 'boolean', description: 'Backward-compatible model-only clear. Cannot be combined with model.' }
                 }
             }
         },
@@ -899,6 +902,7 @@ Example:
                     displayName: { type: 'string', description: 'Optional display name for the new session.' },
                     parentSessionId: { type: 'string', description: 'Optional parent session ID.' },
                     model: { type: 'string', description: 'Optional explicit model key for the new session. When omitted, the current session child-default model behavior is used.' },
+                    effort: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], description: 'Optional explicit effort for the new session. When omitted, child/default inheritance is used.' },
                     systemPromptFiles: {
                         type: 'array',
                         description: 'Optional file list for composing the memory-file portion of the new session snapshot. When set, only these files are used as memory sources, while other system injections remain.',

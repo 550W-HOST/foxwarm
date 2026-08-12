@@ -42,6 +42,7 @@ function makeBlockRecord(sessionId: string, id: number, rawStartSeq: number, raw
 test('mixed vector search works after bootstrapping legacy archive data into sqlite store', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-vector-lineage-'));
   process.env.FOXWARM_DATA_DIR = tempRoot;
+  await fs.outputFile(path.join(tempRoot, 'state', 'config.yaml'), 'vector:\n  baseUrl: http://127.0.0.1:11434/v1\n');
   let embeddingRequestCount = 0;
 
   const makeEmbedding = (text: string): number[] => {
@@ -100,13 +101,13 @@ test('mixed vector search works after bootstrapping legacy archive data into sql
 
     await migrations.runStartupMigrations();
     await archiveStore.initArchiveStore();
-    await vector.init();
+    await vector.init({ enabled: true });
     await vector.waitForStartupArchiveVectorBackfill();
 
     assert.ok(embeddingRequestCount > 0, 'startup bootstrap import should automatically backfill vector rows');
 
     const embeddingRequestCountAfterFirstInit = embeddingRequestCount;
-    await vector.init();
+    await vector.init({ enabled: true });
     assert.equal(
       embeddingRequestCount,
       embeddingRequestCountAfterFirstInit,

@@ -9,7 +9,7 @@ Owns provider request routing, Anthropic conversion/parsing, session prompt snap
 
 ## Key exports
 
-- `chat(parts, session, iteration?, options?)` — optionally append user parts, request one provider turn from current model-visible history, update stats, and append the model result.
+- `chat(parts, session, iteration?, options?)` — optionally append user parts, request one provider turn from current model-visible history while forwarding the Session's raw optional effort, update stats, and append the model result.
 - `requestLlmOnce(options)` — provider request without automatic session-history orchestration.
 - `executeTools(functionCalls, toolContext, session)` — model-ordered tool batch execution with serial barriers, bounded adjacent direct-exec segments, progress/control folding, and one final tool message.
 - `CurrentSessionEffects`, `CurrentSessionTurnEffects`, and `createDefaultCurrentSessionEffects()` — local-only normal-turn hooks. The provider/tool base carries a trusted local/Session-worker placement marker plus append/persist, stream, abort, and explicit-wait rollback; the runner extension adds canonical append-many, busy, wait, and history/runtime event ownership. They are not DTOs or RPC contracts.
@@ -44,6 +44,7 @@ Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolRe
 - Dynamic hints include agent folder and layered-context recall guidance.
 - Prompt-cache keys are random UUIDs tied to model-facing prefix lineage and persisted by normal session callers. Canonical lineage: [D-lifecycle-prefix-lineage](../threads/session-lifecycle.md#d-lifecycle-prefix-lineage).
 - Provider `extraFields` and `extraHeaders` expand `${SESSION_CACHE_KEY}` from the resolved prompt-cache key and `${TURN_ID}` from the request's ephemeral turn identity. A low-level request generates one fallback identity for its retry set; the normal SessionTurnRunner supplies one identity for the whole session turn.
+- A provider-neutral optional request effort is resolved once per outer request. Each physical concrete attempt uses the requested value when its leaf allows it, otherwise that leaf's configured default. Requests without an explicit value use the selected leaf default.
 
 ## Request behavior
 
@@ -54,6 +55,7 @@ Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolRe
 - Streaming progress emits throttled reasoning/text/tool-call snapshots.
 - Retry waits are abortable. Terminal failures move bounded diagnostics to error logs, emit a final retry event, and throw `LlmRequestError`; they do not create fake assistant `Error:` messages. Canonical boundary: [D-llm-request-errors](../modules/llm.md#d-llm-request-errors).
 - The historical `maxRetries` option/event field means total attempts; the default is six. Virtual attempts rebuild the complete selected concrete request, and unusable empty/reasoning-only responses retry. Canonical semantics: [model routing](../threads/model-routing.md).
+- First-class effort is applied after expanded `extraFields` on an attempt-local payload, overriding only known effort/thinking paths without mutating model configuration. OpenAI Responses uses `reasoning.effort`, Chat Completions uses `reasoning_effort`, and Anthropic-format providers use `output_config.effort`; `none` disables Anthropic thinking and omits its output effort. The removed global thinking-budget mechanism no longer injects `budget_tokens`.
 - HTTP classification recognizes nested structured model-not-found errors and bounded common text forms without broadening ordinary HTTP 400 retries. A virtual outer request captures route activation once so old retries cannot replace newer configuration state.
 - Successful results normalize into `ChatResult`, record the provider-qualified concrete model ID and usage, and may contain function calls for the router loop. A virtual route additionally carries its resolved configuration key through `ChatResult.virtualModelKey` into every successful provider-generated assistant message, including tool-call-only turns; canonical semantics are owned by [D-model-routing-concrete-attribution](../threads/model-routing.md#d-model-routing-concrete-attribution).
 - Normal chat request history retains only a model message's canonical concrete `__meta.modelId` as provider-planning provenance; all other internal metadata remains excluded. Each physical attempt uses that identity on an attempt-local clone to remove model-specific reasoning artifacts only after a proven concrete-model mismatch, then strips all `__meta` before any of the three provider serializers. Virtual failover therefore re-evaluates compatibility for every selected leaf without mutating canonical history. Canonical contract: [D-model-routing-history-reasoning-compatibility](../threads/model-routing.md#d-model-routing-history-reasoning-compatibility).

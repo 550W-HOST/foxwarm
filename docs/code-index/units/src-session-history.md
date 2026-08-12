@@ -54,6 +54,8 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 
 ## Behavior
 
+Transient compact-job Session clones preserve raw `effort`, `childModelDefault`, and `childEffortDefault` alongside the selected model so compaction requests use the same provider-neutral request setting without mutating the live owner.
+
 - The planning model uses the live prompt-cache key on a clone because the pre-commit prefix/schema lineage is unchanged; canonical ownership is [D-lifecycle-prefix-lineage](../threads/session-lifecycle.md#d-lifecycle-prefix-lineage).
 - Each transient compact-planning provider call is journaled with purpose `compact-plan`; its canonical prompt/messages and normalized result remain reconstructable without adding temporary planning rows to session history.
 - Async, awaited, and auto modes use one engine. A terminal provider error, exhausted plan loop, or stale prefix leaves live history/frontier unchanged.

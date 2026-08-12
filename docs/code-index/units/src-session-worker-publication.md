@@ -9,14 +9,14 @@ Provides the fixed trusted-local reverse boundary and Main in-memory coordinator
 
 ## Key exports
 
-- `sessionWorkerPublicationServiceDescriptor` — fixed `session-worker-publication@1.publishCommitted` method.
+- `sessionWorkerPublicationServiceDescriptor` — fixed `session-worker-publication@2.publishCommitted` method.
 - `SessionWorkerProjectionRegistry` — current exact generation/incarnation registry with establish, awaited apply, cloned get/list, ordered subscribers, exact stale marking, and exact clear.
 - `createSessionWorkerPublicationServiceHandler()` — exact identity-fenced, plain/bounded projection validator and apply handler.
 - `initializeSessionWorkerPublication()` / `publishCommitted()` / `shutdownSessionWorkerPublication()` — local or borrowed-reverse client lifecycle.
 
 ## Boundary
 
-A request contains only exact session/generation/incarnation identity plus the existing complete bounded `SessionWorkerProjection`. The projection has exact top-level keys, strict finite plain JSON, bounded strings and total size, strictly shaped current runtime active/tool/waiting records, matching duplicated busy/queue counters, and no `stateRevision`, history, queue items, message bodies, callbacks, or live Session.
+A request contains only exact session/generation/incarnation identity plus the existing complete bounded `SessionWorkerProjection`, including nullable raw current/child effort overrides. The projection has exact top-level keys, strict finite plain JSON, bounded strings and total size, strictly shaped current runtime active/tool/waiting records, matching duplicated busy/queue counters, and no `stateRevision`, history, queue items, message bodies, callbacks, or live Session.
 
 Main establishes an identity as stale before activation. A matching full publication replaces it with a cloned fresh projection and awaits subscribers in registration order. Subscriber failure marks that exact entry stale and fails acknowledgement. Older/mismatched identities cannot apply; stale marking and clear affect only the exact current owner. Registry state is process-local presentation/coordinator state only and never writes `sessions.json` or per-session authority.
 

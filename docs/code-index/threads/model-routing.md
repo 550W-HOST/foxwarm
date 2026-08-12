@@ -15,7 +15,9 @@ Two virtual `providerType` values are supported:
 
 A virtual entry uses `targets`, containing model lookup keys that resolve strictly to concrete leaves in the same models-config snapshot. Canonical identity is an actual expansion key, so slash-containing model IDs remain exact and a single-model bare alias and qualified key resolve to the same leaf. Version 1 rejects empty targets, unknown targets, self references, virtual-to-virtual references, and aliases that resolve to the same canonical concrete target. `session-hash` accepts one or more targets; `failover` requires at least two.
 
-Virtual entries do not accept `models`, legacy `model`, `baseUrl`, `apiKey`, `requestCompression`, `extraFields`, `extraHeaders`, `webSearch`, `contextLimit`, or `asyncCompact`. `session-hash` also rejects failover-only threshold/cooldown fields. Concrete entries reject virtual routing fields. Provider entries must be plain objects, and failover threshold/cooldown values are positive integers. Request connection and serialization fields always come from the selected concrete leaf.
+Virtual entries do not accept `models`, legacy `model`, `baseUrl`, `apiKey`, `requestCompression`, `extraFields`, `extraHeaders`, `webSearch`, `contextLimit`, `effort`, or `asyncCompact`. `session-hash` also rejects failover-only threshold/cooldown fields. Concrete entries reject virtual routing fields. Provider entries must be plain objects, and failover threshold/cooldown values are positive integers. Request connection and serialization fields always come from the selected concrete leaf.
+
+Concrete provider/model entries may configure first-class `effort: { allowed, default }`. Omission allows `none`, `low`, `medium`, `high`, `xhigh`, and `max` with default `high`. Model-level fields inherit the provider values except that an explicit model `allowed` list replaces the provider list; the resolved default must be included. Virtual entries cannot configure effort and expose the ordered union of reachable concrete levels.
 
 The resolved virtual model reports:
 
@@ -30,8 +32,9 @@ The resolved virtual model reports:
 1. `requestLlmOnce` resolves one models-config snapshot and one prompt-cache routing key for the entire outer request.
 2. A concrete model uses its resolved entry directly. A virtual model selects one concrete target for the current attempt.
 3. Every outer attempt rebuilds the selected leaf's URL, credentials, headers, payload, request compression, provider serializer, stream collector, and response parser. Historical model reasoning is compatibility-filtered against that attempt's canonical concrete destination.
-4. A successful result records the concrete provider-qualified model ID. The session's selected model remains the virtual key.
-5. Retry callbacks retain the compatibility `maxRetries` field, whose value is the total attempt limit. The default total attempt limit is six.
+4. One optional provider-neutral requested effort is captured for the outer request. Each concrete attempt uses it when allowed by that leaf, otherwise it falls back to that leaf's configured default. An omitted request also uses each selected leaf's default.
+5. A successful result records the concrete provider-qualified model ID. The session's selected model remains the virtual key.
+6. Retry callbacks retain the compatibility `maxRetries` field, whose value is the total attempt limit. The default total attempt limit is six.
 
 Virtual providers add no retry loop of their own. The one LLM outer loop remains the owner of attempts, delay, abort handling, diagnostics, and terminal `LlmRequestError` creation.
 
@@ -75,10 +78,12 @@ Across OpenAI Chat Completions, OpenAI Responses, Anthropic, and compatible conc
 
 ## Surfaces and attribution
 
-- Session and WebUI model selection continue to expose the configured virtual key.
+- Session and WebUI model selection continue to expose the configured virtual key. Public session projections expose raw current/child effort overrides separately from their derived effective values, allowed sets, and concrete defaults; virtual defaults are represented as per-leaf rather than inventing one route-level default.
 - `ChatResult.modelId` and assistant `__meta.modelId` identify the canonical concrete leaf that actually succeeded. When the resolved route is virtual, successful results/messages additionally carry that resolved configuration key as optional `virtualModelKey`; concrete, user, tool, synthetic, failed, and legacy messages omit it. Logs and retry diagnostics continue to identify both the attempted concrete leaf and virtual route where applicable.
 - WebUI Setup presents Models as raw YAML only. Its local static schema and current-document suggestions are advisory; save uses the canonical config validator and remains byte-preserving after validation.
-- Structured setup input accepts virtual targets and failover settings; setup diagnostics expose `isVirtual`, `targets`, `failureThreshold`, and `cooldownMs`. The model-list API also exposes provider type, virtual status, resolved targets, and effective context limit without leaf credentials.
+- Structured setup input accepts virtual targets and failover settings; setup diagnostics expose `isVirtual`, `targets`, `failureThreshold`, and `cooldownMs`. The model-list API also exposes provider type, virtual status, resolved targets, effective context limit, ordered allowed efforts, and a concrete default or `null` for virtual per-leaf defaulting, without leaf credentials.
+- `/model`, `/session child-model`, the existing model/child-model WebUI endpoints, and the compact Chat selector update model-plus-effort pairs through one SessionRuntime settings mutation. Property presence distinguishes omitted fields from explicit unset/default, and `none` remains an explicit value.
+- Model-facing `create_child_session` and `create_session` schemas expose optional canonical model effort. `set_session_child_model` sets or clears the future-child model and effort defaults without introducing another overlapping settings tool. Shared session status reports raw/effective current and child effort.
 - The one-shot model CLI lists and accepts virtual keys while reusing production routing.
 - Raw model readers that need concrete credentials, such as the bundled web-search helper, skip virtual entries and inspect concrete providers only.
 - The active models file follows [D-config-models-data-path](../units/src-config.md#d-config-models-data-path); the packaged template is only a missing-file read fallback.
@@ -112,6 +117,16 @@ Session hashing uses stable SHA-256 rendezvous hashing namespaced by the virtual
 ### D-model-routing-outer-attempts
 
 There is one outer LLM attempt loop, with six total attempts by default. Each virtual attempt selects a leaf and rebuilds the complete concrete request; virtual providers do not contain another retry loop. Compatibility surfaces retain the historical `maxRetries` field name even though it means total attempts.
+
+### D-model-routing-effort
+
+[2026-08-11] Model effort is one provider-neutral request setting with canonical values `none`, `low`, `medium`, `high`, `xhigh`, and `max`. Concrete provider/model configuration owns `{ allowed, default }`; omission allows all values and defaults to `high`. A model-level allowed list replaces the provider list, while a virtual model derives the ordered union of its concrete leaves and cannot define its own request override.
+
+The requested effort is captured once per outer request. Each physical attempt uses it only when the selected concrete leaf allows it, otherwise that leaf's default is used; omission also uses the leaf default. OpenAI Responses maps to `reasoning.effort`, OpenAI Chat Completions to `reasoning_effort`, and Anthropic-format providers to `output_config.effort`. `none` uses OpenAI's native value and disables Anthropic thinking while omitting Anthropic output effort. First-class mapping is applied after expanded `extraFields` without mutating configuration, so it is authoritative over known effort paths while preserving unrelated custom fields. The former global numeric thinking budget is removed.
+
+[2026-08-11] A Session may persist optional raw `effort` and `childEffortDefault` overrides. Absence remains canonical unset/default and is never materialized from a concrete model's configured default; `none` is an explicit stored value. Current and prospective-child model/effort settings are normalized atomically from one models-config snapshot. Explicit effort must belong to the selected concrete allowed set or virtual union; a model-only change preserves a compatible stored effort and clears an incompatible one in the same persistence transaction. Existing persisted effort that becomes unsupported after configuration changes remains readable and request-time fallback stays leaf-local until a later settings mutation canonicalizes it.
+
+[2026-08-11] Public effort controls extend the existing model surfaces instead of creating a model-by-effort matrix or parallel APIs/tools. Commands and HTTP settings accept model and effort together, distinguish omission from explicit unset/default, and return canonical post-update state. The existing child-settings tool clears effort only through property-presence `effort:"default"|"unset"`; legacy `clear:true` remains model-only, rejects a simultaneous supplied model, and may accompany an independent effort update. The compact Chat selector shows current and future-child effort controls beside the existing model rows; options are limited to the selected/effective model's allowed set, while trigger/status text shows derived effective values without storing defaults. Virtual unset is displayed as per-leaf defaulting, and stale raw overrides remain visibly selected but disabled with the backend-authoritative effective fallback until the user chooses a valid recovery value. Model-list capability payloads expose a concrete default or `null` for virtual per-leaf defaulting. Session creation tools expose optional canonical effort, and shared `/status`/`session(status)` output reports raw and effective current/child effort.
 
 ### D-model-routing-failover-health
 

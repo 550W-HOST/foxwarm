@@ -12,6 +12,10 @@ import { refreshSessionSnapshotForSession } from './session/agentMetadata';
 import { clearSession, compactToolMessages as compactSessionToolMessages, deleteMessages, forceIndexSession, getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSessionCompactionRequest, type SessionHistoryDeps } from './session/history';
 import { getManagedSessionState } from './session/managedState';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './session/metadataStore';
+import {
+  applyNormalizedSessionModelEffortSettings,
+  normalizeProspectiveSessionModelEffortSettings,
+} from './session/modelEffortSettings';
 import { applyQueuedItemToWaitState, appendSessionMessagesForSession, buildManualForkNotificationMessage, startSessionWaitForSession, updateSessionBusyStateForSession } from './sessionManager';
 import { clearActiveSessionRuntimeState, setActiveSessionRuntimeState, setSessionRuntimeStateUpdateCallback } from './sessionRuntimeState';
 import { LocalSessionTurnHost, SessionTurnRunner, type SessionTurnHost } from './sessionTurnRunner';
@@ -58,6 +62,7 @@ export class SessionWorkerHost {
   private coalescedStreamEvents = new Map<string, SessionStreamEvent>();
   private streamCoalesceTimer?: ReturnType<typeof setTimeout>;
   private mailboxIntentsAppliedInFlight = 0;
+  private stopMailboxBoundary?: number;
 
   constructor(
     private readonly identity: SessionWorkerIdentity,
@@ -210,7 +215,23 @@ export class SessionWorkerHost {
       const before = captureSessionSemanticState(session);
       const changed: string[] = [];
       try {
+        const hasModelEffortMutation = ['model', 'effort', 'childModelDefault', 'childEffortDefault']
+          .some(key => Object.prototype.hasOwnProperty.call(patch, key));
+        if (hasModelEffortMutation) {
+          try {
+            const normalized = normalizeProspectiveSessionModelEffortSettings(session, {
+              ...(Object.prototype.hasOwnProperty.call(patch, 'model') ? { model: patch.model } : {}),
+              ...(Object.prototype.hasOwnProperty.call(patch, 'effort') ? { effort: patch.effort } : {}),
+              ...(Object.prototype.hasOwnProperty.call(patch, 'childModelDefault') ? { childModelDefault: patch.childModelDefault } : {}),
+              ...(Object.prototype.hasOwnProperty.call(patch, 'childEffortDefault') ? { childEffortDefault: patch.childEffortDefault } : {}),
+            });
+            changed.push(...applyNormalizedSessionModelEffortSettings(session, normalized));
+          } catch (error: any) {
+            throw new RpcError('SESSION_WORKER_SETTINGS_INVALID', error?.message || String(error));
+          }
+        }
         for (const key of ['cwd', 'model', 'childModelDefault', 'currentNode'] as const) {
+          if (key === 'model' || key === 'childModelDefault') continue;
           if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
           const value = patch[key];
           const prior = session[key] ?? null;
@@ -229,6 +250,8 @@ export class SessionWorkerHost {
           if (prior !== value) changed.push('verbose');
           session.verbose = value;
         }
+        const settingOrder = ['cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault', 'currentNode', 'compactThresholdTokens', 'verbose'];
+        changed.sort((left, right) => settingOrder.indexOf(left) - settingOrder.indexOf(right));
         if (changed.length > 0) await this.persistOwner();
         return { changed, previous, current: this.settingsSnapshot(session), projection: buildSessionWorkerProjection(session) };
       } catch (error) {
@@ -341,23 +364,34 @@ export class SessionWorkerHost {
     // request and set the in-memory stopping flag that the in-flight turn polls
     // — neither may wait on the serialized host chain, or interrupting a wedged
     // turn would hang behind that same turn (mirrors local requestSessionStop,
-    // which also signals through the shared in-memory flag). (2) Durability is
-    // serialized: the stopping flag is persisted transactionally on the host
-    // chain so it lands after the turn's own final writes; that persist is
-    // detached so a turn that ignores its abort can never block this RPC.
+    // which also signals through the shared in-memory flag). (2) A successful
+    // RPC waits for the already-accepted serialized lane to complete canonical
+    // Stop finalization. Thus success means the passive history commit and
+    // stopping=false release are authoritative, while a wedged lane is bounded
+    // by the caller's RPC deadline and cannot produce false success.
     const controller = this.activeAbort;
     const abortedInFlight = !!controller;
     await this.ensureLoaded();
+    if (!this.session!.busy) {
+      return { stopping: false, abortedInFlight: false };
+    }
     // Set the stop signal before aborting: the abort rejection reaches the
     // runner through microtasks, and the stopped-turn path requires
     // session.stopping to already be true (mirrors local requestSessionStop).
+    this.stopMailboxBoundary = this.store.latestMailboxIntentId(this.identity.sessionId);
     this.session!.stopping = true;
     controller?.abort();
-    void this.serialize(async () => {
-      await this.fenceMutation();
-      this.session!.stopping = true;
-      await this.persistOwner();
-    }).catch(error => logger.error({ err: error, sessionId: this.identity.sessionId }, 'Session worker interrupt persistence failed'));
+    const completion = this.runTail;
+    await completion;
+    await this.ensureHealthy();
+    const session = this.session!;
+    if (session.busy || session.stopping || (session.lastAppliedMailboxId || 0) < this.stopMailboxBoundary) {
+      throw new RpcError(
+        'SESSION_WORKER_STOP_NOT_FINALIZED',
+        'Session worker Stop did not reach its authoritative passive finalization boundary.',
+        true,
+      );
+    }
     return { stopping: true, abortedInFlight };
   }
 
@@ -435,6 +469,9 @@ export class SessionWorkerHost {
     const session = this.session!;
     this.assertSupportedQueue(session);
     const mailboxCursorBefore = session.lastAppliedMailboxId || 0;
+    const stopBoundary = session.stopping && !session.meta?.runQueuedAfterStop
+      ? this.stopMailboxBoundary
+      : undefined;
     try {
       await this.persistence.applyAndPersistPendingPrefix(
         session,
@@ -457,7 +494,8 @@ export class SessionWorkerHost {
             const transition = applyQueuedItemToWaitState(owner, structuredClone(intent.payload));
             if (transition.action === 'enqueue') owner.queue.push(...transition.items);
           }
-        }
+        },
+        stopBoundary,
       );
     } finally {
       this.mailboxIntentsAppliedInFlight = 0;
@@ -492,6 +530,11 @@ export class SessionWorkerHost {
   private forwardAppendedMessages(messages: Message[]): void {
     if (!this.presentationSubscribed || !this.dependencies.publishPresentationMessage) return;
     for (const message of messages) {
+      // The LLM emitter flushes its final cumulative frame before chat()
+      // appends the canonical model row. Worker-side coalescing must preserve
+      // that order: otherwise the message clears WebUI's synthetic draft and a
+      // later coalescer timer recreates the now-stale reasoning/tool placeholder.
+      if (message.role === 'model') this.flushCoalescedStreamEvents();
       const copy = JSON.parse(JSON.stringify(message)) as Message;
       this.forwardPresentation(() => this.dependencies.publishPresentationMessage!(copy));
     }
@@ -502,7 +545,10 @@ export class SessionWorkerHost {
   private forwardSessionStreamEvent(event: SessionStreamEvent): void {
     if (!this.presentationSubscribed || !this.dependencies.publishPresentationStream) return;
     if (event.type === 'model-stream-reset') {
-      // Resets are structural (draft lifecycle), forward immediately.
+      // A retry/reset is a structural draft boundary. Preserve any already
+      // emitted cumulative frame before it, and cancel its coalescer timer so
+      // an older update can never reappear after the reset.
+      this.flushCoalescedStreamEvents();
       const copy = JSON.parse(JSON.stringify(event)) as SessionStreamEvent;
       this.forwardPresentation(() => this.dependencies.publishPresentationStream!(copy));
       return;
@@ -522,6 +568,10 @@ export class SessionWorkerHost {
   }
 
   private flushCoalescedStreamEvents(): void {
+    if (this.streamCoalesceTimer) {
+      clearTimeout(this.streamCoalesceTimer);
+      this.streamCoalesceTimer = undefined;
+    }
     if (!this.coalescedStreamEvents.size) return;
     const pending = [...this.coalescedStreamEvents.values()];
     this.coalescedStreamEvents.clear();
@@ -746,7 +796,9 @@ export class SessionWorkerHost {
     return {
       cwd: session.cwd || null,
       model: session.model || null,
+      effort: session.effort || null,
       childModelDefault: session.childModelDefault || null,
+      childEffortDefault: session.childEffortDefault || null,
       currentNode: session.currentNode || null,
       compactThresholdTokens: typeof session.compactThresholdTokens === 'number' ? session.compactThresholdTokens : null,
       verbose: !!session.verbose,

@@ -68,8 +68,28 @@ const openaiWebSearchConfig = {
   description: 'Opt-in OpenAI Responses hosted web search settings. Use true/false for defaults or an object for tuning. Ignored by non-Responses providers.',
 }
 
+const modelEffortConfig = {
+  type: 'object',
+  additionalProperties: true,
+  description: 'First-class reasoning effort capabilities and default for this provider or model.',
+  properties: {
+    allowed: {
+      type: 'array',
+      minItems: 1,
+      uniqueItems: true,
+      items: { enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max'] },
+      description: 'Effort levels accepted for this provider/model. Model-level values replace the provider list.',
+    },
+    default: {
+      enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+      description: 'Effort used when a request does not select one. Defaults to high.',
+    },
+  },
+}
+
 const modelOverrideProperties = {
   contextLimit: { type: 'integer', minimum: 1, description: 'Context window size in tokens.' },
+  effort: modelEffortConfig,
   extraFields: { type: 'object', additionalProperties: true, description: 'Provider-specific request fields.' },
   extraHeaders: { type: 'object', additionalProperties: true, description: 'Provider-specific HTTP headers. Values are passed through to the canonical backend loader.' },
   webSearch: openaiWebSearchConfig,
@@ -108,6 +128,7 @@ const providerEntry = {
       ],
     },
     contextLimit: modelOverrideProperties.contextLimit,
+    effort: modelEffortConfig,
     asyncCompact: { type: 'boolean', description: 'Whether background compaction may use this provider.' },
     requestCompression: { enum: ['gzip', 'br'], description: 'Optional request-body compression.' },
     extraFields: modelOverrideProperties.extraFields,
@@ -123,7 +144,7 @@ const providerEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'asyncCompact', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'asyncCompact', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -131,7 +152,7 @@ const providerEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'asyncCompact'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'asyncCompact'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -253,6 +274,20 @@ export const APP_CONFIG_SCHEMA = {
   type: 'object',
   additionalProperties: true,
   properties: {
+    vector: {
+      oneOf: [
+        { const: false },
+        {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            enabled: { type: 'boolean' },
+            baseUrl: { type: 'string', pattern: '^https?://' },
+          },
+        },
+      ],
+      description: 'Optional semantic vector search. Omission or false disables it; an object enables it unless enabled is false and requires an OpenAI-compatible API base URL such as http://host:port/v1. Requires restart.',
+    },
     sessionWorkers: {
       oneOf: [
         { type: 'boolean' },
@@ -300,7 +335,7 @@ export const APP_CONFIG_SCHEMA = {
       type: 'object',
       additionalProperties: true,
       properties: {
-        ollamaBaseUrl: { type: 'string' },
+        ollamaBaseUrl: { type: 'string', description: 'Legacy vector endpoint root. Prefer top-level vector.baseUrl.' },
         contextLimit: { type: 'integer', minimum: 1 },
         compactPercent: { type: 'number', exclusiveMinimum: 0, maximum: 1 },
         compactBlockLevelMinTokens: { type: 'integer', minimum: 1 },
@@ -309,7 +344,6 @@ export const APP_CONFIG_SCHEMA = {
         compactBlockForceCompactFraction: { type: 'number', minimum: 0, maximum: 1 },
         compactMessageForceCompactFraction: { type: 'number', minimum: 0, maximum: 1 },
         maxOutput: { type: 'integer', minimum: 1 },
-        thinkingBudget: { type: 'integer', minimum: 0 },
         openaiBaseUrl: { type: 'string' },
         openaiApiKey: { type: 'string' },
         anthropicBaseUrl: { type: 'string' },

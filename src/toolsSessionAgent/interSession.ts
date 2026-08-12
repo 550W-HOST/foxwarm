@@ -19,7 +19,7 @@ import { COMPACT_PLAN_TOOL_NAME } from '../session/compactPlan';
 
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_child_session');
-  const { suffix, fork = false, message, node, noFurtherAssistantReply, waitAfterHandoff } = args;
+  const { suffix, fork = false, message, node, model, effort, noFurtherAssistantReply, waitAfterHandoff } = args;
 
   if (!ctx || !ctx.sessionId) {
     throw new Error('Cannot create child session: missing context');
@@ -33,7 +33,7 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
 
   const currentSessionId = ctx.sessionId;
   const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork,
-    { node, sourceOverride: (ctx as any).sourceOverride });
+    { node, model, effort, sourceOverride: (ctx as any).sourceOverride });
 
   if (message) {
     if (waitAfterHandoff === true) {

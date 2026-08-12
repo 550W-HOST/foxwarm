@@ -129,8 +129,16 @@ async function start(): Promise<void> {
     // parts. They emit real tool calls so the canonical tool loop exercises the
     // facade handoff-wait post-action path (waitAfterHandoff arms the wait).
     const crossSession = String(process.env.FOXWARM_TEST_CROSS_SESSION || '');
-    if (process.env.FOXWARM_TEST_MAIN_TOOLS && chatCount === 1) {
-      return { toolCalls: JSON.parse(process.env.FOXWARM_TEST_MAIN_TOOLS) };
+    const mainToolsBySession = process.env.FOXWARM_TEST_MAIN_TOOLS_BY_SESSION
+      ? JSON.parse(process.env.FOXWARM_TEST_MAIN_TOOLS_BY_SESSION)
+      : undefined;
+    const configuredMainTools = mainToolsBySession?.[session.id]
+      || (process.env.FOXWARM_TEST_MAIN_TOOLS
+        && (!process.env.FOXWARM_TEST_MAIN_TOOLS_SESSION || session.id === process.env.FOXWARM_TEST_MAIN_TOOLS_SESSION)
+        ? JSON.parse(process.env.FOXWARM_TEST_MAIN_TOOLS)
+        : undefined);
+    if (configuredMainTools && chatCount === 1) {
+      return { toolCalls: configuredMainTools };
     }
     if (crossSession.includes('create-child') && chatCount === 1 && !session.id.endsWith('_mp-child')) {
       return { toolCalls: [{ name: 'create_child_session', args: { suffix: 'mp-child', message: 'hello child', waitAfterHandoff: true } }] };
@@ -164,6 +172,20 @@ async function start(): Promise<void> {
         options.currentSessionEffects.notifySessionEvent(session.id, { type: 'model-stream-update', streamId: 'test-stream', iteration: 0, reasoning: '', text, toolCalls: [] } as any);
       }
       options.currentSessionEffects.notifySessionEvent(session.id, { type: 'model-stream-reset', streamId: 'test-stream', iteration: 0 } as any);
+    }
+    // Production-shaped ordering regression: requestLlmOnce flushes a final
+    // cumulative OpenAI-completions-like frame immediately before chat()
+    // commits the canonical model reasoning/function-call row. The Worker
+    // presentation coalescer must not deliver that frame after the row.
+    if (process.env.FOXWARM_TEST_STREAM_COMMITTED_TOOL === '1'
+      && chatCount === Number(process.env.FOXWARM_TEST_STREAM_COMMITTED_TOOL_AT || '1')) {
+      const call = { id: 'worker-stream-exec', name: 'exec', args: { command: 'printf worker-stream-order' } };
+      options.currentSessionEffects.notifySessionEvent(session.id, {
+        type: 'model-stream-update', streamId: 'committed-tool-stream', iteration: 0,
+        reasoning: 'Starting the process', text: '', toolCalls: [{ index: 0, id: call.id, name: call.name }],
+      } as any);
+      await options.appendMessage({ role: 'model', parts: [{ thinking: 'Starting the process' }, { functionCall: call }] });
+      return { toolCalls: [call], allParts: [{ thinking: 'Starting the process' }, { functionCall: call }] };
     }
     // Simulates a slow provider request that honors its abort signal, like the
     // real runner: the controller is registered for the in-flight request and

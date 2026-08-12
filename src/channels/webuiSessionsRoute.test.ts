@@ -633,7 +633,9 @@ test('WebUI session projections and settings routes use the local SessionRuntime
   const sessionId = makeSessionId('webui_session_runtime_routes');
   const session = await sessionManager.getSession(sessionId);
   session.model = 'legacy/model';
+  session.effort = 'low';
   session.childModelDefault = 'legacy/child';
+  session.childEffortDefault = 'medium';
   session.cwd = '/tmp/before-runtime-route';
   session.displayName = 'Before Runtime Route';
   await sessionManager.saveSession(sessionId);
@@ -647,6 +649,11 @@ test('WebUI session projections and settings routes use the local SessionRuntime
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
   try {
+    const modelsPayload = await (await fetch(`http://127.0.0.1:${port}/api/models`, { headers })).json() as any;
+    assert.ok(modelsPayload.models.length > 0);
+    assert.ok(modelsPayload.models.every((item: any) => Array.isArray(item.allowedEfforts)));
+    assert.ok(modelsPayload.models.every((item: any) => Object.prototype.hasOwnProperty.call(item, 'defaultEffort')));
+
     const cwdRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/cwd`, {
       method: 'POST', headers, body: JSON.stringify({ cwd: '/tmp/after-runtime-route' }),
     });
@@ -665,12 +672,29 @@ test('WebUI session projections and settings routes use the local SessionRuntime
     const modelPayload = await modelRes.json() as any;
     assert.equal(modelPayload.model, null);
 
+    const effortRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/model`, {
+      method: 'POST', headers, body: JSON.stringify({ effort: 'none' }),
+    });
+    assert.equal(effortRes.status, 200);
+    assert.equal((await effortRes.json() as any).effort, 'none');
+
     const childModelRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/child-model`, {
       method: 'POST', headers, body: JSON.stringify({ clear: true }),
     });
     assert.equal(childModelRes.status, 200);
     const childModelPayload = await childModelRes.json() as any;
     assert.equal(childModelPayload.childModelDefault, null);
+
+    const childEffortRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/child-model`, {
+      method: 'POST', headers, body: JSON.stringify({ childEffortDefault: 'max' }),
+    });
+    assert.equal(childEffortRes.status, 200);
+    assert.equal((await childEffortRes.json() as any).childEffortDefault, 'max');
+
+    const invalidEffortRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/model`, {
+      method: 'POST', headers, body: JSON.stringify({ effort: 'middle' }),
+    });
+    assert.equal(invalidEffortRes.status, 400);
 
     const nameRes = await fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/name`, {
       method: 'POST', headers, body: JSON.stringify({ name: 'After Runtime Route' }),
@@ -683,6 +707,9 @@ test('WebUI session projections and settings routes use the local SessionRuntime
     assert.equal(statePayload.session.cwd, '/tmp/after-runtime-route');
     assert.equal(statePayload.session.model, null);
     assert.equal(statePayload.session.childModelDefault, null);
+    assert.equal(statePayload.session.effort, 'none');
+    assert.equal(statePayload.session.childEffortDefault, 'max');
+    assert.ok(Array.isArray(statePayload.session.effortAllowed));
     assert.equal(statePayload.session.displayName, 'After Runtime Route');
 
     const listPayload = await (await fetch(`http://127.0.0.1:${port}/api/sessions`, { headers })).json() as any;
@@ -694,6 +721,8 @@ test('WebUI session projections and settings routes use the local SessionRuntime
     assert.equal(persisted?.cwd, '/tmp/after-runtime-route');
     assert.equal(persisted?.model, undefined);
     assert.equal(persisted?.childModelDefault, undefined);
+    assert.equal(persisted?.effort, 'none');
+    assert.equal(persisted?.childEffortDefault, 'max');
     assert.equal(persisted?.displayName, 'After Runtime Route');
   } finally {
     await server.stop();

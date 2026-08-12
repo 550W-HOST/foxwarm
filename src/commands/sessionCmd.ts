@@ -2,14 +2,52 @@ import { ChannelContext, getChannelId, getConversationId } from '../channel';
 import { commandSessionMessageCount, type CommandSession } from './types';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
-import { resolveModelConfig } from '../config';
-import { parseSessionMoveArgs, parseCompactThresholdInput, resolveCommandModelSelection } from './helpers';
+import { deleteSessionLifecycle } from '../sessionDeletion';
+import { MODEL_EFFORTS, resolveModelConfig, type ModelEffort } from '../config';
+import { parseSessionMoveArgs, parseCompactThresholdInput, resolveCommandModelSelection, parseEffortFlag } from './helpers';
+import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
 
 export function formatSessionListChannels(channelKeys: Iterable<string>): string {
   const visibleChannels = Array.from(channelKeys).filter(channelKey => !channelKey.startsWith('webui:'));
   return visibleChannels.length > 0
     ? `    - channels: \`${visibleChannels.join(', ')}\`\n`
     : '';
+}
+
+type SessionCreateFlags = {
+  model?: string;
+  effort?: ModelEffort;
+  systemPromptFiles: string[];
+};
+
+export function parseSessionCreateFlags(tokens: string[]): SessionCreateFlags | { error: string } {
+  const result: SessionCreateFlags = { systemPromptFiles: [] };
+  let hasModel = false;
+  let hasEffort = false;
+  const recognized = new Set(['--model', '--effort', '--system-prompt-file']);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const flag = tokens[index];
+    if (!recognized.has(flag)) return { error: `Unknown /session create argument: ${flag}` };
+    if (flag === '--model' && hasModel) return { error: '--model may be specified only once.' };
+    if (flag === '--effort' && hasEffort) return { error: '--effort may be specified only once.' };
+    const value = tokens[index + 1];
+    if (!value || value.startsWith('--')) return { error: `${flag} requires a value.` };
+    index += 1;
+    if (flag === '--model') {
+      hasModel = true;
+      result.model = value;
+    } else if (flag === '--effort') {
+      hasEffort = true;
+      const normalized = value.trim().toLowerCase();
+      if (!MODEL_EFFORTS.includes(normalized as ModelEffort)) {
+        return { error: `--effort must be one of: ${MODEL_EFFORTS.join(', ')}.` };
+      }
+      result.effort = normalized as ModelEffort;
+    } else {
+      result.systemPromptFiles.push(value);
+    }
+  }
+  return result;
 }
 
 export async function handleSessionCommand(ctx: ChannelContext, args: string[], sessionId?: string, session?: CommandSession) {
@@ -27,8 +65,8 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
     let resp = '📋 *Session Commands*\n\n'
     resp += '`/session list` - List all sessions\n'
     resp += '`/session new` - Create new ad-hoc session\n'
-    resp += '`/session create <agent> <session> [--model <model>] [--system-prompt-file <path>]...` - Create session under an existing agent\n'
-    resp += '`/session child-model [model|default|clear|unset]` - Get/set child default model for spawned sessions\n'
+    resp += '`/session create <agent> <session> [--model <model>] [--effort <level>] [--system-prompt-file <path>]...` - Create session under an existing agent\n'
+    resp += '`/session child-model [model|default] [--effort <level|default|unset>]` - Get/set child model and effort defaults\n'
     resp += '`/session fork [suffix]` - Fork current session as a child session (default suffix: `fork`)\n'
     resp += '`/session delete <sessionId>` - Delete session\n'
     resp += '`/session clear` - Clear current session history\n'
@@ -104,51 +142,36 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
 
     case 'create': {
       if (subArgs.length < 2) {
-        ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--system-prompt-file <path>]...')
+        ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--effort <level>] [--system-prompt-file <path>]...')
         return
       }
 
       const agentName = subArgs[0]
       const newSessionName = subArgs[1]
-      const modelFlagIndex = subArgs.indexOf('--model')
+      const parsedFlags = parseSessionCreateFlags(subArgs.slice(2))
+      if ('error' in parsedFlags) {
+        ctx.reply(`❌ ${parsedFlags.error}\nUsage: /session create <agent> <session> [--model <model>] [--effort <level>] [--system-prompt-file <path>]...`)
+        return
+      }
       let resolvedModel: string | undefined
-      const systemPromptFiles: string[] = []
-
-      if (modelFlagIndex >= 0) {
-        const requestedModel = subArgs[modelFlagIndex + 1]
-        if (!requestedModel) {
-          ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--system-prompt-file <path>]...')
-          return
-        }
-
-        const selection = resolveCommandModelSelection(requestedModel, session?.model)
+      if (parsedFlags.model) {
+        const selection = resolveCommandModelSelection(parsedFlags.model, session?.model)
         if (selection.error) {
           ctx.reply(selection.error)
           return
         }
-
         resolvedModel = selection.key
       }
 
-      for (let index = 2; index < subArgs.length; index += 1) {
-        if (subArgs[index] !== '--system-prompt-file') continue
-        const configuredFile = subArgs[index + 1]
-        if (!configuredFile) {
-          ctx.reply('Usage: /session create <agent> <session> [--model <model>] [--system-prompt-file <path>]...')
-          return
-        }
-
-        systemPromptFiles.push(configuredFile)
-        index += 1
-      }
-
       try {
+        const spawned = sessionManager.resolveSpawnedSessionModelEffort(session, resolvedModel, parsedFlags.effort)
         const result = await sessionManager.createSessionInAgent({
           agentName,
           sessionName: newSessionName,
           currentNode: session?.currentNode,
-          systemPromptFiles: systemPromptFiles.length > 0 ? systemPromptFiles : undefined,
-          model: sessionManager.resolveSpawnedSessionModel(session, resolvedModel),
+          systemPromptFiles: parsedFlags.systemPromptFiles.length > 0 ? parsedFlags.systemPromptFiles : undefined,
+          model: spawned.model,
+          effort: spawned.effort,
         })
 
         sessionManager.detachChannel(getChannelId(ctx), getConversationId(ctx))
@@ -156,7 +179,7 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
         const createdSession = await sessionRuntime.getSession(result.sessionId)
         if (!createdSession) throw new Error(`Created session \`${result.sessionId}\` is unavailable.`)
         const { currentKey } = resolveModelConfig(createdSession.model)
-        ctx.reply(`✅ Created session \`${result.sessionId}\` under agent \`${agentName}\` and attached current channel.\nModel: \`${currentKey}\``)
+        ctx.reply(`✅ Created session \`${result.sessionId}\` under agent \`${agentName}\` and attached current channel.\nModel: \`${currentKey}\`\nEffort: ${createdSession.effort || 'unset/default'}`)
       } catch (e: any) {
         ctx.reply(`❌ Session create failed: ${e.message}`)
       }
@@ -169,38 +192,31 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
         return
       }
 
-      if (subArgs.length === 0) {
-        const override = session.childModelDefault?.trim()
-          ? `\`${session.childModelDefault.trim()}\``
-          : 'follow current session model'
-        const { currentKey: currentSessionModel } = resolveModelConfig(session.model)
-        const { currentKey: effectiveSpawnModel } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session))
-        ctx.reply([
-          '🧒 *Child default model*',
-          '',
-          `- override: ${override}`,
-          `- current session model: \`${currentSessionModel}\``,
-          `- effective spawned-session model: \`${effectiveSpawnModel}\``,
-        ].join('\n'))
-        return
+      const parsed = parseEffortFlag(subArgs)
+      if (parsed.error) { ctx.reply(`❌ ${parsed.error}`); return }
+      if (parsed.remaining.length > 1) { ctx.reply('Usage: /session child-model [model|default] [--effort <level|default|unset>]'); return }
+      const patch: Record<string, any> = {}
+      if (parsed.present) patch.childEffortDefault = parsed.effort ?? null
+      const target = parsed.remaining[0]
+      if (target) {
+        if (['default', 'clear', 'unset'].includes(target.toLowerCase())) patch.childModelDefault = null
+        else {
+          const selection = resolveCommandModelSelection(target, session.model)
+          if (selection.error) { ctx.reply(selection.error); return }
+          patch.childModelDefault = selection.key
+        }
       }
-
-      const target = subArgs[0].toLowerCase()
-      if (target === 'default' || target === 'clear' || target === 'unset') {
-        const result = await sessionRuntime.updateSettings(sessionId, { childModelDefault: null })
-        const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(result.session))
-        ctx.reply(`✅ Child default model cleared. New child sessions will follow the current session model path (effective: \`${currentKey}\`).`)
-        return
-      }
-
-      const selection = resolveCommandModelSelection(subArgs[0], session.model)
-      if (selection.error) {
-        ctx.reply(selection.error)
-        return
-      }
-
-      await sessionRuntime.updateSettings(sessionId, { childModelDefault: selection.key })
-      ctx.reply(`✅ Child default model set to \`${selection.key}\`.`)
+      if (Object.keys(patch).length > 0) await sessionRuntime.updateSettings(sessionId, patch)
+      const current = await sessionRuntime.getSession(sessionId)
+      if (!current) return
+      const view = buildSessionModelEffortPresentation(current)
+      ctx.reply([
+        '🧒 *Child model / effort defaults*',
+        `- model override: ${view.childModelDefault ? `\`${view.childModelDefault}\`` : 'follow current'}`,
+        `- effective model: \`${view.effectiveChildModelKey}\``,
+        `- effort override: ${view.childEffort.raw || 'unset'}`,
+        `- effective effort: ${view.childEffort.effective}`,
+      ].join('\n'))
       return
     }
 
@@ -225,34 +241,25 @@ export async function handleSessionCommand(ctx: ChannelContext, args: string[], 
 
       const targetSessionId = subArgs[0]
 
-      if (targetSessionId === sessionId) {
-        ctx.reply('❌ Cannot delete current session. Use /session clear to clear history or /attach to switch to another session first.')
-        return
-      }
-
       try {
-        const prep = await sessionManager.prepareSessionForDestructiveAction(targetSessionId)
-        if (prep.requiresRetry) {
-          const queueNote = prep.droppedQueueItems > 0
-            ? ` Cleared ${prep.droppedQueueItems} queued item(s).`
+        const result = await deleteSessionLifecycle({ requestedSessionId: targetSessionId, sourceSessionId: sessionId })
+        if (result.status === 'busy') {
+          const queueNote = result.droppedQueueItems > 0
+            ? ` Cleared ${result.droppedQueueItems} queued item(s).`
             : ''
-          const stopNote = prep.abortedInFlight
+          const stopNote = result.abortedInFlightCount > 0
             ? ' The in-flight LLM request was aborted.'
             : ' It will stop after the current tool call completes.'
           ctx.reply(`🛑 Session \`${targetSessionId}\` is busy. Stop signal sent.${stopNote}${queueNote} Retry delete after it becomes idle.`)
           return
         }
+        if (result.status === 'deleted') {
+          ctx.reply(`✅ Session \`${result.deletedSessionIds[0]}\` deleted.`)
+        } else {
+          ctx.reply(`❌ Session \`${targetSessionId}\` not found.`)
+        }
       } catch (e: any) {
         ctx.reply(`❌ ${e.message}`)
-        return
-      }
-
-      const deleted = await sessionManager.deleteSession(targetSessionId)
-
-      if (deleted) {
-        ctx.reply(`✅ Session \`${targetSessionId}\` deleted.`)
-      } else {
-        ctx.reply(`❌ Session \`${targetSessionId}\` not found.`)
       }
       break
     }

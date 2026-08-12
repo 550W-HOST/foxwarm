@@ -103,6 +103,8 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
   const prompts: string[] = [];
   const purposes: Array<string | undefined> = [];
   const originalChat = llm.chat;
+  session.effort = 'none';
+  session.childEffortDefault = 'max';
 
   try {
     (llm as any).chat = async (
@@ -112,6 +114,8 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
       options?: { appendMessage?: (message: Message) => Promise<void> | void; purpose?: string },
     ): Promise<ChatResult> => {
       assert.equal((activeSession as any).__compactJob, true);
+      assert.equal(activeSession.effort, 'none');
+      assert.equal(activeSession.childEffortDefault, 'max');
       prompts.push(flattenPrompt(parts));
       purposes.push(options?.purpose);
 

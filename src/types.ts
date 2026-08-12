@@ -1,3 +1,5 @@
+import type { ModelEffort } from './config';
+
 // Message format types
 export interface MessagePart {
   text?: string;
@@ -320,7 +322,9 @@ export interface Session {
   currentNode?: string; // Current node ID for tool execution (default: 'master')
   cwd?: string; // Default working directory for exec/terminal-style operations on currentNode
   model?: string; // Model key for this session (default: global)
+  effort?: ModelEffort; // Explicit effort override; undefined => selected concrete leaf default
   childModelDefault?: string; // Default model override for child/new sessions spawned from this session; undefined => follow session.model
+  childEffortDefault?: ModelEffort; // Default effort override for child/new sessions; undefined => follow session.effort/model default
   verbose?: boolean; // Whether to broadcast tool call info (default: false)
   vectorIndexPosition?: number; // Track last indexed message position
   indexingState?: IndexingState; // Track ongoing indexing operation

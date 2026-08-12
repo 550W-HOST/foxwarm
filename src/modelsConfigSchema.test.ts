@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadModelsConfigFromObject, normalizeOpenAIWebSearchConfig } from './config';
+import { loadModelsConfigFromObject, MODEL_EFFORTS, normalizeOpenAIWebSearchConfig } from './config';
 
 test('legacy root models + entry model list schema still works', () => {
   const parsed = loadModelsConfigFromObject({
@@ -101,6 +101,57 @@ test('new providers root + models object list applies model overrides and merge 
       provider: true,
     },
   });
+});
+
+test('effort capabilities default, inherit, and replace at model level', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'openai/model-a',
+    providers: {
+      openai: {
+        providerType: 'openai-responses',
+        effort: { allowed: ['low', 'medium', 'high', 'xhigh'], default: 'high' },
+        models: [
+          'model-a',
+          { id: 'model-b', effort: { allowed: ['none', 'high'], default: 'none' } },
+        ],
+      },
+      defaults: {
+        providerType: 'anthropic',
+        models: ['model-c'],
+      },
+    },
+  });
+
+  assert.deepEqual(parsed.models['openai/model-a'].effort, {
+    allowed: ['low', 'medium', 'high', 'xhigh'], default: 'high',
+  });
+  assert.deepEqual(parsed.models['openai/model-b'].effort, {
+    allowed: ['none', 'high'], default: 'none',
+  });
+  assert.deepEqual(parsed.models.defaults.effort, {
+    allowed: [...MODEL_EFFORTS], default: 'high',
+  });
+});
+
+test('effort validation rejects invalid, duplicate, empty, and disallowed inherited defaults', () => {
+  const parse = (effort: any, modelEffort?: any) => loadModelsConfigFromObject({
+    default: 'provider/model',
+    providers: {
+      provider: {
+        providerType: 'openai-completions',
+        effort,
+        models: [{ id: 'model', ...(modelEffort === undefined ? {} : { effort: modelEffort }) }],
+      },
+    },
+  });
+  assert.throws(() => parse({ allowed: [] }), /non-empty array/);
+  assert.throws(() => parse({ allowed: ['high', 'high'] }), /duplicate/);
+  assert.throws(() => parse({ allowed: ['middle'] }), /must be one of/);
+  assert.throws(() => parse({ allowed: ['low'], default: 'high' }), /must be included/);
+  assert.throws(
+    () => parse({ allowed: ['low', 'high'], default: 'high' }, { allowed: ['low'] }),
+    /Model `provider\/model` effort\.default `high` must be included/,
+  );
 });
 
 test('OpenAI web search boolean/object settings normalize and merge at model level', () => {
@@ -298,6 +349,7 @@ test('virtual providers resolve strict concrete leaves with safe context and asy
   assert.deepEqual(parsed.displayModels, ['sticky', 'openai', 'anthropic', 'fallback']);
   assert.equal(parsed.models.sticky.contextLimit, 100000);
   assert.equal(parsed.models.sticky.asyncCompact, false);
+  assert.deepEqual(parsed.models.sticky.effort, { allowed: [...MODEL_EFFORTS] });
   assert.deepEqual(parsed.models.sticky.virtualRouting?.targets, ['openai/a', 'anthropic/b']);
   assert.equal(parsed.models.sticky.virtualRouting?.failureThreshold, 5);
   assert.equal(parsed.models.sticky.virtualRouting?.cooldownMs, 600000);
@@ -323,6 +375,28 @@ test('session-hash accepts one concrete target as an alias and canonicalizes sin
   });
   assert.deepEqual(parsed.models.alias.virtualRouting?.targets, ['concrete/model-a']);
   assert.equal(parsed.models.alias.asyncCompact, true);
+});
+
+test('virtual effort capabilities are the canonical union of concrete leaf sets', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'route',
+    providers: {
+      first: {
+        providerType: 'openai-responses',
+        effort: { allowed: ['none', 'low', 'high'], default: 'high' },
+        models: ['a'],
+      },
+      second: {
+        providerType: 'anthropic',
+        effort: { allowed: ['medium', 'high', 'max'], default: 'medium' },
+        models: ['b'],
+      },
+      route: { providerType: 'failover', targets: ['first/a', 'second/b'] },
+    },
+  });
+  assert.deepEqual(parsed.models.route.effort, {
+    allowed: ['none', 'low', 'medium', 'high', 'max'],
+  });
 });
 
 test('canonical targets preserve slash-containing and provider-prefixed model ids as actual expansion keys', () => {
@@ -403,6 +477,7 @@ test('route fingerprint deterministically covers resolved concrete request plans
     (() => { const value = structuredClone(raw); value.providers.leaf.contextLimit = 2000; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); value.providers.leaf.asyncCompact = false; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); (value.providers.leaf as any).webSearch = { enabled: true }; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); (value.providers.leaf as any).effort = { allowed: ['low', 'high'], default: 'low' }; return fingerprint(value); })(),
   ];
   assert.ok(changedFingerprints.every(value => value !== baseFingerprint));
 

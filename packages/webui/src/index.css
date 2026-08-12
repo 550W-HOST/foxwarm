@@ -1325,6 +1325,29 @@ html[data-foxwarm-ui-style="550a"] button:active:not(:disabled) {
   transform: translateY(1px);
 }
 
+html[data-foxwarm-ui-style="550a"] .foxwarm-model-effort-select {
+  border-color: var(--foxwarm-550a-border-panel) !important;
+  background: var(--foxwarm-550a-input) !important;
+  color: var(--foxwarm-550a-text-bright) !important;
+  font-size: 11px !important;
+  line-height: 1.2 !important;
+  letter-spacing: 0 !important;
+}
+
+.foxwarm-model-effort-select {
+  font-size: 11px !important;
+  line-height: 1.2 !important;
+  padding-inline: 0.375rem 1.25rem !important;
+}
+
+@media (max-width: 640px) {
+  .foxwarm-model-effort-select,
+  html[data-foxwarm-ui-style="550a"] .foxwarm-model-effort-select {
+    font-size: 16px !important;
+    padding-inline: 0.25rem 1rem !important;
+  }
+}
+
 html[data-foxwarm-ui-style="550a"] .foxwarm-markdown {
   font-family: var(--foxwarm-default-font) !important;
   --tw-prose-headings: var(--foxwarm-550a-text-bright);

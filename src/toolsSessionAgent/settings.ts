@@ -1,8 +1,10 @@
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
-import { resolveModelConfig } from '../config';
+import { MODEL_EFFORTS, type ModelEffort } from '../config';
 import { clearSessionGoal, normalizeGoalText, resolveSessionGoalRemindEvery, setSessionGoal } from '../session/goal';
 import { refreshSessionSnapshotForSession } from '../session/agentMetadata';
+import { applyNormalizedSessionModelEffortSettings, normalizeProspectiveSessionModelEffortSettings } from '../session/modelEffortSettings';
+import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
 import type { Session } from '../types';
 import { ToolArgs, ToolContext, normalizeToolModelKey } from './helpers';
 
@@ -117,77 +119,66 @@ export async function tool_set_session_compact_threshold(args: ToolArgs, ctx: To
   ].join('\n');
 }
 
+function normalizeToolEffort(value: unknown): ModelEffort | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') throw new Error('effort must be a canonical effort string or null.');
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || ['default', 'unset'].includes(normalized)) return null;
+  if (!MODEL_EFFORTS.includes(normalized as ModelEffort)) throw new Error(`effort must be one of: ${MODEL_EFFORTS.join(', ')}, default, or unset.`);
+  return normalized as ModelEffort;
+}
+
+function formatChildModelEffortStatus(session: Pick<Session, 'id' | 'model' | 'effort' | 'childModelDefault' | 'childEffortDefault'>): string {
+  const view = buildSessionModelEffortPresentation(session);
+  return [
+    `Session \`${session.id}\` child model/effort defaults:`,
+    `model override: ${view.childModelDefault ? `\`${view.childModelDefault}\`` : 'follow current model'}`,
+    `effective model: \`${view.effectiveChildModelKey}\``,
+    `effort override: ${view.childEffort.raw || 'unset'}`,
+    `effective effort: ${view.childEffort.effective}`,
+    `allowed: ${view.childEffort.allowed.join(', ')}`,
+  ].join('\n');
+}
+
+function formatChildMutationResult(session: Pick<Session, 'id' | 'model' | 'effort' | 'childModelDefault' | 'childEffortDefault'>, action: string): string {
+  return `${action}\n${formatChildModelEffortStatus(session)}`;
+}
+
 export async function tool_set_session_child_model(args: ToolArgs, ctx: ToolContext) {
   const targetId = args.sessionId || ctx?.sessionId;
-  if (!targetId) {
-    throw new Error('sessionId is required when there is no current session context.');
-  }
+  if (!targetId) throw new Error('sessionId is required when there is no current session context.');
+  const suppliedModel = Object.prototype.hasOwnProperty.call(args, 'model');
+  if (args.clear === true && suppliedModel) throw new Error('clear=true cannot be combined with model.');
+  const hasModel = args.clear === true || suppliedModel;
+  const hasEffort = Object.prototype.hasOwnProperty.call(args, 'effort');
+  const patch: Record<string, any> = {};
+  if (hasModel) patch.childModelDefault = args.clear === true ? null : (normalizeToolModelKey(args.model) || null);
+  if (hasEffort) patch.childEffortDefault = normalizeToolEffort(args.effort);
+
   const currentSession = getTrustedCurrentSession(targetId, ctx);
-
-  const clear = args.clear === true;
   if (currentSession) {
-    if (clear) {
-      const prior = typeof currentSession.childModelDefault === 'string' && currentSession.childModelDefault.trim()
-        ? currentSession.childModelDefault.trim()
-        : null;
-      delete currentSession.childModelDefault;
-      if (prior !== null) await ctx.persistCurrentSession!();
-      const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(currentSession));
-      return `Session \`${currentSession.id}\` child default model cleared.\nNow inheriting the current session model path (effective spawn model: \`${currentKey}\`).`;
-    }
-    const normalizedModel = normalizeToolModelKey(args.model);
-    if (!normalizedModel) {
-      const override = typeof currentSession.childModelDefault === 'string' && currentSession.childModelDefault.trim()
-        ? `\`${currentSession.childModelDefault.trim()}\``
-        : 'inherit current session model';
-      const { currentKey: currentSessionModel } = resolveModelConfig(currentSession.model);
-      const { currentKey: effectiveSpawnModel } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(currentSession));
-      return `Session \`${currentSession.id}\` child default model status:\noverride: ${override}\ncurrent session model: \`${currentSessionModel}\`\neffective spawned-session model: \`${effectiveSpawnModel}\``;
-    }
-    const prior = typeof currentSession.childModelDefault === 'string' && currentSession.childModelDefault.trim()
-      ? currentSession.childModelDefault.trim()
-      : null;
-    currentSession.childModelDefault = normalizedModel;
-    if (prior !== normalizedModel) await ctx.persistCurrentSession!();
-    const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(currentSession));
-    return `Session \`${currentSession.id}\` child default model updated.\noverride: \`${normalizedModel}\`\neffective spawned-session model: \`${currentKey}\``;
-  }
-  if (clear) {
-    const result = await sessionRuntime.updateSettings(targetId, { childModelDefault: null });
-    const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(result.session));
-    return [
-      `Session \`${result.session.id}\` child default model cleared.`,
-      `Now inheriting the current session model path (effective spawn model: \`${currentKey}\`).`,
-    ].join('\n');
+    if (Object.keys(patch).length === 0) return formatChildModelEffortStatus(currentSession);
+    const changed = applyNormalizedSessionModelEffortSettings(
+      currentSession,
+      normalizeProspectiveSessionModelEffortSettings(currentSession, patch),
+    );
+    if (changed.length > 0) await ctx.persistCurrentSession!();
+    const action = args.clear === true && !hasEffort
+      ? 'Child default model cleared.'
+      : hasModel && !hasEffort ? 'Child default model updated.' : 'Child model/effort defaults updated.';
+    return formatChildMutationResult(currentSession, action);
   }
 
-  const normalizedModel = normalizeToolModelKey(args.model);
-  if (!normalizedModel) {
+  if (Object.keys(patch).length === 0) {
     const session = await sessionRuntime.getSession(targetId);
-    if (!session) {
-      throw new Error(`Session \`${targetId}\` not found.`);
-    }
-
-    const override = typeof session.childModelDefault === 'string' && session.childModelDefault.trim()
-      ? `\`${session.childModelDefault.trim()}\``
-      : 'inherit current session model';
-    const { currentKey: currentSessionModel } = resolveModelConfig(session.model);
-    const { currentKey: effectiveSpawnModel } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(session));
-    return [
-      `Session \`${session.id}\` child default model status:`,
-      `override: ${override}`,
-      `current session model: \`${currentSessionModel}\``,
-      `effective spawned-session model: \`${effectiveSpawnModel}\``,
-    ].join('\n');
+    if (!session) throw new Error(`Session \`${targetId}\` not found.`);
+    return formatChildModelEffortStatus(session);
   }
-
-  const result = await sessionRuntime.updateSettings(targetId, { childModelDefault: normalizedModel });
-  const { currentKey } = resolveModelConfig(sessionManager.resolveSpawnedSessionModel(result.session));
-  return [
-    `Session \`${result.session.id}\` child default model updated.`,
-    `override: \`${normalizedModel}\``,
-    `effective spawned-session model: \`${currentKey}\``,
-  ].join('\n');
+  const result = await sessionRuntime.updateSettings(targetId, patch);
+  const action = args.clear === true && !hasEffort
+    ? 'Child default model cleared.'
+    : hasModel && !hasEffort ? 'Child default model updated.' : 'Child model/effort defaults updated.';
+  return formatChildMutationResult(result.session, action);
 }
 
 export async function tool_update_session_snapshot(args: ToolArgs, ctx: ToolContext) {

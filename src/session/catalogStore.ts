@@ -2,7 +2,7 @@ import { backup, DatabaseSync } from 'node:sqlite';
 import fs from 'fs-extra';
 import path from 'path';
 import { randomUUID } from 'node:crypto';
-import { CATALOG_DB_PATH, SESSIONS_DIR, SESSIONS_FILE, STATE_DIR } from '../config';
+import { CATALOG_DB_PATH, SESSIONS_DIR, SESSIONS_FILE, STATE_DIR, MODEL_EFFORTS, type ModelEffort } from '../config';
 import { CURRENT_SESSION_STATE_VERSION, normalizeAndValidateSessionAuthorityPayload } from './stateValidation';
 import { isQueueItem } from '../types';
 import { getEffectiveSessionQueueLength } from '../sessionRuntimeState';
@@ -125,8 +125,13 @@ export function buildSessionCatalogProjection(value: unknown): Record<string, an
     && (!Array.isArray(metadata.aliases) || metadata.aliases.some((alias: unknown) => typeof alias !== 'string' || !alias))) {
     throw new Error(`Session "${sessionId}" has invalid aliases.`);
   }
-  for (const [field, raw] of [['agent', metadata.agent], ['parentSessionId', metadata.parentSessionId], ['displayName', metadata.displayName], ['currentNode', metadata.currentNode], ['cwd', metadata.cwd], ['model', metadata.model], ['childModelDefault', metadata.childModelDefault]] as const) {
+  for (const [field, raw] of [['agent', metadata.agent], ['parentSessionId', metadata.parentSessionId], ['displayName', metadata.displayName], ['currentNode', metadata.currentNode], ['cwd', metadata.cwd], ['model', metadata.model], ['effort', metadata.effort], ['childModelDefault', metadata.childModelDefault], ['childEffortDefault', metadata.childEffortDefault]] as const) {
     sqliteString(raw, field, sessionId);
+  }
+  for (const field of ['effort', 'childEffortDefault'] as const) {
+    if (metadata[field] !== undefined && !MODEL_EFFORTS.includes(metadata[field] as ModelEffort)) {
+      throw new Error(`Session "${sessionId}" has invalid ${field}.`);
+    }
   }
   for (const [field, raw] of [['archived', metadata.archived], ['pinned', metadata.pinned], ['busy', metadata.busy], ['stopping', metadata.stopping], ['verbose', metadata.verbose]] as const) {
     sqliteBoolean(raw, field, sessionId);
@@ -192,7 +197,7 @@ export function buildSessionCatalogProjection(value: unknown): Record<string, an
     currentNode: metadata.currentNode || 'master',
     ...(Object.keys(meta).length ? { meta } : {}),
   };
-  for (const field of ['parentSessionId', 'displayName', 'cwd', 'model', 'childModelDefault', 'vectorIndexPosition'] as const) {
+  for (const field of ['parentSessionId', 'displayName', 'cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault', 'vectorIndexPosition'] as const) {
     if (metadata[field] !== undefined) projection[field] = structuredClone(metadata[field]);
   }
   if (metadata.stats !== undefined) {
@@ -477,7 +482,7 @@ function buildLegacyAuthorityUpgrade(
   if (upgrade.sessionStateVersion !== undefined) return upgrade;
   const transferFields = [
     'history', 'persistentMemorySnapshot', 'queue', 'parentSessionId', 'promptCacheKey', 'systemPromptFiles',
-    'indexingState', 'busy', 'busyStartedAt', 'stopping', 'currentNode', 'cwd', 'model', 'childModelDefault',
+    'indexingState', 'busy', 'busyStartedAt', 'stopping', 'currentNode', 'cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault',
     'agent', 'verbose', 'aliases', 'historyVersion', 'nextMessageSeq', 'nextBlockId', 'contextFrontier',
     'goalState', 'compactThresholdTokens', 'lastAppliedMailboxId',
   ] as const;

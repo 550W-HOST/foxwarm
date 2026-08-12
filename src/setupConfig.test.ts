@@ -231,6 +231,7 @@ test('structured setup conversion between concrete and virtual removes incompati
         baseUrl: 'https://old.test/v1',
         apiKey: 'old-secret',
         contextLimit: 1234,
+        effort: { allowed: ['low', 'high'], default: 'high' },
         asyncCompact: false,
         models: ['old-model'],
         extraFields: { old: true },

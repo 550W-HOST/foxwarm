@@ -195,6 +195,10 @@ schema migrations and the same narrow admission test.
 The Session `metadata_json` projection is an explicit allowlist, not a filtered
 copy of a legacy row. Queue/managed-inbox/history/frontier/prompt/cache/mailbox,
 goal, prompt-file, indexing, deferred-wait, and message bodies are prohibited.
+Optional raw `effort` and `childEffortDefault` values are admitted only as
+bounded semantic presentation projections alongside `model` and
+`childModelDefault`; they add no SQL columns or schema-version change and never
+become a second settings authority.
 A bounded wait presentation may contain only wait ID/start/reason/timeout,
 requested/satisfied wait-all Session IDs, and advisory exec IDs. Legacy-only
 semantic values must move durably into unversioned per-session authority before

@@ -16,10 +16,12 @@ import { MessageRouter } from '../messageRouter';
 import { logger } from '../common';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
+import { deleteSessionLifecycle } from '../sessionDeletion';
 import type { SessionRuntimeSessionDto } from '../sessionRuntime';
 import { buildSessionRuntimeSessionDto } from '../sessionRuntimeService';
 import { sessionCatalogStore } from '../session/catalogStore';
-import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, getActiveModelsConfigPath, readAppConfigFile, resolveModelConfig } from '../config';
+import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, getActiveModelsConfigPath, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort } from '../config';
+import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
 import { listChannelRuntimeStatuses, reloadManagedChannels } from '../channelRuntime';
@@ -427,18 +429,22 @@ function getWeixinSetupConfig(body: any = {}) {
   };
 }
 
-function buildWebUiModelStatus(session: { model?: string | null; childModelDefault?: string | null }) {
-  const { defaultKey, currentKey } = resolveModelConfig(session.model || undefined);
-  const effectiveSpawnModel = typeof session.childModelDefault === 'string' && session.childModelDefault.trim()
-    ? session.childModelDefault.trim()
-    : (typeof session.model === 'string' && session.model.trim() ? session.model.trim() : undefined);
-  const { currentKey: effectiveChildModelKey } = resolveModelConfig(effectiveSpawnModel);
+function buildWebUiModelStatus(session: Pick<Session, 'model' | 'effort' | 'childModelDefault' | 'childEffortDefault'>) {
+  const presentation = buildSessionModelEffortPresentation(session);
   return {
-    model: typeof session.model === 'string' && session.model.trim() ? session.model.trim() : null,
-    modelKey: currentKey,
-    defaultModelKey: defaultKey,
-    childModelDefault: typeof session.childModelDefault === 'string' && session.childModelDefault.trim() ? session.childModelDefault.trim() : null,
-    effectiveChildModelKey,
+    model: presentation.model,
+    modelKey: presentation.modelKey,
+    defaultModelKey: presentation.defaultModelKey,
+    effort: presentation.effort.raw,
+    effectiveEffort: presentation.effort.effective,
+    effortAllowed: presentation.effort.allowed,
+    effortDefault: presentation.effort.defaultEffort,
+    childModelDefault: presentation.childModelDefault,
+    effectiveChildModelKey: presentation.effectiveChildModelKey,
+    childEffortDefault: presentation.childEffort.raw,
+    effectiveChildEffort: presentation.childEffort.effective,
+    childEffortAllowed: presentation.childEffort.allowed,
+    childModelEffortDefault: presentation.childEffort.defaultEffort,
   };
 }
 
@@ -494,7 +500,7 @@ function sendSessionListQueryError(res: express.Response, error: any, logMessage
   res.status(status).json({ error: error?.message || logMessage, ...(code ? { code } : {}) });
 }
 
-function buildWebUiModelsPayload(currentModel?: string) {
+export function buildWebUiModelsPayload(currentModel?: string) {
   const { modelsConfig, defaultKey, currentKey } = resolveModelConfig(currentModel);
   const displayModels = modelsConfig.displayModels || Object.keys(modelsConfig.models || {});
   return {
@@ -510,9 +516,22 @@ function buildWebUiModelsPayload(currentModel?: string) {
         providerType: entry?.providerType || null,
         isVirtual: !!entry?.virtualRouting,
         targets: entry?.virtualRouting?.targets || [],
+        allowedEfforts: [...(entry?.effort?.allowed || MODEL_EFFORTS)],
+        defaultEffort: entry?.virtualRouting ? null : (entry?.effort?.default || 'high'),
       };
     }),
   };
+}
+
+function normalizeWebUiEffortSelection(value: unknown): ModelEffort | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== 'string') throw new Error('effort must be a canonical effort string or null.');
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || ['default', 'unset'].includes(normalized)) return undefined;
+  if (!MODEL_EFFORTS.includes(normalized as ModelEffort)) {
+    throw new Error(`effort must be one of: ${MODEL_EFFORTS.join(', ')}, default, unset, or null.`);
+  }
+  return normalized as ModelEffort;
 }
 
 function normalizeWebUiModelSelection(value: unknown): string | undefined {
@@ -670,10 +689,6 @@ let webUiDeleteLifecycleTestHook: WebUiDeleteLifecycleTestHook | null = null;
 
 export function setWebUiDeleteLifecycleTestHookForTests(hook: WebUiDeleteLifecycleTestHook | null): void {
   webUiDeleteLifecycleTestHook = hook;
-}
-
-function haveSameSessionIds(actual: string[], expected: string[]): boolean {
-  return actual.length === expected.length && actual.every((sessionId, index) => sessionId === expected[index]);
 }
 
 export class WebUIChannel implements Channel {
@@ -1435,8 +1450,13 @@ export class WebUIChannel implements Channel {
               return res.status(404).json({ error: 'Session not found' });
             }
 
-            const model = req.body?.clear === true ? undefined : normalizeWebUiModelSelection(req.body?.model);
-            const updated = await sessionRuntime.updateSettings(session.id, { model: model || null });
+            const body = req.body || {};
+            const patch: Record<string, any> = {};
+            if (body.clear === true && !Object.prototype.hasOwnProperty.call(body, 'model')) patch.model = null;
+            if (Object.prototype.hasOwnProperty.call(body, 'model')) patch.model = normalizeWebUiModelSelection(body.model) || null;
+            if (Object.prototype.hasOwnProperty.call(body, 'effort')) patch.effort = normalizeWebUiEffortSelection(body.effort) || null;
+            if (Object.keys(patch).length === 0) throw new Error('model and/or effort is required.');
+            const updated = await sessionRuntime.updateSettings(session.id, patch);
             this.broadcastSessionListUpdate();
             res.json({ success: true, sessionId: session.id, ...buildWebUiModelStatus(updated.session) });
           } catch (e: any) {
@@ -1457,8 +1477,15 @@ export class WebUIChannel implements Channel {
               return res.status(404).json({ error: 'Session not found' });
             }
 
-            const model = req.body?.clear === true ? undefined : normalizeWebUiModelSelection(req.body?.model);
-            const result = await sessionRuntime.updateSettings(session.id, { childModelDefault: model || null });
+            const body = req.body || {};
+            const patch: Record<string, any> = {};
+            if (body.clear === true && !Object.prototype.hasOwnProperty.call(body, 'childModelDefault') && !Object.prototype.hasOwnProperty.call(body, 'model')) patch.childModelDefault = null;
+            if (Object.prototype.hasOwnProperty.call(body, 'childModelDefault')) patch.childModelDefault = normalizeWebUiModelSelection(body.childModelDefault) || null;
+            else if (Object.prototype.hasOwnProperty.call(body, 'model')) patch.childModelDefault = normalizeWebUiModelSelection(body.model) || null;
+            if (Object.prototype.hasOwnProperty.call(body, 'childEffortDefault')) patch.childEffortDefault = normalizeWebUiEffortSelection(body.childEffortDefault) || null;
+            else if (Object.prototype.hasOwnProperty.call(body, 'effort')) patch.childEffortDefault = normalizeWebUiEffortSelection(body.effort) || null;
+            if (Object.keys(patch).length === 0) throw new Error('childModelDefault and/or childEffortDefault is required.');
+            const result = await sessionRuntime.updateSettings(session.id, patch);
             this.broadcastSessionListUpdate();
             res.json({ success: true, sessionId: result.session.id, ...buildWebUiModelStatus(result.session) });
           } catch (e: any) {
@@ -2211,169 +2238,32 @@ export class WebUIChannel implements Channel {
         handler: async (req: express.Request, res: express.Response) => {
           const requestedSessionId = req.params.sessionId as string;
           const includeDescendants = req.body?.includeDescendants === true;
-          let deleteClaimId: string | undefined;
           try {
-            const rootSession = sessionManager.getSessionCatalog(requestedSessionId);
-            if (!rootSession) return res.status(404).json({ error: 'Session not found' });
-
-            const relationTree = includeDescendants
-              ? sessionManager.collectSessionDescendants(rootSession.id)
-              : undefined;
-            const directChildSessionIds = relationTree?.directChildIds
-              || sessionManager.getCanonicalChildSessionIds(rootSession.id);
-            const targetSessionIds = relationTree
-              ? [rootSession.id, ...relationTree.descendantIds]
-              : [rootSession.id];
-            const postOrderSessionIds = relationTree?.postOrderIds || [rootSession.id];
-            const claimSessionIds = includeDescendants
-              ? targetSessionIds
-              : [rootSession.id, ...directChildSessionIds];
-            deleteClaimId = (await sessionManager.claimSessionsForDestructiveLifecycle(claimSessionIds)).claimId;
-
-            const channelBlockers = targetSessionIds.flatMap(sessionId => sessionManager
-              .getChannelsBySession(sessionId)
-              .filter(channel => channel.channelId !== 'webui')
-              .map(channel => ({ sessionId, ...channel })));
-
-            if (channelBlockers.length > 0) {
-              return res.status(409).json({
-                error: 'Cannot delete session tree while one or more sessions have non-WebUI channels attached. Detach those channels and retry.',
-                code: 'SESSION_DELETE_CHANNEL_BLOCKED',
-                includeDescendants,
-                blockingSessionIds: [...new Set(channelBlockers.map(blocker => blocker.sessionId))],
-                blockingChannels: channelBlockers,
-              });
-            }
-
-            const prepResults = [];
-            for (const sessionId of targetSessionIds) {
-              prepResults.push(await sessionManager.prepareSessionForDestructiveAction(sessionId));
-            }
-            const busySessionIds = prepResults
-              .filter(result => result.requiresRetry)
-              .map(result => result.session.id);
-            if (busySessionIds.length > 0) {
-              const droppedQueueItems = prepResults.reduce((sum, result) => sum + result.droppedQueueItems, 0);
-              const abortedInFlightCount = prepResults.filter(result => result.abortedInFlight).length;
-              const queueNote = droppedQueueItems > 0
-                ? ` Cleared ${droppedQueueItems} queued item(s).`
-                : '';
-              const stopNote = abortedInFlightCount > 0
-                ? ` Aborted ${abortedInFlightCount} in-flight LLM request(s); other running tools will stop after their current call.`
-                : ' Running tools will stop after their current call.';
-              return res.status(409).json({
-                error: `Session tree contains busy sessions. Stop signals sent.${stopNote}${queueNote} Retry delete after every listed session becomes idle.`,
-                code: 'SESSION_DELETE_BUSY',
-                includeDescendants,
-                busySessionIds,
-                droppedQueueItems,
-                abortedInFlightCount,
-              });
-            }
-
-            await webUiDeleteLifecycleTestHook?.({
-              rootSessionId: rootSession.id,
+            const result = await deleteSessionLifecycle({
+              requestedSessionId,
               includeDescendants,
-              targetSessionIds: [...targetSessionIds],
+              ...(webUiDeleteLifecycleTestHook ? { beforeRevalidateForTests: webUiDeleteLifecycleTestHook } : {}),
             });
-
-            const currentRootSession = sessionManager.getSessionCatalog(rootSession.id);
-            if (!currentRootSession) {
+            if (result.status === 'not-found') {
+              return res.status(404).json({ error: 'Session not found' });
+            }
+            if (result.status === 'busy') {
               return res.status(409).json({
-                error: 'The session tree changed while preparing deletion. Retry the delete request.',
-                code: 'SESSION_DELETE_TREE_CHANGED',
-                includeDescendants,
+                error: result.message,
+                code: 'SESSION_DELETE_BUSY',
+                includeDescendants: result.includeDescendants,
+                busySessionIds: result.busySessionIds,
+                droppedQueueItems: result.droppedQueueItems,
+                abortedInFlightCount: result.abortedInFlightCount,
               });
             }
-            const currentRelationTree = includeDescendants
-              ? sessionManager.collectSessionDescendants(currentRootSession.id)
-              : undefined;
-            const currentDirectChildSessionIds = currentRelationTree?.directChildIds
-              || sessionManager.getCanonicalChildSessionIds(currentRootSession.id);
-            const currentTargetSessionIds = currentRelationTree
-              ? [currentRootSession.id, ...currentRelationTree.descendantIds]
-              : [currentRootSession.id];
-            const currentPostOrderSessionIds = currentRelationTree?.postOrderIds || [currentRootSession.id];
-            if (!haveSameSessionIds(currentTargetSessionIds, targetSessionIds)
-              || !haveSameSessionIds(currentPostOrderSessionIds, postOrderSessionIds)
-              || !haveSameSessionIds(currentDirectChildSessionIds, directChildSessionIds)) {
-              return res.status(409).json({
-                error: 'The canonical session tree changed while preparing deletion. Retry the delete request.',
-                code: 'SESSION_DELETE_TREE_CHANGED',
-                includeDescendants,
-                expectedSessionIds: targetSessionIds,
-                currentSessionIds: currentTargetSessionIds,
-              });
-            }
-
-            const revalidatedChannelBlockers = targetSessionIds.flatMap(sessionId => sessionManager
-              .getChannelsBySession(sessionId)
-              .filter(channel => channel.channelId !== 'webui')
-              .map(channel => ({ sessionId, ...channel })));
-            // Placement-neutral revalidation: worker-fenced stubs only mirror
-            // busy/queue at handback, so check the projection-overlaid DTOs.
-            const runtimeById = new Map((await sessionRuntime.listSessions()).map(session => [session.id, session]));
-            const revalidatedBusySessionIds = targetSessionIds.filter(sessionId => runtimeById.get(sessionId)?.busy);
-            const revalidatedQueuedSessionIds = targetSessionIds.filter(sessionId => (runtimeById.get(sessionId)?.queueLength || 0) > 0);
-            if (revalidatedChannelBlockers.length > 0 || revalidatedBusySessionIds.length > 0 || revalidatedQueuedSessionIds.length > 0) {
-              return res.status(409).json({
-                error: 'The session tree became active or channel-blocked while preparing deletion. Retry the delete request.',
-                code: 'SESSION_DELETE_STATE_CHANGED',
-                includeDescendants,
-                blockingSessionIds: [...new Set(revalidatedChannelBlockers.map(blocker => blocker.sessionId))],
-                blockingChannels: revalidatedChannelBlockers,
-                busySessionIds: revalidatedBusySessionIds,
-                queuedSessionIds: revalidatedQueuedSessionIds,
-              });
-            }
-
-            const detachedChildSessionIds: string[] = [];
-            if (!includeDescendants) {
-              for (const childSessionId of directChildSessionIds) {
-                if (!sessionManager.getAllSessions().has(childSessionId)) continue;
-                try {
-                  await sessionManager.setSessionParent(childSessionId, undefined, deleteClaimId);
-                  detachedChildSessionIds.push(childSessionId);
-                } catch (error: any) {
-                  this.broadcastSessionListUpdate();
-                  return res.status(500).json({
-                    error: `Session "${rootSession.id}" was not deleted because surviving child "${childSessionId}" could not be detached: ${error?.message || error}`,
-                    code: 'SESSION_DELETE_DETACH_PARTIAL',
-                    includeDescendants,
-                    deletedSessionIds: [],
-                    failedDetachChildSessionId: childSessionId,
-                    detachedChildSessionIds,
-                  });
-                }
-              }
-            }
-
-            const deletedSessionIds: string[] = [];
-            for (const sessionId of postOrderSessionIds) {
-              try {
-                const deleted = await sessionManager.deleteSession(sessionId, deleteClaimId);
-                if (!deleted) throw new Error(`Session "${sessionId}" disappeared before deletion.`);
-                deletedSessionIds.push(sessionId);
-              } catch (error: any) {
-                this.broadcastSessionListUpdate();
-                return res.status(500).json({
-                  error: `Session tree deletion stopped after an unexpected failure at "${sessionId}": ${error?.message || error}`,
-                  code: 'SESSION_TREE_DELETE_PARTIAL',
-                  includeDescendants,
-                  failedSessionId: sessionId,
-                  deletedSessionIds,
-                  remainingSessionIds: postOrderSessionIds.filter(id => sessionManager.getAllSessions().has(id)),
-                });
-              }
-            }
-
             this.broadcastSessionListUpdate();
             res.json({
               success: true,
-              includeDescendants,
-              deletedCount: deletedSessionIds.length,
-              deletedSessionIds,
-              detachedChildSessionIds,
+              includeDescendants: result.includeDescendants,
+              deletedCount: result.deletedCount,
+              deletedSessionIds: result.deletedSessionIds,
+              detachedChildSessionIds: result.detachedChildSessionIds,
             });
           } catch (e: any) {
             logger.error({ err: e, requestedSessionId, includeDescendants }, 'Failed to delete session');
@@ -2381,9 +2271,10 @@ export class WebUIChannel implements Channel {
             const status = typeof e?.statusCode === 'number'
               ? e.statusCode
               : code === 'SESSION_RELATION_CYCLE' ? 409 : 500;
-            res.status(status).json({ error: e.message, code });
-          } finally {
-            if (deleteClaimId) sessionManager.releaseSessionsForDestructiveLifecycle(deleteClaimId);
+            if (code === 'SESSION_DELETE_DETACH_PARTIAL' || code === 'SESSION_TREE_DELETE_PARTIAL') {
+              this.broadcastSessionListUpdate();
+            }
+            res.status(status).json({ error: e.message, code, ...(e?.details || {}) });
           }
         },
       });

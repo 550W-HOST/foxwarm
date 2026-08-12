@@ -143,6 +143,35 @@ function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+test('chat forwards the raw Session effort override without materializing a configured default', async () => {
+  const originalPost = axios.post;
+  let capturedBody: any;
+  (axios as any).post = async (_url: string, body: any) => {
+    capturedBody = body;
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream('effort ok') };
+  };
+  const session = createOpenAITestSession(makeId('chat_effort'));
+  session.effort = 'none';
+  try {
+    await chat([{ text: 'hello' }], session, 0, {
+      appendMessage: async message => { session.history.push(message); },
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+    assert.equal(capturedBody.reasoning_effort, 'none');
+    delete session.effort;
+    await chat([{ text: 'default' }], session, 1, {
+      appendMessage: async message => { session.history.push(message); },
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+    assert.equal(capturedBody.reasoning_effort, 'high');
+    assert.equal(Object.prototype.hasOwnProperty.call(session, 'effort'), false);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('sanitizeProviderRequestPayload replaces lone surrogates in nested provider payloads', () => {
   const payload = {
     input: [
@@ -218,6 +247,147 @@ test('requestLlmOnce can make a direct provider-specific request without a sessi
       outputTokens: 3,
       cachedTokens: 1,
     });
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('first-class effort defaults high and maps every canonical level across provider protocols', async () => {
+  const originalPost = axios.post;
+  const captured: Array<{ url: string; body: any }> = [];
+  (axios as any).post = async (url: string, body: any) => {
+    captured.push({ url, body });
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: url.endsWith('/responses') ? makeResponsesStream()
+        : url.endsWith('/chat/completions') ? makeChatCompletionStream()
+          : { content: [{ type: 'text', text: 'ok' }] },
+    };
+  };
+
+  const efforts = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+  const entry = (providerType: string) => ({
+    providerKey: 'fixture', providerType, baseUrl: 'https://fixture.example/v1', model: 'model',
+    effort: { allowed: [...efforts], default: 'high' }, extraFields: {}, extraHeaders: {},
+  }) as any;
+  const request = async (providerType: string, effort?: typeof efforts[number]) => requestLlmOnce({
+    contents: [{ role: 'user', parts: [{ text: 'effort test' }] }],
+    systemPrompt: '', modelEntryOverride: entry(providerType), effort,
+    toolDefinitions: [], notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+  });
+
+  try {
+    await request('openai-responses');
+    assert.equal(captured.at(-1)?.body.reasoning.effort, 'high');
+    for (const effort of efforts) {
+      await request('openai-responses', effort);
+      const body = captured.at(-1)?.body;
+      assert.equal(body.reasoning.effort, effort);
+      if (effort === 'none') {
+        assert.equal(body.reasoning.summary, undefined);
+        assert.equal(body.include, undefined);
+      } else {
+        assert.equal(body.reasoning.summary, 'auto');
+        assert.deepEqual(body.include, ['reasoning.encrypted_content']);
+      }
+    }
+
+    for (const effort of efforts) {
+      await request('openai-completions', effort);
+      assert.equal(captured.at(-1)?.body.reasoning_effort, effort);
+    }
+
+    for (const effort of efforts) {
+      await request('anthropic', effort);
+      const body = captured.at(-1)?.body;
+      assert.equal(JSON.stringify(body).includes('budget_tokens'), false);
+      if (effort === 'none') {
+        assert.deepEqual(body.thinking, { type: 'disabled' });
+        assert.equal(body.output_config?.effort, undefined);
+      } else {
+        assert.equal(body.output_config.effort, effort);
+        assert.equal(body.thinking, undefined);
+      }
+    }
+
+    await request('custom-anthropic-compatible', 'medium');
+    assert.equal(captured.at(-1)?.body.output_config.effort, 'medium');
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('first-class effort overrides known extraFields paths last without mutating config objects', async () => {
+  const originalPost = axios.post;
+  const captured: any[] = [];
+  (axios as any).post = async (url: string, body: any) => {
+    captured.push(body);
+    return {
+      status: 200, statusText: 'OK', headers: {},
+      data: url.endsWith('/responses') ? makeResponsesStream()
+        : url.endsWith('/chat/completions') ? makeChatCompletionStream()
+          : { content: [{ type: 'text', text: 'ok' }] },
+    };
+  };
+  const allEfforts = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
+  const request = async (modelEntryOverride: any, effort: any) => requestLlmOnce({
+    contents: [{ role: 'user', parts: [{ text: 'precedence' }] }], systemPrompt: '',
+    modelEntryOverride, effort, toolDefinitions: [], notifySessionEvents: false,
+    registerAbortController: false, maxRetries: 1,
+  });
+
+  const responses = {
+    providerKey: 'fixture', providerType: 'openai-responses', baseUrl: 'https://fixture.example/v1', model: 'responses',
+    effort: { allowed: allEfforts, default: 'high' },
+    extraFields: {
+      reasoning: { effort: 'low', summary: 'detailed', custom: true },
+      include: ['custom.output', 'reasoning.encrypted_content'],
+      custom_top: 1,
+    },
+    extraHeaders: {},
+  };
+  const chat = {
+    providerKey: 'fixture', providerType: 'openai-completions', baseUrl: 'https://fixture.example/v1', model: 'chat',
+    effort: { allowed: allEfforts, default: 'high' },
+    extraFields: { reasoning_effort: 'low', custom_top: 2 }, extraHeaders: {},
+  };
+  const anthropic = {
+    providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', model: 'claude',
+    effort: { allowed: allEfforts, default: 'high' },
+    extraFields: {
+      thinking: { type: 'enabled', budget_tokens: 777 },
+      output_config: { effort: 'low', custom: true },
+      custom_top: 3,
+    },
+    extraHeaders: {},
+  };
+  const before = structuredClone({ responses, chat, anthropic });
+
+  try {
+    await request(responses, 'max');
+    assert.deepEqual(captured.at(-1)?.reasoning, { effort: 'max', summary: 'detailed', custom: true });
+    assert.deepEqual(captured.at(-1)?.include, ['custom.output', 'reasoning.encrypted_content']);
+    assert.equal(captured.at(-1)?.custom_top, 1);
+
+    await request(responses, 'none');
+    assert.deepEqual(captured.at(-1)?.reasoning, { effort: 'none', custom: true });
+    assert.deepEqual(captured.at(-1)?.include, ['custom.output']);
+    assert.equal(captured.at(-1)?.custom_top, 1);
+
+    await request(chat, 'xhigh');
+    assert.equal(captured.at(-1)?.reasoning_effort, 'xhigh');
+    assert.equal(captured.at(-1)?.custom_top, 2);
+
+    await request(anthropic, 'max');
+    assert.deepEqual(captured.at(-1)?.output_config, { effort: 'max', custom: true });
+    assert.deepEqual(captured.at(-1)?.thinking, { type: 'enabled', budget_tokens: 777 });
+
+    await request(anthropic, 'none');
+    assert.deepEqual(captured.at(-1)?.thinking, { type: 'disabled' });
+    assert.deepEqual(captured.at(-1)?.output_config, { custom: true });
+    assert.deepEqual({ responses, chat, anthropic }, before);
   } finally {
     (axios as any).post = originalPost;
   }

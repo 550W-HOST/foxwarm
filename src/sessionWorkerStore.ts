@@ -222,10 +222,31 @@ export class SessionWorkerStore {
   countPendingIntents(sessionId: string): number {
     sessionId = this.sessionId(sessionId);
     const cursor = this.getOwnership(sessionId).mailboxCursor;
+    return this.countPendingIntentsAfter(sessionId, cursor);
+  }
+
+  countPendingIntentsAfter(sessionId: string, afterId: number): number {
+    sessionId = this.sessionId(sessionId);
+    const cursor = Math.max(0, Math.floor(afterId));
     return Number((this.getDb().prepare(`
       SELECT COUNT(*) AS count FROM session_worker_mailbox
       WHERE session_id=? AND id>? AND applied_at IS NULL
     `).get(sessionId, cursor) as any).count);
+  }
+
+  countMailboxIntentsAfter(sessionId: string, afterId: number): number {
+    sessionId = this.sessionId(sessionId);
+    const cursor = Math.max(0, Math.floor(afterId));
+    return Number((this.getDb().prepare(`
+      SELECT COUNT(*) AS count FROM session_worker_mailbox WHERE session_id=? AND id>?
+    `).get(sessionId, cursor) as any).count);
+  }
+
+  latestMailboxIntentId(sessionId: string): number {
+    sessionId = this.sessionId(sessionId);
+    return Number((this.getDb().prepare(`
+      SELECT COALESCE(MAX(id), 0) AS id FROM session_worker_mailbox WHERE session_id=?
+    `).get(sessionId) as any).id);
   }
 
   listSessionsWithPendingIntents(): string[] {
@@ -239,13 +260,30 @@ export class SessionWorkerStore {
     return rows.map(row => row.sessionId);
   }
 
-  listPendingIntents(sessionId: string, afterId?: number, limit = 256): SessionWorkerMailboxIntent[] {
+  listPendingIntents(sessionId: string, afterId?: number, limit = 256, upToId?: number): SessionWorkerMailboxIntent[] {
     sessionId = this.sessionId(sessionId);
     const cursor = afterId === undefined ? this.getOwnership(sessionId).mailboxCursor : Math.max(0, Math.floor(afterId));
-    return (this.getDb().prepare(`
+    const boundedLimit = Math.max(1, Math.min(4096, Math.floor(limit)));
+    const rows = upToId === undefined
+      ? this.getDb().prepare(`
       SELECT * FROM session_worker_mailbox
       WHERE session_id=? AND id>? AND applied_at IS NULL ORDER BY id LIMIT ?
-    `).all(sessionId, cursor, Math.max(1, Math.min(4096, Math.floor(limit)))) as any[]).map(row => this.toIntent(row));
+    `).all(sessionId, cursor, boundedLimit)
+      : this.getDb().prepare(`
+      SELECT * FROM session_worker_mailbox
+      WHERE session_id=? AND id>? AND id<=? AND applied_at IS NULL ORDER BY id LIMIT ?
+    `).all(sessionId, cursor, Math.max(0, Math.floor(upToId)), boundedLimit);
+    return (rows as any[]).map(row => this.toIntent(row));
+  }
+
+  listMailboxIntentsAfter(sessionId: string, afterId: number, limit = 256): SessionWorkerMailboxIntent[] {
+    sessionId = this.sessionId(sessionId);
+    const cursor = Math.max(0, Math.floor(afterId));
+    const boundedLimit = Math.max(1, Math.min(4096, Math.floor(limit)));
+    return (this.getDb().prepare(`
+      SELECT * FROM session_worker_mailbox
+      WHERE session_id=? AND id>? ORDER BY id LIMIT ?
+    `).all(sessionId, cursor, boundedLimit) as any[]).map(row => this.toIntent(row));
   }
 
   acknowledgeMailboxPrefix(input: SessionWorkerMailboxAcknowledgement): SessionWorkerOwnershipRecord {

@@ -9,6 +9,7 @@ import {
   loadModelsConfigFromObject,
   normalizeDbWorkersEnabled,
   normalizeSessionWorkersConfig,
+  normalizeVectorConfig,
   normalizeVectorMaintenanceConfig,
 } from './config';
 
@@ -86,6 +87,7 @@ export function validateAppConfigYaml(rawYaml: string): AppConfig {
   }
   normalizeSessionWorkersConfig(config.sessionWorkers);
   normalizeDbWorkersEnabled(config.dbWorkers);
+  normalizeVectorConfig(config.vector, config.llm?.ollamaBaseUrl);
   normalizeVectorMaintenanceConfig(config.vectorMaintenance);
   return config;
 }
@@ -246,7 +248,7 @@ export function buildModelsConfigFromSetupForm(body: any, existingConfig: any = 
     if (isVirtual) {
       const targets = splitModelIds(hasOwn(draft, 'targets') ? draft.targets : existingProvider.targets);
       nextProvider.targets = targets;
-      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'asyncCompact'] as const) {
+      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'asyncCompact'] as const) {
         delete nextProvider[field];
       }
       if (providerType === 'session-hash') {

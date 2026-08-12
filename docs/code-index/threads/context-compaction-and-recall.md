@@ -41,8 +41,9 @@ Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelFor
 
 ### 5. Vector location and source reload
 
+- Vector is optional and defaults disabled. Archive/compaction and exact recall remain fully functional without LanceDB; semantic requests fail with a stable disabled classification.
 - `scheduleSessionArchiveIndex()` batches archive indexing at 50 pending messages or 8,000 estimated tokens.
-- LanceDB `messages_v7` stores raw segments, block rows, and compact-extracted fact rows. Startup backfill uses SQLite checkpoints and can continue after the service becomes ready.
+- When enabled, LanceDB `messages_v7` stores raw segments, block rows, and compact-extracted fact rows. Startup backfill uses SQLite checkpoints and can continue after the service becomes ready. Raw messages and full block summaries accumulated while disabled remain pending and are discovered from archive maxima after a later enable/restart. Fact text embedded in those summaries is therefore searchable through block rows, but startup backfill does not reconstruct dedicated fact rows.
 - `vector.search(query, limit, format, options)` returns metadata-rich locations. Model-facing recall reloads original archive messages/blocks from those locations before rendering; vector chunks are not the final quoted history.
 
 ### 6. Recall and preview
@@ -142,3 +143,11 @@ Exact selection (`target`), semantic location (`vector_query`), and literal post
 ### D-context-source-backed-recall
 
 Vector hits locate archive sources; recall presents reloaded source messages/blocks through the shared renderer rather than exposing embedding chunks as authoritative history.
+
+### D-context-optional-vector
+
+[2026-08-12] Vector indexing and semantic recall are an optional derived layer and default disabled. The SQLite archive remains authoritative and continues receiving all raw messages, blocks, lineage, and checkpoints while Vector is off. Disabled startup must not load LanceDB, start a vector worker, run maintenance/backfill, or issue embeddings; best-effort indexing hooks become quiet no-ops, while direct semantic operations fail clearly as `VECTOR_DISABLED` and exact archive recall remains available. Enabling Vector later runs the existing checkpoint-based startup backfill for raw messages and full block summaries accumulated since the last checkpoint; it does not require an archive migration or a second backfill protocol. Fact text remains in its formatted block summary and is included in that block row.
+
+## Open questions
+
+- **Unconfirmed follow-up:** decide whether a future bounded backfill should reconstruct dedicated `memory_kind: fact` rows for compactions created while Vector was disabled. Current re-enable backfill intentionally restores raw/block coverage only, so fact-specific kind/attribution metadata and preference reranking may be incomplete even though the authoritative fact text is searchable in the block row.

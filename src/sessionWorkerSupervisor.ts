@@ -20,6 +20,7 @@ import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationS
   SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
 import { createSessionTurnDeliveryServiceHandler, sessionTurnDeliveryServiceDescriptor,
   type ExactFinalSourceContextResolver } from './sessionTurnDelivery';
+import { VECTOR_ENABLED } from './config';
 
 export type SessionWorkerSupervisorOptions = {
   store: SessionWorkerStore;
@@ -28,6 +29,7 @@ export type SessionWorkerSupervisorOptions = {
   idleMs: number;
   restartBaseDelayMs?: number;
   restartMaxDelayMs?: number;
+  stopCompletionTimeoutMs?: number;
   shouldRestart?: (sessionId: string) => boolean | Promise<boolean>;
   readProcessIdentity?: (pid: number) => string | null;
   projectionRegistry?: SessionWorkerProjectionRegistry;
@@ -81,6 +83,7 @@ export class SessionWorkerSupervisor {
   private readonly lifecycleFailures = new Map<string, unknown>();
   private readonly restartBaseDelayMs: number;
   private readonly restartMaxDelayMs: number;
+  private readonly stopCompletionTimeoutMs: number;
   readonly projectionRegistry: SessionWorkerProjectionRegistry;
   private shuttingDown = false;
   private reconciled = false;
@@ -89,6 +92,10 @@ export class SessionWorkerSupervisor {
     if (!Number.isFinite(options.idleMs) || options.idleMs < 1) throw new RpcError('SESSION_WORKER_INVALID_IDLE', 'Session worker idle timeout must be positive.');
     this.restartBaseDelayMs = options.restartBaseDelayMs ?? 250;
     this.restartMaxDelayMs = options.restartMaxDelayMs ?? 5_000;
+    this.stopCompletionTimeoutMs = options.stopCompletionTimeoutMs ?? 30_000;
+    if (!Number.isFinite(this.stopCompletionTimeoutMs) || this.stopCompletionTimeoutMs < 1) {
+      throw new RpcError('SESSION_WORKER_INVALID_STOP_TIMEOUT', 'Session worker Stop completion timeout must be positive.');
+    }
     this.projectionRegistry = options.projectionRegistry || new SessionWorkerProjectionRegistry();
   }
 
@@ -396,7 +403,20 @@ export class SessionWorkerSupervisor {
     entry.activeCalls += 1; this.clearIdleTimer(entry);
     try {
       const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
-      return await runtime.call('interrupt', {});
+      try {
+        return await runtime.call('interrupt', {}, { timeoutMs: this.stopCompletionTimeoutMs });
+      } catch (error: any) {
+        const transportCode = typeof error?.code === 'string' ? error.code : '';
+        if (['RPC_DEADLINE_EXCEEDED', 'RPC_UNAVAILABLE', 'RPC_SEND_FAILED', 'RPC_CLOSED'].includes(transportCode)) {
+          throw new RpcError(
+            'SESSION_WORKER_STOP_OUTCOME_UNKNOWN',
+            'Stop outcome is unknown because authoritative finalization was not confirmed. Inspect session history/state before retrying.',
+            true,
+            { transportCode },
+          );
+        }
+        throw error;
+      }
     } finally {
       entry.activeCalls -= 1;
       if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
@@ -533,7 +553,9 @@ export class SessionWorkerSupervisor {
         }));
       }
       reverseRegistry.register(mcpExternalServiceDescriptor, createMcpExternalServiceHandler({ expectedSourceSessionId: sessionId }));
-      reverseRegistry.register(vectorServiceDescriptor, createVectorFacadeProxyHandler());
+      if (VECTOR_ENABLED) {
+        reverseRegistry.register(vectorServiceDescriptor, createVectorFacadeProxyHandler());
+      }
       reverseServer = new ProcessRpcServer(reverseRegistry, {
         generation, peer: child, direction: 'reverse', exitOnDisconnect: false,
       });

@@ -118,8 +118,13 @@ test('timer, wait-timeout, ONBOOT, and node event triggers share the durable Wor
     assert.equal(fixture.catalogSession.queue.length, 0);
 
     // Settings mutation reaches the exact Worker without hydrating/saving Main.
-    const settings = await sessionRuntime.updateSettings(sessionId, { model: 'other-model' });
+    const settings = await sessionRuntime.updateSettings(sessionId, { model: 'other-model', effort: 'none', childEffortDefault: 'max' });
     assert.equal(settings.current.model, 'other-model');
+    assert.equal(settings.current.effort, 'none');
+    assert.equal(settings.current.childEffortDefault, 'max');
+    const projected = await sessionRuntime.getSession(sessionId);
+    assert.equal(projected?.effort, 'none');
+    assert.equal(projected?.childEffortDefault, 'max');
     assert.equal(mainLocalSaves, 0);
 
     // Managed sessions fail closed at the shared boundary instead of spawning a worker.

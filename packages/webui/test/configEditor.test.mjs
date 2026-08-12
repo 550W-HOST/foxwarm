@@ -40,6 +40,7 @@ test('static config schemas are distinct, permissive, and omit the removed model
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.properties.providers.additionalProperties.additionalProperties, true)
   assert.equal(schemas.APP_CONFIG_SCHEMA.properties.channels.additionalProperties.additionalProperties, true)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.paths.properties, 'modelsConfigPath'), false)
+  assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.llm.properties, 'thinkingBudget'), false)
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.required?.includes('default') || false, false)
 })
 
@@ -59,6 +60,9 @@ test('app config schema suggests all managed channel types and QQ credential key
   const vectorMaintenance = schemas.APP_CONFIG_SCHEMA.properties.vectorMaintenance
   assert.equal(vectorMaintenance.oneOf.some((entry) => entry.type === 'boolean'), true)
   assert.equal(vectorMaintenance.oneOf.find((entry) => entry.type === 'object').properties.retentionHours.minimum, 1)
+  const vector = schemas.APP_CONFIG_SCHEMA.properties.vector
+  assert.equal(vector.oneOf.some((entry) => entry.const === false), true)
+  assert.equal(vector.oneOf.find((entry) => entry.type === 'object').properties.baseUrl.pattern, '^https?://')
 
   assert.equal(validateAppConfigSchema({
     channels: {
@@ -80,6 +84,9 @@ test('app config schema suggests all managed channel types and QQ credential key
   assert.equal(validateAppConfigSchema({ vectorMaintenance: true }), true)
   assert.equal(validateAppConfigSchema({ vectorMaintenance: false }), true)
   assert.equal(validateAppConfigSchema({ vectorMaintenance: { retentionHours: 48 } }), true)
+  assert.equal(validateAppConfigSchema({ vector: false }), true)
+  assert.equal(validateAppConfigSchema({ vector: { baseUrl: 'https://example.test/openai/v1' } }), true)
+  assert.equal(validateAppConfigSchema({ vector: true }), false)
 })
 
 test('WebUI schema wrappers reuse the shared canonical schema objects without a duplicate copy', async () => {
@@ -98,6 +105,7 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
         current: {
           providerType: 'openai-completions',
           models: ['model-a'],
+          effort: { allowed: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], default: 'high' },
           webSearch: true,
           extraHeaders: { nested: { supportedByLoader: true }, numeric: 42 },
           customExtension: { enabled: true },
@@ -178,10 +186,13 @@ test('models schema suggests known provider types while accepting custom strings
   assert.equal(provider.properties.failureThreshold.minimum, 1)
   assert.equal(provider.properties.cooldownMs.minimum, 1)
   assert.equal(provider.properties.webSearch.oneOf.some((entry) => entry.type === 'boolean'), true)
+  assert.deepEqual(provider.properties.effort.properties.allowed.items.enum, ['none', 'low', 'medium', 'high', 'xhigh', 'max'])
+  assert.deepEqual(provider.properties.effort.properties.default.enum, ['none', 'low', 'medium', 'high', 'xhigh', 'max'])
   const webSearchOptions = provider.properties.webSearch.oneOf.find((entry) => entry.type === 'object')
   assert.equal(webSearchOptions.properties.enabled.type, 'boolean')
   assert.deepEqual(webSearchOptions.properties.toolChoice.enum, ['auto', 'required'])
   assert.equal(provider.allOf[0].then.not.anyOf.some((rule) => rule.required.includes('webSearch')), true)
+  assert.equal(provider.allOf[0].then.not.anyOf.some((rule) => rule.required.includes('effort')), true)
 })
 
 test('dynamic models suggestions use the current document and exclude virtual targets', () => {

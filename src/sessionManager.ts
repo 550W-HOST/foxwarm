@@ -14,7 +14,8 @@ import { RpcError } from './rpc';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import { cloneQueueItem, getManagedSessionState, isManagedSessionLeaseExpired, ManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
 import * as vector from './vector';
-import { CATALOG_DB_PATH, CHANNELS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getLegacySessionFrontierPath } from './config';
+import { VECTOR_ENABLED } from './config';
+import { CATALOG_DB_PATH, CHANNELS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getLegacySessionFrontierPath, type ModelEffort, type ModelsConfig } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
 import { appendMessagesToArchive, ensureMessageSeq, getNextSessionMessageSeq } from './session/archive';
@@ -27,6 +28,7 @@ import { externalizeAuthoritativeSessionImages, externalizeAuthoritativeSessionQ
 import { replaceAuthoritativeSessionState } from './session/stateHydration';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
+import { applyNormalizedSessionModelEffortSettings, normalizeProspectiveSessionModelEffortSettings } from './session/modelEffortSettings';
 import * as sessionRelations from './session/relations';
 import { formatSessionIdentityHint } from './session/identityHint';
 import { buildTimestampedSystemMessageParts, withInputTimePart } from './utils/systemMessageParts';
@@ -70,6 +72,23 @@ async function withSessionIdentityLock<T>(operation: () => Promise<T>): Promise<
   } finally {
     release();
   }
+}
+
+/**
+ * Serializes one concrete Session-worker admission against destructive claim
+ * acquisition. The callback must end once the effect is durably admitted
+ * (owner ensured plus mailbox append, or activated call accepted); it must not
+ * await a provider/tool turn to finish.
+ */
+export async function withSessionDestructiveMutationAdmission<T>(
+  sessionIds: Array<string | undefined>,
+  operation: string,
+  admit: () => Promise<T>,
+): Promise<T> {
+  return withSessionIdentityLock(async () => {
+    assertSessionDestructiveMutationAllowed(sessionIds, operation);
+    return admit();
+  });
 }
 
 async function withChannelSessionCreationLock<T>(channelId: string, conversationId: string, operation: () => Promise<T>): Promise<T> {
@@ -487,6 +506,7 @@ let destructiveLifecycleClaimSequence = 0;
 export class SessionDestructiveLifecycleClaimError extends Error {
   readonly code = 'SESSION_DELETE_IN_PROGRESS';
   readonly statusCode = 409;
+  readonly retryable = true;
 
   constructor(sessionId: string, operation: string) {
     super(`Session "${sessionId}" is being prepared for deletion and cannot ${operation}. Retry after the delete request finishes.`);
@@ -1173,6 +1193,7 @@ export async function createAgentWithMainSession(options: {
   displayName?: string;
   currentNode?: string;
   model?: string;
+  effort?: ModelEffort;
   createMainSession?: boolean;
   inherit?: string;
   isolatedNode?: string;
@@ -1221,6 +1242,8 @@ export async function createSessionInAgent(options: {
   displayName?: string;
   currentNode?: string;
   model?: string;
+  effort?: ModelEffort;
+  modelsConfig?: ModelsConfig;
   parentSessionId?: string;
   systemPromptFiles?: string[];
 }): Promise<{ sessionId: string }> {
@@ -1454,11 +1477,12 @@ export function getChannelBySession(sessionId: string): { channelId: string; con
  * @param isChildSession Whether this is a child session (for multi-agent)
  * @returns New session ID
  */
-export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string; sourceOverride?: Session }): Promise<string> {
+export async function forkSession(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
   return withSessionIdentityLock(() => forkSessionUnlocked(sourceSessionId, suffix, isChildSession, options));
 }
 
-async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string; sourceOverride?: Session }): Promise<string> {
+async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isChildSession: boolean = false, options?: { node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
+  assertSessionDestructiveMutationAllowed([sourceSessionId], 'receive a new fork session');
   // sourceOverride lets a trusted caller (e.g. the Main management facade)
   // supply a detached read-only snapshot of a worker-owned authority instead
   // of hydrating it into Main. Overrides are never persisted back.
@@ -1471,6 +1495,7 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
   if (sourceSession.promptCacheKey !== sourcePreviousPromptCacheKey && !detachedSource) {
     await saveSession(sourceSession.id);
   }
+  const spawnedSettings = resolveSpawnedSessionModelEffort(sourceSession, options?.model, options?.effort);
 
   const forkedSession: Session = {
     id: newSessionId,
@@ -1495,8 +1520,10 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
     currentNode: options?.node || sourceSession.currentNode || 'master',
     agent: sourceSession.agent,
     verbose: sourceSession.verbose,
-    model: resolveSpawnedSessionModel(sourceSession, options?.model),
+    model: spawnedSettings.model,
+    effort: spawnedSettings.effort,
     childModelDefault: sourceSession.childModelDefault,
+    childEffortDefault: sourceSession.childEffortDefault,
   };
 
   const appendedForkMessages: Message[] = [];
@@ -1612,12 +1639,34 @@ export function resolveSpawnedSessionModel(
     : undefined;
 }
 
-export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string; sourceOverride?: Session }): Promise<string> {
+export function resolveSpawnedSessionEffort(
+  session?: Pick<Session, 'effort' | 'childEffortDefault'>,
+  explicitEffort?: ModelEffort,
+): ModelEffort | undefined {
+  return explicitEffort ?? session?.childEffortDefault ?? session?.effort;
+}
+
+export function resolveSpawnedSessionModelEffort(
+  session?: Pick<Session, 'model' | 'effort' | 'childModelDefault' | 'childEffortDefault'>,
+  explicitModel?: string,
+  explicitEffort?: ModelEffort,
+): { model?: string; effort?: ModelEffort } {
+  const model = resolveSpawnedSessionModel(session, explicitModel);
+  const inheritedEffort = resolveSpawnedSessionEffort(session, explicitEffort);
+  const normalized = normalizeProspectiveSessionModelEffortSettings(
+    { model, effort: inheritedEffort },
+    explicitEffort === undefined ? {} : { effort: explicitEffort },
+  );
+  return { model: normalized.model, effort: normalized.effort };
+}
+
+export async function createChildSession(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
   return withSessionIdentityLock(() => createChildSessionUnlocked(parentSessionId, suffix, fork, options));
 }
 
-async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string; sourceOverride?: Session }): Promise<string> {
+async function createChildSessionUnlocked(parentSessionId: string, suffix: string, fork: boolean = false, options?: { node?: string; model?: string; effort?: ModelEffort; sourceOverride?: Session }): Promise<string> {
   validateChildSessionSuffix(suffix);
+  assertSessionDestructiveMutationAllowed([parentSessionId], 'receive a new child session');
   if (fork) {
     // Fork from parent (inherit context)
     return await forkSessionUnlocked(parentSessionId, suffix, true, options);
@@ -1626,6 +1675,7 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
     const parentSession = options?.sourceOverride || await getSessionUnlocked(parentSessionId);
     const realParentSessionId = parentSession.id || parentSessionId;
     const childSessionId = await allocateChildSessionId(realParentSessionId, suffix);
+    const spawnedSettings = resolveSpawnedSessionModelEffort(parentSession, options?.model, options?.effort);
 
     const agentName = parentSession.agent || 'main';
     const snapshot = await llm.buildSessionSystemPromptSnapshot({
@@ -1656,8 +1706,10 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
       nextMessageSeq: 1,
       parentSessionId: realParentSessionId,
       currentNode: options?.node || parentSession.currentNode || 'master',
-      model: resolveSpawnedSessionModel(parentSession, options?.model),
+      model: spawnedSettings.model,
+      effort: spawnedSettings.effort,
       childModelDefault: parentSession.childModelDefault,
+      childEffortDefault: parentSession.childEffortDefault,
     };
 
     const initialMessage: Message = {
@@ -1692,6 +1744,11 @@ export async function setSessionParent(childSessionId: string, parentSessionId?:
     const child = sessions.get(childSessionId);
     if (!child) throw new Error(`Session \`${childSessionId}\` not found.`);
     const previousParentSessionId = child.parentSessionId;
+    assertSessionDestructiveMutationAllowed(
+      [childSessionId, parentSessionId],
+      parentSessionId ? 'change parent relations' : 'detach from its parent',
+      owningClaimId,
+    );
     child.parentSessionId = parentSessionId;
     await saveSessionCatalogEntries([childSessionId]);
     notifySessionListUpdated();
@@ -1772,15 +1829,17 @@ async function saveSessionForSessionCritical(session: Session): Promise<void> {
   await saveSessionCatalogEntriesCritical([session.id]);
 
   // Schedule archive-based vector indexing (non-blocking)
-  const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
-  const latestBlockIdHint = Math.max(0, (session.nextBlockId || 1) - 1);
-  const lastMessage = session.history[session.history.length - 1];
-  const latestMessageTokenEstimate = lastMessage?.__meta?.seq === latestSeqHint
-    ? vector.estimateArchiveMessageTokenCount(lastMessage)
-    : undefined;
+  if (VECTOR_ENABLED) {
+    const latestSeqHint = Math.max(0, (session.nextMessageSeq || 1) - 1);
+    const latestBlockIdHint = Math.max(0, (session.nextBlockId || 1) - 1);
+    const lastMessage = session.history[session.history.length - 1];
+    const latestMessageTokenEstimate = lastMessage?.__meta?.seq === latestSeqHint
+      ? vector.estimateArchiveMessageTokenCount(lastMessage)
+      : undefined;
 
-  vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate, latestBlockIdHint)
-    .catch(err => logger.error({ err, sessionId }, 'Failed to schedule archive indexing'));
+    vector.scheduleSessionArchiveIndex(sessionId, latestSeqHint, latestMessageTokenEstimate, latestBlockIdHint)
+      .catch(err => logger.error({ err, sessionId }, 'Failed to schedule archive indexing'));
+  }
 
   // Notify global-list and per-session state consumers.
   notifySessionUpdated(sessionId);
@@ -2236,6 +2295,7 @@ export async function enqueueSessionItem(sessionId: string, item: QueueItem): Pr
     // ingress boundary. Managed sessions remain explicitly unsupported there;
     // fail closed instead of spawning a worker that must reject them.
     const canonicalSessionId = resolveLoadedSessionId(sessionId);
+    assertSessionDestructiveMutationAllowed([canonicalSessionId], 'accept queued work');
     const stub = sessions.get(canonicalSessionId);
     if (stub && getManagedSessionState(stub as Session)) {
       throw new RpcError('SESSION_WORKER_QUEUE_UNSUPPORTED', 'Managed sessions are not supported by Session-worker placement yet.', true);
@@ -2608,11 +2668,10 @@ export async function setSessionChildModelDefault(sessionId: string, childModelD
     ? childModelDefault.trim()
     : undefined;
 
-  if (normalized !== undefined) {
-    session.childModelDefault = normalized;
-  } else {
-    delete session.childModelDefault;
-  }
+  const prospective = normalizeProspectiveSessionModelEffortSettings(session, {
+    childModelDefault: normalized ?? null,
+  });
+  applyNormalizedSessionModelEffortSettings(session, prospective);
 
   await saveSession(session.id);
 

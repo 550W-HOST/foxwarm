@@ -134,6 +134,83 @@ export type NormalizedVectorMaintenanceConfig = {
   retentionHours: number;
 };
 
+export type VectorConfig = false | {
+  enabled?: boolean;
+  baseUrl?: string;
+};
+
+export type NormalizedVectorConfig = {
+  enabled: boolean;
+  baseUrl?: string;
+  source: 'disabled-default' | 'vector' | 'legacy-ollama';
+};
+
+function normalizeAbsoluteHttpUrl(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`app config \`${field}\` must be a non-empty absolute http(s) URL.`);
+  }
+  const trimmed = value.trim().replace(/\/+$/, '');
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(`app config \`${field}\` must be a non-empty absolute http(s) URL.`);
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)
+    || !parsed.hostname
+    || parsed.username
+    || parsed.password
+    || parsed.search
+    || parsed.hash) {
+    throw new Error(`app config \`${field}\` must be a non-empty absolute http(s) URL.`);
+  }
+  return trimmed;
+}
+
+export function normalizeVectorConfig(
+  vectorValue: unknown,
+  legacyOllamaBaseUrl?: unknown,
+): NormalizedVectorConfig {
+  if (vectorValue === undefined) {
+    if (typeof legacyOllamaBaseUrl !== 'string' || legacyOllamaBaseUrl.trim().length === 0) {
+      return { enabled: false, source: 'disabled-default' };
+    }
+    const legacyRoot = normalizeAbsoluteHttpUrl(legacyOllamaBaseUrl, 'llm.ollamaBaseUrl');
+    const parsed = new URL(legacyRoot);
+    const pathname = parsed.pathname.replace(/\/+$/, '');
+    if (!pathname.endsWith('/v1')) {
+      parsed.pathname = `${pathname || ''}/v1`;
+    }
+    return {
+      enabled: true,
+      baseUrl: parsed.toString().replace(/\/+$/, ''),
+      source: 'legacy-ollama',
+    };
+  }
+  if (vectorValue === false) {
+    return { enabled: false, source: 'vector' };
+  }
+  if (!vectorValue || typeof vectorValue !== 'object' || Array.isArray(vectorValue)) {
+    throw new Error('app config `vector` must be false or an object.');
+  }
+  const raw = vectorValue as Record<string, unknown>;
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    throw new Error('app config `vector.enabled` must be a boolean.');
+  }
+  if (raw.enabled === false) {
+    return {
+      enabled: false,
+      ...(raw.baseUrl === undefined ? {} : { baseUrl: normalizeAbsoluteHttpUrl(raw.baseUrl, 'vector.baseUrl') }),
+      source: 'vector',
+    };
+  }
+  return {
+    enabled: true,
+    baseUrl: normalizeAbsoluteHttpUrl(raw.baseUrl, 'vector.baseUrl'),
+    source: 'vector',
+  };
+}
+
 export function normalizeSessionWorkersConfig(value: unknown): NormalizedSessionWorkersConfig {
   if (value === undefined || value === false) {
     return { enabled: false, idleSeconds: DEFAULT_SESSION_WORKER_IDLE_SECONDS };
@@ -217,6 +294,7 @@ export function normalizeVectorMaintenanceConfig(value: unknown): NormalizedVect
 }
 
 export type AppConfig = {
+  vector?: VectorConfig;
   sessionWorkers?: SessionWorkersConfig;
   dbWorkers?: boolean;
   vectorMaintenance?: VectorMaintenanceConfig;
@@ -237,7 +315,6 @@ export type AppConfig = {
     compactBlockForceCompactFraction?: number;
     compactMessageForceCompactFraction?: number;
     maxOutput?: number;
-    thinkingBudget?: number;
     openaiBaseUrl?: string;
     openaiApiKey?: string;
     anthropicBaseUrl?: string;
@@ -394,6 +471,9 @@ function resolvePathValue(value: string | undefined, fallback: string): string {
 
 export const APP_CONFIG = loadAppConfig();
 
+export const VECTOR_CONFIG = normalizeVectorConfig(APP_CONFIG.vector, APP_CONFIG.llm?.ollamaBaseUrl);
+export const VECTOR_ENABLED = VECTOR_CONFIG.enabled;
+export const VECTOR_BASE_URL = VECTOR_CONFIG.baseUrl;
 export const SESSION_WORKERS_CONFIG = normalizeSessionWorkersConfig(APP_CONFIG.sessionWorkers);
 export const SESSION_WORKERS_ENABLED = SESSION_WORKERS_CONFIG.enabled;
 export const SESSION_WORKER_IDLE_SECONDS = SESSION_WORKERS_CONFIG.idleSeconds;
@@ -407,7 +487,6 @@ export const WEWORK_CONFIG: WeWorkConfig = (getDefaultChannelConfigByType<WeWork
 export const WEIXIN_CONFIG: WeixinConfig = (getDefaultChannelConfigByType<WeixinConfig>('weixin', APP_CONFIG)?.config || {}) as WeixinConfig;
 export const QQBOT_CONFIG: QQBotConfig = (getDefaultChannelConfigByType<QQBotConfig>('qqbot', APP_CONFIG)?.config || {}) as QQBotConfig;
 export const ASR_SERVICE_CONFIG: AsrServiceConfig = APP_CONFIG.asrService || {};
-export const OLLAMA_BASE_URL = APP_CONFIG.llm?.ollamaBaseUrl || 'http://localhost:11434';
 
 export const AGENTS_DIR = resolvePathValue(APP_CONFIG.paths?.agentsDir, path.join(DATA_ROOT_DIR, 'agents'));
 export const SKILLS_DIR = resolvePathValue(APP_CONFIG.paths?.skillsDir, path.join(BASE_DIR, 'skills'));
@@ -485,7 +564,6 @@ export const COMPACT_MESSAGE_FORCE_COMPACT_FRACTION = APP_CONFIG.llm?.compactMes
 
 // TODO: move to models config
 export const MAX_OUTPUT = APP_CONFIG.llm?.maxOutput || 16384;
-export const THINKING_BUDGET = APP_CONFIG.llm?.thinkingBudget || 10000;
 
 // Models configuration
 export function resolveDataModelsConfigPath(dataRoot: string = DATA_ROOT_DIR): string {
@@ -514,6 +592,21 @@ export type OpenAIWebSearchOptions = {
 };
 
 export type OpenAIWebSearchConfig = boolean | OpenAIWebSearchOptions;
+
+export const MODEL_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type ModelEffort = (typeof MODEL_EFFORTS)[number];
+export const DEFAULT_MODEL_EFFORT: ModelEffort = 'high';
+
+export type ModelEffortConfig = {
+  allowed?: ModelEffort[];
+  default?: ModelEffort;
+};
+
+export type NormalizedModelEffortConfig = {
+  allowed: ModelEffort[];
+  /** Concrete entries always have a default. Virtual entries expose only the derived union. */
+  default?: ModelEffort;
+};
 
 export type NormalizedOpenAIWebSearchConfig = Omit<OpenAIWebSearchOptions, 'enabled'> & {
   enabled: boolean;
@@ -604,6 +697,7 @@ function mergeOpenAIWebSearchConfig(
 
 export type ModelConfigOverride = {
   contextLimit?: number;
+  effort?: ModelEffortConfig;
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
   webSearch?: OpenAIWebSearchConfig;
@@ -619,6 +713,7 @@ export type ProviderConfigEntry = {
   baseUrl?: string;
   apiKey?: string;
   contextLimit?: number;
+  effort?: ModelEffortConfig;
   asyncCompact?: boolean;
   requestCompression?: 'gzip' | 'br';
   extraFields?: Record<string, any>;
@@ -647,6 +742,7 @@ export type ModelConfigEntry = {
   baseUrl?: string;
   apiKey?: string;
   contextLimit?: number;
+  effort?: NormalizedModelEffortConfig;
   asyncCompact?: boolean;
   requestCompression?: 'gzip' | 'br';
   extraFields?: Record<string, any>;
@@ -714,6 +810,51 @@ function deepMergeObjects<T extends Record<string, any> | undefined>(base: T, ov
   }
 
   return result as T;
+}
+
+function normalizeEffortValue(value: unknown, label: string): ModelEffort {
+  if (typeof value !== 'string' || !MODEL_EFFORTS.includes(value as ModelEffort)) {
+    throw new Error(`${label} must be one of: ${MODEL_EFFORTS.join(', ')}.`);
+  }
+  return value as ModelEffort;
+}
+
+function normalizeEffortAllowed(value: unknown, label: string): ModelEffort[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${label} must be a non-empty array.`);
+  }
+  const allowed = value.map((item, index) => normalizeEffortValue(item, `${label}[${index}]`));
+  if (new Set(allowed).size !== allowed.length) {
+    throw new Error(`${label} must not contain duplicate values.`);
+  }
+  const selected = new Set(allowed);
+  return MODEL_EFFORTS.filter(effort => selected.has(effort));
+}
+
+export function normalizeModelEffortConfig(
+  value: unknown,
+  inherited?: NormalizedModelEffortConfig,
+  label = 'models config `effort`',
+): NormalizedModelEffortConfig {
+  if (value !== undefined && !isPlainObject(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  const raw = (value || {}) as Record<string, unknown>;
+  const allowed = raw.allowed === undefined
+    ? [...(inherited?.allowed || MODEL_EFFORTS)]
+    : normalizeEffortAllowed(raw.allowed, `${label}.allowed`);
+  const defaultEffort = raw.default === undefined
+    ? (inherited?.default || DEFAULT_MODEL_EFFORT)
+    : normalizeEffortValue(raw.default, `${label}.default`);
+  if (!allowed.includes(defaultEffort)) {
+    throw new Error(`${label}.default \`${defaultEffort}\` must be included in ${label}.allowed.`);
+  }
+  return { allowed, default: defaultEffort };
+}
+
+export function getConcreteModelEffortConfig(entry: Pick<ModelConfigEntry, 'effort'>): Required<NormalizedModelEffortConfig> {
+  const normalized = normalizeModelEffortConfig(entry.effort);
+  return { allowed: normalized.allowed, default: normalized.default || DEFAULT_MODEL_EFFORT };
 }
 
 function getProviderType(providerEntry: ProviderConfigEntry): string {
@@ -796,6 +937,16 @@ function applyProviderDefaults(providerEntry: ProviderConfigEntry): ProviderConf
 
 function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderConfigEntry, modelId: string, modelOverride?: ModelConfigOverride): ModelConfigEntry {
   const resolvedProviderEntry = applyProviderDefaults(providerEntry);
+  const providerEffort = normalizeModelEffortConfig(
+    resolvedProviderEntry.effort,
+    undefined,
+    `Provider \`${providerKey}\` effort`,
+  );
+  const effort = normalizeModelEffortConfig(
+    modelOverride?.effort,
+    providerEffort,
+    `Model \`${providerKey}/${modelId}\` effort`,
+  );
   const webSearch = mergeOpenAIWebSearchConfig(
     resolvedProviderEntry.webSearch,
     modelOverride?.webSearch,
@@ -808,6 +959,7 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
     baseUrl: resolvedProviderEntry.baseUrl,
     apiKey: resolvedProviderEntry.apiKey,
     contextLimit: modelOverride?.contextLimit ?? resolvedProviderEntry.contextLimit,
+    effort,
     asyncCompact: resolvedProviderEntry.asyncCompact,
     requestCompression: resolvedProviderEntry.requestCompression,
     extraHeaders: {
@@ -889,6 +1041,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
     'extraFields',
     'extraHeaders',
     'contextLimit',
+    'effort',
     'asyncCompact',
     'webSearch',
   ];
@@ -959,6 +1112,11 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
 
     const contextLimit = Math.min(...leafEntries.map(entry => entry.contextLimit || CONTEXT_LIMIT));
     const asyncCompact = leafEntries.every(entry => entry.asyncCompact !== false);
+    const allowedEffortSet = new Set<ModelEffort>();
+    for (const entry of leafEntries) {
+      for (const effort of getConcreteModelEffortConfig(entry).allowed) allowedEffortSet.add(effort);
+    }
+    const allowedEfforts = MODEL_EFFORTS.filter(effort => allowedEffortSet.has(effort));
     const fingerprint = hashConfigValue({
       strategy: providerType,
       targets,
@@ -974,6 +1132,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
           requestCompression: entry.requestCompression || null,
           contextLimit: entry.contextLimit ?? CONTEXT_LIMIT,
           asyncCompact: entry.asyncCompact !== false,
+          effort: getConcreteModelEffortConfig(entry),
           apiKeyHash: hashConfigValue(entry.apiKey || ''),
           extraFieldsHash: hashConfigValue(entry.extraFields || {}),
           extraHeadersHash: hashConfigValue(entry.extraHeaders || {}),
@@ -988,6 +1147,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
       providerType,
       model: '',
       contextLimit,
+      effort: { allowed: allowedEfforts },
       asyncCompact,
       virtualRouting: {
         strategy: providerType,

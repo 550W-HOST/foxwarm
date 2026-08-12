@@ -46,6 +46,7 @@ import {
     SESSION_WORKERS_ENABLED,
     TELEGRAM_CONFIG,
     TOKEN_FILE,
+    VECTOR_ENABLED,
 } from './config';
 import type { TelegramConfig } from './config';
 import { HttpServer, setHttpServer } from './httpServer';
@@ -245,6 +246,7 @@ async function start() {
             sourceContexts,
             (sessionId) => sessionManager.resolveLoadedSessionId(sessionId),
             (sessionId) => !!sessionManager.getSessionCatalog(sessionId),
+            (sessionId, operation, admit) => sessionManager.withSessionDestructiveMutationAdmission([sessionId], operation, admit),
         );
         sessionManager.setSessionWorkerEnqueueSink(
             (sessionId, item) => sessionWorkerIngress!.enqueueEnsuringWorker(sessionId, item).then(() => {}),
@@ -258,7 +260,9 @@ async function start() {
             // full authority into Main merely because this session is idle and
             // has not spawned its first Worker yet.
             if (!catalog) return undefined;
-            await sessionWorkerIngress!.ensureWorkerOwner(sessionId);
+            // fork/createChild already hold SessionManager's non-reentrant
+            // identity lock; use the exact lifecycle-only admission variant.
+            await sessionWorkerIngress!.ensureWorkerOwnerWithinExistingAdmission(sessionId);
             return readDetachedWorkerSession(sessionId, catalog);
         });
         sessionManager.setSessionWorkerFenceChecker(sessionId => {
@@ -292,7 +296,7 @@ async function start() {
     // Initialize the vector owner locally or in its configured child process.
     // Startup readiness means the table is open; archive backfill continues in
     // the background in either placement.
-    await vector.init({ useWorker: DB_WORKERS_ENABLED });
+    await vector.init({ enabled: VECTOR_ENABLED, useWorker: DB_WORKERS_ENABLED });
 
     await initializeExecManager();
 

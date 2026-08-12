@@ -18,7 +18,7 @@ import {
   updateTimer,
 } from './timers';
 import * as sessionManager from './sessionManager';
-import { getAgentDir } from './config';
+import { getAgentDir, loadModelsConfigFromObject, resolveModelConfig } from './config';
 import {
   create_timer as tool_create_timer,
   delete_timer as tool_delete_timer,
@@ -124,7 +124,9 @@ test('new-session timer allocation skips an archived generated id', async () => 
     const replacementName = `${archivedName}_2`;
 
     try {
-      await sessionManager.createEmptySession(ownerId);
+      const owner = await sessionManager.createEmptySession(ownerId);
+      owner.session.effort = 'none';
+      await sessionManager.saveSession(ownerId);
       const archived = await sessionManager.createEmptySession(archivedName);
       await sessionManager.appendSessionMessage(archived.session, {
         role: 'user',
@@ -142,11 +144,13 @@ test('new-session timer allocation skips an archived generated id', async () => 
         newSession: true,
         sessionPrefix: 'timer',
       });
+      assert.equal(timer.effort, 'none');
       await fireTimerForTests(timer.id);
 
       assert.equal(await sessionManager.getExistingSession(archivedName), null);
       const replacement = await sessionManager.getExistingSession(replacementName);
       assert.ok(replacement);
+      assert.equal(replacement.effort, 'none');
       assert.equal(replacement.queue.length, 1);
     } finally {
       setTriggeredSessionNameFactoryForTests();
@@ -154,6 +158,107 @@ test('new-session timer allocation skips an archived generated id', async () => 
         await deleteTimer(timer.id, ownerId).catch(() => false);
       }
       for (const id of [ownerId, archivedName, replacementName]) {
+        if (sessionManager.getAllSessions().has(id)) await sessionManager.deleteSession(id).catch(() => false);
+      }
+    }
+  });
+});
+
+test('new-session timer fire revalidates snapshotted effort against current concrete and virtual capabilities', async () => {
+  await withTempDir(async (dirPath) => {
+    setTimersStoreForTests(createTimersStore(path.join(dirPath, 'timers.json')));
+    await fs.ensureDir(getAgentDir('main'));
+    const ownerId = `timer_effort_drift_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const generatedIds = [
+      `${ownerId}_cleared`,
+      `${ownerId}_preserved`,
+      `${ownerId}_virtual`,
+    ];
+    const { currentKey } = resolveModelConfig();
+    const slash = currentKey.indexOf('/');
+    assert.ok(slash > 0);
+    const providerKey = currentKey.slice(0, slash);
+    const modelId = currentKey.slice(slash + 1);
+    const concreteConfig = (allowed: string[], defaultEffort: string) => loadModelsConfigFromObject({
+      default: currentKey,
+      providers: {
+        [providerKey]: {
+          providerType: 'openai-responses',
+          effort: { allowed, default: defaultEffort },
+          models: [modelId],
+        },
+      },
+    });
+    const beforeDrift = concreteConfig(['low', 'high'], 'high');
+    const afterDrift = concreteConfig(['high'], 'high');
+    const virtualConfig = loadModelsConfigFromObject({
+      default: 'timer-route',
+      providers: {
+        [providerKey]: {
+          providerType: 'openai-responses',
+          effort: { allowed: ['high'], default: 'high' },
+          models: [modelId],
+        },
+        'timer-other': {
+          providerType: 'anthropic',
+          effort: { allowed: ['medium', 'high'], default: 'high' },
+          models: ['secondary'],
+        },
+        'timer-route': {
+          providerType: 'failover',
+          targets: [currentKey, 'timer-other/secondary'],
+        },
+      },
+    });
+
+    try {
+      const owner = await sessionManager.createEmptySession(ownerId);
+      owner.session.model = currentKey;
+      owner.session.effort = 'low';
+      await sessionManager.saveSession(ownerId);
+      const cleared = await createTimer({
+        sessionId: ownerId, afterSeconds: 60, message: 'cleared effort delivery', newSession: true,
+      }, beforeDrift);
+      assert.equal(cleared.model, currentKey);
+      assert.equal(cleared.effort, 'low');
+
+      owner.session.effort = 'high';
+      await sessionManager.saveSession(ownerId);
+      const preserved = await createTimer({
+        sessionId: ownerId, afterSeconds: 60, message: 'preserved effort delivery', newSession: true,
+      }, beforeDrift);
+      assert.equal(preserved.effort, 'high');
+
+      owner.session.model = 'timer-route';
+      owner.session.effort = 'medium';
+      await sessionManager.saveSession(ownerId);
+      const virtual = await createTimer({
+        sessionId: ownerId, afterSeconds: 60, message: 'virtual effort delivery', newSession: true,
+      }, virtualConfig);
+      assert.equal(virtual.effort, 'medium');
+
+      let generated = 0;
+      setTriggeredSessionNameFactoryForTests(() => generatedIds[generated++]);
+      await fireTimerForTests(cleared.id, afterDrift);
+      await fireTimerForTests(preserved.id, afterDrift);
+      await fireTimerForTests(virtual.id, virtualConfig);
+
+      const clearedSession = await sessionManager.getExistingSession(generatedIds[0]);
+      const preservedSession = await sessionManager.getExistingSession(generatedIds[1]);
+      const virtualSession = await sessionManager.getExistingSession(generatedIds[2]);
+      assert.equal(clearedSession?.model, currentKey);
+      assert.equal(clearedSession?.effort, undefined);
+      assert.equal(clearedSession?.queue.length, 1);
+      assert.equal(preservedSession?.effort, 'high');
+      assert.equal(preservedSession?.queue.length, 1);
+      assert.equal(virtualSession?.model, 'timer-route');
+      assert.equal(virtualSession?.effort, 'medium');
+      assert.equal(virtualSession?.queue.length, 1);
+      assert.equal(listTimers(ownerId).length, 0);
+    } finally {
+      setTriggeredSessionNameFactoryForTests();
+      for (const timer of listTimers(ownerId)) await deleteTimer(timer.id, ownerId).catch(() => false);
+      for (const id of [ownerId, ...generatedIds]) {
         if (sessionManager.getAllSessions().has(id)) await sessionManager.deleteSession(id).catch(() => false);
       }
     }

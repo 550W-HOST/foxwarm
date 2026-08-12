@@ -15,6 +15,7 @@ Canonical image references in live history, queues, archives, and forks are owne
 ## Units
 
 - [src-session-manager](../units/src-session-manager.md) — façade, in-memory map, lazy hydration, queue/wait coordination, callbacks, and restart recovery.
+- [src-session-deletion](../units/src-session-deletion.md) — shared Main-owned WebUI/command/model deletion orchestration, claims, blocker/revalidation flow, child detachment, and Worker target teardown composition.
 - [src-session-runtime](../units/src-session-runtime.md) — placement-neutral high-level DTO service/facade for external session queries, commands, settings, controls, and events.
 - [src-session-worker-runtime](../units/src-session-worker-runtime.md) — activated configurable process-generation/mailbox fencing, authoritative state coordination, exact-owner operations, and supervised per-session child lifecycle.
 - [src-session-runtime-state](../units/src-session-runtime-state.md) — `requesting-model`, `running-tool`, `waiting`, and `idle` derivation.

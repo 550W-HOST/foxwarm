@@ -22,7 +22,7 @@ ToolScript result/run types are internal, not exported TypeScript API types.
 ## Host API
 
 - `call_tool(...)` — normalize shorthand or a unified descriptor, dynamically load `./tools`, and invoke the exported `call_tool` handler with the outer exact `ToolContext`, including its trusted placement/persist hooks.
-- `request_model_without_context(prompt, model?)` — production one-shot model request using the current session as configuration context but not its history.
+- `request_model_without_context(prompt, model?)` — production one-shot model request using the current session's raw effort and optional model selection but not its history.
 - `ask_agent(question)` — persist a snapshot and return an agent continuation.
 - `open_managed_session`, `session_step`, `release_managed_session`, `wait_for_managed_event` — explicit managed-session controller operations.
 
@@ -57,7 +57,7 @@ Unknown external function names are returned to Monty as runtime exceptions that
 - Managed leases acquired by a run are recorded. Controllers normally release them explicitly; cancellation and incompatible-snapshot terminalization perform best-effort cleanup. Failed releases remain recorded so calling `cancel_toolscript_run` on the terminal record retries cleanup.
 - `call_tool` subcalls publish ToolScript progress and are kept in the outer run result/record. They do not append each nested call as ordinary outer-session tool history.
 - In Session-worker placement, managed-session host functions and cleanup of persisted managed leases fail before importing/calling child managed-session state. ToolScript progress emission returns before any child `sessionManager.notifySessionEvent`; transient running/final/error progress may drop until committed publication, while persisted run/subcall state remains authoritative. Ordinary VM/model/ask-agent/timeout and nested already-closed tools remain available; a later fixed managed reverse service owns that deferred closure.
-- `request_model_without_context` uses request-journal purpose `toolscript-one-shot`; it supplies the exact passed owner's prompt-cache key so Worker placement never rehydrates or saves a second child-global Session merely to resolve request identity. Its canonical prompt and normalized provider result are durable independently of the outer ToolScript history boundary.
+- `request_model_without_context` uses request-journal purpose `toolscript-one-shot`; it supplies the exact passed owner's prompt-cache key and raw effort so Worker placement never rehydrates or saves a second child-global Session merely to resolve request identity. Its canonical prompt and normalized provider result are durable independently of the outer ToolScript history boundary.
 - `continue_script` returns stdout produced in that continuation slice; persisted status retains cumulative stdout.
 - `executedTools` is cumulative, while `subCalls`, `hostCallCount`, and `lastHostCall` describe the latest execution slice.
 - Inline image payloads from a final result are promoted to the outer tool result and replaced with compact placeholders inside the textual result.

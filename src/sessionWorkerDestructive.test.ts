@@ -17,6 +17,9 @@ import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
 import { registerChannel, unregisterChannel, type Channel } from './channel';
 import { attachChannel, createChannelsStore, resetChannelsForTests, saveChannels, setChannelsStoreForTests } from './session/channels';
+import { DATA_ROOT_DIR } from './config';
+import { setBeforeCrossSessionDeletionAdmissionForTests } from './sessionDeletion';
+import type { QueueSource } from './types';
 
 async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -33,12 +36,18 @@ function baseSession(id: string): Session {
   } as Session;
 }
 
-function makeFixture(root: string, workerEnv: Record<string, string> = {}, idleMs = 60_000) {
+function makeFixture(
+  root: string,
+  workerEnv: Record<string, string> = {},
+  idleMs = 60_000,
+  stopCompletionTimeoutMs?: number,
+  readProcessIdentity?: (pid: number) => string | null,
+) {
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
   const sourceContexts = new SessionWorkerSourceContextRegistry();
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
-    workerEnv: { FOXWARM_DATA_DIR: root, ...workerEnv },
+    workerEnv: { FOXWARM_DATA_DIR: root, ...workerEnv }, stopCompletionTimeoutMs, readProcessIdentity,
     resolveExactFinalSourceContext: sourceContexts.resolve,
   });
   const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
@@ -51,10 +60,10 @@ function makeFixture(root: string, workerEnv: Record<string, string> = {}, idleM
   return { store, sourceContexts, supervisor, ingress, registry, transport, runtime };
 }
 
-test('closed stop interrupts a fenced worker turn and mirrors stopping catalog-only', async () => {
+test('Worker crash before Stop acknowledgement returns outcome-unknown instead of false success', async () => {
   const sessionId = `mc-stop-${Date.now()}`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-stop-'));
-  const fixture = makeFixture(root, { FOXWARM_TEST_HANG_TURN: '1', FOXWARM_TEST_HANG_SESSION: sessionId });
+  const fixture = makeFixture(root, { FOXWARM_TEST_HANG_TURN: '1', FOXWARM_TEST_HANG_SESSION: sessionId }, 60_000, 2_000);
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
   const stub = baseSession(sessionId);
@@ -67,39 +76,160 @@ test('closed stop interrupts a fenced worker turn and mirrors stopping catalog-o
     // Wait until the turn has registered its in-flight abort controller.
     await waitFor(() => fs.pathExists(path.join(root, 'state', `hang-started-${sessionId}`)));
 
-    const stopped: any = await fixture.runtime.call('control', { sessionId, action: 'stop' });
-    assert.deepEqual(stopped, { action: 'stop', abortedInFlight: true }, 'interrupt aborts the active provider request without waiting on the turn');
-    assert.equal(stub.stopping, true, 'Main mirrors stopping via a catalog-only stub write');
+    const stop = fixture.runtime.call('control', { sessionId, action: 'stop' });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const active = fixture.supervisor.getStatus(sessionId);
+    assert.ok(active?.pid);
+    process.kill(active.pid!, 'SIGKILL');
+    await assert.rejects(() => stop,
+      (error: any) => error?.code === 'SESSION_WORKER_STOP_OUTCOME_UNKNOWN' && error?.retryable === true);
+    assert.notEqual(stub.stopping, true, 'Main never mirrors a Stop that did not confirm durable finalization');
     assert.ok(sessionManager.getAllSessions().get(sessionId) === stub, 'the worker authority is never hydrated into Main');
 
-    // An idle fenced worker has nothing in flight to abort.
+    // An idle fenced worker has nothing in flight to abort and Stop is a no-op.
     const sessionId2 = `${sessionId}-idle`;
     await fs.outputJson(path.join(root, 'state', 'sessions', `${sessionId2}.json`), serializeSessionHistoryPayload(baseSession(sessionId2)));
     await fixture.ingress.submitEnsuringWorker(sessionId2, { type: 'user', parts: [{ text: 'quick turn' }] });
     const stoppedIdle: any = await fixture.runtime.call('control', { sessionId: sessionId2, action: 'stop' });
-    assert.equal(stoppedIdle.action, 'stop');
-    assert.equal(stoppedIdle.abortedInFlight, false);
-    // The transactional persist is detached (queued on the host chain behind
-    // the turn's own writes/publications), so poll for the final durable state.
-    await waitFor(async () => JSON.parse(await fs.readFile(path.join(root, 'state', 'sessions', `${sessionId2}.json`), 'utf8')).stopping === true);
+    assert.deepEqual(stoppedIdle, { action: 'stop', abortedInFlight: false });
     const idleAuthority = JSON.parse(await fs.readFile(path.join(root, 'state', 'sessions', `${sessionId2}.json`), 'utf8'));
-    assert.equal(idleAuthority.stopping, true, 'idle interrupt still persists the stopping flag transactionally');
+    assert.notEqual(idleAuthority.stopping, true, 'idle Stop does not poison the next turn');
 
-    // With no queued work, dequeue preserves the local no-op contract and does
-    // not alter the already-stopped current turn.
-    assert.deepEqual(await fixture.runtime.call('control', { sessionId, action: 'dequeue' }), {
-      action: 'dequeue', queuedItems: 0, stoppedCurrent: false, abortedInFlight: false,
-    });
-    // Retry is closed, but an active Worker call rejects immediately rather
-    // than queuing a second retry behind it.
-    await assert.rejects(() => fixture.runtime.call('control', { sessionId, action: 'retry' }),
-      (error: any) => error?.code === 'SESSION_WORKER_RETRY_BUSY' && error?.retryable === true);
   } finally {
     fixture.transport.close();
     await fixture.supervisor.shutdown(3_000).catch(() => {});
     fixture.store.close();
     sessionManager.getAllSessions().delete(sessionId);
     sessionManager.getAllSessions().delete(`${sessionId}-idle`);
+    await fs.remove(root);
+  }
+});
+
+test('Stop never reports success after a busy Worker has already exited', async () => {
+  const sessionId = `mc-stop-precrashed-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-stop-precrashed-'));
+  const fixture = makeFixture(root, { FOXWARM_TEST_HANG_TURN: '1', FOXWARM_TEST_HANG_SESSION: sessionId });
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  const stub = baseSession(sessionId);
+  try {
+    sessionManager.getAllSessions().set(sessionId, stub);
+    await fixture.supervisor.reconcileStartupOwnerships();
+    void fixture.ingress.submitEnsuringWorker(sessionId, {
+      type: 'user', parts: [{ text: 'busy before crash and stop' }],
+    }).catch(() => {});
+    await waitFor(async () => (await fs.readJson(statePath)).busy === true);
+    await waitFor(() => fs.pathExists(path.join(root, 'state', `hang-started-${sessionId}`)));
+    const active = fixture.supervisor.getStatus(sessionId);
+    assert.ok(active?.pid);
+    process.kill(active.pid!, 'SIGKILL');
+    await waitFor(() => !fixture.supervisor.getStatus(sessionId));
+
+    await assert.rejects(() => fixture.runtime.call('control', { sessionId, action: 'stop' }),
+      (error: any) => error?.code === 'SESSION_WORKER_STOP_OUTCOME_UNKNOWN' && error?.retryable === true);
+    assert.notEqual(stub.stopping, true, 'unavailable Stop never mutates the Main stub');
+    assert.equal((await fs.readJson(statePath)).busy, true, 'crashed authority remains visibly unconfirmed');
+  } finally {
+    fixture.transport.close();
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    sessionManager.getAllSessions().delete(sessionId);
+    await fs.remove(root);
+  }
+});
+
+test('startup-reconciled activated lineage keeps Stop outcome unknown before detached recovery', async () => {
+  for (const scenario of [
+    { name: 'old-exited', actualIdentity: null, reason: 'startup-old-incarnation-exited' },
+    { name: 'pid-reused', actualIdentity: 'new-process:2', reason: 'startup-pid-reused' },
+  ] as ReadonlyArray<{ name: string; actualIdentity: string | null; reason: string }>) {
+    const sessionId = `mc-stop-startup-${scenario.name}-${Date.now()}`;
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), `foxwarm-worker-stop-startup-${scenario.name}-`));
+    const fixture = makeFixture(root, {}, 60_000, undefined, () => scenario.actualIdentity);
+    const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+    await fs.outputJson(statePath, serializeSessionHistoryPayload({ ...baseSession(sessionId), busy: true }));
+    const stub = baseSession(sessionId);
+    try {
+      sessionManager.getAllSessions().set(sessionId, stub);
+      fixture.store.beginGeneration(sessionId, 'old-incarnation');
+      fixture.store.registerCandidate(sessionId, 1, 'old-incarnation', 999_999, 'old-process:1');
+      fixture.store.activateCandidate(sessionId, 1, 'old-incarnation', 999_999, 'old-process:1');
+      await fixture.supervisor.reconcileStartupOwnerships();
+      assert.equal(fixture.store.getOwnership(sessionId).lastExitReason, scenario.reason);
+      assert.equal(fixture.supervisor.getStatus(sessionId), undefined, 'Stop does not spawn detached recovery');
+
+      await assert.rejects(() => fixture.runtime.call('control', { sessionId, action: 'stop' }),
+        (error: any) => error?.code === 'SESSION_WORKER_STOP_OUTCOME_UNKNOWN' && error?.retryable === true);
+      assert.equal(fixture.supervisor.getStatus(sessionId), undefined, 'unknown Stop never ensures a replacement');
+      assert.equal(fixture.store.getOwnership(sessionId).generation, 1);
+      assert.equal((await fs.readJson(statePath)).busy, true, 'Main never mutates unrecovered authority');
+      assert.notEqual(stub.stopping, true, 'Main stub remains untouched');
+    } finally {
+      fixture.transport.close();
+      await fixture.supervisor.shutdown(3_000).catch(() => {});
+      fixture.store.close();
+      sessionManager.getAllSessions().delete(sessionId);
+      await fs.remove(root);
+    }
+  }
+});
+
+test('never-started and confirmed-clean inactive idle Stop remain harmless no-ops', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-stop-clean-inactive-'));
+  const fixture = makeFixture(root);
+  const neverStartedId = `mc-stop-never-started-${Date.now()}`;
+  const cleanInactiveId = `${neverStartedId}-clean`;
+  try {
+    sessionManager.getAllSessions().set(neverStartedId, baseSession(neverStartedId));
+    sessionManager.getAllSessions().set(cleanInactiveId, baseSession(cleanInactiveId));
+    fixture.store.beginGeneration(cleanInactiveId, 'clean-incarnation');
+    fixture.store.registerCandidate(cleanInactiveId, 1, 'clean-incarnation', 999_998, 'clean-process:1');
+    fixture.store.activateCandidate(cleanInactiveId, 1, 'clean-incarnation', 999_998, 'clean-process:1');
+    fixture.store.markExitObserved(cleanInactiveId, 1, 'clean-incarnation', 'stopped:0');
+    await fixture.supervisor.reconcileStartupOwnerships();
+
+    assert.deepEqual(await fixture.runtime.call('control', { sessionId: neverStartedId, action: 'stop' }), {
+      action: 'stop', abortedInFlight: false,
+    });
+    assert.deepEqual(await fixture.runtime.call('control', { sessionId: cleanInactiveId, action: 'stop' }), {
+      action: 'stop', abortedInFlight: false,
+    });
+    assert.equal(fixture.supervisor.listStatuses().length, 0);
+  } finally {
+    fixture.transport.close();
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    sessionManager.getAllSessions().delete(neverStartedId);
+    sessionManager.getAllSessions().delete(cleanInactiveId);
+    await fs.remove(root);
+  }
+});
+
+test('signal-terminated intentional Worker lineage is not a clean inactive Stop no-op', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-stop-signalled-inactive-'));
+  const fixture = makeFixture(root);
+  const sessionId = `mc-stop-signalled-inactive-${Date.now()}`;
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload({ ...baseSession(sessionId), busy: true }));
+  const stub = baseSession(sessionId);
+  try {
+    sessionManager.getAllSessions().set(sessionId, stub);
+    fixture.store.beginGeneration(sessionId, 'signalled-incarnation');
+    fixture.store.registerCandidate(sessionId, 1, 'signalled-incarnation', 999_997, 'signalled-process:1');
+    fixture.store.activateCandidate(sessionId, 1, 'signalled-incarnation', 999_997, 'signalled-process:1');
+    fixture.store.markExitObserved(sessionId, 1, 'signalled-incarnation', 'stopped:SIGKILL');
+    await fixture.supervisor.reconcileStartupOwnerships();
+
+    await assert.rejects(() => fixture.runtime.call('control', { sessionId, action: 'stop' }),
+      (error: any) => error?.code === 'SESSION_WORKER_STOP_OUTCOME_UNKNOWN' && error?.retryable === true);
+    assert.equal(fixture.supervisor.listStatuses().length, 0, 'ambiguous inactive Stop never spawns a Worker');
+    assert.equal((await fs.readJson(statePath)).busy, true, 'busy authority is not Main-mutated');
+    assert.notEqual(stub.stopping, true, 'Main stub remains untouched');
+  } finally {
+    fixture.transport.close();
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    sessionManager.getAllSessions().delete(sessionId);
     await fs.remove(root);
   }
 });
@@ -243,38 +373,121 @@ test('interrupt aborts a slow provider request and ends the turn with stopped se
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-slow-'));
   const fixture = makeFixture(root, { FOXWARM_TEST_SLOW_PROVIDER: '1', FOXWARM_TEST_SLOW_SESSION: sessionId });
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  const mainHistoryPath = getSessionHistoryFilePath(sessionId);
   await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  await fs.remove(mainHistoryPath);
+  await fs.ensureSymlink(statePath, mainHistoryPath);
   try {
     sessionManager.getAllSessions().set(sessionId, baseSession(sessionId));
     await fixture.supervisor.reconcileStartupOwnerships();
     const turn = fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'slow question' }] }).catch(error => error);
     await waitFor(() => fs.pathExists(path.join(root, 'state', `slow-started-${sessionId}`)));
 
+    const stopStarted = Date.now();
     const stopped: any = await fixture.runtime.call('control', { sessionId, action: 'stop' });
     assert.deepEqual(stopped, { action: 'stop', abortedInFlight: true }, 'interrupt aborts the in-flight provider request');
+    assert.ok(Date.now() - stopStarted < 2_000, 'abort-aware provider Stop confirms durable finalization promptly');
+
+    const acknowledged = await fs.readJson(statePath);
+    assert.equal(acknowledged.busy, false, 'successful Stop returns only after busy release is durable');
+    assert.equal(acknowledged.stopping, false, 'successful Stop returns only after stopping is durably cleared');
 
     const started = Date.now();
     const turnResult = await turn;
     assert.ok(!(turnResult instanceof Error), `the stopped turn completes without an RPC error: ${(turnResult as any)?.message}`);
     assert.ok(Date.now() - started < 8_000, 'the turn ends promptly after the abort instead of running the full slow request');
     // Canonical local parity: the stopped-turn marker is channel presentation,
-    // not committed history; what matters is the slow answer is never appended
-    // or delivered and the stopping flag is durably persisted. The detached
-    // transactional persist lands after the turn's own writes on the host
-    // chain, so poll for the final durable state.
+    // not committed history; the slow answer is never appended or delivered,
+    // and finalization clears stopping before releasing the exact owner.
     await waitFor(async () => {
       const authority = JSON.parse(await fs.readFile(statePath, 'utf8'));
-      return authority.stopping === true && authority.busy === false
+      return authority.stopping === false && authority.busy === false
         && !JSON.stringify(authority.history).includes('deterministic child answer');
     });
     const authority = JSON.parse(await fs.readFile(statePath, 'utf8'));
-    assert.equal(authority.stopping, true, 'the stopping flag is durably persisted');
+    assert.equal(authority.stopping, false, 'the stopping flag is durably cleared');
     assert.equal(authority.busy, false, 'the turn released busy');
+
+    const fresh = await fixture.ingress.submitEnsuringWorker(sessionId, {
+      type: 'user', parts: [{ text: 'fresh question after stop' }],
+    });
+    assert.equal(fresh.busy, false);
+    const afterFresh = await fs.readJson(statePath);
+    assert.equal(JSON.stringify(afterFresh.history).split('fresh question after stop').length - 1, 1);
+    assert.equal(JSON.stringify(afterFresh.history).split('deterministic child answer').length - 1, 1);
+    assert.equal(afterFresh.stopping, false);
   } finally {
     fixture.transport.close();
     await fixture.supervisor.shutdown(3_000).catch(() => {});
     fixture.store.close();
     sessionManager.getAllSessions().delete(sessionId);
+    await fs.remove(mainHistoryPath);
+    await fs.remove(root);
+  }
+});
+
+test('busy Worker history exposes durable queued input and Stop passively commits it without another turn', async () => {
+  const sessionId = `mc-stop-pending-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-stop-pending-'));
+  const fixture = makeFixture(root, { FOXWARM_TEST_SLOW_PROVIDER: '1', FOXWARM_TEST_SLOW_SESSION: sessionId });
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  const mainHistoryPath = getSessionHistoryFilePath(sessionId);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  await fs.outputJson(mainHistoryPath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  try {
+    sessionManager.getAllSessions().set(sessionId, baseSession(sessionId));
+    await fixture.supervisor.reconcileStartupOwnerships();
+    const turn = fixture.ingress.submitEnsuringWorker(sessionId, {
+      type: 'user', parts: [{ text: 'slow stop boundary question' }],
+    }).catch(error => error);
+    await waitFor(() => fs.pathExists(path.join(root, 'state', `slow-started-${sessionId}`)));
+    await fixture.ingress.enqueueEnsuringWorker(sessionId, {
+      type: 'user', clientMessageId: 'pending-stop-client', parts: [{ text: 'passively commit me' }],
+    });
+
+    const beforeStop = await fixture.runtime.call('getHistory', { sessionId });
+    assert.ok(beforeStop);
+    assert.equal(beforeStop!.session.queueLength, 1);
+    const queuedClientRows = beforeStop!.queue.filter(item => item.clientMessageId === 'pending-stop-client');
+    assert.equal(queuedClientRows.length, 1, 'the pending WebUI item appears exactly once in the composed queue snapshot');
+
+    assert.deepEqual(await fixture.runtime.call('control', { sessionId, action: 'stop' }), {
+      action: 'stop', abortedInFlight: true,
+    });
+    const turnResult = await turn;
+    assert.ok(!(turnResult instanceof Error), `the stopped turn completes cleanly: ${turnResult?.message}`);
+    await waitFor(async () => {
+      const authority = await fs.readJson(statePath);
+      return authority.busy === false && authority.stopping === false && authority.queue.length === 0
+        && JSON.stringify(authority.history).includes('passively commit me');
+    });
+
+    const authority = await fs.readJson(statePath);
+    const text = JSON.stringify(authority.history);
+    assert.equal(text.split('slow stop boundary question').length - 1, 1);
+    assert.equal(text.split('passively commit me').length - 1, 1);
+    assert.equal(text.split('deterministic child answer').length - 1, 0, 'Stop never runs the queued input');
+    assert.equal(fixture.store.countPendingIntents(sessionId), 0);
+
+    const stoppedGeneration = fixture.supervisor.getStatus(sessionId);
+    assert.ok(stoppedGeneration?.pid);
+    process.kill(stoppedGeneration.pid!, 'SIGKILL');
+    await waitFor(() => fixture.store.findOwnership(sessionId)?.state === 'inactive');
+    await fixture.ingress.submitEnsuringWorker(sessionId, {
+      type: 'user', parts: [{ text: 'fresh input after acknowledged stop crash' }],
+    });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    const settledText = JSON.stringify((await fs.readJson(statePath)).history);
+    assert.equal(settledText.split('passively commit me').length - 1, 1);
+    assert.equal(settledText.split('fresh input after acknowledged stop crash').length - 1, 1);
+    assert.equal(settledText.split('deterministic child answer').length - 1, 1,
+      'restart runs only the fresh post-Stop input, never the passively committed pre-Stop queue');
+  } finally {
+    fixture.transport.close();
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    sessionManager.getAllSessions().delete(sessionId);
+    await fs.remove(mainHistoryPath);
     await fs.remove(root);
   }
 });
@@ -528,6 +741,210 @@ test('worker BTW snapshots a busy owner concurrently and serializes display-only
     sessionManager.getAllSessions().delete(sessionId);
     unregisterChannel(channelId); resetChannelsForTests(); setChannelsStoreForTests(null);
     await fs.remove(root);
+  }
+});
+
+test('worker model delete_session removes local, idle-worker, and busy-worker targets without deleting its source', async () => {
+  const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const sourceId = `mc-delete-source-${nonce}`;
+  const sourceAlias = `${sourceId}-alias`;
+  const localTargetId = `mc-delete-local-${nonce}`;
+  const idleWorkerTargetId = `mc-delete-idle-worker-${nonce}`;
+  const workerSurvivorId = `${idleWorkerTargetId}-child`;
+  const busyWorkerTargetId = `mc-delete-busy-worker-${nonce}`;
+  const root = DATA_ROOT_DIR;
+  const fixture = makeFixture(root, {
+    FOXWARM_TEST_SLOW_PROVIDER: '1',
+    FOXWARM_TEST_SLOW_SESSION: busyWorkerTargetId,
+    FOXWARM_TEST_MAIN_TOOLS_SESSION: sourceId,
+    FOXWARM_TEST_MAIN_TOOLS: JSON.stringify([
+      { id: 'delete-local', name: 'delete_session', args: { sessionId: localTargetId } },
+      { id: 'delete-idle-worker', name: 'delete_session', args: { sessionId: idleWorkerTargetId } },
+      { id: 'delete-busy-worker', name: 'delete_session', args: { sessionId: busyWorkerTargetId } },
+      { id: 'delete-source-alias', name: 'delete_session', args: { sessionId: sourceAlias } },
+    ]),
+  });
+  const ids = [sourceId, localTargetId, idleWorkerTargetId, workerSurvivorId, busyWorkerTargetId];
+  try {
+    await sessionManager.loadSessions();
+    for (const id of ids) {
+      const session = baseSession(id);
+      session.promptCacheKey = `delete-cache-${id}`;
+      if (id === sourceId) session.aliases = [sourceAlias];
+      if (id === workerSurvivorId) session.parentSessionId = idleWorkerTargetId;
+      sessionManager.getAllSessions().set(id, session);
+      await sessionManager.saveSession(id);
+    }
+    sessionManager.setSessionWorkerDeleteHandler(id => teardownSessionWorkerForDelete({ store: fixture.store, supervisor: fixture.supervisor }, id));
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await sessionRuntime.initializeSessionRuntime({
+      worker: { store: fixture.store, registry: fixture.supervisor.projectionRegistry, ingress: fixture.ingress, supervisor: fixture.supervisor },
+    });
+
+    await fixture.ingress.ensureWorkerOwner(idleWorkerTargetId);
+    await fixture.ingress.ensureWorkerOwner(workerSurvivorId);
+    const busyTurn = fixture.ingress.submitEnsuringWorker(busyWorkerTargetId, {
+      type: 'user', parts: [{ text: 'busy target work' }],
+    });
+    await waitFor(() => fs.pathExists(path.join(root, 'state', `slow-started-${busyWorkerTargetId}`)));
+
+    await fixture.ingress.submitEnsuringWorker(sourceId, {
+      type: 'user', parts: [{ text: 'delete the three other targets' }],
+    });
+    await busyTurn;
+
+    const sourceAuthority = await fs.readJson(getSessionHistoryFilePath(sourceId));
+    for (const targetId of [localTargetId, idleWorkerTargetId, busyWorkerTargetId]) {
+      assert.equal(sessionManager.getAllSessions().has(targetId), false, JSON.stringify(sourceAuthority.history));
+      assert.equal(await fs.pathExists(getSessionHistoryFilePath(targetId)), false);
+      assert.equal(fixture.store.findOwnership(targetId), undefined);
+      assert.equal(fixture.store.countPendingIntents(targetId), 0);
+    }
+    assert.equal(sessionManager.getAllSessions().has(sourceId), true);
+    assert.equal(await fs.pathExists(getSessionHistoryFilePath(sourceId)), true);
+    assert.equal(fixture.supervisor.getStatus(sourceId)?.ready, true);
+    assert.equal(fixture.store.findOwnership(sourceId)?.state, 'ready');
+    assert.equal(JSON.stringify(sourceAuthority.history).split('deleted successfully').length - 1, 3);
+    assert.equal(JSON.stringify(sourceAuthority.history).split('Cannot delete current session').length - 1, 1);
+    assert.equal(sourceAuthority.busy, false);
+    assert.equal(sourceAuthority.queue.length, 0);
+
+    assert.equal(sessionManager.getAllSessions().has(workerSurvivorId), true);
+    assert.equal(sessionManager.getSessionCatalog(workerSurvivorId)?.parentSessionId, undefined);
+    assert.equal(fixture.store.findOwnership(workerSurvivorId)?.state, 'ready');
+    await fixture.ingress.submitEnsuringWorker(workerSurvivorId, {
+      type: 'user', parts: [{ text: 'continue after parent deletion' }],
+    });
+    assert.equal(sessionManager.getSessionCatalog(workerSurvivorId)?.parentSessionId, undefined,
+      'later Worker publication must not recreate the deleted parent relation');
+  } finally {
+    sessionManager.setSessionWorkerDeleteHandler(undefined);
+    await sessionRuntime.shutdownSessionRuntime().catch(() => {});
+    fixture.transport.close();
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    for (const id of ids) {
+      sessionManager.getAllSessions().delete(id);
+      await fs.remove(getSessionHistoryFilePath(id)).catch(() => {});
+    }
+    for (const suffix of ['', '-shm', '-wal']) await fs.remove(path.join(root, `session-runtime.sqlite${suffix}`)).catch(() => {});
+  }
+});
+
+test('reciprocal Worker delete_session calls admit one pair and let its surviving source settle', async () => {
+  const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const sourceA = `mc-delete-reciprocal-a-${nonce}`;
+  const sourceB = `mc-delete-reciprocal-b-${nonce}`;
+  const root = DATA_ROOT_DIR;
+  const fixture = makeFixture(root, {
+    FOXWARM_TEST_MAIN_TOOLS_BY_SESSION: JSON.stringify({
+      [sourceA]: [{ id: 'delete-b', name: 'delete_session', args: { sessionId: sourceB } }],
+      [sourceB]: [{ id: 'delete-a', name: 'delete_session', args: { sessionId: sourceA } }],
+    }),
+  });
+  const replies: Array<{ sessionId: string; text: string }> = [];
+  const drainedAuthorities = new Map<string, any>();
+  let releaseAdmissionBarrier!: () => void;
+  const admissionBarrier = new Promise<void>(resolve => { releaseAdmissionBarrier = resolve; });
+  const admissionSources = new Set<string>();
+  setBeforeCrossSessionDeletionAdmissionForTests(async ({ sourceSessionId }) => {
+    admissionSources.add(sourceSessionId);
+    if (admissionSources.size === 2) releaseAdmissionBarrier();
+    await admissionBarrier;
+  });
+  const queueSource = (sessionId: string): QueueSource => ({
+    platform: 'test', channelId: 'reciprocal-delete', channelType: 'test',
+    channelUserId: sessionId, conversationId: sessionId, senderId: sessionId,
+    preferDirectReply: true,
+  });
+  const registrations: Array<() => void> = [];
+  try {
+    await sessionManager.loadSessions();
+    for (const id of [sourceA, sourceB]) {
+      const session = baseSession(id);
+      session.promptCacheKey = `reciprocal-delete-cache-${id}`;
+      sessionManager.getAllSessions().set(id, session);
+      await sessionManager.saveSession(id);
+    }
+    sessionManager.setSessionWorkerDeleteHandler(async id => {
+      const tornDown = await teardownSessionWorkerForDelete({ store: fixture.store, supervisor: fixture.supervisor }, id);
+      if ([sourceA, sourceB].includes(id) && await fs.pathExists(getSessionHistoryFilePath(id))) {
+        drainedAuthorities.set(id, await fs.readJson(getSessionHistoryFilePath(id)));
+      }
+      return tornDown;
+    });
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await sessionRuntime.initializeSessionRuntime({
+      worker: { store: fixture.store, registry: fixture.supervisor.projectionRegistry, ingress: fixture.ingress, supervisor: fixture.supervisor },
+    });
+    await fixture.ingress.ensureWorkerOwner(sourceA);
+    await fixture.ingress.ensureWorkerOwner(sourceB);
+
+    for (const id of [sourceA, sourceB]) {
+      const source = queueSource(id);
+      registrations.push(fixture.sourceContexts.register(id, source, {
+        ...source,
+        reply: async text => { replies.push({ sessionId: id, text }); },
+        sendTyping: async () => {},
+      }));
+    }
+
+    const [turnA, turnB] = await Promise.allSettled([
+      fixture.ingress.submitEnsuringWorker(sourceA, {
+        type: 'user', source: queueSource(sourceA), clientMessageId: `reciprocal-a-${nonce}`,
+        parts: [{ text: 'delete the reciprocal source B' }],
+      }),
+      fixture.ingress.submitEnsuringWorker(sourceB, {
+        type: 'user', source: queueSource(sourceB), clientMessageId: `reciprocal-b-${nonce}`,
+        parts: [{ text: 'delete the reciprocal source A' }],
+      }),
+    ]);
+
+    assert.equal(admissionSources.size, 2, 'both production reverse delete calls reached pair admission');
+    for (const result of [turnA, turnB]) {
+      if (result.status === 'rejected') {
+        assert.fail(`reciprocal turn failed outside the tool result: ${result.reason?.code || result.reason?.message || result.reason}`);
+      }
+    }
+    assert.equal(JSON.stringify([turnA, turnB, replies]).includes('RPC_DRAIN_TIMEOUT'), false);
+    assert.equal(JSON.stringify([turnA, turnB, replies]).includes('RPC_CLOSED'), false);
+
+    const survivingIds = [sourceA, sourceB].filter(id => sessionManager.getSessionCatalog(id));
+    assert.equal(survivingIds.length, 1, 'exactly one reciprocal delete commits');
+    const survivorId = survivingIds[0];
+    const deletedId = survivorId === sourceA ? sourceB : sourceA;
+    const deletedAuthority = drainedAuthorities.get(deletedId);
+    assert.ok(deletedAuthority, 'target teardown observes the drained source authority before deletion');
+    assert.match(JSON.stringify(deletedAuthority.history), /SESSION_DELETE_CONFLICT/);
+    assert.match(JSON.stringify(deletedAuthority.history), /"retryable":true/);
+    assert.ok(replies.some(reply => reply.sessionId === deletedId && reply.text === '_[Execution stopped by user]_'),
+      'the conflicting target commits a terminal turn response before deletion');
+    assert.ok(replies.some(reply => reply.sessionId === survivorId && reply.text === 'deterministic child answer'));
+
+    const survivorAuthority = await fs.readJson(getSessionHistoryFilePath(survivorId));
+    assert.match(JSON.stringify(survivorAuthority.history), /deleted successfully/);
+    assert.equal(survivorAuthority.busy, false);
+    assert.equal(survivorAuthority.queue.length, 0);
+    assert.equal(fixture.supervisor.getStatus(survivorId)?.ready, true);
+    assert.equal(fixture.store.findOwnership(survivorId)?.state, 'ready');
+    assert.equal(sessionManager.getSessionCatalog(deletedId), undefined);
+    assert.equal(await fs.pathExists(getSessionHistoryFilePath(deletedId)), false);
+    assert.equal(fixture.supervisor.getStatus(deletedId), undefined);
+    assert.equal(fixture.store.findOwnership(deletedId), undefined);
+  } finally {
+    releaseAdmissionBarrier();
+    setBeforeCrossSessionDeletionAdmissionForTests(undefined);
+    for (const unregister of registrations) unregister();
+    sessionManager.setSessionWorkerDeleteHandler(undefined);
+    await sessionRuntime.shutdownSessionRuntime().catch(() => {});
+    fixture.transport.close();
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    for (const id of [sourceA, sourceB]) {
+      sessionManager.getAllSessions().delete(id);
+      await fs.remove(getSessionHistoryFilePath(id)).catch(() => {});
+    }
+    for (const suffix of ['', '-shm', '-wal']) await fs.remove(path.join(root, `session-runtime.sqlite${suffix}`)).catch(() => {});
   }
 });
 

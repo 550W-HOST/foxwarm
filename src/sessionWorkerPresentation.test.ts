@@ -33,19 +33,20 @@ function makeFixture(root: string, extraEnv: Record<string, string> = {}) {
   const sourceContexts = new SessionWorkerSourceContextRegistry();
   const receivedMessages: any[] = [];
   const receivedEvents: any[] = [];
+  const receivedPresentation: Array<{ kind: 'message' | 'event'; value: any }> = [];
   const readySessions: string[] = [];
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, ...extraEnv },
     resolveExactFinalSourceContext: sourceContexts.resolve,
     presentationSink: {
-      broadcastMessage: (_sessionId, message) => { receivedMessages.push(message); },
-      notifySessionEvent: (_sessionId, event) => { receivedEvents.push(event); },
+      broadcastMessage: (_sessionId, message) => { receivedMessages.push(message); receivedPresentation.push({ kind: 'message', value: message }); },
+      notifySessionEvent: (_sessionId, event) => { receivedEvents.push(event); receivedPresentation.push({ kind: 'event', value: event }); },
     },
     onWorkerReady: sessionId => { readySessions.push(sessionId); },
   });
   const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
-  return { store, sourceContexts, supervisor, ingress, receivedMessages, receivedEvents, readySessions };
+  return { store, sourceContexts, supervisor, ingress, receivedMessages, receivedEvents, receivedPresentation, readySessions };
 }
 
 test('subscribed workers forward appended messages and coalesced stream deltas as pure presentation', async () => {
@@ -80,6 +81,53 @@ test('subscribed workers forward appended messages and coalesced stream deltas a
     assert.equal(updates.length, 1, 'rapid deltas coalesce into the latest cumulative frame');
     assert.equal(updates[0].text, 'partial-3');
     assert.ok(fixture.receivedEvents.some(e => e.type === 'model-stream-reset'), 'reset forwards immediately');
+    const updateIndex = fixture.receivedPresentation.findIndex(item => item.kind === 'event' && item.value.type === 'model-stream-update');
+    const resetIndex = fixture.receivedPresentation.findIndex(item => item.kind === 'event' && item.value.type === 'model-stream-reset');
+    assert.ok(updateIndex >= 0 && updateIndex < resetIndex, 'a coalesced update cannot arrive after its structural reset');
+  } finally {
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    await fs.remove(root);
+  }
+});
+
+test('final coalesced tool frame is forwarded before its canonical model message and never reappears', async () => {
+  const sessionId = `mc-pres-order-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-pres-order-'));
+  const fixture = makeFixture(root, {
+    FOXWARM_TEST_STREAM_COMMITTED_TOOL: '1',
+    FOXWARM_TEST_STREAM_COMMITTED_TOOL_AT: '2',
+  });
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  try {
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'unsubscribed warmup' }] });
+    await fixture.supervisor.setPresentationSubscription(sessionId, true);
+    await fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'run the streamed tool' }] });
+    await waitFor(() => fixture.receivedMessages.some(message =>
+      message.role === 'model' && message.parts?.some((part: any) => part.functionCall?.id === 'worker-stream-exec')));
+    // Wait beyond the former 500ms timer window: no stale delayed frame may
+    // recreate the synthetic WebUI reasoning/tool row after canonical commit.
+    await new Promise(resolve => setTimeout(resolve, 650));
+
+    const updateIndices = fixture.receivedPresentation
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => item.kind === 'event'
+        && item.value.type === 'model-stream-update'
+        && item.value.streamId === 'committed-tool-stream')
+      .map(({ index }) => index);
+    const modelIndex = fixture.receivedPresentation.findIndex(item => item.kind === 'message'
+      && item.value.role === 'model'
+      && item.value.parts?.some((part: any) => part.functionCall?.id === 'worker-stream-exec'));
+    assert.deepEqual(updateIndices.length, 1, 'the cumulative tool frame is forwarded exactly once');
+    assert.ok(updateIndices[0] < modelIndex, 'the final cumulative frame precedes the canonical model row');
+    assert.equal(fixture.receivedPresentation.slice(modelIndex + 1).some(item => item.kind === 'event'
+      && item.value.type === 'model-stream-update'
+      && item.value.streamId === 'committed-tool-stream'), false, 'no stale frame follows the canonical model row');
+    const committed = fixture.receivedPresentation[modelIndex].value;
+    assert.deepEqual(committed.parts.find((part: any) => part.functionCall)?.functionCall?.args,
+      { command: 'printf worker-stream-order' }, 'canonical message retains the real tool arguments');
   } finally {
     await fixture.supervisor.shutdown(3_000).catch(() => {});
     fixture.store.close();

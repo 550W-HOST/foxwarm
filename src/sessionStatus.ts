@@ -6,6 +6,7 @@ import { estimateSessionSummary } from './tokenCount';
 import type { Message, Session, TokenUsage } from './types';
 import type { SessionRuntimeSessionDto } from './sessionRuntimeService';
 import { formatSessionRuntimeStateSummary, type SessionRuntimeState } from './sessionRuntimeState';
+import { buildSessionModelEffortPresentation, type EffortPresentation } from './session/modelEffortPresentation';
 
 type SessionListItem = ReturnType<typeof sessionManager.listSessions>[number] | SessionRuntimeSessionDto;
 
@@ -17,6 +18,10 @@ export interface SessionStatusInfo {
   parentSessionId?: string;
   archived: boolean;
   modelKey: string;
+  effort: EffortPresentation;
+  childModelDefault: string | null;
+  effectiveChildModelKey: string;
+  childEffort: EffortPresentation;
   messageCount: number;
   tokenEstimate: number;
   imageCount: number;
@@ -166,6 +171,7 @@ export async function buildSessionStatusInfo(
     : session as Session;
   const sessionSummary = estimateSessionSummary(summarySource);
   const { currentKey, contextLimit } = resolveModelConfig(session.model);
+  const modelEffort = buildSessionModelEffortPresentation(session);
   const currentNodeId = session.currentNode || 'master';
   const allSessions = exactOwner ? [] : runtimeDto ? await sessionRuntime.listSessions() : sessionManager.listSessions();
   const childSessions = allSessions
@@ -187,6 +193,10 @@ export async function buildSessionStatusInfo(
     parentSessionId: session.parentSessionId,
     archived: !!session.archived,
     modelKey: currentKey,
+    effort: modelEffort.effort,
+    childModelDefault: modelEffort.childModelDefault,
+    effectiveChildModelKey: modelEffort.effectiveChildModelKey,
+    childEffort: modelEffort.childEffort,
     messageCount: runtimeDto ? runtimeDto.messageCount : (session as Session).history.length,
     tokenEstimate: sessionSummary.tokens,
     imageCount: sessionSummary.imageCount,
@@ -235,6 +245,8 @@ export function formatSessionStatus(info: SessionStatusInfo): string {
   result += `- agent id/name: \`${info.agentName}\`\n`;
   result += `- agent dir: \`${info.agentDir}\`${parent}${archived}\n`;
   result += `- model: \`${info.modelKey}\`\n`;
+  result += `- effort: raw=${info.effort.raw || 'unset'}, effective=${info.effort.effective}, allowed=${info.effort.allowed.join('|')}, default=${info.effort.defaultEffort || 'per-leaf default'}\n`;
+  result += `- child model/effort: model=${info.childModelDefault ? `\`${info.childModelDefault}\`` : `follow (\`${info.effectiveChildModelKey}\`)`}, raw=${info.childEffort.raw || 'unset'}, effective=${info.childEffort.effective}\n`;
   result += `- messages: ${info.messageCount}\n`;
   result += `- token estimate: ~${formatNumber(info.tokenEstimate)} / ${formatNumber(info.contextLimit)}${images}\n`;
   result += `- last usage: ${formatUsage(info.lastUsage, info.lastUsageTotalTokens)}\n`;

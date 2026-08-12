@@ -42,6 +42,7 @@ function makeBlockRecord(sessionId: string, id: number, rawStartSeq: number, raw
 test('vector search filters, block boost, and recall vector_query source rendering respect lineage', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-vector-search-filters-'));
   process.env.FOXWARM_DATA_DIR = tempRoot;
+  await fs.outputFile(path.join(tempRoot, 'state', 'config.yaml'), 'vector:\n  baseUrl: http://127.0.0.1:11434/v1\n');
 
   const originalFetch = global.fetch;
   global.fetch = (async (_input: any, init?: any) => {
@@ -99,10 +100,16 @@ test('vector search filters, block boost, and recall vector_query source renderi
         child: { id: 'child', agent: 'test-agent', parentSessionId: 'parent', meta: { lastMessageTime: 5000 } },
       },
     }, { spaces: 2 });
+    await fs.outputJson(path.join(config.SESSIONS_DIR, 'parent.json'), {
+      id: 'parent', agent: 'test-agent', history: [], queue: [], meta: {}, stats: {}, sessionStateVersion: 1, lastAppliedMailboxId: 0,
+    });
+    await fs.outputJson(path.join(config.SESSIONS_DIR, 'child.json'), {
+      id: 'child', agent: 'test-agent', parentSessionId: 'parent', history: [], queue: [], meta: {}, stats: {}, sessionStateVersion: 1, lastAppliedMailboxId: 0,
+    });
 
     await archiveStore.initArchiveStore();
     await sessionManager.loadSessions();
-    await vector.init();
+    await vector.init({ enabled: true });
     await vector.waitForStartupArchiveVectorBackfill();
 
     const lineage = await archiveStore.getVectorSearchLineage('child');
