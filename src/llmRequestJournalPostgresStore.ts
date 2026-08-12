@@ -148,7 +148,7 @@ export class PostgresLlmRequestJournalStore implements LlmRequestJournalStore {
       }
     }
     const constraints = await client.query(`
-      SELECT tc.table_name,tc.constraint_type,
+      SELECT tc.table_name,tc.constraint_type,tc.is_deferrable,
         array_agg(kcu.column_name ORDER BY kcu.ordinal_position) AS columns
       FROM information_schema.table_constraints tc
       JOIN information_schema.key_column_usage kcu
@@ -157,13 +157,13 @@ export class PostgresLlmRequestJournalStore implements LlmRequestJournalStore {
        AND kcu.constraint_name=tc.constraint_name
        AND kcu.table_name=tc.table_name
       WHERE tc.table_schema=$1 AND tc.constraint_type IN ('PRIMARY KEY','UNIQUE')
-      GROUP BY tc.table_name,tc.constraint_name,tc.constraint_type
+      GROUP BY tc.table_name,tc.constraint_name,tc.constraint_type,tc.is_deferrable
     `, [this.config.schema]);
     const identities = new Map<string, string[][]>();
     for (const row of constraints.rows) {
       const values = Array.isArray(row.columns) ? row.columns : String(row.columns || '').replace(/^\{|\}$/g, '').split(',').filter(Boolean);
       const current = identities.get(row.table_name) || [];
-      current.push(values);
+      if (row.is_deferrable === 'NO') current.push(values);
       identities.set(row.table_name, current);
     }
     for (const [table, expectedColumns] of Object.entries(REQUIRED_IDENTITY_CONSTRAINTS)) {

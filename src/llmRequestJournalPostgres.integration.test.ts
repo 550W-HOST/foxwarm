@@ -320,6 +320,20 @@ test('marked PostgreSQL schema with a missing required table fails closed', { sk
   await assert.rejects(wrongConstraintReopened.initialize(), /required identity constraint llm_journal_requests\(request_id\) is missing or incompatible/);
   await wrongConstraintReopened.close();
   await dropSchema(wrongConstraintSchema);
+
+  const deferrableSchema = `${schema}_deferrable_constraint`;
+  await dropSchema(deferrableSchema);
+  const deferrableInitialized = await configuredStore(deferrableSchema);
+  await deferrableInitialized.close();
+  const deferrablePool = new Pool({ connectionString, max: 1 });
+  try {
+    await deferrablePool.query(`ALTER TABLE "${deferrableSchema}".llm_journal_objects DROP CONSTRAINT llm_journal_objects_pkey`);
+    await deferrablePool.query(`ALTER TABLE "${deferrableSchema}".llm_journal_objects ADD CONSTRAINT replacement_object_identity UNIQUE(object_id) DEFERRABLE INITIALLY IMMEDIATE`);
+  } finally { await deferrablePool.end(); }
+  const deferrableReopened = new PostgresLlmRequestJournalStore({ backend:'postgres', connectionString:connectionString!, connectionStringEnv:'PG', schema:deferrableSchema, ssl:false, poolMax:1, connectTimeoutMs:1000, idleTimeoutMs:1000 });
+  await assert.rejects(deferrableReopened.initialize(), /required identity constraint llm_journal_objects\(object_id\) is missing or incompatible/);
+  await deferrableReopened.close();
+  await dropSchema(deferrableSchema);
 });
 
 test('cutover marker publication failure does not retire SQLite or report success', { skip: !enabled }, async () => {

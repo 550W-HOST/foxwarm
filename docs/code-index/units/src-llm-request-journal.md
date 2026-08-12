@@ -34,7 +34,7 @@ Canonical cross-module contract: [canonical LLM request journal](../threads/llm-
 - Attempt records store a hash, not the body, of the provider-specific semantic payload.
 - Legacy JSONL is strictly imported only by the startup migration, then moved to path-preserving migration backup. Runtime uses FULL synchronous writer transactions and explicit JSONL export.
 - Request/attempt identity structure, object kind/hash, delta ancestry/depth, and reconstructed message count are verified before a request can be reported complete.
-- SQLite uses a busy timeout for concurrent server/CLI journal writers. PostgreSQL uses a bounded lazy pool (default max 1), store-local migration lock, validated quoted schema identifier, strict marked-schema table/column plus identity-constraint verification, and an authority lifecycle of `copying` then `complete` for cutover.
+- SQLite uses a busy timeout for concurrent server/CLI journal writers. PostgreSQL uses a bounded lazy pool (default max 1), store-local migration lock, validated quoted schema identifier, strict marked-schema table/column plus exact non-deferrable identity-constraint verification compatible with its `ON CONFLICT` writes, and an authority lifecycle of `copying` then `complete` for cutover.
 - A database-local authority marker prevents a newly recreated empty file from being mistaken for the migrated journal after migration completion.
 
 ## Tests
