@@ -195,6 +195,63 @@ test('no-write Worker load and idle handback preserve catalog-owned agent in mem
   } finally { await fixture.close(); }
 });
 
+test('loaded idle release canonicalizes a missing v1 mailbox cursor before releasing ownership', async () => {
+  const sessionId = `worker-handback-legacy-loaded-${Date.now()}`;
+  const fixture = await createFixture(sessionId, { idleMs: 150 });
+  const authority = await fs.readJson(fixture.statePath);
+  delete authority.lastAppliedMailboxId;
+  await fs.writeJson(fixture.statePath, authority);
+  fixture.catalog.set(sessionId, baseSession(sessionId));
+  try {
+    await fixture.supervisor.reconcileStartupOwnerships();
+    const owner = await fixture.ingress.ensureWorkerOwner(sessionId);
+    const pid = fixture.supervisor.getStatus(sessionId)?.pid;
+    assert.ok(pid); assert.equal(owner.generation, 1);
+    await waitFor(() => fixture.store.getOwnership(sessionId).state === 'inactive');
+    assert.equal(readSessionWorkerProcessIdentity(pid!), null);
+    assert.equal((await fs.readJson(fixture.statePath)).lastAppliedMailboxId, 0);
+  } finally { await fixture.close(); }
+});
+
+test('immediate stop before runtime load canonicalizes a missing v1 cursor during handback', async () => {
+  const sessionId = `worker-handback-legacy-unloaded-${Date.now()}`;
+  const fixture = await createFixture(sessionId);
+  const authority = await fs.readJson(fixture.statePath);
+  delete authority.lastAppliedMailboxId;
+  await fs.writeJson(fixture.statePath, authority);
+  fixture.catalog.set(sessionId, baseSession(sessionId));
+  try {
+    await fixture.supervisor.reconcileStartupOwnerships();
+    const status = await fixture.supervisor.ensureWorker(sessionId);
+    assert.ok(status.pid);
+    await fixture.supervisor.stopWorker(sessionId, 10_000);
+    assert.equal(fixture.store.getOwnership(sessionId).state, 'inactive');
+    assert.equal(readSessionWorkerProcessIdentity(status.pid!), null);
+    assert.equal((await fs.readJson(fixture.statePath)).lastAppliedMailboxId, 0);
+  } finally { await fixture.close(); }
+});
+
+test('DB-ahead missing-cursor handback retains the draining fence without rewriting authority', async () => {
+  const sessionId = `worker-handback-legacy-ahead-${Date.now()}`;
+  const fixture = await createFixture(sessionId);
+  const authority = await fs.readJson(fixture.statePath);
+  delete authority.lastAppliedMailboxId;
+  await fs.writeJson(fixture.statePath, authority);
+  const before = await fs.readFile(fixture.statePath);
+  fixture.catalog.set(sessionId, baseSession(sessionId));
+  try {
+    await fixture.supervisor.reconcileStartupOwnerships();
+    const status = await fixture.supervisor.ensureWorker(sessionId);
+    const intent = fixture.store.enqueueIntent(sessionId, 'already-acked', 'enqueue', { text: 'already acked' });
+    fixture.store.acknowledgeMailboxPrefix({ sessionId, generation: status.generation,
+      incarnationId: status.incarnationId, expectedCursor: 0, upToId: intent.id });
+    await assert.rejects(() => fixture.supervisor.stopWorker(sessionId, 10_000), SessionWorkerLifecycleError);
+    assert.equal(fixture.store.getOwnership(sessionId).state, 'draining');
+    assert.equal(readSessionWorkerProcessIdentity(status.pid!), null);
+    assert.deepEqual(await fs.readFile(fixture.statePath), before, 'DB-ahead must not rewrite the authority');
+  } finally { await fixture.close(); }
+});
+
 test('graceful Worker drain closes and reaps its real native ToolScript pool before ownership release', {
   skip: process.platform !== 'linux' ? 'native Monty process lifecycle is Linux-specific' : false,
 }, async () => {

@@ -2,6 +2,7 @@ import { RpcError } from './rpc';
 import { captureSessionSemanticState, readSessionHistorySnapshot, restoreSessionSemanticState } from './session/metadataStore';
 import { hydrateAuthoritativeSessionState } from './session/stateHydration';
 import { writeAuthoritativeSessionState } from './session/stateFile';
+import { readSessionAuthorityMailboxCursor } from './session/stateValidation';
 import { buildSessionRuntimeState, type SessionRuntimeState } from './sessionRuntimeState';
 import { SessionWorkerMailboxIntent, SessionWorkerStore } from './sessionWorkerStore';
 import type { Session, SessionStats } from './types';
@@ -78,14 +79,14 @@ export class SessionWorkerPersistence {
   ): Promise<Session> {
     const target = this.detachCatalogStub(baseSession);
     const raw = await this.requireState(baseSession.id);
-    const stateCursor = this.stateCursor(raw);
-    this.store.reconcileActivatedMailboxCursor(baseSession.id, generation, incarnationId, stateCursor);
+    const stateCursor = this.readStateCursor(raw, baseSession.id);
+    this.store.reconcileActivatedMailboxCursor(baseSession.id, generation, incarnationId, stateCursor.cursor);
     const { session, imagesCanonicalized, upgradedLegacy } = await hydrateAuthoritativeSessionState(target, raw, {
       preserveCatalogFields: true, adoptAuthorityDisplayNameWhenMissing: true,
     });
     // Legacy image/version canonicalization is a same-cursor rewrite. Cursor
     // recovery above is justified by the already-durable raw JSON payload.
-    if (imagesCanonicalized || upgradedLegacy) await this.writeState(session);
+    if (imagesCanonicalized || upgradedLegacy || stateCursor.defaulted) await this.writeState(session);
     return session;
   }
 
@@ -110,11 +111,12 @@ export class SessionWorkerPersistence {
     incarnationId: string,
   ): Promise<SessionWorkerProjection> {
     const raw = await this.requireState(session.id);
-    this.store.reconcileActivatedMailboxCursor(session.id, generation, incarnationId, this.stateCursor(raw));
+    const stateCursor = this.readStateCursor(raw, session.id);
+    this.store.reconcileActivatedMailboxCursor(session.id, generation, incarnationId, stateCursor.cursor);
     const hydrated = await hydrateAuthoritativeSessionState(session, raw, {
       preserveCatalogFields: true, adoptAuthorityDisplayNameWhenMissing: true,
     });
-    if (hydrated.imagesCanonicalized || hydrated.upgradedLegacy) await this.writeState(session);
+    if (hydrated.imagesCanonicalized || hydrated.upgradedLegacy || stateCursor.defaulted) await this.writeState(session);
     return buildSessionWorkerProjection(session);
   }
 
@@ -196,9 +198,10 @@ export class SessionWorkerPersistence {
     return state;
   }
 
-  private stateCursor(state: Record<string, any>): number {
-    return Number.isSafeInteger(state.lastAppliedMailboxId) && state.lastAppliedMailboxId >= 0
-      ? state.lastAppliedMailboxId
-      : 0;
+  private readStateCursor(state: Record<string, any>, sessionId: string) {
+    try { return readSessionAuthorityMailboxCursor(state, `Session authority ${sessionId}.json`); }
+    catch (error: any) {
+      throw new RpcError('SESSION_WORKER_STATE_INVALID', `Cannot hydrate ${sessionId}: ${error?.message || error}`);
+    }
   }
 }

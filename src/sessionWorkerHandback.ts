@@ -1,6 +1,7 @@
 import fs from 'fs-extra';
 import { RpcError } from './rpc';
-import { getSessionHistoryFilePath } from './session/metadataStore';
+import { createSessionHistoryStore, getSessionHistoryFilePath, writeSessionHistoryAtomically } from './session/metadataStore';
+import { readSessionAuthorityMailboxCursor } from './session/stateValidation';
 import type { SessionWorkerStore } from './sessionWorkerStore';
 import type { Session } from './types';
 import { clearSessionCatalogStub } from './sessionRuntimeState';
@@ -13,6 +14,7 @@ export type SessionWorkerHandbackDeps = {
   upsertCatalogSession: (session: Session) => void;
   saveCatalog: (sessionId: string) => Promise<void>;
   stateFilePath?: (sessionId: string) => string;
+  writeState?: (sessionId: string, state: Record<string, any>) => Promise<void>;
 };
 
 function handbackUnavailable(message: string): never {
@@ -43,11 +45,19 @@ export async function performSessionWorkerHandback(
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.sessionStateVersion !== 1) {
     handbackUnavailable(`Authoritative state for session \`${sessionId}\` is not a current v1 payload during handback.`);
   }
-  const stateCursor = raw.lastAppliedMailboxId;
-  if (!Number.isSafeInteger(stateCursor) || stateCursor < 0) {
-    handbackUnavailable(`Authoritative state for session \`${sessionId}\` has no valid mailbox cursor during handback.`);
+  let stateCursor: ReturnType<typeof readSessionAuthorityMailboxCursor>;
+  try { stateCursor = readSessionAuthorityMailboxCursor(raw, `Authoritative state for session \`${sessionId}\``); }
+  catch { handbackUnavailable(`Authoritative state for session \`${sessionId}\` has no valid mailbox cursor during handback.`); }
+  deps.store.reconcileDrainedMailboxCursor(sessionId, stateCursor.cursor);
+  if (stateCursor.defaulted) {
+    raw.lastAppliedMailboxId = 0;
+    const writeState = deps.writeState
+      || (deps.stateFilePath
+        ? async (_id: string, state: Record<string, any>) => createSessionHistoryStore(deps.stateFilePath!(_id)).write(state)
+        : writeSessionHistoryAtomically);
+    await writeState(sessionId, raw)
+      .catch(() => handbackUnavailable(`Authoritative state for session \`${sessionId}\` could not be canonicalized during handback.`));
   }
-  deps.store.reconcileDrainedMailboxCursor(sessionId, stateCursor);
 
   const existing = deps.getCatalogSession(sessionId);
   const stub: Session = existing || ({

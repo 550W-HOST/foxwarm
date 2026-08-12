@@ -211,6 +211,58 @@ test('DB cursor ahead of JSON and stale generations fail closed before state wri
   });
 });
 
+test('missing v1 mailbox cursor defaults only to zero and is lazily canonicalized on load and reload', async () => {
+  await withStore(async store => {
+    const owner = activate(store, 'legacy-cursor');
+    const raw = serializeSessionHistoryPayload(session('legacy-cursor'));
+    delete raw.lastAppliedMailboxId;
+    let durable: Record<string, any> | undefined;
+    let writes = 0;
+    const persistence = new SessionWorkerPersistence(store, {
+      readState: async () => structuredClone(raw),
+      writeState: async current => { writes += 1; durable = structuredClone(serializeSessionHistoryPayload(current)); },
+    });
+    const loaded = await persistence.loadActivated(session('legacy-cursor'), owner.generation, owner.incarnationId);
+    assert.equal(loaded.lastAppliedMailboxId, 0);
+    assert.equal(durable?.lastAppliedMailboxId, 0);
+    await persistence.reloadActivated(loaded, owner.generation, owner.incarnationId);
+    assert.equal(writes, 2, 'each observed noncanonical authority is rewritten after reconciliation');
+    assert.equal(durable?.lastAppliedMailboxId, 0);
+  });
+});
+
+test('missing v1 mailbox cursor never repairs from SQLite and invalid explicit cursors fail closed', async () => {
+  await withStore(async store => {
+    const owner = activate(store, 'cursor-validation');
+    const intent = store.enqueueIntent('cursor-validation', 'applied', 'enqueue', { text: 'applied' });
+    store.acknowledgeMailboxPrefix({ sessionId: 'cursor-validation', generation: owner.generation,
+      incarnationId: owner.incarnationId, expectedCursor: 0, upToId: intent.id });
+    const missing = serializeSessionHistoryPayload(session('cursor-validation'));
+    delete missing.lastAppliedMailboxId;
+    let writes = 0;
+    const ahead = new SessionWorkerPersistence(store, {
+      readState: async () => structuredClone(missing), writeState: async () => { writes += 1; },
+    });
+    await assert.rejects(
+      () => ahead.loadActivated(session('cursor-validation'), owner.generation, owner.incarnationId),
+      (error: any) => error?.code === 'SESSION_WORKER_CURSOR_AHEAD',
+    );
+    assert.equal(writes, 0, 'DB-ahead rejection precedes canonical authority rewrite');
+
+    for (const invalid of [-1, 1.5, '0', null, Number.MAX_SAFE_INTEGER + 1]) {
+      const invalidPersistence = new SessionWorkerPersistence(store, {
+        readState: async () => ({ ...missing, lastAppliedMailboxId: invalid }),
+        writeState: async () => { writes += 1; },
+      });
+      await assert.rejects(
+        () => invalidPersistence.loadActivated(session('cursor-validation'), owner.generation, owner.incarnationId),
+        (error: any) => error?.code === 'SESSION_WORKER_STATE_INVALID' || /mailbox cursor/.test(error?.message || ''),
+      );
+    }
+    assert.equal(writes, 0);
+  });
+});
+
 test('unversioned state seeds historical catalog-only fields once while file values win', async () => {
   await withStore(async store => {
     const owner = activate(store, 'legacy');
