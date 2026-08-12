@@ -310,6 +310,21 @@ export type SessionRuntimeWorkerProjectionOptions = {
   supervisor?: SessionWorkerSupervisor;
 };
 
+function isDefinitelyCleanInactiveWorkerStop(ownership: ReturnType<SessionWorkerStore['findOwnership']>): boolean {
+  if (!ownership || ownership.state !== 'inactive') return false;
+  const reason = ownership.lastExitReason;
+  if (!reason) return true;
+  // Candidate-only exits never activated or touched Session authority.
+  if (reason === 'startup-abandoned-inert-candidate'
+    || reason === 'post-fork-startup-failure'
+    || reason === 'shutdown-provisional-child'
+    || reason.startsWith('spawn-failed:')) return true;
+  // Only a genuine zero-code child exit proves graceful Worker completion.
+  // Intentional shutdown can escalate to SIGTERM/SIGKILL; those exits pass
+  // through handback but can still leave authority busy and need recovery.
+  return reason === 'stopped:0';
+}
+
 function requireSession(sessionId: string): Promise<Session> {
   return sessionManager.getExistingSession(sessionId).then((session) => {
     if (!session) {
@@ -322,6 +337,7 @@ function requireSession(sessionId: string): Promise<Session> {
 export function createSessionRuntimeServiceHandler(options?: { worker?: SessionRuntimeWorkerProjectionOptions }): RpcServiceHandler<typeof sessionRuntimeServiceDescriptor> {
   let eventContext: SessionRuntimeEventContext | undefined;
   let unsubscribeWorkerProjections: (() => void) | undefined;
+  let unsubscribeWorkerIngress: (() => void) | undefined;
   const workerListSignatures = new Map<string, string>();
   const volatileLocalIds = new Set<string>();
   let volatileSequence = 1;
@@ -341,6 +357,21 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
   const projectedDto = (session: Session, selection = workerSelection(session.id)): SessionRuntimeSessionDto => overlaySessionWorkerProjection(
     buildSessionRuntimeSessionDto(session), selection.kind === 'worker' ? selection.entry?.projection : undefined,
   );
+  const withPendingWorkerIngress = (session: SessionRuntimeSessionDto, selection = workerSelection(session.id)): SessionRuntimeSessionDto => {
+    if (selection.kind !== 'worker') return session;
+    const pending = options?.worker?.store.countMailboxIntentsAfter(session.id, selection.entry.projection!.lastAppliedMailboxId) || 0;
+    if (pending === 0) return session;
+    const queueLength = session.queueLength + pending;
+    return { ...session, queueLength, runtimeState: { ...session.runtimeState, queueLength } };
+  };
+  const pendingWorkerQueue = (sessionId: string, afterId: number): QueueItem[] => options!.worker!.store
+    // The detached JSON snapshot owns `afterId`. Include every later durable
+    // row even if the live Worker acknowledged it between the file read and
+    // this query; otherwise that concurrent apply window would hide the row
+    // from both sides of the composed history response.
+    .listMailboxIntentsAfter(sessionId, afterId, 4096)
+    .flatMap(intent => intent.kind === 'enqueue' && isQueueItem(intent.payload)
+      ? [structuredClone(intent.payload)] : []);
   const ensureWorkerSelection = async (requestedId: string): Promise<Extract<WorkerSelection, { kind: 'worker' }>> => {
     const canonicalId = sessionManager.resolveLoadedSessionId(requestedId);
     if (!sessionManager.getAllSessions().has(canonicalId)) {
@@ -367,9 +398,10 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
 
   const emitState = (sessionId: string) => {
     const session = sessionManager.getAllSessions().get(sessionId);
+    const selection = session ? workerSelection(sessionId) : undefined;
     eventContext?.emit('stateChanged', {
       sessionId,
-      session: session ? projectedDto(session) : null,
+      session: session ? withPendingWorkerIngress(projectedDto(session, selection), selection) : null,
     });
   };
 
@@ -408,7 +440,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       }
       const selection = workerSelection(entry.sessionId);
       if (selection.kind !== 'worker' || selection.entry?.incarnationId !== entry.incarnationId) return;
-      const current = projectedDto(session, selection);
+      const current = withPendingWorkerIngress(projectedDto(session, selection), selection);
       eventContext?.emit('stateChanged', { sessionId: session.id, session: current });
       const currentSignature = listSignature(current);
       const previousSignature = workerListSignatures.get(session.id) || fallbackSignature;
@@ -417,6 +449,17 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         volatileSequence += 1; eventContext?.emit('listChanged', {});
       }
     });
+    unsubscribeWorkerIngress = typeof options?.worker?.ingress?.subscribeDurableIntentAccepted === 'function'
+      ? options.worker.ingress.subscribeDurableIntentAccepted((sessionId) => {
+        const session = sessionManager.getAllSessions().get(sessionId);
+        const selection = workerSelection(sessionId);
+        if (!session || selection.kind !== 'worker') return;
+        const current = withPendingWorkerIngress(projectedDto(session, selection), selection);
+        eventContext?.emit('stateChanged', { sessionId, session: current });
+        volatileSequence += 1;
+        eventContext?.emit('listChanged', {});
+      })
+      : undefined;
   };
 
   const uninstallEventCallbacks = () => {
@@ -426,6 +469,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
     sessionManager.setOnSessionListUpdated(() => {});
     sessionManager.setOnSessionStateUpdated(() => {});
     unsubscribeWorkerProjections?.(); unsubscribeWorkerProjections = undefined;
+    unsubscribeWorkerIngress?.(); unsubscribeWorkerIngress = undefined;
     workerListSignatures.clear();
     volatileLocalIds.clear();
   };
@@ -445,7 +489,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       if (selection.kind === 'worker' && !session) {
         throw new RpcError('SESSION_WORKER_STATE_UNAVAILABLE', `Committed state for session \`${selection.canonicalId}\` is unavailable.`, true);
       }
-      return { session: session ? projectedDto(session, selection) : null };
+      return { session: session ? withPendingWorkerIngress(projectedDto(session, selection), selection) : null };
     },
     listSessions(input) {
       const limit = input.limit === undefined ? sessionManager.getAllSessions().size : Math.max(0, Math.min(1000, Math.floor(input.limit)));
@@ -459,10 +503,10 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       }
       const activeProjectionCount = options?.worker?.registry.list().length || 0;
       const candidatePage = sessionManager.listSessionCatalogPage(limit + offset + activeProjectionCount, 0);
-      const candidates = new Map(candidatePage.sessions.map(session => [session.id, projectedDto(session)]));
+      const candidates = new Map(candidatePage.sessions.map(session => [session.id, withPendingWorkerIngress(projectedDto(session))]));
       for (const entry of options?.worker?.registry.list() || []) {
         const session = sessionManager.getAllSessions().get(entry.sessionId);
-        if (session) candidates.set(session.id, projectedDto(session));
+        if (session) candidates.set(session.id, withPendingWorkerIngress(projectedDto(session)));
       }
       return {
         sessions: [...candidates.values()]
@@ -505,7 +549,8 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         const projection = ownership && entry?.projection && !entry.stale && ownership.generation === entry.generation
           && ownership.incarnationId === entry.incarnationId ? entry.projection : undefined;
         if (input.currentOwnersOnly && ownership && !projection) continue;
-        sessions.push(overlaySessionWorkerProjection(buildSessionRuntimeSessionDto(session), projection));
+        const projected = overlaySessionWorkerProjection(buildSessionRuntimeSessionDto(session), projection);
+        sessions.push(withPendingWorkerIngress(projected));
       }
       return { sessions, revision: `${sessionCatalogStore.getPresentationRevision()}:${volatileSequence}` };
     },
@@ -524,10 +569,15 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
       if (!session) return null;
       if (selection.kind === 'worker') {
         const detached = await readDetachedWorkerSession(selection.canonicalId, session);
+        // Compose from the authoritative JSON cursor, not the SQLite ack
+        // cursor: JSON-ahead/ack-late rows may still be marked pending in
+        // SQLite but are already reflected in detached.queue.
+        const pending = pendingWorkerQueue(selection.canonicalId, detached.lastAppliedMailboxId || 0);
+        const dto = withPendingWorkerIngress(projectedDto(session, selection), selection);
         return {
-          session: projectedDto(session, selection),
+          session: dto,
           messages: detached.history,
-          queue: detached.queue || [],
+          queue: [...(detached.queue || []), ...pending],
           persistentMemorySnapshot: detached.persistentMemorySnapshot || '',
         };
       }
@@ -904,25 +954,53 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
           return { action: 'dequeue', ...dequeued };
         }
         const selection = workerSelection(sessionId);
+        if (input.action === 'stop' && selection.kind === 'local') {
+          const inactiveOwnership = options.worker.store.findOwnership(selection.canonicalId);
+          if (inactiveOwnership?.state === 'inactive' && !isDefinitelyCleanInactiveWorkerStop(inactiveOwnership)) {
+            throw new RpcError(
+              'SESSION_WORKER_STOP_OUTCOME_UNKNOWN',
+              'Stop may not have been applied because prior Session worker shutdown was not confirmed clean. Inspect session history/state before retrying.',
+              true,
+            );
+          }
+          const local = sessionManager.getAllSessions().get(selection.canonicalId);
+          if (local && !local.busy) return { action: 'stop', abortedInFlight: false };
+        }
         if (selection.kind !== 'local') {
           if (input.action === 'stop' && options.worker.supervisor) {
             // Closed stop for a worker-fenced session: the interrupt aborts the
-            // active provider request immediately (never queued behind the
-            // in-flight turn) and persists stopping=true transactionally on the
-            // worker's serialized chain. The Main stub mirrors stopping via a
-            // catalog-only write; the authority stays worker-owned. An inactive
-            // or crashed worker has nothing running to stop.
+            // active provider request immediately, captures the exact durable
+            // mailbox boundary while ordinary ingress admission is held, and
+            // returns success only after the in-flight turn's authoritative
+            // passive finalization has persisted. Authority stays worker-owned.
             const ownership = options.worker.store.findOwnership(selection.canonicalId);
-            if (ownership && options.worker.supervisor.getStatus(selection.canonicalId)?.ready) {
-              const interrupt = await options.worker.supervisor.interruptActivated(selection.canonicalId, ownership);
-              const stub = sessionManager.getAllSessions().get(selection.canonicalId);
-              if (stub) {
-                stub.stopping = true;
-                await sessionManager.saveSessionCatalogEntries([stub.id]);
+            const status = options.worker.supervisor.getStatus(selection.canonicalId);
+            const exactReady = !!ownership && ownership.state === 'ready' && !!ownership.incarnationId
+              && !!status?.ready && ownership.generation === status.generation
+              && ownership.incarnationId === status.incarnationId;
+            if (exactReady) {
+              try {
+                const interrupt = options.worker.ingress
+                  ? await options.worker.ingress.stopActivatedWorker(selection.canonicalId, ownership!)
+                  : await options.worker.supervisor.interruptActivated(selection.canonicalId, ownership);
+                return { action: 'stop', abortedInFlight: interrupt.abortedInFlight };
+              } catch (error: any) {
+                if (error?.code === 'SESSION_WORKER_STOP_OUTCOME_UNKNOWN') throw error;
+                if (['SESSION_WORKER_INGRESS_UNAVAILABLE', 'SESSION_WORKER_UNAVAILABLE', 'SESSION_WORKER_STATE_UNAVAILABLE'].includes(error?.code)) {
+                  throw new RpcError(
+                    'SESSION_WORKER_STOP_OUTCOME_UNKNOWN',
+                    'Stop may not have been applied because the exact Session worker became unavailable. Inspect session history/state before retrying.',
+                    true,
+                  );
+                }
+                throw error;
               }
-              return { action: 'stop', abortedInFlight: interrupt.abortedInFlight };
             }
-            return { action: 'stop', abortedInFlight: false };
+            throw new RpcError(
+              'SESSION_WORKER_STOP_OUTCOME_UNKNOWN',
+              'Stop may not have been applied because the exact Session worker is unavailable. Inspect session history/state before retrying.',
+              true,
+            );
           }
           throw new RpcError('SESSION_WORKER_CONTROL_UNSUPPORTED', 'Session-worker control is unsupported.', true);
         }

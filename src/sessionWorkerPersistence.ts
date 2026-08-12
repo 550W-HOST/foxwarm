@@ -128,13 +128,14 @@ export class SessionWorkerPersistence {
     incarnationId: string,
     limit: number,
     apply: (session: Session, intents: SessionWorkerMailboxIntent[]) => Promise<void> | void,
+    upToId?: number,
   ): Promise<SessionWorkerProjection> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 4096) {
       throw new RpcError('SESSION_WORKER_MAILBOX_LIMIT', 'Mailbox prefix limit must be an integer from 1 through 4096.');
     }
     const stateCursor = session.lastAppliedMailboxId || 0;
     const ownership = this.store.reconcileActivatedMailboxCursor(session.id, generation, incarnationId, stateCursor);
-    const intents = this.store.listPendingIntents(session.id, ownership.mailboxCursor, limit);
+    const intents = this.store.listPendingIntents(session.id, ownership.mailboxCursor, limit, upToId);
     if (!intents.length) return buildSessionWorkerProjection(session);
 
     const beforeApply = captureSessionSemanticState(session);

@@ -1281,10 +1281,10 @@ export class SessionTurnRunner {
         return 'suppress-trailing-handoff';
       }
       // Worker ingress can become durable while a provider/tool phase is in
-      // flight. Explicit dequeue owns a stop override, so ingest at this exact
-      // boundary before the same outer action loop scans the queue. Local
-      // placement already has live queue state and its hook is absent/no-op.
-      if (session.meta?.runQueuedAfterStop) {
+      // flight. Both Stop and Dequeue ingest at this exact boundary: Stop
+      // passively commits the exact prefix accepted before its atomic boundary,
+      // while Dequeue leaves that prefix queued for the same outer action loop.
+      if (stoppedByUser || session.stopping || session.meta?.runQueuedAfterStop) {
         await this.host.ingestPendingQueue?.(session);
       }
       const runQueuedAfterStop = !!session.meta?.runQueuedAfterStop;

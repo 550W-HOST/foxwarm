@@ -62,6 +62,7 @@ export class SessionWorkerHost {
   private coalescedStreamEvents = new Map<string, SessionStreamEvent>();
   private streamCoalesceTimer?: ReturnType<typeof setTimeout>;
   private mailboxIntentsAppliedInFlight = 0;
+  private stopMailboxBoundary?: number;
 
   constructor(
     private readonly identity: SessionWorkerIdentity,
@@ -363,23 +364,34 @@ export class SessionWorkerHost {
     // request and set the in-memory stopping flag that the in-flight turn polls
     // — neither may wait on the serialized host chain, or interrupting a wedged
     // turn would hang behind that same turn (mirrors local requestSessionStop,
-    // which also signals through the shared in-memory flag). (2) Durability is
-    // serialized: the stopping flag is persisted transactionally on the host
-    // chain so it lands after the turn's own final writes; that persist is
-    // detached so a turn that ignores its abort can never block this RPC.
+    // which also signals through the shared in-memory flag). (2) A successful
+    // RPC waits for the already-accepted serialized lane to complete canonical
+    // Stop finalization. Thus success means the passive history commit and
+    // stopping=false release are authoritative, while a wedged lane is bounded
+    // by the caller's RPC deadline and cannot produce false success.
     const controller = this.activeAbort;
     const abortedInFlight = !!controller;
     await this.ensureLoaded();
+    if (!this.session!.busy) {
+      return { stopping: false, abortedInFlight: false };
+    }
     // Set the stop signal before aborting: the abort rejection reaches the
     // runner through microtasks, and the stopped-turn path requires
     // session.stopping to already be true (mirrors local requestSessionStop).
+    this.stopMailboxBoundary = this.store.latestMailboxIntentId(this.identity.sessionId);
     this.session!.stopping = true;
     controller?.abort();
-    void this.serialize(async () => {
-      await this.fenceMutation();
-      this.session!.stopping = true;
-      await this.persistOwner();
-    }).catch(error => logger.error({ err: error, sessionId: this.identity.sessionId }, 'Session worker interrupt persistence failed'));
+    const completion = this.runTail;
+    await completion;
+    await this.ensureHealthy();
+    const session = this.session!;
+    if (session.busy || session.stopping || (session.lastAppliedMailboxId || 0) < this.stopMailboxBoundary) {
+      throw new RpcError(
+        'SESSION_WORKER_STOP_NOT_FINALIZED',
+        'Session worker Stop did not reach its authoritative passive finalization boundary.',
+        true,
+      );
+    }
     return { stopping: true, abortedInFlight };
   }
 
@@ -457,6 +469,9 @@ export class SessionWorkerHost {
     const session = this.session!;
     this.assertSupportedQueue(session);
     const mailboxCursorBefore = session.lastAppliedMailboxId || 0;
+    const stopBoundary = session.stopping && !session.meta?.runQueuedAfterStop
+      ? this.stopMailboxBoundary
+      : undefined;
     try {
       await this.persistence.applyAndPersistPendingPrefix(
         session,
@@ -479,7 +494,8 @@ export class SessionWorkerHost {
             const transition = applyQueuedItemToWaitState(owner, structuredClone(intent.payload));
             if (transition.action === 'enqueue') owner.queue.push(...transition.items);
           }
-        }
+        },
+        stopBoundary,
       );
     } finally {
       this.mailboxIntentsAppliedInFlight = 0;

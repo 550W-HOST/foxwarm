@@ -95,6 +95,24 @@ test('generation incarnation activation and ordered mailbox acknowledgement fail
   });
 });
 
+test('mailbox snapshot reader retains rows after an older authority cursor even after acknowledgement', async () => {
+  await withRoot(async root => {
+    const store = new SessionWorkerStore(path.join(root, 'runtime.sqlite')); store.open();
+    const first = store.enqueueIntent('snapshot', 'first', 'enqueue', { type: 'user', parts: [{ text: 'first' }] });
+    const second = store.enqueueIntent('snapshot', 'second', 'enqueue', { type: 'user', parts: [{ text: 'second' }] });
+    const identity = readSessionWorkerProcessIdentity(process.pid)!;
+    store.beginGeneration('snapshot', 'inc-snapshot');
+    store.registerCandidate('snapshot', 1, 'inc-snapshot', process.pid, identity);
+    store.activateCandidate('snapshot', 1, 'inc-snapshot', process.pid, identity);
+    store.acknowledgeMailboxPrefix({
+      sessionId: 'snapshot', generation: 1, incarnationId: 'inc-snapshot', expectedCursor: 0, upToId: second.id,
+    });
+    assert.equal(store.listPendingIntents('snapshot', 0, 8).length, 0);
+    assert.deepEqual(store.listMailboxIntentsAfter('snapshot', first.id, 8).map(intent => intent.intentId), ['second']);
+    store.close();
+  });
+});
+
 test('an unregistered fork candidate is inert and can only be abandoned, never activated', async () => {
   await withRoot(async root => {
     const store = new SessionWorkerStore(path.join(root, 'runtime.sqlite')); store.open();

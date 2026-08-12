@@ -6,7 +6,7 @@ import { RpcError } from './rpc';
 import { getSessionHistoryFilePath } from './session/metadataStore';
 import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
 import type { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
-import type { SessionWorkerStore } from './sessionWorkerStore';
+import type { SessionWorkerOwnershipRecord, SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { stableSessionWorkerJson } from './sessionWorkerStableJson';
 import type { SessionWorkerProjection } from './sessionWorkerPersistence';
@@ -178,6 +178,8 @@ export type SessionWorkerMutationAdmission = <T>(
 ) => Promise<T>;
 
 export class SessionWorkerIngressCoordinator {
+  private readonly durableIntentSubscribers = new Set<(sessionId: string, intentId: number) => void>();
+
   constructor(
     private readonly store: SessionWorkerStore,
     private readonly supervisor: SessionWorkerSupervisor,
@@ -199,6 +201,18 @@ export class SessionWorkerIngressCoordinator {
     return this.sourceContexts.register(sessionId, normalizeIngressSource(source), context);
   }
 
+  subscribeDurableIntentAccepted(callback: (sessionId: string, intentId: number) => void): () => void {
+    this.durableIntentSubscribers.add(callback);
+    return () => this.durableIntentSubscribers.delete(callback);
+  }
+
+  private notifyDurableIntentAccepted(sessionId: string, intentId: number): void {
+    for (const callback of this.durableIntentSubscribers) {
+      try { callback(sessionId, intentId); }
+      catch (error) { logger.warn({ err: error, sessionId, intentId }, 'Durable Session-worker ingress presentation notification failed'); }
+    }
+  }
+
   async submitQueuedInput(requestedSessionId: string, item: QueueItem): Promise<SessionWorkerIngressResult> {
     const { sessionId, item: payload } = this.resolveExact(requestedSessionId, item);
     const admitted = await this.withMutationAdmission(sessionId, 'accept queued work', async () => {
@@ -211,6 +225,7 @@ export class SessionWorkerIngressCoordinator {
       const intent = this.store.enqueueIntent(sessionId, crypto.randomUUID(), 'enqueue', payload);
       return { expected, intentId: intent.id };
     });
+    this.notifyDurableIntentAccepted(sessionId, admitted.intentId);
     return this.runAdmittedIntent(sessionId, admitted.expected, admitted.intentId);
   }
 
@@ -222,6 +237,7 @@ export class SessionWorkerIngressCoordinator {
       const intent = this.store.enqueueIntent(sessionId, crypto.randomUUID(), 'enqueue', payload);
       return { expected, intentId: intent.id };
     });
+    this.notifyDurableIntentAccepted(sessionId, admitted.intentId);
     return this.runAdmittedIntent(sessionId, admitted.expected, admitted.intentId);
   }
 
@@ -271,6 +287,20 @@ export class SessionWorkerIngressCoordinator {
     return this.invokeEnsuringWorker(requestedSessionId, 'start queued work', (sessionId, expected) => this.supervisor.dequeueActivated(sessionId, expected));
   }
 
+  async stopActivatedWorker(
+    requestedSessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+  ) {
+    const sessionId = this.requireLoadedCatalogSession(requestedSessionId);
+    if (sessionId !== requestedSessionId) throw new RpcError('SESSION_WORKER_OWNER_INVALID_SESSION', 'Session worker operations require an exact canonical session ID.');
+    return this.withMutationAdmission(sessionId, 'stop current Session work', async () => {
+      // Stop is a short signal RPC, not provider/tool completion. Keep ingress
+      // admission until the Worker has captured its exact mailbox boundary so
+      // later accepted input belongs to a fresh turn.
+      return this.supervisor.interruptActivated(sessionId, expected);
+    });
+  }
+
   async runBtw(requestedSessionId: string, message: string) {
     return this.invokeEnsuringWorker(requestedSessionId, 'run a side request', (sessionId, expected) => this.supervisor.runBtwActivated(sessionId, expected, message));
   }
@@ -316,6 +346,7 @@ export class SessionWorkerIngressCoordinator {
       const intent = this.store.enqueueIntent(sessionId, crypto.randomUUID(), 'enqueue', payload);
       return { expected, intentId: intent.id };
     });
+    this.notifyDurableIntentAccepted(sessionId, admitted.intentId);
     void this.supervisor.runPendingActivated(sessionId, admitted.expected).catch(error => {
       logger.error({ err: error, sessionId }, 'Detached session worker runPending failed; durable mailbox work remains retryable');
     });
