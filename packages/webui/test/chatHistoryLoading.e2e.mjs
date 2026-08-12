@@ -73,7 +73,10 @@ async function buildFixtureBundle() {
       if (url.includes('/debug-file')) return new Response(JSON.stringify({ resolvedPath: '/redacted/session.json', payload: { history: [], persistentMemorySnapshot: 'debug snapshot' } }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       if (url.includes('/models')) return new Response(JSON.stringify({ models: [{ key: 'fixture/model', contextLimit: 1000 }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       if (url.includes('/asr/status')) return new Response(JSON.stringify({ configured: false, available: false }), { status: 200, headers: { 'Content-Type': 'application/json' } })
-      if (url.includes('/commands')) return new Response(JSON.stringify({ commands: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      if (url.includes('/commands')) return new Response(JSON.stringify({ commands: [
+        { name: '/status', description: 'Show status', usage: '/status', requiresSession: true },
+        { name: '/session', description: 'Manage sessions', usage: '/session', requiresSession: true },
+      ] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       return new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } })
     }
 
@@ -129,7 +132,7 @@ before(async () => {
   const bundle = await buildFixtureBundle()
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><style>html,body,#root{width:100%;height:100%;margin:0}.foxwarm-chat-root{height:100%}</style></head><body><div id="root"></div><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><style>html,body,#root{width:100%;height:100%;margin:0}.foxwarm-chat-root{height:100%}.foxwarm-chat-composer-form-anchor{position:relative}.foxwarm-chat-composer-form-anchor>[data-slash-command-overlay="true"]{position:absolute;left:0;right:0;bottom:calc(100% + .5rem)}</style></head><body><div id="root"></div><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -195,6 +198,61 @@ test('rapid A/B sends issue distinct identified requests without waiting for A r
     .map(row => row.textContent.trim())
     .filter(text => text === 'A' || text === 'B')), ['A', 'B'])
   await page.evaluate(() => window.resolveFixtureMessages())
+  await page.close()
+})
+
+test('slash suggestions overlay the composer without changing bottom-follow geometry', async () => {
+  page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.evaluate(() => window.resolveFixtureHistory(0, Array.from({ length: 30 }, (_, index) => ({
+    role: index % 2 ? 'model' : 'user',
+    parts: [{ text: `history row ${index} ${'content '.repeat(12)}` }],
+    __meta: { seq: index + 1, timestamp: index + 1 },
+  }))))
+  await page.waitForFunction(() => document.body.textContent.includes('history row 29'))
+  await page.evaluate(() => {
+    const messages = document.querySelector('.foxwarm-chat-messages')
+    messages.scrollTop = messages.scrollHeight
+  })
+
+  await page.type('textarea', '/')
+  await page.waitForSelector('[data-slash-command-overlay="true"]')
+  const open = await page.evaluate(() => {
+    const root = document.querySelector('.foxwarm-chat-composer-inner')
+    const messages = document.querySelector('.foxwarm-chat-messages')
+    const overlay = document.querySelector('[data-slash-command-overlay="true"]')
+    const form = document.querySelector('.foxwarm-chat-composer-form')
+    const overlayRect = overlay.getBoundingClientRect()
+    const formRect = form.getBoundingClientRect()
+    return {
+      composerHeight: root.getBoundingClientRect().height,
+      scrollTop: messages.scrollTop,
+      scrollHeight: messages.scrollHeight,
+      clientHeight: messages.clientHeight,
+      anchored: overlayRect.bottom <= formRect.top,
+      viewportSafe: overlayRect.top >= 0,
+    }
+  })
+  assert.equal(open.anchored, true)
+  assert.equal(open.viewportSafe, true)
+  assert.ok(Math.abs((open.scrollTop + open.clientHeight) - open.scrollHeight) <= 2)
+
+  await page.keyboard.press('Escape')
+  await page.waitForSelector('[data-slash-command-overlay="true"]', { hidden: true })
+  const closed = await page.evaluate(() => {
+    const root = document.querySelector('.foxwarm-chat-composer-inner')
+    const messages = document.querySelector('.foxwarm-chat-messages')
+    return {
+      composerHeight: root.getBoundingClientRect().height,
+      scrollTop: messages.scrollTop,
+      scrollHeight: messages.scrollHeight,
+      clientHeight: messages.clientHeight,
+    }
+  })
+  assert.equal(closed.composerHeight, open.composerHeight)
+  assert.equal(closed.scrollHeight, open.scrollHeight)
+  assert.ok(Math.abs((closed.scrollTop + closed.clientHeight) - closed.scrollHeight) <= 2)
   await page.close()
 })
 

@@ -50,6 +50,7 @@ export default function ContextMenu({
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
+  const [hoveredSplitKey, setHoveredSplitKey] = useState<string | null>(null)
 
   const visibleEntries = useMemo(() => entries.filter(Boolean), [entries])
 
@@ -140,6 +141,7 @@ export default function ContextMenu({
           : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700/70'
 
         const itemClass = `flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors ${entry.disabled ? 'cursor-not-allowed opacity-50' : toneClass}`
+        const splitItemClass = `flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2.5 text-left text-sm ${entry.disabled ? 'cursor-not-allowed opacity-50' : entry.danger ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-gray-200'}`
 
         const itemButton = (
           <button
@@ -153,7 +155,7 @@ export default function ContextMenu({
               entry.onSelect?.()
               onClose()
             }}
-            className={entry.trailingControl ? itemClass : `${itemClass} w-full`}
+            className={entry.trailingControl ? splitItemClass : `${itemClass} w-full`}
           >
             <span className="flex h-4 w-4 shrink-0 items-center justify-center">{entry.icon}</span>
             <span className="min-w-0 flex-1 truncate">{entry.label}</span>
@@ -166,7 +168,14 @@ export default function ContextMenu({
 
         const control = entry.trailingControl
         return (
-          <div key={entry.key} className="flex w-full items-stretch">
+          <div
+            key={entry.key}
+            className={`foxwarm-context-menu-split-row flex w-full items-stretch transition-colors ${entry.disabled ? '' : entry.danger ? 'foxwarm-context-menu-split-row-danger' : ''} ${hoveredSplitKey === entry.key ? entry.danger ? 'bg-red-50 dark:bg-red-900/20' : 'bg-gray-100 dark:bg-gray-700/70' : ''}`}
+            data-context-menu-split-row="true"
+            data-context-menu-split-row-hovered={hoveredSplitKey === entry.key ? 'true' : 'false'}
+            onMouseEnter={() => setHoveredSplitKey(entry.key)}
+            onMouseLeave={() => setHoveredSplitKey(current => current === entry.key ? null : current)}
+          >
             {itemButton}
             <button
               type="button"

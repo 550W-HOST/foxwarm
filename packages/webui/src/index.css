@@ -1348,6 +1348,34 @@ html[data-foxwarm-ui-style="550a"] .foxwarm-model-effort-select {
   }
 }
 
+.foxwarm-model-selector-grid {
+  grid-template-columns: minmax(0, 1fr) 100px 100px;
+}
+
+.foxwarm-context-menu-split-row:hover,
+.foxwarm-context-menu-split-row:focus-within {
+  background-color: rgb(243 244 246);
+}
+
+.dark .foxwarm-context-menu-split-row:hover,
+.dark .foxwarm-context-menu-split-row:focus-within {
+  background-color: rgb(55 65 81 / 0.7);
+}
+
+.foxwarm-context-menu-split-row-danger:hover,
+.foxwarm-context-menu-split-row-danger:focus-within {
+  background-color: rgb(254 242 242);
+}
+
+.dark .foxwarm-context-menu-split-row-danger:hover,
+.dark .foxwarm-context-menu-split-row-danger:focus-within {
+  background-color: rgb(127 29 29 / 0.2);
+}
+
+.foxwarm-model-selector-scrollbar-aligned {
+  width: calc(100% - var(--foxwarm-model-selector-scrollbar-width, 0px));
+}
+
 html[data-foxwarm-ui-style="550a"] .foxwarm-markdown {
   font-family: var(--foxwarm-default-font) !important;
   --tw-prose-headings: var(--foxwarm-550a-text-bright);
@@ -1402,6 +1430,14 @@ html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-form:focus-within {
   background-color: var(--foxwarm-550a-panel) !important;
   border-color: var(--foxwarm-550a-accent-dim) !important;
   box-shadow: 0 0 0 1px var(--foxwarm-550a-accent-dim), 0 0 18px var(--foxwarm-550a-accent-glow) !important;
+}
+
+html[data-foxwarm-ui-style="550a"] .foxwarm-model-filter-input:focus {
+  border-color: var(--foxwarm-550a-accent-dim) !important;
+  outline: none !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-shadow: 0 0 0 1px var(--foxwarm-550a-accent-dim) !important;
+  box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), 0 0 12px var(--foxwarm-550a-accent-glow) !important;
 }
 
 html[data-foxwarm-ui-style="550a"] .foxwarm-chat-composer-textarea {
