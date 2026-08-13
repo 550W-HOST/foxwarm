@@ -61,7 +61,7 @@ export type SessionWorkerBtwResult = {
   projection: SessionWorkerProjection;
 };
 
-export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 11, {
+export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 12, {
   loadProjection: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
   retry: rpcMethod<{ source?: QueueSource }, SessionWorkerProjection>(),

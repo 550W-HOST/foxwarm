@@ -736,28 +736,32 @@ test('background compact retains only an appended compatible active-history suff
   } finally { (llm as any).chat = originalChat; }
 });
 
-test('historical tool-response pruning keeps Unicode-safe line-aware head/tail, metadata, recall location, and call args', () => {
+test('historical tool-response pruning keeps Unicode-safe line-aware head/tail, metadata, recall location, and call args', async () => {
   const { buildToolResponsePrunePlan } = require('./history') as typeof import('./history');
+  const { archive } = await loadDeps();
   const headLine = `${'h'.repeat(450)}😀\n`;
   const middle = 'M'.repeat(900);
   const tailLine = `\n${'t'.repeat(450)}🦊`;
   const output = `${headLine}${middle}${tailLine}`;
   const history: Message[] = [
-    { role: 'model', parts: [{ functionCall: { id: 'call-prune', name: 'read', args: { unchanged: middle }, rawArgsText: JSON.stringify({ unchanged: middle }) } }], __meta: { seq: 1 } },
+    { role: 'model', parts: [{ functionCall: { id: 'call-prune', name: 'read', args: { unchanged: middle }, rawArgsText: JSON.stringify({ unchanged: middle }) } }], __meta: { seq: 1, timestamp: 1 } },
     { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'call-prune', name: 'read', response: {
       output, status: 'ok', path: '/tmp/result.txt', sha256: 'a'.repeat(64), nested: { discard: middle }, arbitraryLarge: middle,
-    } } }], __meta: { seq: 2 } },
-    { role: 'user', parts: [{ text: 'recent' }], __meta: { seq: 3 } },
+    } } }], __meta: { seq: 2, timestamp: 2 } },
+    { role: 'user', parts: [{ text: 'recent' }], __meta: { seq: 3, timestamp: 3 } },
   ];
-  const plan = buildToolResponsePrunePlan({ history, persistentMemorySnapshot: '' }, 1 / 3);
+  const sessionId = makeSessionId('prune_shape');
+  const authority = { id: sessionId, agent: 'main', history: [], nextMessageSeq: 1 } as Session;
+  await archive.appendMessagesToArchive(authority, history);
+  const plan = await buildToolResponsePrunePlan(sessionId, { history, persistentMemorySnapshot: '' }, 1 / 3);
   assert.equal(plan.replacedFunctionCalls, 0);
   assert.equal(plan.replacedFunctionResponses, 1);
   assert.deepEqual(plan.rewrittenHistory[0].parts[0].functionCall, history[0].parts[0].functionCall);
   const response = plan.rewrittenHistory[1].parts[0].functionResponse!.response;
   const pruned = String(response.output);
-  assert.match(pruned, /^h+/);
-  assert.match(pruned, /😀\n{2,3}--- \[foxwarm:/);
-  assert.match(pruned, /\n\nt+🦊$/);
+  assert.match(pruned, /^output: "h+/);
+  assert.match(pruned, /😀\\nM+/);
+  assert.match(pruned, /--- \[foxwarm:/);
   assert.match(pruned, /recall\(\{ target: "msg#2" \}\)/);
   assert.match(pruned, /tool="read"/);
   assert.match(pruned, /tool_use_id="call-prune"/);
@@ -770,19 +774,110 @@ test('historical tool-response pruning keeps Unicode-safe line-aware head/tail, 
   assert.deepEqual(plan.rewrittenHistory[2], history[2]);
 });
 
-test('structured historical response payloads retain their full JSON envelope inside the pruned text', () => {
+test('structured historical response payloads retain the full model-visible response inside pruned text', async () => {
   const { buildToolResponsePrunePlan } = require('./history') as typeof import('./history');
+  const { archive } = await loadDeps();
   const history: Message[] = [
-    { role: 'model', parts: [{ functionCall: { id: 'structured-call', name: 'call_tool', args: {} } }], __meta: { seq: 1 } },
+    { role: 'model', parts: [{ functionCall: { id: 'structured-call', name: 'call_tool', args: {} } }], __meta: { seq: 1, timestamp: 1 } },
     { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'structured-call', name: 'call_tool', response: {
       output: { status: 'ok', path: '/tmp/structured.txt', body: 'Z'.repeat(2500) },
-    } } }], __meta: { seq: 2 } },
-    { role: 'user', parts: [{ text: 'recent' }], __meta: { seq: 3 } },
+    } } }], __meta: { seq: 2, timestamp: 2 } },
+    { role: 'user', parts: [{ text: 'recent' }], __meta: { seq: 3, timestamp: 3 } },
   ];
-  const plan = buildToolResponsePrunePlan({ history, persistentMemorySnapshot: '' }, 1 / 3);
+  const sessionId = makeSessionId('prune_structured');
+  const authority = { id: sessionId, agent: 'main', history: [], nextMessageSeq: 1 } as Session;
+  await archive.appendMessagesToArchive(authority, history);
+  const plan = await buildToolResponsePrunePlan(sessionId, { history, persistentMemorySnapshot: '' }, 1 / 3);
   const pruned = String(plan.rewrittenHistory[1].parts[0].functionResponse?.response.output);
-  assert.match(pruned, /^\{"status":"ok","path":"\/tmp\/structured\.txt","body":"Z/);
+  assert.match(pruned, /status: ok/);
+  assert.match(pruned, /path: \/tmp\/structured\.txt/);
   assert.match(pruned, /historical tool response pruned/);
+});
+
+
+test('historical pruning requires exact effective archive provenance and accepts inherited exact identity', async () => {
+  const { sessionHistory, archive } = await loadDeps();
+  const archiveStore = await import('./archiveStore');
+  const huge = 'PROVENANCE-FULL '.repeat(2200);
+  const makeHistory = (): Message[] => [
+    { role: 'model', parts: [{ functionCall: { id: 'prov-call', name: 'read', args: {} } }], __meta: { seq: 1, timestamp: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'prov-call', name: 'read', response: { output: huge } } }], __meta: { seq: 2, timestamp: 2 } },
+    { role: 'user', parts: [{ text: 'tail' }], __meta: { seq: 3, timestamp: 3 } },
+  ];
+
+  const missingId = makeSessionId('prune_missing_archive');
+  const missingPlan = await sessionHistory.buildToolResponsePrunePlan(missingId, { history: makeHistory(), persistentMemorySnapshot: '' }, 1 / 3);
+  assert.equal(missingPlan.replacedFunctionResponses, 0);
+
+  const conflictingId = makeSessionId('prune_conflicting_archive');
+  const conflictingArchive = { id: conflictingId, agent: 'main', history: [], nextMessageSeq: 1 } as Session;
+  const archiveHistory = makeHistory();
+  await archive.appendMessagesToArchive(conflictingArchive, archiveHistory);
+  const edited = makeHistory();
+  edited[1].parts[0].functionResponse!.response.output = `${huge} offline edit`;
+  const conflictingPlan = await sessionHistory.buildToolResponsePrunePlan(conflictingId, { history: edited, persistentMemorySnapshot: '' }, 1 / 3);
+  assert.equal(conflictingPlan.replacedFunctionResponses, 0);
+
+  const parentId = makeSessionId('prune_parent');
+  const childId = makeSessionId('prune_child');
+  const parent = { id: parentId, agent: 'main', history: [], nextMessageSeq: 1 } as Session;
+  const inheritedHistory = makeHistory();
+  await archive.appendMessagesToArchive(parent, inheritedHistory);
+  await archiveStore.ensureSessionBranch(childId, { parentSessionId: parentId, forkMessageSeq: 3, forkBlockId: 0 });
+  const inheritedPlan = await sessionHistory.buildToolResponsePrunePlan(childId, { history: inheritedHistory, persistentMemorySnapshot: '' }, 1 / 3);
+  assert.equal(inheritedPlan.replacedFunctionResponses, 1);
+  assert.deepEqual(inheritedPlan.validatedArchiveSeqs, [2]);
+});
+
+test('duplicate effective archive seq identity is nonprunable', async () => {
+  const { sessionHistory, archive } = await loadDeps();
+  const archiveStore = await import('./archiveStore');
+  const huge = 'DUPLICATE '.repeat(2500);
+  const parentId = makeSessionId('prune_dup_parent'); const childId = makeSessionId('prune_dup_child');
+  const parent = { id: parentId, agent: 'main', history: [], nextMessageSeq: 1 } as Session;
+  const message: Message = { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'dup', name: 'read', response: { output: huge } } }], __meta: { seq: 2, timestamp: 2 } };
+  await archive.appendMessagesToArchive(parent, [structuredClone(message)]);
+  await archiveStore.ensureSessionBranch(childId, { parentSessionId: parentId, forkMessageSeq: 2, forkBlockId: 0 });
+  const child = { id: childId, agent: 'main', history: [], nextMessageSeq: 1 } as Session;
+  await archive.appendMessagesToArchive(child, [structuredClone(message)]);
+  const history: Message[] = [
+    { role: 'model', parts: [{ functionCall: { id: 'dup', name: 'read', args: {} } }], __meta: { seq: 1, timestamp: 1 } },
+    message,
+    { role: 'user', parts: [{ text: 'tail' }], __meta: { seq: 3, timestamp: 3 } },
+  ];
+  const plan = await sessionHistory.buildToolResponsePrunePlan(childId, { history, persistentMemorySnapshot: '' }, 1 / 3);
+  assert.equal(plan.replacedFunctionResponses, 0);
+});
+
+test('whole response formatting covers structured roots and mixed output/content/error envelopes', async () => {
+  const { sessionHistory, archive } = await loadDeps();
+  const cases = [
+    { count: 1, totalMatched: 1, tools: [{ name: 'search_tools', description: 'D'.repeat(2500) }] },
+    { output: 'O'.repeat(2200), error: 'small error sibling' },
+    { output: 'O'.repeat(2200), content: 'small content sibling' },
+    { output: 'small', content: 'C'.repeat(2200) },
+    { output: ['array', { nested: 'A'.repeat(2200) }] },
+    { output: 'I'.repeat(2200) },
+  ];
+  for (const [index, response] of cases.entries()) {
+    const id = makeSessionId(`prune_envelope_${index}`);
+    const history: Message[] = [
+      { role: 'model', parts: [{ functionCall: { id: `mixed-${index}`, name: 'call_tool', args: {} } }], __meta: { seq: 1, timestamp: 1 } },
+      { role: 'tool', parts: [
+        { functionResponse: { tool_use_id: `mixed-${index}`, name: 'call_tool', response } },
+        ...(index === cases.length - 1 ? [{ toolUseId: `mixed-${index}`, inlineDataRef: { imageId: 'image-ref', mimeType: 'image/png', byteLength: 1, sha256: 'a'.repeat(64) } }] : []),
+      ], __meta: { seq: 2, timestamp: 2 } },
+      { role: 'user', parts: [{ text: 'tail' }], __meta: { seq: 3, timestamp: 3 } },
+    ];
+    await archive.appendMessagesToArchive({ id, agent: 'main', history: [], nextMessageSeq: 1 } as Session, history);
+    const plan = await sessionHistory.buildToolResponsePrunePlan(id, { history, persistentMemorySnapshot: '' }, 1 / 3);
+    assert.equal(plan.replacedFunctionResponses, 1, `case ${index}`);
+    const output = String(plan.rewrittenHistory[1].parts[0].functionResponse?.response.output);
+    assert.match(output, /historical tool response pruned/);
+    if (index === 1) assert.match(output, /small error sibling/);
+    if (index === 2) assert.match(output, /small content sibling/);
+    if (index === 3) assert.match(output, /small/);
+  }
 });
 
 test('manual historical tool-response pruning is a true no-op for small responses', async () => {
@@ -813,10 +908,13 @@ test('automatic pruning commits below 50% and skips layered provider planning', 
   } as Session;
   const huge = 'auto-prune-payload '.repeat(5000);
   session.history = [
-    { role: 'model', parts: [{ functionCall: { id: 'auto-call', name: 'read', args: { untouched: huge } } }], __meta: { seq: 1 } },
-    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'auto-call', name: 'read', response: { output: huge } } }], __meta: { seq: 2 } },
-    ...Array.from({ length: 8 }, (_, index): Message => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: `tail-${index}` }], __meta: { seq: index + 3 } })),
+    { role: 'model', parts: [{ functionCall: { id: 'auto-call', name: 'read', args: { untouched: huge } } }], __meta: { seq: 1, timestamp: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'auto-call', name: 'read', response: { output: huge } } }], __meta: { seq: 2, timestamp: 2 } },
+    ...Array.from({ length: 8 }, (_, index): Message => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: `tail-${index}` }], __meta: { seq: index + 3, timestamp: index + 3 } })),
   ];
+  const { archive } = await loadDeps();
+  const archiveAuthority = { ...session, history: [], nextMessageSeq: 1 } as Session;
+  await archive.appendMessagesToArchive(archiveAuthority, session.history);
   const saves = { count: 0 };
   const originalChat = llm.chat; let providerCalls = 0;
   (llm as any).chat = async () => { providerCalls += 1; throw new Error('layered planner must not run'); };
@@ -864,22 +962,24 @@ test('automatic pruning above 50% leaves byte-exact history and runs layered pla
 });
 
 test('prune commit accepts an appended suffix and rejects a changed prefix', async () => {
-  const { sessionHistory } = await loadDeps();
+  const { sessionHistory, archive } = await loadDeps();
   const huge = 'compatible-prefix '.repeat(2000);
   const base: Message[] = [
-    { role: 'model', parts: [{ functionCall: { id: 'compat-call', name: 'read', args: {} } }], __meta: { seq: 1 } },
-    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'compat-call', name: 'read', response: { output: huge } } }], __meta: { seq: 2 } },
-    { role: 'user', parts: [{ text: 'protected tail' }], __meta: { seq: 3 } },
+    { role: 'model', parts: [{ functionCall: { id: 'compat-call', name: 'read', args: {} } }], __meta: { seq: 1, timestamp: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'compat-call', name: 'read', response: { output: huge } } }], __meta: { seq: 2, timestamp: 2 } },
+    { role: 'user', parts: [{ text: 'protected tail' }], __meta: { seq: 3, timestamp: 3 } },
   ];
   const session = { id: makeSessionId('prune_compat'), agent: 'main', history: structuredClone(base), persistentMemorySnapshot: '',
     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null }, busy: false, queue: [], meta: { lastMessageTime: 1 }, historyVersion: 0 } as Session;
-  const plan = sessionHistory.buildToolResponsePrunePlan(session, 1 / 3);
+  await archive.appendMessagesToArchive({ ...session, history: [], nextMessageSeq: 1 } as Session, session.history);
+  const plan = await sessionHistory.buildToolResponsePrunePlan(session.id, session, 1 / 3);
   session.history.push({ role: 'user', parts: [{ text: 'appended' }], __meta: { seq: 4 } });
   const saves = { count: 0 };
   assert.equal((await sessionHistory.commitToolResponsePrunePlan(makeDepsForSession(session, saves), session.id, plan)).committed, true);
   assert.equal(session.history.at(-1)?.parts[0].text, 'appended');
   const incompatible = { ...session, id: makeSessionId('prune_incompat'), history: structuredClone(base), historyVersion: 0 } as Session;
-  const incompatiblePlan = sessionHistory.buildToolResponsePrunePlan(incompatible, 1 / 3);
+  await archive.appendMessagesToArchive({ ...incompatible, history: [], nextMessageSeq: 1 } as Session, incompatible.history);
+  const incompatiblePlan = await sessionHistory.buildToolResponsePrunePlan(incompatible.id, incompatible, 1 / 3);
   incompatible.history[0].parts[0].functionCall!.args = { edited: true };
   const incompatibleSaves = { count: 0 };
   assert.equal((await sessionHistory.commitToolResponsePrunePlan(makeDepsForSession(incompatible, incompatibleSaves), incompatible.id, incompatiblePlan)).committed, false);
@@ -888,17 +988,18 @@ test('prune commit accepts an appended suffix and rejects a changed prefix', asy
 });
 
 test('prune persistence failure restores exact semantic history while post-authority failure keeps the committed rewrite', async () => {
-  const { sessionHistory } = await loadDeps();
+  const { sessionHistory, archive } = await loadDeps();
   const huge = 'failure-boundary '.repeat(2500);
   const make = (id: string): Session => ({ id, agent: 'main', history: [
-    { role: 'model', parts: [{ functionCall: { id: 'failure-call', name: 'read', args: {} } }], __meta: { seq: 1 } },
-    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'failure-call', name: 'read', response: { output: huge } } }], __meta: { seq: 2 } },
-    { role: 'user', parts: [{ text: 'tail' }], __meta: { seq: 3 } },
+    { role: 'model', parts: [{ functionCall: { id: 'failure-call', name: 'read', args: {} } }], __meta: { seq: 1, timestamp: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'failure-call', name: 'read', response: { output: huge } } }], __meta: { seq: 2, timestamp: 2 } },
+    { role: 'user', parts: [{ text: 'tail' }], __meta: { seq: 3, timestamp: 3 } },
   ], persistentMemorySnapshot: '', stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
   busy: false, queue: [], meta: { lastMessageTime: 1 }, historyVersion: 5, promptCacheKey: 'dddddddd-eeee-4fff-8aaa-222222222222' } as Session);
 
   const beforeAuthority = make(makeSessionId('prune_before_authority'));
   const beforeSnapshot = structuredClone(beforeAuthority.history);
+  await archive.appendMessagesToArchive({ ...beforeAuthority, history: [], nextMessageSeq: 1 } as Session, beforeAuthority.history);
   await assert.rejects(() => sessionHistory.compactToolMessages({
     ...makeDepsForSession(beforeAuthority, { count: 0 }), saveSession: async () => { throw new Error('before authority'); },
   }, beforeAuthority.id, 1 / 3), /before authority/);
@@ -906,6 +1007,7 @@ test('prune persistence failure restores exact semantic history while post-autho
   assert.equal(beforeAuthority.historyVersion, 5);
 
   const postAuthority = make(makeSessionId('prune_post_authority'));
+  await archive.appendMessagesToArchive({ ...postAuthority, history: [], nextMessageSeq: 1 } as Session, postAuthority.history);
   const postError = Object.assign(new Error('post authority'), { code: 'SESSION_AUTHORITY_POSTCOMMIT_FAILED' });
   await assert.rejects(() => sessionHistory.compactToolMessages({
     ...makeDepsForSession(postAuthority, { count: 0 }), saveSession: async () => { throw postError; },

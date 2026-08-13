@@ -832,6 +832,8 @@ test('WebUI per-session SSE sends initial and live canonical runtime state witho
     assert.equal(initial.session.runtimeState.state, 'waiting');
     assert.equal(initial.session.runtimeState.waiting.waitingFor, 'timer');
     assert.equal(initial.session.busy, false);
+    assert.equal(initial.session.messageCount, session.history.length);
+    assert.equal(initial.session.historyVersion, session.historyVersion || 0);
 
     await sessionManager.appendSessionMessage(session, {
       role: 'tool',
@@ -891,6 +893,7 @@ test('WebUI per-session SSE sends initial and live canonical runtime state witho
     assert.equal(waitingAgain.session.busy, false);
 
     delete session.meta.wait;
+    session.historyVersion = (session.historyVersion || 0) + 1;
     await sessionManager.saveSession(sessionId);
 
     const idle = await sse.read();
@@ -898,6 +901,7 @@ test('WebUI per-session SSE sends initial and live canonical runtime state witho
     assert.equal(idle.session.runtimeState.state, 'idle');
     assert.equal(idle.session.runtimeState.busy, false);
     assert.equal(idle.session.runtimeState.queueLength, 0);
+    assert.equal(idle.session.historyVersion, session.historyVersion);
   } finally {
     await sse?.cancel().catch(() => {});
     await server.stop();

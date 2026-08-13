@@ -17,6 +17,7 @@ export type SessionWorkerProjection = {
   queueLength: number;
   runtimeState: SessionRuntimeState;
   messageCount: number;
+  historyVersion: number;
   lastMessageTime: number;
   stats: SessionStats;
   currentNode: string;
@@ -45,6 +46,7 @@ export function buildSessionWorkerProjection(session: Session): SessionWorkerPro
     queueLength: session.queue.length,
     runtimeState: { ...runtimeState, busy: !!session.busy, queueLength: session.queue.length },
     messageCount: session.meta?.messageCount ?? session.history.length,
+    historyVersion: session.historyVersion || 0,
     lastMessageTime: session.meta?.lastMessageTime
       ?? (typeof lastMessage?.__meta?.timestamp === 'number' ? lastMessage.__meta.timestamp : 0),
     stats: session.stats || { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },

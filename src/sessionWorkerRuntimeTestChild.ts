@@ -16,7 +16,7 @@ import { ProcessRpcClientTransport, ProcessRpcServer, RpcError, RpcServiceRegist
 import { writeAuthoritativeSessionState } from './session/stateFile';
 import { readSessionHistorySnapshot } from './session/metadataStore';
 import { initArchiveStore } from './session/archiveStore';
-import { appendMessagesToArchive } from './session/archive';
+import { appendMessagesToArchive, readArchiveMessagesBySeqRange } from './session/archive';
 import { COMPACT_PLAN_TOOL_NAME } from './session/compactPlan';
 import {
   createSessionWorkerControlServiceHandler,
@@ -342,7 +342,11 @@ async function start(): Promise<void> {
       await Promise.all([initArchiveStore(), initLlmRequestJournal()]);
       if (process.env.FOXWARM_TEST_SEED_ARCHIVE === '1') {
         const seed = await readSessionHistorySnapshot(sessionId);
-        if (seed?.history?.length) { seed.id = sessionId; seed.agent ||= 'main'; await appendMessagesToArchive(seed as any, seed.history); }
+        if (seed?.history?.length) {
+          seed.id = sessionId; seed.agent ||= 'main';
+          const existing = await readArchiveMessagesBySeqRange(sessionId);
+          if (existing.length === 0) await appendMessagesToArchive(seed as any, seed.history);
+        }
       }
     },
   });

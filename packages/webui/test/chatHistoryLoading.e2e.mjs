@@ -26,12 +26,12 @@ async function buildFixtureBundle() {
     window.fixtureHistoryAbortCount = 0
     window.fixtureStateProbeCount = 0
     window.fixtureIgnoreHistoryAbort = false
-    window.resolveFixtureHistory = (queueLength = 0, messages = [{ role: 'user', parts: [{ text: 'old history row' }], __meta: { seq: 1, timestamp: 10 } }]) => {
+    window.resolveFixtureHistory = (queueLength = 0, messages = [{ role: 'user', parts: [{ text: 'old history row' }], __meta: { seq: 1, timestamp: 10 } }], historyVersion = 0) => {
       const entry = historyResponseResolvers.shift()
       if (!entry) throw new Error('No pending history request')
       entry.settled = true
       entry.resolve(new Response(JSON.stringify({
-        session: { id: 'fixture/main', busy: false, runtimeState: { state: 'idle', busy: false, queueLength }, queueLength, modelKey: 'fixture/model' },
+        session: { id: 'fixture/main', busy: false, runtimeState: { state: 'idle', busy: false, queueLength }, queueLength, messageCount: messages.length, historyVersion, modelKey: 'fixture/model' },
         messages,
         persistentMemorySnapshot: 'snapshot supplied by history',
         queuedMessages: [],
@@ -293,6 +293,31 @@ test('same-session refresh triggers coalesce behind one in-flight history reques
 
   await page.evaluate(() => window.resolveFixtureHistory(3))
   await page.waitForFunction(() => document.body.textContent.includes('old history row'))
+  await page.close()
+})
+
+test('same-count historyVersion change refreshes an open Chat after an in-place history rewrite', async () => {
+  page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.evaluate(() => window.resolveFixtureHistory(0, [{ role: 'tool', parts: [{ functionResponse: { tool_use_id: 'same-count', name: 'read', response: { output: 'full historical response' } } }], __meta: { seq: 2, timestamp: 20 } }], 1))
+  await page.waitForFunction(() => document.body.textContent.includes('full historical response'))
+
+  await page.evaluate(() => window.emitFixtureEvent({
+    type: 'session-state',
+    session: { id: 'fixture/main', busy: false, runtimeState: { state: 'idle' }, queueLength: 0, messageCount: 1, historyVersion: 1, modelKey: 'fixture/model' },
+  }))
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 1)
+
+  await page.evaluate(() => window.emitFixtureEvent({
+    type: 'session-state',
+    session: { id: 'fixture/main', busy: false, runtimeState: { state: 'idle' }, queueLength: 0, messageCount: 1, historyVersion: 2, modelKey: 'fixture/model' },
+  }))
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+  await page.evaluate(() => window.resolveFixtureHistory(0, [{ role: 'tool', parts: [{ functionResponse: { tool_use_id: 'same-count', name: 'read', response: { output: 'historical tool response pruned' } } }], __meta: { seq: 2, timestamp: 20 } }], 2))
+  await page.waitForFunction(() => document.body.textContent.includes('historical tool response pruned'))
+  assert.equal(await page.evaluate(() => document.body.textContent.includes('full historical response')), false)
   await page.close()
 })
 

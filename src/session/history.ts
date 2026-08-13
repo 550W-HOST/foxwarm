@@ -34,6 +34,7 @@ import {
   validateCompactPlanArgs,
 } from './compactPlan';
 import { CompactionRequest, Message, MessagePart, QueueItem, Session, TokenUsage } from '../types';
+import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
 import { formatMessagePreviewText } from '../utils/messageFormat';
 import { buildSystemMessageParts } from '../utils/systemMessageParts';
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
@@ -271,15 +272,6 @@ function takeLineAwareTail(chars: string[], limit: number): string {
   return chars.slice(start).join('');
 }
 
-function normalizeHistoricalToolResponseText(value: unknown): string | null {
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return null;
-  }
-}
-
 function buildToolResponsePrunedText(options: {
   originalText: string;
   seq: number;
@@ -307,12 +299,9 @@ function buildPrunedFunctionResponse(
   if (!functionResponse || !Number.isSafeInteger(seq) || (seq || 0) < 1 || !isPlainRecord(functionResponse.response)) return null;
 
   const response = functionResponse.response;
-  const payloadKey = (['output', 'content', 'error'] as const).find(key => response[key] !== undefined && response[key] !== null);
-  if (!payloadKey) return null;
   let originalText: string;
-  const normalizedText = normalizeHistoricalToolResponseText(response[payloadKey]);
-  if (normalizedText === null) return null;
-  originalText = normalizedText;
+  try { originalText = formatToolResponsePayload(response); }
+  catch { return null; }
   const originalChars = unicodeChars(originalText).length;
   if (originalChars <= TOOL_RESPONSE_RETAIN_HEAD_CHARS + TOOL_RESPONSE_RETAIN_TAIL_CHARS) return null;
 
@@ -325,13 +314,12 @@ function buildPrunedFunctionResponse(
   const prunedChars = unicodeChars(prunedText).length;
   if (prunedChars >= originalChars) return null;
 
-  const nextResponse: Record<string, unknown> = {};
+  const nextResponse: Record<string, unknown> = { output: prunedText };
   for (const [key, value] of Object.entries(response)) {
-    if (key !== payloadKey && TOOL_RESPONSE_METADATA_KEYS.has(key) && isSmallMetadataValue(value)) {
+    if (TOOL_RESPONSE_METADATA_KEYS.has(key) && isSmallMetadataValue(value)) {
       nextResponse[key] = structuredClone(value);
     }
   }
-  nextResponse[payloadKey] = prunedText;
 
   return {
     part: {
@@ -349,28 +337,45 @@ function buildPrunedFunctionResponse(
 export type ToolResponsePrunePlan = ToolNoiseCompactionResult & {
   snapshotHistory: Message[];
   rewrittenHistory: Message[];
+  validatedArchiveSeqs: number[];
 };
 
 function toolResponsePruneResult(plan: ToolResponsePrunePlan): ToolNoiseCompactionResult {
-  const { snapshotHistory: _snapshotHistory, rewrittenHistory: _rewrittenHistory, ...result } = plan;
+  const { snapshotHistory: _snapshotHistory, rewrittenHistory: _rewrittenHistory, validatedArchiveSeqs: _validatedArchiveSeqs, ...result } = plan;
   return result;
 }
 
-export function buildToolResponsePrunePlan(
+export async function buildToolResponsePrunePlan(
+  sessionId: string,
   session: Pick<Session, 'history' | 'persistentMemorySnapshot'>,
   keepPercent: number = COMPACT_PERCENT,
-): ToolResponsePrunePlan {
+): Promise<ToolResponsePrunePlan> {
   const snapshotHistory = structuredClone(session.history);
   const splitIndex = resolveCompactionSplitIndex(snapshotHistory, keepPercent);
   let replacedFunctionResponses = 0;
   let touchedMessages = 0;
+  const validatedArchiveSeqs: number[] = [];
+  const candidateSeqs = snapshotHistory.slice(0, splitIndex).flatMap(message =>
+    message.parts.some(part => !!part.functionResponse) && isPositiveSafeInteger(message.__meta?.seq) ? [message.__meta!.seq!] : []);
+  const archiveRecords = candidateSeqs.length
+    ? await readArchiveMessagesBySeqRange(sessionId, Math.min(...candidateSeqs), Math.max(...candidateSeqs)) : [];
+  const archiveBySeq = new Map<number, typeof archiveRecords>();
+  for (const record of archiveRecords) { const records = archiveBySeq.get(record.seq) || []; records.push(record); archiveBySeq.set(record.seq, records); }
 
   const rewrittenOlder = snapshotHistory.slice(0, splitIndex).map(message => {
     let touched = false;
+    const seq = message.__meta?.seq;
+    const records = isPositiveSafeInteger(seq) ? archiveBySeq.get(seq) : undefined;
+    const validArchive = records?.length === 1 && isDeepStrictEqual(
+      normalizedRawMessageForArchiveComparison(message),
+      normalizedRawMessageForArchiveComparison(records[0].message),
+    );
     const parts = message.parts.map(part => {
+      if (!validArchive) return structuredClone(part);
       const pruned = buildPrunedFunctionResponse(message, part);
       if (!pruned) return structuredClone(part);
       replacedFunctionResponses += 1;
+      if (isPositiveSafeInteger(seq) && !validatedArchiveSeqs.includes(seq)) validatedArchiveSeqs.push(seq);
       touched = true;
       return pruned.part;
     });
@@ -384,6 +389,7 @@ export function buildToolResponsePrunePlan(
   return {
     snapshotHistory,
     rewrittenHistory,
+    validatedArchiveSeqs,
     replacedFunctionCalls: 0,
     replacedFunctionResponses,
     touchedMessages,
@@ -409,6 +415,14 @@ export async function commitToolResponsePrunePlan(
   const baseResult = toolResponsePruneResult(plan);
   if (!session || plan.replacedFunctionResponses === 0 || !hasCompatibleHistoryPrefix(session.history, plan.snapshotHistory)) {
     return { committed: false, result: { ...baseResult, replacedFunctionResponses: 0, touchedMessages: 0, estimatedTokensSaved: 0 } };
+  }
+  for (const seq of plan.validatedArchiveSeqs) {
+    const records = await readArchiveMessagesBySeqRange(sessionId, seq, seq);
+    const active = plan.snapshotHistory.filter(message => message.__meta?.seq === seq);
+    if (records.length !== 1 || active.length !== 1 || !isDeepStrictEqual(
+      normalizedRawMessageForArchiveComparison(active[0]),
+      normalizedRawMessageForArchiveComparison(records[0].message),
+    )) return { committed: false, result: { ...baseResult, replacedFunctionResponses: 0, touchedMessages: 0, estimatedTokensSaved: 0 } };
   }
 
   const rewrittenHistory = [...plan.rewrittenHistory, ...structuredClone(session.history.slice(plan.snapshotHistory.length))];
@@ -1571,7 +1585,7 @@ export async function compactToolMessages(
     throw new Error(`Session \`${sessionId}\` not found.`);
   }
 
-  const plan = buildToolResponsePrunePlan(session, keepPercent);
+  const plan = await buildToolResponsePrunePlan(sessionId, session, keepPercent);
   return (await commitToolResponsePrunePlan(deps, sessionId, plan)).result;
 }
 
@@ -1582,7 +1596,7 @@ export async function tryAutomaticToolResponsePruning(
 ): Promise<boolean> {
   const session = deps.getSessionById(sessionId);
   if (!session) return false;
-  const plan = planOverride || buildToolResponsePrunePlan(session, COMPACT_PERCENT);
+  const plan = planOverride || await buildToolResponsePrunePlan(sessionId, session, COMPACT_PERCENT);
   if (plan.replacedFunctionResponses === 0) return false;
   const { contextLimit } = resolveModelConfig(session.model);
   const recoveryTarget = Math.max(1, Math.floor(contextLimit * 0.5));
@@ -1662,7 +1676,7 @@ export async function processSessionCompactionRequest(
 
   if (executionMode === 'auto') {
     const session = deps.getSessionById(sessionId);
-    const prunePlan = session ? buildToolResponsePrunePlan(session, COMPACT_PERCENT) : undefined;
+    const prunePlan = session ? await buildToolResponsePrunePlan(sessionId, session, COMPACT_PERCENT) : undefined;
     if (prunePlan && await tryAutomaticToolResponsePruning(deps, sessionId, prunePlan)) return;
     if (prunePlan && !hasCompatibleHistoryPrefix(session?.history || [], prunePlan.snapshotHistory)) {
       logger.info({ sessionId }, 'Skipping layered compaction because the automatic maintenance snapshot changed incompatibly');

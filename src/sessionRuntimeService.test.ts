@@ -309,6 +309,7 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
 
     registry.establish(identity);
     const projection = buildSessionWorkerProjection(worker);
+    projection.historyVersion = 7;
     await registry.apply(identity, projection); await flushEvents();
     assert.deepEqual(events, ['stateChanged', 'listChanged']); events.length = 0;
     const originalListFenced = store.listFencedOwnerships.bind(store); let ownershipBatchReads = 0;
@@ -317,6 +318,7 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     assert.equal(ownershipBatchReads, 1, 'one batched ownership read covers the volatile projection union');
     assert.equal(projectionBatch.sessions.find(item => item.id === sessionId)?.lastMessageTime, 123);
     assert.equal(projectionBatch.sessions.find(item => item.id === sessionId)?.model, 'worker/model');
+    assert.equal(projectionBatch.sessions.find(item => item.id === sessionId)?.historyVersion, 7);
     (store as any).listFencedOwnerships = originalListFenced;
     await registry.apply(identity, projection); await flushEvents();
     assert.deepEqual(events, ['stateChanged']);

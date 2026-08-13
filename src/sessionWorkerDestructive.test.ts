@@ -595,7 +595,9 @@ test('historical tool-response pruning is serialized behind a busy worker turn a
   const sessionId = `mc-tool-compact-${Date.now()}`;
   const emptySessionId = `${sessionId}-empty`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-tool-compact-'));
-  const fixture = makeFixture(root, { FOXWARM_TEST_HOLD_PROVIDER: '1', FOXWARM_TEST_HOLD_SESSION: sessionId });
+  const fixture = makeFixture(root, {
+    FOXWARM_TEST_HOLD_PROVIDER: '1', FOXWARM_TEST_HOLD_SESSION: sessionId, FOXWARM_TEST_SEED_ARCHIVE: '1',
+  });
   const initial = baseSession(sessionId);
   const oversized = 'large-tool-payload '.repeat(2_000);
   initial.history = [
@@ -1091,7 +1093,7 @@ test('the real llm.chat pipeline dispatches its HTTP request through a worker tu
 test('automatic Worker pruning persists, publishes, survives restart, and forks pruned active history while archive stays full', async () => {
   const sessionId = `mc-auto-prune-${Date.now()}`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-auto-prune-'));
-  const fixture = makeFixture(root, { FOXWARM_TEST_FORCE_USAGE: '1' });
+  const fixture = makeFixture(root, { FOXWARM_TEST_FORCE_USAGE: '1', FOXWARM_TEST_SEED_ARCHIVE: '1' });
   const originalOutput = 'WORKER-ARCHIVE-FULL '.repeat(3500);
   const initial = baseSession(sessionId);
   initial.compactThresholdTokens = 1;

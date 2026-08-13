@@ -120,6 +120,7 @@ type SessionListRecord = {
   id: string
   agent?: string
   messageCount?: number
+  historyVersion?: number
   lastMessageTime?: number
   parentSessionId?: string | null
   childSessions?: string[]
@@ -246,6 +247,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const sessionBusyRef = useRef(false)
   const sessionQueueLengthRef = useRef(0)
   const sessionMessageCountRef = useRef(0)
+  const sessionHistoryVersionRef = useRef(0)
   const queuedMessagesRef = useRef<Message[]>([])
   const sessionStateInitializedRef = useRef(false)
   const composerHeightRef = useRef<number | null>(null)
@@ -283,6 +285,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     sessionBusyRef.current = false
     sessionQueueLengthRef.current = 0
     sessionMessageCountRef.current = 0
+    sessionHistoryVersionRef.current = 0
     queuedMessagesRef.current = []
     pendingSentMessageIdsRef.current.clear()
     sessionStateInitializedRef.current = false
@@ -636,9 +639,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     const nextBusy = isSessionRuntimeActive(session)
     const nextQueueLength = typeof session.queueLength === 'number' ? session.queueLength : 0
     const nextMessageCount = typeof session.messageCount === 'number' ? session.messageCount : 0
+    const nextHistoryVersion = typeof session.historyVersion === 'number' ? session.historyVersion : 0
     sessionBusyRef.current = nextBusy
     sessionQueueLengthRef.current = nextQueueLength
     sessionMessageCountRef.current = nextMessageCount
+    sessionHistoryVersionRef.current = nextHistoryVersion
     sessionStateInitializedRef.current = true
     setSessionRecord(session)
     setSessionBusy(nextBusy)
@@ -799,13 +804,16 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           const hadSessionState = sessionStateInitializedRef.current
           const previousQueueLength = sessionQueueLengthRef.current
           const previousMessageCount = sessionMessageCountRef.current
+          const previousHistoryVersion = sessionHistoryVersionRef.current
           const nextQueueLength = typeof data.session?.queueLength === 'number' ? data.session.queueLength : 0
           const nextMessageCount = typeof data.session?.messageCount === 'number' ? data.session.messageCount : 0
+          const nextHistoryVersion = typeof data.session?.historyVersion === 'number' ? data.session.historyVersion : 0
           setSessionMissing(false)
           applySessionState(data.session)
           if (hadSessionState && (
             nextQueueLength !== previousQueueLength ||
             nextMessageCount !== previousMessageCount ||
+            nextHistoryVersion !== previousHistoryVersion ||
             (nextQueueLength === 0 && queuedMessagesRef.current.length > 0)
           )) {
             scheduleHistoryRefresh()
@@ -836,6 +844,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           sessionBusyRef.current = false
           sessionQueueLengthRef.current = 0
           sessionMessageCountRef.current = 0
+          sessionHistoryVersionRef.current = 0
           queuedMessagesRef.current = []
           es.close()
           eventSourceRef.current = null

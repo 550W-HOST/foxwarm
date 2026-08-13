@@ -580,6 +580,8 @@ function buildWebUiSessionState(session: any) {
     busy: session.busy || false,
     busyStartedAt: typeof session.busyStartedAt === 'number' ? session.busyStartedAt : null,
     queueLength: typeof session.queueLength === 'number' ? session.queueLength : (session.queue?.length || 0),
+    messageCount: typeof session.messageCount === 'number' ? session.messageCount : (session.meta?.messageCount ?? session.history?.length ?? 0),
+    historyVersion: typeof session.historyVersion === 'number' ? session.historyVersion : 0,
     runtimeState: session.runtimeState || sessionManager.buildSessionRuntimeState(session),
     displayName: session.displayName || null,
     archived: session.archived || false,
@@ -595,7 +597,6 @@ function buildWebUiSessionState(session: any) {
 function buildWebUiSessionListProjection(session: SessionRuntimeSessionDto) {
   return {
     ...buildWebUiSessionState(session),
-    messageCount: session.messageCount,
     lastMessageTime: session.lastMessageTime,
     parentSessionId: session.parentSessionId,
     pinned: session.pinned,
