@@ -2,11 +2,11 @@ import crypto, { randomUUID } from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
 import { DatabaseSync } from 'node:sqlite';
-import { createInterface } from 'node:readline';
 import { promises as nodeFs } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { STATE_DIR } from './config';
 import { logger } from './common';
+import { streamJsonlLines } from './jsonl';
 import type { ChatResult, Message, ToolDefinition } from './types';
 
 export const LLM_REQUEST_JOURNAL_JSONL_PATH = path.join(STATE_DIR, 'llm-request-journal.jsonl');
@@ -260,7 +260,6 @@ async function importJournalJsonl(): Promise<void> {
   if (importedSize === source.size) return;
 
   const stream = fs.createReadStream(JOURNAL_PATH, { start: importedSize, end: source.size - 1, encoding: 'utf8' });
-  const reader = createInterface({ input: stream, crlfDelay: Infinity });
   let batch: JournalRecord[] = [];
   const flush = () => {
     if (batch.length === 0) return;
@@ -271,13 +270,12 @@ async function importJournalJsonl(): Promise<void> {
       for (const record of records) if (record.kind === 'request') validateRequestManifestSync(record.requestId);
     });
   };
-  for await (const line of reader) {
-    if (!line) continue;
+  await streamJsonlLines(stream, line => {
     const record = parseRecord(line);
-    if (!record) continue;
+    if (!record) return;
     batch.push(record);
     if (batch.length >= IMPORT_BATCH_SIZE) flush();
-  }
+  });
   flush();
   getDb().prepare(`INSERT INTO llm_journal_import_state(source_path,imported_size,updated_at) VALUES(?,?,?)
     ON CONFLICT(source_path) DO UPDATE SET imported_size=excluded.imported_size,updated_at=excluded.updated_at`).run(JOURNAL_PATH, source.size, Date.now());
@@ -509,11 +507,7 @@ export async function migrateLegacyLlmRequestJournalToSqlite(): Promise<LegacyLl
 
 async function streamJournalLinesStrict(filePath: string, onLine: (line: string) => void): Promise<void> {
   const stream = fs.createReadStream(filePath, { encoding: 'utf8' });
-  const reader = createInterface({ input: stream, crlfDelay: Infinity });
-  for await (const rawLine of reader) {
-    const line = rawLine.trim();
-    if (line) onLine(line);
-  }
+  await streamJsonlLines(stream, onLine);
 }
 
 /** Export the SQLite-authoritative canonical LLM journal in migration-compatible JSONL. */

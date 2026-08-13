@@ -48,7 +48,7 @@ test('LLM legacy JSONL is strictly imported, verified, archived, and reconstruct
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-llm-migration-'));
   const result = await run(`
     const fs=require('fs-extra');const j=require(${JSON.stringify(journalModule)});const m=require(${JSON.stringify(migrationModule)});
-    (async()=>{const r=await j.beginLlmRequestJournal({sessionId:'s',systemPrompt:'p',toolDefinitions:[],messages:[{role:'user',parts:[{text:'legacy'}]}],requestedModelKey:'fixture/model',promptCacheKey:'c'});await j.exportLlmRequestJournalJsonl(j.LLM_REQUEST_JOURNAL_JSONL_PATH);j.resetLlmRequestJournalForTests();for(const x of ['', '-wal','-shm'])await fs.remove(j.LLM_REQUEST_JOURNAL_DB_PATH+x);await m.runSqliteOnlyArchivesMigration();const rebuilt=await j.reconstructLlmRequest(r.requestId);if(rebuilt.completeness!=='complete')throw new Error(JSON.stringify(rebuilt));console.log(r.requestId)})().catch(e=>{console.error(e.stack);process.exit(1)});`, dataRoot);
+    (async()=>{const prompt='p\u2028line\u2029paragraph';const r=await j.beginLlmRequestJournal({sessionId:'s',systemPrompt:prompt,toolDefinitions:[],messages:[{role:'user',parts:[{text:'legacy'}]}],requestedModelKey:'fixture/model',promptCacheKey:'c'});await j.exportLlmRequestJournalJsonl(j.LLM_REQUEST_JOURNAL_JSONL_PATH);j.resetLlmRequestJournalForTests();for(const x of ['', '-wal','-shm'])await fs.remove(j.LLM_REQUEST_JOURNAL_DB_PATH+x);await m.runSqliteOnlyArchivesMigration();const rebuilt=await j.reconstructLlmRequest(r.requestId);if(rebuilt.completeness!=='complete'||rebuilt.systemPrompt!==prompt)throw new Error(JSON.stringify(rebuilt));console.log(r.requestId)})().catch(e=>{console.error(e.stack);process.exit(1)});`, dataRoot);
   const requestId = result.stdout.match(/[0-9a-f]{8}-[0-9a-f-]{27}/)?.[0] || '';
   assert.match(requestId, /^[0-9a-f-]{36}$/);
   assert.equal(await fs.pathExists(path.join(dataRoot, 'state', 'llm-request-journal.jsonl')), false);
@@ -80,6 +80,25 @@ test('malformed LLM legacy JSONL fails closed and remains active', async () => {
   assert.equal(await fs.pathExists(source), true);
   const version = await fs.readJson(path.join(dataRoot, 'state', 'migrationVersion.json')).catch(() => ({ migrations: {} }));
   assert.equal(version.migrations?.['sqlite-only-large-archives-v1'], undefined);
+});
+
+test('migration preserves literal Unicode line separators inside session JSON strings', async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-session-jsonl-unicode-separators-'));
+  const source = path.join(dataRoot, 'state', 'logs', 'sessions', 'unicode.jsonl');
+  const output = `before\u2028middle\u2029after`;
+  const record = functionResponseRecord('unicode', { output });
+  const raw = `${JSON.stringify(record)}\n`;
+  await fs.outputFile(source, raw);
+  await fs.outputJson(path.join(dataRoot, 'state', 'sessions.json'), { sessions: { unicode: { id: 'unicode' } } });
+
+  const result = await run(`const m=require(${JSON.stringify(migrationModule)});const s=require('./lib/session/archiveStore');m.runSqliteOnlyArchivesMigration().then(async()=>{const rows=await s.readLocalArchiveMessages('unicode');console.log(JSON.stringify(rows[0].message.parts[0].functionResponse.response.output))},e=>{console.error(e.stack);process.exit(1)})`, dataRoot);
+
+  assert.match(result.stdout, /before/);
+  assert.equal(JSON.parse(result.stdout.trim()), output);
+  const backup = path.join(dataRoot, 'state', 'migration-backup', 'sqlite-only-large-archives-v1', 'logs', 'sessions', 'unicode.jsonl');
+  assert.equal(await fs.readFile(backup, 'utf8'), raw);
+  const manifest = await fs.readJson(path.join(dataRoot, 'state', 'migration-backup', 'sqlite-only-large-archives-v1', 'manifest.json'));
+  assert.equal(manifest.files.find((entry: any) => entry.relativeStatePath === 'logs/sessions/unicode.jsonl')?.recordCount, 1);
 });
 
 test('structurally invalid session messages and blocks are never imported or moved', async () => {
