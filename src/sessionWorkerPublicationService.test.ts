@@ -30,6 +30,7 @@ test('projection registry applies clones in order and fences stale identities an
   for (const runtimeState of [
     { ...projection(first.sessionId).runtimeState, active: { phase: 'unknown', extra: true } },
     { ...projection(first.sessionId).runtimeState, tool: { name: 'read', startedAt: 'bad' } },
+    { ...projection(first.sessionId).runtimeState, tool: { name: 'set_goal', argsPreview: true, startedAt: 1 } },
     { ...projection(first.sessionId).runtimeState, waiting: { waitId: 'w', waitingFor: 'network' } },
   ]) await assert.rejects(() => registry.apply(first, { ...projection(first.sessionId), runtimeState }), { code: 'SESSION_WORKER_PUBLICATION_INVALID' });
   await assert.rejects(() => registry.apply(first, { ...projection(first.sessionId), busy: true }), { code: 'SESSION_WORKER_PUBLICATION_INVALID' });

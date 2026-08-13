@@ -84,6 +84,28 @@ test('active runtime state wins over persisted wait metadata', () => {
   }
 });
 
+test('active tool presentation normalizes invalid previews without weakening projection types', () => {
+  const session = makeSession({ busy: true });
+  try {
+    setActiveSessionRuntimeState(session.id, {
+      state: 'running-tool',
+      tool: { name: 'set_goal', argsPreview: true as any, startedAt: 1000 },
+    });
+    assert.equal(buildSessionRuntimeState(session).tool?.argsPreview, 'true');
+
+    setActiveSessionRuntimeState(session.id, {
+      state: 'running-tool',
+      tool: { name: 'set_goal', argsPreview: 'x'.repeat(5000), startedAt: 1000 },
+    });
+    const bounded = buildSessionRuntimeState(session).tool?.argsPreview;
+    assert.equal(typeof bounded, 'string');
+    assert.equal(bounded?.length, 4096);
+    assert.match(bounded || '', /…$/);
+  } finally {
+    clearActiveSessionRuntimeState(session.id);
+  }
+});
+
 test('buildSessionRuntimeState derives waitAll pending sessions', () => {
   const session = makeSession({
     meta: {

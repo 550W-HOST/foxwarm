@@ -917,6 +917,48 @@ test('postcommit publication failure preserves authority and poisons later mutat
   }, false, async () => { publishes += 1; if (publishes > 1) throw new Error('publication reply lost'); });
 });
 
+test('malformed primitive tool arguments do not poison Worker publication or later turns', async () => {
+  const initial = baseSession('worker-malformed-tool-preview');
+  const originalChat = llm.chat;
+  const identity = { sessionId: initial.id, generation: 1, incarnationId: 'local-host-incarnation' };
+  const registry = new SessionWorkerProjectionRegistry(); registry.establish(identity);
+  const publishedPreviews: unknown[] = [];
+  let chatCalls = 0;
+  (llm as any).chat = async (parts: any, _session: Session, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    chatCalls += 1;
+    if (chatCalls === 1) {
+      const toolCall = { id: 'bad-goal', name: 'set_goal', args: { goal: true } } as any;
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    }
+    const text = chatCalls === 2 ? 'first turn recovered' : 'later turn recovered';
+    await options.appendMessage({ role: 'model', parts: [{ text }] });
+    return { text };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      store.enqueueIntent(initial.id, 'malformed-tool', 'enqueue', { type: 'user', parts: [{ text: 'call malformed set_goal' }] });
+      await host.runPending(8);
+      const afterMalformed = readDurable();
+      const toolResponse = afterMalformed.history.find((message: any) => message.role === 'tool')?.parts?.[0]?.functionResponse?.response;
+      assert.deepEqual(toolResponse, { error: 'goal must be a string.' });
+      assert.equal(afterMalformed.history.at(-1).parts[0].text, 'first turn recovered');
+      assert.equal(afterMalformed.busy, false);
+
+      store.enqueueIntent(initial.id, 'later-normal-turn', 'enqueue', { type: 'user', parts: [{ text: 'continue normally' }] });
+      await host.runPending(8);
+      assert.equal(readDurable().history.at(-1).parts[0].text, 'later turn recovered');
+      assert.equal(chatCalls, 3);
+      assert.equal(publishedPreviews.filter(value => value !== undefined).every(value => typeof value === 'string'), true);
+      assert.ok(publishedPreviews.includes('true'));
+    }, true, async projection => {
+      publishedPreviews.push(projection.runtimeState.tool?.argsPreview);
+      await registry.apply(identity, projection);
+    });
+  } finally { (llm as any).chat = originalChat; }
+});
+
 test('real activated child runs durable mailbox through canonical SessionTurnRunner', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-host-'));
   const sessionId = 'worker-host-real-child';
