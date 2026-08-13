@@ -3,9 +3,9 @@ import path from 'path';
 import crypto from 'crypto';
 import { promises as nodeFs } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { createInterface } from 'node:readline';
 import { ARCHIVE_DB_PATH, SESSION_ID_RESERVATIONS_LOG_PATH, SESSION_LOGS_DIR, STATE_DIR, getSessionArchiveLogPath, getSessionBlockArchiveLogPath } from '../config';
 import { logger } from '../common';
+import { streamJsonlLines as streamJsonlStream } from '../jsonl';
 import type { Message } from '../types';
 import type { ArchiveMessageRecord } from './archive';
 import type { ArchiveBlockRecord } from './layeredContext';
@@ -207,20 +207,7 @@ function setImportStateSync(
 }
 
 async function streamJsonlLines(filePath: string, onLine: (line: string) => Promise<void> | void): Promise<void> {
-  const stream = fs.createReadStream(filePath, { encoding: 'utf8' });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
-  try {
-    for await (const rawLine of rl) {
-      const line = rawLine.trim();
-      if (!line) {
-        continue;
-      }
-      await onLine(line);
-    }
-  } finally {
-    rl.close();
-    stream.destroy();
-  }
+  await streamJsonlStream(fs.createReadStream(filePath, { encoding: 'utf8' }), onLine);
 }
 
 function upsertSessionIdReservationSync(sessionId: string, canonicalSessionId: string, timestamp: number): void {
