@@ -118,6 +118,11 @@ test('normal workbench visibility includes every active split Chat but excludes 
   assert.equal(attention.shouldMarkSessionIdleUnread('agent/a', new Set(['agent/b']), 'visible'), true)
 })
 
+test('ordinary App navigation acknowledges eagerly while notification navigation waits for actual visibility', () => {
+  assert.equal(attention.shouldAcknowledgeSessionNavigation('user'), true)
+  assert.equal(attention.shouldAcknowledgeSessionNavigation('notification'), false)
+})
+
 test('unread storage failures fail closed without preventing the in-memory normalized result', () => {
   const storage = {
     getItem() { throw new Error('blocked') },
@@ -261,7 +266,9 @@ test('App and Code sidebar notification clicks use their existing canonical Chat
     readFile(new URL('../src/EmbeddedWebUiApp.tsx', import.meta.url), 'utf8'),
   ])
   assert.match(app, /onOpenSession: \(sessionId\) => notificationOpenSessionRef\.current\?\.\(sessionId\)/)
-  assert.match(app, /notificationOpenSessionRef\.current = openChatTab/)
+  assert.match(app, /notificationOpenSessionRef\.current = \(sessionId\) => openChatTab\(sessionId, 'notification'\)/)
+  assert.match(app, /navigateToTab = \(tabId: string, origin: SessionNavigationOrigin = 'user'\)/)
+  assert.match(app, /shouldAcknowledgeSessionNavigation\(origin\)/)
   assert.match(embedded, /onOpenSession: \(sessionId\) => notificationOpenSessionRef\.current\?\.\(sessionId\)/)
   assert.match(embedded, /notificationOpenSessionRef\.current = openSession/)
   assert.match(embedded, /postFoxwarmEmbedHostMessage\(target\.nonce, \{ type: 'open-session', sessionId/)

@@ -4,6 +4,7 @@ export const SESSION_IDLE_SESSION_DELETED_EVENT = 'foxwarm-idle-session-deleted'
 export const SESSION_IDLE_UNREAD_LIMIT = 256
 
 export type SessionIdleUnread = Record<string, number>
+export type SessionNavigationOrigin = 'user' | 'notification'
 
 function isValidSessionId(value: string): boolean {
   return !!value && value === value.trim() && value.length <= 512 && !/[\u0000-\u001f\u007f]/.test(value)
@@ -60,6 +61,10 @@ export function selectVisibleSessionIds(activeSessionIds: Iterable<string | null
 
 export function shouldMarkSessionIdleUnread(sessionId: string, visibleSessionIds: ReadonlySet<string>, visibilityState: DocumentVisibilityState): boolean {
   return visibilityState !== 'visible' || !visibleSessionIds.has(sessionId)
+}
+
+export function shouldAcknowledgeSessionNavigation(origin: SessionNavigationOrigin): boolean {
+  return origin !== 'notification'
 }
 
 export function dispatchSessionIdleDeleted(sessionIds: Iterable<string>): void {

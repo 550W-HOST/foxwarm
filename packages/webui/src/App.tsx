@@ -10,7 +10,7 @@ import VscodeWebFrameHost, { type VscodeWebFrameHostHandle } from './components/
 import type { SessionMoveRequest } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { isSessionRuntimeActive } from './sessionRuntimeState'
-import { selectVisibleSessionIds } from './sessionIdleAttention'
+import { selectVisibleSessionIds, shouldAcknowledgeSessionNavigation, type SessionNavigationOrigin } from './sessionIdleAttention'
 import { useSessionIdleNotifications } from './sessionIdleNotifications'
 import { useBoundedSessionList } from './boundedSessionList'
 import { useWorkbenchStore } from './workbench/store'
@@ -879,7 +879,7 @@ function App() {
     setTabHash(tab.id)
   }, [route.tabId, flattenedTabIds.length, focusedPaneId, paneIds.join('|')])
 
-  const navigateToTab = (tabId: string) => {
+  const navigateToTab = (tabId: string, origin: SessionNavigationOrigin = 'user') => {
     pendingRouteTabIdRef.current = tabId
     activateTab(tabId)
     setRoute({ view: 'tab', tabId })
@@ -888,7 +888,7 @@ function App() {
       setShowSessionList(false)
     }
     const tab = useWorkbenchStore.getState().tabsById[tabId]
-    if (tab?.type === 'chat') acknowledgeSession(tab.sessionId)
+    if (tab?.type === 'chat' && shouldAcknowledgeSessionNavigation(origin)) acknowledgeSession(tab.sessionId)
   }
 
   useLayoutEffect(() => {
@@ -983,7 +983,7 @@ function App() {
       || null
   }
 
-  const openChatTab = (sessionId: string) => {
+  const openChatTab = (sessionId: string, origin: SessionNavigationOrigin = 'user') => {
     const title = sessionTitle(sessionId)
     const existingTab = findPreferredChatTab(sessionId)
 
@@ -991,7 +991,7 @@ function App() {
       if (existingTab.title !== title) {
         updateTab(existingTab.id, (current) => isChatTab(current) ? { ...current, title } : current)
       }
-      navigateToTab(existingTab.id)
+      navigateToTab(existingTab.id, origin)
       return
     }
 
@@ -1000,15 +1000,15 @@ function App() {
       updateTab(previewTab.id, (current) => isPreviewChatTab(current)
         ? { ...current, sessionId, title, preview: true }
         : current)
-      navigateToTab(previewTab.id)
+      navigateToTab(previewTab.id, origin)
       return
     }
 
     const tab = makeChatTab(sessionId, title, { preview: true })
     upsertTab(tab, { activate: true })
-    navigateToTab(tab.id)
+    navigateToTab(tab.id, origin)
   }
-  notificationOpenSessionRef.current = openChatTab
+  notificationOpenSessionRef.current = (sessionId) => openChatTab(sessionId, 'notification')
 
   const openKeptChatTab = (sessionId: string) => {
     const title = sessionTitle(sessionId)
