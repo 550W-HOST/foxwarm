@@ -537,7 +537,11 @@ function App() {
     rootLimit: 20, childLimit: 1, includeIdleWatches: false })
   const sessions = boundedSessions.knownSessions
   const sidebarSessions = boundedSessions.sessions
-  const { idleNotificationModes, toggleIdleNotificationMode, unreadSessionIds, acknowledgeSession } = useSessionIdleNotifications(sessions, { visibleSessionIds })
+  const notificationOpenSessionRef = useRef<((sessionId: string) => void) | null>(null)
+  const { idleNotificationModes, toggleIdleNotificationMode, unreadSessionIds, acknowledgeSession } = useSessionIdleNotifications(sessions, {
+    visibleSessionIds,
+    onOpenSession: (sessionId) => notificationOpenSessionRef.current?.(sessionId),
+  })
   const boundedPresentation = {
     serverOrdered: true as const, hasMoreRoots: boundedSessions.hasMoreRoots, childPages: boundedSessions.childPages,
     descendantBusy: boundedSessions.descendantBusy, invalidationVersion: boundedSessions.invalidationVersion,
@@ -1004,6 +1008,7 @@ function App() {
     upsertTab(tab, { activate: true })
     navigateToTab(tab.id)
   }
+  notificationOpenSessionRef.current = openChatTab
 
   const openKeptChatTab = (sessionId: string) => {
     const title = sessionTitle(sessionId)

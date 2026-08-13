@@ -10,6 +10,14 @@ export interface SessionIdleNotificationSession extends RuntimeStateSessionLike 
   aliases?: string[]
 }
 
+export interface SessionIdleNotificationHandle {
+  onclick: ((event: Event) => unknown) | null
+  onclose: ((event: Event) => unknown) | null
+  close(): void
+}
+
+type OpenSessionFromNotification = (sessionId: string) => void | Promise<void>
+
 type SessionIdleNotificationModes = Record<string, SessionIdleNotificationMode>
 
 type SessionIdleNotificationBaseline = {
@@ -66,18 +74,81 @@ export function requestSessionIdleNotificationPermission(): Promise<boolean> {
     .catch(() => false)
 }
 
-export function showSessionIdleNotification(session: SessionIdleNotificationSession): boolean {
+export function showSessionIdleNotification(session: SessionIdleNotificationSession): SessionIdleNotificationHandle | null {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
-    return false
+    return null
   }
 
   try {
-    new Notification('Session idle', {
+    return new Notification('Session idle', {
       body: session.displayName || session.id,
     })
-    return true
   } catch {
-    return false
+    return null
+  }
+}
+
+/** Owns only the page-created Notification handles registered by one live WebUI root. */
+export class SessionIdleNotificationRegistry {
+  private notifications = new Map<string, Set<SessionIdleNotificationHandle>>()
+
+  constructor(private readonly focusPage: () => void = () => {
+    window.focus()
+    if (window.parent !== window) window.parent.focus()
+  }) {}
+
+  retain(sessionId: string, notification: SessionIdleNotificationHandle, openSession: OpenSessionFromNotification): void {
+    const owned = this.notifications.get(sessionId) || new Set<SessionIdleNotificationHandle>()
+    owned.add(notification)
+    this.notifications.set(sessionId, owned)
+
+    notification.onclick = () => {
+      this.remove(sessionId, notification)
+      try { notification.close() } catch { /* Best-effort browser/OS cleanup. */ }
+      try { this.focusPage() } catch { /* The browser may reject focus. */ }
+      try {
+        Promise.resolve(openSession(sessionId)).catch(() => undefined)
+      } catch {
+        // Navigation failures do not restore a notification that the user already clicked.
+      }
+    }
+    notification.onclose = () => this.remove(sessionId, notification)
+  }
+
+  closeSession(sessionId: string): void {
+    const owned = this.notifications.get(sessionId)
+    if (!owned) return
+    for (const notification of [...owned]) {
+      this.remove(sessionId, notification)
+      try { notification.close() } catch { /* Best-effort browser/OS cleanup. */ }
+    }
+  }
+
+  closeSessions(sessionIds: Iterable<string>): void {
+    for (const sessionId of sessionIds) this.closeSession(sessionId)
+  }
+
+  closeMissingUnread(unreadSessionIds: ReadonlySet<string>): void {
+    for (const sessionId of [...this.notifications.keys()]) {
+      if (!unreadSessionIds.has(sessionId)) this.closeSession(sessionId)
+    }
+  }
+
+  closeAll(): void {
+    this.closeSessions([...this.notifications.keys()])
+  }
+
+  count(sessionId?: string): number {
+    if (sessionId) return this.notifications.get(sessionId)?.size || 0
+    return [...this.notifications.values()].reduce((total, owned) => total + owned.size, 0)
+  }
+
+  private remove(sessionId: string, notification: SessionIdleNotificationHandle): void {
+    const owned = this.notifications.get(sessionId)
+    if (!owned?.delete(notification)) return
+    if (owned.size === 0) this.notifications.delete(sessionId)
+    try { notification.onclick = null } catch { /* Ignore host-object assignment failures. */ }
+    try { notification.onclose = null } catch { /* Ignore host-object assignment failures. */ }
   }
 }
 
@@ -135,15 +206,23 @@ function loadStoredSessionIdleNotificationModes(): SessionIdleNotificationModes 
   return typeof localStorage === 'undefined' ? {} : readSessionIdleNotificationModes(localStorage)
 }
 
-export function useSessionIdleNotifications(sessions: SessionIdleNotificationSession[], options: { visibleSessionIds?: Iterable<string> } = {}) {
+export function useSessionIdleNotifications(sessions: SessionIdleNotificationSession[], options: {
+  visibleSessionIds?: Iterable<string>
+  onOpenSession?: OpenSessionFromNotification
+} = {}) {
   const [modes, setModes] = useState<SessionIdleNotificationModes>(loadStoredSessionIdleNotificationModes)
   const [unread, setUnread] = useState<SessionIdleUnread>(() => typeof localStorage === 'undefined' ? {} : readSessionIdleUnread(localStorage))
   const modesRef = useRef(modes)
   const sessionsRef = useRef(sessions)
   const trackerRef = useRef(new SessionIdleNotificationTracker())
+  const notificationRegistryRef = useRef<SessionIdleNotificationRegistry | null>(null)
+  const openSessionRef = useRef(options.onOpenSession)
+
+  if (!notificationRegistryRef.current) notificationRegistryRef.current = new SessionIdleNotificationRegistry()
 
   modesRef.current = modes
   sessionsRef.current = sessions
+  openSessionRef.current = options.onOpenSession
   const visibleSessionIds = new Set(options.visibleSessionIds || [])
   const canonicalVisibleSessionIds = new Set([...visibleSessionIds].map(sessionId => (
     sessions.find(session => session.id === sessionId || session.aliases?.includes(sessionId))?.id || sessionId
@@ -168,8 +247,16 @@ export function useSessionIdleNotifications(sessions: SessionIdleNotificationSes
         setUnread(next)
         window.dispatchEvent(new Event(SESSION_IDLE_UNREAD_EVENT))
       }
-      const delivered = showSessionIdleNotification(session)
-      if (delivered && modesRef.current[session.id] === 'once') {
+      const notification = showSessionIdleNotification(session)
+      if (notification) {
+        notificationRegistryRef.current?.retain(session.id, notification, canonicalSessionId => {
+          return openSessionRef.current?.(canonicalSessionId)
+        })
+        if (!shouldMarkSessionIdleUnread(session.id, canonicalVisibleSessionIds, document.visibilityState)) {
+          notificationRegistryRef.current?.closeSession(session.id)
+        }
+      }
+      if (notification && modesRef.current[session.id] === 'once') {
         updateModes(current => {
           const { [session.id]: _removed, ...remaining } = current
           return remaining
@@ -181,6 +268,7 @@ export function useSessionIdleNotifications(sessions: SessionIdleNotificationSes
   const acknowledgeSession = useCallback((sessionId: string) => {
     if (!sessionId || document.visibilityState !== 'visible' || typeof localStorage === 'undefined') return
     const canonicalId = sessionsRef.current.find(session => session.id === sessionId || session.aliases?.includes(sessionId))?.id || sessionId
+    notificationRegistryRef.current?.closeSession(canonicalId)
     const next = updateStoredSessionIdleUnread(localStorage, current => {
       if (!(canonicalId in current)) return current
       const { [canonicalId]: _removed, ...remaining } = current
@@ -196,9 +284,10 @@ export function useSessionIdleNotifications(sessions: SessionIdleNotificationSes
   }, [acknowledgeSession])
 
   const clearDeletedSessions = useCallback((sessionIds: Iterable<string>) => {
-    if (typeof localStorage === 'undefined') return
     const deleted = new Set(sessionIds)
     if (deleted.size === 0) return
+    notificationRegistryRef.current?.closeSessions(deleted)
+    if (typeof localStorage === 'undefined') return
     const next = updateStoredSessionIdleUnread(localStorage, current => Object.fromEntries(Object.entries(current).filter(([sessionId]) => !deleted.has(sessionId))))
     setUnread(next)
     window.dispatchEvent(new Event(SESSION_IDLE_UNREAD_EVENT))
@@ -214,12 +303,19 @@ export function useSessionIdleNotifications(sessions: SessionIdleNotificationSes
   }, [clearDeletedSessions])
 
   useEffect(() => {
-    const sync = () => { if (typeof localStorage !== 'undefined') setUnread(readSessionIdleUnread(localStorage)) }
+    const sync = () => {
+      if (typeof localStorage === 'undefined') return
+      const next = readSessionIdleUnread(localStorage)
+      notificationRegistryRef.current?.closeMissingUnread(new Set(Object.keys(next)))
+      setUnread(next)
+    }
     const handleStorage = (event: StorageEvent) => { if (!event.key || event.key === SESSION_IDLE_UNREAD_STORAGE_KEY) sync() }
     window.addEventListener('storage', handleStorage)
     window.addEventListener(SESSION_IDLE_UNREAD_EVENT, sync)
     return () => { window.removeEventListener('storage', handleStorage); window.removeEventListener(SESSION_IDLE_UNREAD_EVENT, sync) }
   }, [])
+
+  useEffect(() => () => notificationRegistryRef.current?.closeAll(), [])
 
   useEffect(() => {
     const acknowledgeCurrentVisibility = () => {

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DndContext } from '@dnd-kit/core'
 import { Bot, Workflow } from 'lucide-react'
 import Chat from './components/Chat'
@@ -135,7 +135,11 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
     setSettings(normalizeSettings(data.settings))
   }, [])
 
-  const { idleNotificationModes, toggleIdleNotificationMode, unreadSessionIds, acknowledgeSession } = useSessionIdleNotifications(sessions, { visibleSessionIds })
+  const notificationOpenSessionRef = useRef<((sessionId: string) => void) | null>(null)
+  const { idleNotificationModes, toggleIdleNotificationMode, unreadSessionIds } = useSessionIdleNotifications(sessions, {
+    visibleSessionIds,
+    onOpenSession: (sessionId) => notificationOpenSessionRef.current?.(sessionId),
+  })
 
   useEffect(() => {
     void fetchSettings()
@@ -157,10 +161,10 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
 
   const openSession = (sessionId: string) => {
     setActiveTarget({ kind: 'session', sessionId })
-    acknowledgeSession(sessionId)
     const session = sessions.find(item => item.id === sessionId || item.aliases?.includes(sessionId))
     postFoxwarmEmbedHostMessage(target.nonce, { type: 'open-session', sessionId, title: session?.displayName || session?.id || sessionId })
   }
+  notificationOpenSessionRef.current = openSession
 
   const openAgents = () => {
     setActiveTarget({ kind: 'agents' })

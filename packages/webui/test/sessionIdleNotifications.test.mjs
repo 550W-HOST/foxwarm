@@ -139,8 +139,12 @@ test('bounded session list retains both idle watches and once-disabled unread ex
   assert.match(source, /\.\.\.unreadIds/)
   const hook = await readFile(new URL('../src/sessionIdleNotifications.ts', import.meta.url), 'utf8')
   assert.match(hook, /shouldMarkSessionIdleUnread/)
-  assert.match(hook, /const delivered = showSessionIdleNotification\(session\)/)
-  assert.match(hook, /delivered && modesRef\.current\[session\.id\] === 'once'/)
+  assert.match(hook, /const notification = showSessionIdleNotification\(session\)/)
+  assert.match(hook, /notificationRegistryRef\.current\?\.retain\(session\.id, notification/)
+  assert.match(hook, /notification && modesRef\.current\[session\.id\] === 'once'/)
+  assert.match(hook, /notificationRegistryRef\.current\?\.closeSession\(canonicalId\)/)
+  assert.match(hook, /notificationRegistryRef\.current\?\.closeSessions\(deleted\)/)
+  assert.match(hook, /notificationRegistryRef\.current\?\.closeMissingUnread/)
 })
 
 test('browser notification permission and delivery require granted permission', async () => {
@@ -162,7 +166,7 @@ test('browser notification permission and delivery require granted permission', 
     globalThis.Notification = MockNotification
     assert.equal(await notifications.requestSessionIdleNotificationPermission(), true)
     assert.deepEqual(calls, ['request'])
-    assert.equal(notifications.showSessionIdleNotification(session('task')), true)
+    assert.ok(notifications.showSessionIdleNotification(session('task')) instanceof MockNotification)
     assert.deepEqual(calls.at(-1), {
       title: 'Session idle',
       options: { body: 'Session task' },
@@ -171,10 +175,96 @@ test('browser notification permission and delivery require granted permission', 
     MockNotification.permission = 'denied'
     MockNotification.requestPermission = async () => 'denied'
     assert.equal(await notifications.requestSessionIdleNotificationPermission(), false)
-    assert.equal(notifications.showSessionIdleNotification(session('task')), false)
+    assert.equal(notifications.showSessionIdleNotification(session('task')), null)
   } finally {
     globalThis.Notification = previousNotification
   }
+})
+
+function notificationHandle({ closeThrows = false } = {}) {
+  return {
+    onclick: null,
+    onclose: null,
+    closeCalls: 0,
+    close() {
+      this.closeCalls += 1
+      if (closeThrows) throw new Error('close failed')
+    },
+  }
+}
+
+test('page notification registry retains multiple handles and closes only the acknowledged session', () => {
+  const registry = new notifications.SessionIdleNotificationRegistry(() => {})
+  const first = notificationHandle()
+  const second = notificationHandle({ closeThrows: true })
+  const other = notificationHandle()
+  registry.retain('agent/task', first, () => {})
+  registry.retain('agent/task', second, () => {})
+  registry.retain('agent/other', other, () => {})
+
+  assert.equal(registry.count('agent/task'), 2)
+  registry.closeSession('agent/task')
+  assert.equal(first.closeCalls, 1)
+  assert.equal(second.closeCalls, 1)
+  assert.equal(registry.count('agent/task'), 0)
+  assert.equal(registry.count('agent/other'), 1)
+})
+
+test('OS close removes only that page notification handle', () => {
+  const registry = new notifications.SessionIdleNotificationRegistry(() => {})
+  const first = notificationHandle()
+  const second = notificationHandle()
+  registry.retain('agent/task', first, () => {})
+  registry.retain('agent/task', second, () => {})
+
+  first.onclose(new Event('close'))
+  assert.equal(registry.count('agent/task'), 1)
+  registry.closeSession('agent/task')
+  assert.equal(first.closeCalls, 0)
+  assert.equal(second.closeCalls, 1)
+})
+
+test('notification click closes/removes, focuses, and opens the exact canonical session', async () => {
+  const calls = []
+  const registry = new notifications.SessionIdleNotificationRegistry(() => calls.push('focus'))
+  const handle = notificationHandle()
+  registry.retain('agent/task', handle, sessionId => calls.push(['open', sessionId]))
+
+  handle.onclick(new Event('click'))
+  await Promise.resolve()
+  assert.equal(handle.closeCalls, 1)
+  assert.equal(registry.count(), 0)
+  assert.deepEqual(calls, ['focus', ['open', 'agent/task']])
+})
+
+test('notification callback failure leaves the registry consistent and storage removal closes live handles', async () => {
+  const registry = new notifications.SessionIdleNotificationRegistry(() => { throw new Error('focus failed') })
+  const clicked = notificationHandle()
+  registry.retain('agent/task', clicked, async () => { throw new Error('open failed') })
+  clicked.onclick(new Event('click'))
+  await Promise.resolve()
+  assert.equal(registry.count(), 0)
+
+  const retained = notificationHandle()
+  const unread = notificationHandle()
+  registry.retain('agent/cleared', retained, () => {})
+  registry.retain('agent/unread', unread, () => {})
+  registry.closeMissingUnread(new Set(['agent/unread']))
+  assert.equal(retained.closeCalls, 1)
+  assert.equal(unread.closeCalls, 0)
+  assert.equal(registry.count(), 1)
+})
+
+test('App and Code sidebar notification clicks use their existing canonical Chat open paths', async () => {
+  const [app, embedded] = await Promise.all([
+    readFile(new URL('../src/App.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/EmbeddedWebUiApp.tsx', import.meta.url), 'utf8'),
+  ])
+  assert.match(app, /onOpenSession: \(sessionId\) => notificationOpenSessionRef\.current\?\.\(sessionId\)/)
+  assert.match(app, /notificationOpenSessionRef\.current = openChatTab/)
+  assert.match(embedded, /onOpenSession: \(sessionId\) => notificationOpenSessionRef\.current\?\.\(sessionId\)/)
+  assert.match(embedded, /notificationOpenSessionRef\.current = openSession/)
+  assert.match(embedded, /postFoxwarmEmbedHostMessage\(target\.nonce, \{ type: 'open-session', sessionId/)
 })
 
 test('session context menu exposes an accessible once item with a trailing always checkbox', async () => {
