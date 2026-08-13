@@ -2134,6 +2134,7 @@ function buildConcreteRequestPlan(options: {
                     name: fd.name,
                     description: fd.description,
                     parameters: fd.parameters,
+                    strict: false,
                 })),
                 ...(webSearchTool ? [webSearchTool] : []),
             ] : undefined,
@@ -2169,6 +2170,7 @@ function buildConcreteRequestPlan(options: {
                     name: fd.name,
                     description: fd.description,
                     parameters: fd.parameters,
+                    strict: false,
                 },
             })) : undefined,
         };
