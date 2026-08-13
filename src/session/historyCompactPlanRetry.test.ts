@@ -181,13 +181,16 @@ test('compact planning rejects a block-only plan when raw messages and L1 blocks
 
   try {
     // Replace active history with five large L1 blocks followed by two raw messages.
+    await archive.appendMessagesToArchive(session, [{
+      role: 'user', parts: [{ text: 'archive-only fifth raw source' }], __meta: { timestamp: 5000 },
+    }]);
     const blocks = await layeredContext.appendBlocksToArchive(session, Array.from({ length: 5 }, (_, index) => ({
       level: 1,
       sourceKind: 'message' as const,
-      sourceStart: 1,
-      sourceEnd: 1,
-      rawStartSeq: 1,
-      rawEndSeq: 1,
+      sourceStart: index + 1,
+      sourceEnd: index + 1,
+      rawStartSeq: index + 1,
+      rawEndSeq: index + 1,
       summary: `L1 backlog ${index + 1} ${'block-summary '.repeat(1800)}`,
     })));
     session.history = [...blocks.map(layeredContext.renderBlockMessage), ...session.history.slice(0, 2)];
@@ -285,6 +288,69 @@ test('missing or conflicting active/archive provenance becomes a compact barrier
   assert.equal(built.candidateEntries.some(entry => entry.item.kind === 'message' && entry.item.startSeq === 1), false);
   assert.deepEqual(session.history[0].parts, [{ text: 'offline same-seq wording edit' }]);
   assert.deepEqual(original[2], session.history[3]);
+});
+
+test('invalid preserved raw provenance is retained and never offered for removal', async () => {
+  const { sessionHistory, archive, compactPlan } = await loadDeps();
+  for (const scenario of ['missing', 'conflicting', 'duplicate'] as const) {
+    const session = await makeCompactableSession(archive, makeSessionId(`compact_preserved_${scenario}`));
+    const preserved = structuredClone(session.history[0]);
+    preserved.__meta!.preservedFromBlockId = 9;
+    if (scenario === 'missing') preserved.__meta!.seq = 999;
+    if (scenario === 'conflicting') preserved.parts = [{ text: 'offline-edited preserved wording must survive unchanged' }];
+    session.history = scenario === 'duplicate'
+      ? [preserved, structuredClone(preserved), ...session.history.slice(1)]
+      : [preserved, ...session.history.slice(1)];
+    const before = structuredClone(session.history);
+    const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.id, session.history);
+    assert.equal(built.preservedMessageCandidates.length, 0, scenario);
+    assert.throws(() => compactPlan.validateCompactPlanArgs(
+      { createBlocksJson: '[]', removePreservedMessages: [preserved.__meta!.seq] },
+      built.candidateEntries.map(entry => entry.item),
+      { removablePreservedMessages: built.preservedMessageCandidates },
+    ), /removePreservedMessages/i, scenario);
+    assert.deepEqual(session.history, before, `${scenario} preserved rows remain byte-semantic exact`);
+  }
+});
+
+test('raw continuity resets across a valid intervening block', async () => {
+  const { sessionHistory, archive, layeredContext } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_raw_block_raw'));
+  const [block] = await layeredContext.appendBlocksToArchive(session, [{
+    level: 1, sourceKind: 'message', sourceStart: 2, sourceEnd: 2, rawStartSeq: 2, rawEndSeq: 2,
+    summary: `valid intervening block ${'block '.repeat(1800)}`,
+  }]);
+  session.history = [session.history[0], layeredContext.renderBlockMessage(block), session.history[2]];
+  const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.id, session.history);
+  assert.deepEqual(built.candidateEntries.filter(entry => entry.item.kind === 'message').map(entry => (entry.item as any).startSeq), [1, 3]);
+});
+
+test('reordered block raw lineage is an end-to-end compact barrier', async () => {
+  const { sessionHistory, archive, layeredContext, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_reordered_blocks'));
+  const blocks = await layeredContext.appendBlocksToArchive(session, Array.from({ length: 5 }, (_, index) => ({
+    level: 1, sourceKind: 'message' as const, sourceStart: index + 1, sourceEnd: index + 1,
+    rawStartSeq: index + 1, rawEndSeq: index + 1, summary: `block ${index + 1} ${'large '.repeat(1800)}`,
+  })));
+  session.history = [blocks[1], blocks[0], ...blocks.slice(2)].map(layeredContext.renderBlockMessage);
+  const before = structuredClone(session.history);
+  const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.id, session.history);
+  const firstTwo = built.candidateEntries.filter(entry => entry.item.kind === 'block').slice(0, 2);
+  assert.notEqual(firstTwo[0]?.item.segmentId, firstTwo[1]?.item.segmentId);
+  const originalChat = llm.chat;
+  (llm as any).chat = async (_parts: any, _activeSession: Session, _iteration: number, options: any) => {
+    const toolCall = { id: 'bad-reordered-range', name: 'submit_compact_plan', args: { createBlocksJson: JSON.stringify([{
+      level: 2, sourceKind: 'block', sourceStart: blocks[1].id, sourceEnd: blocks[0].id, summary: 'must be rejected',
+    }]) } };
+    await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+    return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+  };
+  try {
+    await assert.rejects(() => sessionHistory.processSessionCompactionRequest(
+      makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0 }, 'await',
+    ), /no valid plan was produced/);
+    assert.deepEqual(session.history, before);
+  } finally { (llm as any).chat = originalChat; }
 });
 
 test('prior compact-completion notices are transparent to planning and replaced by one current marker', async () => {

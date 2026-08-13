@@ -1726,18 +1726,41 @@ export async function setSessionParent(childSessionId: string, parentSessionId?:
   // Main-owned presentation metadata there, so update it catalog-only and
   // never write the fenced authority (a stale stub write could corrupt it).
   if (workerEnqueueSink || workerFenceChecker?.(childSessionId)) {
-    const child = sessions.get(childSessionId);
-    if (!child) throw new Error(`Session \`${childSessionId}\` not found.`);
-    const previousParentSessionId = child.parentSessionId;
-    assertSessionDestructiveMutationAllowed(
-      [childSessionId, parentSessionId],
-      parentSessionId ? 'change parent relations' : 'detach from its parent',
-      owningClaimId,
-    );
-    child.parentSessionId = parentSessionId;
-    await saveSessionCatalogEntries([childSessionId]);
-    notifySessionListUpdated();
-    return { childSessionId, parentSessionId, previousParentSessionId };
+    return withSessionIdentityLock(async () => {
+      const realChildId = resolveLoadedSessionId(childSessionId);
+      const child = sessions.get(realChildId);
+      if (!child) throw new Error(`Session \`${childSessionId}\` not found.`);
+      const realParentId = parentSessionId ? resolveLoadedSessionId(parentSessionId) : undefined;
+      if (realParentId && !sessions.has(realParentId)) throw new Error(`Session "${parentSessionId}" not found.`);
+      if (realParentId === realChildId) throw new Error('A session cannot be its own parent.');
+      const seen = new Set<string>([realChildId]);
+      let cursorParentId = realParentId;
+      while (cursorParentId) {
+        if (seen.has(cursorParentId)) {
+          throw new Error(`Session "${realChildId}" cannot be moved under descendant "${realParentId}" because that would create a parent cycle.`);
+        }
+        seen.add(cursorParentId);
+        cursorParentId = sessions.get(cursorParentId)?.parentSessionId;
+      }
+      const previousParentSessionId = child.parentSessionId;
+      assertSessionDestructiveMutationAllowed(
+        [realChildId, realParentId],
+        realParentId ? 'change parent relations' : 'detach from its parent',
+        owningClaimId,
+      );
+      child.parentSessionId = realParentId;
+      try {
+        await workerCatalogFieldsUpdater?.(realChildId, { parentSessionId: realParentId ?? null });
+        await saveSessionCatalogEntriesCritical([realChildId]);
+      } catch (error) {
+        child.parentSessionId = previousParentSessionId;
+        try { await workerCatalogFieldsUpdater?.(realChildId, { parentSessionId: previousParentSessionId ?? null }); }
+        catch (rollbackError) { (error as any).rollbackError = rollbackError; }
+        throw error;
+      }
+      notifySessionListUpdated();
+      return { childSessionId: realChildId, parentSessionId: realParentId, previousParentSessionId };
+    });
   }
   return sessionRelations.setSessionParent({
     getExistingSession,
@@ -2234,6 +2257,7 @@ let workerEnqueueSink: ((sessionId: string, item: QueueItem) => Promise<void>) |
 let workerDeleteHandler: ((sessionId: string) => Promise<boolean>) | undefined;
 let workerForkSourceProvider: ((sessionId: string) => Promise<Session | undefined>) | undefined;
 let workerFenceChecker: ((sessionId: string) => boolean) | undefined;
+let workerCatalogFieldsUpdater: ((sessionId: string, patch: { parentSessionId?: string | null; displayName?: string | null }) => Promise<void>) | undefined;
 
 export function setSessionWorkerEnqueueSink(handler: ((sessionId: string, item: QueueItem) => Promise<void>) | undefined): void {
   workerEnqueueSink = handler;
@@ -2268,6 +2292,33 @@ export function setSessionWorkerForkSourceProvider(provider: ((sessionId: string
  */
 export function setSessionWorkerFenceChecker(checker: ((sessionId: string) => boolean) | undefined): void {
   workerFenceChecker = checker;
+}
+
+export function setSessionWorkerCatalogFieldsUpdater(updater: typeof workerCatalogFieldsUpdater): void {
+  workerCatalogFieldsUpdater = updater;
+}
+
+export async function setSessionDisplayName(sessionId: string, displayName?: string): Promise<{ previous?: string; current?: string }> {
+  return withSessionIdentityLock(async () => {
+    const session = sessions.get(resolveLoadedSessionId(sessionId));
+    if (!session) throw new Error(`Session \`${sessionId}\` not found.`);
+    assertSessionDestructiveMutationAllowed([session.id], 'change Session display name');
+    const previous = session.displayName;
+    if (displayName === undefined) delete session.displayName;
+    else session.displayName = displayName;
+    try {
+      await workerCatalogFieldsUpdater?.(session.id, { displayName: displayName ?? null });
+      await saveSessionCatalogEntriesCritical([session.id]);
+    } catch (error) {
+      if (previous === undefined) delete session.displayName;
+      else session.displayName = previous;
+      try { await workerCatalogFieldsUpdater?.(session.id, { displayName: previous ?? null }); }
+      catch (rollbackError) { (error as any).rollbackError = rollbackError; }
+      throw error;
+    }
+    notifySessionStateUpdated(session.id);
+    return { previous, current: session.displayName };
+  });
 }
 
 /** True when the session currently has an active (non-inactive) Session-worker fence. */

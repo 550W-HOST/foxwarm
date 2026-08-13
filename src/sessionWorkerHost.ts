@@ -30,7 +30,7 @@ import type { SessionWorkerIdentity } from './sessionWorkerControlService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
 import { isQueueItem, type CompactionRequest, type Message, type QueueItem, type QueueSource, type Session, type SessionStreamEvent } from './types';
 import { buildTimestampedSystemMessageParts } from './utils/systemMessageParts';
-import type { SessionWorkerBtwResult, SessionWorkerDequeueResult, SessionWorkerHistoryMutationResult, SessionWorkerSettings, SessionWorkerSettingsPatch, SessionWorkerSettingsResult, SessionWorkerToolNoiseCompactionResult } from './sessionWorkerRuntimeService';
+import type { SessionWorkerBtwResult, SessionWorkerCatalogFieldsPatch, SessionWorkerDequeueResult, SessionWorkerHistoryMutationResult, SessionWorkerSettings, SessionWorkerSettingsPatch, SessionWorkerSettingsResult, SessionWorkerToolNoiseCompactionResult } from './sessionWorkerRuntimeService';
 
 export type SessionWorkerHostDependencies = {
   catalogStub?: Partial<Pick<Session, 'agent' | 'aliases' | 'parentSessionId' | 'displayName'>>;
@@ -154,6 +154,20 @@ export class SessionWorkerHost {
         if (!this.isResyncError(error)) restoreSessionSemanticState(session, before);
         throw error;
       }
+    });
+  }
+
+  async updateCatalogFields(patch: SessionWorkerCatalogFieldsPatch): Promise<{ projection: SessionWorkerProjection }> {
+    return this.serialize(async () => {
+      await this.ensureLoaded(); await this.ensureHealthy(); await this.fenceMutation();
+      const owner = this.session!;
+      for (const field of ['parentSessionId', 'displayName'] as const) {
+        if (!Object.prototype.hasOwnProperty.call(patch, field)) continue;
+        const value = patch[field];
+        if (value === null) delete (owner as any)[field];
+        else (owner as any)[field] = structuredClone(value);
+      }
+      return { projection: buildSessionWorkerProjection(owner) };
     });
   }
 

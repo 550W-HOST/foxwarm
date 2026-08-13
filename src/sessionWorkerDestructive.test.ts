@@ -48,6 +48,10 @@ function makeFixture(
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, ...workerEnv }, stopCompletionTimeoutMs, readProcessIdentity,
+    getCatalogStub: sessionId => {
+      const session = sessionManager.getAllSessions().get(sessionId);
+      return session ? { agent: session.agent, aliases: session.aliases, parentSessionId: session.parentSessionId, displayName: session.displayName } : undefined;
+    },
     resolveExactFinalSourceContext: sourceContexts.resolve,
   });
   const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
@@ -334,35 +338,62 @@ test('fenced fork derives from the detached authority and archive stays Main-own
   }
 });
 
-test('parent moves on a fenced child stay catalog-only and never write the authority', async () => {
+test('live Worker parent moves propagate across IPC and stay out of semantic authority', async () => {
   const sessionId = `mc-move-${Date.now()}`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-move-'));
-  const fixture = makeFixture(root);
+  const fixture = makeFixture(root, {
+    FOXWARM_TEST_CHILD_REMINDER_NO_ACTION: '1', FOXWARM_TEST_ECHO_CATALOG_FIELDS: '1',
+  });
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   try {
-    const session = await sessionManager.getSession(sessionId);
-    await sessionManager.appendSessionMessage(sessionId, { role: 'user', parts: [{ text: 'move guard message' }] } as any);
+    const session = baseSession(sessionId);
+    session.parentSessionId = 'old/parent';
+    sessionManager.getAllSessions().set('some/parent', baseSession('some/parent'));
+    sessionManager.getAllSessions().set(sessionId, session);
+    await fs.outputJson(statePath, serializeSessionHistoryPayload(session));
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await fixture.ingress.ensureWorkerOwner(sessionId);
     session.history = []; // production fenced stubs are unhydrated
-    fixture.store.beginGeneration(sessionId, 'inc-move');
-    fixture.store.registerCandidate(sessionId, 1, 'inc-move', 999_999, 'fake-identity');
-    fixture.store.activateCandidate(sessionId, 1, 'inc-move', 999_999, 'fake-identity');
     sessionManager.setSessionWorkerFenceChecker(id => {
       const ownership = fixture.store.findOwnership(id);
       return !!ownership && ownership.state !== 'inactive';
     });
-    const authorityBefore = await fs.readFile(getSessionHistoryFilePath(sessionId));
+    sessionManager.setSessionWorkerCatalogFieldsUpdater(
+      (id, patch) => fixture.ingress.updateCatalogFieldsWithinExistingAdmission(id, patch),
+    );
+    const authorityBefore = await fs.readFile(statePath);
 
     const moved = await sessionManager.setSessionParent(sessionId, 'some/parent');
     assert.equal(moved.parentSessionId, 'some/parent');
     assert.equal(sessionManager.getAllSessions().get(sessionId)!.parentSessionId, 'some/parent');
-    assert.deepEqual(await fs.readFile(getSessionHistoryFilePath(sessionId)), authorityBefore,
+    assert.deepEqual(await fs.readFile(statePath), authorityBefore,
       'the fenced authority is never written by a parent move');
+    const renamed: any = await fixture.runtime.call('updateSettings', {
+      sessionId, patch: { displayName: 'Live Worker name' },
+    });
+    assert.equal(renamed.current.displayName, 'Live Worker name');
+    assert.deepEqual(await fs.readFile(statePath), authorityBefore,
+      'the fenced authority is never written merely to propagate a display name');
+    await fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'answer after live reparent' }] });
+    const workerAuthority = await fs.readJson(statePath);
+    assert.match(JSON.stringify(workerAuthority.history), /catalog parent=some\/parent display=Live Worker name/,
+      'the next real Worker turn observes the propagated Main-owned display name and parent');
+    assert.match(JSON.stringify(workerAuthority.history), /parentSessionId=\\"some\/parent\\"/,
+      'next parent-dependent child reminder uses the propagated Main-owned parent');
     const detached = await sessionManager.setSessionParent(sessionId, undefined);
     assert.equal(detached.parentSessionId, undefined);
+    const updater = (sessionManager as any).setSessionWorkerCatalogFieldsUpdater;
+    updater(async () => { throw Object.assign(new Error('catalog propagation failed'), { code: 'TEST_PROPAGATION_FAILED' }); });
+    await assert.rejects(() => sessionManager.setSessionParent(sessionId, 'some/parent'), /catalog propagation failed/);
+    assert.equal(session.parentSessionId, undefined, 'Main parent rolls back when the live-Worker update fails');
+    updater((id: string, patch: any) => fixture.ingress.updateCatalogFieldsWithinExistingAdmission(id, patch));
   } finally {
+    sessionManager.setSessionWorkerCatalogFieldsUpdater(undefined);
     sessionManager.setSessionWorkerFenceChecker(undefined);
     fixture.transport.close();
     await fixture.supervisor.shutdown(3_000).catch(() => {});
     fixture.store.close();
+    sessionManager.getAllSessions().delete('some/parent');
     await sessionManager.deleteSession(sessionId).catch(() => {});
     await fs.remove(root);
   }

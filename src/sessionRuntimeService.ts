@@ -730,11 +730,8 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
           const previous = settingsFromSession(stub);
           const normalized = normalizedStrings.get('displayName')!;
           const changed: Array<keyof SessionRuntimeSettingsPatchDto> = previous.displayName !== normalized ? ['displayName'] : [];
-          if (normalized === null) delete stub.displayName;
-          else stub.displayName = normalized;
           if (changed.length > 0) {
-            await sessionManager.saveSessionCatalogEntries([stub.id]);
-            sessionManager.notifySessionStateUpdated(stub.id);
+            await sessionManager.setSessionDisplayName(stub.id, normalized ?? undefined);
           }
           return { changed, previous, current: settingsFromSession(stub), session: projectedDto(stub, workerSelection(stub.id)) };
         }

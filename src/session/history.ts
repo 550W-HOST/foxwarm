@@ -379,6 +379,7 @@ export type LayeredCompactCandidateEntry = {
 
 type LayeredCompactCandidateBuildResult = {
   candidateEntries: LayeredCompactCandidateEntry[];
+  preservedMessageCandidates: PreservedMessageCandidateItem[];
   messagePolicy: MessageCompactionPolicy;
   blockPolicies: BlockCompactionPolicy[];
 };
@@ -546,17 +547,37 @@ export async function buildLayeredCompactCandidateEntries(sessionId: string, old
   }
 
   const entries: LayeredCompactCandidateEntry[] = [];
+  const preservedMessageCandidates: PreservedMessageCandidateItem[] = [];
   let compactSegmentId = 1;
   let priorCandidateKind: 'message' | 'block' | undefined;
   let previousRawSeq: number | undefined;
+  let previousBlockRawEndSeq: number | undefined;
   for (let historyIndex = 0; historyIndex < olderHistory.length; historyIndex += 1) {
     const message = olderHistory[historyIndex];
-    if (isPreservedMessage(message)) { compactSegmentId += 1; continue; }
+    if (isPreservedMessage(message)) {
+      if (hasValidRawProvenance(message) && !shouldIgnoreMessageInCompactCandidates(message)) {
+        const seq = message.__meta!.seq!;
+        preservedMessageCandidates.push({
+          seq, key: `M#${seq}`, preservedFromBlockId: message.__meta!.preservedFromBlockId!,
+          preview: formatMessagePreviewText(message, 300, {
+            skipEphemeralSystem: true, skipRagMemorySnippets: true, skipThinking: true,
+          }).trim() || '[empty message]',
+        });
+      }
+      compactSegmentId += 1; priorCandidateKind = undefined; previousRawSeq = undefined; previousBlockRawEndSeq = undefined;
+      continue;
+    }
     const block = message.__meta?.contextBlock;
     if (block) {
-      if (!hasValidBlockProvenance(message)) { compactSegmentId += 1; priorCandidateKind = undefined; continue; }
+      previousRawSeq = undefined;
+      if (!hasValidBlockProvenance(message)) {
+        compactSegmentId += 1; priorCandidateKind = undefined; previousBlockRawEndSeq = undefined; continue;
+      }
       if (priorCandidateKind && priorCandidateKind !== 'block') compactSegmentId += 1;
-      if (!candidateBlockIdsByLevel.get(block.level)?.has(block.id)) { compactSegmentId += 1; continue; }
+      if (!candidateBlockIdsByLevel.get(block.level)?.has(block.id)) {
+        compactSegmentId += 1; priorCandidateKind = undefined; previousBlockRawEndSeq = undefined; continue;
+      }
+      if (previousBlockRawEndSeq !== undefined && block.rawStartSeq <= previousBlockRawEndSeq) compactSegmentId += 1;
       entries.push({
         item: buildBlockCandidateItem(block.id, block.level, block.rawStartSeq, block.rawEndSeq,
           formatMessagePreviewText(message, Number.MAX_SAFE_INTEGER, { skipThinking: true }),
@@ -565,8 +586,10 @@ export async function buildLayeredCompactCandidateEntries(sessionId: string, old
         historyStartIndex: historyIndex, historyEndIndex: historyIndex,
       });
       priorCandidateKind = 'block';
+      previousBlockRawEndSeq = block.rawEndSeq;
       continue;
     }
+    previousBlockRawEndSeq = undefined;
     const seq = message.__meta?.seq;
     if (!Number.isSafeInteger(seq) || (seq || 0) < 1) { compactSegmentId += 1; priorCandidateKind = undefined; continue; }
     if (!hasValidRawProvenance(message) || (previousRawSeq !== undefined && seq !== previousRawSeq + 1)) {
@@ -634,16 +657,7 @@ export async function buildLayeredCompactCandidateEntries(sessionId: string, old
     return { ...policy, feasibleMaxBlocks, effectiveMinBlocks,
       ...(policy.requestedMinBlocks > 0 && feasibleMaxBlocks === 0 ? { skippedReason: 'no legal contiguous multi-block candidate segment is available' } : {}) };
   }).sort((a, b) => a.sourceLevel - b.sourceLevel);
-  return { candidateEntries, messagePolicy, blockPolicies };
-}
-
-function buildPreservedMessageCandidateItems(olderHistory: Message[]): PreservedMessageCandidateItem[] {
-  return olderHistory.flatMap((message): PreservedMessageCandidateItem[] => {
-    const seq = message.__meta?.seq; const preservedFromBlockId = message.__meta?.preservedFromBlockId;
-    if (!isPreservedMessage(message) || !Number.isSafeInteger(seq) || shouldIgnoreMessageInCompactCandidates(message)) return [];
-    return [{ seq: seq!, key: `M#${seq}`, preservedFromBlockId: preservedFromBlockId!, preview:
-      formatMessagePreviewText(message, 300, { skipEphemeralSystem: true, skipRagMemorySnippets: true, skipThinking: true }).trim() || '[empty message]' }];
-  });
+  return { candidateEntries, preservedMessageCandidates, messagePolicy, blockPolicies };
 }
 
 function filterRetainedHistory(history: Message[], removePreservedSeqs: Set<number>): Message[] {
@@ -876,8 +890,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
 
   const olderHistory = historySnapshot.slice(0, splitIndex);
   const forceKeptRecentHistory = splitIndex < historySnapshot.length ? historySnapshot.slice(splitIndex) : [];
-  const preservedMessageCandidates = buildPreservedMessageCandidateItems(olderHistory);
-  const { candidateEntries, messagePolicy, blockPolicies } = await buildLayeredCompactCandidateEntries(sessionId, olderHistory);
+  const { candidateEntries, preservedMessageCandidates, messagePolicy, blockPolicies } = await buildLayeredCompactCandidateEntries(sessionId, olderHistory);
   const candidateItems = candidateEntries.map(entry => entry.item);
 
   if (candidateItems.length === 0 && preservedMessageCandidates.length === 0) {

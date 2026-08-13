@@ -10,7 +10,7 @@ import { ProcessRpcClientTransport, ProcessRpcServer, RpcClient, RpcError, RpcSe
 import { SessionWorkerIdentity, sessionWorkerControlServiceDescriptor } from './sessionWorkerControlService';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { SessionWorkerOwnershipRecord, SessionWorkerStore } from './sessionWorkerStore';
-import { sessionWorkerRuntimeServiceDescriptor, type SessionWorkerHistoryMutationResult, type SessionWorkerSettingsPatch, type SessionWorkerSettingsResult } from './sessionWorkerRuntimeService';
+import { sessionWorkerRuntimeServiceDescriptor, type SessionWorkerCatalogFieldsPatch, type SessionWorkerHistoryMutationResult, type SessionWorkerSettingsPatch, type SessionWorkerSettingsResult } from './sessionWorkerRuntimeService';
 import type { CompactionRequest } from './types';
 import type { SessionRuntimeHistoryDto } from './sessionRuntimeService';
 import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
@@ -290,6 +290,23 @@ export class SessionWorkerSupervisor {
     try {
       const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
       return await runtime.call('updateSettings', { patch });
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
+  }
+
+  async updateCatalogFieldsActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+    patch: SessionWorkerCatalogFieldsPatch,
+  ): Promise<void> {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      await runtime.call('updateCatalogFields', { patch });
     } finally {
       entry.activeCalls -= 1;
       if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);

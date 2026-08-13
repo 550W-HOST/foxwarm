@@ -214,6 +214,15 @@ async function start(): Promise<void> {
     if (options?.purpose === 'compact-plan' && process.env.FOXWARM_TEST_COMPACT_PLAN) {
       return { toolCalls: [{ name: COMPACT_PLAN_TOOL_NAME, args: JSON.parse(process.env.FOXWARM_TEST_COMPACT_PLAN) }] };
     }
+    if (process.env.FOXWARM_TEST_CHILD_REMINDER_NO_ACTION === '1' && chatCount > 1) {
+      await options.appendMessage({ role: 'model', parts: [{ text: '[NO_ACTION]' }] });
+      return { text: '[NO_ACTION]' };
+    }
+    if (process.env.FOXWARM_TEST_ECHO_CATALOG_FIELDS === '1') {
+      const text = `catalog parent=${session.parentSessionId || ''} display=${session.displayName || ''}`;
+      await options.appendMessage({ role: 'model', parts: [{ text }] });
+      return { text };
+    }
     if (process.env.FOXWARM_TEST_FAIL_GOAL === '1' && chatCount === 2) {
       try {
         await tool_set_goal(
@@ -285,6 +294,9 @@ async function start(): Promise<void> {
 
   const store = new SessionWorkerStore(storePath); store.open();
   const identity = { sessionId, generation, incarnationId, pid: process.pid, processIdentity };
+  let catalogStub: any;
+  try { catalogStub = JSON.parse(process.env.FOXWARM_SESSION_WORKER_CATALOG_STUB || '{}'); }
+  catch { throw new Error('Session worker catalog stub is invalid JSON.'); }
   const gate = new SessionWorkerActivationGate();
   const reverseTransport = new ProcessRpcClientTransport(process, { generation, direction: 'reverse' });
   await reverseTransport.waitUntilReady();
@@ -297,6 +309,7 @@ async function start(): Promise<void> {
   await initializeMcpExternalService({ transport: reverseTransport, placement: 'child-reverse' });
   await vector.init({ transport: reverseTransport, placement: 'child-reverse' });
   const host = new SessionWorkerHost(identity, store, {
+    catalogStub,
     publishCommitted: projection => publishCommitted(identity, projection),
     deliverIntermediateText: (source, text) => deliverIntermediateText({ sourceSessionId: sessionId, source, text }).then(() => {}),
     deliverCommittedFinal: (source, text, outcome) => deliverCommittedFinal({ sourceSessionId: sessionId, source, text, outcome }).then(() => {}),
