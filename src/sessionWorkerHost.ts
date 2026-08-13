@@ -9,7 +9,7 @@ import type { CurrentSessionTurnEffects } from './llm';
 import { RpcError } from './rpc';
 import { initArchiveStore } from './session/archiveStore';
 import { refreshSessionSnapshotForSession } from './session/agentMetadata';
-import { clearSession, compactToolMessages as compactSessionToolMessages, deleteMessages, forceIndexSession, getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSessionCompactionRequest, type SessionHistoryDeps } from './session/history';
+import { clearSession, compactToolMessages as compactSessionToolMessages, deleteMessages, forceIndexSession, getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSessionCompactionRequest, tryAutomaticToolResponsePruning, type SessionHistoryDeps } from './session/history';
 import { getManagedSessionState } from './session/managedState';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './session/metadataStore';
 import {
@@ -824,6 +824,9 @@ export class SessionWorkerHost {
     await this.fenceMutation();
     const beforeVersion = this.session!.historyVersion || 0;
     try {
+      if (failurePolicy !== 'explicit' && await tryAutomaticToolResponsePruning(this.historyDeps(), this.identity.sessionId)) {
+        return (this.session!.historyVersion || 0) !== beforeVersion;
+      }
       await processSessionCompactionRequest(this.historyDeps(), this.identity.sessionId, request, 'await');
       return (this.session!.historyVersion || 0) !== beforeVersion;
     } catch (error) {

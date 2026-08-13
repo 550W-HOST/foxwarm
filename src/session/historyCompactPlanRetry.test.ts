@@ -735,3 +735,208 @@ test('background compact retains only an appended compatible active-history suff
     assert.fail('background compact did not become ready');
   } finally { (llm as any).chat = originalChat; }
 });
+
+test('historical tool-response pruning keeps Unicode-safe line-aware head/tail, metadata, recall location, and call args', () => {
+  const { buildToolResponsePrunePlan } = require('./history') as typeof import('./history');
+  const headLine = `${'h'.repeat(450)}😀\n`;
+  const middle = 'M'.repeat(900);
+  const tailLine = `\n${'t'.repeat(450)}🦊`;
+  const output = `${headLine}${middle}${tailLine}`;
+  const history: Message[] = [
+    { role: 'model', parts: [{ functionCall: { id: 'call-prune', name: 'read', args: { unchanged: middle }, rawArgsText: JSON.stringify({ unchanged: middle }) } }], __meta: { seq: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'call-prune', name: 'read', response: {
+      output, status: 'ok', path: '/tmp/result.txt', sha256: 'a'.repeat(64), nested: { discard: middle }, arbitraryLarge: middle,
+    } } }], __meta: { seq: 2 } },
+    { role: 'user', parts: [{ text: 'recent' }], __meta: { seq: 3 } },
+  ];
+  const plan = buildToolResponsePrunePlan({ history, persistentMemorySnapshot: '' }, 1 / 3);
+  assert.equal(plan.replacedFunctionCalls, 0);
+  assert.equal(plan.replacedFunctionResponses, 1);
+  assert.deepEqual(plan.rewrittenHistory[0].parts[0].functionCall, history[0].parts[0].functionCall);
+  const response = plan.rewrittenHistory[1].parts[0].functionResponse!.response;
+  const pruned = String(response.output);
+  assert.match(pruned, /^h+/);
+  assert.match(pruned, /😀\n{2,3}--- \[foxwarm:/);
+  assert.match(pruned, /\n\nt+🦊$/);
+  assert.match(pruned, /recall\(\{ target: "msg#2" \}\)/);
+  assert.match(pruned, /tool="read"/);
+  assert.match(pruned, /tool_use_id="call-prune"/);
+  assert.equal(response.status, 'ok');
+  assert.equal(response.path, '/tmp/result.txt');
+  assert.equal(response.sha256, 'a'.repeat(64));
+  assert.equal(response.nested, undefined);
+  assert.equal(response.arbitraryLarge, undefined);
+  assert.doesNotMatch(pruned, /\uFFFD/);
+  assert.deepEqual(plan.rewrittenHistory[2], history[2]);
+});
+
+test('structured historical response payloads retain their full JSON envelope inside the pruned text', () => {
+  const { buildToolResponsePrunePlan } = require('./history') as typeof import('./history');
+  const history: Message[] = [
+    { role: 'model', parts: [{ functionCall: { id: 'structured-call', name: 'call_tool', args: {} } }], __meta: { seq: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'structured-call', name: 'call_tool', response: {
+      output: { status: 'ok', path: '/tmp/structured.txt', body: 'Z'.repeat(2500) },
+    } } }], __meta: { seq: 2 } },
+    { role: 'user', parts: [{ text: 'recent' }], __meta: { seq: 3 } },
+  ];
+  const plan = buildToolResponsePrunePlan({ history, persistentMemorySnapshot: '' }, 1 / 3);
+  const pruned = String(plan.rewrittenHistory[1].parts[0].functionResponse?.response.output);
+  assert.match(pruned, /^\{"status":"ok","path":"\/tmp\/structured\.txt","body":"Z/);
+  assert.match(pruned, /historical tool response pruned/);
+});
+
+test('manual historical tool-response pruning is a true no-op for small responses', async () => {
+  const { compactToolMessages } = await loadDeps().then(value => value.sessionHistory);
+  const session: Session = {
+    id: makeSessionId('tool_prune_noop'), agent: 'main', history: [
+      { role: 'model', parts: [{ functionCall: { id: 'small-call', name: 'read', args: { large: 'x'.repeat(2000) } } }], __meta: { seq: 1 } },
+      { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'small-call', name: 'read', response: { output: 'small' } } }], __meta: { seq: 2 } },
+    ], persistentMemorySnapshot: '', stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false, queue: [], meta: { lastMessageTime: Date.now() }, historyVersion: 7,
+  } as Session;
+  const saveCounter = { count: 0 };
+  const before = structuredClone(session.history);
+  const result = await compactToolMessages(makeDepsForSession(session, saveCounter), session.id, 0);
+  assert.equal(result.replacedFunctionCalls, 0);
+  assert.equal(result.replacedFunctionResponses, 0);
+  assert.equal(saveCounter.count, 0);
+  assert.equal(session.historyVersion, 7);
+  assert.deepEqual(session.history, before);
+});
+
+test('automatic pruning commits below 50% and skips layered provider planning', async () => {
+  const { sessionHistory, llm } = await loadDeps();
+  const session: Session = {
+    id: makeSessionId('auto_tool_prune_commit'), agent: 'main', history: [], persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null }, busy: false, queue: [],
+    meta: { lastMessageTime: Date.now() }, historyVersion: 2, promptCacheKey: '11111111-2222-4333-8444-555555555555',
+  } as Session;
+  const huge = 'auto-prune-payload '.repeat(5000);
+  session.history = [
+    { role: 'model', parts: [{ functionCall: { id: 'auto-call', name: 'read', args: { untouched: huge } } }], __meta: { seq: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'auto-call', name: 'read', response: { output: huge } } }], __meta: { seq: 2 } },
+    ...Array.from({ length: 8 }, (_, index): Message => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: `tail-${index}` }], __meta: { seq: index + 3 } })),
+  ];
+  const saves = { count: 0 };
+  const originalChat = llm.chat; let providerCalls = 0;
+  (llm as any).chat = async () => { providerCalls += 1; throw new Error('layered planner must not run'); };
+  try {
+    await sessionHistory.checkAndCompactIfNeeded(makeDepsForSession(session, saves), session.id, { inputTokens: 200000 });
+    assert.equal(providerCalls, 0);
+    assert.equal(saves.count, 1);
+    assert.equal(session.historyVersion, 3);
+    assert.equal(session.promptCacheKey, '11111111-2222-4333-8444-555555555555');
+    assert.match(String(session.history[1].parts[0].functionResponse?.response.output), /historical tool response pruned/);
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('automatic pruning above 50% leaves byte-exact history and runs layered planning', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session: Session = {
+    id: makeSessionId('auto_tool_prune_fallback'), agent: 'main', history: [], persistentMemorySnapshot: 'S'.repeat(300000),
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null }, busy: false, queue: [],
+    meta: { lastMessageTime: Date.now() }, historyVersion: 4, promptCacheKey: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+  } as Session;
+  const huge = 'fallback-tool '.repeat(4000);
+  const messages: Message[] = [
+    { role: 'model', parts: [{ functionCall: { id: 'fallback-call', name: 'read', args: { unchanged: true } } }], __meta: { timestamp: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'fallback-call', name: 'read', response: { output: huge } } }], __meta: { timestamp: 2 } },
+    { role: 'user', parts: [{ text: 'recent' }], __meta: { timestamp: 3 } },
+  ];
+  await archive.appendMessagesToArchive(session, messages);
+  session.history = messages;
+  const before = structuredClone(session.history);
+  const saves = { count: 0 };
+  const originalChat = llm.chat; let sawOriginal = false;
+  (llm as any).chat = async (_parts: MessagePart[] | null, active: Session): Promise<ChatResult> => {
+    sawOriginal = JSON.stringify(active.history).includes(huge);
+    throw new Error('expected planner probe');
+  };
+  try {
+    await sessionHistory.checkAndCompactIfNeeded(makeDepsForSession(session, saves), session.id, { inputTokens: 200000 });
+    for (let index = 0; index < 100 && !sawOriginal; index += 1) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(sawOriginal, true);
+    assert.deepEqual(session.history, before);
+    assert.equal(session.historyVersion, 4);
+    assert.equal(session.promptCacheKey, 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+    assert.equal(saves.count, 0);
+  } finally { sessionHistory.discardPendingCompactWork(session.id); (llm as any).chat = originalChat; }
+});
+
+test('prune commit accepts an appended suffix and rejects a changed prefix', async () => {
+  const { sessionHistory } = await loadDeps();
+  const huge = 'compatible-prefix '.repeat(2000);
+  const base: Message[] = [
+    { role: 'model', parts: [{ functionCall: { id: 'compat-call', name: 'read', args: {} } }], __meta: { seq: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'compat-call', name: 'read', response: { output: huge } } }], __meta: { seq: 2 } },
+    { role: 'user', parts: [{ text: 'protected tail' }], __meta: { seq: 3 } },
+  ];
+  const session = { id: makeSessionId('prune_compat'), agent: 'main', history: structuredClone(base), persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null }, busy: false, queue: [], meta: { lastMessageTime: 1 }, historyVersion: 0 } as Session;
+  const plan = sessionHistory.buildToolResponsePrunePlan(session, 1 / 3);
+  session.history.push({ role: 'user', parts: [{ text: 'appended' }], __meta: { seq: 4 } });
+  const saves = { count: 0 };
+  assert.equal((await sessionHistory.commitToolResponsePrunePlan(makeDepsForSession(session, saves), session.id, plan)).committed, true);
+  assert.equal(session.history.at(-1)?.parts[0].text, 'appended');
+  const incompatible = { ...session, id: makeSessionId('prune_incompat'), history: structuredClone(base), historyVersion: 0 } as Session;
+  const incompatiblePlan = sessionHistory.buildToolResponsePrunePlan(incompatible, 1 / 3);
+  incompatible.history[0].parts[0].functionCall!.args = { edited: true };
+  const incompatibleSaves = { count: 0 };
+  assert.equal((await sessionHistory.commitToolResponsePrunePlan(makeDepsForSession(incompatible, incompatibleSaves), incompatible.id, incompatiblePlan)).committed, false);
+  assert.equal(incompatibleSaves.count, 0);
+  assert.match(String(incompatible.history[1].parts[0].functionResponse?.response.output), /compatible-prefix/);
+});
+
+test('prune persistence failure restores exact semantic history while post-authority failure keeps the committed rewrite', async () => {
+  const { sessionHistory } = await loadDeps();
+  const huge = 'failure-boundary '.repeat(2500);
+  const make = (id: string): Session => ({ id, agent: 'main', history: [
+    { role: 'model', parts: [{ functionCall: { id: 'failure-call', name: 'read', args: {} } }], __meta: { seq: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'failure-call', name: 'read', response: { output: huge } } }], __meta: { seq: 2 } },
+    { role: 'user', parts: [{ text: 'tail' }], __meta: { seq: 3 } },
+  ], persistentMemorySnapshot: '', stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+  busy: false, queue: [], meta: { lastMessageTime: 1 }, historyVersion: 5, promptCacheKey: 'dddddddd-eeee-4fff-8aaa-222222222222' } as Session);
+
+  const beforeAuthority = make(makeSessionId('prune_before_authority'));
+  const beforeSnapshot = structuredClone(beforeAuthority.history);
+  await assert.rejects(() => sessionHistory.compactToolMessages({
+    ...makeDepsForSession(beforeAuthority, { count: 0 }), saveSession: async () => { throw new Error('before authority'); },
+  }, beforeAuthority.id, 1 / 3), /before authority/);
+  assert.deepEqual(beforeAuthority.history, beforeSnapshot);
+  assert.equal(beforeAuthority.historyVersion, 5);
+
+  const postAuthority = make(makeSessionId('prune_post_authority'));
+  const postError = Object.assign(new Error('post authority'), { code: 'SESSION_AUTHORITY_POSTCOMMIT_FAILED' });
+  await assert.rejects(() => sessionHistory.compactToolMessages({
+    ...makeDepsForSession(postAuthority, { count: 0 }), saveSession: async () => { throw postError; },
+  }, postAuthority.id, 1 / 3), error => error === postError);
+  assert.match(String(postAuthority.history[1].parts[0].functionResponse?.response.output), /historical tool response pruned/);
+  assert.equal(postAuthority.historyVersion, 6);
+  assert.equal(postAuthority.promptCacheKey, 'dddddddd-eeee-4fff-8aaa-222222222222');
+});
+
+test('manual pruning rewrites only active history while exact archive recall keeps the full original', async () => {
+  const { sessionHistory, archive } = await loadDeps();
+  const session: Session = {
+    id: makeSessionId('tool_prune_archive'), agent: 'main', history: [], persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null }, busy: false, queue: [],
+    meta: { lastMessageTime: Date.now() }, historyVersion: 1, promptCacheKey: 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff', nextMessageSeq: 1,
+  } as Session;
+  const originalOutput = 'ARCHIVE-FULL '.repeat(3000);
+  const messages: Message[] = [
+    { role: 'model', parts: [{ functionCall: { id: 'archive-call', name: 'read', args: {} } }], __meta: { timestamp: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'archive-call', name: 'read', response: { output: originalOutput } } }], __meta: { timestamp: 2 } },
+    { role: 'user', parts: [{ text: 'tail' }], __meta: { timestamp: 3 } },
+  ];
+  await archive.appendMessagesToArchive(session, messages); session.history = messages;
+  const saves = { count: 0 };
+  const result = await sessionHistory.compactToolMessages(makeDepsForSession(session, saves), session.id, 1 / 3);
+  assert.equal(result.replacedFunctionResponses, 1);
+  assert.equal(session.promptCacheKey, 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff');
+  const activeOutput = String(session.history[1].parts[0].functionResponse?.response.output);
+  assert.match(activeOutput, /historical tool response pruned/);
+  assert.ok(activeOutput.length < originalOutput.length / 10);
+  const recalled = await sessionHistory.getArchivedMessages(session.id, { startSeq: 2, endSeq: 2 });
+  assert.equal(recalled.records.length, 1);
+  assert.equal(recalled.records[0].message.parts[0].functionResponse?.response.output, originalOutput);
+});

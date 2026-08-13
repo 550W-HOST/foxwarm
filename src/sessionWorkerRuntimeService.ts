@@ -61,7 +61,7 @@ export type SessionWorkerBtwResult = {
   projection: SessionWorkerProjection;
 };
 
-export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 10, {
+export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 11, {
   loadProjection: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
   retry: rpcMethod<{ source?: QueueSource }, SessionWorkerProjection>(),
@@ -271,7 +271,7 @@ export function createSessionWorkerRuntimeServiceHandler(
       gate.assertActive();
       if (!input || typeof input !== 'object' || Array.isArray(input)
         || Object.keys(input).some(key => key !== 'keepPercent')) {
-        throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', 'Tool-noise compaction takes an optional keepPercent.');
+        throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', 'Historical tool-response pruning takes an optional keepPercent.');
       }
       if (input.keepPercent !== undefined
         && (!Number.isFinite(input.keepPercent) || input.keepPercent <= 0 || input.keepPercent > 1)) {

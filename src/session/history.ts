@@ -10,7 +10,7 @@ import {
   COMPACT_PERCENT,
   resolveModelConfig,
 } from '../config';
-import { estimateTokenCount } from '../tokenCount';
+import { estimateSessionTokens, estimateTokenCount } from '../tokenCount';
 import * as vector from '../vector';
 import { appendMessagesToArchive, readArchiveMessages, readArchiveMessagesBySeqRange, rollbackUncommittedMessages } from './archive';
 import {
@@ -34,7 +34,6 @@ import {
   validateCompactPlanArgs,
 } from './compactPlan';
 import { CompactionRequest, Message, MessagePart, QueueItem, Session, TokenUsage } from '../types';
-import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatMessagePreviewText } from '../utils/messageFormat';
 import { buildSystemMessageParts } from '../utils/systemMessageParts';
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
@@ -45,7 +44,15 @@ import { isModelVisibleMessage } from './messageVisibility';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './metadataStore';
 import { isSessionAuthorityPostCommitError } from './stateFile';
 
-const TOOL_NOISE_TOKEN_THRESHOLD = 200;
+const TOOL_RESPONSE_RETAIN_HEAD_CHARS = 500;
+const TOOL_RESPONSE_RETAIN_TAIL_CHARS = 500;
+const TOOL_RESPONSE_LINE_PREFERENCE_WINDOW = 100;
+const TOOL_RESPONSE_METADATA_KEYS = new Set([
+  'status', 'node', 'nodeId', 'path', 'filePath', 'absolutePath', 'outputFullPath',
+  'logPath', 'statusPath', 'runId', 'execId', 'sha256', 'hash', 'location',
+  'sizeBytes', 'byteLength', 'outputOriginalLengthChars', 'outputOriginalLineCount',
+  'exitCode', 'code', 'overwritten',
+]);
 
 export interface ArchivedMessagesQueryOptions {
   startSeq?: number;
@@ -67,6 +74,12 @@ export interface ToolNoiseCompactionResult {
   inspectedMessages: number;
   keepStartIndex: number;
   thresholdTokens: number;
+  estimatedTokensBefore: number;
+  estimatedTokensAfter: number;
+  estimatedTokensSaved: number;
+  retainedHeadChars: number;
+  retainedTailChars: number;
+  minimumResponseChars: number;
 }
 
 export function getDefaultCompactThresholdTokens(session: Pick<Session, 'model'>): number {
@@ -229,53 +242,200 @@ export async function forceIndexSession(deps: SessionHistoryDeps, sessionId: str
   }
 }
 
-function getFunctionCallTokenCount(part: Message['parts'][number]): number {
-  if (!part.functionCall) {
-    return 0;
-  }
-
-  return estimateTokenCount(part.functionCall.name || '')
-    + estimateTokenCount(stringifyFunctionCallArgs(part.functionCall));
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
-function getFunctionResponseTokenCount(part: Message['parts'][number]): number {
-  if (!part.functionResponse) {
-    return 0;
-  }
-
-  return estimateTokenCount(part.functionResponse.name || '')
-    + estimateTokenCount(JSON.stringify(part.functionResponse.response || {}));
+function unicodeChars(value: string): string[] {
+  return Array.from(value);
 }
 
-function buildToolNoisePlaceholder(options: {
-  sessionId: string;
-  seq?: number;
+function takeLineAwareHead(chars: string[], limit: number): string {
+  if (chars.length <= limit) return chars.join('');
+  const minimumPreferred = Math.max(0, limit - TOOL_RESPONSE_LINE_PREFERENCE_WINDOW);
+  for (let index = limit - 1; index >= minimumPreferred; index -= 1) {
+    if (chars[index] === '\n') return chars.slice(0, index + 1).join('');
+  }
+  return chars.slice(0, limit).join('');
+}
+
+function takeLineAwareTail(chars: string[], limit: number): string {
+  if (chars.length <= limit) return chars.join('');
+  const start = chars.length - limit;
+  const maximumPreferred = Math.min(chars.length - 1, start + TOOL_RESPONSE_LINE_PREFERENCE_WINDOW);
+  for (let index = start; index <= maximumPreferred; index += 1) {
+    if (chars[index] === '\n') return chars.slice(index + 1).join('');
+  }
+  return chars.slice(start).join('');
+}
+
+function normalizeHistoricalToolResponseText(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
+}
+
+function buildToolResponsePrunedText(options: {
+  originalText: string;
+  seq: number;
   toolName?: string;
-  kind: 'function_call' | 'function_response';
-  estimatedTokens: number;
+  toolUseId?: string;
 }): string {
-  const { seq, toolName, kind } = options;
-  const rangeLabel = typeof seq === 'number' ? `#${seq}` : '(seq unavailable)';
-  const kindLabel = kind === 'function_call' ? 'tool call' : 'tool response';
-  const toolLabel = toolName || 'unknown';
-  const lookup = typeof seq === 'number'
-    ? `message log msg${rangeLabel} via recall`
-    : 'see earlier message log via recall';
-  return `[compacted ${kindLabel}: ${toolLabel}] ${lookup}`;
+  const chars = unicodeChars(options.originalText);
+  const head = takeLineAwareHead(chars, TOOL_RESPONSE_RETAIN_HEAD_CHARS);
+  const tail = takeLineAwareTail(chars, TOOL_RESPONSE_RETAIN_TAIL_CHARS);
+  const marker = `--- [foxwarm: historical tool response pruned; original: recall({ target: "msg#${options.seq}" }); tool=${JSON.stringify(options.toolName || 'unknown')}; tool_use_id=${JSON.stringify(options.toolUseId || 'unknown')}; kept first ${unicodeChars(head).length} and last ${unicodeChars(tail).length} Unicode characters] ---`;
+  return `${head}\n\n${marker}\n\n${tail}`;
 }
 
-function buildCompactedFunctionCallArgs(placeholder: string): Record<string, any> {
+function isSmallMetadataValue(value: unknown): boolean {
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') return true;
+  return typeof value === 'string' && unicodeChars(value).length <= 512;
+}
+
+function buildPrunedFunctionResponse(
+  message: Message,
+  part: MessagePart,
+): { part: MessagePart; originalChars: number; prunedChars: number } | null {
+  const functionResponse = part.functionResponse;
+  const seq = message.__meta?.seq;
+  if (!functionResponse || !Number.isSafeInteger(seq) || (seq || 0) < 1 || !isPlainRecord(functionResponse.response)) return null;
+
+  const response = functionResponse.response;
+  const payloadKey = (['output', 'content', 'error'] as const).find(key => response[key] !== undefined && response[key] !== null);
+  if (!payloadKey) return null;
+  let originalText: string;
+  const normalizedText = normalizeHistoricalToolResponseText(response[payloadKey]);
+  if (normalizedText === null) return null;
+  originalText = normalizedText;
+  const originalChars = unicodeChars(originalText).length;
+  if (originalChars <= TOOL_RESPONSE_RETAIN_HEAD_CHARS + TOOL_RESPONSE_RETAIN_TAIL_CHARS) return null;
+
+  const prunedText = buildToolResponsePrunedText({
+    originalText,
+    seq: seq!,
+    toolName: functionResponse.name,
+    toolUseId: functionResponse.tool_use_id,
+  });
+  const prunedChars = unicodeChars(prunedText).length;
+  if (prunedChars >= originalChars) return null;
+
+  const nextResponse: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(response)) {
+    if (key !== payloadKey && TOOL_RESPONSE_METADATA_KEYS.has(key) && isSmallMetadataValue(value)) {
+      nextResponse[key] = structuredClone(value);
+    }
+  }
+  nextResponse[payloadKey] = prunedText;
+
   return {
-    __compacted: true,
-    placeholder,
+    part: {
+      ...structuredClone(part),
+      functionResponse: {
+        ...structuredClone(functionResponse),
+        response: nextResponse,
+      },
+    },
+    originalChars,
+    prunedChars,
   };
 }
 
-function buildCompactedFunctionResponse(placeholder: string): Record<string, any> {
+export type ToolResponsePrunePlan = ToolNoiseCompactionResult & {
+  snapshotHistory: Message[];
+  rewrittenHistory: Message[];
+};
+
+function toolResponsePruneResult(plan: ToolResponsePrunePlan): ToolNoiseCompactionResult {
+  const { snapshotHistory: _snapshotHistory, rewrittenHistory: _rewrittenHistory, ...result } = plan;
+  return result;
+}
+
+export function buildToolResponsePrunePlan(
+  session: Pick<Session, 'history' | 'persistentMemorySnapshot'>,
+  keepPercent: number = COMPACT_PERCENT,
+): ToolResponsePrunePlan {
+  const snapshotHistory = structuredClone(session.history);
+  const splitIndex = resolveCompactionSplitIndex(snapshotHistory, keepPercent);
+  let replacedFunctionResponses = 0;
+  let touchedMessages = 0;
+
+  const rewrittenOlder = snapshotHistory.slice(0, splitIndex).map(message => {
+    let touched = false;
+    const parts = message.parts.map(part => {
+      const pruned = buildPrunedFunctionResponse(message, part);
+      if (!pruned) return structuredClone(part);
+      replacedFunctionResponses += 1;
+      touched = true;
+      return pruned.part;
+    });
+    if (touched) touchedMessages += 1;
+    return { ...structuredClone(message), parts };
+  });
+  const rewrittenHistory = [...rewrittenOlder, ...structuredClone(snapshotHistory.slice(splitIndex))];
+  const estimatedTokensBefore = estimateSessionTokens({ history: snapshotHistory, persistentMemorySnapshot: session.persistentMemorySnapshot });
+  const estimatedTokensAfter = estimateSessionTokens({ history: rewrittenHistory, persistentMemorySnapshot: session.persistentMemorySnapshot });
+
   return {
-    __compacted: true,
-    output: placeholder,
+    snapshotHistory,
+    rewrittenHistory,
+    replacedFunctionCalls: 0,
+    replacedFunctionResponses,
+    touchedMessages,
+    inspectedMessages: splitIndex,
+    keepStartIndex: splitIndex,
+    thresholdTokens: 0,
+    estimatedTokensBefore,
+    estimatedTokensAfter,
+    estimatedTokensSaved: Math.max(0, estimatedTokensBefore - estimatedTokensAfter),
+    retainedHeadChars: TOOL_RESPONSE_RETAIN_HEAD_CHARS,
+    retainedTailChars: TOOL_RESPONSE_RETAIN_TAIL_CHARS,
+    minimumResponseChars: TOOL_RESPONSE_RETAIN_HEAD_CHARS + TOOL_RESPONSE_RETAIN_TAIL_CHARS + 1,
   };
+}
+
+export async function commitToolResponsePrunePlan(
+  deps: SessionHistoryDeps,
+  sessionId: string,
+  plan: ToolResponsePrunePlan,
+  maximumEstimatedTokens?: number,
+): Promise<{ committed: boolean; result: ToolNoiseCompactionResult }> {
+  const session = deps.getSessionById(sessionId);
+  const baseResult = toolResponsePruneResult(plan);
+  if (!session || plan.replacedFunctionResponses === 0 || !hasCompatibleHistoryPrefix(session.history, plan.snapshotHistory)) {
+    return { committed: false, result: { ...baseResult, replacedFunctionResponses: 0, touchedMessages: 0, estimatedTokensSaved: 0 } };
+  }
+
+  const rewrittenHistory = [...plan.rewrittenHistory, ...structuredClone(session.history.slice(plan.snapshotHistory.length))];
+  const estimatedTokensBefore = estimateSessionTokens(session);
+  const estimatedTokensAfter = estimateSessionTokens({ history: rewrittenHistory, persistentMemorySnapshot: session.persistentMemorySnapshot });
+  const result: ToolNoiseCompactionResult = {
+    ...baseResult,
+    estimatedTokensBefore,
+    estimatedTokensAfter,
+    estimatedTokensSaved: Math.max(0, estimatedTokensBefore - estimatedTokensAfter),
+  };
+  if (maximumEstimatedTokens !== undefined && estimatedTokensAfter > maximumEstimatedTokens) {
+    return { committed: false, result };
+  }
+
+  const beforeCommit = captureSessionSemanticState(session);
+  session.history = rewrittenHistory;
+  session.historyVersion = (session.historyVersion || 0) + 1;
+  session.indexingState = undefined;
+  if (session.vectorIndexPosition !== undefined) session.vectorIndexPosition = Math.min(session.vectorIndexPosition, session.history.length);
+  try {
+    await deps.saveSession(sessionId);
+    return { committed: true, result };
+  } catch (error) {
+    if (!isSessionAuthorityPostCommitError(error)) restoreSessionSemanticState(session, beforeCommit);
+    throw error;
+  }
 }
 
 function normalizeSeqRange(startSeq?: number, endSeq?: number): { startSeq?: number; endSeq?: number } {
@@ -1404,94 +1564,42 @@ export async function compactToolMessages(
   deps: SessionHistoryDeps,
   sessionId: string,
   keepPercent: number = COMPACT_PERCENT,
-  thresholdTokens: number = TOOL_NOISE_TOKEN_THRESHOLD,
+  _thresholdTokens?: number,
 ): Promise<ToolNoiseCompactionResult> {
   const session = await deps.getExistingSession(sessionId);
   if (!session) {
     throw new Error(`Session \`${sessionId}\` not found.`);
   }
 
-  const splitIndex = resolveCompactionSplitIndex(session.history, keepPercent);
-  const targetMessages = session.history.slice(0, splitIndex);
-  let replacedFunctionCalls = 0;
-  let replacedFunctionResponses = 0;
-  let touchedMessages = 0;
+  const plan = buildToolResponsePrunePlan(session, keepPercent);
+  return (await commitToolResponsePrunePlan(deps, sessionId, plan)).result;
+}
 
-  const rewrittenMessages = targetMessages.map(message => {
-    let touched = false;
-    const rewrittenParts = message.parts.map(part => {
-      const nextPart = structuredClone(part);
-
-      const functionCallTokens = getFunctionCallTokenCount(part);
-      if (part.functionCall && functionCallTokens > thresholdTokens) {
-        const placeholder = buildToolNoisePlaceholder({
-          sessionId,
-          seq: message.__meta?.seq,
-          toolName: part.functionCall.name,
-          kind: 'function_call',
-          estimatedTokens: functionCallTokens,
-        });
-        const compactedArgs = buildCompactedFunctionCallArgs(placeholder);
-        nextPart.functionCall = {
-          ...nextPart.functionCall,
-          args: compactedArgs,
-          rawArgsText: JSON.stringify(compactedArgs),
-          argsParseError: undefined,
-        };
-        replacedFunctionCalls += 1;
-        touched = true;
-      }
-
-      const functionResponseTokens = getFunctionResponseTokenCount(part);
-      if (part.functionResponse && functionResponseTokens > thresholdTokens) {
-        const placeholder = buildToolNoisePlaceholder({
-          sessionId,
-          seq: message.__meta?.seq,
-          toolName: part.functionResponse.name,
-          kind: 'function_response',
-          estimatedTokens: functionResponseTokens,
-        });
-        nextPart.functionResponse = {
-          ...nextPart.functionResponse,
-          response: buildCompactedFunctionResponse(placeholder),
-        };
-        replacedFunctionResponses += 1;
-        touched = true;
-      }
-
-      return nextPart;
-    });
-
-    if (touched) {
-      touchedMessages += 1;
-    }
-
-    return {
-      ...message,
-      parts: rewrittenParts,
-    };
-  });
-
-  session.history = [
-    ...rewrittenMessages,
-    ...session.history.slice(splitIndex),
-  ];
-  session.historyVersion = (session.historyVersion || 0) + 1;
-  session.indexingState = undefined;
-  if (session.vectorIndexPosition !== undefined) {
-    session.vectorIndexPosition = Math.min(session.vectorIndexPosition, session.history.length);
+export async function tryAutomaticToolResponsePruning(
+  deps: SessionHistoryDeps,
+  sessionId: string,
+  planOverride?: ToolResponsePrunePlan,
+): Promise<boolean> {
+  const session = deps.getSessionById(sessionId);
+  if (!session) return false;
+  const plan = planOverride || buildToolResponsePrunePlan(session, COMPACT_PERCENT);
+  if (plan.replacedFunctionResponses === 0) return false;
+  const { contextLimit } = resolveModelConfig(session.model);
+  const recoveryTarget = Math.max(1, Math.floor(contextLimit * 0.5));
+  const commit = await commitToolResponsePrunePlan(deps, sessionId, plan, recoveryTarget);
+  if (!commit.committed) {
+    logger.info({
+      sessionId, prunableResponses: plan.replacedFunctionResponses,
+      estimatedTokensAfter: commit.result.estimatedTokensAfter, recoveryTarget,
+    }, 'Automatic historical tool-response pruning did not commit; continuing to layered compaction');
+    return false;
   }
-
-  await deps.saveSession(sessionId);
-
-  return {
-    replacedFunctionCalls,
-    replacedFunctionResponses,
-    touchedMessages,
-    inspectedMessages: targetMessages.length,
-    keepStartIndex: splitIndex,
-    thresholdTokens,
-  };
+  logger.info({
+    sessionId, prunedResponses: commit.result.replacedFunctionResponses, touchedMessages: commit.result.touchedMessages,
+    estimatedTokensBefore: commit.result.estimatedTokensBefore, estimatedTokensAfter: commit.result.estimatedTokensAfter,
+    estimatedTokensSaved: commit.result.estimatedTokensSaved, recoveryTarget,
+  }, 'Automatic historical tool-response pruning completed; layered compaction skipped for this trigger');
+  return true;
 }
 
 export function getUsageTotalTokens(finalUsage?: Partial<TokenUsage> & {
@@ -1527,6 +1635,7 @@ export async function checkAndCompactIfNeeded(deps: SessionHistoryDeps, sessionI
 
   if (currentSize > compactThreshold) {
     logger.info({ currentSize, compactThreshold, sessionThresholdOverride: session.compactThresholdTokens }, 'Auto compact');
+    if (await tryAutomaticToolResponsePruning(deps, sessionId)) return;
     await runCompactionWithMode(deps, sessionId, {
       keepPercent: COMPACT_PERCENT,
       completionMarker: 'Compaction completed.',
@@ -1549,6 +1658,16 @@ export async function processSessionCompactionRequest(
       startLogMessage: 'Manual compaction starting',
     }, executionMode);
     return;
+  }
+
+  if (executionMode === 'auto') {
+    const session = deps.getSessionById(sessionId);
+    const prunePlan = session ? buildToolResponsePrunePlan(session, COMPACT_PERCENT) : undefined;
+    if (prunePlan && await tryAutomaticToolResponsePruning(deps, sessionId, prunePlan)) return;
+    if (prunePlan && !hasCompatibleHistoryPrefix(session?.history || [], prunePlan.snapshotHistory)) {
+      logger.info({ sessionId }, 'Skipping layered compaction because the automatic maintenance snapshot changed incompatibly');
+      return;
+    }
   }
 
   await runCompactionWithMode(deps, sessionId, {

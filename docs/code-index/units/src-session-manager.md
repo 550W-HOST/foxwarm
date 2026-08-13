@@ -50,7 +50,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 ### Channel and history façades
 
 - Channel functions delegate to `src/session/channels.ts`: attachment lookup/mutation, direct text/file delivery, session broadcast setup, and attachment enumeration.
-- Compaction/archive functions delegate to `src/session/history.ts`: threshold resolution, explicit/automatic compaction, completed-job application, archive reads, and tool-noise compaction.
+- Compaction/archive functions delegate to `src/session/history.ts`: threshold resolution, explicit/automatic compaction, completed-job application, archive reads, and historical tool-response pruning.
 - Runtime-state helpers are re-exported from `src/sessionRuntimeState.ts`.
 
 ### Update callbacks

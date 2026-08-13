@@ -4,7 +4,7 @@ Files: src/session/history.ts, src/session/history.test.ts, src/session/historyC
 
 ## Purpose
 
-Owns session-history mutation and compaction orchestration. It computes thresholds, creates transient compact jobs, runs the bounded plan loop, validates compatible-prefix commits, formats completion markers, applies manual clear/delete/tool-noise operations, and delegates archive/vector work to their domain modules.
+Owns session-history mutation and compaction orchestration. It computes thresholds, creates transient compact jobs, runs the bounded plan loop, validates compatible-prefix commits, formats completion markers, applies manual clear/delete/historical-response-pruning operations, and delegates archive/vector work to their domain modules.
 
 Canonical end-to-end contract: [context compaction and recall](../threads/context-compaction-and-recall.md).
 
@@ -29,14 +29,15 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 
 - `compactHistory`, `compactHistoryWithSummary` — explicit compaction façades.
 - `checkAndCompactIfNeeded`, `processSessionCompactionRequest` — automatic/explicit orchestration.
-- `compactToolMessages` — bounded replacement of oversized tool call/response payloads.
+- `buildToolResponsePrunePlan`, `commitToolResponsePrunePlan` — pure dry-run and exact compatible-prefix commit for historical response-only pruning.
+- `compactToolMessages` — manual provider-free façade over the shared response-only pruning primitive.
 - `deleteMessages`, `clearSession` — destructive history operations with archive coordination.
 - `getArchivedMessages` — sequence-range archive query result.
 - `forceIndexSession`, `getUsageTotalTokens` — index and provider-usage helpers.
 
 ## Internal sections
 
-- **Snapshot creation:** captures exact active history, prompt/cache context, request options, and a transient session clone.
+- **Snapshot creation:** captures exact active history, prompt/cache context, request options, and a transient session clone; automatic tool-response pruning uses the same complete-history snapshot discipline.
 - **Candidate construction:** applies visibility, exact active/archive provenance validation, protected/noncandidate barriers, atomic tool grouping, recent-tail keep, and raw/block policies without repairing history from archive.
 - **Planning loop:** calls the model, accepts only `submit_compact_plan`, appends actionable feedback, and stops after `COMPACT_FLOW_MAX_ROUNDS`.
 - **Result construction:** creates block archive records and replacement history messages without touching the live session.
@@ -62,6 +63,7 @@ Transient compact-job Session clones preserve raw `effort`, `childModelDefault`,
 - Session-worker callers bind exact-owner dependencies and force awaited mode at canonical runner safe points or an idle explicit operation; omitting the enqueue dependency structurally prevents background commit records.
 - Async planning may start from a compatible snapshot while the live session is busy. Planning itself is not queued; background completion enqueues only `compact-commit` for safe live application. Canonical scheduling: [D-context-compact-scheduling-boundary](../threads/context-compaction-and-recall.md#d-context-compact-scheduling-boundary).
 - Successful compaction preserves `promptCacheKey`; `/clear` remains the lineage rotation boundary.
+- At the automatic usage trigger, response-only pruning dry-runs first. It retains Unicode-safe line-aware 500/500 response excerpts plus exact recall guidance, commits only when the complete estimated Session falls to at most 50% of model context, and otherwise leaves history untouched for layered planning. Manual `/compact tools` uses the same primitive without that recovery gate and performs no save/version increment on no-op.
 - Protected lifecycle/history items are segment barriers; display-only messages are transparent and not summarized. Prior pure compact-completion notices are the narrow exception: they are transparent to candidate ranges and removed from the entire compatible active history only on successful commit, before one current notice is appended. Canonical contract: [D-context-compact-completion](../threads/context-compaction-and-recall.md#d-context-compact-completion).
 - Each created block carries its normalized facts through archive append; its facts are indexed only after success with that block identity/level/raw range, and indexing is best-effort.
 - Goal reminders remain separate system parts from compact-completion metadata.

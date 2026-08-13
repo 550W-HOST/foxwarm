@@ -591,7 +591,7 @@ test('dequeue aborts a busy provider and the same worker action loop consumes qu
   }
 });
 
-test('tool-noise compaction is serialized behind a busy worker turn and persists the exact projection', async () => {
+test('historical tool-response pruning is serialized behind a busy worker turn and persists the exact projection', async () => {
   const sessionId = `mc-tool-compact-${Date.now()}`;
   const emptySessionId = `${sessionId}-empty`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-tool-compact-'));
@@ -633,14 +633,14 @@ test('tool-noise compaction is serialized behind a busy worker turn and persists
     await turn;
     const result: any = await compact;
     assert.equal(result.kind, 'tool-noise');
-    assert.equal(result.result.replacedFunctionCalls, 1);
+    assert.equal(result.result.replacedFunctionCalls, 0);
     assert.equal(result.result.replacedFunctionResponses, 1);
-    assert.equal(result.result.touchedMessages, 2);
+    assert.equal(result.result.touchedMessages, 1);
 
     const authority = await fs.readJson(statePath);
-    assert.equal(authority.history[1].parts[0].functionCall.args.__compacted, true);
-    assert.equal(authority.history[2].parts[0].functionResponse.response.__compacted, true);
-    assert.equal(JSON.stringify(authority.history).includes('large-tool-payload'), false);
+    assert.equal(authority.history[1].parts[0].functionCall.args.payload, oversized);
+    assert.match(authority.history[2].parts[0].functionResponse.response.output, /historical tool response pruned/);
+    assert.ok(authority.history[2].parts[0].functionResponse.response.output.length < oversized.length);
     assert.equal(authority.queue.length, 0);
     assert.equal(authority.busy, false);
     const projection = fixture.supervisor.projectionRegistry.get(sessionId)?.projection;
@@ -653,7 +653,7 @@ test('tool-noise compaction is serialized behind a busy worker turn and persists
       sessionId: emptySessionId, keepPercent: 0.5, toolNoise: true,
     }), { kind: 'empty' });
     assert.deepEqual(await fs.readFile(emptyStatePath), emptyBefore,
-      'empty tool-noise compaction has no persistence side effect');
+      'empty historical tool-response pruning has no persistence side effect');
   } finally {
     fixture.transport.close();
     await fixture.supervisor.shutdown(3_000).catch(() => {});
@@ -1085,5 +1085,60 @@ test('the real llm.chat pipeline dispatches its HTTP request through a worker tu
     fixture.store.close();
     sessionManager.getAllSessions().delete(sessionId);
     await fs.remove(root);
+  }
+});
+
+test('automatic Worker pruning persists, publishes, survives restart, and forks pruned active history while archive stays full', async () => {
+  const sessionId = `mc-auto-prune-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-auto-prune-'));
+  const fixture = makeFixture(root, { FOXWARM_TEST_FORCE_USAGE: '1' });
+  const originalOutput = 'WORKER-ARCHIVE-FULL '.repeat(3500);
+  const initial = baseSession(sessionId);
+  initial.compactThresholdTokens = 1;
+  initial.model = 'openai/gpt-5.6-sol';
+  initial.promptCacheKey = 'cccccccc-dddd-4eee-8fff-111111111111';
+  initial.nextMessageSeq = 1;
+  const messages: any[] = [
+    { role: 'model', parts: [{ functionCall: { id: 'worker-prune-call', name: 'read', args: { unchanged: true } } }], __meta: { timestamp: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'worker-prune-call', name: 'read', response: { output: originalOutput } } }], __meta: { timestamp: 2 } },
+    ...Array.from({ length: 8 }, (_, index) => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: `protected-${index}` }], __meta: { timestamp: index + 3 } })),
+  ];
+  const archive = await import('./session/archive');
+  await archive.appendMessagesToArchive(initial, messages); initial.history = messages;
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(initial));
+  try {
+    sessionManager.getAllSessions().set(sessionId, { ...initial, history: [] });
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'trigger automatic pruning' }] });
+    let authority = await fs.readJson(statePath);
+    assert.match(authority.history[1].parts[0].functionResponse.response.output, /historical tool response pruned/);
+    assert.equal(authority.history[0].parts[0].functionCall.args.unchanged, true);
+    assert.equal(authority.promptCacheKey, 'cccccccc-dddd-4eee-8fff-111111111111');
+    assert.equal(fixture.supervisor.projectionRegistry.get(sessionId)?.projection?.messageCount, authority.history.length);
+
+    const effective = await archive.readArchiveMessagesBySeqRange(sessionId, 2, 2);
+    assert.equal(effective[0].message.parts[0].functionResponse?.response.output, originalOutput);
+
+    assert.equal(await fixture.supervisor.stopWorker(sessionId, 5_000), true);
+    await fixture.ingress.ensureWorkerOwner(sessionId);
+    authority = await fs.readJson(statePath);
+    assert.match(authority.history[1].parts[0].functionResponse.response.output, /historical tool response pruned/);
+
+    const canonicalAuthorityPath = getSessionHistoryFilePath(sessionId);
+    await fs.remove(canonicalAuthorityPath);
+    await fs.ensureSymlink(statePath, canonicalAuthorityPath);
+    sessionManager.setSessionWorkerForkSourceProvider(async id =>
+      fixture.store.findOwnership(id) ? readDetachedWorkerSession(id, sessionManager.getAllSessions().get(id)!) : undefined);
+    const forkedId = await sessionManager.forkSession(sessionId, 'auto-pruned', false);
+    const forked = await sessionManager.getSession(forkedId);
+    assert.match(JSON.stringify(forked.history), /historical tool response pruned/);
+    assert.ok(String(forked.history[1].parts[0].functionResponse?.response.output).length < originalOutput.length / 10);
+    await sessionManager.deleteSession(forkedId).catch(() => {});
+  } finally {
+    sessionManager.setSessionWorkerForkSourceProvider(undefined);
+    await fs.remove(getSessionHistoryFilePath(sessionId)).catch(() => {});
+    fixture.transport.close(); await fixture.supervisor.shutdown(5_000).catch(() => {}); fixture.store.close();
+    sessionManager.getAllSessions().delete(sessionId); await fs.remove(root);
   }
 });

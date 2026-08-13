@@ -289,7 +289,12 @@ async function start(): Promise<void> {
       return { toolCalls: [call] };
     }
     await options.appendMessage({ role: 'model', parts: [{ text: 'deterministic child answer' }] });
-    return { text: 'deterministic child answer' };
+    return {
+      text: 'deterministic child answer',
+      ...(process.env.FOXWARM_TEST_FORCE_USAGE === '1'
+        ? { usage: { inputTokens: 2, outputTokens: 1, cachedTokens: 0 } }
+        : {}),
+    };
   };
 
   const store = new SessionWorkerStore(storePath); store.open();
