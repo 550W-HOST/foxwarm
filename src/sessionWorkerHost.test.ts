@@ -26,6 +26,7 @@ import { getAgentDir, SESSIONS_FILE, TIMERS_FILE } from './config';
 import * as timers from './timers';
 import * as vector from './vector';
 import * as sessionHistory from './session/history';
+import * as sessionArchive from './session/archive';
 import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
 import { vectorServiceDescriptor } from './vectorServiceDescriptor';
 import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationServiceDescriptor, SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
@@ -159,6 +160,25 @@ test('worker swallows one ambiguous final-delivery failure after committed respo
       throw new Error('ambiguous reverse transport');
     });
   } finally { (llm as any).chat = originalChat; }
+});
+
+test('required Worker archive failure makes one presentation-only error attempt and skips provider continuation', async () => {
+  const initial = baseSession('worker-archive-final');
+  const originalChat = llm.chat;
+  const originalAppend = sessionArchive.appendMessagesToArchive;
+  let chatCalls = 0; const finals: any[] = [];
+  (llm as any).chat = async () => { chatCalls += 1; return { text: 'must not run' }; };
+  (sessionArchive as any).appendMessagesToArchive = async () => { const error: any = new Error('archive unavailable'); error.code = 'SESSION_ARCHIVE_COMMIT_FAILED'; throw error; };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      store.enqueueIntent(initial.id, 'archive-failure', 'enqueue', {
+        type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'do not continue' }],
+      });
+      await host.runPending(8);
+      assert.equal(chatCalls, 0); assert.equal(finals.length, 1); assert.match(finals[0].text, /archive unavailable/);
+      assert.equal(readDurable().history.length, 0); assert.equal(readDurable().busy, false);
+    }, true, undefined, async (_source, text, outcome) => { finals.push({ text, outcome }); });
+  } finally { (llm as any).chat = originalChat; (sessionArchive as any).appendMessagesToArchive = originalAppend; }
 });
 
 test('worker delivers canonical model text before multiple tool iterations and only finalizes the genuine no-tool result', async () => {
@@ -644,8 +664,8 @@ test('failed mutation plus failed reload poisons until a later run resynchronize
     persistence.writeState = originalWrite;
     persistence.readState = originalRead;
     await host.runPending(8);
-    assert.equal(session.displayName, undefined);
-    assert.equal(readDurable().displayName, undefined);
+    assert.equal(session.displayName, 'must-not-survive', 'Main-owned presentation metadata survives semantic resync');
+    assert.equal(readDurable().displayName, undefined, 'failed semantic write never reached authority');
   });
 });
 

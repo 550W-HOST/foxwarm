@@ -64,6 +64,12 @@ test('normal session archive runtime is SQLite-only and exports JSONL on demand'
   assert.equal(await fs.pathExists(path.join(output, 'stale.jsonl')), false);
 });
 
+test('decreasing ordered block endpoints survive export and strict reimport', async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-block-order-roundtrip-'));
+  const output = path.join(dataRoot, 'export');
+  await run(`const fs=require('fs-extra');const c=require('./lib/config');const s=require('./lib/session/archiveStore');(async()=>{await s.writeArchiveBlocks([{v:1,kind:'block',sessionId:'ordered',agent:'main',id:20,level:1,sourceKind:'message',sourceStart:1,sourceEnd:1,rawStartSeq:1,rawEndSeq:1,summary:'a',createdAt:1},{v:1,kind:'block',sessionId:'ordered',agent:'main',id:13,level:1,sourceKind:'message',sourceStart:2,sourceEnd:2,rawStartSeq:2,rawEndSeq:2,summary:'b',createdAt:2},{v:1,kind:'block',sessionId:'ordered',agent:'main',id:21,level:2,sourceKind:'block',sourceStart:20,sourceEnd:13,sourceBlockIds:[20,13],rawStartSeq:1,rawEndSeq:2,summary:'decreasing',createdAt:3}]);await s.exportSessionArchivesJsonl(${JSON.stringify(output)});await fs.remove(c.ARCHIVE_DB_PATH);await fs.outputJson(c.SESSIONS_FILE,{sessions:{ordered:{id:'ordered'}}});await fs.copy(${JSON.stringify(path.join(output, 'ordered.blocks.jsonl'))},c.getSessionBlockArchiveLogPath('ordered'));const m=require(${JSON.stringify(migrationModule)});await m.runSqliteOnlyArchivesMigration();const rows=await s.readLocalArchiveBlocks('ordered');const r=rows.find(x=>x.id===21);if(!r||r.sourceStart!==20||r.sourceEnd!==13||JSON.stringify(r.sourceBlockIds)!=='[20,13]')throw new Error(JSON.stringify(rows));console.log('roundtrip')})().catch(e=>{console.error(e.stack);process.exit(1)})`, dataRoot);
+});
+
 test('migration preserves an established root branch when metadata heuristics claim a parent', async () => {
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-established-lineage-'));
   const result = await run(`

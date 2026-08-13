@@ -152,9 +152,11 @@ test('archive message and block identities allow identical replay but reject con
     summary: 'original summary', createdAt: 2000,
   };
   await archiveStore.writeArchiveMessages([message]);
+  await assert.rejects(() => archiveStore.writeArchiveMessages([message, { ...message, sessionId: 'other' }]), /exactly one session ID/);
   await archiveStore.writeArchiveMessages([structuredClone(message)]);
   await assert.rejects(() => archiveStore.writeArchiveMessages([{ ...message, message: { ...message.message, parts: [{ text: 'conflict' }] } }]), /Immutable archive message conflict/);
   await archiveStore.writeArchiveBlocks([block]);
+  await assert.rejects(() => archiveStore.writeArchiveBlocks([block, { ...block, sessionId: 'other' }]), /exactly one session ID/);
   await archiveStore.writeArchiveBlocks([structuredClone(block)]);
   await assert.rejects(() => archiveStore.writeArchiveBlocks([{ ...block, summary: 'conflict' }]), /Immutable archive block conflict/);
   assert.equal((await archiveStore.readLocalArchiveMessages('immutable'))[0].message.parts[0].text, 'original');
@@ -214,4 +216,31 @@ test('authority persistence failure rolls back newly inserted archive rows befor
   assert.equal(session.history.length, 1);
   assert.equal((await archiveStore.readLocalArchiveMessages(session.id)).length, 1);
   await fs.remove(tempRoot);
+});
+
+test('catalog postcommit failure retains aligned authoritative history and archive rows', async () => {
+  const archiveStore = await import('./archiveStore');
+  const metadataStore = await import('./metadataStore');
+  const sessionManager = await import('../sessionManager');
+  const sessionId = `local-postcommit-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const session: any = {
+    id: sessionId, agent: 'main', history: [], persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false, queue: [], meta: { lastMessageTime: 1 }, nextMessageSeq: 1, nextBlockId: 1,
+  };
+  sessionManager.getAllSessions().set(session.id, session);
+  sessionManager.setSessionPersistenceFaultInjectorForTests(phase => { if (phase === 'metadata') throw new Error('catalog postcommit failed'); });
+  try {
+    await assert.rejects(() => sessionManager.appendSessionMessages(session, [
+      { role: 'user', parts: [{ text: 'durable despite catalog failure' }], __meta: { timestamp: 1000 } },
+    ]), (error: any) => error?.code === 'SESSION_AUTHORITY_POSTCOMMIT_FAILED');
+    const authority = await metadataStore.readSessionHistorySnapshot(session.id);
+    assert.equal(authority!.history[0].parts[0].text, 'durable despite catalog failure');
+    assert.equal(session.history[0].parts[0].text, 'durable despite catalog failure');
+    assert.equal((await archiveStore.readLocalArchiveMessages(session.id))[0].message.parts[0].text, 'durable despite catalog failure');
+  } finally {
+    sessionManager.setSessionPersistenceFaultInjectorForTests(null);
+    sessionManager.getAllSessions().delete(session.id);
+    await fs.remove(metadataStore.getSessionHistoryFilePath(session.id)).catch(() => {});
+  }
 });

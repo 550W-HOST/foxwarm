@@ -40,9 +40,10 @@ import { buildSystemMessageParts } from '../utils/systemMessageParts';
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
 import { formatLocalTimestamp } from '../utils/localTime';
 import { formatSessionGoalReminderText } from './goal';
-import { appendBlocksToArchiveWithCommitInfo, renderBlockMessage, rollbackUncommittedBlocks, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
+import { appendBlocksToArchiveWithCommitInfo, readArchiveBlocksByIdRange, renderBlockMessage, rollbackUncommittedBlocks, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
 import { isModelVisibleMessage } from './messageVisibility';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './metadataStore';
+import { isSessionAuthorityPostCommitError } from './stateFile';
 
 const TOOL_NOISE_TOKEN_THRESHOLD = 200;
 
@@ -382,6 +383,19 @@ type LayeredCompactCandidateBuildResult = {
   blockPolicies: BlockCompactionPolicy[];
 };
 
+function normalizedRawMessageForArchiveComparison(message: Message): Message {
+  const normalized = structuredClone(message);
+  if (normalized.__meta) {
+    delete normalized.__meta.preservedFromBlockId;
+    delete normalized.__meta.goalAnchorSeq;
+  }
+  return normalized;
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0;
+}
+
 export function isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(
   olderHistory: Message[],
   historyIndex: number,
@@ -436,7 +450,72 @@ export function removePreservedMessages(history: Message[], removeSeqs: Set<numb
   return history.filter(message => !(isPreservedMessage(message) && removeSeqs.has(message.__meta?.seq || 0)));
 }
 
-async function buildLayeredCompactCandidateEntries(olderHistory: Message[]): Promise<LayeredCompactCandidateBuildResult> {
+export async function buildLayeredCompactCandidateEntries(sessionId: string, olderHistory: Message[]): Promise<LayeredCompactCandidateBuildResult> {
+  const [archiveMessages, archiveBlocks] = await Promise.all([
+    readArchiveMessages(sessionId),
+    readArchiveBlocksByIdRange(sessionId),
+  ]);
+  const archiveMessagesBySeq = new Map<number, typeof archiveMessages>();
+  for (const record of archiveMessages) {
+    const records = archiveMessagesBySeq.get(record.seq) || [];
+    records.push(record); archiveMessagesBySeq.set(record.seq, records);
+  }
+  const archiveBlocksById = new Map<number, typeof archiveBlocks>();
+  for (const record of archiveBlocks) {
+    const records = archiveBlocksById.get(record.id) || [];
+    records.push(record); archiveBlocksById.set(record.id, records);
+  }
+  const activeSeqCounts = new Map<number, number>();
+  const activeBlockIdCounts = new Map<number, number>();
+  for (const message of olderHistory) {
+    const blockId = message.__meta?.contextBlock?.id;
+    const seq = message.__meta?.seq;
+    if (isPositiveSafeInteger(blockId)) activeBlockIdCounts.set(blockId, (activeBlockIdCounts.get(blockId) || 0) + 1);
+    else if (isPositiveSafeInteger(seq)) activeSeqCounts.set(seq, (activeSeqCounts.get(seq) || 0) + 1);
+  }
+
+  const hasValidRawProvenance = (message: Message): boolean => {
+    const seq = message.__meta?.seq;
+    if (!isPositiveSafeInteger(seq) || activeSeqCounts.get(seq) !== 1) return false;
+    const records = archiveMessagesBySeq.get(seq);
+    return records?.length === 1 && isDeepStrictEqual(
+      normalizedRawMessageForArchiveComparison(message),
+      normalizedRawMessageForArchiveComparison(records[0].message),
+    );
+  };
+  const hasValidBlockProvenance = (message: Message): boolean => {
+    const block = message.__meta?.contextBlock;
+    if (!block || !isPositiveSafeInteger(block.id) || activeBlockIdCounts.get(block.id) !== 1
+      || !isPositiveSafeInteger(block.level) || !isPositiveSafeInteger(block.sourceStart)
+      || !isPositiveSafeInteger(block.sourceEnd) || !isPositiveSafeInteger(block.rawStartSeq)
+      || !isPositiveSafeInteger(block.rawEndSeq) || block.rawStartSeq > block.rawEndSeq) return false;
+    const records = archiveBlocksById.get(block.id);
+    if (records?.length !== 1) return false;
+    const record = records[0];
+    const expected = renderBlockMessage(record);
+    const expectedBlock = expected.__meta!.contextBlock!;
+    const activeBlock = message.__meta!.contextBlock!;
+    const { sourceSessionId: expectedSourceSessionId, inherited: expectedInherited, ...expectedCore } = expectedBlock;
+    const { sourceSessionId: activeSourceSessionId, inherited: activeInherited, ...activeCore } = activeBlock;
+    if (message.role !== expected.role || !isDeepStrictEqual(message.parts, expected.parts)
+      || message.__meta?.timestamp !== expected.__meta?.timestamp || !isDeepStrictEqual(activeCore, expectedCore)
+      || (activeSourceSessionId !== undefined && activeSourceSessionId !== expectedSourceSessionId)
+      || (activeInherited !== undefined && activeInherited !== expectedInherited)) return false;
+    if (record.sourceKind === 'message') {
+      if (record.sourceStart > record.sourceEnd) return false;
+      for (let seq = record.sourceStart; seq <= record.sourceEnd; seq += 1) {
+        if (archiveMessagesBySeq.get(seq)?.length !== 1) return false;
+      }
+      return true;
+    }
+    if (!Array.isArray(record.sourceBlockIds) || record.sourceBlockIds.length === 0
+      || record.sourceBlockIds[0] !== record.sourceStart || record.sourceBlockIds.at(-1) !== record.sourceEnd
+      || new Set(record.sourceBlockIds).size !== record.sourceBlockIds.length) return false;
+    return record.sourceBlockIds.every(sourceId => {
+      const sources = archiveBlocksById.get(sourceId);
+      return sources?.length === 1 && sources[0].level === record.level - 1;
+    });
+  };
   const blockRecordsByLevel = new Map<number, Array<{ id: number; summary: string }>>();
   for (const message of olderHistory) {
     const block = message.__meta?.contextBlock;
@@ -468,11 +547,15 @@ async function buildLayeredCompactCandidateEntries(olderHistory: Message[]): Pro
 
   const entries: LayeredCompactCandidateEntry[] = [];
   let compactSegmentId = 1;
+  let priorCandidateKind: 'message' | 'block' | undefined;
+  let previousRawSeq: number | undefined;
   for (let historyIndex = 0; historyIndex < olderHistory.length; historyIndex += 1) {
     const message = olderHistory[historyIndex];
     if (isPreservedMessage(message)) { compactSegmentId += 1; continue; }
     const block = message.__meta?.contextBlock;
     if (block) {
+      if (!hasValidBlockProvenance(message)) { compactSegmentId += 1; priorCandidateKind = undefined; continue; }
+      if (priorCandidateKind && priorCandidateKind !== 'block') compactSegmentId += 1;
       if (!candidateBlockIdsByLevel.get(block.level)?.has(block.id)) { compactSegmentId += 1; continue; }
       entries.push({
         item: buildBlockCandidateItem(block.id, block.level, block.rawStartSeq, block.rawEndSeq,
@@ -481,13 +564,20 @@ async function buildLayeredCompactCandidateEntries(olderHistory: Message[]): Pro
           isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(olderHistory, historyIndex), compactSegmentId),
         historyStartIndex: historyIndex, historyEndIndex: historyIndex,
       });
+      priorCandidateKind = 'block';
       continue;
     }
     const seq = message.__meta?.seq;
-    if (!Number.isSafeInteger(seq) || (seq || 0) < 1) { compactSegmentId += 1; continue; }
-    if (!isModelVisibleMessage(message)) continue;
-    if (shouldRemoveOldCompactCompletionMessage(message)) continue;
-    if (shouldIgnoreMessageInCompactCandidates(message)) { compactSegmentId += 1; continue; }
+    if (!Number.isSafeInteger(seq) || (seq || 0) < 1) { compactSegmentId += 1; priorCandidateKind = undefined; continue; }
+    if (!hasValidRawProvenance(message) || (previousRawSeq !== undefined && seq !== previousRawSeq + 1)) {
+      compactSegmentId += 1; priorCandidateKind = undefined; previousRawSeq = seq; continue;
+    }
+    if (!isModelVisibleMessage(message) || shouldRemoveOldCompactCompletionMessage(message)) {
+      previousRawSeq = seq;
+      continue;
+    }
+    if (shouldIgnoreMessageInCompactCandidates(message)) { compactSegmentId += 1; priorCandidateKind = undefined; continue; }
+    if (priorCandidateKind && priorCandidateKind !== 'message') compactSegmentId += 1;
 
     let groupedEndHistoryIndex = historyIndex;
     const groupedMessages = [message];
@@ -495,6 +585,8 @@ async function buildLayeredCompactCandidateEntries(olderHistory: Message[]): Pro
       for (let nextIndex = historyIndex + 1; nextIndex < olderHistory.length; nextIndex += 1) {
         const next = olderHistory[nextIndex];
         if (next.__meta?.contextBlock || isPreservedMessage(next) || next.role !== 'tool' || !Number.isSafeInteger(next.__meta?.seq)) break;
+        const previousGroupedSeq = groupedMessages[groupedMessages.length - 1].__meta?.seq;
+        if (!hasValidRawProvenance(next) || next.__meta!.seq !== (previousGroupedSeq || 0) + 1) break;
         groupedMessages.push(next); groupedEndHistoryIndex = nextIndex;
       }
     }
@@ -508,6 +600,8 @@ async function buildLayeredCompactCandidateEntries(olderHistory: Message[]): Pro
       item: buildMessageCandidateItem(seq!, groupedMessages[groupedMessages.length - 1].__meta!.seq!, preview, estimatedTokens, compactSegmentId),
       historyStartIndex: historyIndex, historyEndIndex: groupedEndHistoryIndex,
     });
+    priorCandidateKind = 'message';
+    previousRawSeq = groupedMessages[groupedMessages.length - 1].__meta!.seq!;
     historyIndex = groupedEndHistoryIndex;
   }
 
@@ -783,7 +877,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
   const olderHistory = historySnapshot.slice(0, splitIndex);
   const forceKeptRecentHistory = splitIndex < historySnapshot.length ? historySnapshot.slice(splitIndex) : [];
   const preservedMessageCandidates = buildPreservedMessageCandidateItems(olderHistory);
-  const { candidateEntries, messagePolicy, blockPolicies } = await buildLayeredCompactCandidateEntries(olderHistory);
+  const { candidateEntries, messagePolicy, blockPolicies } = await buildLayeredCompactCandidateEntries(sessionId, olderHistory);
   const candidateItems = candidateEntries.map(entry => entry.item);
 
   if (candidateItems.length === 0 && preservedMessageCandidates.length === 0) {
@@ -1010,6 +1104,7 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     }
     return true;
   } catch (error) {
+    if (isSessionAuthorityPostCommitError(error)) throw error;
     restoreSessionSemanticState(session, beforeCommit);
     try {
       await rollbackUncommittedMessages(insertedCompletionMessages);

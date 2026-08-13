@@ -6,6 +6,19 @@ import type { QueueItem, Session } from '../types';
 import { getManagedSessionState, setManagedSessionState } from './managedState';
 import { serializeSessionHistoryPayload, writeSessionHistoryAtomically } from './metadataStore';
 
+export class SessionAuthorityPostCommitError extends Error {
+  readonly code = 'SESSION_AUTHORITY_POSTCOMMIT_FAILED';
+  readonly authorityCommitted = true;
+  constructor(message: string, readonly cause?: unknown) { super(message); this.name = 'SessionAuthorityPostCommitError'; }
+}
+
+export function isSessionAuthorityPostCommitError(error: unknown): boolean {
+  const code = String((error as any)?.code || '');
+  return (error as any)?.authorityCommitted === true
+    || code === 'SESSION_AUTHORITY_POSTCOMMIT_FAILED'
+    || code === 'SESSION_WORKER_PUBLICATION_RESYNC_REQUIRED';
+}
+
 /** Materialize queue/inbox images only when the observed arrays are still unchanged; otherwise fail for retry. */
 export async function externalizeAuthoritativeSessionQueueImages(session: Session): Promise<boolean> {
   const queue = session.queue || [];

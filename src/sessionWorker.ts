@@ -9,7 +9,7 @@ import {
   SessionWorkerActivationGate,
   sessionWorkerControlServiceDescriptor,
 } from './sessionWorkerControlService';
-import { SessionWorkerHost } from './sessionWorkerHost';
+import { SessionWorkerHost, type SessionWorkerHostDependencies } from './sessionWorkerHost';
 import { createSessionWorkerRuntimeServiceHandler, sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { SessionWorkerStore } from './sessionWorkerStore';
@@ -34,8 +34,12 @@ async function start(): Promise<void> {
   const store = new SessionWorkerStore(storePath);
   store.open();
   const identity = { sessionId, generation, incarnationId, pid: process.pid, processIdentity };
+  let catalogStub: SessionWorkerHostDependencies['catalogStub'];
+  try { catalogStub = JSON.parse(process.env.FOXWARM_SESSION_WORKER_CATALOG_STUB || '{}'); }
+  catch { throw new Error('Session worker catalog stub is invalid JSON.'); }
   const gate = new SessionWorkerActivationGate();
   const host = new SessionWorkerHost(identity, store, {
+    catalogStub,
     publishCommitted: projection => publishCommitted(identity, projection),
     deliverIntermediateText: (source, text) => deliverIntermediateText({ sourceSessionId: sessionId, source, text }).then(() => {}),
     deliverCommittedFinal: (source, text, outcome) => deliverCommittedFinal({ sourceSessionId: sessionId, source, text, outcome }).then(() => {}),

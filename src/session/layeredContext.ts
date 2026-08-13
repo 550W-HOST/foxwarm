@@ -1,5 +1,5 @@
 import { Message, Session, ContextBlockMessageMeta } from '../types';
-import { readArchiveMessagesBySeqRange } from './archive';
+import { readArchiveMessagesBySeqRange, SessionArchiveCommitError } from './archive';
 import { formatLocalTimeRange } from '../utils/localTime';
 import {
   ensureSessionBranch,
@@ -196,7 +196,9 @@ export async function appendBlocksToArchiveWithCommitInfo(
 
   await ensureSessionBranch(session.id);
   const records = await buildArchiveBlockRecords(session, blocks);
-  const insertedRecords = await writeArchiveBlocks(records);
+  let insertedRecords: ArchiveBlockRecord[];
+  try { insertedRecords = await writeArchiveBlocks(records); }
+  catch (error) { throw new SessionArchiveCommitError(`Required archive block commit failed for Session ${session.id}: ${(error as any)?.message || error}`, error); }
   return { records, insertedRecords };
 }
 

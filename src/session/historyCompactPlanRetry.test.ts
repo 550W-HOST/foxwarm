@@ -251,6 +251,42 @@ test('compact planning rejects a block-only plan when raw messages and L1 blocks
   }
 });
 
+test('block compaction cannot consume a filtered short raw-message barrier', async () => {
+  const { sessionHistory, archive, layeredContext } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_block_raw_barrier'));
+  const blocks = await layeredContext.appendBlocksToArchive(session, Array.from({ length: 5 }, (_, index) => ({
+    level: 1, sourceKind: 'message' as const, sourceStart: 1, sourceEnd: 1, rawStartSeq: 1, rawEndSeq: 1,
+    summary: `large block ${index + 1} ${'block '.repeat(1800)}`,
+  })));
+  const shortRaw = structuredClone(session.history[0]);
+  shortRaw.parts = [{ text: 'short raw must survive byte-exact' }];
+  delete shortRaw.__meta!.seq;
+  shortRaw.__meta!.timestamp = 5000;
+  await archive.appendMessagesToArchive(session, [shortRaw]);
+  session.history = [
+    layeredContext.renderBlockMessage(blocks[0]),
+    shortRaw,
+    ...blocks.slice(1).map(layeredContext.renderBlockMessage),
+  ];
+  const before = structuredClone(shortRaw);
+  const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.id, session.history);
+  const firstTwo = built.candidateEntries.filter(entry => entry.item.kind === 'block').slice(0, 2);
+  assert.notEqual(firstTwo[0]?.item.segmentId, firstTwo[1]?.item.segmentId);
+  assert.deepEqual(session.history[1], before);
+});
+
+test('missing or conflicting active/archive provenance becomes a compact barrier without editing history', async () => {
+  const { sessionHistory, archive } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_provenance_barriers'));
+  const original = structuredClone(session.history);
+  session.history[0].parts = [{ text: 'offline same-seq wording edit' }];
+  session.history.splice(1, 0, structuredClone(session.history[0]));
+  const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.id, session.history);
+  assert.equal(built.candidateEntries.some(entry => entry.item.kind === 'message' && entry.item.startSeq === 1), false);
+  assert.deepEqual(session.history[0].parts, [{ text: 'offline same-seq wording edit' }]);
+  assert.deepEqual(original[2], session.history[3]);
+});
+
 test('prior compact-completion notices are transparent to planning and replaced by one current marker', async () => {
   const { sessionHistory, archive, llm } = await loadDeps();
   const sessionId = makeSessionId('compact_lifecycle_barrier');

@@ -45,6 +45,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 
 - `archive_branches` — session, optional parent, message/block fork points.
 - `archive_store_metadata` — durable SQLite-authority migration marker plus idempotent torn-message recovery audit markers; marker-backed retries require the stored row to still match, and a completed migration with a missing authority marker fails startup.
+- Runtime message/block write batches are single-Session only. Immutable identity allows exact replay and rejects conflicts. Block-backed records may preserve decreasing/nonconsecutive source endpoint order only through a valid ordered `sourceBlockIds`; message-backed ranges stay ascending, including strict export/reimport migration validation.
 - `archive_session_id_reservations` — exact committed historical ID to current canonical-ID mappings mirrored by the durable ledger.
 - `archive_messages` — session-local sequence records and serialized message JSON.
 - `archive_blocks` — block level/source/range/summary records plus optional serialized normalized memory facts.

@@ -82,7 +82,7 @@ export class SessionWorkerPersistence {
     const stateCursor = this.readStateCursor(raw, baseSession.id);
     this.store.reconcileActivatedMailboxCursor(baseSession.id, generation, incarnationId, stateCursor.cursor);
     const { session, imagesCanonicalized, upgradedLegacy } = await hydrateAuthoritativeSessionState(target, raw, {
-      preserveCatalogFields: false,
+      preserveCatalogFields: true, adoptAuthorityCatalogFieldsWhenMissing: true,
     });
     // Legacy image/version canonicalization is a same-cursor rewrite. Cursor
     // recovery above is justified by the already-durable raw JSON payload.
@@ -114,7 +114,7 @@ export class SessionWorkerPersistence {
     const stateCursor = this.readStateCursor(raw, session.id);
     this.store.reconcileActivatedMailboxCursor(session.id, generation, incarnationId, stateCursor.cursor);
     const hydrated = await hydrateAuthoritativeSessionState(session, raw, {
-      preserveCatalogFields: false,
+      preserveCatalogFields: true, adoptAuthorityDisplayNameWhenMissing: true,
     });
     if (hydrated.imagesCanonicalized || hydrated.upgradedLegacy || stateCursor.defaulted) await this.writeState(session);
     return buildSessionWorkerProjection(session);

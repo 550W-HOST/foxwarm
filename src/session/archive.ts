@@ -28,6 +28,15 @@ export function setArchiveWriteFaultInjectorForTests(injector: ((phase: ArchiveW
   archiveWriteFaultInjector = injector;
 }
 
+export class SessionArchiveCommitError extends Error {
+  readonly code = 'SESSION_ARCHIVE_COMMIT_FAILED';
+  constructor(message: string, readonly cause?: unknown) { super(message); this.name = 'SessionArchiveCommitError'; }
+}
+
+export function isSessionArchiveCommitError(error: unknown): boolean {
+  return String((error as any)?.code || '') === 'SESSION_ARCHIVE_COMMIT_FAILED';
+}
+
 export function getMessageTimestamp(message: Message): number {
   return message.__meta?.timestamp || Date.now();
 }
@@ -104,8 +113,11 @@ export async function appendMessagesToArchive(session: Session, messages: Messag
     records.push(record as ArchiveMessageRecord);
   }
 
-  archiveWriteFaultInjector?.('before-sqlite-write', session.id);
-  return writeArchiveMessages(records);
+  try {
+    archiveWriteFaultInjector?.('before-sqlite-write', session.id);
+    return await writeArchiveMessages(records);
+  }
+  catch (error) { throw new SessionArchiveCommitError(`Required archive commit failed for Session ${session.id}: ${(error as any)?.message || error}`, error); }
 }
 
 export async function rollbackUncommittedMessages(records: ArchiveMessageRecord[]): Promise<void> {

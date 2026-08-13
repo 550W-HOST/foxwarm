@@ -546,10 +546,17 @@ function isCanonicalMessageRecord(value: unknown): value is ArchiveMessageRecord
 function isCanonicalBlockRecord(value: unknown): value is ArchiveBlockRecord {
   if (!isRecord(value) || value.v !== 1 || value.kind !== 'block' || typeof value.sessionId !== 'string' || !value.sessionId
     || typeof value.agent !== 'string' || !value.agent || !isPositiveInteger(value.id) || !isPositiveInteger(value.level)
-    || !['message', 'block'].includes(value.sourceKind) || !isPositiveInteger(value.sourceStart) || !isPositiveInteger(value.sourceEnd) || value.sourceStart > value.sourceEnd
+    || !['message', 'block'].includes(value.sourceKind) || !isPositiveInteger(value.sourceStart) || !isPositiveInteger(value.sourceEnd)
     || !isPositiveInteger(value.rawStartSeq) || !isPositiveInteger(value.rawEndSeq) || value.rawStartSeq > value.rawEndSeq
     || typeof value.summary !== 'string' || !isFiniteNumber(value.createdAt)) return false;
   if (value.sourceBlockIds !== undefined && (!Array.isArray(value.sourceBlockIds) || !value.sourceBlockIds.every(isPositiveInteger))) return false;
+  if (value.sourceKind === 'message') {
+    if (value.sourceStart > value.sourceEnd || value.sourceBlockIds !== undefined) return false;
+  } else if (value.sourceBlockIds !== undefined) {
+    if (value.sourceBlockIds.length === 0 || value.sourceBlockIds[0] !== value.sourceStart
+      || value.sourceBlockIds[value.sourceBlockIds.length - 1] !== value.sourceEnd
+      || new Set(value.sourceBlockIds).size !== value.sourceBlockIds.length) return false;
+  } else if (value.sourceStart > value.sourceEnd) return false;
   if (value.rawStartTimestamp !== undefined && !isFiniteNumber(value.rawStartTimestamp)) return false;
   if (value.rawEndTimestamp !== undefined && !isFiniteNumber(value.rawEndTimestamp)) return false;
   if (value.memoryFacts !== undefined && (!Array.isArray(value.memoryFacts) || !value.memoryFacts.every((fact: unknown) => isRecord(fact)
@@ -1171,6 +1178,9 @@ export async function writeArchiveMessages(records: ArchiveMessageRecord[]): Pro
   if (records.length === 0) {
     return [];
   }
+  if (records.some(record => record.sessionId !== records[0].sessionId)) {
+    throw new Error('Archive message batches must contain exactly one session ID.');
+  }
 
   await initArchiveStore();
   await ensureSessionBranch(records[0].sessionId);
@@ -1208,6 +1218,9 @@ export async function writeArchiveMessages(records: ArchiveMessageRecord[]): Pro
 export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise<ArchiveBlockRecord[]> {
   if (records.length === 0) {
     return [];
+  }
+  if (records.some(record => record.sessionId !== records[0].sessionId)) {
+    throw new Error('Archive block batches must contain exactly one session ID.');
   }
 
   await initArchiveStore();

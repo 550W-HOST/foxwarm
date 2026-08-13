@@ -22,7 +22,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - `getExistingSession`, `getSession`, `createEmptySession`, `createSession`, `deleteSession`, `archiveSession` — lifecycle operations.
 - `saveSession`, `saveSessionCatalogEntries`, `saveSessionCatalogProjectionStrict`, `loadSessions`, `listSessions`, `getAllSessions`, `getSessionCatalog` — persistence and enumeration. Normal saves commit authority before an exact row/batch catalog projection; fenced Main-only presentation writes preserve the current semantic projection, while Worker handback explicitly commits one complete bounded projection. `getSessionCatalog` is a Main-owned loaded-stub read that never hydrates worker authority.
 - `setSessionCwd`, `setSessionChildModelDefault`, `setSessionCompactThreshold` — persisted session settings; child-model mutation uses the shared atomic model/effort normalizer.
-- `appendSessionMessage`, `appendSessionMessages`, `getSessionMessages` — durable history access. `appendSessionMessagesForSession` exposes the same sequence/image/archive/persist/notify composition for an exact supplied owner and persistence hook; required archive and authority writes fail closed and restore semantic state on failure.
+- `appendSessionMessage`, `appendSessionMessages`, `getSessionMessages` — durable history access. `appendSessionMessagesForSession` exposes the same sequence/image/archive/persist/notify composition for an exact supplied owner and persistence hook; pre-authority failures restore semantic state, while explicit post-authority catalog/projection failures retain committed JSON/archive and resynchronize the owner.
 
 ### Queue, wait, and execution coordination
 

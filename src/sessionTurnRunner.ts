@@ -8,6 +8,7 @@ import { getManagedSessionState, setManagedSessionState } from './session/manage
 import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
 import { maybeBuildGoalReminderMessage } from './session/goal';
+import { isSessionArchiveCommitError } from './session/archive';
 import { isSessionTurnIncomplete, SessionContinuationUnavailableError } from './sessionContinuation';
 import { buildSessionRuntimeState } from './sessionRuntimeState';
 import { snapshotQueueSource, type SessionTurnFinalKind } from './sessionTurnDelivery';
@@ -1243,6 +1244,18 @@ export class SessionTurnRunner {
       logger.error(e, 'Error handling message');
       const errorText = formatTerminalSessionError(e);
       const mutationFencedMaintenance = e?.code === 'SESSION_WORKER_AUTO_COMPACTION_FATAL';
+      const archiveCommitFailure = isSessionArchiveCommitError(e);
+      if (archiveCommitFailure) {
+        // The required archive boundary already restored/resynced the owner.
+        // Do not try to append another semantic error row through the same
+        // failed archive. Make at most one presentation-only final attempt.
+        if (this.host.deliverCommittedFinal && turnSource) {
+          await this.host.deliverCommittedFinal(session, turnSource, errorText, 'error');
+        } else {
+          await this.sendSessionError(session, options.sourceCtx, e, turnChannelOptions, turnSource);
+        }
+        return 'suppress-trailing-handoff';
+      }
       if (mutationFencedMaintenance) {
         fencedMaintenanceError = e;
         if (this.host.deliverCommittedFinal && turnSource) {

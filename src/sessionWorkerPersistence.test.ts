@@ -312,6 +312,30 @@ test('current state replaces stale semantic stub fields while preserving catalog
   });
 });
 
+test('reload preserves Main-owned relation and presentation fields after catalog reparent', async () => {
+  await withStore(async store => {
+    const owner = activate(store, 'reparent');
+    let durable: any = {
+      sessionStateVersion: SESSION_STATE_FORMAT_VERSION, id: 'reparent', agent: 'authority-agent', aliases: ['old'],
+      parentSessionId: 'authority-parent', displayName: 'Authority name', history: [], persistentMemorySnapshot: '',
+      queue: [], stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+      busy: false, meta: { lastMessageTime: 0 }, lastAppliedMailboxId: 0,
+    };
+    const base = session('reparent');
+    base.agent = 'catalog-agent'; base.aliases = ['catalog-alias']; base.parentSessionId = 'catalog-parent'; base.displayName = 'Catalog name';
+    const persistence = new SessionWorkerPersistence(store, {
+      readState: async () => structuredClone(durable),
+      writeState: async current => { durable = structuredClone(serializeSessionHistoryPayload(current)); },
+    });
+    const loaded = await persistence.loadActivated(base, owner.generation, owner.incarnationId);
+    assert.equal(loaded.parentSessionId, 'catalog-parent'); assert.equal(loaded.displayName, 'Catalog name');
+    loaded.parentSessionId = 'reparented-in-main'; loaded.displayName = 'Renamed in Main'; loaded.aliases = ['new-alias'];
+    await persistence.reloadActivated(loaded, owner.generation, owner.incarnationId);
+    assert.equal(loaded.parentSessionId, 'reparented-in-main'); assert.equal(loaded.displayName, 'Renamed in Main');
+    assert.deepEqual(loaded.aliases, ['new-alias']); assert.equal(loaded.agent, 'catalog-agent');
+  });
+});
+
 test('bounded projection remains a pure cloned DTO with no catalog writer protocol', () => {
   const current = session('projection');
   current.history = [{ role: 'user', parts: [{ text: 'secret' }] }];

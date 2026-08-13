@@ -24,7 +24,7 @@ import { readArchiveBlocksByIdRange } from './session/layeredContext';
 import { ensureSessionBranch, hasArchivedSessionId, rollbackUncommittedSessionArchive } from './session/archiveStore';
 import { captureSessionSemanticState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, restoreSessionSemanticState, withSessionsMetadataWriteLock } from './session/metadataStore';
 import { buildSessionCatalogProjection, readLegacyChannelAttachmentsFromCatalogMigrationEvidence, sessionCatalogStore } from './session/catalogStore';
-import { externalizeAuthoritativeSessionImages, externalizeAuthoritativeSessionQueueImages, writeAuthoritativeSessionState } from './session/stateFile';
+import { externalizeAuthoritativeSessionImages, externalizeAuthoritativeSessionQueueImages, isSessionAuthorityPostCommitError, SessionAuthorityPostCommitError, writeAuthoritativeSessionState } from './session/stateFile';
 import { replaceAuthoritativeSessionState } from './session/stateHydration';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
@@ -1811,7 +1811,18 @@ async function saveSessionForSessionCritical(session: Session): Promise<void> {
   await saveSessionStateOnlyCritical(session);
 
   // Save metadata (lightweight operation)
-  await saveSessionCatalogEntriesCritical([session.id]);
+  try { await saveSessionCatalogEntriesCritical([session.id]); }
+  catch (error) {
+    try {
+      const authority = await readSessionHistorySnapshot(session.id);
+      if (authority) replaceAuthoritativeSessionState(session, authority, { preserveCatalogFields: true });
+    } catch (resyncError) {
+      const postcommit = new SessionAuthorityPostCommitError(`Session ${session.id} authority committed, its catalog projection failed, and local authority resync also failed.`, error);
+      (postcommit as any).resyncError = resyncError;
+      throw postcommit;
+    }
+    throw new SessionAuthorityPostCommitError(`Session ${session.id} authority committed, but its catalog projection failed.`, error);
+  }
 
   // Schedule archive-based vector indexing (non-blocking)
   if (VECTOR_ENABLED) {
@@ -2475,8 +2486,9 @@ export async function appendSessionMessagesForSession(
     session.history.push(...canonicalMessages);
     await persistSession();
   } catch (error) {
-    restoreSessionSemanticState(session, before);
+    if (!isSessionAuthorityPostCommitError(error)) restoreSessionSemanticState(session, before);
     if (insertedArchiveMessages.length > 0) {
+      if (isSessionAuthorityPostCommitError(error)) throw error;
       try { await rollbackUncommittedMessages(insertedArchiveMessages); }
       catch (rollbackError) {
         const combined = new Error(`Session ${session.id} append failed and its uncommitted archive rows could not be rolled back.`);

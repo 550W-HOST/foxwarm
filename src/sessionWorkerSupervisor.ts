@@ -26,6 +26,7 @@ export type SessionWorkerSupervisorOptions = {
   store: SessionWorkerStore;
   workerScriptPath?: string;
   workerEnv?: Record<string, string>;
+  getCatalogStub?: (sessionId: string) => Partial<Pick<import('./types').Session, 'agent' | 'aliases' | 'parentSessionId' | 'displayName'>> | undefined;
   idleMs: number;
   restartBaseDelayMs?: number;
   restartMaxDelayMs?: number;
@@ -516,7 +517,8 @@ export class SessionWorkerSupervisor {
           FOXWARM_SESSION_WORKER_SESSION_ID: sessionId,
           FOXWARM_SESSION_WORKER_GENERATION: String(generation),
           FOXWARM_SESSION_WORKER_INCARNATION_ID: incarnationId,
-          FOXWARM_SESSION_WORKER_STORE_PATH: this.options.store.filePath },
+          FOXWARM_SESSION_WORKER_STORE_PATH: this.options.store.filePath,
+          FOXWARM_SESSION_WORKER_CATALOG_STUB: JSON.stringify(this.options.getCatalogStub?.(sessionId) || {}) },
         serialization: 'advanced',
       });
     } catch (error) {

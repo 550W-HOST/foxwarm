@@ -37,7 +37,7 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 ## Internal sections
 
 - **Snapshot creation:** captures exact active history, prompt/cache context, request options, and a transient session clone.
-- **Candidate construction:** applies visibility, protected barriers, atomic tool grouping, recent-tail keep, and raw/block policies.
+- **Candidate construction:** applies visibility, exact active/archive provenance validation, protected/noncandidate barriers, atomic tool grouping, recent-tail keep, and raw/block policies without repairing history from archive.
 - **Planning loop:** calls the model, accepts only `submit_compact_plan`, appends actionable feedback, and stops after `COMPACT_FLOW_MAX_ROUNDS`.
 - **Result construction:** creates block archive records and replacement history messages without touching the live session.
 - **Compatible commit:** verifies the consumed snapshot prefix, writes archive/block state, replaces only that prefix while retaining appended suffixes and preserving the prompt-cache key, persists, and emits completion/reminder events.

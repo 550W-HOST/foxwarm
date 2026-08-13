@@ -33,6 +33,7 @@ import { buildTimestampedSystemMessageParts } from './utils/systemMessageParts';
 import type { SessionWorkerBtwResult, SessionWorkerDequeueResult, SessionWorkerHistoryMutationResult, SessionWorkerSettings, SessionWorkerSettingsPatch, SessionWorkerSettingsResult, SessionWorkerToolNoiseCompactionResult } from './sessionWorkerRuntimeService';
 
 export type SessionWorkerHostDependencies = {
+  catalogStub?: Partial<Pick<Session, 'agent' | 'aliases' | 'parentSessionId' | 'displayName'>>;
   persistence?: SessionWorkerPersistenceDependencies;
   initialize?: () => Promise<void>;
   createTurnHost?: (effects: CurrentSessionTurnEffects, session: Session) => SessionTurnHost;
@@ -907,6 +908,7 @@ export class SessionWorkerHost {
   private baseSession(): Session {
     return {
       id: this.identity.sessionId,
+      ...(this.dependencies.catalogStub || {}),
       history: [],
       persistentMemorySnapshot: '',
       stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
