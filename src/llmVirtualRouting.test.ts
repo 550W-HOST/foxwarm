@@ -211,7 +211,7 @@ test('failover uses outer attempts A x5 then rebuilds a clean Anthropic request 
   }
 });
 
-test('virtual attempts preserve requested effort and fall back independently to each concrete leaf default', async () => {
+test('virtual attempts with unset effort use each concrete leaf default independently', async () => {
   const config = loadModelsConfigFromObject({
     default: 'route',
     providers: {
@@ -248,7 +248,6 @@ test('virtual attempts preserve requested effort and fall back independently to 
     const result = await withImmediateRetryTimers(() => requestLlmOnce({
       ...baseRequest('route', 2),
       modelsConfigOverride: config,
-      effort: 'xhigh',
     }));
     assert.equal(calls[0].body.reasoning_effort, 'low');
     assert.equal(calls[1].body.output_config.effort, 'max');

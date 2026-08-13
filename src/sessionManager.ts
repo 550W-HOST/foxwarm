@@ -1522,8 +1522,6 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
     verbose: sourceSession.verbose,
     model: spawnedSettings.model,
     effort: spawnedSettings.effort,
-    childModelDefault: sourceSession.childModelDefault,
-    childEffortDefault: sourceSession.childEffortDefault,
   };
 
   const appendedForkMessages: Message[] = [];
@@ -1650,12 +1648,14 @@ export function resolveSpawnedSessionModelEffort(
   session?: Pick<Session, 'model' | 'effort' | 'childModelDefault' | 'childEffortDefault'>,
   explicitModel?: string,
   explicitEffort?: ModelEffort,
+  modelsConfig?: ModelsConfig,
 ): { model?: string; effort?: ModelEffort } {
   const model = resolveSpawnedSessionModel(session, explicitModel);
   const inheritedEffort = resolveSpawnedSessionEffort(session, explicitEffort);
   const normalized = normalizeProspectiveSessionModelEffortSettings(
     { model, effort: inheritedEffort },
     explicitEffort === undefined ? {} : { effort: explicitEffort },
+    modelsConfig,
   );
   return { model: normalized.model, effort: normalized.effort };
 }
@@ -1708,8 +1708,6 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
       currentNode: options?.node || parentSession.currentNode || 'master',
       model: spawnedSettings.model,
       effort: spawnedSettings.effort,
-      childModelDefault: parentSession.childModelDefault,
-      childEffortDefault: parentSession.childEffortDefault,
     };
 
     const initialMessage: Message = {

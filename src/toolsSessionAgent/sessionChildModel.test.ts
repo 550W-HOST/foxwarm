@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import * as sessionManager from '../sessionManager';
-import { getAgentDir, resolveModelConfig } from '../config';
+import { getAgentDir, loadModelsConfigFromObject, resolveModelConfig } from '../config';
 import { tool_create_child_session, tool_create_session, tool_set_session_child_model } from '../toolsSessionAgent';
 import { Session } from '../types';
+import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -186,7 +187,7 @@ test('create_child_session defaults to non-fork when fork is omitted', async () 
   }
 });
 
-test('forked and non-fork children resolve raw effort without materializing model defaults', async () => {
+test('forked and non-fork children resolve one current model/effort pair without copying future-child defaults', async () => {
   await sessionManager.loadSessions();
   const { primary } = getTestModels();
   const parentSessionId = makeId('child_effort_parent');
@@ -202,7 +203,9 @@ test('forked and non-fork children resolve raw effort without materializing mode
     await sessionManager.createChildSession(parent.id, 'inherited', false, { sourceOverride: parent });
     const inherited = await sessionManager.getSession(inheritedId);
     assert.equal(inherited.effort, 'max');
-    assert.equal(inherited.childEffortDefault, 'max');
+    assert.equal(inherited.model, primary);
+    assert.equal(inherited.childModelDefault, undefined);
+    assert.equal(inherited.childEffortDefault, undefined);
 
     await sessionManager.createChildSession(parent.id, 'explicit', false, { effort: 'none', sourceOverride: parent });
     assert.equal((await sessionManager.getSession(explicitId)).effort, 'none');
@@ -210,7 +213,9 @@ test('forked and non-fork children resolve raw effort without materializing mode
     await sessionManager.createChildSession(parent.id, 'forked', true, { sourceOverride: parent });
     const forked = await sessionManager.getSession(forkedId);
     assert.equal(forked.effort, 'max');
-    assert.equal(forked.childEffortDefault, 'max');
+    assert.equal(forked.model, primary);
+    assert.equal(forked.childModelDefault, undefined);
+    assert.equal(forked.childEffortDefault, undefined);
 
     delete parent.childEffortDefault;
     assert.equal(sessionManager.resolveSpawnedSessionEffort(parent), 'low');
@@ -218,6 +223,88 @@ test('forked and non-fork children resolve raw effort without materializing mode
     assert.equal(sessionManager.resolveSpawnedSessionEffort(parent), undefined);
   } finally {
     for (const id of [inheritedId, explicitId, forkedId, parentSessionId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
+  }
+});
+
+test('unset effort remains unset for local new/fork children and a virtual route does not materialize a leaf default', async () => {
+  await sessionManager.loadSessions();
+  const { primary } = getTestModels();
+  const parentSessionId = makeId('child_unset_effort_parent');
+  const newChildId = `${parentSessionId}_new`;
+  const forkChildId = `${parentSessionId}_fork`;
+  try {
+    const parent = await ensureSession(parentSessionId, primary);
+    delete parent.effort;
+    delete parent.childEffortDefault;
+    await sessionManager.saveSession(parent.id);
+    await sessionManager.createChildSession(parent.id, 'new', false, { sourceOverride: parent });
+    await sessionManager.createChildSession(parent.id, 'fork', true, { sourceOverride: parent });
+    for (const id of [newChildId, forkChildId]) {
+      const child = await sessionManager.getSession(id);
+      assert.equal(child.effort, undefined);
+      assert.equal(child.childEffortDefault, undefined);
+    }
+
+    const virtualConfig = loadModelsConfigFromObject({
+      default: 'route',
+      providers: {
+        leaf: {
+          providerType: 'anthropic',
+          effort: { allowed: ['medium', 'max'], default: 'max' },
+          models: ['one'],
+        },
+        fallback: {
+          providerType: 'openai-completions',
+          effort: { allowed: ['low', 'high'], default: 'high' },
+          models: ['two'],
+        },
+        route: { providerType: 'failover', targets: ['leaf/one', 'fallback/two'] },
+      },
+    });
+    assert.deepEqual(
+      sessionManager.resolveSpawnedSessionModelEffort({ model: 'route' }, undefined, undefined, virtualConfig),
+      { model: 'route', effort: undefined },
+    );
+  } finally {
+    for (const id of [newChildId, forkChildId, parentSessionId]) {
+      await sessionManager.deleteSession(id).catch(() => {});
+    }
+  }
+});
+
+test('child current settings use distinct parent child defaults while the child future defaults follow its current pair', async () => {
+  await sessionManager.loadSessions();
+  const { primary, secondary } = getTestModels();
+  const parentSessionId = makeId('child_distinct_defaults_parent');
+  const newChildId = `${parentSessionId}_new`;
+  const forkChildId = `${parentSessionId}_fork`;
+  try {
+    const parent = await ensureSession(parentSessionId, primary);
+    parent.effort = 'low';
+    parent.childModelDefault = secondary;
+    parent.childEffortDefault = 'max';
+    await sessionManager.saveSession(parent.id);
+
+    await sessionManager.createChildSession(parent.id, 'new', false, { sourceOverride: parent });
+    await sessionManager.createChildSession(parent.id, 'fork', true, { sourceOverride: parent });
+    for (const id of [newChildId, forkChildId]) {
+      const child = await sessionManager.getSession(id);
+      assert.equal(child.model, secondary);
+      assert.equal(child.effort, 'max');
+      assert.equal(child.childModelDefault, undefined);
+      assert.equal(child.childEffortDefault, undefined);
+      const presentation = buildSessionModelEffortPresentation(child);
+      assert.equal(presentation.effectiveChildModelKey, secondary);
+      const childAllowed = presentation.childEffort.allowed;
+      assert.equal(
+        presentation.childEffort.effective,
+        childAllowed.includes('max') ? 'max' : presentation.childEffort.defaultEffort || 'default',
+      );
+    }
+  } finally {
+    for (const id of [newChildId, forkChildId, parentSessionId]) {
       await sessionManager.deleteSession(id).catch(() => {});
     }
   }
