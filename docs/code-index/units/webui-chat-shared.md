@@ -92,7 +92,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - Consumed by chat UI components (message rendering, tool call display, input autocomplete). `chatShared.tsx` re-exports the Markdown renderer from `markdownRenderer.ts` to keep existing imports stable.
 - Re-exports `formatCompactObjectPreview` from the shared package for use by UI consumers.
 - Provides the data structures (`Message`, `SessionStreamEvent`, `PatchPreviewOperation`) that define the chat protocol between frontend and backend.
-- `Message.__meta` includes optional `contextBlock`, `contextFrontierItem`, and `preservedFromBlockId` fields so WebUI rendering can use structured layered-context metadata without parsing text as the primary path.
+- `Message.__meta` includes optional `contextBlock` and `preservedFromBlockId` fields so WebUI rendering can use structured active-history provenance without parsing text as the primary path. Canonical authority: [D-context-active-history-authority](../threads/context-compaction-and-recall.md#d-context-active-history-authority).
 - `toolMeta` drives icon/color rendering in tool call bubbles across the chat interface.
 
 ## Design Decisions

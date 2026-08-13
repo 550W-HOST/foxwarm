@@ -268,7 +268,6 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     ...stub,
     history: [{ role: 'user', parts: [{ text: 'authoritative worker history' }], __meta: { seq: 1, timestamp: 123 } }],
     queue: [1, 2, 3].map(index => ({ type: 'background', parts: [{ text: `authoritative worker queue ${index}` }] })),
-    contextFrontier: [{ kind: 'message', seq: 1 }],
     persistentMemorySnapshot: 'worker prompt',
     busy: true, busyStartedAt: 100, currentNode: 'worker-node', cwd: '/worker/cwd', model: 'worker/model',
     meta: { lastMessageTime: 123, messageCount: 1, wait: { id: 'worker-exec-wait', startedAt: 20, waitExecIds: ['worker-exec'] } },
@@ -444,7 +443,7 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     await writeAuthoritativeSessionState({
       ...stub, busy: false, currentNode: 'master',
       history: [{ role: 'user', parts: [{ text: 'later local authority' }], __meta: { seq: 1, timestamp: 456 } }],
-      queue: [], contextFrontier: [{ kind: 'message', seq: 1 }], meta: { lastMessageTime: 456, messageCount: 1 },
+      queue: [], meta: { lastMessageTime: 456, messageCount: 1 },
     } as Session);
     assert.equal(stub.busy, false);
     const localAgain = (await client.call('getSession', { sessionId })).session!;

@@ -112,7 +112,7 @@ test('buildCompactPromptText instructs the model to use the compact plan tool fo
   assert.match(prompt, /Source L1 blocks: 5 block\(s\).*newest 3 are force-kept.*oldest 2 may be listed/i);
   assert.match(prompt, /must compact at least 1 source L1 block/i);
   assert.match(prompt, /Segment 1: raw message candidates -> L1 block\(s\)/);
-  assert.match(prompt, /Segment 2: frontier-contiguous L1 block candidates -> L2 block\(s\)/);
+  assert.match(prompt, /Segment 2: history-contiguous L1 block candidates -> L2 block\(s\)/);
   assert.match(prompt, /This segment has only one block, so normally leave it uncompressed/i);
   assert.match(prompt, /Treat each Segment header as a hard boundary/i);
   assert.match(prompt, /Goal: Replace older context with compact, continuation-oriented summaries/i);
@@ -272,7 +272,7 @@ test('block quotas accumulate legal multi-block segments and ignore stranded sin
   assert.equal(valid.createBlocks.length, 2);
 });
 
-test('buildCompactPromptText renders block candidates by legal frontier-contiguous segments', () => {
+test('buildCompactPromptText renders block candidates by legal history-contiguous segments', () => {
   const prompt = buildCompactPromptText({
     forcedKeptCount: 0,
     candidateItems: [
@@ -286,11 +286,11 @@ test('buildCompactPromptText renders block candidates by legal frontier-contiguo
     ],
   });
 
-  assert.match(prompt, /Segment 1: frontier-contiguous L1 block candidates -> L2 block\(s\).*B#10\.\.B#13/s);
+  assert.match(prompt, /Segment 1: history-contiguous L1 block candidates -> L2 block\(s\).*B#10\.\.B#13/s);
   assert.match(prompt, /Block ids inside a segment may skip numbers/i);
-  assert.match(prompt, /Segment 2: frontier-contiguous L2 block candidates -> L3 block\(s\).*B#14/s);
-  assert.match(prompt, /Segment 3: frontier-contiguous L1 block candidates -> L2 block\(s\).*B#15\.\.B#16/s);
-  assert.match(prompt, /Segment 4: frontier-contiguous L2 block candidates -> L3 block\(s\).*B#17/s);
+  assert.match(prompt, /Segment 2: history-contiguous L2 block candidates -> L3 block\(s\).*B#14/s);
+  assert.match(prompt, /Segment 3: history-contiguous L1 block candidates -> L2 block\(s\).*B#15\.\.B#16/s);
+  assert.match(prompt, /Segment 4: history-contiguous L2 block candidates -> L3 block\(s\).*B#17/s);
   assert.match(prompt, /This segment has only one block, so normally leave it uncompressed/i);
   assert.match(prompt, /stranded single-block segment.*sourceStart=sourceEnd=17/i);
   assert.match(prompt, /must stay inside one listed segment/i);
@@ -453,7 +453,7 @@ test('compact prompt lists preserved raw messages separately with removePreserve
   assert.match(prompt, /Previously preserved raw messages already covered by summary blocks/);
   assert.match(prompt, /M#42 preserved from B#7/);
   assert.match(prompt, /removePreservedMessages: number\[\]/);
-  assert.match(prompt, /working history\/frontier only/i);
+  assert.match(prompt, /active history only/i);
 });
 
 test('validateCompactPlanArgs accepts preserveMessages covered by a created message block', () => {
@@ -544,7 +544,7 @@ test('validateCompactPlanArgs ignores malformed block memory facts without inval
   assert.equal(plan.createBlocks[0].memoryFacts, undefined);
 });
 
-test('validateCompactPlanArgs accepts frontier-continuous block ranges with non-consecutive ids', () => {
+test('validateCompactPlanArgs accepts history-contiguous block ranges with non-consecutive ids', () => {
   const candidates = [
     buildBlockCandidateItem(10, 1, 5, 8, 'prior L1 block'),
     buildBlockCandidateItem(13, 1, 9, 12, 'next adjacent L1 block despite id gap'),
@@ -566,7 +566,7 @@ test('validateCompactPlanArgs accepts frontier-continuous block ranges with non-
   assert.equal(plan.createBlocks[0].sourceEnd, 13);
 });
 
-test('validateCompactPlanArgs accepts frontier-continuous block ranges whose endpoint ids decrease', () => {
+test('validateCompactPlanArgs accepts history-contiguous block ranges whose endpoint ids decrease', () => {
   const candidates = [
     buildBlockCandidateItem(20, 1, 5, 8, 'newer-created block covering earlier context'),
     buildBlockCandidateItem(13, 1, 9, 12, 'older-created adjacent block covering later context'),
@@ -578,7 +578,7 @@ test('validateCompactPlanArgs accepts frontier-continuous block ranges whose end
       sourceKind: 'block',
       sourceStart: 20,
       sourceEnd: 13,
-      summary: 'summary for adjacent L1 blocks in frontier order despite decreasing ids',
+      summary: 'summary for adjacent L1 blocks in history order despite decreasing ids',
     }]),
   }, candidates);
 

@@ -307,6 +307,9 @@ async function materializeWebUiMessages(messages: Message[]): Promise<{ messages
 
 async function sanitizeWebUiDebugPayload(payload: any): Promise<any> {
   const result = { ...payload };
+  // contextFrontier is obsolete migration input, not current Session business
+  // state. Debug transport must not make an arbitrary stale field look live.
+  delete result.contextFrontier;
   if (Array.isArray(payload?.history)) {
     result.history = (await materializeWebUiMessages(payload.history)).messages;
   }

@@ -18,7 +18,7 @@ Session context owns model-context budgeting, layered compaction and direct acti
 
 - `getDefaultCompactThresholdTokens`, `getEffectiveCompactThresholdTokens`, `checkAndCompactIfNeeded`, `processSessionCompactionRequest`, `applyCompletedCompactJob`.
 - `COMPACT_PLAN_TOOL_DEFINITION`, `buildCompactPromptText`, and `validateCompactPlanArgs`.
-- `ensureContextFrontier`, `appendMessagesToContextFrontier`, `renderHistoryFromFrontier`, and CTX-BLOCK formatting/annotation helpers.
+- Direct history compaction helpers, CTX-BLOCK formatting/rendering, and structured provenance helpers.
 - `initArchiveStore`, `hasArchivedSessionId`, `ensureSessionBranch`, `readEffectiveArchiveMessages`, `readEffectiveArchiveBlocks`, and vector checkpoint APIs.
 - `vector.search`, archive indexing/backfill APIs, and compact-fact indexing.
 - Tool-layer `recall` and `get_session_messages` retrieval/preview paths.
@@ -56,9 +56,7 @@ Session context owns model-context budgeting, layered compaction and direct acti
 
 Cross-module compact, archive, vector, recall, and WebUI-expansion contracts live in the context thread. This module keeps only subsystem boundaries, defaults, and links rather than a second decision log.
 
-### D-session-context-history-authority
-
-The authoritative per-session `history` array is the sole active/model-visible timeline. Archive and obsolete frontier data never reconstruct it.
+Active history authority is canonical in [D-context-active-history-authority](../threads/context-compaction-and-recall.md#d-context-active-history-authority); this module does not duplicate that decision.
 
 ### D-session-context-best-effort-index
 

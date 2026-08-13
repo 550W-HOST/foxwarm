@@ -28,7 +28,7 @@ function messageEntry(startSeq: number, endSeq: number, index: number, segmentId
   };
 }
 
-test('resolveCreateBlockRanges follows frontier order for non-consecutive block ids', () => {
+test('resolveCreateBlockRanges follows history order for non-consecutive block ids', () => {
   const entries = [
     blockEntry(11, 2, 0),
     blockEntry(18, 2, 1),
@@ -55,7 +55,7 @@ test('resolveCreateBlockRanges follows frontier order for non-consecutive block 
   assert.equal(operation.rawEndSeq, 40);
 });
 
-test('resolveCreateBlockRanges supports decreasing block id endpoints in frontier order', () => {
+test('resolveCreateBlockRanges supports decreasing block id endpoints in history order', () => {
   const entries = [
     blockEntry(120, 1, 0),
     blockEntry(118, 1, 1),

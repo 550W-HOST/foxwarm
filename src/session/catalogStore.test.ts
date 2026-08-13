@@ -168,7 +168,6 @@ test('normal writes persist only the narrow catalog projection, never semantic b
   fixture.store.upsertMany([metadata('narrow', {
     queue: [{ type: 'background', parts: [{ text: 'queued' }] }],
     history: [{ role: 'user', parts: [{ text: 'history' }] }],
-    contextFrontier: [{ kind: 'message', seq: 1 }],
     promptCacheKey: 'secret-routing-key', lastAppliedMailboxId: 7,
     goalState: { goal: 'body' }, systemPromptFiles: ['MEMORY.md'], indexingState: { inProgress: true },
     meta: {
@@ -213,7 +212,7 @@ test('strict migration publishes SQLite atomically, keeps one evidence copy, tol
       aliases: ['shared'], parentSessionId: 'missing-parent', lastMessageTime: 2,
       queue: [{ type: 'background', parts: [{ text: 'legacy queue' }] }],
       history: [{ role: 'user', parts: [{ text: 'legacy catalog history' }] }],
-      contextFrontier: [{ kind: 'message', seq: 1 }], promptCacheKey: 'legacy-key', lastAppliedMailboxId: 4,
+      promptCacheKey: 'legacy-key', lastAppliedMailboxId: 4,
       goalState: { goal: 'legacy goal' }, systemPromptFiles: ['MEMORY.md'], indexingState: { inProgress: true },
       vectorIndexPosition: 1,
       meta: { lastMessageTime: 2, messageCount: 1, managedSession: { pendingInbox: [{ type: 'background', parts: [{ text: 'managed' }] }] } },

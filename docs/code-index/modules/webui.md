@@ -40,7 +40,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 
 - Markdown is sanitized; math supports only documented delimiters with trusted rendering disabled.
 - Strict commit markers are model-only standalone lines outside code fences and stay inert until clicked.
-- CTX-BLOCK expansion is local read-only preview and never mutates session/frontier/queue.
+- CTX-BLOCK expansion is local read-only preview and never mutates active history or queue state.
 - Chat/tool/markdown containers remain shrinkable; only intentional inner table/output surfaces own horizontal scrolling.
 - Browser terminals are identified by node and cwd, not chat session ID.
 - Optional official Code assets remain outside the main WebUI bundle.

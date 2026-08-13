@@ -4,12 +4,12 @@ Files: src/migrations/index.ts, src/migrations/state.ts, src/migrations/embedded
 
 ## Purpose
 
-Holds startup migration orchestration and migration-only data structures. Current runtime modules should stay clean: legacy formats such as standalone `*.frontier.json` are parsed here, converted into current session history JSON shape, and then moved out of the active state tree.
+Holds startup migration orchestration and migration-only data structures. Current runtime modules should stay clean: legacy formats such as standalone `*.frontier.json` are retired here without becoming current active state.
 
 ## Key Exports
 
 - `runStartupMigrations()` — runs registered startup migrations and returns their summaries.
-- `runEmbeddedContextFrontierMigration(options?)` — scans legacy frontier files unless migrationVersion says this migration already completed, embeds frontier data into matching session JSON files, annotates rendered messages, and moves successful legacy files to backup.
+- `runEmbeddedContextFrontierMigration(options?)` — scans legacy frontier files unless migrationVersion says this migration already completed, preserves authoritative history, advances only a safe `nextBlockId` floor, removes any obsolete embedded field, and moves successful legacy files to backup.
 - `runLegacyUndatedExecArtifactMigration(options?)` — archives eligible legacy undated persistent-exec wrapper/user/paths artifacts per agent, removes only successfully archived sources, and retries until no strict matching top-level artifacts remain.
 - `EMBEDDED_CONTEXT_FRONTIER_MIGRATION_ID` — current migration id (`embedded-context-frontier-v1`).
 - `LEGACY_UNDATED_EXEC_ARTIFACT_MIGRATION_ID` — migration id for old root-level exec artifacts (`legacy-undated-exec-artifacts-v1`).
@@ -33,21 +33,15 @@ Holds startup migration orchestration and migration-only data structures. Curren
 - The manifest audits torn physical prefixes, unique recovered logical records, inserted missing SQLite rows, and per-source recovered identities/payload hashes. This audit does not rewrite the raw backup source.
 - Legacy archive and LLM-journal JSONL scanning uses the shared LF/CRLF UTF-8 framing contract in [src-jsonl](./src-jsonl.md), preserving literal U+2028/U+2029 inside JSON strings and failing before migration completion or source movement on invalid records.
 - Each legacy frontier file maps to a session id by stripping `.frontier.json` from its path relative to `state/sessions`.
-- For a matching session history JSON, the migration:
-  1. reads legacy `{ frontier, nextBlockId }` from the standalone frontier file;
-  2. validates that the frontier aligns with rendered `history`;
-  3. annotates CTX-BLOCK rendered messages with `__meta.contextBlock` and raw preserved messages with preserved/frontier metadata;
-  4. writes `contextFrontier` and max `nextBlockId` into the session JSON;
-  5. verifies the embedded frontier was saved;
-  6. moves the legacy file under `state/migration-backup/<migration-id>/...`, preserving a path traceable to the original `state/` relative path.
-- If a frontier file is corrupt, missing its session history, missing archive block metadata, or does not match rendered history, the migration logs a warning, records the failure, and leaves the original file in place.
+- For a matching session history JSON, the migration reads legacy `{ frontier, nextBlockId }`, keeps the existing `history` byte-semantically authoritative, removes any obsolete embedded `contextFrontier`, advances `nextBlockId` to at least the legacy/block-ID floor, verifies that current history remains present and no embedded frontier was written, then moves the standalone file under `state/migration-backup/<migration-id>/...`.
+- If a frontier file is corrupt or missing its session history, the migration logs a warning, records the failure, and leaves the original file in place. A well-formed but unmatched legacy frontier is still retirement input; it does not block migration or rewrite active history.
 - Runtime session load does not fallback-read leftover failed frontier files; resolving those files requires a future explicit repair/manual migration path.
 
 ## Design Decisions
 
 - [2026-06-17] Use `state/migrationVersion.json` as a reusable migration-version registry to avoid repeated startup scans. Successful frontier migration moves legacy files to `state/migration-backup/<migration-id>/...`; failed files are never deleted automatically.
 - [2026-06-17] Legacy frontier parsing, payload normalization, and standalone frontier file movement belong in `src/migrations/`, not in current layered-context/session runtime modules.
-- [2026-06-17] Current runtime assumes the migration has completed: active session load reads only embedded `contextFrontier` from per-session history JSON, while leftover `*.frontier.json` files may still be cleaned on delete/rename but are not data sources.
+- [2026-08-13] Current runtime ignores both embedded `contextFrontier` and standalone `*.frontier.json`; they are compatibility/retirement inputs only. Canonical authority: [D-context-active-history-authority](../threads/context-compaction-and-recall.md#d-context-active-history-authority).
 ### D-legacy-undated-exec-artifact-migration
 
 Legacy undated persistent-exec artifacts are migrated conservatively: only exact historical wrapper/user/paths names older than a full local-day boundary are archived per agent before unlink, and the migration records completion only after none remain. The current writer's date-co-located artifact contract is owned by [D-persistent-exec-date-co-located-artifacts](./shared-persistent-exec.md#d-persistent-exec-date-co-located-artifacts).
@@ -56,6 +50,5 @@ Legacy undated persistent-exec artifacts are migrated conservatively: only exact
 
 - `sessionManager.loadSessions()` imports `runStartupMigrations()` from `src/migrations/index.ts`.
 - The migration uses `metadataStore.createSessionHistoryStore` for atomic per-session history writes.
-- The migration uses `layeredContext.annotateHistoryWithContextFrontierMetadata` to attach the same structured metadata that runtime rendering uses.
 - Tests cover migration success, backup movement, migrationVersion skip behavior, failure recording, and runtime non-fallback behavior in `src/session/sessionEmbeddedFrontierLoad.test.ts`.
 - SQLite-only migration integration tests also cover literal Unicode separators, malformed-source retry behavior, and the rule that a failed Journal import does not advance its imported byte offset.

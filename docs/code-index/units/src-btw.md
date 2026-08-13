@@ -44,7 +44,7 @@ Provides a "BTW" (by-the-way) side-request feature that lets users ask a quick b
 
 ## Behavior
 
-- Clones the session (history, frontier, snapshot, raw current/child model-effort settings, metadata, and promptCacheKey) so the BTW LLM call cannot mutate live state while following [D-lifecycle-prefix-lineage](../threads/session-lifecycle.md#d-lifecycle-prefix-lineage).
+- Clones the session (history, snapshot, raw current/child model-effort settings, metadata, and promptCacheKey) so the BTW LLM call cannot mutate live state while following [D-lifecycle-prefix-lineage](../threads/session-lifecycle.md#d-lifecycle-prefix-lineage).
 - Injects a system prompt instructing the model not to use tools.
 - If the model returns tool calls anyway, the request is denied and a warning is appended instead of executing tools.
 - On success or failure, a display-only (`modelVisible: false`) message is appended to the real session history and broadcast to connected clients (excluding webui).

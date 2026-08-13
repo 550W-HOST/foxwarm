@@ -46,7 +46,7 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 - Operations do not overlap and summaries are non-empty.
 - Block-source operations normally consume multiple blocks; only the explicit stranded-island exception permits a single source block.
 - `preserveMessages` must name raw candidates covered by a newly created message block and cannot split an atomic tool group.
-- `removePreservedMessages` can name only previously marked preserved frontier entries listed to the planner.
+- `removePreservedMessages` can name only previously marked preserved active-history entries listed to the planner.
 - Preserved raw tokens do not count as replaced quota; stranded single-block lifts do not count as block reduction.
 - Quota coverage may accumulate across segments, but one operation never crosses a segment.
 - Optional malformed block memory facts are skipped rather than failing a valid compaction plan; the bounded total and text deduplication apply across all created blocks.

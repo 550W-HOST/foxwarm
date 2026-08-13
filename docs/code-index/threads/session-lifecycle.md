@@ -38,8 +38,8 @@ Canonical turn flow: [message processing pipeline](./message-processing-pipeline
 ## Context, archive, and recall
 
 - Final usage may trigger `checkAndCompactIfNeeded`.
-- Compaction plans against a snapshot and commits only a compatible consumed prefix.
-- Frontier rendering uses `renderHistoryFromFrontier`.
+- Compaction plans against an exact active-history snapshot and commits only a compatible consumed prefix while retaining an appended suffix.
+- CTX-BLOCK messages are rendered directly into authoritative `history`; neither archive rows nor obsolete frontier state reconstruct active history.
 - Current archive appends commit only to the SQLite authority; effective reads enforce fork lineage caps, and vector indexing may lag without losing source data.
 
 Canonical contract: [context compaction and recall](./context-compaction-and-recall.md), especially [SQLite archive authority](./context-compaction-and-recall.md#d-context-sqlite-archive-authority).

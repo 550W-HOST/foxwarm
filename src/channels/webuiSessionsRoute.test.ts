@@ -585,9 +585,9 @@ test('WebUI history route returns queued preview messages separately from commit
     const debugFixture = await fs.readJson(debugFixturePath);
     const nestedSecretBase64 = imageBuffer.toString('base64');
     const legacySecretPath = '/private/legacy/image-secret.png';
-    debugFixture.contextFrontier = [{
-      kind: 'message',
-      marker: 'context-frontier-business-field',
+    debugFixture.obsoleteContextFrontier = [{
+      kind: 'legacy-fixture',
+      marker: 'obsolete-context-frontier-field',
       nestedFunctionResponse: {
         functionResponse: {
           tool_use_id: 'debug_nested_tool',
@@ -616,10 +616,11 @@ test('WebUI history route returns queued preview messages separately from commit
     assert.equal(debugText.includes(legacySecretPath), false);
     assert.doesNotMatch(debugText, /"path"\s*:/);
     const debugPayload = JSON.parse(debugText);
-    assert.equal(debugPayload.payload.contextFrontier[0].marker, 'context-frontier-business-field');
-    assert.equal(debugPayload.payload.contextFrontier[0].nestedFunctionResponse.functionResponse.response.status, 'kept');
-    assert.equal(debugPayload.payload.contextFrontier[0].nestedFunctionResponse.functionResponse.response.inlineDataUnavailable.unavailable, true);
-    assert.equal(debugPayload.payload.contextFrontier[0].nestedLegacyRef.inlineDataRef.unavailable, true);
+    assert.equal(debugPayload.payload.contextFrontier, undefined, 'obsolete active frontier is not exposed as current debug business state');
+    assert.equal(debugPayload.payload.obsoleteContextFrontier[0].marker, 'obsolete-context-frontier-field');
+    assert.equal(debugPayload.payload.obsoleteContextFrontier[0].nestedFunctionResponse.functionResponse.response.status, 'kept');
+    assert.equal(debugPayload.payload.obsoleteContextFrontier[0].nestedFunctionResponse.functionResponse.response.inlineDataUnavailable.unavailable, true);
+    assert.equal(debugPayload.payload.obsoleteContextFrontier[0].nestedLegacyRef.inlineDataRef.unavailable, true);
   } finally {
     await server.stop();
     setHttpServer(null);
