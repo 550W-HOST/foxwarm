@@ -36,6 +36,7 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 - Derives node/cwd from the first `foxwarm` workspace folder.
 - Restores backend terminals inside the current workspace after Code reload without POSTing duplicate PTYs.
 - User terminal close kills/deletes the backend. Extension/window reload and non-user exit only detach.
+- The browser WebSocket automatically answers the terminal route's server-originated protocol pings, so transport keepalive requires no extension application-message changes and does not alter detach/kill semantics.
 - Contributes new/toggle/editor/open-here commands. Remote PTY requires advertised `vscode-pty`.
 - Terminal-scoped `code` helper supports one existing POSIX file/folder or goto target via local capability IPC.
 

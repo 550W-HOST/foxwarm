@@ -24,6 +24,7 @@ Provides the terminal transport boundary used by WebUI and Code browser clients.
 - Remote terminal records are rediscovered with `list` after master map loss. Metadata `get` refreshes node-side cwd tracking rather than returning a stale proxy record.
 - Node disconnect sends an error and closes attached browser WebSockets but preserves the proxy record; if the CLI process reconnects with its in-memory PTY still alive, a later list/attach can rediscover it.
 - Explicit close kills the node PTY. Browser page shutdown remains detach-only through the existing extension lifecycle policy.
+- The authenticated WebUI terminal-stream route owns a 30-second server WebSocket protocol-ping timer after successful router attachment. The router still treats WebSocket close/error as detach only; protocol keepalive does not affect local or remote PTY lifetime. Canonical semantics: [D-code-terminal-lifecycle](../threads/code-integration.md#d-code-terminal-lifecycle).
 
 ## Dependencies
 

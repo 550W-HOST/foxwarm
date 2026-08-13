@@ -35,7 +35,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 
 - Master file/Git operations execute locally; remote operations require matching advertised `vscode-fs`/`vscode-git` versions.
 - Optional `vscode-pty` owns remote PTY process state and emits fixed service events through the authenticated node connection.
-- Terminal browser WebSockets attach to backend PTYs. Page reload detaches; explicit user close deletes.
+- Terminal browser WebSockets attach to backend PTYs. After authenticated attachment, the server sends a WebSocket protocol ping every 30 seconds as transport keepalive; browser clients answer protocol pong automatically. Page reload or transport close detaches; explicit user close deletes.
 - Terminal `code` helper uses a process-local random capability/socket and one Code-control terminal attachment; it has no browser/master credential.
 
 ## SCM and commit markers
@@ -91,7 +91,7 @@ Code commands for the Foxwarm app and data folders obtain `BASE_DIR` and the res
 
 ### D-code-terminal-lifecycle
 
-Page/extension reload detaches backend terminals; only explicit user close kills them. Matching terminals reattach after reload.
+Page/extension reload and terminal WebSocket close detach backend terminals; only explicit user close kills them. Matching terminals reattach after reload. An authenticated, successfully attached terminal stream receives a server-originated WebSocket protocol ping every 30 seconds so idle browser connections remain active through intermediaries. This ping is transport keepalive only: it is not a PTY idle timeout, liveness ledger, or backend lifecycle signal.
 
 ### D-code-read-only-scm
 

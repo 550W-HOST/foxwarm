@@ -57,6 +57,127 @@ const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 const MAX_QUEUED_PREVIEW_ITEMS = 20;
 const MAX_QUEUED_PREVIEW_TEXT_CHARS = 4000;
 const WEBUI_NODE_LAUNCH_SERVICES = ['vscode-fs', 'vscode-git', 'vscode-pty'] as const;
+const TERMINAL_WEBSOCKET_KEEPALIVE_MS = 30_000;
+
+type TerminalStreamDependencies = {
+  checkIncomingToken: (req: http.IncomingMessage) => boolean;
+  attachClient: typeof attachTerminalClient;
+  detachClient: typeof detachTerminalClient;
+  close: typeof closeTerminal;
+  resize: typeof resizeTerminal;
+  resolveControlRequest: typeof resolveTerminalControlRequest;
+  writeInput: typeof writeTerminalInput;
+  keepaliveIntervalMs?: number;
+};
+
+export function startTerminalWebSocketKeepalive(
+  ws: WebSocket,
+  intervalMs = TERMINAL_WEBSOCKET_KEEPALIVE_MS,
+): () => void {
+  let stopped = false;
+  const timer = setInterval(() => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.ping();
+    } catch (error) {
+      logger.debug({ err: error }, 'Failed to send terminal websocket keepalive ping');
+    }
+  }, intervalMs);
+  timer.unref?.();
+
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
+export async function handleTerminalStreamWebSocket(
+  ws: WebSocket,
+  req: http.IncomingMessage,
+  dependencies: TerminalStreamDependencies,
+): Promise<void> {
+  if (!dependencies.checkIncomingToken(req)) {
+    ws.close(1008, 'Unauthorized');
+    return;
+  }
+
+  const requestUrl = new URL(req.url || '/api/terminals/stream', 'http://localhost');
+  const terminalId = requestUrl.searchParams.get('terminalId') || '';
+  const codeControl = requestUrl.searchParams.get('control') === 'code';
+  if (!terminalId) {
+    ws.close(1008, 'Missing terminalId');
+    return;
+  }
+
+  let attachedTerminalId = '';
+  let stopKeepalive = () => {};
+  let cleanupRequested = false;
+  let detached = false;
+  const cleanup = () => {
+    cleanupRequested = true;
+    stopKeepalive();
+    if (attachedTerminalId && !detached) {
+      detached = true;
+      dependencies.detachClient(attachedTerminalId, ws);
+    }
+  };
+
+  ws.on('close', cleanup);
+  ws.on('error', (error) => {
+    logger.error({ err: error, terminalId: attachedTerminalId || terminalId }, 'Terminal websocket client error');
+    cleanup();
+  });
+
+  try {
+    const { terminal, backlog } = await dependencies.attachClient(terminalId, ws, { codeControl });
+    attachedTerminalId = terminal.id;
+    if (cleanupRequested || ws.readyState !== WebSocket.OPEN) {
+      cleanup();
+      return;
+    }
+    stopKeepalive = startTerminalWebSocketKeepalive(ws, dependencies.keepaliveIntervalMs);
+
+    ws.send(JSON.stringify({
+      type: 'ready',
+      terminal,
+      backlog,
+    }));
+  } catch (err: any) {
+    cleanup();
+    ws.close(1008, err?.message || 'Failed to attach terminal');
+    return;
+  }
+
+  ws.on('message', async (raw) => {
+    try {
+      const payload = JSON.parse(raw.toString());
+      if (payload?.type === 'input' && typeof payload.data === 'string') {
+        dependencies.writeInput(attachedTerminalId, payload.data);
+        return;
+      }
+
+      if (payload?.type === 'resize') {
+        dependencies.resize(attachedTerminalId, Number(payload.cols || 0), Number(payload.rows || 0));
+        return;
+      }
+
+      if (payload?.type === 'close') {
+        await dependencies.close(attachedTerminalId, 'ws-close-message');
+        return;
+      }
+
+      if (payload?.type === 'control-result') {
+        dependencies.resolveControlRequest(attachedTerminalId, ws, payload);
+        return;
+      }
+
+      ws.send(JSON.stringify({ type: 'error', message: 'Unsupported terminal message type' }));
+    } catch (err: any) {
+      ws.send(JSON.stringify({ type: 'error', message: err?.message || 'Terminal stream error' }));
+    }
+  });
+}
 
 function pickWebUiNodeLaunchServices(services: Record<string, number> | undefined): Record<string, number> {
   return Object.fromEntries(WEBUI_NODE_LAUNCH_SERVICES.flatMap((service) => {
@@ -2628,69 +2749,14 @@ export class WebUIChannel implements Channel {
       });
 
       httpServerInstance.addWebSocket('/api/terminals/stream', async (ws: WebSocket, req: http.IncomingMessage) => {
-        if (!httpServerInstance.checkIncomingToken(req)) {
-          ws.close(1008, 'Unauthorized');
-          return;
-        }
-
-        const requestUrl = new URL(req.url || '/api/terminals/stream', 'http://localhost');
-        const terminalId = requestUrl.searchParams.get('terminalId') || '';
-        const codeControl = requestUrl.searchParams.get('control') === 'code';
-        if (!terminalId) {
-          ws.close(1008, 'Missing terminalId');
-          return;
-        }
-
-        let attachedTerminalId = '';
-        try {
-          const { terminal, backlog } = await attachTerminalClient(terminalId, ws, { codeControl });
-          attachedTerminalId = terminal.id;
-          ws.send(JSON.stringify({
-            type: 'ready',
-            terminal,
-            backlog,
-          }));
-        } catch (err: any) {
-          ws.close(1008, err?.message || 'Failed to attach terminal');
-          return;
-        }
-
-        ws.on('message', async (raw) => {
-          try {
-            const payload = JSON.parse(raw.toString());
-            if (payload?.type === 'input' && typeof payload.data === 'string') {
-              writeTerminalInput(attachedTerminalId, payload.data);
-              return;
-            }
-
-            if (payload?.type === 'resize') {
-              resizeTerminal(attachedTerminalId, Number(payload.cols || 0), Number(payload.rows || 0));
-              return;
-            }
-
-            if (payload?.type === 'close') {
-              await closeTerminal(attachedTerminalId, 'ws-close-message');
-              return;
-            }
-
-            if (payload?.type === 'control-result') {
-              resolveTerminalControlRequest(attachedTerminalId, ws, payload);
-              return;
-            }
-
-            ws.send(JSON.stringify({ type: 'error', message: 'Unsupported terminal message type' }));
-          } catch (err: any) {
-            ws.send(JSON.stringify({ type: 'error', message: err?.message || 'Terminal stream error' }));
-          }
-        });
-
-        ws.on('close', () => {
-          detachTerminalClient(attachedTerminalId, ws);
-        });
-
-        ws.on('error', (error) => {
-          logger.error({ err: error, terminalId: attachedTerminalId }, 'Terminal websocket client error');
-          detachTerminalClient(attachedTerminalId, ws);
+        await handleTerminalStreamWebSocket(ws, req, {
+          checkIncomingToken: (incoming) => httpServerInstance.checkIncomingToken(incoming),
+          attachClient: attachTerminalClient,
+          detachClient: detachTerminalClient,
+          close: closeTerminal,
+          resize: resizeTerminal,
+          resolveControlRequest: resolveTerminalControlRequest,
+          writeInput: writeTerminalInput,
         });
       });
 
