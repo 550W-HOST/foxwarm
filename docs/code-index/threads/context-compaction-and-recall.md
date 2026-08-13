@@ -36,7 +36,7 @@ Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelFor
 
 - Raw messages and summary blocks commit to `archive-store.sqlite` before active frontier replacement.
 - SQLite uses durable WAL/FULL transactions, archive branches, lineage-bounded effective reads, and vector checkpoints.
-- A one-time startup migration strictly imports and verifies every legacy active JSONL before moving it under `state/migration-backup/sqlite-only-large-archives-v1/`. Runtime does not dual-write or lazy-import JSONL.
+- A one-time startup migration strictly imports and verifies every legacy active JSONL before moving it under `state/migration-backup/sqlite-only-large-archives-v1/`. Shared stateful UTF-8 LF/CRLF framing preserves literal U+2028/U+2029 inside JSON strings. Runtime does not dual-write or lazy-import JSONL.
 - Fork branches inherit only parent messages/blocks at or before their fork points.
 
 ### 5. Vector location and source reload
@@ -69,6 +69,7 @@ The WebUI block endpoint expands exactly one layer into structured timeline mess
 - [src-session-compact-plan](../units/src-session-compact-plan.md)
 - [src-session-layered-context](../units/src-session-layered-context.md)
 - [src-session-archive-store](../units/src-session-archive-store.md)
+- [src-jsonl](../units/src-jsonl.md)
 - [src-vector](../units/src-vector.md)
 - [src-tools-session-agent](../units/src-tools-session-agent.md)
 

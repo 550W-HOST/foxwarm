@@ -6,7 +6,7 @@ import { promises as nodeFs } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { STATE_DIR } from './config';
 import { logger } from './common';
-import { streamJsonlLines } from './jsonl';
+import { streamUtf8JsonlLines } from './jsonl';
 import type { ChatResult, Message, ToolDefinition } from './types';
 
 export const LLM_REQUEST_JOURNAL_JSONL_PATH = path.join(STATE_DIR, 'llm-request-journal.jsonl');
@@ -215,21 +215,6 @@ function attemptResultRecordFromRow(row: any): AttemptResultRecord {
     outcome: row.outcome, result: row.result_json ? JSON.parse(row.result_json) : undefined, error: row.error_json ? JSON.parse(row.error_json) : undefined };
 }
 
-function parseRecord(line: string): JournalRecord | null {
-  try {
-    const value = JSON.parse(line);
-    if (value?.v !== 1 || !['object','request','attempt-start','attempt-result'].includes(value.kind)) return null;
-    if (value.kind === 'object') assertObjectRecord(value);
-    if (value.kind === 'request') assertRequestRecord(value);
-    if (value.kind === 'attempt-start') assertAttemptStartRecord(value);
-    if (value.kind === 'attempt-result') assertAttemptResultRecord(value);
-    return value as JournalRecord;
-  } catch (error) {
-    logger.warn({ err: error }, 'Skipping malformed or corrupt LLM request journal line');
-    return null;
-  }
-}
-
 function validateRequestManifestSync(requestId: string): void {
   const row: any = getDb().prepare('SELECT * FROM llm_journal_requests WHERE request_id=?').get(requestId);
   if (!row) throw new Error(`LLM request journal request ${requestId} not found`);
@@ -259,7 +244,7 @@ async function importJournalJsonl(): Promise<void> {
   }
   if (importedSize === source.size) return;
 
-  const stream = fs.createReadStream(JOURNAL_PATH, { start: importedSize, end: source.size - 1, encoding: 'utf8' });
+  const stream = fs.createReadStream(JOURNAL_PATH, { start: importedSize, end: source.size - 1 });
   let batch: JournalRecord[] = [];
   const flush = () => {
     if (batch.length === 0) return;
@@ -270,9 +255,19 @@ async function importJournalJsonl(): Promise<void> {
       for (const record of records) if (record.kind === 'request') validateRequestManifestSync(record.requestId);
     });
   };
-  await streamJsonlLines(stream, line => {
-    const record = parseRecord(line);
-    if (!record) return;
+  await streamUtf8JsonlLines(stream, line => {
+    let record: JournalRecord;
+    try {
+      const value = JSON.parse(line);
+      if (value?.v !== 1 || !['object','request','attempt-start','attempt-result'].includes(value.kind)) throw new Error('Invalid legacy LLM request journal record kind');
+      if (value.kind === 'object') assertObjectRecord(value);
+      else if (value.kind === 'request') assertRequestRecord(value);
+      else if (value.kind === 'attempt-start') assertAttemptStartRecord(value);
+      else assertAttemptResultRecord(value);
+      record = value as JournalRecord;
+    } catch (error) {
+      throw new Error(`Malformed legacy LLM request journal JSONL: ${error instanceof Error ? error.message : String(error)}`);
+    }
     batch.push(record);
     if (batch.length >= IMPORT_BATCH_SIZE) flush();
   });
@@ -506,8 +501,7 @@ export async function migrateLegacyLlmRequestJournalToSqlite(): Promise<LegacyLl
 }
 
 async function streamJournalLinesStrict(filePath: string, onLine: (line: string) => void): Promise<void> {
-  const stream = fs.createReadStream(filePath, { encoding: 'utf8' });
-  await streamJsonlLines(stream, onLine);
+  await streamUtf8JsonlLines(fs.createReadStream(filePath), onLine);
 }
 
 /** Export the SQLite-authoritative canonical LLM journal in migration-compatible JSONL. */

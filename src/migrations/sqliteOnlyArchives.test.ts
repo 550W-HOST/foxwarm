@@ -78,8 +78,19 @@ test('malformed LLM legacy JSONL fails closed and remains active', async () => {
   await fs.outputFile(source, '{"v":1,"kind":"request"');
   await assert.rejects(run(`const m=require(${JSON.stringify(migrationModule)});m.runSqliteOnlyArchivesMigration().catch(e=>{console.error(e.message);process.exit(1)})`, dataRoot), /Malformed legacy LLM request journal JSONL/);
   assert.equal(await fs.pathExists(source), true);
+  const importState = await run(`const {DatabaseSync}=require('node:sqlite');const j=require(${JSON.stringify(journalModule)});const db=new DatabaseSync(j.LLM_REQUEST_JOURNAL_DB_PATH,{readOnly:true});console.log(JSON.stringify(db.prepare('SELECT imported_size FROM llm_journal_import_state WHERE source_path=?').get(j.LLM_REQUEST_JOURNAL_JSONL_PATH)||null));db.close()`, dataRoot);
+  assert.equal(JSON.parse(importState.stdout.trim()), null);
   const version = await fs.readJson(path.join(dataRoot, 'state', 'migrationVersion.json')).catch(() => ({ migrations: {} }));
   assert.equal(version.migrations?.['sqlite-only-large-archives-v1'], undefined);
+});
+
+test('incremental LLM journal import does not advance its byte offset after a malformed suffix', async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-llm-incremental-offset-'));
+  const result = await run(`
+    const fs=require('fs-extra');const {DatabaseSync}=require('node:sqlite');const j=require(${JSON.stringify(journalModule)});
+    (async()=>{await j.beginLlmRequestJournal({sessionId:'s',systemPrompt:'valid',toolDefinitions:[],messages:[{role:'user',parts:[{text:'record'}]}],requestedModelKey:'fixture/model',promptCacheKey:'c'});await j.exportLlmRequestJournalJsonl(j.LLM_REQUEST_JOURNAL_JSONL_PATH);j.resetLlmRequestJournalForTests();for(const x of ['', '-wal','-shm'])await fs.remove(j.LLM_REQUEST_JOURNAL_DB_PATH+x);await j.migrateLegacyLlmRequestJournalToSqlite();let db=new DatabaseSync(j.LLM_REQUEST_JOURNAL_DB_PATH,{readOnly:true});const baseline=db.prepare('SELECT imported_size FROM llm_journal_import_state WHERE source_path=?').get(j.LLM_REQUEST_JOURNAL_JSONL_PATH).imported_size;db.close();await fs.appendFile(j.LLM_REQUEST_JOURNAL_JSONL_PATH,'{"v":1,"kind":"request"');let failed=false;try{await j.migrateLegacyLlmRequestJournalToSqlite()}catch(e){if(!/Malformed legacy LLM request journal JSONL/.test(String(e?.message)))throw e;failed=true}if(!failed)throw new Error('malformed suffix unexpectedly imported');db=new DatabaseSync(j.LLM_REQUEST_JOURNAL_DB_PATH,{readOnly:true});const current=db.prepare('SELECT imported_size FROM llm_journal_import_state WHERE source_path=?').get(j.LLM_REQUEST_JOURNAL_JSONL_PATH).imported_size;db.close();console.log(JSON.stringify({baseline,current}))})().catch(e=>{console.error(e.stack);process.exit(1)});`, dataRoot);
+  const offsets = JSON.parse(result.stdout.trim());
+  assert.equal(offsets.current, offsets.baseline);
 });
 
 test('migration preserves literal Unicode line separators inside session JSON strings', async () => {

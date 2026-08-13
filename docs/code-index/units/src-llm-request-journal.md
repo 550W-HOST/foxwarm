@@ -28,13 +28,14 @@ Canonical cross-module contract: [canonical LLM request journal](../threads/llm-
 - Request records store only a hash of the prompt-cache key.
 - Attempt records store a hash, not the body, of the provider-specific semantic payload.
 - Legacy JSONL is strictly imported only by the startup migration, then moved to path-preserving migration backup. Runtime uses FULL synchronous writer transactions and explicit JSONL export.
+- Legacy JSONL import and verification use the shared stateful UTF-8 LF/CRLF framing helper in [src-jsonl](./src-jsonl.md). Incremental import advances its persisted byte offset only after the selected source range has decoded, framed, parsed, and flushed successfully.
 - Request/attempt identity structure, object kind/hash, delta ancestry/depth, and reconstructed message count are verified before a request can be reported complete.
 - SQLite uses a busy timeout for concurrent server/CLI journal writers.
 - A database-local authority marker prevents a newly recreated empty file from being mistaken for the migrated journal after migration completion.
 
 ## Tests
 
-Tests cover deterministic canonical JSON, checkpoint/delta reconstruction, lossless equal-timestamp pagination, strict migration/retry/conflict handling, SQLite-only runtime and export, independent process/conversation-archive concurrency, malformed/corrupt-record rejection, explicit legacy partialness, post-response non-retry behavior, and assistant request linkage.
+Tests cover deterministic canonical JSON, checkpoint/delta reconstruction, lossless equal-timestamp pagination, strict migration/retry/conflict handling (including no offset advance after malformed input), SQLite-only runtime and export, independent process/conversation-archive concurrency, malformed/corrupt-record rejection, explicit legacy partialness, post-response non-retry behavior, and assistant request linkage.
 
 ## Design decisions
 

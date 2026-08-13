@@ -31,6 +31,7 @@ Holds startup migration orchestration and migration-only data structures. Curren
 - Canonical message/block structures are validated before bootstrap mutations. Migration locking waits behind a live owner for arbitrarily large supported migrations and recovers only a provably dead or grace-expired malformed owner.
 - Canonical legacy-message validation includes only proven migration-era writer variants: unscoped message-level provider-specific fields and defined JSON-valued tool responses are preserved without normalization. This compatibility does not change current message types or admit missing tool responses, malformed provider metadata, non-object function-call arguments, or relaxed record identity/role checks.
 - The manifest audits torn physical prefixes, unique recovered logical records, inserted missing SQLite rows, and per-source recovered identities/payload hashes. This audit does not rewrite the raw backup source.
+- Legacy archive and LLM-journal JSONL scanning uses the shared LF/CRLF UTF-8 framing contract in [src-jsonl](./src-jsonl.md), preserving literal U+2028/U+2029 inside JSON strings and failing before migration completion or source movement on invalid records.
 - Each legacy frontier file maps to a session id by stripping `.frontier.json` from its path relative to `state/sessions`.
 - For a matching session history JSON, the migration:
   1. reads legacy `{ frontier, nextBlockId }` from the standalone frontier file;
@@ -57,3 +58,4 @@ Legacy undated persistent-exec artifacts are migrated conservatively: only exact
 - The migration uses `metadataStore.createSessionHistoryStore` for atomic per-session history writes.
 - The migration uses `layeredContext.annotateHistoryWithContextFrontierMetadata` to attach the same structured metadata that runtime rendering uses.
 - Tests cover migration success, backup movement, migrationVersion skip behavior, failure recording, and runtime non-fallback behavior in `src/session/sessionEmbeddedFrontierLoad.test.ts`.
+- SQLite-only migration integration tests also cover literal Unicode separators, malformed-source retry behavior, and the rule that a failed Journal import does not advance its imported byte offset.

@@ -47,7 +47,7 @@ Session context owns model-context budgeting, layered compaction, the active con
 ## Compatibility
 
 - Active `contextFrontier` is stored in the per-session history snapshot. The startup migration is the only reader for legacy standalone frontier files.
-- Legacy JSONL message/block archives are migration-only inputs; current runtime is SQLite-only and explicit export provides compatibility JSONL.
+- Legacy JSONL message/block archives are migration-only inputs; current runtime is SQLite-only and explicit export provides compatibility JSONL. Their stream framing is shared with [src-jsonl](../units/src-jsonl.md).
 - The compact-completion wire shape is owned by [D-context-compact-completion](../threads/context-compaction-and-recall.md#d-context-compact-completion).
 
 ## Design decisions

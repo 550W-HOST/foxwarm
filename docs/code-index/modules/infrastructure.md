@@ -19,6 +19,7 @@ Speech recognition is integrated as an external service boundary: Foxwarm sends 
 - [src-misc](../units/src-misc.md) — logging, retries, ASR client, JSON arguments, and node transfer helpers.
 - [src-types](../units/src-types.md) — shared runtime interfaces.
 - [src-utils](../units/src-utils.md) — durable JSON, time, prompt wrappers, message formatting, and Unicode helpers.
+- [src-jsonl](../units/src-jsonl.md) — shared stateful UTF-8 LF/CRLF JSONL stream framing.
 - [src-skills](../units/src-skills.md) — layered skill discovery and loading.
 - [src-timers](../units/src-timers.md) — persisted one-shot and recurring timers.
 - [src-terminal-manager](../units/src-terminal-manager.md) — local PTY lifecycle.

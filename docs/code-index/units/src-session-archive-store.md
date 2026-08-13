@@ -31,7 +31,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 
 | Stable symbol/section | Responsibility |
 |---|---|
-| `streamJsonlLines` | Streaming line reader with explicit event-loop yields |
+| `streamJsonlLines` | File-path adapter over the shared stateful UTF-8 LF/CRLF JSONL reader |
 | `parseLegacyMessageLine` | Strict canonical parser plus the single migration-only matching torn-prefix/suffix recovery shape |
 | reservation-ledger load/persist/canonical-resolution helpers | Validate committed alias graphs, rebuild exact moved-ID reservations, and map proven historical aliases |
 | message/block import functions | Batched parse/upsert and per-source import-state updates |
@@ -64,6 +64,8 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 ## Compatibility
 
 Legacy JSONL message and block logs are migration-only inputs. Strictly verified sources move to migration backup; normal runtime never reads or writes them. The standalone frontier migration is separate and owned by `src/migrations/`.
+
+Legacy file framing delegates to [src-jsonl](./src-jsonl.md), so literal U+2028/U+2029 remain inside records and UTF-8 characters split across raw Buffer chunks decode statefully.
 
 ## Integration
 
