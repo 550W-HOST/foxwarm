@@ -14,6 +14,7 @@ import {
   Power,
   SeparatorHorizontal,
   ScrollText,
+  Search,
   Target,
   Timer,
   Wrench,
@@ -726,6 +727,7 @@ export const parseAnsi = (text: string): ReactNode[] => {
 
 const toolIcons: Record<string, LucideIcon> = {
   reasoning: Brain,
+  'web-search': Search,
   'ctx-block': BookOpen,
   read: BookOpen,
   write: Pencil,

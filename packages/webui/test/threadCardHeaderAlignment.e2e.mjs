@@ -8,6 +8,7 @@ import puppeteer from 'puppeteer-core'
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const timelineEntry = new URL('../src/components/ChatTimeline.tsx', import.meta.url).pathname
 const reasoningEntry = new URL('../src/components/ReasoningCard.tsx', import.meta.url).pathname
+const webSearchEntry = new URL('../src/components/WebSearchCard.tsx', import.meta.url).pathname
 const contextEntry = new URL('../src/components/ContextBlockCard.tsx', import.meta.url).pathname
 const toolEntry = new URL('../src/components/ToolTimelineItems.tsx', import.meta.url).pathname
 const assetsDirectory = new URL('../dist/assets/', import.meta.url)
@@ -23,6 +24,7 @@ async function buildFixtureBundle() {
     import { createRoot } from 'react-dom/client'
     import ChatTimeline from ${JSON.stringify(timelineEntry)}
     import ReasoningCard from ${JSON.stringify(reasoningEntry)}
+    import WebSearchCard from ${JSON.stringify(webSearchEntry)}
     import ContextBlockCard from ${JSON.stringify(contextEntry)}
     import { ToolCallsBlock } from ${JSON.stringify(toolEntry)}
 
@@ -32,6 +34,7 @@ async function buildFixtureBundle() {
     createRoot(document.getElementById('read')).render(React.createElement(ToolCallsBlock, { msg: read, onOpenCodeFile: () => {} }))
     createRoot(document.getElementById('read-short')).render(React.createElement(ToolCallsBlock, { msg: shortRead, onOpenCodeFile: () => {} }))
     createRoot(document.getElementById('reasoning')).render(React.createElement(ReasoningCard, { thinking: 'reasoning preview', tone: 'message', defaultExpanded: false }))
+    createRoot(document.getElementById('web-search')).render(React.createElement(WebSearchCard, { action: { type: 'search', query: 'web search preview', queries: ['web search preview'] } }))
     createRoot(document.getElementById('event')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nevent preview\\n</foxwarm-system>' }] }], isMobile: window.innerWidth < 768, groupTools: false, showUsageBadge: false }))
     createRoot(document.getElementById('context')).render(React.createElement(ContextBlockCard, { sessionId: 'fixture/main', messageKey: 'context', block: { id: 1, level: 1, rawStartSeq: 1, rawEndSeq: 2 }, text: 'context summary', nestedDepth: 0, renderNestedMessages: () => null }))
   `
@@ -52,7 +55,7 @@ async function mountFixture({ width, dark }) {
   await page.setViewport({ width, height: 720, isMobile: width < 768, hasTouch: width < 768, deviceScaleFactor: 1 })
   await page.goto(fixtureUrl, { waitUntil: 'load' })
   await page.evaluate((dark) => document.documentElement.classList.toggle('dark', dark), dark)
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-tag, .foxwarm-reasoning-tag, .foxwarm-system-message-tag').length >= 3)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-tag, .foxwarm-reasoning-tag, .foxwarm-web-search-tag, .foxwarm-system-message-tag').length >= 4)
 }
 
 async function readAlignment() {
@@ -74,6 +77,8 @@ async function readAlignment() {
     const eventPreview = rect('#event .foxwarm-system-message-preview')
     const reasoningTag = rect('#reasoning .foxwarm-reasoning-tag')
     const reasoningPreview = rect('#reasoning .foxwarm-reasoning-preview')
+    const webSearchTag = rect('#web-search .foxwarm-web-search-tag')
+    const webSearchPreview = rect('#web-search .foxwarm-web-search-preview')
     const contextTag = rect('#context .foxwarm-context-block-tag')
     const contextPreview = rect('#context .foxwarm-context-block-preview')
     const readSummaryElement = document.querySelector('#read .foxwarm-tool-call-summary')
@@ -87,6 +92,7 @@ async function readAlignment() {
         readTagRange: centerDelta(readTag, readRange),
         event: centerDelta(eventTag, eventPreview),
         reasoning: centerDelta(reasoningTag, reasoningPreview),
+        webSearch: centerDelta(webSearchTag, webSearchPreview),
         context: centerDelta(contextTag, contextPreview),
       },
       read: {
@@ -113,7 +119,7 @@ before(async () => {
   const bundle = await buildFixtureBundle()
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:12px}</style></head><body><main>${['read', 'read-short', 'reasoning', 'event', 'context'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:900px;max-width:100%;min-width:0;margin-bottom:12px}</style></head><body><main>${['read', 'read-short', 'reasoning', 'web-search', 'event', 'context'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
