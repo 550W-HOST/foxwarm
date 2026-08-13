@@ -290,6 +290,11 @@ function isSmallMetadataValue(value: unknown): boolean {
   return typeof value === 'string' && unicodeChars(value).length <= 512;
 }
 
+function isSmallPayloadValue(value: unknown): boolean {
+  try { return unicodeChars(formatToolResponsePayload({ output: value })).length <= 512; }
+  catch { return false; }
+}
+
 function buildPrunedFunctionResponse(
   message: Message,
   part: MessagePart,
@@ -314,9 +319,15 @@ function buildPrunedFunctionResponse(
   const prunedChars = unicodeChars(prunedText).length;
   if (prunedChars >= originalChars) return null;
 
-  const nextResponse: Record<string, unknown> = { output: prunedText };
+  const payloadKeys = (['output', 'content', 'error'] as const).filter(key => response[key] !== undefined);
+  const carrierKey = payloadKeys.find(key => !isSmallPayloadValue(response[key])) || 'output';
+  const nextResponse: Record<string, unknown> = { [carrierKey]: prunedText };
+  for (const key of payloadKeys) {
+    if (key !== carrierKey && isSmallPayloadValue(response[key])) nextResponse[key] = structuredClone(response[key]);
+  }
   for (const [key, value] of Object.entries(response)) {
-    if (TOOL_RESPONSE_METADATA_KEYS.has(key) && isSmallMetadataValue(value)) {
+    if (!Object.prototype.hasOwnProperty.call(nextResponse, key)
+      && TOOL_RESPONSE_METADATA_KEYS.has(key) && isSmallMetadataValue(value)) {
       nextResponse[key] = structuredClone(value);
     }
   }
@@ -355,6 +366,11 @@ export async function buildToolResponsePrunePlan(
   let replacedFunctionResponses = 0;
   let touchedMessages = 0;
   const validatedArchiveSeqs: number[] = [];
+  const activeSeqCounts = new Map<number, number>();
+  for (const message of snapshotHistory) {
+    const seq = message.__meta?.seq;
+    if (isPositiveSafeInteger(seq)) activeSeqCounts.set(seq, (activeSeqCounts.get(seq) || 0) + 1);
+  }
   const candidateSeqs = snapshotHistory.slice(0, splitIndex).flatMap(message =>
     message.parts.some(part => !!part.functionResponse) && isPositiveSafeInteger(message.__meta?.seq) ? [message.__meta!.seq!] : []);
   const archiveRecords = candidateSeqs.length
@@ -366,7 +382,8 @@ export async function buildToolResponsePrunePlan(
     let touched = false;
     const seq = message.__meta?.seq;
     const records = isPositiveSafeInteger(seq) ? archiveBySeq.get(seq) : undefined;
-    const validArchive = records?.length === 1 && isDeepStrictEqual(
+    const validArchive = isPositiveSafeInteger(seq) && activeSeqCounts.get(seq) === 1
+      && records?.length === 1 && isDeepStrictEqual(
       normalizedRawMessageForArchiveComparison(message),
       normalizedRawMessageForArchiveComparison(records[0].message),
     );

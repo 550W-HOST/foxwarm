@@ -849,6 +849,26 @@ test('duplicate effective archive seq identity is nonprunable', async () => {
   assert.equal(plan.replacedFunctionResponses, 0);
 });
 
+test('duplicate active seq identity stays byte-exact and cannot influence the pruning estimate', async () => {
+  const { sessionHistory, archive } = await loadDeps();
+  const id = makeSessionId('prune_duplicate_active');
+  const huge = 'ACTIVE-DUPLICATE '.repeat(2500);
+  const archived: Message = { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'active-dup', name: 'read', response: { output: huge } } }], __meta: { seq: 2, timestamp: 2 } };
+  await archive.appendMessagesToArchive({ id, agent: 'main', history: [], nextMessageSeq: 1 } as Session, [structuredClone(archived)]);
+  const history: Message[] = [
+    { role: 'model', parts: [{ functionCall: { id: 'active-dup', name: 'read', args: {} } }], __meta: { seq: 1, timestamp: 1 } },
+    structuredClone(archived),
+    structuredClone(archived),
+    { role: 'user', parts: [{ text: 'tail' }], __meta: { seq: 3, timestamp: 3 } },
+  ];
+  const before = structuredClone(history);
+  const plan = await sessionHistory.buildToolResponsePrunePlan(id, { history, persistentMemorySnapshot: '' }, 0.25);
+  assert.equal(plan.replacedFunctionResponses, 0);
+  assert.equal(plan.estimatedTokensSaved, 0);
+  assert.deepEqual(plan.rewrittenHistory, before);
+  assert.deepEqual(plan.validatedArchiveSeqs, []);
+});
+
 test('whole response formatting covers structured roots and mixed output/content/error envelopes', async () => {
   const { sessionHistory, archive } = await loadDeps();
   const cases = [
@@ -872,11 +892,34 @@ test('whole response formatting covers structured roots and mixed output/content
     await archive.appendMessagesToArchive({ id, agent: 'main', history: [], nextMessageSeq: 1 } as Session, history);
     const plan = await sessionHistory.buildToolResponsePrunePlan(id, { history, persistentMemorySnapshot: '' }, 1 / 3);
     assert.equal(plan.replacedFunctionResponses, 1, `case ${index}`);
-    const output = String(plan.rewrittenHistory[1].parts[0].functionResponse?.response.output);
-    assert.match(output, /historical tool response pruned/);
-    if (index === 1) assert.match(output, /small error sibling/);
-    if (index === 2) assert.match(output, /small content sibling/);
-    if (index === 3) assert.match(output, /small/);
+    const rewritten = plan.rewrittenHistory[1].parts[0].functionResponse!.response;
+    assert.match(String(index === 3 ? rewritten.content : rewritten.output), /historical tool response pruned/);
+    if (index === 1) assert.equal(rewritten.error, 'small error sibling');
+    if (index === 2) assert.equal(rewritten.content, 'small content sibling');
+    if (index === 3) assert.equal(rewritten.output, 'small');
+  }
+});
+
+test('mixed payload envelopes preserve small siblings under their original keys regardless of field order', async () => {
+  const { sessionHistory, archive } = await loadDeps();
+  const cases: Array<{ response: Record<string, unknown>; carrier: 'output' | 'content' | 'error'; preserved: Record<string, unknown> }> = [
+    { response: { output: 'O'.repeat(2200), error: 'middle error', content: 'C'.repeat(2200) }, carrier: 'output', preserved: { error: 'middle error' } },
+    { response: { output: 'small output', content: 'C'.repeat(2200) }, carrier: 'content', preserved: { output: 'small output' } },
+    { response: { content: 'small content', error: 'E'.repeat(2200) }, carrier: 'error', preserved: { content: 'small content' } },
+    { response: { error: 'small error', content: 'C'.repeat(2200) }, carrier: 'content', preserved: { error: 'small error' } },
+  ];
+  for (const [index, testCase] of cases.entries()) {
+    const id = makeSessionId(`prune_middle_sibling_${index}`);
+    const history: Message[] = [
+      { role: 'model', parts: [{ functionCall: { id: `middle-${index}`, name: 'call_tool', args: {} } }], __meta: { seq: 1, timestamp: 1 } },
+      { role: 'tool', parts: [{ functionResponse: { tool_use_id: `middle-${index}`, name: 'call_tool', response: testCase.response } }], __meta: { seq: 2, timestamp: 2 } },
+      { role: 'user', parts: [{ text: 'tail' }], __meta: { seq: 3, timestamp: 3 } },
+    ];
+    await archive.appendMessagesToArchive({ id, agent: 'main', history: [], nextMessageSeq: 1 } as Session, history);
+    const plan = await sessionHistory.buildToolResponsePrunePlan(id, { history, persistentMemorySnapshot: '' }, 1 / 3);
+    const rewritten = plan.rewrittenHistory[1].parts[0].functionResponse!.response;
+    assert.match(String(rewritten[testCase.carrier]), /historical tool response pruned/);
+    for (const [key, value] of Object.entries(testCase.preserved)) assert.deepEqual(rewritten[key], value);
   }
 });
 
