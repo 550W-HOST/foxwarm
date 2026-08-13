@@ -1,6 +1,5 @@
 import { RpcError } from '../rpc';
 import type { Session } from '../types';
-import { annotateHistoryWithContextFrontierMetadata, renderHistoryFromFrontier } from './layeredContext';
 import { prepareSessionSemanticStateForHydration, replaceSessionSemanticState } from './metadataStore';
 import { externalizeAuthoritativeSessionImages } from './stateFile';
 
@@ -60,13 +59,6 @@ export async function hydrateAuthoritativeSessionState(
   options?: { preserveCatalogFields?: boolean; adoptAuthorityDisplayNameWhenMissing?: boolean },
 ): Promise<{ session: Session; imagesCanonicalized: boolean; upgradedLegacy: boolean }> {
   const replaced = replaceAuthoritativeSessionState(target, raw, options);
-  if (target.contextFrontier?.length) {
-    if (target.history.length !== target.contextFrontier.length) {
-      target.history = await renderHistoryFromFrontier(target);
-    } else {
-      target.history = (await annotateHistoryWithContextFrontierMetadata(target.id, target.history, target.contextFrontier)).history;
-    }
-  }
   // This is legacy inline-image materialization, not mailbox/JSON cursor reconciliation.
   const imagesCanonicalized = await externalizeAuthoritativeSessionImages(target);
   return { session: target, imagesCanonicalized, upgradedLegacy: replaced.upgradedLegacy };

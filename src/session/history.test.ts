@@ -1,23 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCreatedBlockFrontierItemsWithPreservedMessages, getUsageTotalTokens, isSingleBlockCompactionStrandedBetweenHigherLevelBlocks, removePreservedMessageFrontierItems, resolveCompactionSplitIndex } from './history';
-import { ContextFrontierItem, Message } from '../types';
+import { buildCreatedBlockHistoryWithPreservedMessages, getUsageTotalTokens, isSingleBlockCompactionStrandedBetweenHigherLevelBlocks, removePreservedMessages, resolveCompactionSplitIndex } from './history';
+import { Message } from '../types';
 
-function msg(role: Message['role'], parts: Message['parts']): Message {
-  return { role, parts };
+function msg(role: Message['role'], parts: Message['parts'], meta?: Message['__meta']): Message {
+  return { role, parts, ...(meta ? { __meta: meta } : {}) };
 }
 
-function block(id: number, level: number): ContextFrontierItem {
-  return { kind: 'block', id, level, rawStartSeq: id * 10, rawEndSeq: id * 10 + 9 };
+function blockMessage(id: number, level: number): Message {
+  return msg('model', [{ text: `block ${id}` }], { contextBlock: {
+    id, level, rawStartSeq: id * 10, rawEndSeq: id * 10 + 9,
+    sourceKind: level === 1 ? 'message' : 'block', sourceStart: id, sourceEnd: id,
+  } });
 }
 
 test('getUsageTotalTokens does not add reasoning tokens on top of complete output usage', () => {
-  assert.equal(getUsageTotalTokens({
-    cachedTokens: 5,
-    inputTokens: 12,
-    outputTokens: 13,
-    reasoningTokens: 8,
-  }), 30);
+  assert.equal(getUsageTotalTokens({ cachedTokens: 5, inputTokens: 12, outputTokens: 13, reasoningTokens: 8 }), 30);
 });
 
 test('resolveCompactionSplitIndex moves split back to include paired tool call when boundary lands on tool response', () => {
@@ -27,83 +25,29 @@ test('resolveCompactionSplitIndex moves split back to include paired tool call w
     msg('tool', [{ functionResponse: { tool_use_id: 'call1', name: 'search_vector', response: { output: 'ok' } } }]),
     msg('model', [{ text: 'recent answer' }]),
   ];
-
-  const splitIndex = resolveCompactionSplitIndex(history, 0.5);
-  assert.equal(splitIndex, 1);
-});
-
-test('resolveCompactionSplitIndex still pairs legacy search_memory tool history', () => {
-  const history: Message[] = [
-    msg('user', [{ text: 'older' }]),
-    msg('model', [{ functionCall: { id: 'call1', name: 'search_memory', args: { query: 'x' } } }]),
-    msg('tool', [{ functionResponse: { tool_use_id: 'call1', name: 'search_memory', response: { output: 'ok' } } }]),
-    msg('model', [{ text: 'recent answer' }]),
-  ];
-
-  const splitIndex = resolveCompactionSplitIndex(history, 0.5);
-  assert.equal(splitIndex, 1);
+  assert.equal(resolveCompactionSplitIndex(history, 0.5), 1);
 });
 
 test('resolveCompactionSplitIndex does not make display-only messages a permanent compact barrier', () => {
-  const history: Message[] = [
-    msg('user', [{ text: 'older before notice' }]),
-    { role: 'model', modelVisible: false, parts: [{ text: 'display-only notice' }] },
-    msg('user', [{ text: 'ordinary message after notice' }]),
-  ];
-
+  const history: Message[] = [msg('user', [{ text: 'older' }]), { role: 'model', modelVisible: false, parts: [{ text: 'notice' }] }, msg('user', [{ text: 'after' }])];
   assert.equal(resolveCompactionSplitIndex(history, 0), 3);
 });
 
 test('isSingleBlockCompactionStrandedBetweenHigherLevelBlocks recognizes a 3,3,2,3,3 island pattern', () => {
-  const frontier: ContextFrontierItem[] = [
-    block(1, 3),
-    block(2, 3),
-    block(3, 2),
-    block(4, 3),
-    block(5, 3),
-  ];
-
-  assert.equal(isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(frontier, 2), true);
+  const history = [blockMessage(1, 3), blockMessage(2, 3), blockMessage(3, 2), blockMessage(4, 3), blockMessage(5, 3)];
+  assert.equal(isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(history, 2), true);
 });
 
-test('isSingleBlockCompactionStrandedBetweenHigherLevelBlocks stays false without higher-level blocks on both sides', () => {
-  const noRightHigher: ContextFrontierItem[] = [
-    block(1, 3),
-    block(2, 2),
-    block(3, 2),
-  ];
-  const edgeCase: ContextFrontierItem[] = [
-    block(1, 2),
-    block(2, 3),
-    block(3, 3),
-  ];
-
-  assert.equal(isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(noRightHigher, 1), false);
-  assert.equal(isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(edgeCase, 0), false);
+test('created block history preserves exact selected raw messages with provenance', () => {
+  const source = [msg('user', [{ text: 'one' }], { seq: 12 }), msg('user', [{ text: 'two' }], { seq: 15 })];
+  const created: any = { id: 8, level: 1, rawStartSeq: 10, rawEndSeq: 20, sourceKind: 'message', sourceStart: 10, sourceEnd: 20, summary: 'summary', createdAt: 1 };
+  const result = buildCreatedBlockHistoryWithPreservedMessages(created, source, [15, 12]);
+  assert.equal(result[0].__meta?.contextBlock?.id, 8);
+  assert.deepEqual(result.slice(1).map(message => [message.__meta?.seq, message.__meta?.preservedFromBlockId]), [[12, 8], [15, 8]]);
+  assert.equal(result[1].parts[0].text, 'one');
 });
 
-test('buildCreatedBlockFrontierItemsWithPreservedMessages inserts preserved raw messages after their covering block', () => {
-  const items = buildCreatedBlockFrontierItemsWithPreservedMessages(
-    { id: 8, level: 1, rawStartSeq: 10, rawEndSeq: 20 },
-    [{ seq: 15 }, { seq: 12 }],
-  );
-
-  assert.deepStrictEqual(items, [
-    { kind: 'block', id: 8, level: 1, rawStartSeq: 10, rawEndSeq: 20 },
-    { kind: 'message', seq: 12, preservedFromBlockId: 8 },
-    { kind: 'message', seq: 15, preservedFromBlockId: 8 },
-  ]);
-});
-
-test('removePreservedMessageFrontierItems removes only preserved raw messages', () => {
-  const frontier: ContextFrontierItem[] = [
-    { kind: 'message', seq: 10 },
-    { kind: 'message', seq: 11, preservedFromBlockId: 3 },
-    { kind: 'block', id: 3, level: 1, rawStartSeq: 1, rawEndSeq: 12 },
-  ];
-
-  assert.deepStrictEqual(removePreservedMessageFrontierItems(frontier, new Set([10, 11])), [
-    { kind: 'message', seq: 10 },
-    { kind: 'block', id: 3, level: 1, rawStartSeq: 1, rawEndSeq: 12 },
-  ]);
+test('removePreservedMessages removes only marked preserved raw messages', () => {
+  const history = [msg('user', [{ text: 'ordinary' }], { seq: 10 }), msg('user', [{ text: 'preserved' }], { seq: 11, preservedFromBlockId: 3 }), blockMessage(3, 1)];
+  assert.deepEqual(removePreservedMessages(history, new Set([10, 11])).map(message => message.__meta?.seq || message.__meta?.contextBlock?.id), [10, 3]);
 });

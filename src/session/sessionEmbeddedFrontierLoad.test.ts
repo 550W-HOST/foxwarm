@@ -18,7 +18,7 @@ async function withTempDataDir(run: (dataDir: string) => Promise<void>): Promise
   }
 }
 
-test('runtime session load uses embedded contextFrontier only and deleteSession cleans leftover legacy frontier file', async () => {
+test('runtime session load ignores obsolete embedded and standalone frontiers and delete cleans the legacy file', async () => {
   await withTempDataDir(async (dataDir) => {
     const stateDir = path.join(dataDir, 'state');
     const sessionsDir = path.join(stateDir, 'sessions');
@@ -105,10 +105,9 @@ test('runtime session load uses embedded contextFrontier only and deleteSession 
           const legacyFileExistsAfterDelete = await fs.pathExists(${JSON.stringify(legacyFrontierFile)});
           const deleteEmbeddedResult = await sm.deleteSession(${JSON.stringify(embeddedSessionId)});
           const result = {
-            embeddedContextFrontier: embeddedSession.contextFrontier,
             embeddedPreservedFromBlockId: embeddedSession.history[0]?.__meta?.preservedFromBlockId,
-            embeddedContextFrontierItem: embeddedSession.history[0]?.__meta?.contextFrontierItem,
-            legacyContextFrontier: legacySession.contextFrontier,
+            embeddedHistoryText: embeddedSession.history[0]?.parts?.[0]?.text,
+            legacyHistoryText: legacySession.history[0]?.parts?.[0]?.text,
             legacyNextBlockId: legacySession.nextBlockId,
             legacyPreservedFromBlockId: legacySession.history[0]?.__meta?.preservedFromBlockId,
             deleteLegacyResult,
@@ -140,10 +139,9 @@ test('runtime session load uses embedded contextFrontier only and deleteSession 
     assert.ok(resultLine, `child process did not report result JSON. stdout:\n${stdout}`);
     const result = JSON.parse(resultLine.slice('RESULT_JSON '.length));
 
-    assert.deepEqual(result.embeddedContextFrontier, [{ kind: 'message', seq: 11, preservedFromBlockId: 77 }]);
-    assert.equal(result.embeddedPreservedFromBlockId, 77, 'embedded contextFrontier should annotate current runtime history');
-    assert.deepEqual(result.embeddedContextFrontierItem, { kind: 'message', seq: 11, preservedFromBlockId: 77 });
-    assert.equal(result.legacyContextFrontier, undefined, 'runtime load should not fallback-read legacy .frontier.json');
+    assert.equal(result.embeddedPreservedFromBlockId, undefined, 'obsolete frontier provenance must not be synthesized into history');
+    assert.equal(result.embeddedHistoryText, 'history with embedded frontier');
+    assert.equal(result.legacyHistoryText, 'history without embedded frontier');
     assert.equal(result.legacyNextBlockId, 1, 'legacy .frontier.json nextBlockId should not be applied at runtime');
     assert.equal(result.legacyPreservedFromBlockId, undefined, 'legacy preserved metadata should not be applied at runtime');
     assert.equal(result.deleteLegacyResult, true);

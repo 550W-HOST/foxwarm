@@ -1,7 +1,6 @@
 import { externalizeMessages } from './imageBlobs';
 import fs from 'fs-extra';
 import { RpcError } from './rpc';
-import { annotateHistoryWithContextFrontierMetadata, renderHistoryFromFrontier } from './session/layeredContext';
 import { getSessionHistoryFilePath } from './session/metadataStore';
 import { replaceAuthoritativeSessionState } from './session/stateHydration';
 import type { Session } from './types';
@@ -29,11 +28,6 @@ export async function readDetachedWorkerSession(sessionId: string, catalog: Sess
       preserveCatalogFields: true, adoptAuthorityDisplayNameWhenMissing: true,
     });
     if (replaced.upgradedLegacy) throw new Error('legacy state requires the owning worker upgrade');
-    if (detached.contextFrontier?.length) {
-      detached.history = detached.history.length !== detached.contextFrontier.length
-        ? await renderHistoryFromFrontier(detached)
-        : (await annotateHistoryWithContextFrontierMetadata(detached.id, detached.history, detached.contextFrontier)).history;
-    }
     detached.history = (await externalizeMessages(detached.history.slice())).messages;
     return detached;
   } catch {

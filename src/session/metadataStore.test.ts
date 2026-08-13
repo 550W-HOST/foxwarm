@@ -119,7 +119,8 @@ test('real state-file reader rejects malformed v1 shapes while normalizing only 
 
     const frontierPath = path.join(dirPath, 'frontier.json');
     await fs.writeJson(frontierPath, { sessionStateVersion: 1, history: [], contextFrontier: { invalid: true } });
-    await assert.rejects(() => createSessionHistoryStore(frontierPath).readFromPath(), /contextFrontier must be an array/);
+    const frontierRaw = await createSessionHistoryStore(frontierPath).readFromPath();
+    assert.equal(Object.prototype.hasOwnProperty.call(frontierRaw!, 'contextFrontier'), false);
 
     const unknownPath = path.join(dirPath, 'unknown.json');
     await fs.writeJson(unknownPath, { sessionStateVersion: 99, history: [] });
@@ -135,7 +136,7 @@ test('real state-file reader rejects malformed v1 shapes while normalizing only 
   });
 });
 
-test('session history payload embeds context frontier and recovery ignores legacy frontier files', async () => {
+test('session history payload drops obsolete context frontier and recovery ignores legacy frontier files', async () => {
   await withTempDir(async (dirPath) => {
     const sessionsDir = path.join(dirPath, 'sessions');
     await fs.ensureDir(sessionsDir);
@@ -161,7 +162,7 @@ test('session history payload embeds context frontier and recovery ignores legac
     };
     const payload = serializeSessionHistoryPayload(session);
     assert.equal(payload.sessionStateVersion, 1);
-    assert.deepEqual(payload.contextFrontier, [{ kind: 'message', seq: 1 }]);
+    assert.equal(Object.prototype.hasOwnProperty.call(payload, 'contextFrontier'), false);
     assert.equal(payload.lastAppliedMailboxId, 7);
     assert.equal(payload.meta.wait.id, 'wait-1');
     assert.equal(payload.effort, 'none');
@@ -169,7 +170,7 @@ test('session history payload embeds context frontier and recovery ignores legac
 
     const target: any = { history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 } };
     replaceSessionSemanticState(target, prepareSessionSemanticStateForHydration(target, payload).snapshot);
-    assert.deepEqual(target.contextFrontier, [{ kind: 'message', seq: 1 }]);
+    assert.equal(Object.prototype.hasOwnProperty.call(target, 'contextFrontier'), false);
     assert.equal(target.lastAppliedMailboxId, 7);
     assert.equal(target.meta.managedSession.leaseId, 'lease');
     assert.equal(target.effort, 'none');

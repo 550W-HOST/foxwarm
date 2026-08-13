@@ -136,7 +136,7 @@ test('corrupt request and attempt identity rows are never reported complete', as
 test('dedicated journal DB supports a second process while ordinary archive writes continue', async () => {
   assert.notEqual(LLM_REQUEST_JOURNAL_DB_PATH, ARCHIVE_DB_PATH);
   const sessionId = unique('journal_concurrency');
-  const session: any = { id: sessionId, agent: 'main', history: [], nextMessageSeq: 1, contextFrontier: [] };
+  const session: any = { id: sessionId, agent: 'main', history: [], nextMessageSeq: 1 };
   const modulePath = path.join(__dirname, 'llmRequestJournal.js');
   const childCode = `const j=require(${JSON.stringify(modulePath)}); j.beginLlmRequestJournal({sessionId:${JSON.stringify(sessionId)},systemPrompt:'child',toolDefinitions:[],messages:[{role:'user',parts:[{text:'child'}]}],requestedModelKey:'fixture/model',promptCacheKey:'child-cache'}).then(()=>process.exit(0),e=>{console.error(e);process.exit(1)})`;
   const child = spawn(process.execPath, ['-e', childCode], { cwd: process.cwd(), env: { ...process.env, FOXWARM_SYNC_FILE_LOG: '1' }, stdio: ['ignore', 'ignore', 'pipe'] });

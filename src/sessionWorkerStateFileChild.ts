@@ -17,7 +17,7 @@ async function run(): Promise<void> {
       ownerSessionId: 'owner', leaseId: 'lease', revision: 1, openedAt: 1, leaseTouchedAt: 1,
       pendingInbox: [{ type: 'background', parts: [{ inlineData }] }],
     } },
-    contextFrontier: [{ kind: 'message', seq: 1 }], nextMessageSeq: 2, nextBlockId: 1,
+    nextMessageSeq: 2, nextBlockId: 1,
     lastAppliedMailboxId: 9,
   };
   await writeAuthoritativeSessionState(state);
@@ -30,7 +30,6 @@ async function run(): Promise<void> {
       && !raw.meta.managedSession.pendingInbox[0].parts[0].inlineData,
     cursor: raw.lastAppliedMailboxId,
     stateVersion: raw.sessionStateVersion,
-    frontier: raw.contextFrontier,
     promptCacheKey: raw.promptCacheKey,
     catalogExists: await fs.pathExists(SESSIONS_FILE),
   };

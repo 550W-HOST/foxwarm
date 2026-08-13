@@ -483,7 +483,7 @@ function buildLegacyAuthorityUpgrade(
   const transferFields = [
     'history', 'persistentMemorySnapshot', 'queue', 'parentSessionId', 'promptCacheKey', 'systemPromptFiles',
     'indexingState', 'busy', 'busyStartedAt', 'stopping', 'currentNode', 'cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault',
-    'agent', 'verbose', 'aliases', 'historyVersion', 'nextMessageSeq', 'nextBlockId', 'contextFrontier',
+    'agent', 'verbose', 'aliases', 'historyVersion', 'nextMessageSeq', 'nextBlockId',
     'goalState', 'compactThresholdTokens', 'lastAppliedMailboxId',
   ] as const;
   for (const field of transferFields) {

@@ -82,8 +82,7 @@ async function createArchivedSession(deps: LoadedDeps, sessionId: string, firstM
     ...createBaseSession(sessionId),
     nextMessageSeq: 1,
     nextBlockId: 1,
-    contextFrontier: [],
-  } as Session;
+      } as Session;
 
   await deps.archive.appendMessagesToArchive(session, [
     { role: 'user', parts: firstMessageParts, __meta: { timestamp: 1000 } },
@@ -410,10 +409,6 @@ test('renderContextBlockExpansion returns structured child block/raw message ite
   const sessionId = makeId('ctx_block_expand');
   const session = await ensureSession(deps.sessionManager, sessionId);
   await createArchivedSession(deps, sessionId);
-  session.contextFrontier = [
-    { kind: 'block', id: 4, level: 2, rawStartSeq: 1, rawEndSeq: 2 },
-    { kind: 'block', id: 3, level: 1, rawStartSeq: 3, rawEndSeq: 3 },
-  ];
   session.history = [
     deps.layeredContext.renderBlockMessage({
       v: 1,
@@ -435,7 +430,6 @@ test('renderContextBlockExpansion returns structured child block/raw message ite
 
   const before = await deps.sessionManager.getExistingSession(sessionId);
   const beforeHistory = JSON.stringify(before?.history || []);
-  const beforeFrontier = JSON.stringify(before?.contextFrontier || []);
 
   const detail = await deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 4, previewLength: 2000 });
   assert.equal(detail.expansionKind, 'child-blocks');
@@ -475,7 +469,6 @@ test('renderContextBlockExpansion returns structured child block/raw message ite
 
   const after = await deps.sessionManager.getExistingSession(sessionId);
   assert.equal(JSON.stringify(after?.history || []), beforeHistory);
-  assert.equal(JSON.stringify(after?.contextFrontier || []), beforeFrontier);
 });
 
 test('renderContextBlockExpansion reports invalid session/block', async () => {
@@ -507,12 +500,10 @@ test('WebUI context block expansion route is admin-authenticated and read-only',
     { text: 'archived alpha' },
     { inlineData: { data: imageBase64, mimeType: 'image/png' } },
   ]);
-  session.contextFrontier = [{ kind: 'block', id: 4, level: 2, rawStartSeq: 1, rawEndSeq: 2 }];
   session.history = [];
   await deps.sessionManager.saveSession(sessionId);
   const before = await deps.sessionManager.getExistingSession(sessionId);
   const beforeHistory = JSON.stringify(before?.history || []);
-  const beforeFrontier = JSON.stringify(before?.contextFrontier || []);
 
   const port = 33180 + Math.floor(Math.random() * 1000);
   const server = new deps.httpServerModule.HttpServer(port, 'secret-token');
@@ -570,7 +561,6 @@ test('WebUI context block expansion route is admin-authenticated and read-only',
 
   const after = await deps.sessionManager.getExistingSession(sessionId);
   assert.equal(JSON.stringify(after?.history || []), beforeHistory);
-  assert.equal(JSON.stringify(after?.contextFrontier || []), beforeFrontier);
 });
 
 test('recall renderer filters messages and centers previews around matches', async () => {
@@ -580,8 +570,7 @@ test('recall renderer filters messages and centers previews around matches', asy
     ...createBaseSession(sessionId),
     nextMessageSeq: 1,
     nextBlockId: 1,
-    contextFrontier: [],
-  } as Session;
+      } as Session;
 
   await deps.archive.appendMessagesToArchive(session, [
     {
@@ -694,8 +683,7 @@ test('recall uses clamped total preview budgets for broad ranges', async () => {
     ...createBaseSession(sessionId),
     nextMessageSeq: 5,
     nextBlockId: 5,
-    contextFrontier: [],
-  } as Session;
+      } as Session;
   await deps.layeredContext.appendBlocksToArchive(session, [
     { level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 4, rawStartSeq: 1, rawEndSeq: 4, summary: 'wide message-backed block' },
   ]);
@@ -735,8 +723,7 @@ test('recall blocks target caps large frontier output while suggesting B# drill-
     ...createBaseSession(sessionId),
     nextMessageSeq: 1,
     nextBlockId: 1,
-    contextFrontier: [],
-  } as Session;
+      } as Session;
 
   await deps.archive.appendMessagesToArchive(session, Array.from({ length: 25 }, (_, index) => ({
     role: 'user' as const,
@@ -769,8 +756,7 @@ test('recall lets previewLength control archived tool response previews and trea
     ...createBaseSession(sessionId),
     nextMessageSeq: 1,
     nextBlockId: 1,
-    contextFrontier: [],
-  } as Session;
+      } as Session;
 
   await deps.archive.appendMessagesToArchive(session, [
     {

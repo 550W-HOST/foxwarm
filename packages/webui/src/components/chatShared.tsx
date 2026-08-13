@@ -272,7 +272,6 @@ export interface Message {
   __meta?: {
     timestamp?: number
     contextBlock?: ContextBlockMessageMeta
-    contextFrontierItem?: any
     preservedFromBlockId?: number
     [key: string]: any
   }

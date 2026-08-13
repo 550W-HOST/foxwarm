@@ -29,7 +29,7 @@ async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 15_0
 
 function baseSession(id: string): Session {
   return {
-    id, agent: 'main', history: [], contextFrontier: [], persistentMemorySnapshot: 'destructive prompt',
+    id, agent: 'main', history: [], persistentMemorySnapshot: 'destructive prompt',
     systemPromptFiles: [], snapshotUpdatedAt: Date.now(),
     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
     busy: false, queue: [], meta: { lastMessageTime: 0 }, lastAppliedMailboxId: 0,
@@ -573,7 +573,6 @@ test('tool-noise compaction is serialized behind a busy worker turn and persists
     { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'large-call', name: 'read', response: { output: oversized } } }], __meta: { seq: 3, timestamp: 3 } },
     { role: 'user', parts: [{ text: 'recent tail' }], __meta: { seq: 4, timestamp: 4 } },
   ] as any;
-  initial.contextFrontier = [1, 2, 3, 4].map(seq => ({ kind: 'message' as const, seq }));
   initial.nextMessageSeq = 5;
   initial.historyVersion = 2;
   initial.meta.messageCount = 4;

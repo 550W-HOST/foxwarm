@@ -18,11 +18,11 @@ import { VECTOR_ENABLED } from './config';
 import { CATALOG_DB_PATH, CHANNELS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getLegacySessionFrontierPath, type ModelEffort, type ModelsConfig } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
-import { appendMessagesToArchive, ensureMessageSeq, getNextSessionMessageSeq } from './session/archive';
+import { appendMessagesToArchive, ensureMessageSeq, getNextSessionMessageSeq, rollbackUncommittedMessages } from './session/archive';
 import { externalizeMessages, externalizeQueueItemImages } from './imageBlobs';
-import { annotateHistoryWithContextFrontierMetadata, appendMessagesToContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier } from './session/layeredContext';
+import { readArchiveBlocksByIdRange } from './session/layeredContext';
 import { ensureSessionBranch, hasArchivedSessionId, rollbackUncommittedSessionArchive } from './session/archiveStore';
-import { getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, withSessionsMetadataWriteLock } from './session/metadataStore';
+import { captureSessionSemanticState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, restoreSessionSemanticState, withSessionsMetadataWriteLock } from './session/metadataStore';
 import { buildSessionCatalogProjection, readLegacyChannelAttachmentsFromCatalogMigrationEvidence, sessionCatalogStore } from './session/catalogStore';
 import { externalizeAuthoritativeSessionImages, externalizeAuthoritativeSessionQueueImages, writeAuthoritativeSessionState } from './session/stateFile';
 import { replaceAuthoritativeSessionState } from './session/stateHydration';
@@ -905,18 +905,6 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
   if (session.nextMessageSeq === undefined) {
     session.nextMessageSeq = getNextSessionMessageSeq(session);
   }
-  if (session.contextFrontier && session.contextFrontier.length > 0) {
-    if (session.history.length !== session.contextFrontier.length) {
-      session.history = await renderHistoryFromFrontier(session);
-    } else {
-      const annotation = await annotateHistoryWithContextFrontierMetadata(session.id, session.history, session.contextFrontier);
-      session.history = annotation.history;
-      if (!annotation.matched) {
-        logger.warn({ sessionId: session.id, warnings: annotation.warnings }, 'Loaded session context frontier did not exactly match rendered history; applied best-effort metadata annotations');
-      }
-    }
-  }
-
   try {
     if (await externalizeAuthoritativeSessionImages(session) || needsAuthoritativeStateUpgrade) {
       await saveSessionCritical(session.id);
@@ -1107,7 +1095,7 @@ function getSessionHistoryDeps() {
   return {
     getSessionById: (sessionId: string) => sessions.get(sessionId),
     getExistingSession,
-    saveSession,
+    saveSession: saveSessionCritical,
     enqueueSessionItem,
     notifyHistoryUpdate,
   };
@@ -1515,7 +1503,6 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
     vectorIndexPosition: sourceSession.history.length, // Inherit parent's index position to avoid re-indexing
     nextMessageSeq: sourceSession.nextMessageSeq,
     nextBlockId: sourceSession.nextBlockId,
-    contextFrontier: sourceSession.contextFrontier ? structuredClone(sourceSession.contextFrontier) : undefined,
     parentSessionId: realSourceSessionId,
     currentNode: options?.node || sourceSession.currentNode || 'master',
     agent: sourceSession.agent,
@@ -2459,10 +2446,12 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
     ? await getSession(sessionOrId)
     : sessionOrId;
 
-  await appendSessionMessagesForSession(session, messages, async () => {
-    if (options.strictPersistence) await saveSessionForSessionCritical(session);
-    else await saveSession(session);
-  });
+  // Canonical message append is an archive+authority commit boundary. Never
+  // use the best-effort public save wrapper here: a failed authority write
+  // must abort the owning Session turn rather than continue from memory-only
+  // history. Keep the option shape temporarily for current callers.
+  void options;
+  await appendSessionMessagesForSession(session, messages, () => saveSessionForSessionCritical(session));
 }
 
 export async function appendSessionMessagesForSession(
@@ -2476,18 +2465,28 @@ export async function appendSessionMessagesForSession(
     return;
   }
 
-  for (const message of messages) ensureMessageSeq(session, message);
-  const canonicalMessages = (await externalizeMessages(messages)).messages;
-  await appendMessagesToArchive(session, canonicalMessages);
-
-  for (const message of canonicalMessages) {
-    session.history.push(message);
+  const before = captureSessionSemanticState(session);
+  let canonicalMessages: Message[];
+  let insertedArchiveMessages: Awaited<ReturnType<typeof appendMessagesToArchive>> = [];
+  try {
+    for (const message of messages) ensureMessageSeq(session, message);
+    canonicalMessages = (await externalizeMessages(messages)).messages;
+    insertedArchiveMessages = await appendMessagesToArchive(session, canonicalMessages);
+    session.history.push(...canonicalMessages);
+    await persistSession();
+  } catch (error) {
+    restoreSessionSemanticState(session, before);
+    if (insertedArchiveMessages.length > 0) {
+      try { await rollbackUncommittedMessages(insertedArchiveMessages); }
+      catch (rollbackError) {
+        const combined = new Error(`Session ${session.id} append failed and its uncommitted archive rows could not be rolled back.`);
+        (combined as any).errors = [error, rollbackError];
+        throw combined;
+      }
+    }
+    throw error;
   }
-  appendMessagesToContextFrontier(session, canonicalMessages);
-
   const messagesToNotify = [...canonicalMessages];
-
-  await persistSession();
 
   for (const message of messagesToNotify) {
     notifyMessage(session.id, message);

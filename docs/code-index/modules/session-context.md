@@ -2,17 +2,17 @@
 
 ## Responsibility
 
-Session context owns model-context budgeting, layered compaction, the active context frontier, durable message/block archives, archive lineage, vector indexing, and exact/semantic recall. The end-to-end contract is canonical in [context compaction and recall](../threads/context-compaction-and-recall.md).
+Session context owns model-context budgeting, layered compaction and direct active-history transformation, durable message/block archives, archive lineage, vector indexing, and exact/semantic recall. The end-to-end contract is canonical in [context compaction and recall](../threads/context-compaction-and-recall.md).
 
 ## Units
 
 - [src-session-history](../units/src-session-history.md) — threshold checks, snapshot jobs, planning rounds, compatible commit, completion, and manual history operations.
 - [src-session-compact-plan](../units/src-session-compact-plan.md) — plan schema, candidate prompt, quota calculations, and validation.
-- [src-session-layered-context](../units/src-session-layered-context.md) — embedded frontier, archive blocks, CTX-BLOCK rendering, and metadata annotation.
+- [src-session-layered-context](../units/src-session-layered-context.md) — archive blocks, CTX-BLOCK rendering, and provenance metadata.
 - [src-session-archive-store](../units/src-session-archive-store.md) — SQLite/WAL authority, lineage, legacy migration, export, and vector checkpoints.
 - [src-vector](../units/src-vector.md) — LanceDB indexing, startup backfill, semantic location, and compact facts.
 - [src-token-count](../units/src-token-count.md) — message/session token estimates with image-payload exclusion.
-- [src-migrations](../units/src-migrations.md) — one-shot persisted-data migrations, including standalone frontier import.
+- [src-migrations](../units/src-migrations.md) — one-shot persisted-data migrations, including standalone frontier retirement.
 
 ## Public interfaces
 
@@ -35,18 +35,18 @@ Session context owns model-context budgeting, layered compaction, the active con
 
 ## Invariants
 
-- Archive writes precede active frontier replacement.
-- The embedded frontier is the model-visible prefix source of truth and must render into valid messages.
+- Archive writes precede active-history replacement.
+- The persisted history array is the unconditional model-visible source of truth.
 - A compaction job applies only to a compatible live prefix snapshot.
 - Lineage caps prevent post-fork parent content from reaching a child.
 - Vector is an optional derived layer that defaults disabled. Optional memory facts and startup vector backfill are best-effort and never block a compact commit or service readiness; raw messages and full block summaries archived while disabled remain pending for later checkpoint-based backfill. Dedicated fact rows are not reconstructed, though fact text remains in block summaries.
 - Display-only messages are excluded from model context, candidate quota denominators, and embeddings.
-- Read-only recall/expansion may update archive import caches but never live history/frontier/queue.
+- Read-only recall/expansion may update archive import caches but never live history/queue.
 - Retained branch/log discovery plus the committed moved-ID alias ledger supplies the archive side of exact internal session-ID reservation and canonical historical reads; lifecycle semantics are canonical in [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 
 ## Compatibility
 
-- Active `contextFrontier` is stored in the per-session history snapshot. The startup migration is the only reader for legacy standalone frontier files.
+- Obsolete `contextFrontier` is ignored on read and omitted on write. The startup migration only retires standalone frontier files.
 - Legacy JSONL message/block archives are migration-only inputs; current runtime is SQLite-only and explicit export provides compatibility JSONL. Their stream framing is shared with [src-jsonl](../units/src-jsonl.md).
 - The compact-completion wire shape is owned by [D-context-compact-completion](../threads/context-compaction-and-recall.md#d-context-compact-completion).
 
@@ -56,9 +56,9 @@ Session context owns model-context budgeting, layered compaction, the active con
 
 Cross-module compact, archive, vector, recall, and WebUI-expansion contracts live in the context thread. This module keeps only subsystem boundaries, defaults, and links rather than a second decision log.
 
-### D-session-context-embedded-frontier
+### D-session-context-history-authority
 
-The current frontier is embedded in the authoritative per-session history snapshot. Standalone frontier files are migration inputs, not runtime fallback state.
+The authoritative per-session `history` array is the sole active/model-visible timeline. Archive and obsolete frontier data never reconstruct it.
 
 ### D-session-context-best-effort-index
 

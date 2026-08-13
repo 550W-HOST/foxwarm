@@ -20,9 +20,9 @@ Canonical façade and child-ID ownership: [session core façade](../modules/sess
 1. Startup migrations run before normal loading.
 2. `loadSessions()` loads the metadata index, creates lightweight session objects, and loads channel attachments.
 3. `getSession(id)` lazily loads the authoritative per-session history snapshot.
-4. When an embedded `contextFrontier` exists, hydration calls `renderHistoryFromFrontier(session)` or annotates an already matching rendered history.
+4. Hydration accepts the per-session `history` array exactly as active authority and ignores obsolete frontier fields.
 5. Accessed legacy live history/queue images are lazily materialized into canonical content-addressed blob references; there is no startup-wide image migration.
-6. The shared metadata file remains a main-owned presentation/list index; the per-session JSON owns full semantic state, including messages, queue, wait/managed metadata, prompt snapshot/cache key, frontier, and any session-worker mailbox cursor.
+6. The shared metadata file remains a main-owned presentation/list index; the per-session JSON owns full semantic state, including messages, queue, wait/managed metadata, prompt snapshot/cache key, active history provenance, and any session-worker mailbox cursor.
 7. Creation-critical history and metadata writes propagate errors. A known failed creation removes its map/history/archive artifacts so the same uncommitted ID can be retried; ordinary noncritical saves retain best-effort logging behavior.
 
 Canonical data authority: [D-session-core-authoritative-history](../modules/session-core.md#d-session-core-authoritative-history).
@@ -48,7 +48,7 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 
 - Agent-main children replace the `main` leaf; non-main children retain append-style IDs.
 - Fork and child allocators skip both live and archived IDs while incrementing their suffix counters.
-- Forks copy the model-visible prefix/frontier/snapshot and inherit prompt-cache/archive lineage only through the fork point.
+- Forks copy the model-visible active history/prompt snapshot and inherit prompt-cache/archive lineage only through the fork point.
 - Non-fork children start a fresh model-visible prefix and cache key.
 - Forked and non-fork children resolve one raw current model/effort pair. Effort resolution is explicit effort, parent `childEffortDefault`, parent raw `effort`, then unset; unset never freezes a concrete model default into the child. The spawned child leaves its own future-child defaults unset so they naturally follow that current pair.
 - A manual user fork calls `notifyManualForkCreated` so the parent history records the child even when no initial instruction was supplied.
@@ -91,7 +91,7 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 
 ## Compatibility
 
-- Stored legacy frontier files are startup migration inputs only; current hydration reads embedded frontier state.
+- Stored legacy frontier files are retirement inputs only; current hydration ignores both standalone and embedded frontier state.
 - Legacy busy fields remain concurrency/recovery compatibility data while `runtimeState` is current display state.
 - Existing non-main child ID chains retain append-style identity.
 - Existing live sessions remain hydratable when their ID also appears in the archive. Reservation checks distinguish persisted live records from archive-only deleted lifetimes.
@@ -100,7 +100,7 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 
 ### D-lifecycle-prefix-lineage
 
-Prompt-cache keys follow the model-facing prefix, not session identity. Forks and same-prefix side/compact-planning requests reuse the key; fresh non-fork sessions, successful compact commits, and clear operations use a fresh key.
+Prompt-cache keys follow the model-facing prefix, not session identity. Forks and same-prefix side/compact-planning requests reuse the key; fresh non-fork sessions and clear operations use a fresh key; successful compaction preserves it.
 
 ### D-lifecycle-model-effort-inheritance
 
@@ -112,7 +112,7 @@ A manual fork remains visible to the parent even with no child instruction. The 
 
 ### D-lifecycle-lazy-hydration
 
-Startup loads lightweight metadata stubs and hydrates per-session history/frontier only when a session is accessed.
+Startup loads lightweight metadata stubs and hydrates per-session history only when a session is accessed.
 
 ### D-lifecycle-archived-id-reservation
 

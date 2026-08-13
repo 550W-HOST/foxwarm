@@ -64,8 +64,7 @@ async function makeCompactableSession(archive: LoadedDeps['archive'], sessionId:
     meta: { lastMessageTime: Date.now() },
     nextMessageSeq: 1,
     nextBlockId: 1,
-    contextFrontier: [],
-    historyVersion: 0,
+        historyVersion: 0,
     promptCacheKey: '11111111-2222-3333-4444-555555555555',
   } as Session;
 
@@ -78,10 +77,6 @@ async function makeCompactableSession(archive: LoadedDeps['archive'], sessionId:
 
   await archive.appendMessagesToArchive(session, messages);
   session.history = messages;
-  session.contextFrontier = messages.map(message => ({
-    kind: 'message' as const,
-    seq: message.__meta!.seq!,
-  }));
 
   return session;
 }
@@ -94,6 +89,16 @@ function makeDepsForSession(session: Session, saveCounter: { count: number }) {
     enqueueSessionItem: async (_sessionId: string) => {},
     notifyHistoryUpdate: (_sessionId: string, _message: Message) => {},
   };
+}
+
+async function waitForCompactReady(sessionHistory: LoadedDeps['sessionHistory'], sessionId: string): Promise<void> {
+  for (let index = 0; index < 200; index += 1) {
+    if (sessionHistory.hasPendingCompactWork(sessionId)) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      continue;
+    }
+    throw new Error('compact job disappeared before commit');
+  }
 }
 
 test('compact planning retries plain-text/no-tool response and succeeds on a later submit_compact_plan call', async () => {
@@ -157,7 +162,7 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
     assert.match(prompts[1], /submit_compact_plan/);
     assert(session.history.some(message => message.parts.some(part => /summary after retrying a missing compact tool call/.test(part.text || ''))));
     assert(session.history.some(message => message.parts.some(part => (part.system || '').includes('event="compact-completed"'))));
-    assert.equal(session.contextFrontier?.[0]?.kind, 'block');
+    assert.equal(session.history[0]?.__meta?.contextBlock?.level, 1);
   } finally {
     (llm as any).chat = originalChat;
     if (!SAVE_GENERATED_SESSION_LOGS) {
@@ -175,8 +180,7 @@ test('compact planning rejects a block-only plan when raw messages and L1 blocks
   const prompts: string[] = [];
 
   try {
-    // Keep the archived source messages but replace the active frontier with
-    // five large L1 blocks followed by two large raw messages.
+    // Replace active history with five large L1 blocks followed by two raw messages.
     const blocks = await layeredContext.appendBlocksToArchive(session, Array.from({ length: 5 }, (_, index) => ({
       level: 1,
       sourceKind: 'message' as const,
@@ -186,12 +190,7 @@ test('compact planning rejects a block-only plan when raw messages and L1 blocks
       rawEndSeq: 1,
       summary: `L1 backlog ${index + 1} ${'block-summary '.repeat(1800)}`,
     })));
-    session.contextFrontier = [
-      ...blocks.map(block => ({ kind: 'block' as const, id: block.id, level: block.level, rawStartSeq: block.rawStartSeq, rawEndSeq: block.rawEndSeq })),
-      { kind: 'message' as const, seq: 1 },
-      { kind: 'message' as const, seq: 2 },
-    ];
-    session.history = await layeredContext.renderHistoryFromFrontier(session, session.contextFrontier);
+    session.history = [...blocks.map(layeredContext.renderBlockMessage), ...session.history.slice(0, 2)];
 
     (llm as any).chat = async (
       parts: MessagePart[] | null,
@@ -242,7 +241,7 @@ test('compact planning rejects a block-only plan when raw messages and L1 blocks
     assert.match(prompts[0], /Raw messages: .*message-source createBlocks must actually replace at least/i);
     assert.match(prompts[0], /Source L1 blocks: 5 block\(s\).*newest 3 are force-kept.*oldest 2 may be listed/is);
     assert.match(prompts[1], /RAW-MESSAGE HARD QUOTA REQUIRES/i);
-    assert.equal(session.contextFrontier?.filter(item => item.kind === 'block').length, 5);
+    assert.equal(session.history.filter(message => !!message.__meta?.contextBlock).length, 5);
   } finally {
     (llm as any).chat = originalChat;
     if (!SAVE_GENERATED_SESSION_LOGS) {
@@ -266,8 +265,7 @@ test('prior compact-completion notices are transparent to planning and replaced 
     meta: { lastMessageTime: Date.now() },
     nextMessageSeq: 1,
     nextBlockId: 1,
-    contextFrontier: [],
-    historyVersion: 0,
+        historyVersion: 0,
     promptCacheKey: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
   } as Session;
   const lifecycleText = '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="parent" currentSessionId="child" />';
@@ -278,7 +276,6 @@ test('prior compact-completion notices are transparent to planning and replaced 
   ];
   await archive.appendMessagesToArchive(session, messages);
   session.history = messages;
-  session.contextFrontier = messages.map(message => ({ kind: 'message' as const, seq: message.__meta!.seq! }));
   const saveCounter = { count: 0 };
   const originalChat = llm.chat;
   let firstPrompt = '';
@@ -317,8 +314,8 @@ test('prior compact-completion notices are transparent to planning and replaced 
 
     assert.match(firstPrompt, /Segment 1: raw message candidates.*M#1.*M#3/s);
     assert.doesNotMatch(firstPrompt, /Segment 2: raw message candidates/);
-    assert.equal(session.contextFrontier?.[0]?.kind, 'block');
-    assert.equal(session.contextFrontier?.some(item => item.kind === 'message' && item.seq === 2), false);
+    assert.equal(session.history[0]?.__meta?.contextBlock?.level, 1);
+    assert.equal(session.history.some(message => message.__meta?.seq === 2), false);
     assert.equal(session.history.filter(message => message.parts.some(part => (part.system || '').includes('event="compact-completed"'))).length, 1);
     const archived = await archive.readArchiveMessagesBySeqRange(session.id, 2, 2);
     assert.equal(archived[0]?.message.parts[0]?.system, lifecycleText);
@@ -345,8 +342,7 @@ test('successful compaction removes prior completion notices from the force-kept
     meta: { lastMessageTime: Date.now() },
     nextMessageSeq: 1,
     nextBlockId: 1,
-    contextFrontier: [],
-    historyVersion: 0,
+        historyVersion: 0,
     promptCacheKey: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
     goalState: { goal: 'keep current goal', remindEvery: 10, anchorSeq: 0, updatedAt: Date.now() },
   } as Session;
@@ -361,7 +357,6 @@ test('successful compaction removes prior completion notices from the force-kept
   ];
   await archive.appendMessagesToArchive(session, messages);
   session.history = messages;
-  session.contextFrontier = messages.map(message => ({ kind: 'message' as const, seq: message.__meta!.seq! }));
   const saveCounter = { count: 0 };
   const originalChat = llm.chat;
 
@@ -389,7 +384,7 @@ test('successful compaction removes prior completion notices from the force-kept
     const compactCompletions = session.history.filter(message => message.parts.some(part => (part.system || '').includes('event="compact-completed"')));
     assert.equal(compactCompletions.length, 1, 'only the current compact completion remains active');
     assert(compactCompletions[0].parts.some(part => (part.system || '').includes('goal-reminder')), 'current completion retains the current goal reminder');
-    assert.equal(session.contextFrontier?.some(item => item.kind === 'message' && item.seq === 3), false, 'old completion is removed even from the force-kept tail');
+    assert.equal(session.history.some(message => message.__meta?.seq === 3), false, 'old completion is removed even from the force-kept tail');
     assert.equal(session.history.some(message => message.parts.some(part => part.system === inheritedBoundary)), true, 'unrelated session boundary remains active');
     assert.equal(session.history.some(message => message.parts.some(part => part.text === 'recent real user content')), true, 'real content remains active');
     const archived = await archive.readArchiveMessagesBySeqRange(session.id, 3, 3);
@@ -409,7 +404,6 @@ test('compact planning stops after bounded plain-text/no-tool retries without re
   const saveCounter = { count: 0 };
   const originalChat = llm.chat;
   const originalHistory = structuredClone(session.history);
-  const originalFrontier = structuredClone(session.contextFrontier);
   const originalNextBlockId = session.nextBlockId;
   const originalPromptCacheKey = session.promptCacheKey;
   let callCount = 0;
@@ -440,7 +434,6 @@ test('compact planning stops after bounded plain-text/no-tool retries without re
 
     assert.equal(callCount, compactPlan.COMPACT_FLOW_MAX_ROUNDS);
     assert.deepEqual(session.history, originalHistory);
-    assert.deepEqual(session.contextFrontier, originalFrontier);
     assert.equal(session.nextBlockId, originalNextBlockId);
     assert.equal(session.promptCacheKey, originalPromptCacheKey);
     assert.equal(session.historyVersion, 0);
@@ -463,11 +456,9 @@ test('compact planning LLM final failure aborts without rewriting session histor
   };
   await archive.appendMessagesToArchive(session, [priorCompletion]);
   session.history.push(priorCompletion);
-  session.contextFrontier?.push({ kind: 'message', seq: priorCompletion.__meta!.seq! });
   const saveCounter = { count: 0 };
   const originalChat = llm.chat;
   const originalHistory = structuredClone(session.history);
-  const originalFrontier = structuredClone(session.contextFrontier);
   const originalNextBlockId = session.nextBlockId;
   const originalPromptCacheKey = session.promptCacheKey;
   let callCount = 0;
@@ -490,12 +481,11 @@ test('compact planning LLM final failure aborts without rewriting session histor
 
     assert.equal(callCount, 1);
     assert.deepEqual(session.history, originalHistory);
-    assert.deepEqual(session.contextFrontier, originalFrontier);
     assert.equal(session.nextBlockId, originalNextBlockId);
     assert.equal(session.promptCacheKey, originalPromptCacheKey);
     assert.equal(session.historyVersion, 0);
     assert.equal(sessionHistory.hasPendingCompactWork(session.id), false);
-    assert(session.contextFrontier?.some(item => item.kind === 'message' && item.seq === priorCompletion.__meta!.seq), 'failed planning leaves prior completion untouched');
+    assert(session.history.some(item => item.__meta?.seq === priorCompletion.__meta!.seq), 'failed planning leaves prior completion untouched');
   } finally {
     (llm as any).chat = originalChat;
     if (!SAVE_GENERATED_SESSION_LOGS) {
@@ -550,4 +540,96 @@ test('compact commit persists block facts and survives best-effort fact indexing
     (llm as any).chat = originalChat;
     (vector as any).indexMemoryFactsFromCompaction = originalIndexFacts;
   }
+});
+
+test('compact authority persistence failure restores active state and removes uncommitted archive rows', async () => {
+  const { sessionHistory, archive, layeredContext, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_authority_rollback'));
+  const originalChat = llm.chat;
+  const originalHistory = structuredClone(session.history);
+  const originalNextBlockId = session.nextBlockId;
+  const originalHistoryVersion = session.historyVersion;
+  try {
+    (llm as any).chat = async (_parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
+      const toolCall = { id: 'authority-failure', name: 'submit_compact_plan', args: { createBlocksJson: JSON.stringify([{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'must be rolled back',
+      }]) } };
+      await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    await assert.rejects(() => sessionHistory.processSessionCompactionRequest({
+      ...makeDepsForSession(session, { count: 0 }),
+      saveSession: async () => { throw new Error('injected compact authority persistence failure'); },
+    }, session.id, { keepPercent: 0.5 }, 'await'), /injected compact authority persistence failure/);
+    assert.deepEqual(session.history, originalHistory);
+    assert.equal(session.nextBlockId, originalNextBlockId);
+    assert.equal(session.historyVersion, originalHistoryVersion);
+    assert.equal((await layeredContext.readLocalArchiveBlocks(session.id)).length, 0);
+    assert.equal((await archive.readArchiveMessages(session.id)).length, originalHistory.length);
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('background compact validates exact snapshot content and rejects same-metadata offline edits', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_exact_snapshot_edit'));
+  const originalChat = llm.chat;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  try {
+    (llm as any).chat = async (_parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
+      await gate;
+      const toolCall = { id: 'exact-edit', name: 'submit_compact_plan', args: { createBlocksJson: JSON.stringify([{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'must not commit over edited history',
+      }]) } };
+      await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'background');
+    session.history[0] = { ...structuredClone(session.history[0]), parts: [{ text: 'offline edited wording with the same seq and metadata' }] };
+    release();
+    for (let index = 0; index < 200; index += 1) {
+      try {
+        const applied = await sessionHistory.applyCompletedCompactJob(makeDepsForSession(session, { count: 0 }), session.id);
+        if (!sessionHistory.hasPendingCompactWork(session.id)) {
+          assert.equal(applied, false);
+          assert.equal(session.history[0].parts[0].text, 'offline edited wording with the same seq and metadata');
+          return;
+        }
+      } catch { /* still running */ }
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.fail('background compact did not become ready');
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('background compact retains only an appended compatible active-history suffix', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_appended_suffix'));
+  const originalChat = llm.chat;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  try {
+    (llm as any).chat = async (_parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
+      await gate;
+      const toolCall = { id: 'suffix', name: 'submit_compact_plan', args: { createBlocksJson: JSON.stringify([{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'compacted before appended suffix',
+      }]) } };
+      await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'background');
+    const suffix: Message = { role: 'user', parts: [{ text: 'compatible appended suffix survives' }], __meta: { seq: 5, timestamp: 5000 } };
+    session.history.push(suffix);
+    release();
+    for (let index = 0; index < 200; index += 1) {
+      const applied = await sessionHistory.applyCompletedCompactJob(makeDepsForSession(session, { count: 0 }), session.id);
+      if (!sessionHistory.hasPendingCompactWork(session.id)) {
+        assert.equal(applied, true);
+        assert.equal(session.history.some(message => message.parts.some(part => part.text === 'compatible appended suffix survives')), true);
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.fail('background compact did not become ready');
+  } finally { (llm as any).chat = originalChat; }
 });

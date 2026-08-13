@@ -1,4 +1,5 @@
 import * as llm from '../llm';
+import { isDeepStrictEqual } from 'node:util';
 import { logger } from '../common';
 import {
   COMPACT_BLOCK_CANDIDATE_FRACTION,
@@ -11,7 +12,7 @@ import {
 } from '../config';
 import { estimateTokenCount } from '../tokenCount';
 import * as vector from '../vector';
-import { appendMessagesToArchive, readArchiveMessages, readArchiveMessagesBySeqRange } from './archive';
+import { appendMessagesToArchive, readArchiveMessages, readArchiveMessagesBySeqRange, rollbackUncommittedMessages } from './archive';
 import {
   buildBlockCandidateItem,
   calculateBlockCompactionWindow,
@@ -32,15 +33,16 @@ import {
   selectCompactCandidateTargetLevels,
   validateCompactPlanArgs,
 } from './compactPlan';
-import { CompactionRequest, Message, MessagePart, QueueItem, Session, TokenUsage, ContextFrontierItem } from '../types';
+import { CompactionRequest, Message, MessagePart, QueueItem, Session, TokenUsage } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatMessagePreviewText } from '../utils/messageFormat';
 import { buildSystemMessageParts } from '../utils/systemMessageParts';
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
 import { formatLocalTimestamp } from '../utils/localTime';
 import { formatSessionGoalReminderText } from './goal';
-import { appendBlocksToArchive, cloneSessionFrontier, ensureContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
+import { appendBlocksToArchiveWithCommitInfo, renderBlockMessage, rollbackUncommittedBlocks, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
 import { isModelVisibleMessage } from './messageVisibility';
+import { captureSessionSemanticState, restoreSessionSemanticState } from './metadataStore';
 
 const TOOL_NOISE_TOKEN_THRESHOLD = 200;
 
@@ -117,7 +119,6 @@ type CompactJobSnapshot = {
   sessionId: string;
   baseHistoryVersion: number;
   historySnapshot: Message[];
-  frontierSnapshot: ContextFrontierItem[];
   transientSession: Session;
   keepPercent: number;
   completionMarker: string;
@@ -126,8 +127,8 @@ type CompactJobSnapshot = {
 };
 
 type CompactJobOperation = {
-  frontierStartIndex: number;
-  frontierEndIndex: number;
+  historyStartIndex: number;
+  historyEndIndex: number;
   rawStartSeq: number;
   rawEndSeq: number;
   sourceKind: 'message' | 'block';
@@ -142,17 +143,17 @@ type CompactJobOperation = {
 type CompactJobResult =
   | {
       status: 'noop';
-      reason: 'empty-history' | 'empty-frontier' | 'no-older-messages' | 'no-candidates';
+      reason: 'empty-history' | 'no-older-messages' | 'no-candidates';
       completionMarker: string;
-      snapshotFrontier: ContextFrontierItem[];
-      consumedFrontierCount: number;
+      snapshotHistory: Message[];
+      consumedHistoryCount: number;
     }
   | {
       status: 'ready';
       completionMarker: string;
       completionBroadcastMessage?: string;
-      snapshotFrontier: ContextFrontierItem[];
-      consumedFrontierCount: number;
+      snapshotHistory: Message[];
+      consumedHistoryCount: number;
       operations: CompactJobOperation[];
       createdBlocks: Array<{
         level: number;
@@ -284,7 +285,7 @@ function normalizeSeqRange(startSeq?: number, endSeq?: number): { startSeq?: num
   return { startSeq, endSeq };
 }
 
-function cloneSessionForCompactJob(session: Session, historySnapshot: Message[], frontierSnapshot: ContextFrontierItem[]): Session {
+function cloneSessionForCompactJob(session: Session, historySnapshot: Message[]): Session {
   const cloned: Session = {
     id: session.id,
     agent: session.agent,
@@ -308,7 +309,6 @@ function cloneSessionForCompactJob(session: Session, historySnapshot: Message[],
     historyVersion: session.historyVersion,
     nextMessageSeq: session.nextMessageSeq,
     nextBlockId: session.nextBlockId,
-    contextFrontier: structuredClone(frontierSnapshot),
     parentSessionId: session.parentSessionId,
     goalState: session.goalState ? structuredClone(session.goalState) : undefined,
     compactThresholdTokens: session.compactThresholdTokens,
@@ -332,17 +332,11 @@ function buildCompactJobSnapshot(session: Session, options: CompactionRunOptions
     return null;
   }
 
-  const frontierSnapshot = cloneSessionFrontier(session);
-  if (frontierSnapshot.length === 0) {
-    return null;
-  }
-
   return {
     sessionId: session.id,
     baseHistoryVersion: session.historyVersion || 0,
     historySnapshot,
-    frontierSnapshot,
-    transientSession: cloneSessionForCompactJob(session, historySnapshot, frontierSnapshot),
+    transientSession: cloneSessionForCompactJob(session, historySnapshot),
     keepPercent,
     completionMarker,
     completionBroadcastMessage,
@@ -363,33 +357,12 @@ function appendTransientSessionMessage(session: Session, message: Message): Prom
   return Promise.resolve();
 }
 
-function contextFrontierItemsEqual(a: ContextFrontierItem | undefined, b: ContextFrontierItem | undefined): boolean {
-  if (!a || !b || a.kind !== b.kind) {
+function hasCompatibleHistoryPrefix(currentHistory: Message[], snapshotHistory: Message[]): boolean {
+  if (currentHistory.length < snapshotHistory.length) {
     return false;
   }
-
-  if (a.kind === 'message' && b.kind === 'message') {
-    return a.seq === b.seq
-      && (a.preservedFromBlockId ?? 0) === (b.preservedFromBlockId ?? 0);
-  }
-
-  if (a.kind === 'block' && b.kind === 'block') {
-    return a.id === b.id
-      && a.level === b.level
-      && a.rawStartSeq === b.rawStartSeq
-      && a.rawEndSeq === b.rawEndSeq;
-  }
-
-  return false;
-}
-
-function hasCompatibleFrontierPrefix(currentFrontier: ContextFrontierItem[], snapshotFrontier: ContextFrontierItem[]): boolean {
-  if (currentFrontier.length < snapshotFrontier.length) {
-    return false;
-  }
-
-  for (let index = 0; index < snapshotFrontier.length; index += 1) {
-    if (!contextFrontierItemsEqual(currentFrontier[index], snapshotFrontier[index])) {
+  for (let index = 0; index < snapshotHistory.length; index += 1) {
+    if (!isDeepStrictEqual(currentHistory[index], snapshotHistory[index])) {
       return false;
     }
   }
@@ -399,8 +372,8 @@ function hasCompatibleFrontierPrefix(currentFrontier: ContextFrontierItem[], sna
 
 export type LayeredCompactCandidateEntry = {
   item: CompactCandidateItem;
-  frontierStartIndex: number;
-  frontierEndIndex: number;
+  historyStartIndex: number;
+  historyEndIndex: number;
 };
 
 type LayeredCompactCandidateBuildResult = {
@@ -410,18 +383,13 @@ type LayeredCompactCandidateBuildResult = {
 };
 
 export function isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(
-  olderFrontier: ContextFrontierItem[],
-  frontierIndex: number,
+  olderHistory: Message[],
+  historyIndex: number,
 ): boolean {
-  const current = olderFrontier[frontierIndex];
-  const previous = olderFrontier[frontierIndex - 1];
-  const next = olderFrontier[frontierIndex + 1];
-
-  return current?.kind === 'block'
-    && previous?.kind === 'block'
-    && next?.kind === 'block'
-    && previous.level > current.level
-    && next.level > current.level;
+  const current = olderHistory[historyIndex]?.__meta?.contextBlock;
+  const previous = olderHistory[historyIndex - 1]?.__meta?.contextBlock;
+  const next = olderHistory[historyIndex + 1]?.__meta?.contextBlock;
+  return !!current && !!previous && !!next && previous.level > current.level && next.level > current.level;
 }
 
 export function resolveCompactionSplitIndex(history: Message[], keepPercent: number): number {
@@ -445,67 +413,37 @@ export function resolveCompactionSplitIndex(history: Message[], keepPercent: num
   return splitIndex;
 }
 
-function isPreservedMessageFrontierItem(item: ContextFrontierItem): item is Extract<ContextFrontierItem, { kind: 'message' }> & { preservedFromBlockId: number } {
-  return item.kind === 'message' && typeof item.preservedFromBlockId === 'number' && Number.isInteger(item.preservedFromBlockId) && item.preservedFromBlockId > 0;
+function isPreservedMessage(message: Message): boolean {
+  return Number.isSafeInteger(message.__meta?.preservedFromBlockId) && (message.__meta?.preservedFromBlockId || 0) > 0;
 }
 
-export function buildCreatedBlockFrontierItemsWithPreservedMessages(
-  createdBlock: { id: number; level: number; rawStartSeq: number; rawEndSeq: number },
-  preservedMessages: Array<{ seq: number }>,
-): ContextFrontierItem[] {
-  return [
-    {
-      kind: 'block',
-      id: createdBlock.id,
-      level: createdBlock.level,
-      rawStartSeq: createdBlock.rawStartSeq,
-      rawEndSeq: createdBlock.rawEndSeq,
-    },
-    ...preservedMessages
-      .slice()
-      .sort((a, b) => a.seq - b.seq)
-      .map((preserved): ContextFrontierItem => ({
-        kind: 'message',
-        seq: preserved.seq,
-        preservedFromBlockId: createdBlock.id,
-      })),
-  ];
+export function buildCreatedBlockHistoryWithPreservedMessages(
+  createdBlock: Parameters<typeof renderBlockMessage>[0],
+  sourceMessages: Message[],
+  preservedSeqs: number[],
+): Message[] {
+  const preserved = new Set(preservedSeqs);
+  return [renderBlockMessage(createdBlock), ...sourceMessages.filter(message => preserved.has(message.__meta?.seq || 0)).map(message => ({
+    ...structuredClone(message),
+    __meta: { ...(message.__meta || {}), preservedFromBlockId: createdBlock.id },
+  }))];
 }
 
-export function removePreservedMessageFrontierItems(frontier: ContextFrontierItem[], removeSeqs: Set<number>): ContextFrontierItem[] {
+export function removePreservedMessages(history: Message[], removeSeqs: Set<number>): Message[] {
   if (removeSeqs.size === 0) {
-    return frontier;
+    return history;
   }
-
-  return frontier.filter(item => !(isPreservedMessageFrontierItem(item) && removeSeqs.has(item.seq)));
+  return history.filter(message => !(isPreservedMessage(message) && removeSeqs.has(message.__meta?.seq || 0)));
 }
 
-async function buildLayeredCompactCandidateEntries(session: Session, olderFrontier: ContextFrontierItem[]): Promise<LayeredCompactCandidateBuildResult> {
-  const messageSeqs = olderFrontier
-    .filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message')
-    .map(item => item.seq);
-  const blockIds = olderFrontier
-    .filter((item): item is Extract<ContextFrontierItem, { kind: 'block' }> => item.kind === 'block')
-    .map(item => item.id);
-
-  const messageRecords = messageSeqs.length > 0
-    ? await readArchiveMessagesBySeqRange(session.id, Math.min(...messageSeqs), Math.max(...messageSeqs))
-    : [];
-  const blockRecords = blockIds.length > 0
-    ? await readArchiveBlocksByIdRange(session.id, Math.min(...blockIds), Math.max(...blockIds))
-    : [];
-
-  const messageMap = new Map(messageRecords.map(record => [record.seq, record]));
-  const blockMap = new Map(blockRecords.map(record => [record.id, record]));
-
+async function buildLayeredCompactCandidateEntries(olderHistory: Message[]): Promise<LayeredCompactCandidateBuildResult> {
   const blockRecordsByLevel = new Map<number, Array<{ id: number; summary: string }>>();
-  for (const item of olderFrontier) {
-    if (item.kind !== 'block') continue;
-    const record = blockMap.get(item.id);
-    if (!record) continue;
-    const records = blockRecordsByLevel.get(record.level) || [];
-    records.push({ id: record.id, summary: record.summary });
-    blockRecordsByLevel.set(record.level, records);
+  for (const message of olderHistory) {
+    const block = message.__meta?.contextBlock;
+    if (!block) continue;
+    const records = blockRecordsByLevel.get(block.level) || [];
+    records.push({ id: block.id, summary: formatMessagePreviewText(message, Number.MAX_SAFE_INTEGER, { skipThinking: true }) });
+    blockRecordsByLevel.set(block.level, records);
   }
 
   const candidateBlockIdsByLevel = new Map<number, Set<number>>();
@@ -513,289 +451,114 @@ async function buildLayeredCompactCandidateEntries(session: Session, olderFronti
   for (const [sourceLevel, records] of blockRecordsByLevel.entries()) {
     const totalTokens = records.reduce((sum, record) => sum + estimateTokenCount(record.summary || ''), 0);
     const window = calculateBlockCompactionWindow({
-      totalBlockCount: records.length,
-      totalTokens,
-      minTokens: COMPACT_BLOCK_LEVEL_MIN_TOKENS,
-      forceTokens: COMPACT_BLOCK_LEVEL_FORCE_TOKENS,
-      candidateFraction: COMPACT_BLOCK_CANDIDATE_FRACTION,
+      totalBlockCount: records.length, totalTokens, minTokens: COMPACT_BLOCK_LEVEL_MIN_TOKENS,
+      forceTokens: COMPACT_BLOCK_LEVEL_FORCE_TOKENS, candidateFraction: COMPACT_BLOCK_CANDIDATE_FRACTION,
       forceCompactFraction: COMPACT_BLOCK_FORCE_COMPACT_FRACTION,
     });
     candidateBlockIdsByLevel.set(sourceLevel, new Set(records.slice(0, window.candidateBlockCount).map(record => record.id)));
     preliminaryBlockPolicies.push({
-      sourceLevel,
-      totalBlockCount: records.length,
-      totalTokens,
-      forcedKeepNewestCount: window.forcedKeepNewestCount,
-      candidateBlockCount: window.candidateBlockCount,
-      requestedMinBlocks: window.requestedMinBlocks,
-      feasibleMaxBlocks: 0,
-      effectiveMinBlocks: 0,
+      sourceLevel, totalBlockCount: records.length, totalTokens,
+      forcedKeepNewestCount: window.forcedKeepNewestCount, candidateBlockCount: window.candidateBlockCount,
+      requestedMinBlocks: window.requestedMinBlocks, feasibleMaxBlocks: 0, effectiveMinBlocks: 0,
       ...(totalTokens < COMPACT_BLOCK_LEVEL_MIN_TOKENS
         ? { skippedReason: `below the ${COMPACT_BLOCK_LEVEL_MIN_TOKENS}-token block eligibility threshold` }
-        : window.candidateBlockCount === 0
-        ? { skippedReason: 'the strict oldest-candidate window is empty at this level size' }
-        : {}),
+        : window.candidateBlockCount === 0 ? { skippedReason: 'the strict oldest-candidate window is empty at this level size' } : {}),
     });
   }
 
   const entries: LayeredCompactCandidateEntry[] = [];
   let compactSegmentId = 1;
-
-  for (let frontierIndex = 0; frontierIndex < olderFrontier.length; frontierIndex += 1) {
-    const item = olderFrontier[frontierIndex];
-
-    if (isPreservedMessageFrontierItem(item)) {
-      compactSegmentId += 1;
-      continue;
-    }
-
-    if (item.kind === 'block') {
-      const record = blockMap.get(item.id);
-      if (!record || !candidateBlockIdsByLevel.get(record.level)?.has(record.id)) {
-        // Non-candidate blocks are hard boundaries. Otherwise two eligible
-        // same-level blocks could form a range whose frontier replacement
-        // silently consumes a force-kept/different-level block between them.
-        compactSegmentId += 1;
-        continue;
-      }
-
+  for (let historyIndex = 0; historyIndex < olderHistory.length; historyIndex += 1) {
+    const message = olderHistory[historyIndex];
+    if (isPreservedMessage(message)) { compactSegmentId += 1; continue; }
+    const block = message.__meta?.contextBlock;
+    if (block) {
+      if (!candidateBlockIdsByLevel.get(block.level)?.has(block.id)) { compactSegmentId += 1; continue; }
       entries.push({
-        item: buildBlockCandidateItem(
-          record.id,
-          record.level,
-          record.rawStartSeq,
-          record.rawEndSeq,
-          record.summary,
-          estimateTokenCount(record.summary),
-          isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(olderFrontier, frontierIndex),
-          compactSegmentId,
-        ),
-        frontierStartIndex: frontierIndex,
-        frontierEndIndex: frontierIndex,
+        item: buildBlockCandidateItem(block.id, block.level, block.rawStartSeq, block.rawEndSeq,
+          formatMessagePreviewText(message, Number.MAX_SAFE_INTEGER, { skipThinking: true }),
+          estimateTokenCount(formatMessagePreviewText(message, Number.MAX_SAFE_INTEGER, { skipThinking: true })),
+          isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(olderHistory, historyIndex), compactSegmentId),
+        historyStartIndex: historyIndex, historyEndIndex: historyIndex,
       });
       continue;
     }
+    const seq = message.__meta?.seq;
+    if (!Number.isSafeInteger(seq) || (seq || 0) < 1) { compactSegmentId += 1; continue; }
+    if (!isModelVisibleMessage(message)) continue;
+    if (shouldRemoveOldCompactCompletionMessage(message)) continue;
+    if (shouldIgnoreMessageInCompactCandidates(message)) { compactSegmentId += 1; continue; }
 
-    const record = messageMap.get(item.seq);
-    if (!record) {
-      compactSegmentId += 1;
-      continue;
-    }
-    if (!isModelVisibleMessage(record.message)) {
-      // Display-only items are intentionally transparent to compact ranges;
-      // they are dropped when an enclosing visible range is rewritten.
-      continue;
-    }
-    if (shouldRemoveOldCompactCompletionMessage(record.message)) {
-      // A previous compact-completed notice is replaced by the one emitted at
-      // the end of this successful commit. It is transparent here so it does
-      // not split otherwise legal ranges or enter a summary.
-      continue;
-    }
-    if (shouldIgnoreMessageInCompactCandidates(record.message)) {
-      // Model-visible lifecycle/session-boundary messages are protected hard
-      // boundaries even though they are not useful summary candidates.
-      compactSegmentId += 1;
-      continue;
-    }
-
-    let groupedEndFrontierIndex = frontierIndex;
-    const groupedRecords = [record];
-    const startsToolExchange = record.message.role === 'model'
-      && record.message.parts?.some(part => !!part.functionCall);
-
-    if (startsToolExchange) {
-      for (let nextIndex = frontierIndex + 1; nextIndex < olderFrontier.length; nextIndex += 1) {
-        const nextItem = olderFrontier[nextIndex];
-        if (nextItem.kind !== 'message' || isPreservedMessageFrontierItem(nextItem)) {
-          break;
-        }
-
-        const nextRecord = messageMap.get(nextItem.seq);
-        if (!nextRecord || nextRecord.message.role !== 'tool') {
-          break;
-        }
-
-        groupedRecords.push(nextRecord);
-        groupedEndFrontierIndex = nextIndex;
+    let groupedEndHistoryIndex = historyIndex;
+    const groupedMessages = [message];
+    if (message.role === 'model' && message.parts?.some(part => !!part.functionCall)) {
+      for (let nextIndex = historyIndex + 1; nextIndex < olderHistory.length; nextIndex += 1) {
+        const next = olderHistory[nextIndex];
+        if (next.__meta?.contextBlock || isPreservedMessage(next) || next.role !== 'tool' || !Number.isSafeInteger(next.__meta?.seq)) break;
+        groupedMessages.push(next); groupedEndHistoryIndex = nextIndex;
       }
     }
-
-    const visibleGroupedRecords = groupedRecords.filter(groupRecord => isModelVisibleMessage(groupRecord.message));
-    const preview = visibleGroupedRecords
-      .map(groupRecord => formatMessagePreviewText(groupRecord.message, 50, {
-        skipEphemeralSystem: true,
-        skipRagMemorySnippets: true,
-        skipThinking: true,
-      }).trim())
-      .filter(Boolean)
-      .join(' | ') || '[empty message]';
-
-    const estimatedTokens = visibleGroupedRecords.reduce((sum, groupRecord) => {
-      return sum + estimateTokenCount(formatMessagePreviewText(groupRecord.message, Number.MAX_SAFE_INTEGER, {
-        skipEphemeralSystem: true,
-        skipRagMemorySnippets: true,
-        skipThinking: true,
-      }));
-    }, 0);
-
+    const preview = groupedMessages.filter(isModelVisibleMessage).map(item => formatMessagePreviewText(item, 50, {
+      skipEphemeralSystem: true, skipRagMemorySnippets: true, skipThinking: true,
+    }).trim()).filter(Boolean).join(' | ') || '[empty message]';
+    const estimatedTokens = groupedMessages.filter(isModelVisibleMessage).reduce((sum, item) => sum + estimateTokenCount(
+      formatMessagePreviewText(item, Number.MAX_SAFE_INTEGER, { skipEphemeralSystem: true, skipRagMemorySnippets: true, skipThinking: true })
+    ), 0);
     entries.push({
-      item: buildMessageCandidateItem(item.seq, groupedRecords[groupedRecords.length - 1].seq, preview, estimatedTokens, compactSegmentId),
-      frontierStartIndex: frontierIndex,
-      frontierEndIndex: groupedEndFrontierIndex,
+      item: buildMessageCandidateItem(seq!, groupedMessages[groupedMessages.length - 1].__meta!.seq!, preview, estimatedTokens, compactSegmentId),
+      historyStartIndex: historyIndex, historyEndIndex: groupedEndHistoryIndex,
     });
-
-    frontierIndex = groupedEndFrontierIndex;
+    historyIndex = groupedEndHistoryIndex;
   }
 
-  const rawEntries = entries.filter(entry => entry.item.kind === 'message');
-  const rawItems = rawEntries.map(entry => entry.item);
+  const rawItems = entries.filter(entry => entry.item.kind === 'message').map(entry => entry.item);
   const totalRawTokens = rawItems.reduce((sum, item) => sum + Math.max(0, item.estimatedTokens || 0), 0);
   const rawEligible = selectCompactCandidateTargetLevels(rawItems).has(1);
   const candidateEntries = entries.filter(entry => entry.item.kind === 'block' || rawEligible);
-
   const rawFraction = clampCompactFraction(COMPACT_MESSAGE_FORCE_COMPACT_FRACTION, 0.2);
   const eligibleRawTokens = rawEligible ? totalRawTokens : 0;
   const requestedRawTokens = rawEligible ? Math.ceil(eligibleRawTokens * rawFraction) : 0;
   const messagePolicy: MessageCompactionPolicy = {
-    thresholdTokens: COMPACT_LEVEL_TOKEN_THRESHOLD,
-    totalCandidateTokens: totalRawTokens,
-    eligibleTokens: eligibleRawTokens,
-    requestedMinTokens: requestedRawTokens,
-    feasibleMaxTokens: eligibleRawTokens,
+    thresholdTokens: COMPACT_LEVEL_TOKEN_THRESHOLD, totalCandidateTokens: totalRawTokens, eligibleTokens: eligibleRawTokens,
+    requestedMinTokens: requestedRawTokens, feasibleMaxTokens: eligibleRawTokens,
     effectiveMinTokens: Math.min(requestedRawTokens, eligibleRawTokens),
-    ...(!rawEligible
-      ? { skippedReason: totalRawTokens > 0
-        ? `~${totalRawTokens} raw-message tokens do not exceed the ${COMPACT_LEVEL_TOKEN_THRESHOLD}-token eligibility threshold`
-        : 'no eligible model-visible raw message candidates' }
-      : {}),
+    ...(!rawEligible ? { skippedReason: totalRawTokens > 0
+      ? `~${totalRawTokens} raw-message tokens do not exceed the ${COMPACT_LEVEL_TOKEN_THRESHOLD}-token eligibility threshold`
+      : 'no eligible model-visible raw message candidates' } : {}),
   };
-
-  const blockPolicies = preliminaryBlockPolicies
-    .map(policy => {
-      const levelEntries = candidateEntries.filter(entry => entry.item.kind === 'block' && entry.item.level === policy.sourceLevel);
-      let feasibleMaxBlocks = 0;
-      let runLength = 0;
-      let previousSegmentId: number | undefined;
-      let previousCandidateIndex = -2;
-      const flushRun = () => {
-        if (runLength >= 2) feasibleMaxBlocks += runLength;
-        runLength = 0;
-      };
-
-      for (const entry of levelEntries) {
-        const candidateIndex = candidateEntries.indexOf(entry);
-        const segmentId = entry.item.segmentId ?? 0;
-        if (runLength > 0 && (candidateIndex !== previousCandidateIndex + 1 || segmentId !== previousSegmentId)) {
-          flushRun();
-        }
-        runLength += 1;
-        previousSegmentId = segmentId;
-        previousCandidateIndex = candidateIndex;
-      }
-      flushRun();
-
-      const effectiveMinBlocks = Math.min(policy.requestedMinBlocks, feasibleMaxBlocks);
-      return {
-        ...policy,
-        feasibleMaxBlocks,
-        effectiveMinBlocks,
-        ...(policy.requestedMinBlocks > 0 && feasibleMaxBlocks === 0
-          ? { skippedReason: 'no legal contiguous multi-block candidate segment is available' }
-          : {}),
-      };
-    })
-    .sort((a, b) => a.sourceLevel - b.sourceLevel);
-
+  const blockPolicies = preliminaryBlockPolicies.map(policy => {
+    const levelEntries = candidateEntries.filter(entry => entry.item.kind === 'block' && entry.item.level === policy.sourceLevel);
+    let feasibleMaxBlocks = 0, runLength = 0, previousCandidateIndex = -2; let previousSegmentId: number | undefined;
+    const flush = () => { if (runLength >= 2) feasibleMaxBlocks += runLength; runLength = 0; };
+    for (const entry of levelEntries) {
+      const candidateIndex = candidateEntries.indexOf(entry); const segmentId = entry.item.segmentId ?? 0;
+      if (runLength > 0 && (candidateIndex !== previousCandidateIndex + 1 || segmentId !== previousSegmentId)) flush();
+      runLength += 1; previousSegmentId = segmentId; previousCandidateIndex = candidateIndex;
+    }
+    flush();
+    const effectiveMinBlocks = Math.min(policy.requestedMinBlocks, feasibleMaxBlocks);
+    return { ...policy, feasibleMaxBlocks, effectiveMinBlocks,
+      ...(policy.requestedMinBlocks > 0 && feasibleMaxBlocks === 0 ? { skippedReason: 'no legal contiguous multi-block candidate segment is available' } : {}) };
+  }).sort((a, b) => a.sourceLevel - b.sourceLevel);
   return { candidateEntries, messagePolicy, blockPolicies };
 }
 
-async function getDisplayOnlyMessageSeqsForFrontier(sessionId: string, frontier: ContextFrontierItem[]): Promise<Set<number>> {
-  const messageSeqs = frontier
-    .filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message')
-    .map(item => item.seq);
-
-  if (messageSeqs.length === 0) {
-    return new Set();
-  }
-
-  const records = await readArchiveMessagesBySeqRange(sessionId, Math.min(...messageSeqs), Math.max(...messageSeqs));
-  return new Set(records
-    .filter(record => !isModelVisibleMessage(record.message))
-    .map(record => record.seq));
-}
-
-async function filterDisplayOnlyMessageFrontierItems(sessionId: string, frontier: ContextFrontierItem[]): Promise<ContextFrontierItem[]> {
-  const displayOnlySeqs = await getDisplayOnlyMessageSeqsForFrontier(sessionId, frontier);
-
-  if (displayOnlySeqs.size === 0) {
-    return frontier;
-  }
-
-  return frontier.filter(item => item.kind !== 'message' || !displayOnlySeqs.has(item.seq));
-}
-
-async function buildPreservedMessageCandidateItems(session: Session, olderFrontier: ContextFrontierItem[]): Promise<PreservedMessageCandidateItem[]> {
-  const preservedItems = olderFrontier.filter(isPreservedMessageFrontierItem);
-  if (preservedItems.length === 0) {
-    return [];
-  }
-
-  const seqs = preservedItems.map(item => item.seq);
-  const records = await readArchiveMessagesBySeqRange(session.id, Math.min(...seqs), Math.max(...seqs));
-  const messageMap = new Map(records.map(record => [record.seq, record]));
-
-  return preservedItems.flatMap((item): PreservedMessageCandidateItem[] => {
-    const record = messageMap.get(item.seq);
-    if (!record || shouldIgnoreMessageInCompactCandidates(record.message)) {
-      return [];
-    }
-
-    const preview = formatMessagePreviewText(record.message, 300, {
-      skipEphemeralSystem: true,
-      skipRagMemorySnippets: true,
-      skipThinking: true,
-    }).trim() || '[empty message]';
-
-    return [{
-      seq: item.seq,
-      key: `M#${item.seq}`,
-      preservedFromBlockId: item.preservedFromBlockId,
-      preview,
-    }];
+function buildPreservedMessageCandidateItems(olderHistory: Message[]): PreservedMessageCandidateItem[] {
+  return olderHistory.flatMap((message): PreservedMessageCandidateItem[] => {
+    const seq = message.__meta?.seq; const preservedFromBlockId = message.__meta?.preservedFromBlockId;
+    if (!isPreservedMessage(message) || !Number.isSafeInteger(seq) || shouldIgnoreMessageInCompactCandidates(message)) return [];
+    return [{ seq: seq!, key: `M#${seq}`, preservedFromBlockId: preservedFromBlockId!, preview:
+      formatMessagePreviewText(message, 300, { skipEphemeralSystem: true, skipRagMemorySnippets: true, skipThinking: true }).trim() || '[empty message]' }];
   });
 }
 
-async function filterDisplayOnlyAndRemovedPreservedMessageFrontierItems(sessionId: string, frontier: ContextFrontierItem[], removePreservedSeqs: Set<number>): Promise<ContextFrontierItem[]> {
-  const visibleFrontier = await filterDisplayOnlyMessageFrontierItems(sessionId, frontier);
-  if (removePreservedSeqs.size === 0) {
-    return visibleFrontier;
-  }
-
-  return removePreservedMessageFrontierItems(visibleFrontier, removePreservedSeqs);
+function filterRetainedHistory(history: Message[], removePreservedSeqs: Set<number>): Message[] {
+  return removePreservedMessages(history, removePreservedSeqs)
+    .filter(message => isModelVisibleMessage(message) && !shouldRemoveOldCompactCompletionMessage(message));
 }
 
-async function removeOldCompactCompletionFrontierItems(sessionId: string, frontier: ContextFrontierItem[]): Promise<ContextFrontierItem[]> {
-  const messageSeqs = frontier
-    .filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message')
-    .map(item => item.seq);
-  if (messageSeqs.length === 0) {
-    return frontier;
-  }
-
-  const records = await readArchiveMessagesBySeqRange(sessionId, Math.min(...messageSeqs), Math.max(...messageSeqs));
-  const removableSeqs = new Set(records
-    .filter(record => shouldRemoveOldCompactCompletionMessage(record.message))
-    .map(record => record.seq));
-  if (removableSeqs.size === 0) {
-    return frontier;
-  }
-
-  return frontier.filter(item => item.kind !== 'message' || !removableSeqs.has(item.seq));
-}
-
-export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; memoryFacts?: ExtractedMemoryFact[]; }> {
-  const operations: Array<{ planIndex: number; startIndex: number; endIndex: number; frontierStartIndex: number; frontierEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; memoryFacts?: ExtractedMemoryFact[]; }> = [];
+export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; historyStartIndex: number; historyEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; memoryFacts?: ExtractedMemoryFact[]; }> {
+  const operations: Array<{ planIndex: number; startIndex: number; endIndex: number; historyStartIndex: number; historyEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; memoryFacts?: ExtractedMemoryFact[]; }> = [];
   const candidateItems = candidateEntries.map(entry => entry.item);
 
   for (let planIndex = 0; planIndex < plan.createBlocks.length; planIndex += 1) {
@@ -834,8 +597,8 @@ export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: La
         planIndex,
         startIndex,
         endIndex,
-        frontierStartIndex: startEntry.frontierStartIndex,
-        frontierEndIndex: endEntry.frontierEndIndex,
+        historyStartIndex: startEntry.historyStartIndex,
+        historyEndIndex: endEntry.historyEndIndex,
         rawStartSeq: block.sourceStart,
         rawEndSeq: block.sourceEnd,
         sourceKind: block.sourceKind,
@@ -883,8 +646,8 @@ export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: La
       planIndex,
       startIndex,
       endIndex,
-      frontierStartIndex: startEntry.frontierStartIndex,
-      frontierEndIndex: endEntry.frontierEndIndex,
+      historyStartIndex: startEntry.historyStartIndex,
+      historyEndIndex: endEntry.historyEndIndex,
       rawStartSeq: startItem.rawStartSeq,
       rawEndSeq: endItem.rawEndSeq,
       sourceKind: block.sourceKind,
@@ -901,10 +664,10 @@ export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: La
 }
 
 /** Extract skill names from current skill(load) and persisted legacy load_skill calls. */
-function extractCompactedSkillNames(history: Message[], consumedFrontierCount: number): string[] {
+function extractCompactedSkillNames(history: Message[], consumedHistoryCount: number): string[] {
   const skillNames = new Set<string>();
-  // Scan messages that correspond to the consumed frontier portion
-  const scanLimit = Math.min(consumedFrontierCount, history.length);
+  // Scan messages that correspond to the consumed active-history portion.
+  const scanLimit = Math.min(consumedHistoryCount, history.length);
   for (let i = 0; i < scanLimit; i++) {
     const msg = history[i];
     if (!msg.parts) continue;
@@ -927,20 +690,20 @@ async function finalizeCompaction(
   deps: SessionHistoryDeps,
   sessionId: string,
   session: Session,
-  newFrontier: ContextFrontierItem[],
+  newHistory: Message[],
   completionMarker: string,
   completionBroadcastMessage: string | undefined,
   createdBlockCount: number,
   replacedItemCount: number,
   compactedSkillNames: string[] = [],
+  insertedCompletionMessages: Awaited<ReturnType<typeof appendMessagesToArchive>> = [],
 ): Promise<void> {
-  session.contextFrontier = newFrontier;
   session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
     agentName: session.agent || 'main',
     sessionId,
     systemPromptFiles: session.systemPromptFiles,
   });
-  session.history = await renderHistoryFromFrontier(session, newFrontier);
+  session.history = newHistory;
 
   const completionText = formatCompactionCompletionMarker(sessionId, completionMarker, session.parentSessionId, compactedSkillNames, Date.now());
   const hasCompletionGoalReminder = !!session.goalState?.goal?.trim();
@@ -957,10 +720,9 @@ async function finalizeCompaction(
       ...(hasCompletionGoalReminder ? { goalReminder: true, goalReminderKind: 'compact-completion' } : {}),
     },
   };
-  await appendMessagesToArchive(session, [completionMessage]);
+  insertedCompletionMessages.push(...await appendMessagesToArchive(session, [completionMessage]));
   session.history.push(completionMessage);
   const completionSeq = completionMessage.__meta!.seq!;
-  ensureContextFrontier(session).push({ kind: 'message', seq: completionSeq });
   if (hasCompletionGoalReminder && session.goalState) {
     session.goalState.anchorSeq = completionSeq;
     completionMessage.__meta!.goalAnchorSeq = completionSeq;
@@ -969,12 +731,6 @@ async function finalizeCompaction(
   session.vectorIndexPosition = 0;
   session.historyVersion = (session.historyVersion || 0) + 1;
   session.indexingState = undefined;
-  // Compact planning itself reuses the live session's cache key, but a
-  // successful compact commit rewrites the model-facing frontier/prefix. Route
-  // subsequent turns to a fresh prompt-cache namespace so they do not compete
-  // with requests built against the pre-compact prefix.
-  session.promptCacheKey = llm.generatePromptCacheKey();
-
   await deps.saveSession(sessionId);
   logger.info({ createdBlockCount, replacedItemCount, renderedCount: session.history.length }, 'Layered context compaction completed successfully');
   compactPreviewLastTimestamp.delete(sessionId);
@@ -1011,7 +767,7 @@ export function formatCompactionCompletionMarker(sessionId: string, completionMa
 }
 
 async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnapshot): Promise<CompactJobResult> {
-  const { sessionId, transientSession, historySnapshot, frontierSnapshot, keepPercent, compactGuidance, completionMarker, completionBroadcastMessage } = snapshot;
+  const { sessionId, transientSession, historySnapshot, keepPercent, compactGuidance, completionMarker, completionBroadcastMessage } = snapshot;
   const splitIndex = resolveCompactionSplitIndex(historySnapshot, keepPercent);
   if (splitIndex <= 0) {
     logger.info({ sessionId, keepPercent }, 'Compaction skipped because there are no older messages to compact');
@@ -1019,27 +775,27 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       status: 'noop',
       reason: 'no-older-messages',
       completionMarker,
-      snapshotFrontier: frontierSnapshot,
-      consumedFrontierCount: splitIndex,
+      snapshotHistory: historySnapshot,
+      consumedHistoryCount: splitIndex,
     };
   }
 
-  const olderFrontier = frontierSnapshot.slice(0, splitIndex);
-  const forceKeptRecentFrontier = splitIndex < frontierSnapshot.length ? frontierSnapshot.slice(splitIndex) : [];
-  const preservedMessageCandidates = await buildPreservedMessageCandidateItems(transientSession, olderFrontier);
-  const { candidateEntries, messagePolicy, blockPolicies } = await buildLayeredCompactCandidateEntries(transientSession, olderFrontier);
+  const olderHistory = historySnapshot.slice(0, splitIndex);
+  const forceKeptRecentHistory = splitIndex < historySnapshot.length ? historySnapshot.slice(splitIndex) : [];
+  const preservedMessageCandidates = buildPreservedMessageCandidateItems(olderHistory);
+  const { candidateEntries, messagePolicy, blockPolicies } = await buildLayeredCompactCandidateEntries(olderHistory);
   const candidateItems = candidateEntries.map(entry => entry.item);
 
   if (candidateItems.length === 0 && preservedMessageCandidates.length === 0) {
-    const droppedDisplayOnlyCount = (await getDisplayOnlyMessageSeqsForFrontier(sessionId, olderFrontier)).size;
+    const droppedDisplayOnlyCount = olderHistory.filter(message => !isModelVisibleMessage(message)).length;
     if (droppedDisplayOnlyCount > 0) {
       logger.info({ sessionId, splitIndex, droppedDisplayOnlyCount }, 'Compaction will drop display-only older messages without creating compact blocks');
       return {
         status: 'ready',
         completionMarker,
         completionBroadcastMessage,
-        snapshotFrontier: frontierSnapshot,
-        consumedFrontierCount: splitIndex,
+        snapshotHistory: historySnapshot,
+        consumedHistoryCount: splitIndex,
         operations: [],
         createdBlocks: [],
         preserveMessages: [],
@@ -1053,17 +809,17 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       status: 'noop',
       reason: 'no-candidates',
       completionMarker,
-      snapshotFrontier: frontierSnapshot,
-      consumedFrontierCount: splitIndex,
+      snapshotHistory: historySnapshot,
+      consumedHistoryCount: splitIndex,
     };
   }
 
-  const forcedKeptMessageItems = forceKeptRecentFrontier.filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message');
-  const forcedKeptStartSeq = forcedKeptMessageItems[0]?.seq;
-  const forcedKeptEndSeq = forcedKeptMessageItems[forcedKeptMessageItems.length - 1]?.seq;
+  const forcedKeptMessageItems = forceKeptRecentHistory.filter(message => Number.isSafeInteger(message.__meta?.seq));
+  const forcedKeptStartSeq = forcedKeptMessageItems[0]?.__meta?.seq;
+  const forcedKeptEndSeq = forcedKeptMessageItems[forcedKeptMessageItems.length - 1]?.__meta?.seq;
   const summaryPrompt = {
     system: buildCompactPromptText({
-      forcedKeptCount: forceKeptRecentFrontier.length,
+      forcedKeptCount: forceKeptRecentHistory.length,
       forcedKeptStartSeq,
       forcedKeptEndSeq,
       candidateItems,
@@ -1150,11 +906,11 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
     status: 'ready',
     completionMarker,
       completionBroadcastMessage,
-    snapshotFrontier: frontierSnapshot,
-    consumedFrontierCount: splitIndex,
+    snapshotHistory: historySnapshot,
+    consumedHistoryCount: splitIndex,
     operations: operations.map(operation => ({
-      frontierStartIndex: operation.frontierStartIndex,
-      frontierEndIndex: operation.frontierEndIndex,
+      historyStartIndex: operation.historyStartIndex,
+      historyEndIndex: operation.historyEndIndex,
       rawStartSeq: operation.rawStartSeq,
       rawEndSeq: operation.rawEndSeq,
       sourceKind: operation.sourceKind,
@@ -1178,7 +934,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
     })),
     preserveMessages,
     removePreservedMessages,
-    replacedItemCount: operations.reduce((sum, operation) => sum + (operation.frontierEndIndex - operation.frontierStartIndex + 1), 0) + removePreservedMessages.length,
+    replacedItemCount: operations.reduce((sum, operation) => sum + (operation.historyEndIndex - operation.historyStartIndex + 1), 0) + removePreservedMessages.length,
   };
 }
 
@@ -1192,70 +948,79 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     return false;
   }
 
-  const currentFrontier = cloneSessionFrontier(session);
-  if (!hasCompatibleFrontierPrefix(currentFrontier, result.snapshotFrontier)) {
-    logger.warn({ sessionId, snapshotFrontierLength: result.snapshotFrontier.length, currentFrontierLength: currentFrontier.length }, 'Skipping async compact commit because session frontier changed incompatibly');
+  const currentHistory = session.history;
+  if (!hasCompatibleHistoryPrefix(currentHistory, result.snapshotHistory)) {
+    logger.warn({ sessionId, snapshotHistoryLength: result.snapshotHistory.length, currentHistoryLength: currentHistory.length }, 'Skipping async compact commit because active history changed incompatibly');
     return false;
   }
 
-  const olderFrontier = result.snapshotFrontier.slice(0, result.consumedFrontierCount);
-  const createdRecords = await appendBlocksToArchive(session, result.createdBlocks);
-  const removePreservedSeqs = new Set(result.removePreservedMessages || []);
+  const beforeCommit = captureSessionSemanticState(session);
+  let insertedBlocks: Awaited<ReturnType<typeof appendBlocksToArchiveWithCommitInfo>>['insertedRecords'] = [];
+  let insertedCompletionMessages: Awaited<ReturnType<typeof appendMessagesToArchive>> = [];
+  try {
+    const olderHistory = result.snapshotHistory.slice(0, result.consumedHistoryCount);
+    const appendedBlocks = await appendBlocksToArchiveWithCommitInfo(session, result.createdBlocks);
+    const createdRecords = appendedBlocks.records;
+    insertedBlocks = appendedBlocks.insertedRecords;
+    const removePreservedSeqs = new Set(result.removePreservedMessages || []);
 
-  const rewrittenOlderFrontier: ContextFrontierItem[] = [];
-  let cursor = 0;
-  for (let index = 0; index < result.operations.length; index += 1) {
-    const operation = result.operations[index];
-    const createdRecord = createdRecords[index];
-    if (cursor < operation.frontierStartIndex) {
-      rewrittenOlderFrontier.push(...await filterDisplayOnlyAndRemovedPreservedMessageFrontierItems(sessionId, olderFrontier.slice(cursor, operation.frontierStartIndex), removePreservedSeqs));
+    const rewrittenOlderHistory: Message[] = [];
+    let cursor = 0;
+    for (let index = 0; index < result.operations.length; index += 1) {
+      const operation = result.operations[index];
+      const createdRecord = createdRecords[index];
+      if (cursor < operation.historyStartIndex) {
+        rewrittenOlderHistory.push(...filterRetainedHistory(olderHistory.slice(cursor, operation.historyStartIndex), removePreservedSeqs));
+      }
+      const preservedForBlock = (result.preserveMessages || [])
+        .filter(item => item.operationIndex === index)
+        .map(item => item.seq);
+      rewrittenOlderHistory.push(...buildCreatedBlockHistoryWithPreservedMessages(
+        createdRecord,
+        olderHistory.slice(operation.historyStartIndex, operation.historyEndIndex + 1),
+        preservedForBlock,
+      ));
+      cursor = operation.historyEndIndex + 1;
     }
-    const preservedForBlock = (result.preserveMessages || [])
-      .filter(item => item.operationIndex === index)
-      .sort((a, b) => a.seq - b.seq);
-    rewrittenOlderFrontier.push(...buildCreatedBlockFrontierItemsWithPreservedMessages(createdRecord, preservedForBlock));
-    cursor = operation.frontierEndIndex + 1;
+    if (cursor < olderHistory.length) {
+      rewrittenOlderHistory.push(...filterRetainedHistory(olderHistory.slice(cursor), removePreservedSeqs));
+    }
+
+    const newHistory = [...rewrittenOlderHistory, ...currentHistory.slice(result.consumedHistoryCount)]
+      .filter(message => !shouldRemoveOldCompactCompletionMessage(message));
+
+    // Scan compacted messages for current and persisted legacy skill-load calls.
+    const compactedSkillNames = extractCompactedSkillNames(result.snapshotHistory, result.consumedHistoryCount);
+
+    await finalizeCompaction(
+      deps, sessionId, session, newHistory, result.completionMarker,
+      result.completionBroadcastMessage, createdRecords.length,
+      result.replacedItemCount, compactedSkillNames, insertedCompletionMessages,
+    );
+
+    for (const record of createdRecords) {
+      if (!record.memoryFacts?.length) continue;
+      void vector.indexMemoryFactsFromCompaction({
+        sessionId, agent: session.agent || 'main', facts: record.memoryFacts,
+        sourceStartSeq: record.rawStartSeq, sourceEndSeq: record.rawEndSeq,
+        blockId: record.id, blockLevel: record.level, createdAt: record.createdAt,
+      }).catch((err) => {
+        logger.warn({ err, sessionId, blockId: record.id, factCount: record.memoryFacts?.length || 0 }, 'Failed to index compact memory facts');
+      });
+    }
+    return true;
+  } catch (error) {
+    restoreSessionSemanticState(session, beforeCommit);
+    try {
+      await rollbackUncommittedMessages(insertedCompletionMessages);
+      await rollbackUncommittedBlocks(insertedBlocks);
+    } catch (rollbackError) {
+      const combined = new Error(`Session ${sessionId} compaction failed and its uncommitted archive rows could not be rolled back.`);
+      (combined as any).errors = [error, rollbackError];
+      throw combined;
+    }
+    throw error;
   }
-  if (cursor < olderFrontier.length) {
-    rewrittenOlderFrontier.push(...await filterDisplayOnlyAndRemovedPreservedMessageFrontierItems(sessionId, olderFrontier.slice(cursor), removePreservedSeqs));
-  }
-
-  const newFrontier = await removeOldCompactCompletionFrontierItems(
-    sessionId,
-    [...rewrittenOlderFrontier, ...currentFrontier.slice(result.consumedFrontierCount)],
-  );
-
-  // Scan compacted messages for current and persisted legacy skill-load calls.
-  const compactedSkillNames = extractCompactedSkillNames(session.history, result.consumedFrontierCount);
-
-  await finalizeCompaction(
-    deps,
-    sessionId,
-    session,
-    newFrontier,
-    result.completionMarker,
-    result.completionBroadcastMessage,
-    createdRecords.length,
-    result.replacedItemCount,
-    compactedSkillNames,
-  );
-
-  for (const record of createdRecords) {
-    if (!record.memoryFacts?.length) continue;
-    void vector.indexMemoryFactsFromCompaction({
-      sessionId,
-      agent: session.agent || 'main',
-      facts: record.memoryFacts,
-      sourceStartSeq: record.rawStartSeq,
-      sourceEndSeq: record.rawEndSeq,
-      blockId: record.id,
-      blockLevel: record.level,
-      createdAt: record.createdAt,
-    }).catch((err) => {
-      logger.warn({ err, sessionId, blockId: record.id, factCount: record.memoryFacts?.length || 0 }, 'Failed to index compact memory facts');
-    });
-  }
-  return true;
 }
 
 async function runCompaction(deps: SessionHistoryDeps, sessionId: string, options: CompactionRunOptions = {}): Promise<boolean> {
@@ -1445,9 +1210,6 @@ export async function deleteMessages(deps: SessionHistoryDeps, sessionId: string
   if (num > 0) {
     deleted = Math.min(num, session.history.length);
     session.history = session.history.slice(deleted);
-    if (Array.isArray(session.contextFrontier)) {
-      session.contextFrontier = session.contextFrontier.slice(deleted);
-    }
     if (session.vectorIndexPosition !== undefined) {
       session.vectorIndexPosition = Math.max(0, session.vectorIndexPosition - deleted);
     }
@@ -1455,9 +1217,6 @@ export async function deleteMessages(deps: SessionHistoryDeps, sessionId: string
     const absNum = Math.min(Math.abs(num), session.history.length);
     deleted = absNum;
     session.history = session.history.slice(0, session.history.length - absNum);
-    if (Array.isArray(session.contextFrontier)) {
-      session.contextFrontier = session.contextFrontier.slice(0, session.contextFrontier.length - absNum);
-    }
     if (session.vectorIndexPosition !== undefined) {
       session.vectorIndexPosition = Math.min(session.vectorIndexPosition, session.history.length);
     }
@@ -1479,7 +1238,6 @@ export async function clearSession(deps: SessionHistoryDeps, sessionId: string):
   discardPendingCompactWork(sessionId);
 
   session.history = [];
-  session.contextFrontier = [];
   session.queue = [];
   session.stopping = false;
   session.busy = false;

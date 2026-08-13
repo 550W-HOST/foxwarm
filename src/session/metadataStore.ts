@@ -34,7 +34,6 @@ export const SESSION_HISTORY_STATE_FIELDS = [
   'stopping',
   'nextMessageSeq',
   'nextBlockId',
-  'contextFrontier',
   'goalState',
   'compactThresholdTokens',
   'lastAppliedMailboxId',

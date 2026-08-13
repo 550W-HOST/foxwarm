@@ -225,8 +225,7 @@ test('strict migration publishes SQLite atomically, keeps one evidence copy, tol
   await fs.outputJson(path.join(state, 'sessions.json.1.bak'), source, { spaces: 2 });
   await fs.outputJson(path.join(state, 'sessions', 'first.json'), { id: 'first' });
   await fs.outputJson(path.join(state, 'sessions', 'second.json'), {
-    id: 'second', sessionStateVersion: 1, history: [], queue: [], contextFrontier: [],
-    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    id: 'second', sessionStateVersion: 1, history: [], queue: [],     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
     meta: { lastMessageTime: 1 }, lastAppliedMailboxId: 0,
   });
   await writeAuthority(dataRoot, 'orphan');
@@ -389,7 +388,6 @@ test('malformed current authority is fatal and never falls through to a stale ca
   const cases: Array<[string, Record<string, any>, RegExp]> = [
     ['history', { sessionStateVersion: 1, history: [{}] }, /history\[0\]/],
     ['queue', { sessionStateVersion: 1, history: [], queue: [{}] }, /invalid current QueueItem/],
-    ['frontier', { sessionStateVersion: 1, history: [], contextFrontier: [{}] }, /contextFrontier\[0\]/],
     ['version', { sessionStateVersion: 99, history: [] }, /Unsupported per-session state format version 99/],
   ];
   for (const [name, authority, expected] of cases) {

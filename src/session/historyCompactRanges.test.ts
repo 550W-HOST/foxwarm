@@ -7,8 +7,8 @@ import { resolveCreateBlockRanges, type LayeredCompactCandidateEntry } from './h
 function blockEntry(id: number, level: number, index: number): LayeredCompactCandidateEntry {
   return {
     item: buildBlockCandidateItem(id, level, index * 10 + 1, index * 10 + 10, `block ${id}`),
-    frontierStartIndex: index,
-    frontierEndIndex: index,
+    historyStartIndex: index,
+    historyEndIndex: index,
   };
 }
 
@@ -23,8 +23,8 @@ function messageEntry(startSeq: number, endSeq: number, index: number, segmentId
       estimatedTokens: 10,
       ...(typeof segmentId === 'number' ? { segmentId } : {}),
     },
-    frontierStartIndex: index,
-    frontierEndIndex: index,
+    historyStartIndex: index,
+    historyEndIndex: index,
   };
 }
 
@@ -48,8 +48,8 @@ test('resolveCreateBlockRanges follows frontier order for non-consecutive block 
 
   assert.equal(operation.startIndex, 0);
   assert.equal(operation.endIndex, 3);
-  assert.equal(operation.frontierStartIndex, 0);
-  assert.equal(operation.frontierEndIndex, 3);
+  assert.equal(operation.historyStartIndex, 0);
+  assert.equal(operation.historyEndIndex, 3);
   assert.deepEqual(operation.sourceBlockIds, [11, 18, 24, 118]);
   assert.equal(operation.rawStartSeq, 1);
   assert.equal(operation.rawEndSeq, 40);

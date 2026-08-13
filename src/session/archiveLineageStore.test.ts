@@ -22,8 +22,7 @@ test('archive store reads inherited and local messages/blocks without copying pa
     history: [],
     nextMessageSeq: 1,
     nextBlockId: 1,
-    contextFrontier: [],
-  };
+      };
 
   await archive.appendMessagesToArchive(parent, [
     { role: 'user', parts: [{ text: 'alpha parent one' }], __meta: { timestamp: 1000 } },
@@ -56,8 +55,7 @@ test('archive store reads inherited and local messages/blocks without copying pa
     history: [],
     nextMessageSeq: parent.nextMessageSeq,
     nextBlockId: parent.nextBlockId,
-    contextFrontier: [],
-  };
+      };
 
   await archive.appendMessagesToArchive(child, [
     { role: 'user', parts: [{ text: 'gamma child local' }], __meta: { timestamp: 4000 } },
@@ -137,4 +135,83 @@ test('archive store reads inherited and local messages/blocks without copying pa
   assert.equal(childBlockLog.trim().split('\n').length, 1, 'child block archive should contain only local blocks');
   assert.match(childBlockLog, /gamma child local block/);
   assert.doesNotMatch(childBlockLog, /alpha summary block/);
+});
+
+test('archive message and block identities allow identical replay but reject conflicting overwrite', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-archive-immutable-'));
+  process.env.FOXWARM_DATA_DIR = tempRoot;
+  process.env.FOXWARM_SYNC_FILE_LOG = '1';
+  const archiveStore = await import('./archiveStore');
+  const message: any = {
+    v: 1, kind: 'message', sessionId: 'immutable', agent: 'main', seq: 1,
+    timestamp: 1000, role: 'user', message: { role: 'user', parts: [{ text: 'original' }], __meta: { seq: 1, timestamp: 1000 } },
+  };
+  const block: any = {
+    v: 1, kind: 'block', sessionId: 'immutable', agent: 'main', id: 1, level: 1,
+    sourceKind: 'message', sourceStart: 1, sourceEnd: 1, rawStartSeq: 1, rawEndSeq: 1,
+    summary: 'original summary', createdAt: 2000,
+  };
+  await archiveStore.writeArchiveMessages([message]);
+  await archiveStore.writeArchiveMessages([structuredClone(message)]);
+  await assert.rejects(() => archiveStore.writeArchiveMessages([{ ...message, message: { ...message.message, parts: [{ text: 'conflict' }] } }]), /Immutable archive message conflict/);
+  await archiveStore.writeArchiveBlocks([block]);
+  await archiveStore.writeArchiveBlocks([structuredClone(block)]);
+  await assert.rejects(() => archiveStore.writeArchiveBlocks([{ ...block, summary: 'conflict' }]), /Immutable archive block conflict/);
+  assert.equal((await archiveStore.readLocalArchiveMessages('immutable'))[0].message.parts[0].text, 'original');
+  assert.equal((await archiveStore.readLocalArchiveBlocks('immutable'))[0].summary, 'original summary');
+  await fs.remove(tempRoot);
+});
+
+test('required archive append failure restores active Session state and skips authority persistence', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-archive-fail-closed-'));
+  process.env.FOXWARM_DATA_DIR = tempRoot;
+  process.env.FOXWARM_SYNC_FILE_LOG = '1';
+  const archive = await import('./archive');
+  const sessionManager = await import('../sessionManager');
+  const session: any = {
+    id: 'fail-closed', agent: 'main', history: [{ role: 'user', parts: [{ text: 'committed' }], __meta: { seq: 1, timestamp: 1 } }],
+    persistentMemorySnapshot: '', stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: true, queue: [], meta: { lastMessageTime: 1 }, nextMessageSeq: 2, nextBlockId: 1,
+  };
+  let persisted = 0;
+  archive.setArchiveWriteFaultInjectorForTests(() => { throw new Error('injected required archive failure'); });
+  try {
+    await assert.rejects(() => sessionManager.appendSessionMessagesForSession(
+      session,
+      [{ role: 'model', parts: [{ text: 'must not become active' }] }],
+      async () => { persisted += 1; },
+    ), /injected required archive failure/);
+    assert.equal(persisted, 0);
+    assert.equal(session.history.length, 1);
+    assert.equal(session.history[0].parts[0].text, 'committed');
+    assert.equal(session.nextMessageSeq, 2);
+    assert.equal(session.busy, true);
+  } finally {
+    archive.setArchiveWriteFaultInjectorForTests(null);
+    await fs.remove(tempRoot);
+  }
+});
+
+test('authority persistence failure rolls back newly inserted archive rows before retry', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-authority-rollback-'));
+  process.env.FOXWARM_DATA_DIR = tempRoot;
+  process.env.FOXWARM_SYNC_FILE_LOG = '1';
+  const archiveStore = await import('./archiveStore');
+  const sessionManager = await import('../sessionManager');
+  const session: any = {
+    id: 'authority-rollback', agent: 'main', history: [], persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: true, queue: [], meta: { lastMessageTime: 1 }, nextMessageSeq: 1, nextBlockId: 1,
+  };
+  const message: any = { role: 'user', parts: [{ text: 'retryable exact wording' }], __meta: { timestamp: 1000 } };
+  await assert.rejects(() => sessionManager.appendSessionMessagesForSession(
+    session, [message], async () => { throw new Error('injected authority persistence failure'); },
+  ), /injected authority persistence failure/);
+  assert.equal((await archiveStore.readLocalArchiveMessages(session.id)).length, 0);
+  assert.equal(session.history.length, 0);
+  assert.equal(session.nextMessageSeq, 1);
+  await sessionManager.appendSessionMessagesForSession(session, [message], async () => {});
+  assert.equal(session.history.length, 1);
+  assert.equal((await archiveStore.readLocalArchiveMessages(session.id)).length, 1);
+  await fs.remove(tempRoot);
 });

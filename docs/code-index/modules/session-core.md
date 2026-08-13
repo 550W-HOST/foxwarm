@@ -27,7 +27,7 @@ Canonical image references in live history, queues, archives, and forks are owne
 - [src-managed-sessions](../units/src-managed-sessions.md) — exclusive leases, inbox interception, step execution, and controller wakeup.
 - [src-session-goal](../units/src-session-goal.md) — long-horizon goal persistence and bounded reminders.
 
-Context frontier, compaction, archive-store, and vector retrieval are owned by [session context](./session-context.md).
+Active history transformation, compaction, archive-store, and vector retrieval are owned by [session context](./session-context.md).
 
 ## Public interfaces
 
@@ -45,7 +45,7 @@ Context frontier, compaction, archive-store, and vector retrieval are owned by [
 ## Data ownership
 
 - `state/catalog.sqlite` is the Main-owned identity/topology/list projection. Its cross-module admission rule is canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
-- `state/sessions/<id>.json` owns versioned authoritative full semantic session state: durable history, queue, wait/managed metadata, prompt snapshot/cache key, embedded `contextFrontier`, settings, and worker mailbox cursor. Unversioned legacy files receive a one-time tolerant upgrade; current-version hydration replaces semantic fields rather than merging stale catalog values. Per-session files use durable serialized replacement without numbered rotation.
+- `state/sessions/<id>.json` owns versioned authoritative full semantic session state: durable history, queue, wait/managed metadata, prompt snapshot/cache key, message provenance, settings, and worker mailbox cursor. Unversioned legacy files receive a one-time tolerant upgrade; current-version hydration replaces semantic fields rather than merging stale catalog values. Per-session files use durable serialized replacement without numbered rotation.
 - `state/channels.json` owns channel attachments.
 - `state/session-runtime.sqlite` owns Session-worker generations, incarnations, mailbox intents, and acknowledged mailbox cursors when process placement is enabled; it never owns semantic Session state.
 - `state/sessions/<id>.json` additionally persists `lastAppliedMailboxId`; worker placement must durably replace this authoritative file before SQLite acknowledges the corresponding ordered session-local mailbox prefix.

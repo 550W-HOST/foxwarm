@@ -4,6 +4,7 @@ import {
   ensureSessionBranch,
   readEffectiveArchiveMessages,
   readLocalArchiveMessages as readLocalArchiveMessagesFromStore,
+  rollbackUncommittedArchiveMessages,
   writeArchiveMessages,
 } from './archiveStore';
 
@@ -90,9 +91,9 @@ export async function buildArchiveRecord(session: Session, message: Message): Pr
   };
 }
 
-export async function appendMessagesToArchive(session: Session, messages: Message[]): Promise<void> {
+export async function appendMessagesToArchive(session: Session, messages: Message[]): Promise<ArchiveMessageRecord[]> {
   if (messages.length === 0) {
-    return;
+    return [];
   }
 
   await ensureSessionBranch(session.id);
@@ -104,7 +105,11 @@ export async function appendMessagesToArchive(session: Session, messages: Messag
   }
 
   archiveWriteFaultInjector?.('before-sqlite-write', session.id);
-  await writeArchiveMessages(records);
+  return writeArchiveMessages(records);
+}
+
+export async function rollbackUncommittedMessages(records: ArchiveMessageRecord[]): Promise<void> {
+  await rollbackUncommittedArchiveMessages(records);
 }
 
 export async function readArchiveMessages(sessionId: string): Promise<ArchiveMessageRecord[]> {

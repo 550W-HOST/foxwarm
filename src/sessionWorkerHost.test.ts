@@ -36,7 +36,6 @@ function baseSession(id: string): Session {
     id,
     agent: 'main',
     history: [],
-    contextFrontier: [],
     persistentMemorySnapshot: 'worker prompt',
     systemPromptFiles: [],
     snapshotUpdatedAt: Date.now(),
@@ -1083,7 +1082,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.equal(committedFinals[0].options.turnFinal, true);
     const durable = await fs.readJson(statePath);
     assert.deepEqual(durable.history.map((message: any) => message.role), ['user', 'model']);
-    assert.equal(durable.contextFrontier.length, 2);
+    assert.equal(durable.history.length, 2);
     assert.equal(durable.queue.length, 0);
     assert.equal(durable.busy, false);
     const archive = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'), { readOnly: true });

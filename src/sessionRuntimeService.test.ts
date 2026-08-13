@@ -371,7 +371,6 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     assert.equal(history!.session.id, sessionId); assert.deepEqual(history!.session.aliases, [alias]);
     assert.equal(history!.messages[0].parts[0].text, 'authoritative worker history');
     assert.equal(history!.messages[0].__meta?.seq, 1);
-    assert.deepEqual(history!.messages[0].__meta?.contextFrontierItem, { kind: 'message', seq: 1 });
     assert.equal(history!.queue[0].parts![0].text, 'authoritative worker queue 1');
     assert.equal(history!.persistentMemorySnapshot, 'worker prompt');
     history!.messages[0].parts[0].text = 'caller mutation'; history!.queue[0].parts![0].text = 'caller queue mutation';
@@ -497,7 +496,7 @@ test('SessionRuntime list pagination is catalog-indexed and returns a stable tot
         session.promptCacheKey = 'normal-save-cache-key'; session.lastAppliedMailboxId = 8;
         session.goalState = { goal: 'normal body', remindEvery: 5, anchorSeq: 0, updatedAt: 1 };
         session.systemPromptFiles = ['MEMORY.md']; session.indexingState = { inProgress: true, startedAt: 1 } as any;
-        session.contextFrontier = []; (session.meta as any).managedSession = { pendingInbox: [] };
+        (session.meta as any).managedSession = { pendingInbox: [] };
         (session.meta as any).wait = {
           id: 'normal-save-wait', startedAt: 1, waitExecIds: ['exec-a'],
           waitAll: {
@@ -514,7 +513,7 @@ test('SessionRuntime list pagination is catalog-indexed and returns a stable tot
         const rawDb = new DatabaseSync(sessionCatalogStore.filePath, { readOnly: true });
         const raw = JSON.parse((rawDb.prepare('SELECT metadata_json FROM session_catalog WHERE session_id=?').get(ids[index]) as any).metadata_json);
         rawDb.close();
-        for (const field of ['queue', 'history', 'contextFrontier', 'promptCacheKey', 'lastAppliedMailboxId', 'goalState', 'systemPromptFiles', 'indexingState']) {
+        for (const field of ['queue', 'history', 'promptCacheKey', 'lastAppliedMailboxId', 'goalState', 'systemPromptFiles', 'indexingState']) {
           assert.equal(Object.prototype.hasOwnProperty.call(raw, field), false, `${field} leaked from normal save`);
         }
         assert.equal(Object.prototype.hasOwnProperty.call(raw.meta || {}, 'managedSession'), false);

@@ -298,7 +298,7 @@ test('sidebar focus query keeps comma IDs, repeatable focus values, and a comple
   const ids = [rootId, ...Array.from({ length: 105 }, (_, index) => `${prefix}_d${String(index + 1).padStart(3, '0')}`)];
   const sessions = ids.map((id, index) => ({
     id, agent: `${prefix}_agent`, aliases: [], parentSessionId: index ? ids[index - 1] : undefined,
-    history: [], contextFrontier: [], persistentMemorySnapshot: '', systemPromptFiles: [],
+    history: [], persistentMemorySnapshot: '', systemPromptFiles: [],
     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
     busy: false, queue: [], meta: { lastMessageTime: ids.length - index, messageCount: 0 }, currentNode: 'master',
   } as Session));

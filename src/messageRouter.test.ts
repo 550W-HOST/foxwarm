@@ -14,7 +14,6 @@ async function createRouterQueueTestSession(prefix: string): Promise<Session> {
   await sessionManager.loadSessions();
   const session = await sessionManager.getSession(makeRouterQueueTestId(prefix)) as Session;
   session.history = [];
-  session.contextFrontier = [];
   session.nextMessageSeq = 1;
   session.nextBlockId = 1;
   session.persistentMemorySnapshot = 'system prompt';
@@ -1527,7 +1526,7 @@ test('MessageRouter does not replay dispatched parts after an async compact comm
     assert.equal(seenParts[0], null, 'owned queued input is already canonical before the provider call');
     assert.equal(seenParts[1], null);
     assert.equal(userTextOccurrences(session, 'A'), 1);
-    assert.equal(session.contextFrontier?.filter(item => item.kind === 'message').length, session.history.length);
+    assert.equal(session.history.every(message => Number.isSafeInteger(message.__meta?.seq)), true);
     assert.equal(session.queue.length, 0);
   } finally {
     (llm as any).chat = originalChat;
@@ -1574,7 +1573,7 @@ test('MessageRouter keeps a queued user item behind compact commit separate from
     assert.equal(seenParts[1], null);
     assert.equal(userTextOccurrences(session, 'A'), 1);
     assert.equal(userTextOccurrences(session, 'Q'), 1);
-    assert.equal(session.contextFrontier?.filter(item => item.kind === 'message').length, session.history.length);
+    assert.equal(session.history.every(message => Number.isSafeInteger(message.__meta?.seq)), true);
     assert.equal(session.queue.length, 0);
   } finally {
     (llm as any).chat = originalChat;
@@ -1675,7 +1674,7 @@ test('MessageRouter preserves an already-consumed follow-up once when compact co
     assert.equal(seenParts[2], null);
     assert.equal(userTextOccurrences(session, 'A'), 1);
     assert.equal(userTextOccurrences(session, 'Q'), 1);
-    assert.equal(session.contextFrontier?.filter(item => item.kind === 'message').length, session.history.length);
+    assert.equal(session.history.every(message => Number.isSafeInteger(message.__meta?.seq)), true);
     assert.equal(session.queue.length, 0);
   } finally {
     (llm as any).chat = originalChat;
@@ -1710,7 +1709,7 @@ test('MessageRouter preserves owned queued input across a leading compact action
 
     assert.equal(seenParts[0], null, 'owned queued input is already canonical before the provider call');
     assert.equal(userTextOccurrences(session, 'A'), 1);
-    assert.equal(session.contextFrontier?.filter(item => item.kind === 'message').length, session.history.length);
+    assert.equal(session.history.every(message => Number.isSafeInteger(message.__meta?.seq)), true);
   } finally {
     (llm as any).chat = originalChat;
     (sessionManager as any).applyCompletedCompactJob = originalApplyCompletedCompactJob;

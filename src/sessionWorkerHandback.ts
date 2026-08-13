@@ -64,7 +64,6 @@ export async function performSessionWorkerHandback(
     id: sessionId,
     agent: 'main',
     history: [],
-    contextFrontier: [],
     persistentMemorySnapshot: '',
     systemPromptFiles: [],
     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },

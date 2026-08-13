@@ -18,11 +18,10 @@ import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { QueueSource, Session } from './types';
-import * as vector from './vector';
 
 function baseSession(id: string): Session {
   return {
-    id, agent: 'main', history: [], contextFrontier: [], persistentMemorySnapshot: 'worker ingress prompt',
+    id, agent: 'main', history: [], persistentMemorySnapshot: 'worker ingress prompt',
     systemPromptFiles: [], snapshotUpdatedAt: Date.now(),
     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
     busy: false, queue: [], meta: { lastMessageTime: 0 }, lastAppliedMailboxId: 0,
@@ -130,18 +129,17 @@ test('Worker admission that starts before a delete claim cannot spawn or append 
 
 test('idle Main runtime compacts a real Worker archive through the canonical awaited plan engine', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-compact-')); const sessionId = 'worker-compact-real';
-  const initial = baseSession(sessionId); initial.historyVersion = 3; initial.promptCacheKey = 'pre-compact-cache';
+  const initial = baseSession(sessionId); initial.historyVersion = 3; initial.promptCacheKey = '11111111-2222-4333-8444-555555555555';
   initial.history = Array.from({ length: 12 }, (_, index) => ({
     role: 'user' as const, parts: [{ text: `message-${index + 1} ${'payload '.repeat(180)}` }],
     __meta: { seq: index + 1, timestamp: 1_700_000_000_000 + index },
   }));
-  initial.contextFrontier = initial.history.map((_message, index) => ({ kind: 'message' as const, seq: index + 1 }));
   initial.nextMessageSeq = 13; initial.nextBlockId = 1; initial.meta.messageCount = 12;
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`); await fs.outputJson(statePath, serializeSessionHistoryPayload(initial));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
   const sourceContexts = new SessionWorkerSourceContextRegistry();
   const plan = { createBlocksJson: JSON.stringify([{ level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 8,
-    summary: 'Canonical compacted summary.', memoryFacts: [{ kind: 'decision', text: 'durable compact fact' }] }]) };
+    summary: 'Canonical compacted summary.' }]) };
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_SEED_ARCHIVE: '1', FOXWARM_TEST_COMPACT_PLAN: JSON.stringify(plan) },
@@ -150,12 +148,11 @@ test('idle Main runtime compacts a real Worker archive through the canonical awa
   const catalog = sessionManager.getAllSessions(); catalog.set(sessionId, { ...initial, history: [] });
   const sessionsBefore = await fs.pathExists(SESSIONS_FILE) ? await fs.readFile(SESSIONS_FILE) : null;
   const originals = { getExistingSession: sessionManager.getExistingSession, saveSession: sessionManager.saveSession,
-    enqueueSessionItem: sessionManager.enqueueSessionItem, indexFacts: vector.indexMemoryFactsFromCompaction };
-  let mainSemanticCalls = 0; const factCalls: any[] = [];
+    enqueueSessionItem: sessionManager.enqueueSessionItem };
+  let mainSemanticCalls = 0;
   (sessionManager as any).getExistingSession = async () => { mainSemanticCalls += 1; throw new Error('Main hydration forbidden'); };
   (sessionManager as any).saveSession = async () => { mainSemanticCalls += 1; throw new Error('Main save forbidden'); };
   (sessionManager as any).enqueueSessionItem = async () => { mainSemanticCalls += 1; throw new Error('Main enqueue forbidden'); };
-  (vector as any).indexMemoryFactsFromCompaction = async (input: any) => { factCalls.push(input); return input.facts.length; };
   try {
     await supervisor.reconcileStartupOwnerships(); const activated = await supervisor.ensureWorker(sessionId);
     await supervisor.runPendingActivated(sessionId, { generation: activated.generation, incarnationId: activated.incarnationId });
@@ -163,17 +160,15 @@ test('idle Main runtime compacts a real Worker archive through the canonical awa
     const result = await requestCompaction(sessionId, 0.3);
     assert.deepEqual(result, { kind: 'worker', completed: true, compacted: true, messageCount: 6 });
     const authority = await fs.readJson(statePath);
-    assert.equal(authority.historyVersion, 4); assert.notEqual(authority.promptCacheKey, 'pre-compact-cache');
-    assert.equal(authority.contextFrontier[0].kind, 'block'); assert.equal(authority.contextFrontier[0].rawStartSeq, 1); assert.equal(authority.contextFrontier[0].rawEndSeq, 8);
+    assert.equal(authority.historyVersion, 4); assert.equal(authority.promptCacheKey, '11111111-2222-4333-8444-555555555555');
+    assert.equal(authority.history[0].__meta.contextBlock.rawStartSeq, 1); assert.equal(authority.history[0].__meta.contextBlock.rawEndSeq, 8);
     assert.match(JSON.stringify(authority.history.at(-1)?.parts), /compact-completed/);
     assert.equal(authority.queue.some((item: any) => item.type === 'compact-commit'), false); assert.equal(store.countMailboxIntents(), 0);
     const projection = supervisor.projectionRegistry.get(sessionId)!;
     assert.equal(projection.generation, activated.generation); assert.equal(projection.projection?.messageCount, authority.history.length);
     const archive = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'));
     const block = archive.prepare('SELECT id, raw_start_seq, raw_end_seq, summary, memory_facts_json FROM archive_blocks WHERE session_id=?').get(sessionId) as any;
-    archive.close(); assert.equal(block.raw_start_seq, 1); assert.equal(block.raw_end_seq, 8); assert.match(block.summary, /Canonical compacted summary/); assert.match(block.memory_facts_json, /durable compact fact/);
-    for (let i = 0; i < 50 && factCalls.length === 0; i += 1) await new Promise(resolve => setTimeout(resolve, 10));
-    assert.equal(factCalls.length, 1); assert.equal(factCalls[0].sessionId, sessionId);
+    archive.close(); assert.equal(block.raw_start_seq, 1); assert.equal(block.raw_end_seq, 8); assert.match(block.summary, /Canonical compacted summary/);
     const liveEntry = (supervisor as any).entries.get(sessionId); liveEntry.activeCalls = 1;
     await assert.rejects(() => requestCompaction(sessionId, 0.3), (error: any) => error?.code === 'SESSION_WORKER_COMPACTION_BUSY');
     liveEntry.activeCalls = 0;
@@ -185,7 +180,7 @@ test('idle Main runtime compacts a real Worker archive through the canonical awa
     const sessionsAfter = await fs.pathExists(SESSIONS_FILE) ? await fs.readFile(SESSIONS_FILE) : null; assert.deepEqual(sessionsAfter, sessionsBefore);
   } finally {
     (sessionManager as any).getExistingSession = originals.getExistingSession; (sessionManager as any).saveSession = originals.saveSession;
-    (sessionManager as any).enqueueSessionItem = originals.enqueueSessionItem; (vector as any).indexMemoryFactsFromCompaction = originals.indexFacts;
+    (sessionManager as any).enqueueSessionItem = originals.enqueueSessionItem;
     await shutdownSessionRuntime().catch(() => {}); await supervisor.shutdown(5_000).catch(() => {}); store.close(); catalog.delete(sessionId); await fs.remove(root);
   }
 });

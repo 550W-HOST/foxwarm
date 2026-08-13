@@ -55,7 +55,6 @@ export function cloneSessionForBtw(session: Session): Session {
     historyVersion: session.historyVersion,
     nextMessageSeq: session.nextMessageSeq,
     nextBlockId: session.nextBlockId,
-    contextFrontier: session.contextFrontier ? structuredClone(session.contextFrontier) : undefined,
     parentSessionId: session.parentSessionId,
     goalState: session.goalState ? structuredClone(session.goalState) : undefined,
     compactThresholdTokens: session.compactThresholdTokens,

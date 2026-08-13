@@ -19,7 +19,7 @@ import { COMMANDS } from './commands';
 
 function baseSession(id: string): Session {
   return {
-    id, agent: 'main', history: [], contextFrontier: [], persistentMemorySnapshot: 'router ingress prompt',
+    id, agent: 'main', history: [], persistentMemorySnapshot: 'router ingress prompt',
     systemPromptFiles: [], snapshotUpdatedAt: Date.now(),
     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
     busy: false, queue: [], meta: { lastMessageTime: 0 }, lastAppliedMailboxId: 0,

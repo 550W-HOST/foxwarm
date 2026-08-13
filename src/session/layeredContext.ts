@@ -1,10 +1,11 @@
-import { Message, Session, ContextFrontierItem, ContextBlockMessageMeta } from '../types';
-import { ArchiveMessageRecord, readArchiveMessagesBySeqRange } from './archive';
+import { Message, Session, ContextBlockMessageMeta } from '../types';
+import { readArchiveMessagesBySeqRange } from './archive';
 import { formatLocalTimeRange } from '../utils/localTime';
 import {
   ensureSessionBranch,
   readEffectiveArchiveBlocks,
   readLocalArchiveBlocks as readLocalArchiveBlocksFromStore,
+  rollbackUncommittedArchiveBlocks,
   writeArchiveBlocks,
 } from './archiveStore';
 import { isModelVisibleMessage } from './messageVisibility';
@@ -53,16 +54,6 @@ export interface CreateArchiveBlockInput {
   summary: string;
   memoryFacts?: ExtractedMemoryFact[];
 }
-
-export type ContextFrontierAnnotationResult = {
-  history: Message[];
-  matched: boolean;
-  warnings: string[];
-};
-
-export type ContextFrontierAnnotationOptions = {
-  readBlocksByIdRange?: (sessionId: string, startId?: number, endId?: number) => Promise<ArchiveBlockRecord[]>;
-};
 
 export function isIgnoredCompactLifecycleSystemText(text: string): boolean {
   const tag = parseFoxwarmOpeningTag(text);
@@ -147,54 +138,19 @@ export function shouldIgnoreMessageInCompactCandidates(message: Message): boolea
   return systemTexts.every(isIgnoredCompactLifecycleSystemText);
 }
 
-function cloneFrontier(frontier: ContextFrontierItem[] | undefined): ContextFrontierItem[] | undefined {
-  return frontier ? structuredClone(frontier) : undefined;
-}
-
 function getNextSessionBlockId(session: Session): number {
   if (typeof session.nextBlockId === 'number' && session.nextBlockId > 0) {
     return session.nextBlockId;
   }
 
   let maxId = 0;
-  for (const item of session.contextFrontier || []) {
-    if (item.kind === 'block' && item.id > maxId) {
-      maxId = item.id;
-    }
+  for (const message of session.history) {
+    const id = message.__meta?.contextBlock?.id;
+    if (typeof id === 'number' && id > maxId) maxId = id;
   }
 
   session.nextBlockId = maxId + 1 || 1;
   return session.nextBlockId;
-}
-
-export function ensureContextFrontier(session: Session): ContextFrontierItem[] {
-  if (Array.isArray(session.contextFrontier) && session.contextFrontier.length > 0) {
-    return session.contextFrontier;
-  }
-
-  const frontier: ContextFrontierItem[] = [];
-  for (const message of session.history) {
-    const seq = message.__meta?.seq;
-    if (typeof seq === 'number' && seq > 0) {
-      frontier.push({ kind: 'message', seq });
-    }
-  }
-
-  session.contextFrontier = frontier;
-  return frontier;
-}
-
-export function appendMessagesToContextFrontier(session: Session, messages: Message[]): void {
-  if (!Array.isArray(session.contextFrontier)) {
-    return;
-  }
-
-  for (const message of messages) {
-    const seq = message.__meta?.seq;
-    if (typeof seq === 'number' && seq > 0) {
-      session.contextFrontier.push({ kind: 'message', seq });
-    }
-  }
 }
 
 async function buildArchiveBlockRecords(session: Session, blocks: CreateArchiveBlockInput[]): Promise<ArchiveBlockRecord[]> {
@@ -230,15 +186,26 @@ async function buildArchiveBlockRecords(session: Session, blocks: CreateArchiveB
   }));
 }
 
-export async function appendBlocksToArchive(session: Session, blocks: CreateArchiveBlockInput[]): Promise<ArchiveBlockRecord[]> {
+export async function appendBlocksToArchiveWithCommitInfo(
+  session: Session,
+  blocks: CreateArchiveBlockInput[],
+): Promise<{ records: ArchiveBlockRecord[]; insertedRecords: ArchiveBlockRecord[] }> {
   if (blocks.length === 0) {
-    return [];
+    return { records: [], insertedRecords: [] };
   }
 
   await ensureSessionBranch(session.id);
   const records = await buildArchiveBlockRecords(session, blocks);
-  await writeArchiveBlocks(records);
-  return records;
+  const insertedRecords = await writeArchiveBlocks(records);
+  return { records, insertedRecords };
+}
+
+export async function appendBlocksToArchive(session: Session, blocks: CreateArchiveBlockInput[]): Promise<ArchiveBlockRecord[]> {
+  return (await appendBlocksToArchiveWithCommitInfo(session, blocks)).records;
+}
+
+export async function rollbackUncommittedBlocks(records: ArchiveBlockRecord[]): Promise<void> {
+  await rollbackUncommittedArchiveBlocks(records);
 }
 
 export async function readArchiveBlocksByIdRange(sessionId: string, startId?: number, endId?: number): Promise<ArchiveBlockRecord[]> {
@@ -334,147 +301,7 @@ export function buildContextBlockMessageMeta(record: ArchiveBlockRecord): Contex
   };
 }
 
-function annotateMessageWithFrontierItem(message: Message, item: Extract<ContextFrontierItem, { kind: 'message' }>): Message {
-  const next = structuredClone(message);
-  next.__meta = {
-    ...(next.__meta || {}),
-    contextFrontierItem: structuredClone(item),
-    ...(typeof item.preservedFromBlockId === 'number' ? { preservedFromBlockId: item.preservedFromBlockId } : {}),
-  };
-  if (typeof item.preservedFromBlockId !== 'number') {
-    delete next.__meta.preservedFromBlockId;
-  }
-  return next;
-}
-
-function annotateMessageWithBlock(message: Message, item: Extract<ContextFrontierItem, { kind: 'block' }>, record: ArchiveBlockRecord): Message {
-  const next = structuredClone(message);
-  next.__meta = {
-    ...(next.__meta || {}),
-    timestamp: next.__meta?.timestamp || record.createdAt,
-    contextFrontierItem: structuredClone(item),
-    contextBlock: buildContextBlockMessageMeta(record),
-  };
-  return next;
-}
-
-function messageText(message: Message): string {
-  return (message.parts || [])
-    .map(part => typeof part.text === 'string' ? part.text : '')
-    .filter(Boolean)
-    .join('\n');
-}
-
-function blockMessageLooksCompatible(message: Message, item: Extract<ContextFrontierItem, { kind: 'block' }>): boolean {
-  if (!message) {
-    return false;
-  }
-
-  if (message.__meta?.contextBlock?.id === item.id) {
-    return true;
-  }
-
-  const text = messageText(message).trim();
-  return new RegExp(`^\\[CTX-BLOCK\\s+L${item.level}\\s+B#${item.id}(?:\\s|])`).test(text);
-}
-
-async function readBlockMapForFrontier(
-  sessionId: string,
-  frontier: ContextFrontierItem[],
-  readBlocksByIdRange: (sessionId: string, startId?: number, endId?: number) => Promise<ArchiveBlockRecord[]>,
-): Promise<Map<number, ArchiveBlockRecord>> {
-  const blockIds = frontier
-    .filter((item): item is Extract<ContextFrontierItem, { kind: 'block' }> => item.kind === 'block')
-    .map(item => item.id);
-  if (blockIds.length === 0) {
-    return new Map();
-  }
-
-  const records = await readBlocksByIdRange(sessionId, Math.min(...blockIds), Math.max(...blockIds));
-  return new Map(records.map(record => [record.id, record]));
-}
-
-export async function annotateHistoryWithContextFrontierMetadata(
-  sessionId: string,
-  history: Message[],
-  frontier: ContextFrontierItem[],
-  options: ContextFrontierAnnotationOptions = {},
-): Promise<ContextFrontierAnnotationResult> {
-  const readBlocks = options.readBlocksByIdRange || readArchiveBlocksByIdRange;
-  const blockMap = await readBlockMapForFrontier(sessionId, frontier, readBlocks);
-  const nextHistory = structuredClone(history || []);
-  const warnings: string[] = [];
-
-  if (nextHistory.length !== frontier.length) {
-    warnings.push(`history length ${nextHistory.length} does not match context frontier length ${frontier.length}`);
-  }
-
-  const seqToHistoryIndex = new Map<number, number>();
-  nextHistory.forEach((message, index) => {
-    const seq = message.__meta?.seq;
-    if (typeof seq === 'number' && seq > 0 && !seqToHistoryIndex.has(seq)) {
-      seqToHistoryIndex.set(seq, index);
-    }
-  });
-
-  const usedHistoryIndexes = new Set<number>();
-  for (let frontierIndex = 0; frontierIndex < frontier.length; frontierIndex += 1) {
-    const item = frontier[frontierIndex];
-    const positionalMessage = nextHistory[frontierIndex];
-
-    if (item.kind === 'message') {
-      let historyIndex = positionalMessage?.__meta?.seq === item.seq
-        ? frontierIndex
-        : seqToHistoryIndex.get(item.seq);
-      if (typeof historyIndex !== 'number') {
-        warnings.push(`frontier message seq ${item.seq} did not match any rendered history message`);
-        continue;
-      }
-      if (historyIndex !== frontierIndex) {
-        warnings.push(`frontier message seq ${item.seq} matched history index ${historyIndex}, expected ${frontierIndex}`);
-      }
-      nextHistory[historyIndex] = annotateMessageWithFrontierItem(nextHistory[historyIndex], item);
-      usedHistoryIndexes.add(historyIndex);
-      continue;
-    }
-
-    const blockRecord = blockMap.get(item.id);
-    if (!blockRecord) {
-      warnings.push(`frontier block B#${item.id} has no archive block record`);
-      continue;
-    }
-
-    let historyIndex = blockMessageLooksCompatible(positionalMessage, item) ? frontierIndex : -1;
-    if (historyIndex < 0) {
-      historyIndex = nextHistory.findIndex((message, index) => !usedHistoryIndexes.has(index) && blockMessageLooksCompatible(message, item));
-    }
-    if (historyIndex < 0) {
-      warnings.push(`frontier block B#${item.id} did not match any rendered CTX-BLOCK message`);
-      continue;
-    }
-    if (historyIndex !== frontierIndex) {
-      warnings.push(`frontier block B#${item.id} matched history index ${historyIndex}, expected ${frontierIndex}`);
-    }
-
-    nextHistory[historyIndex] = annotateMessageWithBlock(nextHistory[historyIndex], item, blockRecord);
-    usedHistoryIndexes.add(historyIndex);
-  }
-
-  return {
-    history: nextHistory,
-    matched: warnings.length === 0,
-    warnings,
-  };
-}
-
 export function renderBlockMessage(record: ArchiveBlockRecord): Message {
-  const frontierItem: ContextFrontierItem = {
-    kind: 'block',
-    id: record.id,
-    level: record.level,
-    rawStartSeq: record.rawStartSeq,
-    rawEndSeq: record.rawEndSeq,
-  };
   return {
     role: 'model',
     parts: [{
@@ -482,54 +309,7 @@ export function renderBlockMessage(record: ArchiveBlockRecord): Message {
     }],
     __meta: {
       timestamp: record.createdAt,
-      contextFrontierItem: frontierItem,
       contextBlock: buildContextBlockMessageMeta(record),
     },
   };
-}
-
-export async function renderHistoryFromFrontier(session: Session, frontier?: ContextFrontierItem[]): Promise<Message[]> {
-  const targetFrontier = frontier || session.contextFrontier || [];
-  if (targetFrontier.length === 0) {
-    return [];
-  }
-
-  const messageSeqs = targetFrontier
-    .filter((item): item is Extract<ContextFrontierItem, { kind: 'message' }> => item.kind === 'message')
-    .map(item => item.seq);
-  const blockIds = targetFrontier
-    .filter((item): item is Extract<ContextFrontierItem, { kind: 'block' }> => item.kind === 'block')
-    .map(item => item.id);
-
-  const messageRecords = messageSeqs.length
-    ? await readArchiveMessagesBySeqRange(session.id, Math.min(...messageSeqs), Math.max(...messageSeqs))
-    : [];
-  const blockRecords = blockIds.length
-    ? await readArchiveBlocksByIdRange(session.id, Math.min(...blockIds), Math.max(...blockIds))
-    : [];
-
-  const messageMap = new Map<number, ArchiveMessageRecord>(messageRecords.map(record => [record.seq, record]));
-  const blockMap = new Map<number, ArchiveBlockRecord>(blockRecords.map(record => [record.id, record]));
-
-  const rendered: Message[] = [];
-  for (const item of targetFrontier) {
-    if (item.kind === 'message') {
-      const record = messageMap.get(item.seq);
-      if (record?.message) {
-        rendered.push(annotateMessageWithFrontierItem(record.message, item));
-      }
-      continue;
-    }
-
-    const record = blockMap.get(item.id);
-    if (record) {
-      rendered.push(annotateMessageWithBlock(renderBlockMessage(record), item, record));
-    }
-  }
-
-  return rendered;
-}
-
-export function cloneSessionFrontier(session: Session): ContextFrontierItem[] {
-  return cloneFrontier(ensureContextFrontier(session)) || [];
 }

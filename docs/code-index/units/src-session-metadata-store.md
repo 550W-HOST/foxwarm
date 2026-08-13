@@ -4,11 +4,11 @@ Files: src/session/metadataStore.ts, src/session/stateFile.ts, src/session/state
 
 ## Purpose
 
-Manages authoritative per-session JSON serialization/hydration and the compatibility readers used by the one-time legacy catalog migration. Active metadata snapshots and writes adapt to the Main-owned SQLite Session catalog; semantic history/frontier/queue state remains in individual Session files.
+Manages authoritative per-session JSON serialization/hydration and the compatibility readers used by the one-time legacy catalog migration. Active metadata snapshots and writes adapt to the Main-owned SQLite Session catalog; semantic history/queue state remains in individual Session files.
 
 ## Key Exports
 
-- `serializeSessionHistoryPayload(session)` — writes `sessionStateVersion:1` plus authoritative history and semantic fields, including raw model/effort settings, stats/meta wait/managed state, queue, `contextFrontier`, prompt/cache state, and `lastAppliedMailboxId`; catalog-only channel/sidebar state is excluded
+- `serializeSessionHistoryPayload(session)` — writes `sessionStateVersion:1` plus authoritative history and semantic fields, including raw model/effort settings, stats/meta wait/managed state, queue, prompt/cache state, and `lastAppliedMailboxId`; catalog-only channel/sidebar state is excluded
 - `captureSessionSemanticState()` / `restoreSessionSemanticState()` / `replaceSessionSemanticState()` — one shared semantic-field owner for exact rollback and current-format replace/default behavior
 - `prepareSessionSemanticStateForHydration()` — distinguishes current v1 from unversioned legacy state and seeds only historically catalog-only stats/meta/vector values during the one-time upgrade
 - `normalizeAndValidateSessionAuthorityPayload()` — side-effect-free shared
@@ -19,7 +19,7 @@ Manages authoritative per-session JSON serialization/hydration and the compatibi
 - `readSessionHistorySnapshot(sessionId)` — reads a session's history from disk
 - `writeSessionHistoryAtomically(sessionId, data)` — atomically writes session history
 - `writeAuthoritativeSessionState(session)` — worker-safe per-session state write with image canonicalization; never writes the shared Main catalog
-- `hydrateAuthoritativeSessionState(target, raw)` — reuses current queue/frontier/image compatibility behavior when loading the authoritative file into a catalog stub
+- `hydrateAuthoritativeSessionState(target, raw)` — reuses current queue/image compatibility behavior when loading the authoritative file into a catalog stub
 - `sessionsMetadataStore` — legacy candidate reader retained for one-time migration/tests
 - `loadSessionsMetadataSnapshot()` — returns the active SQLite catalog snapshot after catalog initialization
 - `writeSessionsMetadataAtomically(data)` — full-replacement recovery adapter over the SQLite catalog; not a normal save path
@@ -71,8 +71,8 @@ Manages authoritative per-session JSON serialization/hydration and the compatibi
 - Separates session data into a Main-owned `catalog.sqlite` identity/topology/list projection and authoritative full semantic per-session state files. Current local save writes authority then one catalog row; Session-worker placement keeps Main as the sole catalog writer and updates it from explicit catalog mutations plus bounded Worker projections.
 - `sidebarOrder` and `pinned` are WebUI/session-list metadata fields saved in the shared metadata index only. They are excluded from per-session history serialization/application so reorder/pin operations do not touch or risk stale rewrites of history JSON files.
 - Uses an in-memory `Map` cache for history store instances to avoid recreating them.
-- The real per-session file reader applies tolerant history/frontier shape normalization only to unversioned legacy payloads. Versioned payloads pass the shared strict history/queue/frontier/version validator before hydration, so malformed v1 data and unknown versions fail closed without an empty-history rewrite.
-- Per-session history normalization accepts embedded `contextFrontier` only when it is an array; invalid frontier payloads are ignored rather than corrupting session state.
+- The real per-session file reader applies tolerant history shape normalization only to unversioned legacy payloads. Versioned payloads pass the shared strict history/queue/version validator before hydration, so malformed v1 data and unknown versions fail closed without an empty-history rewrite.
+- Per-session normalization drops obsolete `contextFrontier` regardless of shape; it never rejects or rewrites valid history.
 - Legacy goal-state end-turn flags remain readable, but current history serialization removes the obsolete flag and the catalog projection omits goal bodies entirely. The canonical goal contract is [D-goal-direct-safe-boundary](src-session-goal.md#d-goal-direct-safe-boundary).
 - History-scan rebuild helpers remain available for explicit repair/recovery composition, but normal startup does not silently replace a missing SQLite catalog from authority files because catalog-only topology/presentation fields are not recoverable.
 - Metadata recovery deliberately ignores legacy `*.frontier.json` files so they are not mistaken for sessions named `*.frontier`.
@@ -87,7 +87,7 @@ Manages authoritative per-session JSON serialization/hydration and the compatibi
 
 ## Design Decisions
 
-- [2026-06-17] Store structured `contextFrontier` in the per-session history JSON as the active persistence path; keep legacy `*.frontier.json` only for startup migration, and exclude those legacy files from metadata recovery scans.
+- [2026-08-13] Persist only `history` as active timeline authority. Ignore old embedded frontier data, omit it from current writes, and exclude standalone frontier files from metadata recovery scans.
 - [2026-07-09] WebUI sidebar ordering belongs to the Main catalog, not per-session history JSON; drag reorder must not risk stale semantic history/queue/context rewrites.
 - [2026-07-10] WebUI session pin state follows the same catalog-only boundary as `sidebarOrder`; current history payloads intentionally never contain `pinned`.
 
@@ -96,5 +96,5 @@ Manages authoritative per-session JSON serialization/hydration and the compatibi
 - Used by the session management layer to persist and restore session state across restarts.
 - Relies on `DiskJsonData` for per-session authority writes and legacy ordered-candidate readers; active catalog access delegates to `SessionCatalogStore`.
 - The SQLite catalog is the source of truth for listing/session identity projections, while per-session JSON is the sole semantic authority. Canonical boundary: [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
-- The per-session history file is also the active source for structured context frontier state; standalone frontier files are migration artifacts only, not runtime fallback inputs.
+- The per-session history file directly owns the active timeline; standalone and embedded frontier data are obsolete compatibility inputs only.
 - Legacy JSON candidate/rebuild helpers exist for controlled migration or explicit repair; normal SQLite catalog loss fails closed rather than discarding catalog-only state.
