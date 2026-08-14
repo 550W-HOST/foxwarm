@@ -4,6 +4,7 @@ import {
   ensureSessionBranch,
   readEffectiveArchiveMessages,
   readLocalArchiveMessages as readLocalArchiveMessagesFromStore,
+  rollbackUncommittedArchiveMessages,
   writeArchiveMessages,
 } from './archiveStore';
 
@@ -25,6 +26,15 @@ let archiveWriteFaultInjector: ((phase: ArchiveWritePhase, sessionId: string) =>
 
 export function setArchiveWriteFaultInjectorForTests(injector: ((phase: ArchiveWritePhase, sessionId: string) => void) | null): void {
   archiveWriteFaultInjector = injector;
+}
+
+export class SessionArchiveCommitError extends Error {
+  readonly code = 'SESSION_ARCHIVE_COMMIT_FAILED';
+  constructor(message: string, readonly cause?: unknown) { super(message); this.name = 'SessionArchiveCommitError'; }
+}
+
+export function isSessionArchiveCommitError(error: unknown): boolean {
+  return String((error as any)?.code || '') === 'SESSION_ARCHIVE_COMMIT_FAILED';
 }
 
 export function getMessageTimestamp(message: Message): number {
@@ -90,9 +100,9 @@ export async function buildArchiveRecord(session: Session, message: Message): Pr
   };
 }
 
-export async function appendMessagesToArchive(session: Session, messages: Message[]): Promise<void> {
+export async function appendMessagesToArchive(session: Session, messages: Message[]): Promise<ArchiveMessageRecord[]> {
   if (messages.length === 0) {
-    return;
+    return [];
   }
 
   await ensureSessionBranch(session.id);
@@ -103,8 +113,15 @@ export async function appendMessagesToArchive(session: Session, messages: Messag
     records.push(record as ArchiveMessageRecord);
   }
 
-  archiveWriteFaultInjector?.('before-sqlite-write', session.id);
-  await writeArchiveMessages(records);
+  try {
+    archiveWriteFaultInjector?.('before-sqlite-write', session.id);
+    return await writeArchiveMessages(records);
+  }
+  catch (error) { throw new SessionArchiveCommitError(`Required archive commit failed for Session ${session.id}: ${(error as any)?.message || error}`, error); }
+}
+
+export async function rollbackUncommittedMessages(records: ArchiveMessageRecord[]): Promise<void> {
+  await rollbackUncommittedArchiveMessages(records);
 }
 
 export async function readArchiveMessages(sessionId: string): Promise<ArchiveMessageRecord[]> {

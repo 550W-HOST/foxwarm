@@ -55,7 +55,7 @@ true:
 
 The boundary explicitly excludes:
 
-- per-session semantic history, queue, prompt/frontier, and worker-owned hot
+- per-session semantic history, queue, prompt/cache state, structured history provenance, and worker-owned hot
   state, whose authority is `state/sessions/<id>.json`;
 - worker ownership, mailbox, generation, and process runtime state in
   `session-runtime.sqlite`;
@@ -176,6 +176,13 @@ both by-ID HTTP and global SSE subscriptions. Ordinary busy-descendant badges
 use a bounded batch active-ancestor projection; destructive dialogs retain exact
 recursive summaries.
 
+Every bounded Sidebar/search/exact item carries its numeric direct Sidebar
+presentation-child count from one maintained-count batch over the returned IDs.
+Default/Time counts exclude pinned children elevated to presentation roots; an
+item's own unpinned children still count normally. Loaded child-page totals take
+precedence in the browser. Architecture keeps its separate real-agent-forest
+branch totals and does not reinterpret Sidebar counts.
+
 ## Design decisions
 
 ### D-main-catalog-indexed-boundary
@@ -193,7 +200,7 @@ contains only Session catalog data; future admitted domains require explicit
 schema migrations and the same narrow admission test.
 
 The Session `metadata_json` projection is an explicit allowlist, not a filtered
-copy of a legacy row. Queue/managed-inbox/history/frontier/prompt/cache/mailbox,
+copy of a legacy row. Queue/managed-inbox/history/prompt/cache/mailbox,
 goal, prompt-file, indexing, deferred-wait, and message bodies are prohibited.
 Optional raw `effort` and `childEffortDefault` values are admitted only as
 bounded semantic presentation projections alongside `model` and

@@ -133,8 +133,6 @@ export interface Message {
     usage?: TokenUsage;
     /** Structured CTX-BLOCK metadata for rendered layered-context block messages. */
     contextBlock?: ContextBlockMessageMeta;
-    /** Structured active-frontier entry used to render this message, if known. */
-    contextFrontierItem?: ContextFrontierItem;
     /** Present when a raw message is intentionally preserved after a covering block. */
     preservedFromBlockId?: number;
     [key: string]: any;
@@ -297,10 +295,6 @@ export function isQueueItem(value: unknown): value is QueueItem {
     || (!!item.message && typeof item.message === 'object');
 }
 
-export type ContextFrontierItem =
-  | { kind: 'message'; seq: number; preservedFromBlockId?: number }
-  | { kind: 'block'; id: number; level: number; rawStartSeq: number; rawEndSeq: number };
-
 export interface Session {
   id: string;
   agent?: string; // Agent name (default: 'main')
@@ -331,7 +325,6 @@ export interface Session {
   historyVersion?: number; // Incremented on compact/clear to detect changes
   nextMessageSeq?: number; // Next per-session sequence number for append-only archive logging
   nextBlockId?: number; // Next per-session layered-context block id
-  contextFrontier?: ContextFrontierItem[]; // Structured layered-context frontier; session.history is a rendered view
   parentSessionId?: string; // Parent session ID for child sessions
   goalState?: SessionGoalState; // Session-local goal reminder configuration
   compactThresholdTokens?: number; // Optional per-session auto-compact threshold override in tokens

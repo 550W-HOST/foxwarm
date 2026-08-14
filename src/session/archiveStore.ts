@@ -3,9 +3,9 @@ import path from 'path';
 import crypto from 'crypto';
 import { promises as nodeFs } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { createInterface } from 'node:readline';
 import { ARCHIVE_DB_PATH, SESSION_ID_RESERVATIONS_LOG_PATH, SESSION_LOGS_DIR, STATE_DIR, getSessionArchiveLogPath, getSessionBlockArchiveLogPath } from '../config';
 import { logger } from '../common';
+import { streamUtf8JsonlLines } from '../jsonl';
 import type { Message } from '../types';
 import type { ArchiveMessageRecord } from './archive';
 import type { ArchiveBlockRecord } from './layeredContext';
@@ -207,20 +207,7 @@ function setImportStateSync(
 }
 
 async function streamJsonlLines(filePath: string, onLine: (line: string) => Promise<void> | void): Promise<void> {
-  const stream = fs.createReadStream(filePath, { encoding: 'utf8' });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
-  try {
-    for await (const rawLine of rl) {
-      const line = rawLine.trim();
-      if (!line) {
-        continue;
-      }
-      await onLine(line);
-    }
-  } finally {
-    rl.close();
-    stream.destroy();
-  }
+  await streamUtf8JsonlLines(fs.createReadStream(filePath), onLine);
 }
 
 function upsertSessionIdReservationSync(sessionId: string, canonicalSessionId: string, timestamp: number): void {
@@ -559,10 +546,17 @@ function isCanonicalMessageRecord(value: unknown): value is ArchiveMessageRecord
 function isCanonicalBlockRecord(value: unknown): value is ArchiveBlockRecord {
   if (!isRecord(value) || value.v !== 1 || value.kind !== 'block' || typeof value.sessionId !== 'string' || !value.sessionId
     || typeof value.agent !== 'string' || !value.agent || !isPositiveInteger(value.id) || !isPositiveInteger(value.level)
-    || !['message', 'block'].includes(value.sourceKind) || !isPositiveInteger(value.sourceStart) || !isPositiveInteger(value.sourceEnd) || value.sourceStart > value.sourceEnd
+    || !['message', 'block'].includes(value.sourceKind) || !isPositiveInteger(value.sourceStart) || !isPositiveInteger(value.sourceEnd)
     || !isPositiveInteger(value.rawStartSeq) || !isPositiveInteger(value.rawEndSeq) || value.rawStartSeq > value.rawEndSeq
     || typeof value.summary !== 'string' || !isFiniteNumber(value.createdAt)) return false;
   if (value.sourceBlockIds !== undefined && (!Array.isArray(value.sourceBlockIds) || !value.sourceBlockIds.every(isPositiveInteger))) return false;
+  if (value.sourceKind === 'message') {
+    if (value.sourceStart > value.sourceEnd || value.sourceBlockIds !== undefined) return false;
+  } else if (value.sourceBlockIds !== undefined) {
+    if (value.sourceBlockIds.length === 0 || value.sourceBlockIds[0] !== value.sourceStart
+      || value.sourceBlockIds[value.sourceBlockIds.length - 1] !== value.sourceEnd
+      || new Set(value.sourceBlockIds).size !== value.sourceBlockIds.length) return false;
+  } else if (value.sourceStart > value.sourceEnd) return false;
   if (value.rawStartTimestamp !== undefined && !isFiniteNumber(value.rawStartTimestamp)) return false;
   if (value.rawEndTimestamp !== undefined && !isFiniteNumber(value.rawEndTimestamp)) return false;
   if (value.memoryFacts !== undefined && (!Array.isArray(value.memoryFacts) || !value.memoryFacts.every((fact: unknown) => isRecord(fact)
@@ -1180,70 +1174,144 @@ export async function getSessionBranch(sessionId: string): Promise<ArchiveBranch
   return getBranchInternal(sessionId);
 }
 
-export async function writeArchiveMessages(records: ArchiveMessageRecord[]): Promise<void> {
+export async function writeArchiveMessages(records: ArchiveMessageRecord[]): Promise<ArchiveMessageRecord[]> {
   if (records.length === 0) {
-    return;
+    return [];
+  }
+  if (records.some(record => record.sessionId !== records[0].sessionId)) {
+    throw new Error('Archive message batches must contain exactly one session ID.');
   }
 
   await initArchiveStore();
   await ensureSessionBranch(records[0].sessionId);
   const database = getDb();
+  const select = database.prepare(`SELECT agent,timestamp,role,message_json FROM archive_messages WHERE session_id=? AND seq=?`);
   const insert = database.prepare(`
-    INSERT OR REPLACE INTO archive_messages (
+    INSERT INTO archive_messages (
       session_id, agent, seq, timestamp, role, message_json
     ) VALUES (?, ?, ?, ?, ?, ?)
   `);
+  const inserted: ArchiveMessageRecord[] = [];
   runInTransaction(() => {
     for (const record of records) {
+      const values = [record.agent || 'main', record.timestamp, record.role, JSON.stringify(record.message)] as const;
+      const existing = select.get(record.sessionId, record.seq) as any;
+      if (existing) {
+        if (existing.agent === values[0] && existing.timestamp === values[1] && existing.role === values[2] && existing.message_json === values[3]) continue;
+        throw new Error(`Immutable archive message conflict for ${record.sessionId}#${record.seq}.`);
+      }
       insert.run(
         record.sessionId,
-        record.agent || 'main',
+        values[0],
         record.seq,
-        record.timestamp,
-        record.role,
-        JSON.stringify(record.message),
+        values[1],
+        values[2],
+        values[3],
       );
+      inserted.push(record);
     }
   });
   importedSessions.add(records[0].sessionId);
+  return inserted;
 }
 
-export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise<void> {
+export async function writeArchiveBlocks(records: ArchiveBlockRecord[]): Promise<ArchiveBlockRecord[]> {
   if (records.length === 0) {
-    return;
+    return [];
+  }
+  if (records.some(record => record.sessionId !== records[0].sessionId)) {
+    throw new Error('Archive block batches must contain exactly one session ID.');
   }
 
   await initArchiveStore();
   await ensureSessionBranch(records[0].sessionId);
   const database = getDb();
+  const select = database.prepare(`SELECT agent,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at FROM archive_blocks WHERE session_id=? AND id=?`);
   const insert = database.prepare(`
-    INSERT OR REPLACE INTO archive_blocks (
+    INSERT INTO archive_blocks (
       session_id, agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
       raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const inserted: ArchiveBlockRecord[] = [];
   runInTransaction(() => {
     for (const record of records) {
+      const values = {
+        agent: record.agent || 'main', source_kind: record.sourceKind,
+        source_block_ids_json: record.sourceKind === 'block' && Array.isArray(record.sourceBlockIds) && record.sourceBlockIds.length > 0 ? JSON.stringify(record.sourceBlockIds) : null,
+        raw_start_timestamp: record.rawStartTimestamp ?? null, raw_end_timestamp: record.rawEndTimestamp ?? null,
+        memory_facts_json: record.memoryFacts?.length ? JSON.stringify(record.memoryFacts) : null,
+      };
+      const existing = select.get(record.sessionId, record.id) as any;
+      if (existing) {
+        const identical = existing.agent === values.agent && existing.level === record.level && existing.source_kind === values.source_kind
+          && existing.source_start === record.sourceStart && existing.source_end === record.sourceEnd
+          && existing.source_block_ids_json === values.source_block_ids_json && existing.raw_start_seq === record.rawStartSeq
+          && existing.raw_end_seq === record.rawEndSeq && existing.raw_start_timestamp === values.raw_start_timestamp
+          && existing.raw_end_timestamp === values.raw_end_timestamp && existing.summary === record.summary
+          && existing.memory_facts_json === values.memory_facts_json && existing.created_at === record.createdAt;
+        if (identical) continue;
+        throw new Error(`Immutable archive block conflict for ${record.sessionId} B#${record.id}.`);
+      }
       insert.run(
         record.sessionId,
-        record.agent || 'main',
+        values.agent,
         record.id,
         record.level,
         record.sourceKind,
         record.sourceStart,
         record.sourceEnd,
-        record.sourceKind === 'block' && Array.isArray(record.sourceBlockIds) && record.sourceBlockIds.length > 0 ? JSON.stringify(record.sourceBlockIds) : null,
+        values.source_block_ids_json,
         record.rawStartSeq,
         record.rawEndSeq,
-        record.rawStartTimestamp ?? null,
-        record.rawEndTimestamp ?? null,
+        values.raw_start_timestamp,
+        values.raw_end_timestamp,
         record.summary,
-        record.memoryFacts?.length ? JSON.stringify(record.memoryFacts) : null,
+        values.memory_facts_json,
         record.createdAt,
       );
+      inserted.push(record);
     }
   });
   importedSessions.add(records[0].sessionId);
+  return inserted;
+}
+
+/** Delete only rows newly inserted by a larger active-authority commit that
+ * failed before publication. Existing identical immutable rows are never
+ * returned by writeArchiveMessages/writeArchiveBlocks and are not eligible. */
+export async function rollbackUncommittedArchiveMessages(records: ArchiveMessageRecord[]): Promise<void> {
+  if (!records.length) return;
+  await initArchiveStore();
+  const remove = getDb().prepare(`DELETE FROM archive_messages
+    WHERE session_id=? AND seq=? AND agent=? AND timestamp=? AND role=? AND message_json=?`);
+  runInTransaction(() => {
+    for (const record of records) {
+      const result = remove.run(record.sessionId, record.seq, record.agent || 'main', record.timestamp, record.role, JSON.stringify(record.message));
+      if (Number(result.changes) !== 1) throw new Error(`Unable to roll back uncommitted archive message ${record.sessionId}#${record.seq}.`);
+    }
+  });
+}
+
+export async function rollbackUncommittedArchiveBlocks(records: ArchiveBlockRecord[]): Promise<void> {
+  if (!records.length) return;
+  await initArchiveStore();
+  const remove = getDb().prepare(`DELETE FROM archive_blocks WHERE
+    session_id=? AND id=? AND agent=? AND level=? AND source_kind=? AND source_start=? AND source_end=?
+    AND source_block_ids_json IS ? AND raw_start_seq=? AND raw_end_seq=?
+    AND raw_start_timestamp IS ? AND raw_end_timestamp IS ? AND summary=? AND memory_facts_json IS ? AND created_at=?`);
+  runInTransaction(() => {
+    for (const record of records) {
+      const result = remove.run(
+        record.sessionId, record.id, record.agent || 'main', record.level, record.sourceKind,
+        record.sourceStart, record.sourceEnd,
+        record.sourceKind === 'block' && record.sourceBlockIds?.length ? JSON.stringify(record.sourceBlockIds) : null,
+        record.rawStartSeq, record.rawEndSeq, record.rawStartTimestamp ?? null, record.rawEndTimestamp ?? null,
+        record.summary, record.memoryFacts?.length ? JSON.stringify(record.memoryFacts) : null, record.createdAt,
+      );
+      if (Number(result.changes) !== 1) throw new Error(`Unable to roll back uncommitted archive block ${record.sessionId} B#${record.id}.`);
+    }
+  });
 }
 
 export async function readLocalArchiveMessages(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageRecord[]> {

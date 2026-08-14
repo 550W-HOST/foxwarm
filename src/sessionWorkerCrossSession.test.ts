@@ -29,7 +29,7 @@ async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 15_0
 
 function baseSession(id: string): Session {
   return {
-    id, agent: 'main', history: [], contextFrontier: [], persistentMemorySnapshot: 'cross-session prompt',
+    id, agent: 'main', history: [], persistentMemorySnapshot: 'cross-session prompt',
     systemPromptFiles: [], snapshotUpdatedAt: Date.now(),
     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
     busy: false, queue: [], meta: { lastMessageTime: 0 }, lastAppliedMailboxId: 0,
@@ -124,6 +124,7 @@ test('worker child creation, reply delivery, and facade queries stay Main-owned 
 test('main-management facade forks read-only, rejects stale generations, and validates bounded args', async () => {
   const parentId = `mc-fork-${Date.now()}`;
   const forkChildId = `${parentId}_mp-fork`;
+  const inheritedChildId = `${parentId}_mp-new`;
   const dtoChildId = `${parentId}_dto-child`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-facade-fork-'));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
@@ -133,16 +134,20 @@ test('main-management facade forks read-only, rejects stale generations, and val
   }));
   const transport = new LocalRpcTransport(registry, { maxPendingRequests: 32 });
   const client = new RpcClient(mainManagementToolServiceDescriptor, transport);
-  const createdSessions = [parentId, forkChildId, dtoChildId];
+  const createdSessions = [parentId, forkChildId, inheritedChildId, dtoChildId];
   try {
     const parent = await sessionManager.getSession(parentId);
+    delete parent.model;
+    delete parent.effort;
+    delete parent.childModelDefault;
+    delete parent.childEffortDefault;
+    await sessionManager.saveSession(parentId);
     const staleDeleteTargetId = `${parentId}-stale-delete-target`;
     await sessionManager.getSession(staleDeleteTargetId);
     createdSessions.push(staleDeleteTargetId);
     await sessionManager.appendSessionMessage(parentId, { role: 'user', parts: [{ text: 'fork parent message one' }] } as any);
     await sessionManager.appendSessionMessage(parentId, { role: 'model', parts: [{ text: 'fork parent message two' }] } as any);
     const parentJsonPath = getSessionHistoryFilePath(parentId);
-    const parentBytesBefore = await fs.readFile(parentJsonPath);
     // Simulate a ready durable fence owned by the calling worker generation.
     store.beginGeneration(parentId, 'inc-fork');
     store.registerCandidate(parentId, 1, 'inc-fork', 999_999, 'fake-identity');
@@ -185,6 +190,18 @@ test('main-management facade forks read-only, rejects stale generations, and val
       (error: any) => error?.code === 'MAIN_MANAGEMENT_SOURCE_MISMATCH',
     );
 
+    const inheritedResult: any = await client.call('execute', {
+      sourceSessionId: parentId,
+      operation: 'create_child_session',
+      args: { suffix: 'mp-new', fork: false },
+    });
+    assert.ok(String(inheritedResult?.result).includes(inheritedChildId));
+    const inheritedChild = await sessionManager.getSession(inheritedChildId);
+    assert.equal(inheritedChild.model, undefined);
+    assert.equal(inheritedChild.effort, undefined);
+    assert.equal(inheritedChild.childModelDefault, undefined);
+    assert.equal(inheritedChild.childEffortDefault, undefined);
+
     const dtoResult: any = await client.call('execute', {
       sourceSessionId: parentId,
       operation: 'create_child_session',
@@ -195,6 +212,14 @@ test('main-management facade forks read-only, rejects stale generations, and val
     assert.equal(dtoChild.currentNode, 'node-from-worker');
     assert.equal(dtoChild.model, 'model-from-worker');
     assert.equal(dtoChild.effort, 'none');
+    assert.equal(dtoChild.childModelDefault, undefined);
+    assert.equal(dtoChild.childEffortDefault, undefined);
+
+    parent.model = 'model-from-parent';
+    parent.childModelDefault = 'model-for-child';
+    parent.childEffortDefault = 'max';
+    await sessionManager.saveSession(parentId);
+    const parentBytesBeforeFork = await fs.readFile(parentJsonPath);
 
     // fork=true derives from the authority through a strictly read-only detached read.
     const forkResult: any = await client.call('execute',
@@ -206,7 +231,11 @@ test('main-management facade forks read-only, rejects stale generations, and val
     assert.ok(JSON.stringify(forked.history.slice(0, parentHistoryLength)).includes('fork parent message one')
       && JSON.stringify(forked.history.slice(0, parentHistoryLength)).includes('fork parent message two'),
       'the inherited prefix matches the parent authority exactly');
-    assert.deepEqual(await fs.readFile(parentJsonPath), parentBytesBefore, 'fork never writes the parent authority');
+    assert.equal(forked.model, 'model-for-child');
+    assert.equal(forked.effort, 'max');
+    assert.equal(forked.childModelDefault, undefined);
+    assert.equal(forked.childEffortDefault, undefined);
+    assert.deepEqual(await fs.readFile(parentJsonPath), parentBytesBeforeFork, 'fork never writes the parent authority');
     assert.equal(store.getOwnership(parentId).mailboxCursor, 0, 'fork never touches the durable mailbox cursor');
 
     // Detached cross-session read and catalog list through the same facade.

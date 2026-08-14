@@ -15,6 +15,43 @@ async function loadTypeScriptModule(relativePath) {
   return import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
 }
 
+test('bounded tree rows use exact item counts before loading arbitrary-depth branches', async () => {
+  const { collapseSessionListExpandedBranch, getSessionListChildDisclosure } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
+
+  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 0, itemTotal: 1, allowTree: true }), {
+    total: 1,
+    canExpand: true,
+  }, 'a newly loaded child exposes its exact count before its own child window is requested')
+  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 1, boundedTotal: 1, itemTotal: 9, allowTree: true }), {
+    total: 1,
+    canExpand: true,
+  }, 'an exact loaded child page takes precedence over the item projection')
+  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 0, itemTotal: 0, allowTree: true }), {
+    total: 0,
+    canExpand: false,
+  }, 'a true leaf never shows a disclosure')
+  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 0, itemTotal: 2, allowTree: false }), {
+    total: 2,
+    canExpand: false,
+  }, 'flat and search presentations carry counts without probing hidden tree branches')
+
+  const collapsed = collapseSessionListExpandedBranch(
+    new Set(['root', 'child', 'grandchild', 'unrelated', 'unrelated-child']),
+    new Map([
+      ['root', [{ id: 'child' }]],
+      ['child', [{ id: 'grandchild' }]],
+      ['unrelated', [{ id: 'unrelated-child' }]],
+    ]),
+    'root',
+  )
+  assert.deepEqual(collapsed, new Set(['unrelated', 'unrelated-child']),
+    'collapsing an ancestor clears only its loaded descendant expansion state')
+  collapsed.add('root')
+  assert.equal(collapsed.has('child'), false, 're-expanding the ancestor leaves its child disclosure collapsed')
+  collapsed.add('child')
+  assert.equal(collapsed.has('child'), true, 'one explicit child expansion can reload the grandchild window')
+})
+
 test('agent/session creation helpers keep an empty session ID random', async () => {
   const {
     RANDOM_SESSION_ID_PLACEHOLDER,

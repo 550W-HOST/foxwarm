@@ -268,7 +268,6 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     ...stub,
     history: [{ role: 'user', parts: [{ text: 'authoritative worker history' }], __meta: { seq: 1, timestamp: 123 } }],
     queue: [1, 2, 3].map(index => ({ type: 'background', parts: [{ text: `authoritative worker queue ${index}` }] })),
-    contextFrontier: [{ kind: 'message', seq: 1 }],
     persistentMemorySnapshot: 'worker prompt',
     busy: true, busyStartedAt: 100, currentNode: 'worker-node', cwd: '/worker/cwd', model: 'worker/model',
     meta: { lastMessageTime: 123, messageCount: 1, wait: { id: 'worker-exec-wait', startedAt: 20, waitExecIds: ['worker-exec'] } },
@@ -310,6 +309,7 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
 
     registry.establish(identity);
     const projection = buildSessionWorkerProjection(worker);
+    projection.historyVersion = 7;
     await registry.apply(identity, projection); await flushEvents();
     assert.deepEqual(events, ['stateChanged', 'listChanged']); events.length = 0;
     const originalListFenced = store.listFencedOwnerships.bind(store); let ownershipBatchReads = 0;
@@ -318,6 +318,7 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     assert.equal(ownershipBatchReads, 1, 'one batched ownership read covers the volatile projection union');
     assert.equal(projectionBatch.sessions.find(item => item.id === sessionId)?.lastMessageTime, 123);
     assert.equal(projectionBatch.sessions.find(item => item.id === sessionId)?.model, 'worker/model');
+    assert.equal(projectionBatch.sessions.find(item => item.id === sessionId)?.historyVersion, 7);
     (store as any).listFencedOwnerships = originalListFenced;
     await registry.apply(identity, projection); await flushEvents();
     assert.deepEqual(events, ['stateChanged']);
@@ -371,7 +372,6 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     assert.equal(history!.session.id, sessionId); assert.deepEqual(history!.session.aliases, [alias]);
     assert.equal(history!.messages[0].parts[0].text, 'authoritative worker history');
     assert.equal(history!.messages[0].__meta?.seq, 1);
-    assert.deepEqual(history!.messages[0].__meta?.contextFrontierItem, { kind: 'message', seq: 1 });
     assert.equal(history!.queue[0].parts![0].text, 'authoritative worker queue 1');
     assert.equal(history!.persistentMemorySnapshot, 'worker prompt');
     history!.messages[0].parts[0].text = 'caller mutation'; history!.queue[0].parts![0].text = 'caller queue mutation';
@@ -445,7 +445,7 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     await writeAuthoritativeSessionState({
       ...stub, busy: false, currentNode: 'master',
       history: [{ role: 'user', parts: [{ text: 'later local authority' }], __meta: { seq: 1, timestamp: 456 } }],
-      queue: [], contextFrontier: [{ kind: 'message', seq: 1 }], meta: { lastMessageTime: 456, messageCount: 1 },
+      queue: [], meta: { lastMessageTime: 456, messageCount: 1 },
     } as Session);
     assert.equal(stub.busy, false);
     const localAgain = (await client.call('getSession', { sessionId })).session!;
@@ -497,7 +497,7 @@ test('SessionRuntime list pagination is catalog-indexed and returns a stable tot
         session.promptCacheKey = 'normal-save-cache-key'; session.lastAppliedMailboxId = 8;
         session.goalState = { goal: 'normal body', remindEvery: 5, anchorSeq: 0, updatedAt: 1 };
         session.systemPromptFiles = ['MEMORY.md']; session.indexingState = { inProgress: true, startedAt: 1 } as any;
-        session.contextFrontier = []; (session.meta as any).managedSession = { pendingInbox: [] };
+        (session.meta as any).managedSession = { pendingInbox: [] };
         (session.meta as any).wait = {
           id: 'normal-save-wait', startedAt: 1, waitExecIds: ['exec-a'],
           waitAll: {
@@ -514,7 +514,7 @@ test('SessionRuntime list pagination is catalog-indexed and returns a stable tot
         const rawDb = new DatabaseSync(sessionCatalogStore.filePath, { readOnly: true });
         const raw = JSON.parse((rawDb.prepare('SELECT metadata_json FROM session_catalog WHERE session_id=?').get(ids[index]) as any).metadata_json);
         rawDb.close();
-        for (const field of ['queue', 'history', 'contextFrontier', 'promptCacheKey', 'lastAppliedMailboxId', 'goalState', 'systemPromptFiles', 'indexingState']) {
+        for (const field of ['queue', 'history', 'promptCacheKey', 'lastAppliedMailboxId', 'goalState', 'systemPromptFiles', 'indexingState']) {
           assert.equal(Object.prototype.hasOwnProperty.call(raw, field), false, `${field} leaked from normal save`);
         }
         assert.equal(Object.prototype.hasOwnProperty.call(raw.meta || {}, 'managedSession'), false);

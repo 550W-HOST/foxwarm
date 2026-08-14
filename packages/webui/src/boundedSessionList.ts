@@ -3,7 +3,8 @@ import { API_BASE_PATH } from './config'
 import type { Session } from './components/SessionListCore'
 import { createSessionListRefreshScheduler, requestSessionListStreamOpenResync, type SessionListRefreshScheduler } from './sessionListRefresh'
 import type { SessionListOrderMode } from './sessionListPresentation'
-import { applyExactMissTombstone, captureExactAliasKeys, chunkBoundedIds, createEpochRows, mergeDeltaRows, mergeHttpRows, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from './boundedSessionReplay'
+import { applyExactMissTombstone, captureExactAliasKeys, chunkBoundedIds, createEpochRows, mergeDeltaRows, mergeHttpRows, preserveKnownChildTotals, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from './boundedSessionReplay'
+import { dispatchSessionIdleDeleted, getSessionIdleUnreadIds, SESSION_IDLE_UNREAD_EVENT } from './sessionIdleAttention'
 
 export interface BoundedChildPage { parentSessionId: string; ids: string[]; total: number; nextCursor: string | null }
 interface SidebarPayload { version: 1; sessions: Session[]; nextCursor: string | null; reset?: boolean
@@ -19,6 +20,8 @@ const dedupe = (ids: Iterable<string>) => [...new Set(ids)]
 function responseError(response: Response): Promise<Error> { return response.json().catch(() => ({})).then(body => new Error(body?.error || `Request failed (${response.status})`)) }
 async function fetchJson(path: string, init?: RequestInit): Promise<any> { const response = await fetch(`${API_BASE_PATH}${path}`, init); if (!response.ok) throw await responseError(response); return response.json() }
 function currentWatchIds(): string[] { try { const value = JSON.parse(localStorage.getItem('foxwarm_session_idle_notifications_v1') || '{}'); return value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value) : [] } catch { return [] } }
+function currentUnreadIds(): string[] { return getSessionIdleUnreadIds(localStorage) }
+function currentAttentionIds(includeIdleWatches: boolean, unreadIds = currentUnreadIds()): string[] { return dedupe([...(includeIdleWatches ? currentWatchIds() : []), ...unreadIds]) }
 function structuralIds(state: Pick<CacheState, 'rootIds'|'childPages'|'forcedChildren'>): string[] {
   const ids = [...state.rootIds]
   for (const page of state.childPages.values()) ids.push(page.parentSessionId, ...page.ids)
@@ -41,7 +44,8 @@ export interface BoundedSessionListController { sessions: Session[]; knownSessio
 export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: string[]; rootLimit?: number; childLimit?: number; connectStream?: boolean; includeGlobalSummary?: boolean; includeIdleWatches?: boolean }): BoundedSessionListController {
   const rootLimit = options.rootLimit || 50; const childLimit = options.childLimit || 5
   const [mode, setModeState] = useState<SessionListOrderMode>('default'); const [query, setQueryState] = useState('')
-  const [watchIds, setWatchIds] = useState<string[]>(currentWatchIds); const [state, setState] = useState(() => emptyState(rootLimit))
+  const [unreadIds, setUnreadIds] = useState<string[]>(currentUnreadIds)
+  const [watchIds, setWatchIds] = useState<string[]>(() => currentAttentionIds(options.includeIdleWatches !== false, unreadIds)); const [state, setState] = useState(() => emptyState(rootLimit))
   const [globalSummary, setGlobalSummary] = useState<{ total: number; busy: number } | null>(null)
   const stateRef = useRef(state); stateRef.current = state; const queryRef = useRef(query); queryRef.current = query
   const rowStoreRef = useRef(createEpochRows<Session>()); const windowGenerationRef = useRef(0); const exactGenerationRef = useRef(0)
@@ -49,11 +53,11 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
   const schedulerRef = useRef<SessionListRefreshScheduler | null>(null)
   const invalidationIdentityRef = useRef<string | null>(null)
   const focusIds = useMemo(() => dedupe(options.focusIds.filter(Boolean)).slice(0, 8), [options.focusIds.join('\0')])
-  const exactIds = useMemo(() => dedupe([...focusIds, ...(options.exactIds || []), ...(options.includeIdleWatches === false ? [] : watchIds)].filter(Boolean)), [focusIds.join('\0'), (options.exactIds || []).join('\0'), watchIds.join('\0'), options.includeIdleWatches])
+  const exactIds = useMemo(() => dedupe([...focusIds, ...(options.exactIds || []), ...watchIds].filter(Boolean)), [focusIds.join('\0'), (options.exactIds || []).join('\0'), watchIds.join('\0')])
   const exactIdsRef = useRef(exactIds); exactIdsRef.current = exactIds
 
-  useEffect(() => { const update = () => setWatchIds(currentWatchIds()); window.addEventListener('foxwarm-idle-watch-changed', update); window.addEventListener('storage', update)
-    return () => { window.removeEventListener('foxwarm-idle-watch-changed', update); window.removeEventListener('storage', update) } }, [])
+  useEffect(() => { const update = () => { const nextUnreadIds = currentUnreadIds(); setUnreadIds(nextUnreadIds); setWatchIds(currentAttentionIds(options.includeIdleWatches !== false, nextUnreadIds)) }; update(); window.addEventListener('foxwarm-idle-watch-changed', update); window.addEventListener(SESSION_IDLE_UNREAD_EVENT, update); window.addEventListener('storage', update)
+    return () => { window.removeEventListener('foxwarm-idle-watch-changed', update); window.removeEventListener(SESSION_IDLE_UNREAD_EVENT, update); window.removeEventListener('storage', update) } }, [])
 
   const publish = useCallback((next: CacheState, httpRows: Session[], startEpoch: number) => {
     mergeHttpRows(rowStoreRef.current, httpRows, startEpoch); pruneEpochRows(rowStoreRef.current, ownedKeepIds(next, exactIdsRef.current)); next.rows = new Map(rowStoreRef.current.rows); stateRef.current = next; setState(next)
@@ -105,6 +109,7 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
     for (const batch of chunkBoundedIds(exactIds, 100)) { const payload = await fetchJson('/session-list/by-id', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: batch, includePaths: false }) }); for (const item of payload.results || []) item.session ? rows.push(item.session) : missing.push(item.requestedId) }
     if (generation !== exactGenerationRef.current) return; mergeHttpRows(rowStoreRef.current, rows, startEpoch)
     for (const requested of missing) applyExactMissTombstone(rowStoreRef.current, requested, known.get(requested), startEpoch)
+    dispatchSessionIdleDeleted(missing)
     const next = { ...stateRef.current, rows: new Map() }; pruneEpochRows(rowStoreRef.current, ownedKeepIds(next, exactIds)); next.rows = new Map(rowStoreRef.current.rows); stateRef.current = next; setState(next)
   }), [exactIds.join('\0')])
 
@@ -154,14 +159,14 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
       const params = new URLSearchParams(); controller.batch.forEach(id => params.append('sessionId', id)); const queryString = params.toString()
       const source = new EventSource(`${API_BASE_PATH}/sessions/stream${queryString ? `?${queryString}` : ''}`); controller.source = source
       source.onopen = () => { controller.delay = 1000; requestSessionListStreamOpenResync(schedulerRef.current) }
-      source.onmessage = event => { try { const data = JSON.parse(event.data); if (data.type === 'session-list-delta') { mergeDeltaRows(rowStoreRef.current, data.sessions || [], data.deletedIds || []); const next = { ...stateRef.current, rows: new Map(rowStoreRef.current.rows) }; stateRef.current = next; setState(next) } if (data.type === 'sessions-updated' || data.type === 'session-list-invalidated') handleInvalidation(data) } catch {} }
+      source.onmessage = event => { try { const data = JSON.parse(event.data); if (data.type === 'session-list-delta') { const deletedIds = Array.isArray(data.deletedIds) ? data.deletedIds.filter((value: unknown): value is string => typeof value === 'string') : []; mergeDeltaRows(rowStoreRef.current, preserveKnownChildTotals(rowStoreRef.current.rows, data.sessions || []), deletedIds); dispatchSessionIdleDeleted(deletedIds); const next = { ...stateRef.current, rows: new Map(rowStoreRef.current.rows) }; stateRef.current = next; setState(next) } if (data.type === 'sessions-updated' || data.type === 'session-list-invalidated') handleInvalidation(data) } catch {} }
       source.onerror = () => { source.close(); if (disposed) return; controller.timer = window.setTimeout(() => { invalidate(); connect(controller); controller.delay = Math.min(controller.delay * 2, 30000) }, controller.delay) }
     }
     controllers.forEach(connect)
     return () => { disposed = true; controllers.forEach(controller => { controller.source?.close(); if (controller.timer !== null) window.clearTimeout(controller.timer) }); if (legacyTimer !== null) window.clearTimeout(legacyTimer) }
   }, [subscriptionIds.join('\0'), options.connectStream, invalidate])
 
-  const visibleIds = state.searchIds || structuralIds(state)
+  const visibleIds = dedupe([...(state.searchIds || structuralIds(state)), ...unreadIds])
   return { sessions: visibleIds.map(id => state.rows.get(id)).filter((row): row is Session => !!row), knownSessions: [...state.rows.values()], mode, query,
     hasMoreRoots: !query.trim() && !!state.rootCursor, childPages: query.trim() ? new Map() : state.childPages, descendantBusy: state.descendantBusy,
     invalidationVersion: state.invalidationVersion, setMode, setQuery, loadMoreRoots, loadMoreChildren, expandBranch, collapseBranch, refresh, invalidate, globalSummary }

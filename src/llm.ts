@@ -1358,31 +1358,39 @@ function normalizeExecutedToolResult(rawResult: any): any {
     return { output: String(rawResult) };
 }
 
+function formatToolArgPreviewValue(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (value === undefined) return 'undefined';
+    try {
+        const serialized = JSON.stringify(value);
+        return typeof serialized === 'string' ? serialized : String(value);
+    } catch {
+        return String(value);
+    }
+}
+
 function buildToolArgsPreview(call: FunctionCall): string {
-    let argStr = '';
+    let argValue: unknown = '';
     if (call.argsParseError && typeof call.rawArgsText === 'string') {
-        argStr = call.rawArgsText;
+        argValue = call.rawArgsText;
     } else if (call.name === 'exec') {
-        argStr = call.args.command;
+        argValue = call.args?.command;
     } else if (call.name === 'edit' || call.name === 'write' || call.name === 'edit_memory' || call.name === 'write_memory' || call.name === 'delete_memory') {
-        argStr = call.args.filePath;
+        argValue = call.args?.filePath;
     } else if (call.name === 'apply_patch' || call.name === 'apply_patch_memory') {
-        argStr = typeof call.args.input === 'string' ? call.args.input : '';
+        argValue = typeof call.args?.input === 'string' ? call.args.input : '';
     } else if (call.name === 'read' || call.name === 'read_memory') {
-        const { filePath, startLine, endLine } = call.args;
-        argStr = filePath + (startLine ? ` (lines ${startLine}-${endLine})` : '');
+        const { filePath, startLine, endLine } = call.args || {};
+        argValue = (filePath ?? '') + (startLine ? ` (lines ${startLine}-${endLine})` : '');
     } else if (call.args) {
         const keys = Object.keys(call.args);
         if (keys.length === 1) {
-            const value = call.args[keys[0]];
-            argStr = typeof value === 'object' ? JSON.stringify(value) : value;
+            argValue = call.args[keys[0]];
         } else {
-            argStr = keys.map(key => {
-                const value = call.args[key];
-                return `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`;
-            }).join('\n');
+            argValue = keys.map(key => `${key}: ${formatToolArgPreviewValue(call.args[key])}`).join('\n');
         }
     }
+    const argStr = formatToolArgPreviewValue(argValue);
     return argStr.length > 200 ? `${argStr.substring(0, 197)}...` : argStr;
 }
 
@@ -2126,6 +2134,7 @@ function buildConcreteRequestPlan(options: {
                     name: fd.name,
                     description: fd.description,
                     parameters: fd.parameters,
+                    strict: false,
                 })),
                 ...(webSearchTool ? [webSearchTool] : []),
             ] : undefined,
@@ -2161,6 +2170,7 @@ function buildConcreteRequestPlan(options: {
                     name: fd.name,
                     description: fd.description,
                     parameters: fd.parameters,
+                    strict: false,
                 },
             })) : undefined,
         };

@@ -17,7 +17,8 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 - `resolveArchivedSessionId` — resolves a historical alias chain to its current archive identity.
 - `rollbackUncommittedSessionArchive` — removes branch/record/import artifacts for a known failed new lifetime.
 - `ensureSessionBranch`, `getSessionBranch` — branch and fork-point records.
-- `writeArchiveMessages`, `writeArchiveBlocks` — batched SQLite upserts for current archive appends/import.
+- `writeArchiveMessages`, `writeArchiveBlocks` — batched immutable SQLite inserts; exact replay is idempotent and same-key conflicting payloads fail closed.
+- `rollbackUncommittedArchiveMessages`, `rollbackUncommittedArchiveBlocks` — exact-payload cleanup for rows newly inserted by a larger active-authority commit that then failed before publication; pre-existing replay rows are never eligible.
 - `readLocalArchiveMessages`, `readLocalArchiveBlocks` — current-branch rows only.
 - `readEffectiveArchiveMessages`, `readEffectiveArchiveBlocks` — lineage-bounded inherited plus local rows.
 - `getVectorCheckpoint`, `getVectorCheckpointSync`, `setVectorCheckpointSync` — vector progress.
@@ -31,7 +32,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 
 | Stable symbol/section | Responsibility |
 |---|---|
-| `streamJsonlLines` | Streaming line reader with explicit event-loop yields |
+| `streamJsonlLines` | File-path adapter over the shared stateful UTF-8 LF/CRLF JSONL reader |
 | `parseLegacyMessageLine` | Strict canonical parser plus the single migration-only matching torn-prefix/suffix recovery shape |
 | reservation-ledger load/persist/canonical-resolution helpers | Validate committed alias graphs, rebuild exact moved-ID reservations, and map proven historical aliases |
 | message/block import functions | Batched parse/upsert and per-source import-state updates |
@@ -44,6 +45,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 
 - `archive_branches` — session, optional parent, message/block fork points.
 - `archive_store_metadata` — durable SQLite-authority migration marker plus idempotent torn-message recovery audit markers; marker-backed retries require the stored row to still match, and a completed migration with a missing authority marker fails startup.
+- Runtime message/block write batches are single-Session only. Immutable identity allows exact replay and rejects conflicts. Block-backed records may preserve decreasing/nonconsecutive source endpoint order only through a valid ordered `sourceBlockIds`; message-backed ranges stay ascending, including strict export/reimport migration validation.
 - `archive_session_id_reservations` — exact committed historical ID to current canonical-ID mappings mirrored by the durable ledger.
 - `archive_messages` — session-local sequence records and serialized message JSON.
 - `archive_blocks` — block level/source/range/summary records plus optional serialized normalized memory facts.
@@ -56,6 +58,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 - Migration-only message validation recognizes two proven historical writer variants without changing current writer types: message-level `providerMeta` may carry a record-valued `providerSpecificFields` without the later `sourceModelId`, and `functionResponse.response` may be any defined JSON value rather than only an object. SQLite preserves those payload values as written, unscoped provider fields are not replayed to a guessed model, and all outer record identity, role, tool-call identity, duplicate, and lineage checks remain strict.
 - Migration import-state rows avoid reparsing unchanged legacy sources while a failed migration is being repaired and retried.
 - Effective reads walk current session then ancestors, cap each ancestor at cumulative fork points, annotate `sourceSessionId`/`inherited`, and sort by source sequence or block ID.
+- Current message/block writes return only rows actually inserted by that call. The active-history commit path may delete those exact rows if authoritative JSON persistence fails, so a retry can reuse the same identity without overwriting or deleting an older immutable replay row.
 - Child branch creation seeds vector checkpoints at its fork boundaries.
 - Backfill candidates are sessions whose latest local message/block exceeds the checkpoint.
 - Reservation lookup loads the independent ledger and SQLite mirror. The atomically rewritten `state/session-id-reservations.jsonl` ledger is explicit durable state: missing/syntactically malformed files self-heal from every nonconflicting SQLite mapping row, while SQLite loss rebuilds from the ledger. Conflicting valid mappings and cycles fail closed; live metadata aliases are proof for backfill.
@@ -63,7 +66,9 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 
 ## Compatibility
 
-Legacy JSONL message and block logs are migration-only inputs. Strictly verified sources move to migration backup; normal runtime never reads or writes them. The standalone frontier migration is separate and owned by `src/migrations/`.
+Legacy JSONL message and block logs are migration-only inputs. Strictly verified sources move to migration backup; normal runtime never reads or writes them. Standalone frontier retirement is separate and owned by `src/migrations/`.
+
+Legacy file framing delegates to [src-jsonl](./src-jsonl.md), so literal U+2028/U+2029 remain inside records and UTF-8 characters split across raw Buffer chunks decode statefully.
 
 ## Integration
 

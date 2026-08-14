@@ -6,6 +6,7 @@ import { RpcError } from './rpc';
 import { getSessionHistoryFilePath } from './session/metadataStore';
 import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
 import type { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
+import type { SessionWorkerCatalogFieldsPatch } from './sessionWorkerRuntimeService';
 import type { SessionWorkerOwnershipRecord, SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { stableSessionWorkerJson } from './sessionWorkerStableJson';
@@ -281,6 +282,17 @@ export class SessionWorkerIngressCoordinator {
 
   async updateSettings(requestedSessionId: string, patch: SessionWorkerSettingsPatch): Promise<SessionWorkerSettingsResult> {
     return this.invokeEnsuringWorker(requestedSessionId, 'change Session settings', (sessionId, expected) => this.supervisor.updateSettingsActivated(sessionId, expected, patch));
+  }
+
+  async updateCatalogFieldsWithinExistingAdmission(requestedSessionId: string, patch: SessionWorkerCatalogFieldsPatch): Promise<void> {
+    const sessionId = this.requireLoadedCatalogSession(requestedSessionId);
+    if (sessionId !== requestedSessionId) throw new RpcError('SESSION_WORKER_OWNER_INVALID_SESSION', 'Session worker catalog-field updates require an exact canonical session ID.');
+    const ownership = this.store.findOwnership(sessionId);
+    if (!ownership || ownership.state === 'inactive') return;
+    if (ownership.state !== 'ready') {
+      throw new RpcError('SESSION_WORKER_CATALOG_FIELDS_UNAVAILABLE', 'The exact Session worker is not ready for a catalog-field update.', true);
+    }
+    await this.supervisor.updateCatalogFieldsActivated(sessionId, ownership, patch);
   }
 
   async dequeueEnsuringWorker(requestedSessionId: string) {

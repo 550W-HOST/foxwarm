@@ -167,7 +167,7 @@ export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
       removePreservedMessages: {
         type: 'array',
         items: { type: 'number' },
-        description: 'Optional list of previously preserved raw message seq numbers to remove from working history/frontier. This never deletes archive records or summary blocks, and can only target messages listed as preserved in the compact prompt.',
+        description: 'Optional list of previously preserved raw message seq numbers to remove from active history. This never deletes archive records or summary blocks, and can only target messages listed as preserved in the compact prompt.',
       },
     },
     required: ['createBlocksJson'],
@@ -420,7 +420,7 @@ function formatCandidateSegmentHeader(segment: CandidateSegment, index: number):
   const firstBlock = first as Extract<CompactCandidateItem, { kind: 'block' }>;
   const lastBlock = last as Extract<CompactCandidateItem, { kind: 'block' }>;
   const sourceRange = firstBlock.id === lastBlock.id ? `B#${firstBlock.id}` : `B#${firstBlock.id}..B#${lastBlock.id}`;
-  const base = `Segment ${index}: frontier-contiguous L${firstBlock.level} block candidates -> L${segment.targetLevel} block(s). Legal ranges must stay within this segment (${sourceRange}; sourceKind=block, level=${segment.targetLevel}, sourceStart/sourceEnd at listed B# boundaries). Block ids inside a segment may skip numbers or be out of numeric order; a range covers the listed candidates between its endpoints, not every numeric id in between.`;
+  const base = `Segment ${index}: history-contiguous L${firstBlock.level} block candidates -> L${segment.targetLevel} block(s). Legal ranges must stay within this segment (${sourceRange}; sourceKind=block, level=${segment.targetLevel}, sourceStart/sourceEnd at listed B# boundaries). Block ids inside a segment may skip numbers or be out of numeric order; a range covers the listed candidates between its endpoints, not every numeric id in between.`;
 
   if (segment.items.length === 1) {
     return firstBlock.allowSingleBlockCompact
@@ -527,12 +527,12 @@ export function buildCompactPromptText(options: {
     '- Raw messages are summarized by L1 blocks, L1 blocks are summarized by L2 blocks, and so on.',
     '- Items covered by createBlocksJson will be replaced by the summary. Other items stay verbatim unless listed in removePreservedMessages.',
     '- Use preserveMessages for a small number of raw message seqs that must remain verbatim even though they are covered by a newly created message-source block. The system will extract them after the covering block in working history.',
-    '- Use removePreservedMessages only for messages listed in the "Previously preserved raw messages" section. This removes the raw message from working history/frontier only; it does not delete archive records or existing summary blocks.',
+    '- Use removePreservedMessages only for messages listed in the "Previously preserved raw messages" section. This removes the raw message from active history only; it does not delete archive records or existing summary blocks.',
     '- Block compression is optional after satisfying the hard minima above. Prefer compressing only older/resolved/repetitive block segments; keep recent, detail-rich, decision-heavy, or still-active blocks verbatim by omitting them from createBlocksJson.',
     '- Subject to the hard minima above, if a block/message still seems useful, you can leave it uncompressed by simply omitting it from createBlocksJson.',
     '',
     'Block range rules (must be followed to produce a valid plan):',
-    '- Treat each Segment header as a hard boundary: createBlocksJson ranges must stay inside one listed segment and must not cross different block levels or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in frontier order.',
+    '- Treat each Segment header as a hard boundary: createBlocksJson ranges must stay inside one listed segment and must not cross different block levels or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in history order.',
     '- A single block may be summarized only when it is a stranded island immediately surrounded on both sides by higher-level blocks; otherwise block sources must span at least two blocks.',
     '- Blocks must have same kind and same level of source; do not combine low-level and high-level blocks in one createBlocks entry.',
     '- Blocks must not overlap source ranges across createBlocks.',
@@ -771,7 +771,7 @@ function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidate
       }
 
       const unitLabel = block.sourceKind === 'message' ? 'seq' : 'block id';
-      const continuityLabel = block.sourceKind === 'message' ? 'message' : 'frontier/candidate block';
+      const continuityLabel = block.sourceKind === 'message' ? 'message' : 'active candidate block';
       details.createBlockErrors.push(`createBlocks[${index}] does not match a continuous ${continuityLabel} range in current older context for ${unitLabel} ${block.sourceStart}-${block.sourceEnd}.`);
       return;
     }
@@ -793,7 +793,7 @@ function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidate
       }
     } else if (range[1] > range[0]) {
       // A stranded single-block lift changes level but does not reduce the
-      // number of active frontier items, so it never satisfies a compression quota.
+      // number of active context items, so it never satisfies a compression quota.
       const sourceLevel = block.level - 1;
       const covered = coveredBlockIndicesByLevel.get(sourceLevel) || new Set<number>();
       for (let candidateIndex = range[0]; candidateIndex <= range[1]; candidateIndex += 1) {
@@ -859,7 +859,7 @@ export function buildCompactPlanValidationFeedback(error: CompactPlanValidationE
   return [
     'COMPACT PLAN INVALID.',
     error.message,
-    'Use only ranges shown in one Segment header; do not cross segment boundaries, different block levels, or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in frontier order.',
+    'Use only ranges shown in one Segment header; do not cross segment boundaries, different block levels, or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in history order.',
     'Use preserveMessages only for raw messages covered by a newly created message-source block; use removePreservedMessages only for messages listed as previously preserved in the prompt.',
     `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. Do not read or write agent memory during compaction; attach durable facts to the matching createBlocksJson entry's memoryFacts instead.`,
   ].join(' ');

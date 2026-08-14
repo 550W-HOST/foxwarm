@@ -5,9 +5,9 @@ import { sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeSer
 import { sessionWorkerPublicationServiceDescriptor } from './sessionWorkerPublicationService';
 import { mainManagementToolServiceDescriptor } from './mainManagementToolService';
 
-test('model-effort DTO additions advance every affected versioned RPC contract', () => {
-  assert.equal(sessionRuntimeServiceDescriptor.version, 7);
-  assert.equal(sessionWorkerRuntimeServiceDescriptor.version, 9);
-  assert.equal(sessionWorkerPublicationServiceDescriptor.version, 2);
+test('versioned runtime DTO additions advance every affected RPC contract', () => {
+  assert.equal(sessionRuntimeServiceDescriptor.version, 9);
+  assert.equal(sessionWorkerRuntimeServiceDescriptor.version, 12);
+  assert.equal(sessionWorkerPublicationServiceDescriptor.version, 3);
   assert.equal(mainManagementToolServiceDescriptor.version, 5);
 });

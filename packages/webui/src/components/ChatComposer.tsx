@@ -86,6 +86,15 @@ function formatEffortLabel(value: string): string {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : value
 }
 
+function getBrowserScrollbarWidth(): number {
+  const probe = document.createElement('div')
+  probe.style.cssText = 'position:absolute;visibility:hidden;overflow:scroll;width:100px;height:100px;'
+  document.body.appendChild(probe)
+  const width = probe.offsetWidth - probe.clientWidth
+  probe.remove()
+  return width
+}
+
 function ModelSelector({
   options,
   currentModelKey,
@@ -138,6 +147,7 @@ function ModelSelector({
   const [open, setOpen] = useState(false)
   const [filterQuery, setFilterQuery] = useState('')
   const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({})
+  const [scrollbarWidth] = useState(() => getBrowserScrollbarWidth())
   const rootRef = useRef<HTMLDivElement | null>(null)
   const buttonRef = useRef<HTMLButtonElement | null>(null)
   const popupRef = useRef<HTMLDivElement | null>(null)
@@ -194,7 +204,7 @@ function ModelSelector({
   const updatePopupPosition = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect()
     if (!rect) return
-    const width = Math.min(500, Math.max(0, window.innerWidth - 16), Math.max(360, rect.width + 220))
+    const width = Math.min(600, Math.max(0, window.innerWidth - 16))
     const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8))
     const preferredMaxHeight = Math.min(360, Math.max(220, window.innerHeight - 24))
     const spaceAbove = Math.max(0, rect.top - 12)
@@ -301,26 +311,22 @@ function ModelSelector({
   const renderRow = (row: { key: string | null; label: string; title: string; currentChecked: boolean; childChecked: boolean; defaultRow?: boolean }) => (
     <div
       key={row.key || '__default__'}
-      className="grid grid-cols-[minmax(0,1fr)_minmax(5.5rem,7.5rem)_minmax(5.5rem,7.5rem)] items-stretch border-t border-gray-100 text-xs first:border-t-0 dark:border-gray-800"
+      className="foxwarm-model-selector-grid grid items-stretch border-t border-gray-100 text-xs first:border-t-0 dark:border-gray-800"
       data-model-selector-row="true"
     >
       <button
         type="button"
         disabled={busy}
         onClick={() => applyCurrentModel(row.key)}
-        className={`min-w-0 px-3 py-2 text-left transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-blue-950/30 ${row.currentChecked ? 'text-blue-700 dark:text-blue-200' : 'text-gray-700 dark:text-gray-200'}`}
+        className={`col-span-2 grid min-w-0 grid-cols-[minmax(0,1fr)_100px] items-stretch text-left transition-colors hover:bg-blue-50 focus-visible:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-blue-950/30 dark:focus-visible:bg-blue-950/30 ${row.currentChecked ? 'text-blue-700 dark:text-blue-200' : 'text-gray-700 dark:text-gray-200'}`}
         title={row.title}
+        aria-label={`Use ${row.label} as current session model`}
+        data-model-current-region="true"
       >
-        <div className="truncate font-medium">{row.label}</div>
-      </button>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => applyCurrentModel(row.key)}
-        className="flex items-center justify-center transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-blue-950/30"
-        title={`Use ${row.label} as current session model`}
-      >
-        {renderCheckbox(row.currentChecked, 'current model selected')}
+        <span className="min-w-0 px-3 py-2" data-model-selector-column="model"><span className="block truncate font-medium">{row.label}</span></span>
+        <span className="flex items-center justify-center border-l border-gray-100 dark:border-gray-800" data-model-selector-column="current">
+          {renderCheckbox(row.currentChecked, 'current model selected')}
+        </span>
       </button>
       <button
         type="button"
@@ -328,6 +334,7 @@ function ModelSelector({
         onClick={() => applyChildModel(row.key)}
         className="flex items-center justify-center transition hover:bg-purple-50 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-purple-950/30"
         title={`Use ${row.label} as child default model`}
+        data-model-selector-column="child"
       >
         {renderCheckbox(row.childChecked, 'child default selected')}
       </button>
@@ -360,21 +367,24 @@ function ModelSelector({
         <div
           ref={popupRef}
           className="foxwarm-model-selector-popup z-[1000] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900"
-          style={popupStyle}
+          style={{
+            ...popupStyle,
+            '--foxwarm-model-selector-scrollbar-width': `${scrollbarWidth}px`,
+          } as React.CSSProperties}
           role="dialog"
           aria-modal="false"
           aria-label="Model selection"
           data-model-selector-popup="true"
         >
           <div
-            className="grid grid-cols-[minmax(0,1fr)_minmax(5.5rem,7.5rem)_minmax(5.5rem,7.5rem)] items-stretch border-b border-gray-200 bg-gray-50 px-0 text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
+            className="foxwarm-model-selector-grid foxwarm-model-selector-scrollbar-aligned grid items-stretch border-b border-gray-200 bg-gray-50 px-0 text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
             data-model-selector-header="true"
           >
             <div className="flex items-center px-3 py-2">Model id</div>
             <div className="flex items-center justify-center border-l border-gray-200/80 px-2 py-2 text-center dark:border-gray-700/80">Current</div>
             <div className="flex items-center justify-center border-l border-gray-200/80 px-2 py-2 text-center dark:border-gray-700/80">Child</div>
           </div>
-          <div className="overflow-y-auto" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 144 : 110) : undefined }}>
+          <div className="overflow-y-scroll" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 144 : 110) : undefined }} data-model-selector-scroll="true">
             {renderRow({
               key: null,
               label: 'default / follow',
@@ -393,7 +403,7 @@ function ModelSelector({
           </div>
           {error && <div className="border-t border-red-100 px-3 py-2 text-xs text-red-600 dark:border-red-900/50 dark:text-red-300">{error}</div>}
           <div
-            className="grid grid-cols-[minmax(0,1fr)_minmax(5.5rem,7.5rem)_minmax(5.5rem,7.5rem)] items-stretch border-t border-gray-200 bg-gray-50/70 text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-700 dark:bg-gray-800/70 dark:text-gray-400"
+            className="foxwarm-model-selector-grid foxwarm-model-selector-scrollbar-aligned grid items-stretch border-t border-gray-200 bg-gray-50/70 text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-700 dark:bg-gray-800/70 dark:text-gray-400"
             data-model-effort-footer="true"
           >
             <div className="flex items-center px-3 py-1.5">Effort</div>
@@ -453,7 +463,7 @@ function ModelSelector({
               onCompositionEnd={() => { filterComposingRef.current = false }}
               aria-label="Filter models"
               placeholder="Filter models"
-              className="h-8 min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2.5 text-xs text-gray-800 outline-none placeholder:text-gray-400 focus:border-blue-400 focus:ring-1 focus:ring-blue-400 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:placeholder:text-gray-500"
+              className="foxwarm-model-filter-input h-8 min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2.5 text-xs text-gray-800 outline-none placeholder:text-gray-400 focus:border-blue-400 focus:ring-1 focus:ring-blue-400 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:placeholder:text-gray-500"
             />
           </div>
         </div>,
@@ -1217,13 +1227,20 @@ const ChatComposer = memo(function ChatComposer({
           </div>
         )}
 
-        {showSlashCommandMenu && (
-          <div className="mb-2 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-900">
+        {sessionMissing && (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/80 dark:bg-amber-900/20 dark:text-amber-200">
+            Session not found. Select an existing session from the list, or create a new session instead of opening a missing hash directly.
+          </div>
+        )}
+
+        <div className="foxwarm-chat-composer-form-anchor relative">
+          {showSlashCommandMenu && (
+            <div className="absolute inset-x-0 bottom-[calc(100%+0.5rem)] z-10 flex max-h-[min(20rem,calc(100vh-1rem))] flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-900" data-slash-command-overlay="true">
             <div className="flex items-center justify-between gap-2 border-b border-gray-200 px-3 py-2 text-xs font-medium text-gray-500 dark:border-gray-700 dark:text-gray-400">
               <span>Slash commands</span>
               <span className="text-[11px]">↑↓ select · Enter/Tab apply · Esc dismiss</span>
             </div>
-            <div ref={slashMenuRef} className="max-h-64 overflow-y-auto">
+            <div ref={slashMenuRef} className="min-h-0 flex-1 overflow-y-auto">
               {commandsLoading && (
                 <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">Loading commands...</div>
               )}
@@ -1275,21 +1292,15 @@ const ChatComposer = memo(function ChatComposer({
                 </div>
               ))}
             </div>
-          </div>
-        )}
+            </div>
+          )}
 
-        {sessionMissing && (
-          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/80 dark:bg-amber-900/20 dark:text-amber-200">
-            Session not found. Select an existing session from the list, or create a new session instead of opening a missing hash directly.
-          </div>
-        )}
-
-        <form
-          onSubmit={handleSubmit}
-          className={`foxwarm-chat-composer-form rounded-[30px] border border-gray-200/90 bg-gray-50/75 px-3.5 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.06)] backdrop-blur-[5px] transition focus-within:border-gray-300 focus-within:bg-white/92 dark:border-gray-700/90 dark:bg-gray-800/70 dark:focus-within:border-gray-600 dark:focus-within:bg-gray-800/92 ${
-            isDragging ? 'border-blue-400 dark:border-blue-500' : ''
-          }`}
-        >
+          <form
+            onSubmit={handleSubmit}
+            className={`foxwarm-chat-composer-form rounded-[30px] border border-gray-200/90 bg-gray-50/75 px-3.5 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.06)] backdrop-blur-[5px] transition focus-within:border-gray-300 focus-within:bg-white/92 dark:border-gray-700/90 dark:bg-gray-800/70 dark:focus-within:border-gray-600 dark:focus-within:bg-gray-800/92 ${
+              isDragging ? 'border-blue-400 dark:border-blue-500' : ''
+            }`}
+          >
         <input
           type="file"
           id="file-upload"
@@ -1450,7 +1461,8 @@ const ChatComposer = memo(function ChatComposer({
             <ArrowUp size={18} />
           </button>
         </div>
-        </form>
+          </form>
+        </div>
       </div>
     </div>
   )

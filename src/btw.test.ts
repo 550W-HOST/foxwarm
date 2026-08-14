@@ -396,7 +396,7 @@ test('manual compact drops display-only messages outside the force-kept range an
     assert.match(rendered, /summary of visible before and visible after/);
     assert.equal(compacted.history.some(message => message.modelVisible === false), false);
     assert.match(compacted.promptCacheKey || '', /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-    assert.notEqual(compacted.promptCacheKey, originalPromptCacheKey);
+    assert.equal(compacted.promptCacheKey, originalPromptCacheKey);
   } finally {
     (llm as any).chat = originalChat;
     (vector as any).scheduleSessionArchiveIndex = originalArchiveIndex;

@@ -124,3 +124,151 @@ test('Sidebar keeps a newly forked child when an older bounded-window response a
     await browser.close()
   }
 })
+
+test('Sidebar collapse prunes nested expansion state without clearing unrelated branches', async () => {
+  const token = (await readFile(tokenFile, 'utf8')).trim()
+  const browser = await puppeteer.launch({
+    executablePath: chromiumPath,
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  })
+  const page = await browser.newPage()
+  await page.setViewport({ width: 1440, height: 900 })
+  const createdIds = []
+  await page.evaluateOnNewDocument(() => {
+    const nativeFetch = window.fetch.bind(window)
+    window.__foxwarmE2eChildTotals = {}
+    window.fetch = async (input, init) => {
+      const response = await nativeFetch(input, init)
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href)
+      if (!['/api/session-list/sidebar', '/api/session-list/children', '/api/session-list/by-id', '/api/session-list/search']
+        .some(suffix => url.pathname.endsWith(suffix))) return response
+      const body = await response.clone().json().catch(() => null)
+      if (!body) return response
+      const addCounts = value => {
+        if (Array.isArray(value)) return value.map(addCounts)
+        if (!value || typeof value !== 'object') return value
+        if (typeof value.id === 'string' && value.runtimeState && value.tokenUsage) {
+          return { ...value, childTotal: window.__foxwarmE2eChildTotals[value.id] || 0 }
+        }
+        return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, addCounts(entry)]))
+      }
+      return new Response(JSON.stringify(addCounts(body)), {
+        status: response.status, statusText: response.statusText, headers: response.headers,
+      })
+    }
+  })
+
+  const createSession = async () => {
+    const sessionId = await page.evaluate(async () => {
+      const response = await fetch('./api/sessions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(JSON.stringify(payload))
+      return payload.sessionId
+    })
+    createdIds.push(sessionId)
+    return sessionId
+  }
+  const moveSession = (sessionId, parentSessionId) => page.evaluate(async ({ sessionId, parentSessionId }) => {
+    const response = await fetch(`./api/sessions/${encodeURIComponent(sessionId)}/move`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parentSessionId }),
+    })
+    if (!response.ok) throw new Error(await response.text())
+  }, { sessionId, parentSessionId })
+  const waitForRow = sessionId => page.waitForFunction(id => (
+    !!document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)
+  ), { timeout: 10_000 }, sessionId)
+  const rowExists = sessionId => page.evaluate(id => (
+    !!document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)
+  ), sessionId)
+  const clickDisclosure = sessionId => page.evaluate(id => {
+    const row = document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)
+    const button = row?.querySelector('button[aria-label="Expand child sessions"],button[aria-label="Collapse child sessions"]')
+    if (!(button instanceof HTMLElement)) throw new Error(`Missing disclosure for ${id}`)
+    button.click()
+  }, sessionId)
+  const disclosureExpanded = sessionId => page.evaluate(id => {
+    const row = document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)
+    return row?.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded') || null
+  }, sessionId)
+  const disclosureText = sessionId => page.evaluate(id => {
+    const row = document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)
+    return row?.querySelector('button[aria-expanded]')?.textContent?.trim() || null
+  }, sessionId)
+  const waitForBranchReplay = (includedIds, excludedIds = []) => page.waitForResponse(response => {
+    const request = response.request()
+    if (request.method() !== 'POST' || !new URL(request.url()).pathname.endsWith('/api/session-list/children')) return false
+    try {
+      const ids = JSON.parse(request.postData() || '{}').parents?.map(parent => parent.parentSessionId) || []
+      return includedIds.every(id => ids.includes(id)) && excludedIds.every(id => !ids.includes(id))
+    } catch { return false }
+  }, { timeout: 10_000 })
+
+  try {
+    await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
+
+    const root = await createSession()
+    const child = await createSession()
+    const grandchild = await createSession()
+    const unrelatedRoot = await createSession()
+    const unrelatedChild = await createSession()
+    await page.evaluate(({ root, child, grandchild, unrelatedRoot, unrelatedChild }) => {
+      window.__foxwarmE2eChildTotals = {
+        [root]: 1, [child]: 1, [grandchild]: 0, [unrelatedRoot]: 1, [unrelatedChild]: 0,
+      }
+    }, { root, child, grandchild, unrelatedRoot, unrelatedChild })
+    await moveSession(child, root)
+    await moveSession(grandchild, child)
+    await moveSession(unrelatedChild, unrelatedRoot)
+    await waitForRow(root)
+    await waitForRow(unrelatedRoot)
+
+    let replay = waitForBranchReplay([unrelatedRoot])
+    await clickDisclosure(unrelatedRoot)
+    await replay
+    await waitForRow(unrelatedChild)
+    assert.equal(await disclosureText(unrelatedChild), null, 'a true leaf has no disclosure before any child query')
+
+    replay = waitForBranchReplay([root, unrelatedRoot])
+    await clickDisclosure(root)
+    await replay
+    await waitForRow(child)
+    assert.match(await disclosureText(child), /1 child/, 'the child has an exact numbered disclosure before nested expansion')
+    assert.equal(await rowExists(grandchild), false)
+
+    replay = waitForBranchReplay([root, child, unrelatedRoot])
+    await clickDisclosure(child)
+    await replay
+    await waitForRow(grandchild)
+    assert.equal(await disclosureText(grandchild), null)
+
+    replay = waitForBranchReplay([unrelatedRoot], [root, child])
+    await clickDisclosure(root)
+    await replay
+    assert.equal(await rowExists(child), false)
+    assert.equal(await rowExists(grandchild), false)
+    assert.equal(await rowExists(unrelatedChild), true)
+    assert.equal(await disclosureExpanded(unrelatedRoot), 'true')
+
+    replay = waitForBranchReplay([root, unrelatedRoot], [child])
+    await clickDisclosure(root)
+    await replay
+    await waitForRow(child)
+    assert.equal(await rowExists(grandchild), false, 're-expanding the root does not hidden-fetch the pruned grandchild branch')
+    assert.equal(await disclosureExpanded(child), 'false', 'the reloaded child disclosure returns collapsed')
+    assert.equal(await rowExists(unrelatedChild), true, 'the unrelated expanded branch stays rendered')
+
+    replay = waitForBranchReplay([root, child, unrelatedRoot])
+    await clickDisclosure(child)
+    await replay
+    await waitForRow(grandchild)
+  } finally {
+    for (const sessionId of createdIds.reverse()) {
+      await page.evaluate(async id => { await fetch(`./api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }) }, sessionId).catch(() => {})
+    }
+    await browser.close()
+  }
+})

@@ -48,6 +48,7 @@ interface SessionListProps {
   onCreateAgent: (agentId: string, inheritAgent?: string) => Promise<void>
   onCreateSession: (agentId: string, sessionId?: string) => Promise<void>
   idleNotificationModes: Record<string, SessionIdleNotificationMode>
+  unreadSessionIds?: ReadonlySet<string>
   onToggleIdleNotificationMode: (sessionId: string, mode: SessionIdleNotificationMode) => void
   bounded?: BoundedSessionListPresentationProps
 }
@@ -91,6 +92,7 @@ export default function SessionList({
   onCreateAgent,
   onCreateSession,
   idleNotificationModes,
+  unreadSessionIds,
   onToggleIdleNotificationMode,
   bounded,
 }: SessionListProps) {
@@ -177,6 +179,7 @@ export default function SessionList({
           onSelectSession={onSelectSession}
           onKeepSession={onKeepSession}
           idleNotificationModes={idleNotificationModes}
+          unreadSessionIds={unreadSessionIds}
           onToggleIdleNotificationMode={onToggleIdleNotificationMode}
           bounded={bounded}
           dragEnabled={false}

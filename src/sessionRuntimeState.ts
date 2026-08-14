@@ -54,6 +54,21 @@ const activeRuntimeStates = new Map<string, ActiveSessionRuntimeStateInput>();
 const catalogStubQueueLengths = new WeakMap<Session, number>();
 let updateCallback: RuntimeStateUpdateCallback | undefined;
 
+function normalizeToolArgsPreview(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  let preview: string;
+  if (typeof value === 'string') preview = value;
+  else {
+    try {
+      const serialized = JSON.stringify(value);
+      preview = typeof serialized === 'string' ? serialized : String(value);
+    } catch {
+      preview = String(value);
+    }
+  }
+  return preview.length > 4096 ? `${preview.slice(0, 4095)}…` : preview;
+}
+
 export function markSessionCatalogStub(session: Session, queueLength: number): void {
   catalogStubQueueLengths.set(session, Math.max(0, Math.floor(queueLength)));
 }
@@ -157,7 +172,11 @@ export function setActiveSessionRuntimeState(sessionId: string, state: ActiveSes
     ...state,
     since: state.since || Date.now(),
     tool: state.tool
-      ? { ...state.tool, startedAt: state.tool.startedAt || Date.now() }
+      ? {
+        ...state.tool,
+        argsPreview: normalizeToolArgsPreview(state.tool.argsPreview),
+        startedAt: state.tool.startedAt || Date.now(),
+      }
       : undefined,
   });
   updateCallback?.(sessionId);

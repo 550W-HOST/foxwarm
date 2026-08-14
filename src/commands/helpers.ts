@@ -362,11 +362,12 @@ export async function handleCompactCommand(ctx: ChannelContext, args: string[], 
     const compact = await sessionRuntime.requestCompaction(sessionId, keepPercent, true)
     if (compact.kind === 'empty') { ctx.reply('History is empty.'); return }
     if (compact.kind === 'unsupported') { ctx.reply(`⚠️ ${compact.message}`); return }
-    if (compact.kind !== 'tool-noise') throw new Error('Unexpected tool-noise compaction result.')
+    if (compact.kind !== 'tool-noise') throw new Error('Unexpected historical tool-response pruning result.')
     const result = compact.result
     ctx.reply(
-      `🧹 Tool-noise compaction finished. Replaced ${result.replacedFunctionCalls} tool call(s) and ${result.replacedFunctionResponses} tool response(s) across ${result.touchedMessages} message(s). `
-      + `Inspected ${result.inspectedMessages} older message(s); kept the most recent ${Math.max(0, commandSessionMessageCount(session) - result.keepStartIndex)} message(s) untouched.`
+      `🧹 Historical tool-response pruning finished. Pruned ${result.replacedFunctionResponses} oversized response(s) across ${result.touchedMessages} message(s); tool-call arguments were unchanged. `
+      + `Inspected ${result.inspectedMessages} older message(s), kept the most recent ${Math.max(0, commandSessionMessageCount(session) - result.keepStartIndex)} message(s) untouched, `
+      + `and estimated ${result.estimatedTokensSaved} token(s) saved (${result.estimatedTokensBefore} → ${result.estimatedTokensAfter}).`
     )
     return
   }

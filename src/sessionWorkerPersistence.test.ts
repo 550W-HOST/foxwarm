@@ -134,7 +134,6 @@ test('authoritative JSON write failure restores exact semantic state and leaves 
     current.meta.wait = { id: 'before-wait' };
     current.meta.managedSession = { ownerSessionId: 'owner', leaseId: 'before-lease', revision: 1,
       pendingInbox: [{ type: 'background', parts: [{ text: 'before-managed' }] }] };
-    current.contextFrontier = [{ kind: 'message', seq: 1 }];
     const before = captureSessionSemanticState(current);
     const persistence = new SessionWorkerPersistence(store, { writeState: async () => { throw new Error('replace failed'); } });
     await assert.rejects(() => persistence.applyAndPersistPendingPrefix(
@@ -146,7 +145,6 @@ test('authoritative JSON write failure restores exact semantic state and leaves 
         target.queue = [];
         target.meta.wait = { id: 'after-wait' };
         target.meta.managedSession = { ownerSessionId: 'owner', leaseId: 'after-lease', revision: 2, pendingInbox: [] };
-        target.contextFrontier = [{ kind: 'block', id: 2, level: 1, rawStartSeq: 1, rawEndSeq: 2 }];
       },
     ), /replace failed/);
     assert.deepEqual(captureSessionSemanticState(current), before);
@@ -296,7 +294,6 @@ test('current state replaces stale semantic stub fields while preserving catalog
     const base = session('current');
     base.queue = [{ type: 'trigger', parts: [{ text: 'stale' }] }];
     base.model = 'stale-model'; base.childModelDefault = 'stale-child'; base.vectorIndexPosition = 99;
-    base.contextFrontier = [{ kind: 'message', seq: 99 }];
     base.meta = { lastMessageTime: 99, wait: { id: 'stale' }, managedSession: { pendingInbox: ['stale'] },
       lastChannel: { channelId: 'telegram', channelUserId: 'u' } };
     base.pinned = true; base.sidebarOrder = 3; base.archived = true;
@@ -307,11 +304,35 @@ test('current state replaces stale semantic stub fields while preserving catalog
     const loaded = await persistence.loadActivated(base, owner.generation, owner.incarnationId);
     assert.deepEqual(loaded.queue, []);
     assert.equal(loaded.model, undefined); assert.equal(loaded.childModelDefault, undefined);
-    assert.equal(loaded.vectorIndexPosition, undefined); assert.equal(loaded.contextFrontier, undefined);
+    assert.equal(loaded.vectorIndexPosition, undefined);
     assert.equal(loaded.meta.wait, undefined); assert.equal(loaded.meta.managedSession, undefined);
     assert.equal(loaded.meta.lastChannel.channelId, 'telegram');
     assert.equal(loaded.pinned, true); assert.equal(loaded.sidebarOrder, 3); assert.equal(loaded.archived, true);
     assert.equal(loaded.broadcast, broadcast);
+  });
+});
+
+test('reload preserves Main-owned relation and presentation fields after catalog reparent', async () => {
+  await withStore(async store => {
+    const owner = activate(store, 'reparent');
+    let durable: any = {
+      sessionStateVersion: SESSION_STATE_FORMAT_VERSION, id: 'reparent', agent: 'authority-agent', aliases: ['old'],
+      parentSessionId: 'authority-parent', displayName: 'Authority name', history: [], persistentMemorySnapshot: '',
+      queue: [], stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+      busy: false, meta: { lastMessageTime: 0 }, lastAppliedMailboxId: 0,
+    };
+    const base = session('reparent');
+    base.agent = 'catalog-agent'; base.aliases = ['catalog-alias']; base.parentSessionId = 'catalog-parent'; base.displayName = 'Catalog name';
+    const persistence = new SessionWorkerPersistence(store, {
+      readState: async () => structuredClone(durable),
+      writeState: async current => { durable = structuredClone(serializeSessionHistoryPayload(current)); },
+    });
+    const loaded = await persistence.loadActivated(base, owner.generation, owner.incarnationId);
+    assert.equal(loaded.parentSessionId, 'catalog-parent'); assert.equal(loaded.displayName, 'Catalog name');
+    loaded.parentSessionId = 'reparented-in-main'; loaded.displayName = 'Renamed in Main'; loaded.aliases = ['new-alias'];
+    await persistence.reloadActivated(loaded, owner.generation, owner.incarnationId);
+    assert.equal(loaded.parentSessionId, 'reparented-in-main'); assert.equal(loaded.displayName, 'Renamed in Main');
+    assert.deepEqual(loaded.aliases, ['new-alias']); assert.equal(loaded.agent, 'catalog-agent');
   });
 });
 
@@ -344,7 +365,7 @@ test('real state-file writer atomically canonicalizes history/queue/managed imag
     });
     assert.equal(result.historyRef, true); assert.equal(result.queueRef, true); assert.equal(result.managedRef, true);
     assert.equal(result.cursor, 9); assert.equal(result.stateVersion, SESSION_STATE_FORMAT_VERSION);
-    assert.deepEqual(result.frontier, [{ kind: 'message', seq: 1 }]);
+    assert.equal(result.frontier, undefined);
     assert.equal(result.promptCacheKey, 'cache'); assert.equal(result.catalogExists, false);
   } finally {
     if (child.exitCode === null) child.kill('SIGKILL');

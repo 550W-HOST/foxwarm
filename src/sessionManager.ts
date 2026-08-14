@@ -18,13 +18,13 @@ import { VECTOR_ENABLED } from './config';
 import { CATALOG_DB_PATH, CHANNELS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getLegacySessionFrontierPath, type ModelEffort, type ModelsConfig } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
-import { appendMessagesToArchive, ensureMessageSeq, getNextSessionMessageSeq } from './session/archive';
+import { appendMessagesToArchive, ensureMessageSeq, getNextSessionMessageSeq, rollbackUncommittedMessages } from './session/archive';
 import { externalizeMessages, externalizeQueueItemImages } from './imageBlobs';
-import { annotateHistoryWithContextFrontierMetadata, appendMessagesToContextFrontier, readArchiveBlocksByIdRange, renderHistoryFromFrontier } from './session/layeredContext';
+import { readArchiveBlocksByIdRange } from './session/layeredContext';
 import { ensureSessionBranch, hasArchivedSessionId, rollbackUncommittedSessionArchive } from './session/archiveStore';
-import { getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, withSessionsMetadataWriteLock } from './session/metadataStore';
+import { captureSessionSemanticState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, restoreSessionSemanticState, withSessionsMetadataWriteLock } from './session/metadataStore';
 import { buildSessionCatalogProjection, readLegacyChannelAttachmentsFromCatalogMigrationEvidence, sessionCatalogStore } from './session/catalogStore';
-import { externalizeAuthoritativeSessionImages, externalizeAuthoritativeSessionQueueImages, writeAuthoritativeSessionState } from './session/stateFile';
+import { externalizeAuthoritativeSessionImages, externalizeAuthoritativeSessionQueueImages, isSessionAuthorityPostCommitError, SessionAuthorityPostCommitError, writeAuthoritativeSessionState } from './session/stateFile';
 import { replaceAuthoritativeSessionState } from './session/stateHydration';
 import * as sessionChannels from './session/channels';
 import * as sessionHistory from './session/history';
@@ -905,18 +905,6 @@ async function getSessionUnlocked(sessionId: string, persistNew: boolean = true)
   if (session.nextMessageSeq === undefined) {
     session.nextMessageSeq = getNextSessionMessageSeq(session);
   }
-  if (session.contextFrontier && session.contextFrontier.length > 0) {
-    if (session.history.length !== session.contextFrontier.length) {
-      session.history = await renderHistoryFromFrontier(session);
-    } else {
-      const annotation = await annotateHistoryWithContextFrontierMetadata(session.id, session.history, session.contextFrontier);
-      session.history = annotation.history;
-      if (!annotation.matched) {
-        logger.warn({ sessionId: session.id, warnings: annotation.warnings }, 'Loaded session context frontier did not exactly match rendered history; applied best-effort metadata annotations');
-      }
-    }
-  }
-
   try {
     if (await externalizeAuthoritativeSessionImages(session) || needsAuthoritativeStateUpgrade) {
       await saveSessionCritical(session.id);
@@ -1107,7 +1095,7 @@ function getSessionHistoryDeps() {
   return {
     getSessionById: (sessionId: string) => sessions.get(sessionId),
     getExistingSession,
-    saveSession,
+    saveSession: saveSessionCritical,
     enqueueSessionItem,
     notifyHistoryUpdate,
   };
@@ -1515,15 +1503,12 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
     vectorIndexPosition: sourceSession.history.length, // Inherit parent's index position to avoid re-indexing
     nextMessageSeq: sourceSession.nextMessageSeq,
     nextBlockId: sourceSession.nextBlockId,
-    contextFrontier: sourceSession.contextFrontier ? structuredClone(sourceSession.contextFrontier) : undefined,
     parentSessionId: realSourceSessionId,
     currentNode: options?.node || sourceSession.currentNode || 'master',
     agent: sourceSession.agent,
     verbose: sourceSession.verbose,
     model: spawnedSettings.model,
     effort: spawnedSettings.effort,
-    childModelDefault: sourceSession.childModelDefault,
-    childEffortDefault: sourceSession.childEffortDefault,
   };
 
   const appendedForkMessages: Message[] = [];
@@ -1650,12 +1635,14 @@ export function resolveSpawnedSessionModelEffort(
   session?: Pick<Session, 'model' | 'effort' | 'childModelDefault' | 'childEffortDefault'>,
   explicitModel?: string,
   explicitEffort?: ModelEffort,
+  modelsConfig?: ModelsConfig,
 ): { model?: string; effort?: ModelEffort } {
   const model = resolveSpawnedSessionModel(session, explicitModel);
   const inheritedEffort = resolveSpawnedSessionEffort(session, explicitEffort);
   const normalized = normalizeProspectiveSessionModelEffortSettings(
     { model, effort: inheritedEffort },
     explicitEffort === undefined ? {} : { effort: explicitEffort },
+    modelsConfig,
   );
   return { model: normalized.model, effort: normalized.effort };
 }
@@ -1708,8 +1695,6 @@ async function createChildSessionUnlocked(parentSessionId: string, suffix: strin
       currentNode: options?.node || parentSession.currentNode || 'master',
       model: spawnedSettings.model,
       effort: spawnedSettings.effort,
-      childModelDefault: parentSession.childModelDefault,
-      childEffortDefault: parentSession.childEffortDefault,
     };
 
     const initialMessage: Message = {
@@ -1741,18 +1726,41 @@ export async function setSessionParent(childSessionId: string, parentSessionId?:
   // Main-owned presentation metadata there, so update it catalog-only and
   // never write the fenced authority (a stale stub write could corrupt it).
   if (workerEnqueueSink || workerFenceChecker?.(childSessionId)) {
-    const child = sessions.get(childSessionId);
-    if (!child) throw new Error(`Session \`${childSessionId}\` not found.`);
-    const previousParentSessionId = child.parentSessionId;
-    assertSessionDestructiveMutationAllowed(
-      [childSessionId, parentSessionId],
-      parentSessionId ? 'change parent relations' : 'detach from its parent',
-      owningClaimId,
-    );
-    child.parentSessionId = parentSessionId;
-    await saveSessionCatalogEntries([childSessionId]);
-    notifySessionListUpdated();
-    return { childSessionId, parentSessionId, previousParentSessionId };
+    return withSessionIdentityLock(async () => {
+      const realChildId = resolveLoadedSessionId(childSessionId);
+      const child = sessions.get(realChildId);
+      if (!child) throw new Error(`Session \`${childSessionId}\` not found.`);
+      const realParentId = parentSessionId ? resolveLoadedSessionId(parentSessionId) : undefined;
+      if (realParentId && !sessions.has(realParentId)) throw new Error(`Session "${parentSessionId}" not found.`);
+      if (realParentId === realChildId) throw new Error('A session cannot be its own parent.');
+      const seen = new Set<string>([realChildId]);
+      let cursorParentId = realParentId;
+      while (cursorParentId) {
+        if (seen.has(cursorParentId)) {
+          throw new Error(`Session "${realChildId}" cannot be moved under descendant "${realParentId}" because that would create a parent cycle.`);
+        }
+        seen.add(cursorParentId);
+        cursorParentId = sessions.get(cursorParentId)?.parentSessionId;
+      }
+      const previousParentSessionId = child.parentSessionId;
+      assertSessionDestructiveMutationAllowed(
+        [realChildId, realParentId],
+        realParentId ? 'change parent relations' : 'detach from its parent',
+        owningClaimId,
+      );
+      child.parentSessionId = realParentId;
+      try {
+        await workerCatalogFieldsUpdater?.(realChildId, { parentSessionId: realParentId ?? null });
+        await saveSessionCatalogEntriesCritical([realChildId]);
+      } catch (error) {
+        child.parentSessionId = previousParentSessionId;
+        try { await workerCatalogFieldsUpdater?.(realChildId, { parentSessionId: previousParentSessionId ?? null }); }
+        catch (rollbackError) { (error as any).rollbackError = rollbackError; }
+        throw error;
+      }
+      notifySessionListUpdated();
+      return { childSessionId: realChildId, parentSessionId: realParentId, previousParentSessionId };
+    });
   }
   return sessionRelations.setSessionParent({
     getExistingSession,
@@ -1826,7 +1834,18 @@ async function saveSessionForSessionCritical(session: Session): Promise<void> {
   await saveSessionStateOnlyCritical(session);
 
   // Save metadata (lightweight operation)
-  await saveSessionCatalogEntriesCritical([session.id]);
+  try { await saveSessionCatalogEntriesCritical([session.id]); }
+  catch (error) {
+    try {
+      const authority = await readSessionHistorySnapshot(session.id);
+      if (authority) replaceAuthoritativeSessionState(session, authority, { preserveCatalogFields: true });
+    } catch (resyncError) {
+      const postcommit = new SessionAuthorityPostCommitError(`Session ${session.id} authority committed, its catalog projection failed, and local authority resync also failed.`, error);
+      (postcommit as any).resyncError = resyncError;
+      throw postcommit;
+    }
+    throw new SessionAuthorityPostCommitError(`Session ${session.id} authority committed, but its catalog projection failed.`, error);
+  }
 
   // Schedule archive-based vector indexing (non-blocking)
   if (VECTOR_ENABLED) {
@@ -2238,6 +2257,7 @@ let workerEnqueueSink: ((sessionId: string, item: QueueItem) => Promise<void>) |
 let workerDeleteHandler: ((sessionId: string) => Promise<boolean>) | undefined;
 let workerForkSourceProvider: ((sessionId: string) => Promise<Session | undefined>) | undefined;
 let workerFenceChecker: ((sessionId: string) => boolean) | undefined;
+let workerCatalogFieldsUpdater: ((sessionId: string, patch: { parentSessionId?: string | null; displayName?: string | null }) => Promise<void>) | undefined;
 
 export function setSessionWorkerEnqueueSink(handler: ((sessionId: string, item: QueueItem) => Promise<void>) | undefined): void {
   workerEnqueueSink = handler;
@@ -2272,6 +2292,33 @@ export function setSessionWorkerForkSourceProvider(provider: ((sessionId: string
  */
 export function setSessionWorkerFenceChecker(checker: ((sessionId: string) => boolean) | undefined): void {
   workerFenceChecker = checker;
+}
+
+export function setSessionWorkerCatalogFieldsUpdater(updater: typeof workerCatalogFieldsUpdater): void {
+  workerCatalogFieldsUpdater = updater;
+}
+
+export async function setSessionDisplayName(sessionId: string, displayName?: string): Promise<{ previous?: string; current?: string }> {
+  return withSessionIdentityLock(async () => {
+    const session = sessions.get(resolveLoadedSessionId(sessionId));
+    if (!session) throw new Error(`Session \`${sessionId}\` not found.`);
+    assertSessionDestructiveMutationAllowed([session.id], 'change Session display name');
+    const previous = session.displayName;
+    if (displayName === undefined) delete session.displayName;
+    else session.displayName = displayName;
+    try {
+      await workerCatalogFieldsUpdater?.(session.id, { displayName: displayName ?? null });
+      await saveSessionCatalogEntriesCritical([session.id]);
+    } catch (error) {
+      if (previous === undefined) delete session.displayName;
+      else session.displayName = previous;
+      try { await workerCatalogFieldsUpdater?.(session.id, { displayName: previous ?? null }); }
+      catch (rollbackError) { (error as any).rollbackError = rollbackError; }
+      throw error;
+    }
+    notifySessionStateUpdated(session.id);
+    return { previous, current: session.displayName };
+  });
 }
 
 /** True when the session currently has an active (non-inactive) Session-worker fence. */
@@ -2461,10 +2508,12 @@ export async function appendSessionMessages(sessionOrId: Session | string, messa
     ? await getSession(sessionOrId)
     : sessionOrId;
 
-  await appendSessionMessagesForSession(session, messages, async () => {
-    if (options.strictPersistence) await saveSessionForSessionCritical(session);
-    else await saveSession(session);
-  });
+  // Canonical message append is an archive+authority commit boundary. Never
+  // use the best-effort public save wrapper here: a failed authority write
+  // must abort the owning Session turn rather than continue from memory-only
+  // history. Keep the option shape temporarily for current callers.
+  void options;
+  await appendSessionMessagesForSession(session, messages, () => saveSessionForSessionCritical(session));
 }
 
 export async function appendSessionMessagesForSession(
@@ -2478,18 +2527,29 @@ export async function appendSessionMessagesForSession(
     return;
   }
 
-  for (const message of messages) ensureMessageSeq(session, message);
-  const canonicalMessages = (await externalizeMessages(messages)).messages;
-  await appendMessagesToArchive(session, canonicalMessages);
-
-  for (const message of canonicalMessages) {
-    session.history.push(message);
+  const before = captureSessionSemanticState(session);
+  let canonicalMessages: Message[];
+  let insertedArchiveMessages: Awaited<ReturnType<typeof appendMessagesToArchive>> = [];
+  try {
+    for (const message of messages) ensureMessageSeq(session, message);
+    canonicalMessages = (await externalizeMessages(messages)).messages;
+    insertedArchiveMessages = await appendMessagesToArchive(session, canonicalMessages);
+    session.history.push(...canonicalMessages);
+    await persistSession();
+  } catch (error) {
+    if (!isSessionAuthorityPostCommitError(error)) restoreSessionSemanticState(session, before);
+    if (insertedArchiveMessages.length > 0) {
+      if (isSessionAuthorityPostCommitError(error)) throw error;
+      try { await rollbackUncommittedMessages(insertedArchiveMessages); }
+      catch (rollbackError) {
+        const combined = new Error(`Session ${session.id} append failed and its uncommitted archive rows could not be rolled back.`);
+        (combined as any).errors = [error, rollbackError];
+        throw combined;
+      }
+    }
+    throw error;
   }
-  appendMessagesToContextFrontier(session, canonicalMessages);
-
   const messagesToNotify = [...canonicalMessages];
-
-  await persistSession();
 
   for (const message of messagesToNotify) {
     notifyMessage(session.id, message);

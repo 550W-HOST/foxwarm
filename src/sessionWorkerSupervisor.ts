@@ -10,7 +10,7 @@ import { ProcessRpcClientTransport, ProcessRpcServer, RpcClient, RpcError, RpcSe
 import { SessionWorkerIdentity, sessionWorkerControlServiceDescriptor } from './sessionWorkerControlService';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { SessionWorkerOwnershipRecord, SessionWorkerStore } from './sessionWorkerStore';
-import { sessionWorkerRuntimeServiceDescriptor, type SessionWorkerHistoryMutationResult, type SessionWorkerSettingsPatch, type SessionWorkerSettingsResult } from './sessionWorkerRuntimeService';
+import { sessionWorkerRuntimeServiceDescriptor, type SessionWorkerCatalogFieldsPatch, type SessionWorkerHistoryMutationResult, type SessionWorkerSettingsPatch, type SessionWorkerSettingsResult } from './sessionWorkerRuntimeService';
 import type { CompactionRequest } from './types';
 import type { SessionRuntimeHistoryDto } from './sessionRuntimeService';
 import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
@@ -26,6 +26,7 @@ export type SessionWorkerSupervisorOptions = {
   store: SessionWorkerStore;
   workerScriptPath?: string;
   workerEnv?: Record<string, string>;
+  getCatalogStub?: (sessionId: string) => Partial<Pick<import('./types').Session, 'agent' | 'aliases' | 'parentSessionId' | 'displayName'>> | undefined;
   idleMs: number;
   restartBaseDelayMs?: number;
   restartMaxDelayMs?: number;
@@ -295,6 +296,23 @@ export class SessionWorkerSupervisor {
     }
   }
 
+  async updateCatalogFieldsActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+    patch: SessionWorkerCatalogFieldsPatch,
+  ): Promise<void> {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      await runtime.call('updateCatalogFields', { patch });
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
+  }
+
   async deleteMessagesActivated(
     sessionId: string,
     expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
@@ -516,7 +534,8 @@ export class SessionWorkerSupervisor {
           FOXWARM_SESSION_WORKER_SESSION_ID: sessionId,
           FOXWARM_SESSION_WORKER_GENERATION: String(generation),
           FOXWARM_SESSION_WORKER_INCARNATION_ID: incarnationId,
-          FOXWARM_SESSION_WORKER_STORE_PATH: this.options.store.filePath },
+          FOXWARM_SESSION_WORKER_STORE_PATH: this.options.store.filePath,
+          FOXWARM_SESSION_WORKER_CATALOG_STUB: JSON.stringify(this.options.getCatalogStub?.(sessionId) || {}) },
         serialization: 'advanced',
       });
     } catch (error) {

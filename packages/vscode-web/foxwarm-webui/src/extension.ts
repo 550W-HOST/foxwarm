@@ -334,6 +334,19 @@ export class FoxwarmWebUiController implements vscode.WebviewViewProvider, vscod
     }
   }
 
+  private getVisibleSessionIds(): string[] {
+    const visible: string[] = [];
+    for (const group of vscode.window.tabGroups.all) {
+      const input = group.activeTab?.input as { viewType?: unknown; uri?: vscode.Uri } | undefined;
+      if (!input?.uri || input.viewType !== FOXWARM_CHAT_EDITOR_VIEW_TYPE) continue;
+      try {
+        const target = parseEditorTarget(input.uri);
+        if (target.kind === 'session' && !visible.includes(target.sessionId)) visible.push(target.sessionId);
+      } catch {}
+    }
+    return visible;
+  }
+
   publishActiveTarget(): void {
     const bridge = this.sidebarBridge;
     if (!bridge) return;
@@ -343,6 +356,7 @@ export class FoxwarmWebUiController implements vscode.WebviewViewProvider, vscod
       nonce: bridge.nonce,
       type: 'active-target',
       target: this.getActiveTarget(),
+      visibleSessionIds: this.getVisibleSessionIds(),
     });
   }
 

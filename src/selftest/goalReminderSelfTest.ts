@@ -141,7 +141,6 @@ async function main(): Promise<void> {
       assert.strictEqual(historyPayload.queue?.some((item: any) => item.message?.__meta?.goalReminder === true), false);
 
       session.history = [];
-      session.contextFrontier = undefined;
       const reloaded = await sessionManager.getSession(sessionId);
       assert.strictEqual(countGoalReminders(reloaded), 1);
       assert.strictEqual(reloaded.queue.some(item => item.message?.__meta?.goalReminder === true), false);

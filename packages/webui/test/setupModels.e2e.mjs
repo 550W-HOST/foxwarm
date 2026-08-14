@@ -871,7 +871,10 @@ test('embedded model filter selects one result and keeps the accessible Setup br
         footerImmediatelyAboveSearch: !!footer.nextElementSibling?.querySelector('input[aria-label="Filter models"]'),
         headerColumns: columnRects(header),
         footerColumns: columnRects(footer),
-        rowColumns: columnRects(row),
+        rowColumns: Array.from(row.querySelectorAll('[data-model-selector-column]')).map((child) => {
+          const rect = child.getBoundingClientRect()
+          return { left: rect.left, right: rect.right, width: rect.width }
+        }),
         footerHeight: footer.getBoundingClientRect().height,
         selects,
       }
@@ -888,6 +891,8 @@ test('embedded model filter selects one result and keeps the accessible Setup br
       assert.ok(Math.abs(alignedEffortLayout.rowColumns[index].left - alignedEffortLayout.footerColumns[index].left) <= 1)
       assert.ok(Math.abs(alignedEffortLayout.rowColumns[index].right - alignedEffortLayout.footerColumns[index].right) <= 1)
     }
+    assert.ok(Math.abs(alignedEffortLayout.headerColumns[1].width - 100) <= 1)
+    assert.ok(Math.abs(alignedEffortLayout.headerColumns[2].width - 100) <= 1)
     assert.ok(alignedEffortLayout.selects.every(({ left, right, width }, index) => left >= alignedEffortLayout.footerColumns[index + 1].left && right <= alignedEffortLayout.footerColumns[index + 1].right && width >= 76))
     assert.ok(alignedEffortLayout.selects.every(({ fontSize }) => fontSize === 16))
     assert.deepEqual(alignedEffortLayout.selects.map(({ selectedLabel }) => selectedLabel), ['Per leaf', 'Per leaf'])
@@ -1026,7 +1031,10 @@ test('default desktop model effort footer stays compact and table-aligned', asyn
       })
       const headerColumns = columns(header)
       const footerColumns = columns(footer)
-      const rowColumns = columns(row)
+      const rowColumns = Array.from(row.querySelectorAll('[data-model-selector-column]')).map((child) => {
+        const rect = child.getBoundingClientRect()
+        return { left: rect.left, right: rect.right }
+      })
       const selects = Array.from(footer.querySelectorAll('select')).map((select) => {
         const rect = select.getBoundingClientRect()
         const style = getComputedStyle(select)
@@ -1061,7 +1069,7 @@ test('default desktop model effort footer stays compact and table-aligned', asyn
     assert.equal(layout.footerLabel, 'Effort')
     assert.deepEqual(layout.selects.map(({ selectedLabel }) => selectedLabel), ['Default', 'Follow'])
     assert.ok(layout.selects.every(({ fontSize }) => fontSize === 11))
-    assert.ok(layout.selects.every(({ width }) => width >= 104))
+    assert.ok(layout.selects.every(({ width }) => width >= 80))
     assert.ok(layout.selects.every(({ readable }) => readable))
     assert.deepEqual(layout.selects.map(({ title }) => title), [
       'Current effort: default (high)',
@@ -1071,6 +1079,67 @@ test('default desktop model effort footer stays compact and table-aligned', asyn
       'Current effort: default (high)',
       'Child effort: follow/default (high)',
     ])
+  } finally {
+    await desktopPage.close()
+  }
+})
+
+test('desktop model popup keeps stable 600/100/100 geometry across scroll and current selection', async () => {
+  const desktopPage = await browser.newPage()
+  await desktopPage.setViewport({ width: 1000, height: 700 })
+  await attachRequestMocks(desktopPage)
+  try {
+    await desktopPage.goto(`${baseUrl}/normal/#session/model-popup-geometry`, { waitUntil: 'networkidle2' })
+    await desktopPage.click('button[aria-haspopup="dialog"]')
+    await desktopPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+
+    const readGeometry = () => desktopPage.$eval('[data-model-selector-popup="true"]', (popup) => {
+      const header = popup.querySelector('[data-model-selector-header="true"]')
+      const footer = popup.querySelector('[data-model-effort-footer="true"]')
+      const row = popup.querySelector('[data-model-selector-row="true"]')
+      const scroll = popup.querySelector('[data-model-selector-scroll="true"]')
+      if (!header || !footer || !row || !scroll) throw new Error('model selector geometry missing')
+      scroll.scrollTop = scroll.scrollHeight
+      const columns = (element) => Array.from(element.children).map((child) => {
+        const rect = child.getBoundingClientRect()
+        return { left: rect.left, right: rect.right, width: rect.width }
+      })
+      return {
+        popup: popup.getBoundingClientRect().width,
+        header: columns(header),
+        footer: columns(footer),
+        row: Array.from(row.querySelectorAll('[data-model-selector-column]')).map((child) => {
+          const rect = child.getBoundingClientRect()
+          return { left: rect.left, right: rect.right, width: rect.width }
+        }),
+        scrollGutter: scroll.getBoundingClientRect().width - scroll.clientWidth,
+      }
+    })
+
+    const before = await readGeometry()
+    assert.ok(Math.abs(before.popup - 600) <= 1)
+    assert.ok(Math.abs(before.header[1].width - 100) <= 1)
+    assert.ok(Math.abs(before.header[2].width - 100) <= 1)
+    const hoverRegions = await desktopPage.$eval('[data-model-selector-row="true"]', (row) => {
+      const current = row.querySelector('[data-model-current-region="true"]')
+      const child = row.querySelector('[data-model-selector-column="child"]')
+      return {
+        currentClasses: current?.className || '',
+        currentColumns: current ? Array.from(current.children).map(cell => cell.getAttribute('data-model-selector-column')) : [],
+        childClasses: child?.className || '',
+        currentTag: current?.tagName,
+        childTag: child?.tagName,
+      }
+    })
+    assert.equal(hoverRegions.currentTag, 'BUTTON')
+    assert.deepEqual(hoverRegions.currentColumns, ['model', 'current'])
+    assert.match(hoverRegions.currentClasses, /hover:bg-blue-50/)
+    assert.equal(hoverRegions.childTag, 'BUTTON')
+    assert.match(hoverRegions.childClasses, /hover:bg-purple-50/)
+    await desktopPage.click('button[title="leaf/model-a"]')
+    await desktopPage.waitForFunction(() => document.querySelector('button[title="leaf/model-a"]')?.className.includes('text-blue-700'))
+    const after = await readGeometry()
+    assert.deepEqual(after, before)
   } finally {
     await desktopPage.close()
   }
@@ -1099,7 +1168,10 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
       }) : []
       const headerColumns = columns(header)
       const footerColumns = columns(footer)
-      const rowColumns = columns(row)
+      const rowColumns = Array.from(row.querySelectorAll('[data-model-selector-column]')).map((child) => {
+        const rect = child.getBoundingClientRect()
+        return { left: rect.left, right: rect.right }
+      })
       return {
         theme: document.documentElement.getAttribute('data-foxwarm-ui-style'),
         popupWidth: popup.getBoundingClientRect().width,
@@ -1112,6 +1184,9 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
         currentFontSize: current ? Number.parseFloat(getComputedStyle(current).fontSize) : 0,
         currentLabel: current?.selectedOptions[0]?.label || '',
         childLabel: child?.selectedOptions[0]?.label || '',
+        filterBorderColor: getComputedStyle(popup.querySelector('input[aria-label="Filter models"]')).borderColor,
+        filterBoxShadow: getComputedStyle(popup.querySelector('input[aria-label="Filter models"]')).boxShadow,
+        themeAccentDim: getComputedStyle(document.documentElement).getPropertyValue('--foxwarm-550a-accent-dim').trim(),
         aligned: footerColumns.length === 3 && footerColumns.every((column, index) => (
           Math.abs(column.left - headerColumns[index].left) <= 1
           && Math.abs(column.right - headerColumns[index].right) <= 1
@@ -1121,16 +1196,18 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
       }
     })
     assert.equal(themeLayout.theme, '550a')
-    assert.ok(themeLayout.popupWidth <= 500)
+    assert.ok(Math.abs(themeLayout.popupWidth - 600) <= 1)
     assert.equal(themeLayout.headerContainsCurrent, false)
     assert.equal(themeLayout.headerContainsChild, false)
     assert.equal(themeLayout.footerContainsCurrent, true)
     assert.equal(themeLayout.footerContainsChild, true)
-    assert.ok(themeLayout.currentWidth >= 104)
-    assert.ok(themeLayout.childWidth >= 104)
+    assert.ok(themeLayout.currentWidth >= 80)
+    assert.ok(themeLayout.childWidth >= 80)
     assert.ok(themeLayout.currentFontSize <= 11)
     assert.equal(themeLayout.currentLabel, 'Per leaf')
     assert.equal(themeLayout.childLabel, 'Per leaf')
+    assert.equal(themeLayout.filterBorderColor, `rgb(${Number.parseInt(themeLayout.themeAccentDim.slice(1, 3), 16)}, ${Number.parseInt(themeLayout.themeAccentDim.slice(3, 5), 16)}, ${Number.parseInt(themeLayout.themeAccentDim.slice(5, 7), 16)})`)
+    assert.doesNotMatch(themeLayout.filterBoxShadow, /59, 130, 246|96, 165, 250/)
     assert.equal(themeLayout.aligned, true)
     const configure = await normalPage.waitForSelector('button[aria-label="Configure models"]')
     assert.equal((await configure.evaluate((button) => button.textContent || '')).trim(), '')

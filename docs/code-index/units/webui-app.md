@@ -36,7 +36,7 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 - Browser-only theme, UI style, sidebar, send-key, last-tab/session, and Code preferences use local storage. Instance branding comes from server settings.
 - Browser auth storage reads only `foxwarm_token`. The browser E2E helper is exposed only as `window.foxwarmTest`.
 - Main launcher options consume the authenticated node summary. Code persists its standalone node/path target in browser storage; terminal defaults follow the focused session. Session-header terminal placement reuses a lower pane only for the exact normalized node/cwd target and otherwise adds the requested target there.
-- Idle-notification settings are browser-local too. App and the embedded sidebar each observe their accepted list snapshots once; the notification transition contract belongs to [webui-session-list](./webui-session-list.md#design-decisions).
+- Idle-notification settings and unread idle-completion attention are browser-local too. App and the embedded sidebar each observe their accepted list snapshots once and retain only the page-created Notification handles produced by that root. App supplies every actually rendered active split-pane Chat (or the one visible mobile pane). Notification clicks use a notification-origin `openChatTab` activation that preserves normal workbench/hash navigation but skips its ordinary eager row/tab acknowledgement, then rely on actual visible-session reconciliation; Code uses the existing nonce-bound `open-session` host action. Lifecycle, acknowledgement, and closed-page limitations are canonical in [webui-session-list](./webui-session-list.md#design-decisions).
 
 ## Embedded leaf roots
 
@@ -49,7 +49,7 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 
 Embedded Chat sends `open-setup` with an allowlisted optional Models-focus field. The Code host activates the stable Setup custom editor and sends a separate nonce-bound one-shot `focus-models` message after the Setup leaf reports ready; Embedded Setup converts it to the same transient `SetupView` focus request used by normal App.
 
-These are independent roots, not CSS-hidden full App instances. Active-target messages update sidebar selection; a null target clears it.
+These are independent roots, not CSS-hidden full App instances. Active-target messages update sidebar selection; a null target clears it. The same nonce-bound payload may include all active Code Chat editor session IDs so the embedded sidebar can apply the canonical unread visibility contract.
 
 ## Code and commit behavior
 
@@ -74,7 +74,7 @@ Workbench store/layout, Sidebar, Chat, Architecture, Setup, terminal view, WebUI
 
 ### D-webui-app-route-close
 
-Advance the route/hash to the workbench fallback before a closed active tab can be rehydrated.
+[2026-08-14] App owns route publication for Workbench close actions. An ordinary active-tab close fences the routed tab before the synchronous store removal, then immediately publishes the store-selected fallback; when the final closable tab has no protected forced Setup fallback, the Workbench may remain empty for the rest of the current mount and App clears the hash plus last-active-tab preference. Bulk close pre-fences every closable target, runs the sequential per-tab resource and component close lifecycle with intermediate route/hash publication deferred, and publishes exactly one final store-selected fallback afterward. `Close others` therefore preserves its selected target, while `Close all` leaves an empty pane/hash/preference when no protected Setup tab remains. Reload or explicit navigation may create or restore a tab later.
 
 ### D-webui-app-global-list-gate
 

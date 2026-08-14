@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DndContext } from '@dnd-kit/core'
 import { Bot, Workflow } from 'lucide-react'
 import Chat from './components/Chat'
@@ -8,7 +8,7 @@ import GlobalUiSettingsMenu from './components/GlobalUiSettingsMenu'
 import CreateTabButton from './components/CreateTabButton'
 import { API_BASE_PATH } from './config'
 import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
-import { postFoxwarmEmbedHostMessage, readEmbeddedSessionLink, readFoxwarmActiveTargetMessage, readFoxwarmFocusModelsMessage, type FoxwarmActiveTarget, type FoxwarmEmbeddedTarget } from './embeddedWebUi'
+import { postFoxwarmEmbedHostMessage, readEmbeddedSessionLink, readFoxwarmActiveTargetMessage, readFoxwarmFocusModelsMessage, readFoxwarmVisibleSessionIdsMessage, type FoxwarmActiveTarget, type FoxwarmEmbeddedTarget } from './embeddedWebUi'
 import { useSessionIdleNotifications } from './sessionIdleNotifications'
 import { useBoundedSessionList } from './boundedSessionList'
 
@@ -104,6 +104,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
   const [agents, setAgents] = useState<AgentSummary[]>([])
   const [settings, setSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [activeTarget, setActiveTarget] = useState<FoxwarmActiveTarget | null>(null)
+  const [visibleSessionIds, setVisibleSessionIds] = useState<string[]>([])
   const currentSession = activeTarget?.kind === 'session' ? activeTarget.sessionId : ''
   const boundedSessions = useBoundedSessionList({ focusIds: currentSession ? [currentSession] : [], exactIds: currentSession ? [currentSession] : [] })
   const sessions = boundedSessions.knownSessions
@@ -134,7 +135,11 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
     setSettings(normalizeSettings(data.settings))
   }, [])
 
-  const { idleNotificationModes, toggleIdleNotificationMode } = useSessionIdleNotifications(sessions)
+  const notificationOpenSessionRef = useRef<((sessionId: string) => void) | null>(null)
+  const { idleNotificationModes, toggleIdleNotificationMode, unreadSessionIds } = useSessionIdleNotifications(sessions, {
+    visibleSessionIds,
+    onOpenSession: (sessionId) => notificationOpenSessionRef.current?.(sessionId),
+  })
 
   useEffect(() => {
     void fetchSettings()
@@ -146,6 +151,8 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
       if (event.source !== window.parent) return
       const next = readFoxwarmActiveTargetMessage(event.data, target.nonce)
       if (next !== undefined) setActiveTarget(next)
+      const nextVisibleSessionIds = readFoxwarmVisibleSessionIdsMessage(event.data, target.nonce)
+      if (nextVisibleSessionIds !== undefined) setVisibleSessionIds(nextVisibleSessionIds)
     }
     window.addEventListener('message', handleHostMessage)
     postFoxwarmEmbedHostMessage(target.nonce, { type: 'sidebar-ready' })
@@ -157,6 +164,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
     const session = sessions.find(item => item.id === sessionId || item.aliases?.includes(sessionId))
     postFoxwarmEmbedHostMessage(target.nonce, { type: 'open-session', sessionId, title: session?.displayName || session?.id || sessionId })
   }
+  notificationOpenSessionRef.current = openSession
 
   const openAgents = () => {
     setActiveTarget({ kind: 'agents' })
@@ -245,7 +253,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
           </div>
         </div>
         <div className="min-h-0 flex-1 border-t border-gray-200 dark:border-gray-700">
-          <SessionListCore sessions={sidebarSessions} currentSession={currentSession} onSelectSession={openSession} onKeepSession={openSession} toolbarContainerClassName="p-2 pb-1" listContainerClassName="p-2 pt-1" dragEnabled={false} idleNotificationModes={idleNotificationModes} onToggleIdleNotificationMode={toggleIdleNotificationMode} bounded={boundedPresentation} />
+          <SessionListCore sessions={sidebarSessions} currentSession={currentSession} onSelectSession={openSession} onKeepSession={openSession} toolbarContainerClassName="p-2 pb-1" listContainerClassName="p-2 pt-1" dragEnabled={false} idleNotificationModes={idleNotificationModes} unreadSessionIds={unreadSessionIds} onToggleIdleNotificationMode={toggleIdleNotificationMode} bounded={boundedPresentation} />
         </div>
       </div>
     </DndContext>

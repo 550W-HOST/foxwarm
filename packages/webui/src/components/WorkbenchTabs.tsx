@@ -16,6 +16,7 @@ interface WorkbenchTabsProps {
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
   onKeepTab: (tabId: string) => void
+  onCloseOtherTabs: (tabId: string) => void
   onCloseAllTabs: () => void
 }
 
@@ -284,6 +285,7 @@ export default function WorkbenchTabs({
   onSelectTab,
   onCloseTab,
   onKeepTab,
+  onCloseOtherTabs,
   onCloseAllTabs,
 }: WorkbenchTabsProps) {
   const [contextMenu, setContextMenu] = useState<TabContextMenuState | null>(null)
@@ -338,6 +340,13 @@ export default function WorkbenchTabs({
 
     entries.push({ key: 'separator-bulk-close', type: 'separator' })
     entries.push({
+      key: 'close-others',
+      label: 'Close others',
+      icon: <X className="h-4 w-4" />,
+      disabled: tabs.length <= 1,
+      onSelect: () => onCloseOtherTabs(contextMenuTab.id),
+    })
+    entries.push({
       key: 'close-all',
       label: 'Close all',
       icon: <X className="h-4 w-4" />,
@@ -345,7 +354,7 @@ export default function WorkbenchTabs({
     })
 
     return entries
-  }, [contextMenuTab, onCloseAllTabs, onCloseTab, onKeepTab])
+  }, [contextMenuTab, onCloseAllTabs, onCloseOtherTabs, onCloseTab, onKeepTab, tabs.length])
 
   const openContextMenu = (tabId: string, event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault()

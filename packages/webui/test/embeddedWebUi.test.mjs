@@ -21,7 +21,7 @@ await esbuild.build({
   logLevel: 'silent',
 })
 
-const { parseFoxwarmEmbeddedTarget, postFoxwarmEmbedHostMessage, readFoxwarmActiveTargetMessage, readFoxwarmFocusModelsMessage } = await import(pathToFileURL(bundledPath).href)
+const { parseFoxwarmEmbeddedTarget, postFoxwarmEmbedHostMessage, readFoxwarmActiveTargetMessage, readFoxwarmFocusModelsMessage, readFoxwarmVisibleSessionIdsMessage } = await import(pathToFileURL(bundledPath).href)
 const nonce = '0123456789abcdef0123456789abcdef'
 
 test('parses only fixed sidebar, chat, Agents, and Setup embed targets with a bridge nonce', () => {
@@ -44,6 +44,14 @@ test('accepts only nonce-bound fixed active-target messages from the Code host',
   assert.equal(readFoxwarmActiveTargetMessage({ ...base, target: null }, nonce), null)
   assert.equal(readFoxwarmActiveTargetMessage({ ...base, nonce: 'wrong', target: { kind: 'agents' } }, nonce), undefined)
   assert.equal(readFoxwarmActiveTargetMessage({ ...base, target: { kind: 'session', sessionId: '' } }, nonce), undefined)
+})
+
+test('accepts only bounded nonce-bound visible session ids on active-target messages', () => {
+  const base = { channel: 'foxwarm-webui-host', version: 1, nonce, type: 'active-target', target: null }
+  assert.deepEqual(readFoxwarmVisibleSessionIdsMessage({ ...base, visibleSessionIds: ['agent/a', 'agent/b', 'agent/a'] }, nonce), ['agent/a', 'agent/b'])
+  assert.deepEqual(readFoxwarmVisibleSessionIdsMessage(base, nonce), [])
+  assert.equal(readFoxwarmVisibleSessionIdsMessage({ ...base, visibleSessionIds: [42] }, nonce), undefined)
+  assert.equal(readFoxwarmVisibleSessionIdsMessage({ ...base, nonce: 'wrong', visibleSessionIds: ['agent/a'] }, nonce), undefined)
 })
 
 test('accepts only the nonce-bound fixed Models focus signal from the Code host', () => {

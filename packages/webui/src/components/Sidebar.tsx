@@ -50,6 +50,7 @@ interface SidebarProps {
   onToggleCollapsed: () => void
   isPeek?: boolean
   idleNotificationModes: Record<string, SessionIdleNotificationMode>
+  unreadSessionIds?: ReadonlySet<string>
   onToggleIdleNotificationMode: (sessionId: string, mode: SessionIdleNotificationMode) => void
   bounded?: BoundedSessionListPresentationProps
 }
@@ -95,6 +96,7 @@ export default function Sidebar({
   onToggleCollapsed,
   isPeek = false,
   idleNotificationModes,
+  unreadSessionIds,
   onToggleIdleNotificationMode,
   bounded,
 }: SidebarProps) {
@@ -189,6 +191,7 @@ export default function Sidebar({
           onSelectSession={onSelectSession}
           onKeepSession={onKeepSession}
           idleNotificationModes={idleNotificationModes}
+          unreadSessionIds={unreadSessionIds}
           onToggleIdleNotificationMode={onToggleIdleNotificationMode}
           bounded={bounded}
           toolbarContainerClassName="p-2 pb-1"

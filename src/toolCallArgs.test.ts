@@ -84,6 +84,47 @@ test('executeTools turns malformed tool arguments into a structured tool error',
   }
 });
 
+test('executeTools emits bounded string previews for primitive and structured argument values', async () => {
+  const sessionId = makeSessionId('tool_args_preview');
+  const previews: unknown[] = [];
+  const cases: Array<{ value: unknown; expected: string }> = [
+    { value: true, expected: 'true' },
+    { value: 42, expected: '42' },
+    { value: null, expected: 'null' },
+    { value: 'plain text', expected: 'plain text' },
+    { value: { nested: 'value' }, expected: '{"nested":"value"}' },
+    { value: ['a', 2], expected: '["a",2]' },
+  ];
+  try {
+    const session = await sessionManager.getSession(sessionId);
+    for (const [index, item] of cases.entries()) {
+      await executeTools(
+        [{ id: `preview-${index}`, name: 'set_goal', args: { goal: item.value } } as any],
+        { sessionId, session, onToolStart: (tool: any) => { previews.push(tool.argsPreview); } },
+        session,
+      );
+    }
+    await executeTools(
+      [{ id: 'preview-malformed', name: 'set_goal', args: {}, rawArgsText: '{"goal":', argsParseError: 'bad args' }],
+      { sessionId, session, onToolStart: (tool: any) => { previews.push(tool.argsPreview); } },
+      session,
+    );
+    await executeTools(
+      [{ id: 'preview-bounded', name: 'set_goal', args: { goal: 'x'.repeat(400) } }],
+      { sessionId, session, onToolStart: (tool: any) => { previews.push(tool.argsPreview); } },
+      session,
+    );
+
+    assert.deepEqual(previews.slice(0, cases.length), cases.map(item => item.expected));
+    assert.equal(previews[cases.length], '{"goal":');
+    assert.equal(typeof previews.at(-1), 'string');
+    assert.equal((previews.at(-1) as string).length, 200);
+    assert.match(previews.at(-1) as string, /\.\.\.$/);
+  } finally {
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
 test('executeTools persists previous LLM timing only on the first tool response', async () => {
   const toolMessage = await executeTools(
     [

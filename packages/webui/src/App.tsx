@@ -10,6 +10,7 @@ import VscodeWebFrameHost, { type VscodeWebFrameHostHandle } from './components/
 import type { SessionMoveRequest } from './components/SessionListCore'
 import { API_BASE_PATH } from './config'
 import { isSessionRuntimeActive } from './sessionRuntimeState'
+import { selectVisibleSessionIds, shouldAcknowledgeSessionNavigation, type SessionNavigationOrigin } from './sessionIdleAttention'
 import { useSessionIdleNotifications } from './sessionIdleNotifications'
 import { useBoundedSessionList } from './boundedSessionList'
 import { useWorkbenchStore } from './workbench/store'
@@ -502,6 +503,9 @@ function App() {
   const [draggingItem, setDraggingItem] = useState<{ type: 'tab' | 'session'; id: string; title: string } | null>(null)
 
   const pendingRouteTabIdRef = useRef<string | null>(null)
+  const currentRouteTabIdRef = useRef<string | null>(route.tabId)
+  const closingRouteTabIdsRef = useRef<Set<string>>(new Set())
+  const didInitializeEmptyWorkbenchRef = useRef(false)
   const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
   const allTabs = useMemo(() => Object.values(tabsById), [tabsById])
@@ -522,13 +526,25 @@ function App() {
   const currentContextSessionId = focusedActiveTab?.type === 'chat'
     ? focusedActiveTab.sessionId
     : loadStoredLastVisitedSession()
+  const visibleSessionIds = useMemo(() => {
+    const visiblePanes = isMobile ? (focusedPane ? [focusedPane] : paneNodes.slice(0, 1)) : paneNodes
+    const activeSessionIds = visiblePanes.map(pane => {
+      const tab = pane.activeTabId ? tabsById[pane.activeTabId] : null
+      return tab?.type === 'chat' ? tab.sessionId : null
+    })
+    return selectVisibleSessionIds(activeSessionIds, !isMobile || !showSessionList)
+  }, [isMobile, showSessionList, focusedPane, paneNodes, tabsById])
   const exactSessionIds = useMemo(() => allTabs.flatMap(tab => isChatTab(tab) ? [tab.sessionId] : []), [allTabs])
   const boundedSessions = useBoundedSessionList({ focusIds: currentContextSessionId ? [currentContextSessionId] : [], exactIds: exactSessionIds, includeGlobalSummary: true })
   const collapsedSessions = useBoundedSessionList({ focusIds: currentContextSessionId ? [currentContextSessionId] : [],
     rootLimit: 20, childLimit: 1, includeIdleWatches: false })
   const sessions = boundedSessions.knownSessions
   const sidebarSessions = boundedSessions.sessions
-  const { idleNotificationModes, toggleIdleNotificationMode } = useSessionIdleNotifications(sessions)
+  const notificationOpenSessionRef = useRef<((sessionId: string) => void) | null>(null)
+  const { idleNotificationModes, toggleIdleNotificationMode, unreadSessionIds, acknowledgeSession } = useSessionIdleNotifications(sessions, {
+    visibleSessionIds,
+    onOpenSession: (sessionId) => notificationOpenSessionRef.current?.(sessionId),
+  })
   const boundedPresentation = {
     serverOrdered: true as const, hasMoreRoots: boundedSessions.hasMoreRoots, childPages: boundedSessions.childPages,
     descendantBusy: boundedSessions.descendantBusy, invalidationVersion: boundedSessions.invalidationVersion,
@@ -823,6 +839,14 @@ function App() {
     }
   }, [route, tabsById])
 
+  currentRouteTabIdRef.current = route.tabId
+
+  useEffect(() => {
+    if (!route.tabId || !closingRouteTabIdsRef.current.has(route.tabId)) {
+      closingRouteTabIdsRef.current.clear()
+    }
+  }, [route.tabId])
+
   useEffect(() => {
     if (focusedActiveTabId) {
       localStorage.setItem(LAST_ACTIVE_TAB_STORAGE_KEY, focusedActiveTabId)
@@ -856,9 +880,14 @@ function App() {
   }, [route, tabsById, focusedActiveTabId])
 
   useEffect(() => {
-    if (flattenedTabIds.length > 0) return
+    if (flattenedTabIds.length > 0) {
+      didInitializeEmptyWorkbenchRef.current = true
+      return
+    }
+    if (didInitializeEmptyWorkbenchRef.current) return
     if (route.tabId && isRestorableRouteTabId(route.tabId)) return
 
+    didInitializeEmptyWorkbenchRef.current = true
     const fallbackSessionId = loadStoredLastVisitedSession()
     const tab = makeChatTab(fallbackSessionId, sessionTitle(fallbackSessionId), { preview: true })
     upsertTab(tab, { paneId: focusedPaneId || paneIds[0], activate: true })
@@ -866,14 +895,17 @@ function App() {
     setTabHash(tab.id)
   }, [route.tabId, flattenedTabIds.length, focusedPaneId, paneIds.join('|')])
 
-  const navigateToTab = (tabId: string) => {
+  const navigateToTab = (tabId: string, origin: SessionNavigationOrigin = 'user') => {
     pendingRouteTabIdRef.current = tabId
+    currentRouteTabIdRef.current = tabId
     activateTab(tabId)
     setRoute({ view: 'tab', tabId })
     setTabHash(tabId)
     if (isMobile) {
       setShowSessionList(false)
     }
+    const tab = useWorkbenchStore.getState().tabsById[tabId]
+    if (tab?.type === 'chat' && shouldAcknowledgeSessionNavigation(origin)) acknowledgeSession(tab.sessionId)
   }
 
   useLayoutEffect(() => {
@@ -968,7 +1000,7 @@ function App() {
       || null
   }
 
-  const openChatTab = (sessionId: string) => {
+  const openChatTab = (sessionId: string, origin: SessionNavigationOrigin = 'user') => {
     const title = sessionTitle(sessionId)
     const existingTab = findPreferredChatTab(sessionId)
 
@@ -976,7 +1008,7 @@ function App() {
       if (existingTab.title !== title) {
         updateTab(existingTab.id, (current) => isChatTab(current) ? { ...current, title } : current)
       }
-      navigateToTab(existingTab.id)
+      navigateToTab(existingTab.id, origin)
       return
     }
 
@@ -985,14 +1017,15 @@ function App() {
       updateTab(previewTab.id, (current) => isPreviewChatTab(current)
         ? { ...current, sessionId, title, preview: true }
         : current)
-      navigateToTab(previewTab.id)
+      navigateToTab(previewTab.id, origin)
       return
     }
 
     const tab = makeChatTab(sessionId, title, { preview: true })
     upsertTab(tab, { activate: true })
-    navigateToTab(tab.id)
+    navigateToTab(tab.id, origin)
   }
+  notificationOpenSessionRef.current = (sessionId) => openChatTab(sessionId, 'notification')
 
   const openKeptChatTab = (sessionId: string) => {
     const title = sessionTitle(sessionId)
@@ -1093,7 +1126,7 @@ function App() {
     navigateToTab(tab.id)
   }
 
-  const closeWorkbenchTab = async (tabId: string) => {
+  const closeWorkbenchTab = async (tabId: string, options?: { deferRoute?: boolean }) => {
     const targetTab = tabsById[tabId] || null
     if (targetTab?.type === 'setup' && setupOobe) {
       return
@@ -1117,7 +1150,18 @@ function App() {
       setVscodeFrameStarted((started) => selectCodeFrameStarted(started, [], { explicitlyClosed: true }))
     }
 
+    if (currentRouteTabIdRef.current === tabId) {
+      // Zustand publishes removeTab synchronously, before React's route state
+      // update is committed. Mark this route as intentionally closing so the
+      // route-restoration effect cannot recreate the tab in that brief render.
+      closingRouteTabIdsRef.current.add(tabId)
+    }
+
     removeTab(tabId)
+
+    if (options?.deferRoute) {
+      return
+    }
 
     if (route.tabId === tabId || wasFocusedActiveTab) {
       const stateAfterClose = useWorkbenchStore.getState()
@@ -1132,6 +1176,8 @@ function App() {
         navigateToTab(nextTabId)
       } else {
         pendingRouteTabIdRef.current = null
+        currentRouteTabIdRef.current = null
+        localStorage.removeItem(LAST_ACTIVE_TAB_STORAGE_KEY)
         setRoute({ view: 'tab', tabId: null })
         setTabHash(null)
       }
@@ -1187,8 +1233,34 @@ function App() {
       .filter((tab): tab is WorkbenchTab => !!tab)
       .filter(predicate)
 
-    for (const tab of tabsToClose) {
-      await closeWorkbenchTab(tab.id)
+    tabsToClose.forEach((tab) => {
+      if (tab.type !== 'setup' || !setupOobe) {
+        closingRouteTabIdsRef.current.add(tab.id)
+      }
+    })
+
+    try {
+      for (const tab of tabsToClose) {
+        await closeWorkbenchTab(tab.id, { deferRoute: true })
+      }
+    } finally {
+      const stateAfterClose = useWorkbenchStore.getState()
+      const focusedPaneAfterClose = stateAfterClose.focusedPaneId
+        ? findPaneNode(stateAfterClose.root, stateAfterClose.focusedPaneId)
+        : null
+      const nextTabId = focusedPaneAfterClose?.activeTabId
+        || getPaneNodes(stateAfterClose.root)[0]?.activeTabId
+        || null
+
+      if (!nextTabId) {
+        pendingRouteTabIdRef.current = null
+        currentRouteTabIdRef.current = null
+        localStorage.removeItem(LAST_ACTIVE_TAB_STORAGE_KEY)
+        setRoute({ view: 'tab', tabId: null })
+        setTabHash(null)
+      } else {
+        navigateToTab(nextTabId)
+      }
     }
   }
 
@@ -1354,6 +1426,10 @@ function App() {
 
   useEffect(() => {
     if (!route.tabId || tabsById[route.tabId]) {
+      return
+    }
+
+    if (closingRouteTabIdsRef.current.has(route.tabId)) {
       return
     }
 
@@ -1547,6 +1623,7 @@ function App() {
         onSelectTab={navigateToTab}
         onCloseTab={(tabId) => { void closeWorkbenchTab(tabId) }}
         onKeepTab={keepWorkbenchTab}
+        onCloseOtherTabs={(tabId) => { void closePaneTabsByPredicate(paneId, (tab) => tab.id !== tabId) }}
         onCloseAllTabs={() => { void closePaneTabsByPredicate(paneId, () => true) }}
         onSplitRight={() => handleSplit('right')}
         onSplitDown={() => handleSplit('bottom')}
@@ -1798,6 +1875,7 @@ function App() {
           onCreateAgent={handleCreateAgent}
           onCreateSession={handleCreateSession}
           idleNotificationModes={idleNotificationModes}
+          unreadSessionIds={unreadSessionIds}
           onToggleIdleNotificationMode={toggleIdleNotificationMode}
           bounded={boundedPresentation}
         />,
@@ -1860,6 +1938,7 @@ function App() {
             onToggleCollapsed={() => setSidebarCollapsed(true)}
             isPeek={false}
             idleNotificationModes={idleNotificationModes}
+            unreadSessionIds={unreadSessionIds}
             onToggleIdleNotificationMode={toggleIdleNotificationMode}
             bounded={boundedPresentation}
           />
@@ -1875,6 +1954,7 @@ function App() {
           onSelectSession={openChatTab}
           onCreateSession={handleQuickCreateSession}
           onToggleCollapsed={() => setSidebarCollapsed(false)}
+          unreadSessionIds={unreadSessionIds}
         />
       )}
       <div className="flex-1 h-full min-h-0 overflow-hidden">

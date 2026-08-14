@@ -25,6 +25,8 @@ import {
 } from './chatShared'
 import ImageParts from './ImageParts'
 import ReasoningCard from './ReasoningCard'
+import WebSearchCard from './WebSearchCard'
+import { getWebSearchAction, type WebSearchAction } from '../webSearchAction'
 import ContextBlockCard, { getContextBlockMetaFromMessage } from './ContextBlockCard'
 import CommitMarkerCard, { type OpenCodeCommitHandler } from './CommitMarkerCard'
 import { splitCommitMarkers } from '../commitMarker'
@@ -640,7 +642,21 @@ const MessageRow = memo(function MessageRow({
   onOpenCodeCommit,
   renderNestedMessages,
 }: MessageRowProps) {
-  const textLikeParts = useMemo(() => msg.parts.filter(p => p.text || p.system || p.thinking), [msg.parts])
+  const visibleModelParts = useMemo<Array<{ part: Message['parts'][number]; webSearchAction: WebSearchAction | null }>>(() => {
+    const visible: Array<{ part: Message['parts'][number]; webSearchAction: WebSearchAction | null }> = []
+    for (const part of msg.parts) {
+      if (part.text || part.system || part.thinking) {
+        visible.push({ part, webSearchAction: null })
+        continue
+      }
+      const webSearchAction = msg.role === 'model'
+        ? getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem)
+        : null
+      if (webSearchAction) visible.push({ part, webSearchAction })
+    }
+    return visible
+  }, [msg.parts])
+  const textLikeParts = useMemo(() => visibleModelParts.map(item => item.part), [visibleModelParts])
   const imageParts = useMemo(() => msg.parts.filter(p => p.inlineData || p.inlineDataRef || p.inlineDataUnavailable), [msg.parts])
   const usage = useMemo(() => getModelMessageUsage(msg), [msg])
   const isInToolGroup = summaryTagItems.length > 0
@@ -697,7 +713,13 @@ const MessageRow = memo(function MessageRow({
           </div>
         ) : (
           <div className={`flex min-w-0 max-w-full flex-col ${displayUsage && !isMobile ? 'relative' : ''}`}>
-            {textLikeParts.map((part, partIdx) => {
+            {visibleModelParts.map(({ part, webSearchAction }, partIdx) => {
+              if (webSearchAction) {
+                if (groupTools && !hasVisibleTextContent && isInToolGroup && !groupExpanded) {
+                  return null
+                }
+                return <WebSearchCard key={`web-search-${partIdx}`} action={webSearchAction} />
+              }
               if (part.system) {
                 return <InlineMetaPart key={`model-system-${partIdx}`} systemText={formatStructuredSystemText(part.system)} isUser={false} />
               }

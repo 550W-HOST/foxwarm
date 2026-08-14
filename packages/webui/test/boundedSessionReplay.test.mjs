@@ -40,6 +40,39 @@ test('branch replay handles 25-child and one-child owned branches in batches of 
   assert.ok(calls.some(call => call.parents.length === 20), 'expanded parents are batched')
 })
 
+test('nested branch replay materializes only explicitly expanded parent windows', async () => {
+  const data = new Map([
+    ['root', [{ id: 'child' }]],
+    ['child', [{ id: 'grandchild' }]],
+    ['unrelated', [{ id: 'unrelated-child' }]],
+  ])
+  const calls = []
+  const fetchBatch = async parents => {
+    calls.push(parents.map(parent => parent.parentSessionId))
+    return { revision: 'r1', groups: parents.map(parent => ({
+      parentSessionId: parent.parentSessionId,
+      items: data.get(parent.parentSessionId) || [],
+      total: (data.get(parent.parentSessionId) || []).length,
+      nextCursor: null,
+    })) }
+  }
+
+  const collapsed = await replay.replayCursorBranches({
+    targets: new Map([['root', 5]]), pageCap: 20, parentBatchCap: 20, expectedRevision: 'r1', fetchBatch,
+  })
+  assert.deepEqual(collapsed.get('root').items.map(row => row.id), ['child'])
+  assert.equal(collapsed.has('child'), false)
+  assert.deepEqual(calls.flat(), ['root'], 'collapsed descendants and unrelated rows are not requested')
+
+  calls.length = 0
+  const expanded = await replay.replayCursorBranches({
+    targets: new Map([['root', 5], ['child', 5]]), pageCap: 20, parentBatchCap: 20, expectedRevision: 'r1', fetchBatch,
+  })
+  assert.deepEqual(expanded.get('child').items.map(row => row.id), ['grandchild'])
+  assert.deepEqual(new Set(calls.flat()), new Set(['root', 'child']))
+  assert.equal(calls.flat().includes('unrelated'), false)
+})
+
 test('newer SSE deltas and tombstones win over older HTTP rows', () => {
   const state = replay.createEpochRows()
   const start = state.epoch
@@ -48,6 +81,23 @@ test('newer SSE deltas and tombstones win over older HTTP rows', () => {
   assert.equal(state.rows.get('live').value, 'delta')
   assert.equal(state.rows.has('deleted'), false)
   assert.equal(state.rows.get('untouched').value, 'http')
+})
+
+test('state-only SSE deltas preserve an exact bounded child count until topology refetch', () => {
+  const existing = new Map([['child', { id: 'child', childTotal: 1, runtime: 'idle' }]])
+  const rows = replay.preserveKnownChildTotals(existing, [{ id: 'child', runtime: 'busy' }, { id: 'new', runtime: 'idle' }])
+  assert.deepEqual(rows, [{ id: 'child', childTotal: 1, runtime: 'busy' }, { id: 'new', runtime: 'idle' }])
+  assert.deepEqual(replay.preserveKnownChildTotals(existing, [{ id: 'child', childTotal: 0, runtime: 'busy' }]),
+    [{ id: 'child', childTotal: 0, runtime: 'busy' }], 'an explicit topology count is never replaced by the cache')
+
+  const state = replay.createEpochRows()
+  replay.mergeDeltaRows(state, [{ id: 'child', childTotal: 1, runtime: 'idle' }])
+  const refreshStart = replay.beginHttpRowsRequest(state)
+  replay.mergeDeltaRows(state, replay.preserveKnownChildTotals(state.rows, [{ id: 'child', runtime: 'busy' }]))
+  replay.mergeHttpRows(state, [{ id: 'child', childTotal: 0, runtime: 'stale-http' }], refreshStart)
+  assert.deepEqual(state.rows.get('child'), { id: 'child', childTotal: 0, runtime: 'busy' },
+    'topology refetch updates only the count when a newer state delta owns the rest of the row')
+  replay.endHttpRowsRequest(state, refreshStart)
 })
 
 test('exact by-id miss tombstone prevents an older root or search response from resurrecting the row', () => {

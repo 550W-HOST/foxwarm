@@ -39,6 +39,7 @@ Provides the canonical derived runtime-state view for sessions. It combines tran
 ## Behavior
 
 - Active `requesting-model` / `running-tool` state is transient and never persisted.
+- Active tool argument previews are presentation-only and are normalized to bounded strings at the runtime-state setter, so an invalid caller value cannot escape into a strict Session-worker projection.
 - Persisted `session.meta.wait` drives `waiting` after the active turn has ended only when the wait has an explicit UI-visible target/reason.
 - `waitAll.sessions` derives `waitingFor: 'sessions'` with satisfied and pending lists, and takes display precedence if combined with advisory exec ids.
 - `waitExecIds` derives `waitingFor: 'exec'` when no wait-all target is present and is advisory UI/status metadata.
@@ -66,3 +67,4 @@ Provides the canonical derived runtime-state view for sessions. It combines tran
 
 - [2026-07-07] Canonical runtime state has four top-level states: `requesting-model`, `running-tool`, `waiting`, and `idle`. Active model/tool phases are transient in memory; wait state remains persisted in `session.meta.wait`. Generic `wait({})` remains valid and is displayed as `idle`, not forced to specify session or exec targets, because common subagent handoff (`send_to_session` then `wait({})`) means the stage is complete and the session is simply waiting for parent/user input.
 - [2026-08-10, updated 2026-08-11] Queue count has one effective derivation: catalog count only for a marked lightweight stub, actual queue length for a hydrated owner, and Worker projection count after overlay. Queue count is activity-independent: with no transient active phase, no recognized persisted wait, and `busy:false`, positive queued work is canonical `idle`/`busy:false` with its real queue count. It must not fabricate `requesting-model`, thinking/Stop UI, active sidebar treatment, or an idle notification transition. A real legacy `session.busy:true` without transient phase still falls back to `requesting-model`.
+- Strict Session-worker publication and malformed-tool recovery are canonical in [D-process-topology-session-events](../threads/process-topology-and-rpc.md#d-process-topology-session-events).

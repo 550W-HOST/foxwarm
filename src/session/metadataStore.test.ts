@@ -119,7 +119,8 @@ test('real state-file reader rejects malformed v1 shapes while normalizing only 
 
     const frontierPath = path.join(dirPath, 'frontier.json');
     await fs.writeJson(frontierPath, { sessionStateVersion: 1, history: [], contextFrontier: { invalid: true } });
-    await assert.rejects(() => createSessionHistoryStore(frontierPath).readFromPath(), /contextFrontier must be an array/);
+    const frontierRaw = await createSessionHistoryStore(frontierPath).readFromPath();
+    assert.equal(Object.prototype.hasOwnProperty.call(frontierRaw!, 'contextFrontier'), false);
 
     const unknownPath = path.join(dirPath, 'unknown.json');
     await fs.writeJson(unknownPath, { sessionStateVersion: 99, history: [] });
@@ -135,7 +136,7 @@ test('real state-file reader rejects malformed v1 shapes while normalizing only 
   });
 });
 
-test('session history payload embeds context frontier and recovery ignores legacy frontier files', async () => {
+test('session history payload drops obsolete context frontier and recovery ignores legacy frontier files', async () => {
   await withTempDir(async (dirPath) => {
     const sessionsDir = path.join(dirPath, 'sessions');
     await fs.ensureDir(sessionsDir);
@@ -161,7 +162,7 @@ test('session history payload embeds context frontier and recovery ignores legac
     };
     const payload = serializeSessionHistoryPayload(session);
     assert.equal(payload.sessionStateVersion, 1);
-    assert.deepEqual(payload.contextFrontier, [{ kind: 'message', seq: 1 }]);
+    assert.equal(Object.prototype.hasOwnProperty.call(payload, 'contextFrontier'), false);
     assert.equal(payload.lastAppliedMailboxId, 7);
     assert.equal(payload.meta.wait.id, 'wait-1');
     assert.equal(payload.effort, 'none');
@@ -169,12 +170,36 @@ test('session history payload embeds context frontier and recovery ignores legac
 
     const target: any = { history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 } };
     replaceSessionSemanticState(target, prepareSessionSemanticStateForHydration(target, payload).snapshot);
-    assert.deepEqual(target.contextFrontier, [{ kind: 'message', seq: 1 }]);
+    assert.equal(Object.prototype.hasOwnProperty.call(target, 'contextFrontier'), false);
     assert.equal(target.lastAppliedMailboxId, 7);
     assert.equal(target.meta.managedSession.leaseId, 'lease');
     assert.equal(target.effort, 'none');
     assert.equal(target.childEffortDefault, 'max');
   });
+});
+
+test('legacy per-message contextFrontierItem is stripped on hydrate and write while contextBlock survives', () => {
+  const contextBlock = {
+    id: 7, level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 1, rawStartSeq: 1, rawEndSeq: 1,
+  };
+  const raw: any = {
+    sessionStateVersion: 1,
+    history: [{
+      role: 'user', parts: [{ text: 'legacy frontier metadata' }],
+      __meta: { seq: 1, timestamp: 1, contextFrontierItem: { kind: 'message', seq: 1 }, contextBlock },
+    }],
+    persistentMemorySnapshot: '', queue: [],
+  };
+  const target: any = {
+    id: 'legacy-message-frontier', history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [],
+    meta: { lastMessageTime: 0 },
+  };
+  replaceSessionSemanticState(target, prepareSessionSemanticStateForHydration(target, raw).snapshot);
+  assert.equal(Object.prototype.hasOwnProperty.call(target.history[0].__meta, 'contextFrontierItem'), false);
+  assert.deepEqual(target.history[0].__meta.contextBlock, contextBlock);
+  const written = serializeSessionHistoryPayload({ ...target, history: raw.history } as any);
+  assert.equal(Object.prototype.hasOwnProperty.call(written.history[0].__meta, 'contextFrontierItem'), false);
+  assert.deepEqual(written.history[0].__meta.contextBlock, contextBlock);
 });
 
 test('legacy goal end-turn setting loads but is omitted from current writes', () => {

@@ -31,6 +31,7 @@ let tabChangeHandler;
 let tabGroupChangeHandler;
 const tabGroups = {
   activeTabGroup: { activeTab: null },
+  all: [],
   onDidChangeTabs(handler) { tabChangeHandler = handler; return disposable(); },
   onDidChangeTabGroups(handler) { tabGroupChangeHandler = handler; return disposable(); },
 };
@@ -44,6 +45,7 @@ const vscodeMock = {
       if (id === 'vscode.openWith') {
         const tab = { input: { uri: args[0], viewType: args[1] } };
         tabGroups.activeTabGroup.activeTab = tab;
+        tabGroups.all = [{ activeTab: tab }];
         tabChangeHandler?.({ opened: [tab], closed: [], changed: [tab] });
       }
     },
@@ -122,6 +124,7 @@ test('fixed bridges open, restore, activate, and explicitly close session/Agents
   await sidebarWebview.receive({ type: 'sidebar-ready' });
   await tick();
   assert.equal(sidebarWebview.posted.at(-1).target, null);
+  assert.deepEqual(sidebarWebview.posted.at(-1).visibleSessionIds, []);
 
   await sidebarWebview.receive({ type: 'open-terminal' });
   assert.deepEqual(executed.at(-1), { id: 'foxwarm-terminal.newTerminal', args: [] });
@@ -132,6 +135,13 @@ test('fixed bridges open, restore, activate, and explicitly close session/Agents
   assert.equal(extension.parseChatEditorUri(open.args[0]), 'agent/task');
   assert.equal(open.args[1], 'foxwarm-webui.chatEditor');
   assert.deepEqual(sidebarWebview.posted.at(-1).target, { kind: 'session', sessionId: 'agent/task' });
+  assert.deepEqual(sidebarWebview.posted.at(-1).visibleSessionIds, ['agent/task']);
+
+  const secondSessionTab = { input: { uri: extension.buildChatEditorUri('agent/other'), viewType: 'foxwarm-webui.chatEditor' } };
+  tabGroups.all = [{ activeTab: tabGroups.activeTabGroup.activeTab }, { activeTab: secondSessionTab }];
+  tabGroupChangeHandler?.();
+  await tick();
+  assert.deepEqual(sidebarWebview.posted.at(-1).visibleSessionIds, ['agent/task', 'agent/other']);
 
   const chatProvider = customEditorProviders.get('foxwarm-webui.chatEditor');
   const chatDocument = chatProvider.openCustomDocument(open.args[0]);

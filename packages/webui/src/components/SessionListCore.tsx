@@ -5,8 +5,9 @@ import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUp
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
-import { compareSessionListSessions, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
+import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListChildDisclosure, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
 import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
+import { dispatchSessionIdleDeleted } from '../sessionIdleAttention'
 
 export interface Session {
   id: string
@@ -63,6 +64,7 @@ interface SessionListCoreProps {
   listContainerClassName?: string
   dragEnabled?: boolean
   idleNotificationModes?: Record<string, SessionIdleNotificationMode>
+  unreadSessionIds?: ReadonlySet<string>
   onToggleIdleNotificationMode?: (sessionId: string, mode: SessionIdleNotificationMode) => void
   bounded?: BoundedSessionListPresentationProps
 }
@@ -467,7 +469,7 @@ function DraggableSessionRow({
   )
 }
 
-export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, onToggleIdleNotificationMode, bounded }: SessionListCoreProps) {
+export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, bounded }: SessionListCoreProps) {
   const { active } = useDndContext()
   const [primaryPointerCoarse, setPrimaryPointerCoarse] = useState(() => window.matchMedia?.('(pointer: coarse)').matches ?? false)
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
@@ -769,16 +771,16 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }, [renameSessionId])
 
   const toggleExpand = (sessionId: string) => {
-    const newExpanded = new Set(expandedSessions)
-    const wasExpanded = newExpanded.has(sessionId)
+    const wasExpanded = expandedSessions.has(sessionId)
+    const newExpanded = wasExpanded
+      ? collapseSessionListExpandedBranch(expandedSessions, childrenMap, sessionId)
+      : new Set(expandedSessions).add(sessionId)
     if (wasExpanded) {
-      newExpanded.delete(sessionId)
+      bounded?.onCollapseBranch(sessionId)
     } else {
-      newExpanded.add(sessionId)
+      bounded?.onExpandBranch(sessionId)
     }
     setExpandedSessions(newExpanded)
-    if (wasExpanded) bounded?.onCollapseBranch(sessionId)
-    else bounded?.onExpandBranch(sessionId)
   }
 
   const cycleViewMode = () => {
@@ -874,6 +876,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         setDeleteError(error.error || `Request failed with ${response.status}`)
       } else {
         console.log('[DELETE] Success')
+        const result = await response.json().catch(() => ({}))
+        dispatchSessionIdleDeleted(Array.isArray(result.deletedSessionIds) ? result.deletedSessionIds : [sessionId])
         setContextMenu(null)
         setDeleteConfirm(null)
         setDeleteIncludeDescendants(false)
@@ -1075,13 +1079,20 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const renderSession = (session: Session, level: number = 0, parentSession: Session | null = null) => {
     const children = childrenMap.get(session.id) || []
     const boundedChildPage = bounded?.childPages.get(session.id)
-    const childTotal = boundedChildPage?.total ?? children.length
-    const hasChildren = childTotal > 0
+    const childDisclosure = getSessionListChildDisclosure({
+      bounded: !!bounded,
+      loadedCount: children.length,
+      boundedTotal: boundedChildPage?.total,
+      itemTotal: session.childTotal,
+      allowTree: !isFiltering && viewMode !== 'flat-time',
+    })
+    const childTotal = childDisclosure.total
+    const hasChildren = childDisclosure.canExpand
     const descendantBusyCount = bounded?.descendantBusy.get(session.id) ?? descendantSummaries.get(session.id)?.busy ?? 0
     const isExpanded = isFiltering || expandedSessions.has(session.id)
     const visibleCount = visibleChildCounts.get(session.id) ?? DEFAULT_VISIBLE_CHILDREN
     const visibleChildren = bounded ? children : children.slice(0, visibleCount)
-    const hiddenCount = Math.max(0, childTotal - visibleChildren.length)
+    const hiddenCount = childTotal === null ? 0 : Math.max(0, childTotal - visibleChildren.length)
     const contentPaddingLeft = `${12 + level * 16}px`
 
     // Get display ID (with parent prefix removed if applicable)
@@ -1137,6 +1148,12 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                       <Pin className="mr-1 inline h-3.5 w-3.5 align-[-2px] text-blue-500 dark:text-blue-300" aria-label="Pinned session" />
                     )}
                     {session.displayName || displayId}
+                    {unreadSessionIds.has(session.id) && (
+                      <span className="ml-1.5 inline-flex items-center align-middle">
+                        <span className="h-2 w-2 rounded-full bg-blue-500" aria-hidden="true" />
+                        <span className="sr-only">Unread idle completion</span>
+                      </span>
+                    )}
                     {session.archived && (
                       <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">[Archived]</span>
                     )}

@@ -13,7 +13,7 @@ Defines the core TypeScript interfaces and type aliases used throughout the syst
 - `MessageProviderMeta` — Message-level opaque provider metadata persisted on assistant messages; JSON-object `providerSpecificFields` carries the OpenAI Chat Completions `provider_specific_fields` (e.g. `reasoning_signature`), and `sourceModelId` scopes their round-trip to the producing concrete model
 - `OpenAIResponsesPartMeta` — Ordered Responses output metadata/annotations scoped to the concrete model that produced the part
 - `Message` — Role-tagged message with parts and metadata
-- `Session` — Full session state including history, queue, stats, raw `model`/`effort` plus future-child defaults, and context frontier
+- `Session` — Full session state including authoritative history, queue, stats, raw `model`/`effort`, and future-child defaults
 - `QueueItem` / `QueueSource` — Current inbound content/event work plus the `compact-commit` safe-point item and origin metadata. Source metadata can retain WeWork stream IDs and QQ Bot passive-reply message IDs without persisting callbacks; retry and compact planning are not queue types
 - `CompactionRequest` — Planning request options kept separate from queue-item state
 - `isQueueItem(value)` — Runtime guard that accepts only current non-empty queue records so unrecognized persisted records can be discarded generically
@@ -24,7 +24,6 @@ Defines the core TypeScript interfaces and type aliases used throughout the syst
 - `TokenUsage` / `SessionStats` / `SessionTokenTotals` — Token accounting. `TokenUsage.reasoningTokens` is an optional provider-reported component of `outputTokens`, never an additional total.
 - `AnthropicMessage` / `AnthropicContentBlock` / `OpenAIResponsesContent` — Provider-specific message formats
 - `ContextBlockMessageMeta` — Structured metadata attached to rendered CTX-BLOCK messages under `Message.__meta.contextBlock` for WebUI/API consumers.
-- `ContextFrontierItem` — Layered-context frontier tracking
 - `MaybePromise<T>`, `SessionReply`, `SessionBroadcast` — Utility types
 
 ## Function Index
@@ -39,7 +38,7 @@ None. This file has no imports from other project modules or external packages.
 
 ## Behavior
 
-Mostly type declarations plus the side-effect-free `isQueueItem` runtime guard. The `Session` interface defines mutable state shape (busy flags, queue, history, stopping flag) that is managed elsewhere, plus metadata such as optional WebUI `sidebarOrder` sibling ordering and `pinned` presentation state. The `Message.modelVisible` field controls whether a message is included in LLM context. Assistant `providerMeta` may retain opaque Chat Completions fields together with their concrete source model; model parts may retain ordered OpenAI Responses hosted output items and URL annotations with an explicit concrete source model. These are provider replay metadata rather than Foxwarm tool calls. Model-message `__meta` may carry `usage`, concrete `modelId`, optional `virtualModelKey`, `contextBlock`, `contextFrontierItem`, and `preservedFromBlockId`; LLM request construction strips `__meta` before provider calls. `usage.reasoningTokens`, when present, is a provider-reported subset of `usage.outputTokens`; its cross-module accounting contract is [D-pipeline-provider-usage-components](../threads/message-processing-pipeline.md#d-pipeline-provider-usage-components). Canonical model-attribution semantics belong to [D-model-routing-concrete-attribution](../threads/model-routing.md#d-model-routing-concrete-attribution). `ContextFrontierItem` is a discriminated union supporting layered compaction.
+Mostly type declarations plus the side-effect-free `isQueueItem` runtime guard. The `Session` interface defines mutable state shape (busy flags, queue, authoritative history, stopping flag) that is managed elsewhere, plus metadata such as optional WebUI `sidebarOrder` sibling ordering and `pinned` presentation state. The `Message.modelVisible` field controls whether a message is included in LLM context. Assistant `providerMeta` may retain opaque Chat Completions fields together with their concrete source model; model parts may retain ordered OpenAI Responses hosted output items and URL annotations with an explicit concrete source model. These are provider replay metadata rather than Foxwarm tool calls. Model-message `__meta` may carry `usage`, concrete `modelId`, optional `virtualModelKey`, `contextBlock`, and `preservedFromBlockId`; LLM request construction strips `__meta` before provider calls. Active-history authority and provenance are canonical in [D-context-active-history-authority](../threads/context-compaction-and-recall.md#d-context-active-history-authority). `usage.reasoningTokens`, when present, is a provider-reported subset of `usage.outputTokens`; its cross-module accounting contract is [D-pipeline-provider-usage-components](../threads/message-processing-pipeline.md#d-pipeline-provider-usage-components). Canonical model-attribution semantics belong to [D-model-routing-concrete-attribution](../threads/model-routing.md#d-model-routing-concrete-attribution).
 
 ## Integration
 

@@ -36,6 +36,9 @@ The cross-module admission and scaling policy is canonical in
 - `listPresentationPage()` / `listChildrenPreviews()` /
   `listChildrenContinuations()` — indexed mode-aware root/flat/child keyset
   queries and one compound request of bounded per-parent child seeks.
+- `getPresentationChildCounts()` — one bounded maintained-count lookup for the
+  direct children of returned list rows; Sidebar counts exclude elevated pinned
+  children, while agent-scoped Architecture counts retain real same-agent edges.
 - `listAgentForestPage()` — indexed Architecture roots where canonical parent
   is absent or belongs to another agent; agent children retain real relations.
 - `getMany()` / `resolveMany()` / `getPresentationPaths()` — bounded exact,
@@ -55,7 +58,7 @@ The cross-module admission and scaling policy is canonical in
 - `session_catalog` stores typed identity, raw and canonical parent, agent,
   presentation/list, activity/recovery, node, and bounded summary projection
   columns plus bounded metadata projection JSON. Queue/managed-inbox, history,
-  frontier, prompt-cache, mailbox, goal, prompt-file, and indexing bodies are
+  obsolete frontier, prompt-cache, mailbox, goal, prompt-file, and indexing bodies are
   never admitted; only indexed counts and narrowly validated stats, list-meta,
   vector-position, and sanitized wait-presentation summaries remain. Raw
   `effort` and `childEffortDefault` are allowlisted only inside bounded
@@ -85,9 +88,10 @@ remains preserved. There is intentionally no parent foreign key.
 
 The first open reads `sessions.json`, numbered `sessions.json.N.bak` candidates, then legacy `.bak`.
 It strictly validates IDs and row/value shapes. Every selected per-session
-authority passes the shared version-aware validator: legacy normalization is
-tolerant only for the established unversioned history/frontier shapes, while
-v1 history/queue/frontier and version boundaries are strict. Missing, malformed,
+  authority passes the shared version-aware validator: legacy normalization is
+tolerant only for the established unversioned history shape, while current
+history/queue and version boundaries are strict; obsolete frontier fields are
+ignored for both versions and omitted on rewrite. Missing, malformed,
 or unreadable cataloged authority fails closed without trying a stale catalog
 backup; orphan authority files are not imported. Before catalog retirement,
 unversioned authority files are durably staged/upgraded to v1 and absorb any
@@ -123,6 +127,6 @@ candidates nor authority files exist.
   the `pinned=0` equality, and high-fanout previews/continuations use
   per-parent `LIMIT k+1` seeks rather than window-ranking all descendants.
 - Per-session JSON remains semantic authority. Catalog metadata JSON is only a
-  bounded projection, never a second history/queue/frontier authority.
+  bounded projection, never a second history/queue authority. Canonical active-history ownership is [D-context-active-history-authority](../threads/context-compaction-and-recall.md#d-context-active-history-authority).
 - Live backup uses SQLite's online backup API; copying only the main file while
   WAL is active is unsupported.

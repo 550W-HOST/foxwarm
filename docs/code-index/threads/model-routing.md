@@ -42,7 +42,7 @@ Virtual providers add no retry loop of their own. The one LLM outer loop remains
 
 `session-hash` uses SHA-256 highest-random-weight (rendezvous) hashing over the virtual model key, the resolved `Session.promptCacheKey` lineage value, and each canonical target key. The target with the greatest digest wins; a canonical target-key tie break keeps the result independent of configured target order.
 
-The request routing key is resolved once before the attempt loop. Normal sessions persist a random low-sensitivity UUID tied to the model-facing prefix. Forks and same-prefix side/compact requests inherit it; successful compaction and clear operations rotate it. Consequently, forks stay on the same virtual leaf while a rewritten prefix may be re-routed.
+The request routing key is resolved once before the attempt loop. Normal sessions persist a random low-sensitivity UUID tied to stable conversation/cache-routing lineage. Forks, side requests, and compaction inherit it; only clear starts a new lineage. Consequently, successful compact rewrites remain on the same virtual leaf.
 
 A low-level request without a usable key receives one request-scoped random key; retries do not generate another key.
 

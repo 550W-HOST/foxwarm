@@ -36,7 +36,7 @@ function blockRecord(): ArchiveBlockRecord {
   };
 }
 
-test('frontier migration embeds legacy frontier into session JSON, annotates messages, and moves legacy file to backup', async () => {
+test('frontier migration retires the legacy file without changing active history', async () => {
   await withTempDir(async (dirPath) => {
     const stateDir = path.join(dirPath, 'state');
     const sessionsDir = path.join(stateDir, 'sessions');
@@ -87,14 +87,10 @@ test('frontier migration embeds legacy frontier into session JSON, annotates mes
     assert.equal(await fs.pathExists(frontierFile), false);
 
     const migratedSession = await fs.readJson(sessionFile);
-    assert.deepEqual(migratedSession.contextFrontier, [
-      { kind: 'block', id: 3, level: 1, rawStartSeq: 1, rawEndSeq: 2 },
-      { kind: 'message', seq: 2, preservedFromBlockId: 3 },
-    ]);
+    assert.equal(Object.prototype.hasOwnProperty.call(migratedSession, 'contextFrontier'), false);
     assert.equal(migratedSession.nextBlockId, 4);
-    assert.equal(migratedSession.history[0].__meta.contextBlock.id, 3);
-    assert.equal(migratedSession.history[0].__meta.contextBlock.sourceKind, 'message');
-    assert.equal(migratedSession.history[1].__meta.preservedFromBlockId, 3);
+    assert.equal(migratedSession.history[0].parts[0].text, '[CTX-BLOCK L1 B#3 raw#1-#2] legacy block summary');
+    assert.equal(migratedSession.history[1].parts[0].text, 'exact preserved instruction');
 
     const backupFile = path.join(migrationBackupDir, EMBEDDED_CONTEXT_FRONTIER_MIGRATION_ID, 'sessions', 'alpha.frontier.json');
     assert.equal(await fs.pathExists(backupFile), true);
@@ -117,7 +113,7 @@ test('frontier migration embeds legacy frontier into session JSON, annotates mes
   });
 });
 
-test('frontier migration leaves unmatched legacy frontier file in place and records failure', async () => {
+test('frontier migration retires even unmatched legacy frontier because history is authoritative', async () => {
   await withTempDir(async (dirPath) => {
     const stateDir = path.join(dirPath, 'state');
     const sessionsDir = path.join(stateDir, 'sessions');
@@ -145,14 +141,13 @@ test('frontier migration leaves unmatched legacy frontier file in place and reco
       readBlocksByIdRange: async () => [],
     });
 
-    assert.equal(result.migratedFiles, 0);
-    assert.equal(result.failedFiles, 1);
-    assert.equal(await fs.pathExists(frontierFile), true);
+    assert.equal(result.migratedFiles, 1);
+    assert.equal(result.failedFiles, 0);
+    assert.equal(await fs.pathExists(frontierFile), false);
     const unchangedSession = await fs.readJson(sessionFile);
     assert.equal(unchangedSession.contextFrontier, undefined);
 
     const migrationVersion = await fs.readJson(migrationVersionFile);
-    assert.equal(migrationVersion.migrations[EMBEDDED_CONTEXT_FRONTIER_MIGRATION_ID].status, 'completed_with_failures');
-    assert.match(migrationVersion.migrations[EMBEDDED_CONTEXT_FRONTIER_MIGRATION_ID].failures[0].reason, /did not match/);
+    assert.equal(migrationVersion.migrations[EMBEDDED_CONTEXT_FRONTIER_MIGRATION_ID].status, 'completed');
   });
 });

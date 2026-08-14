@@ -217,6 +217,16 @@ async function start() {
         const sourceContexts = new SessionWorkerSourceContextRegistry();
         sessionWorkerSupervisor = new SessionWorkerSupervisor({
             store: sessionWorkerStore,
+            getCatalogStub: sessionId => {
+                const session = sessionManager.getAllSessions().get(sessionId);
+                if (!session) return undefined;
+                return {
+                    agent: session.agent,
+                    aliases: session.aliases,
+                    parentSessionId: session.parentSessionId,
+                    displayName: session.displayName,
+                };
+            },
             idleMs: SESSION_WORKERS_CONFIG.idleSeconds * 1000,
             shouldRestart: () => true,
             resolveExactFinalSourceContext: sourceContexts.resolve,
@@ -269,11 +279,15 @@ async function start() {
             const ownership = sessionWorkerStore!.findOwnership(sessionId);
             return !!ownership && ownership.state !== 'inactive';
         });
+        sessionManager.setSessionWorkerCatalogFieldsUpdater(
+            (sessionId, patch) => sessionWorkerIngress!.updateCatalogFieldsWithinExistingAdmission(sessionId, patch),
+        );
         shutdownSessionWorkers = async () => {
             sessionManager.setSessionWorkerEnqueueSink(undefined);
             sessionManager.setSessionWorkerDeleteHandler(undefined);
             sessionManager.setSessionWorkerForkSourceProvider(undefined);
             sessionManager.setSessionWorkerFenceChecker(undefined);
+            sessionManager.setSessionWorkerCatalogFieldsUpdater(undefined);
             await sessionWorkerSupervisor!.shutdown();
             sessionWorkerStore!.close();
         };

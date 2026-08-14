@@ -1,4 +1,4 @@
-import { isQueueItem } from '../types';
+import { isQueueItem, type Message } from '../types';
 import { MODEL_EFFORTS, type ModelEffort } from '../config';
 
 export const CURRENT_SESSION_STATE_VERSION = 1;
@@ -10,6 +10,14 @@ export type SessionAuthorityMailboxCursor = {
 
 function isRecord(value: unknown): value is Record<string, any> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Read-old/write-new compatibility for the retired per-message Frontier marker. */
+export function omitObsoleteContextFrontierItem(message: Message): Message {
+  const meta = message?.__meta;
+  if (!isRecord(meta) || !Object.prototype.hasOwnProperty.call(meta, 'contextFrontierItem')) return message;
+  const { contextFrontierItem: _obsolete, ...currentMeta } = meta as Record<string, unknown>;
+  return { ...message, __meta: currentMeta } as Message;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -48,29 +56,6 @@ function validateCurrentHistory(history: unknown[], label: string): void {
   }
 }
 
-function validateCurrentFrontier(frontier: unknown[], label: string): void {
-  for (let index = 0; index < frontier.length; index += 1) {
-    const item = frontier[index];
-    if (!isRecord(item)) throw new Error(`${label} contextFrontier[${index}] must be an object.`);
-    if (item.kind === 'message') {
-      if (!Number.isSafeInteger(item.seq) || item.seq < 1
-        || (item.preservedFromBlockId !== undefined && (!Number.isSafeInteger(item.preservedFromBlockId) || item.preservedFromBlockId < 1))) {
-        throw new Error(`${label} contextFrontier[${index}] has an invalid message boundary.`);
-      }
-      continue;
-    }
-    if (item.kind === 'block') {
-      if (!Number.isSafeInteger(item.id) || item.id < 1 || !Number.isSafeInteger(item.level) || item.level < 1
-        || !Number.isSafeInteger(item.rawStartSeq) || item.rawStartSeq < 1
-        || !Number.isSafeInteger(item.rawEndSeq) || item.rawEndSeq < item.rawStartSeq) {
-        throw new Error(`${label} contextFrontier[${index}] has an invalid block boundary.`);
-      }
-      continue;
-    }
-    throw new Error(`${label} contextFrontier[${index}] has an unknown kind.`);
-  }
-}
-
 /** Strict authority cursor reader. Only a missing legacy value defaults to zero. */
 export function readSessionAuthorityMailboxCursor(
   value: Record<string, any>,
@@ -87,7 +72,9 @@ export function readSessionAuthorityMailboxCursor(
 /**
  * Side-effect-free authority reader shared by startup hydration and catalog
  * migration preflight. Unversioned files retain the existing tolerant
- * history/frontier normalization; v1 files must satisfy current shapes.
+ * history normalization; v1 files must satisfy current shapes. Historical
+ * contextFrontier is deliberately ignored for every version: history is the
+ * sole active authority and the obsolete field is dropped on the next save.
  */
 export function normalizeAndValidateSessionAuthorityPayload(raw: unknown, label = 'Per-session state'): Record<string, any> {
   if (!isRecord(raw)) throw new Error(`${label} must be an object.`);
@@ -99,8 +86,10 @@ export function normalizeAndValidateSessionAuthorityPayload(raw: unknown, label 
   const value: Record<string, any> = structuredClone(raw);
   if (!current) {
     value.history = Array.isArray(value.history) ? value.history : [];
-    if (value.contextFrontier !== undefined && !Array.isArray(value.contextFrontier)) delete value.contextFrontier;
   }
+  delete value.contextFrontier;
+  if (Array.isArray(value.history)) value.history = value.history.map(message => isRecord(message)
+    ? omitObsoleteContextFrontierItem(message as Message) : message);
   if (value.history !== undefined && !Array.isArray(value.history)) throw new Error(`${label} history must be an array.`);
   if (current) validateCurrentHistory(value.history || [], label);
   if (value.persistentMemorySnapshot !== undefined && typeof value.persistentMemorySnapshot !== 'string') {
@@ -108,8 +97,6 @@ export function normalizeAndValidateSessionAuthorityPayload(raw: unknown, label 
   }
   if (value.queue !== undefined && !Array.isArray(value.queue)) throw new Error(`${label} queue must be an array.`);
   if (current && value.queue?.some((item: unknown) => !isQueueItem(item))) throw new Error(`${label} queue contains an invalid current QueueItem.`);
-  if (value.contextFrontier !== undefined && !Array.isArray(value.contextFrontier)) throw new Error(`${label} contextFrontier must be an array.`);
-  if (current && value.contextFrontier) validateCurrentFrontier(value.contextFrontier, label);
   if (value.stats !== undefined) validateStats(value.stats, label);
   if (value.meta !== undefined) validateMeta(value.meta, label);
   readSessionAuthorityMailboxCursor(value, label);

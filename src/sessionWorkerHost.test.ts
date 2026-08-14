@@ -26,6 +26,7 @@ import { getAgentDir, SESSIONS_FILE, TIMERS_FILE } from './config';
 import * as timers from './timers';
 import * as vector from './vector';
 import * as sessionHistory from './session/history';
+import * as sessionArchive from './session/archive';
 import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
 import { vectorServiceDescriptor } from './vectorServiceDescriptor';
 import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationServiceDescriptor, SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
@@ -36,7 +37,6 @@ function baseSession(id: string): Session {
     id,
     agent: 'main',
     history: [],
-    contextFrontier: [],
     persistentMemorySnapshot: 'worker prompt',
     systemPromptFiles: [],
     snapshotUpdatedAt: Date.now(),
@@ -160,6 +160,25 @@ test('worker swallows one ambiguous final-delivery failure after committed respo
       throw new Error('ambiguous reverse transport');
     });
   } finally { (llm as any).chat = originalChat; }
+});
+
+test('required Worker archive failure makes one presentation-only error attempt and skips provider continuation', async () => {
+  const initial = baseSession('worker-archive-final');
+  const originalChat = llm.chat;
+  const originalAppend = sessionArchive.appendMessagesToArchive;
+  let chatCalls = 0; const finals: any[] = [];
+  (llm as any).chat = async () => { chatCalls += 1; return { text: 'must not run' }; };
+  (sessionArchive as any).appendMessagesToArchive = async () => { const error: any = new Error('archive unavailable'); error.code = 'SESSION_ARCHIVE_COMMIT_FAILED'; throw error; };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      store.enqueueIntent(initial.id, 'archive-failure', 'enqueue', {
+        type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'do not continue' }],
+      });
+      await host.runPending(8);
+      assert.equal(chatCalls, 0); assert.equal(finals.length, 1); assert.match(finals[0].text, /archive unavailable/);
+      assert.equal(readDurable().history.length, 0); assert.equal(readDurable().busy, false);
+    }, true, undefined, async (_source, text, outcome) => { finals.push({ text, outcome }); });
+  } finally { (llm as any).chat = originalChat; (sessionArchive as any).appendMessagesToArchive = originalAppend; }
 });
 
 test('worker delivers canonical model text before multiple tool iterations and only finalizes the genuine no-tool result', async () => {
@@ -645,8 +664,8 @@ test('failed mutation plus failed reload poisons until a later run resynchronize
     persistence.writeState = originalWrite;
     persistence.readState = originalRead;
     await host.runPending(8);
-    assert.equal(session.displayName, undefined);
-    assert.equal(readDurable().displayName, undefined);
+    assert.equal(session.displayName, 'must-not-survive', 'Main-owned presentation metadata survives semantic resync');
+    assert.equal(readDurable().displayName, undefined, 'failed semantic write never reached authority');
   });
 });
 
@@ -917,6 +936,48 @@ test('postcommit publication failure preserves authority and poisons later mutat
   }, false, async () => { publishes += 1; if (publishes > 1) throw new Error('publication reply lost'); });
 });
 
+test('malformed primitive tool arguments do not poison Worker publication or later turns', async () => {
+  const initial = baseSession('worker-malformed-tool-preview');
+  const originalChat = llm.chat;
+  const identity = { sessionId: initial.id, generation: 1, incarnationId: 'local-host-incarnation' };
+  const registry = new SessionWorkerProjectionRegistry(); registry.establish(identity);
+  const publishedPreviews: unknown[] = [];
+  let chatCalls = 0;
+  (llm as any).chat = async (parts: any, _session: Session, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    chatCalls += 1;
+    if (chatCalls === 1) {
+      const toolCall = { id: 'bad-goal', name: 'set_goal', args: { goal: true } } as any;
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    }
+    const text = chatCalls === 2 ? 'first turn recovered' : 'later turn recovered';
+    await options.appendMessage({ role: 'model', parts: [{ text }] });
+    return { text };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      store.enqueueIntent(initial.id, 'malformed-tool', 'enqueue', { type: 'user', parts: [{ text: 'call malformed set_goal' }] });
+      await host.runPending(8);
+      const afterMalformed = readDurable();
+      const toolResponse = afterMalformed.history.find((message: any) => message.role === 'tool')?.parts?.[0]?.functionResponse?.response;
+      assert.deepEqual(toolResponse, { error: 'goal must be a string.' });
+      assert.equal(afterMalformed.history.at(-1).parts[0].text, 'first turn recovered');
+      assert.equal(afterMalformed.busy, false);
+
+      store.enqueueIntent(initial.id, 'later-normal-turn', 'enqueue', { type: 'user', parts: [{ text: 'continue normally' }] });
+      await host.runPending(8);
+      assert.equal(readDurable().history.at(-1).parts[0].text, 'later turn recovered');
+      assert.equal(chatCalls, 3);
+      assert.equal(publishedPreviews.filter(value => value !== undefined).every(value => typeof value === 'string'), true);
+      assert.ok(publishedPreviews.includes('true'));
+    }, true, async projection => {
+      publishedPreviews.push(projection.runtimeState.tool?.argsPreview);
+      await registry.apply(identity, projection);
+    });
+  } finally { (llm as any).chat = originalChat; }
+});
+
 test('real activated child runs durable mailbox through canonical SessionTurnRunner', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-host-'));
   const sessionId = 'worker-host-real-child';
@@ -1041,7 +1102,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
     assert.equal(committedFinals[0].options.turnFinal, true);
     const durable = await fs.readJson(statePath);
     assert.deepEqual(durable.history.map((message: any) => message.role), ['user', 'model']);
-    assert.equal(durable.contextFrontier.length, 2);
+    assert.equal(durable.history.length, 2);
     assert.equal(durable.queue.length, 0);
     assert.equal(durable.busy, false);
     const archive = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'), { readOnly: true });

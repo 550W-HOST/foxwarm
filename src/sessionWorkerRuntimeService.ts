@@ -40,6 +40,10 @@ export type SessionWorkerSettingsResult = {
   current: SessionWorkerSettings;
   projection: SessionWorkerProjection;
 };
+export type SessionWorkerCatalogFieldsPatch = {
+  parentSessionId?: string | null;
+  displayName?: string | null;
+};
 export type SessionWorkerHistoryMutationResult = {
   deleted?: number;
   remaining?: number;
@@ -57,7 +61,7 @@ export type SessionWorkerBtwResult = {
   projection: SessionWorkerProjection;
 };
 
-export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 9, {
+export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 12, {
   loadProjection: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
   retry: rpcMethod<{ source?: QueueSource }, SessionWorkerProjection>(),
@@ -66,6 +70,7 @@ export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-w
   compactAwaited: rpcMethod<{ request: CompactionRequest }, { compacted: boolean; projection: SessionWorkerProjection }>(),
   compactToolMessages: rpcMethod<{ keepPercent?: number }, SessionWorkerToolNoiseCompactionResult>(),
   updateSettings: rpcMethod<{ patch: SessionWorkerSettingsPatch }, SessionWorkerSettingsResult>(),
+  updateCatalogFields: rpcMethod<{ patch: SessionWorkerCatalogFieldsPatch }, { projection: SessionWorkerProjection }>(),
   deleteMessages: rpcMethod<{ num: number }, SessionWorkerHistoryMutationResult>(),
   clearHistory: rpcMethod<Record<string, never>, SessionWorkerHistoryMutationResult>(),
   forceIndex: rpcMethod<Record<string, never>, SessionWorkerHistoryMutationResult>(),
@@ -165,6 +170,25 @@ export function createSessionWorkerRuntimeServiceHandler(
       }
       return host.updateSettings(structuredClone(input.patch));
     },
+    async updateCatalogFields(input) {
+      gate.assertActive();
+      if (!input || typeof input !== 'object' || Array.isArray(input)
+        || Object.keys(input).length !== 1 || !input.patch || typeof input.patch !== 'object' || Array.isArray(input.patch)) {
+        throw new RpcError('SESSION_WORKER_CATALOG_FIELDS_INVALID', 'updateCatalogFields takes { patch: object }.');
+      }
+      const keys = Object.keys(input.patch);
+      if (keys.some(key => !['parentSessionId', 'displayName'].includes(key))) {
+        throw new RpcError('SESSION_WORKER_CATALOG_FIELDS_INVALID', 'Catalog-field patch contains unsupported fields.');
+      }
+      for (const key of ['parentSessionId', 'displayName'] as const) {
+        if (!Object.prototype.hasOwnProperty.call(input.patch, key)) continue;
+        const value = input.patch[key];
+        if (value !== null && (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 4096)) {
+          throw new RpcError('SESSION_WORKER_CATALOG_FIELDS_INVALID', `${key} must be a bounded string or null.`);
+        }
+      }
+      return host.updateCatalogFields(structuredClone(input.patch));
+    },
     async deleteMessages(input) {
       gate.assertActive();
       if (!input || typeof input !== 'object' || Array.isArray(input)
@@ -247,7 +271,7 @@ export function createSessionWorkerRuntimeServiceHandler(
       gate.assertActive();
       if (!input || typeof input !== 'object' || Array.isArray(input)
         || Object.keys(input).some(key => key !== 'keepPercent')) {
-        throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', 'Tool-noise compaction takes an optional keepPercent.');
+        throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', 'Historical tool-response pruning takes an optional keepPercent.');
       }
       if (input.keepPercent !== undefined
         && (!Number.isFinite(input.keepPercent) || input.keepPercent <= 0 || input.keepPercent > 1)) {

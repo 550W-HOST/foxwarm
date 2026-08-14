@@ -22,7 +22,7 @@ async function waitFor(check: () => boolean, timeoutMs = 5_000): Promise<void> {
 
 function baseSession(id: string): Session {
   return {
-    id, agent: 'main', history: [], contextFrontier: [], persistentMemorySnapshot: 'ensure ingress prompt',
+    id, agent: 'main', history: [], persistentMemorySnapshot: 'ensure ingress prompt',
     systemPromptFiles: [], snapshotUpdatedAt: Date.now(),
     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
     busy: false, queue: [], meta: { lastMessageTime: 0 }, lastAppliedMailboxId: 0,

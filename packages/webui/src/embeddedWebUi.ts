@@ -68,6 +68,21 @@ export function readFoxwarmActiveTargetMessage(value: unknown, nonce: string): F
   return sessionId ? { kind: 'session', sessionId } : undefined
 }
 
+export function readFoxwarmVisibleSessionIdsMessage(value: unknown, nonce: string): string[] | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const message = value as { channel?: unknown; version?: unknown; nonce?: unknown; type?: unknown; visibleSessionIds?: unknown }
+  if (message.channel !== FOXWARM_EMBED_HOST_CHANNEL || message.version !== FOXWARM_EMBED_VERSION || message.nonce !== nonce || message.type !== 'active-target') return undefined
+  if (message.visibleSessionIds === undefined) return []
+  if (!Array.isArray(message.visibleSessionIds)) return undefined
+  const result: string[] = []
+  for (const value of message.visibleSessionIds) {
+    const sessionId = normalizeSessionId(typeof value === 'string' ? value : null)
+    if (!sessionId) return undefined
+    if (!result.includes(sessionId)) result.push(sessionId)
+  }
+  return result.slice(0, 256)
+}
+
 export function readFoxwarmFocusModelsMessage(value: unknown, nonce: string): boolean {
   if (!value || typeof value !== 'object') return false
   const message = value as { channel?: unknown; version?: unknown; nonce?: unknown; type?: unknown }

@@ -19,6 +19,7 @@ LLM owns model/provider configuration consumption, prompt snapshots, provider se
 - `chat`, `requestLlmOnce`, `executeTools`, and prompt snapshot/cache helpers.
 - `LlmRequestError`, retry events, abort recognition, and provider payload sanitization.
 - OpenAI conversion/stream collectors.
+- OpenAI custom function-tool request serialization explicitly uses non-strict mode while preserving schema-required keys; canonical decision: [D-llm-openai-non-strict-function-tools](../units/src-llm.md#d-llm-openai-non-strict-function-tools).
 - MCP list/call/configuration APIs.
 
 ## Provider routing

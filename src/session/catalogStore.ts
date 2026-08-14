@@ -483,7 +483,7 @@ function buildLegacyAuthorityUpgrade(
   const transferFields = [
     'history', 'persistentMemorySnapshot', 'queue', 'parentSessionId', 'promptCacheKey', 'systemPromptFiles',
     'indexingState', 'busy', 'busyStartedAt', 'stopping', 'currentNode', 'cwd', 'model', 'effort', 'childModelDefault', 'childEffortDefault',
-    'agent', 'verbose', 'aliases', 'historyVersion', 'nextMessageSeq', 'nextBlockId', 'contextFrontier',
+    'agent', 'verbose', 'aliases', 'historyVersion', 'nextMessageSeq', 'nextBlockId',
     'goalState', 'compactThresholdTokens', 'lastAppliedMailboxId',
   ] as const;
   for (const field of transferFields) {
@@ -923,8 +923,8 @@ export class SessionCatalogStore {
     });
   }
 
-  private getUnpinnedParentCounts(parentSessionIds: readonly string[], agent?: string): Record<string, number> {
-    const parents = [...new Set(parentSessionIds)].slice(0, 100); if (!parents.length) return {};
+  getPresentationChildCounts(parentSessionIds: readonly string[], agent?: string): Record<string, number> {
+    const parents = [...new Set(parentSessionIds)].slice(0, 4096); if (!parents.length) return {};
     if (agent === undefined) {
       const rows = this.database().prepare(`SELECT parent_key,unpinned_session_count FROM catalog_parent_count
         WHERE parent_key IN (${parents.map(() => '?').join(',')})`).all(...parents) as Array<{ parent_key: string; unpinned_session_count: number }>;
@@ -934,6 +934,10 @@ export class SessionCatalogStore {
       WHERE agent=? AND parent_key IN (${parents.map(() => '?').join(',')})`)
       .all(agent, ...parents) as Array<{ parent_key: string; session_count: number }>;
     return Object.fromEntries(rows.map(row => [row.parent_key, Number(row.session_count)]));
+  }
+
+  private getUnpinnedParentCounts(parentSessionIds: readonly string[], agent?: string): Record<string, number> {
+    return this.getPresentationChildCounts(parentSessionIds, agent);
   }
 
   getPresentationPaths(sessionIds: readonly string[]): Record<string, string[]> {

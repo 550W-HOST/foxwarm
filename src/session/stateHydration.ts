@@ -1,6 +1,5 @@
 import { RpcError } from '../rpc';
 import type { Session } from '../types';
-import { annotateHistoryWithContextFrontierMetadata, renderHistoryFromFrontier } from './layeredContext';
 import { prepareSessionSemanticStateForHydration, replaceSessionSemanticState } from './metadataStore';
 import { externalizeAuthoritativeSessionImages } from './stateFile';
 
@@ -13,7 +12,7 @@ import { externalizeAuthoritativeSessionImages } from './stateFile';
 export function replaceAuthoritativeSessionState(
   target: Session,
   raw: Record<string, any>,
-  options?: { preserveCatalogFields?: boolean; preserveDisplayName?: boolean; adoptAuthorityDisplayNameWhenMissing?: boolean },
+  options?: { preserveCatalogFields?: boolean; preserveDisplayName?: boolean; adoptAuthorityDisplayNameWhenMissing?: boolean; adoptAuthorityCatalogFieldsWhenMissing?: boolean },
 ): { session: Session; upgradedLegacy: boolean } {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new RpcError('SESSION_WORKER_STATE_INVALID', `Authoritative state for ${target.id} is not a session payload.`);
@@ -24,7 +23,8 @@ export function replaceAuthoritativeSessionState(
     const catalogFields = new Map<string, { present: boolean; value: unknown }>();
     if (preserveCatalogFields) {
       for (const field of ['agent', 'aliases', 'parentSessionId', 'displayName'] as const) {
-        if (field === 'displayName' && options?.adoptAuthorityDisplayNameWhenMissing
+        if ((options?.adoptAuthorityCatalogFieldsWhenMissing
+          || (field === 'displayName' && options?.adoptAuthorityDisplayNameWhenMissing))
           && !Object.prototype.hasOwnProperty.call(target, field)) continue;
         catalogFields.set(field, {
           present: Object.prototype.hasOwnProperty.call(target, field),
@@ -57,16 +57,9 @@ export function replaceAuthoritativeSessionState(
 export async function hydrateAuthoritativeSessionState(
   target: Session,
   raw: Record<string, any>,
-  options?: { preserveCatalogFields?: boolean; adoptAuthorityDisplayNameWhenMissing?: boolean },
+  options?: { preserveCatalogFields?: boolean; adoptAuthorityDisplayNameWhenMissing?: boolean; adoptAuthorityCatalogFieldsWhenMissing?: boolean },
 ): Promise<{ session: Session; imagesCanonicalized: boolean; upgradedLegacy: boolean }> {
   const replaced = replaceAuthoritativeSessionState(target, raw, options);
-  if (target.contextFrontier?.length) {
-    if (target.history.length !== target.contextFrontier.length) {
-      target.history = await renderHistoryFromFrontier(target);
-    } else {
-      target.history = (await annotateHistoryWithContextFrontierMetadata(target.id, target.history, target.contextFrontier)).history;
-    }
-  }
   // This is legacy inline-image materialization, not mailbox/JSON cursor reconciliation.
   const imagesCanonicalized = await externalizeAuthoritativeSessionImages(target);
   return { session: target, imagesCanonicalized, upgradedLegacy: replaced.upgradedLegacy };

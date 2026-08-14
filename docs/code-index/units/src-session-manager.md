@@ -22,7 +22,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 - `getExistingSession`, `getSession`, `createEmptySession`, `createSession`, `deleteSession`, `archiveSession` — lifecycle operations.
 - `saveSession`, `saveSessionCatalogEntries`, `saveSessionCatalogProjectionStrict`, `loadSessions`, `listSessions`, `getAllSessions`, `getSessionCatalog` — persistence and enumeration. Normal saves commit authority before an exact row/batch catalog projection; fenced Main-only presentation writes preserve the current semantic projection, while Worker handback explicitly commits one complete bounded projection. `getSessionCatalog` is a Main-owned loaded-stub read that never hydrates worker authority.
 - `setSessionCwd`, `setSessionChildModelDefault`, `setSessionCompactThreshold` — persisted session settings; child-model mutation uses the shared atomic model/effort normalizer.
-- `appendSessionMessage`, `appendSessionMessages`, `getSessionMessages` — durable history access. `appendSessionMessagesForSession` exposes the same sequence/image/archive/frontier/persist/notify composition for an exact supplied owner and persistence hook.
+- `appendSessionMessage`, `appendSessionMessages`, `getSessionMessages` — durable history access. `appendSessionMessagesForSession` exposes the same sequence/image/archive/persist/notify composition for an exact supplied owner and persistence hook; pre-authority failures restore semantic state, while explicit post-authority catalog/projection failures retain committed JSON/archive and resynchronize the owner.
 
 ### Queue, wait, and execution coordination
 
@@ -40,7 +40,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 
 ### Relations, agents, and inter-session delivery
 
-- `forkSession`, `createChildSession`, `resolveSpawnedSessionModelEffort`, `setSessionParent`, `updateChildSessionParentIds`, `getChildSessionIds`, `getCanonicalChildSessionIds`, `collectSessionDescendants` — lineage, model/effort spawn inheritance, explicit parent links, and canonical lifecycle traversal. Fork/child creation rejects a claimed source or parent at lifecycle entry before detached-provider, hydration, prompt-cache, or allocation effects, then rechecks before the child commit. `forkSession`/`createChildSession` accept a trusted `sourceOverride` snapshot so the Main management facade can fork a worker-fenced parent from a strictly read-only detached authority read without hydrating or persisting it.
+- `forkSession`, `createChildSession`, `resolveSpawnedSessionModelEffort`, `setSessionParent`, `updateChildSessionParentIds`, `getChildSessionIds`, `getCanonicalChildSessionIds`, `collectSessionDescendants` — lineage, one-pair model/effort spawn inheritance, explicit parent links, and canonical lifecycle traversal. Spawned children persist only the resolved current pair and leave their own future-child defaults unset. Fork/child creation rejects a claimed source or parent at lifecycle entry before detached-provider, hydration, prompt-cache, or allocation effects, then rechecks before the child commit. `forkSession`/`createChildSession` accept a trusted `sourceOverride` snapshot so the Main management facade can fork a worker-fenced parent from a strictly read-only detached authority read without hydrating or persisting it.
 - `normalizeProspectiveSessionModelEffortSettings` / `applyNormalizedSessionModelEffortSettings` — one models-config snapshot and one mutation step for current plus future-child model/effort pairs; explicit effort is strict and stale inherited effort clears.
 - `buildSessionModelEffortPresentation` — derives public raw/effective current and child effort, allowed sets, concrete defaults, virtual per-leaf default markers, and tolerant fallback presentation from one models-config snapshot.
 - `sendToSession`, `notifyManualForkCreated` — inter-session and manual-fork events.
@@ -50,7 +50,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 ### Channel and history façades
 
 - Channel functions delegate to `src/session/channels.ts`: attachment lookup/mutation, direct text/file delivery, session broadcast setup, and attachment enumeration.
-- Compaction/archive functions delegate to `src/session/history.ts`: threshold resolution, explicit/automatic compaction, completed-job application, archive reads, and tool-noise compaction.
+- Compaction/archive functions delegate to `src/session/history.ts`: threshold resolution, explicit/automatic compaction, completed-job application, archive reads, and historical tool-response pruning.
 - Runtime-state helpers are re-exported from `src/sessionRuntimeState.ts`.
 
 ### Update callbacks
@@ -63,7 +63,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 ## Internal sections
 
 - **Wait-state transition table:** maintenance items are wait-neutral; matching timeout tokens wake; stale tokens drop; `waitAllSessions` defers listed child messages until all requested sessions report.
-- **Lazy hydration:** metadata creates lightweight session objects; `getSession` loads the per-session history snapshot and renders the embedded context frontier. A persisted live record remains hydratable even when archive rows exist, while an archive-only ID cannot implicitly start a new lifetime.
+- **Lazy hydration:** metadata creates lightweight session objects; `getSession` loads the per-session history snapshot exactly as the active authority and ignores obsolete frontier fields. A persisted live record remains hydratable even when archive rows exist, while an archive-only ID cannot implicitly start a new lifetime.
 - **Image canonicalization:** history append assigns sequence identity before materializing images; saves canonicalize history, queue, and managed inbox images, while lazy hydration performs tolerant read-old/write-new conversion for accessed legacy sessions.
 - **Session ID reservation:** one non-reentrant process-wide mutex spans check through strict commit for all public session creation/move façades. Nested implementation paths use private unlocked helpers; callback descendants cannot inherit a bypass capability. Automatic random/fork/child/timer allocation skips live IDs, aliases, and retained archive IDs.
 - **Critical persistence:** creation/move paths use strict history/metadata/channel writers and roll back known failed attempts, including partial archive appends. Ordinary runtime saves remain best-effort where callers historically do not handle persistence errors.
@@ -86,7 +86,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 ## Invariants
 
 - One `SessionTurnRunner.processSessionQueue()` invocation may claim a session at a time through the MessageRouter delegate; this façade persists and exposes the `busy` compatibility/concurrency flag.
-- Per-session JSON files are authoritative for full semantic Session state, including conversation content, queue, wait/managed metadata, prompt/cache state, embedded `contextFrontier`, and the worker mailbox cursor. `state/catalog.sqlite` is the Main-owned identity/topology/list projection; canonical boundary: [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
+- Per-session JSON files are authoritative for full semantic Session state, including conversation content, queue, wait/managed metadata, prompt/cache state, structured history provenance, and the worker mailbox cursor. `state/catalog.sqlite` is the Main-owned identity/topology/list projection; active-history authority is canonical in [D-context-active-history-authority](../threads/context-compaction-and-recall.md#d-context-active-history-authority), and the catalog boundary is canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
 - Operation ownership is stable under Worker placement: Session-semantic work must use the exact owner even when it must first spawn/load an idle Worker; Main catalog/topology/presentation work must remain catalog-only. The manager does not opportunistically hydrate and save authority simply because no Worker is currently active. Canonical decision: [D-process-topology-stable-operation-ownership](../threads/process-topology-and-rpc.md#d-process-topology-stable-operation-ownership).
 - Lazy load upgrades only unversioned per-session files by seeding historically catalog-only fields, while current-format files exactly replace semantic stub state. Local and Worker placement keep the SQLite catalog Main-owned; Session-worker placement supplies bounded projections through SessionRuntime handback.
 - Queue insertion passes through wait-state and managed-inbox transitions before work is persisted or triggered.
@@ -102,7 +102,7 @@ The LLM/tool turn loop is **not** implemented here. `MessageRouter.processSessio
 ## Compatibility
 
 - `busy`, `busyStartedAt`, and queue-length fields remain available to existing API readers; `runtimeState` is the canonical user-facing phase.
-- Legacy channel attachment shapes and context-frontier files are handled by their dedicated readers/migrations, not by undocumented fallback logic in this façade.
+- Legacy channel attachment shapes and standalone/embedded frontier state are handled by dedicated tolerant readers/retirement migration; this façade never uses them to rebuild active history.
 - Existing child IDs under non-main parents retain append-style semantics. Agent-main child creation replaces the `main` leaf.
 - Channel attachment no longer doubles as an implicit session allocator; creation chooses an available ID before attaching the channel.
 

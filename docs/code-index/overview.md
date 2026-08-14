@@ -61,7 +61,7 @@ Remote Nodes and CLI Node runtime
 | [message-routing](./modules/message-routing.md) | Inbound routing, commands, queue processing, and turn orchestration |
 | [nodes](./modules/nodes.md) | Pairing, registry, authentication, and remote-node communication |
 | [scripting](./modules/scripting.md) | ToolScript execution, persistence, suspension, and managed orchestration |
-| [session-context](./modules/session-context.md) | Compaction, layered frontier, archive, vector indexing, and recall |
+| [session-context](./modules/session-context.md) | Compaction, layered active history, archive, vector indexing, and recall |
 | [session-core](./modules/session-core.md) | Session lifecycle, persistence, relations, channels, goals, and managed sessions |
 | [shared-utilities](./modules/shared-utilities.md) | Cross-package patch, file, execution, formatting, and node-service utilities |
 | [tools-and-permissions](./modules/tools-and-permissions.md) | Tool registry, dispatch, isolation checks, browser, file, and exec tools |

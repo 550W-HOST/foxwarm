@@ -36,6 +36,7 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 - Derives node/cwd from the first `foxwarm` workspace folder.
 - Restores backend terminals inside the current workspace after Code reload without POSTing duplicate PTYs.
 - User terminal close kills/deletes the backend. Extension/window reload and non-user exit only detach.
+- The browser WebSocket automatically answers the terminal route's server-originated protocol pings, so transport keepalive requires no extension application-message changes and does not alter detach/kill semantics.
 - Contributes new/toggle/editor/open-here commands. Remote PTY requires advertised `vscode-pty`.
 - Terminal-scoped `code` helper supports one existing POSIX file/folder or goto target via local capability IPC.
 
@@ -52,7 +53,7 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 - Contributes the Foxwarm Activity Bar sidebar plus read-only custom editors for session Chat, Agents, and Setup.
 - Embeds strict leaf WebUI roots (`foxwarmEmbed=sidebar|chat|agents|setup`) through exact-source and random-nonce checked fixed messages.
 - Deterministic target URIs deduplicate editors. Generalized extension global state restores open targets and reads the older session-only key once.
-- Tab-group events publish the active Foxwarm target; ordinary editors clear sidebar selection.
+- Tab-group events publish the active Foxwarm target for singular sidebar selection plus all active Foxwarm Chat editor-group session IDs for the browser-local unread visibility contract; ordinary editors clear singular sidebar selection.
 - Embedded Chat can request `open-setup` with the fixed `focus: models` field. The controller activates the stable Setup editor, waits for its nonce-bound ready message, and forwards one fixed Models-focus signal; arbitrary focus targets or commands are not bridged.
 - Sidebar terminal actions invoke the Code terminal extension rather than nesting a WebUI terminal.
 - Same-origin cookie auth is current. Separate isolated webview origins do not yet have scoped credential exchange.

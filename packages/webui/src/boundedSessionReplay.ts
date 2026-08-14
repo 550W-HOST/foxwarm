@@ -179,10 +179,14 @@ export function applyExactMissTombstone<T extends { id: string; aliases?: string
   tombstoneRows(state, [...keys].filter(key => !preserve.has(key)))
 }
 
-export function mergeHttpRows<T extends { id: string; aliases?: string[] }>(state: EpochRows<T>, rows: readonly T[], startEpoch: number): void {
+export function mergeHttpRows<T extends { id: string; aliases?: string[]; childTotal?: number }>(state: EpochRows<T>, rows: readonly T[], startEpoch: number): void {
   for (const row of rows) {
     if ([row.id, ...(row.aliases || [])].some(id => (state.tombstones.get(id) || 0) > startEpoch)) continue
-    if ((state.epochs.get(row.id) || 0) <= startEpoch) { state.rows.set(row.id, row); state.tombstones.delete(row.id) }
+    if ((state.epochs.get(row.id) || 0) <= startEpoch) { state.rows.set(row.id, row); state.tombstones.delete(row.id); continue }
+    const current = state.rows.get(row.id)
+    if (current && typeof row.childTotal === 'number' && current.childTotal !== row.childTotal) {
+      state.rows.set(row.id, { ...current, childTotal: row.childTotal })
+    }
   }
 }
 
@@ -199,6 +203,14 @@ export function mergeDeltaRows<T extends { id: string; aliases?: string[] }>(sta
     state.rows.delete(id)
     state.tombstones.set(id, state.epoch)
   }
+}
+
+export function preserveKnownChildTotals<T extends { id: string; childTotal?: number }>(existing: ReadonlyMap<string, T>, rows: readonly T[]): T[] {
+  return rows.map(row => {
+    if (typeof row.childTotal === 'number') return row
+    const childTotal = existing.get(row.id)?.childTotal
+    return typeof childTotal === 'number' ? { ...row, childTotal } : row
+  })
 }
 
 export function pruneEpochRows<T extends { id: string; aliases?: string[] }>(state: EpochRows<T>, keepIds: ReadonlySet<string>): void {

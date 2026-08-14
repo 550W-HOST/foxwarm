@@ -729,7 +729,7 @@ async function main(): Promise<void> {
       assert(finalSession.history.some(msg => msg.role === 'model' && msg.parts.some(part => (part.text || '').includes('continued before async compact commit'))));
     });
 
-    await test('tool-noise compaction replaces oversized archived tool parts in older history only', async () => {
+    await test('historical tool-response pruning keeps call args and prunes older responses only', async () => {
       const sessionId = makeSessionId('selftest_tool_noise_compact');
       createdSessionIds.push(sessionId);
       const session = await ensureSession(sessionId);
@@ -754,21 +754,18 @@ async function main(): Promise<void> {
       });
 
       const result = await sessionManager.compactSessionToolMessages(sessionId, 0.25);
-      assert.strictEqual(result.replacedFunctionCalls, 1);
+      assert.strictEqual(result.replacedFunctionCalls, 0);
       assert.strictEqual(result.replacedFunctionResponses, 1);
 
       const updated = await sessionManager.getSession(sessionId);
       const compactedCallPart = updated.history[1].parts[0];
       const compactedResponsePart = updated.history[2].parts[0];
-      assert(compactedCallPart.functionCall, 'expected compacted function call part to preserve functionCall structure');
-      assert(compactedResponsePart.functionResponse, 'expected compacted function response part to preserve functionResponse structure');
+      assert(compactedCallPart.functionCall, 'expected function call structure to remain');
+      assert(compactedResponsePart.functionResponse, 'expected pruned function response structure to remain');
       assert.strictEqual(compactedCallPart.functionCall?.name, 'exec');
       assert.strictEqual(compactedResponsePart.functionResponse?.name, 'exec');
-      assert.strictEqual(compactedCallPart.functionCall?.args?.__compacted, true);
-      assert.match(String(compactedCallPart.functionCall?.args?.placeholder || ''), /compacted tool call/);
-      assert.match(String(compactedCallPart.functionCall?.args?.placeholder || ''), /recall/);
-      assert.strictEqual(compactedResponsePart.functionResponse?.response?.__compacted, true);
-      assert.match(String(compactedResponsePart.functionResponse?.response?.output || ''), /compacted tool response/);
+      assert.deepStrictEqual(compactedCallPart.functionCall?.args, longArgs);
+      assert.match(String(compactedResponsePart.functionResponse?.response?.output || ''), /historical tool response pruned/);
       assert.match(String(compactedResponsePart.functionResponse?.response?.output || ''), /recall/);
       assert.match(updated.history[3].parts[0].text || '', /recent tail should stay untouched/);
     });

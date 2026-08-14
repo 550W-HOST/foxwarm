@@ -34,7 +34,7 @@ Existing session message/block archives remain readable and unchanged. They do n
 
 `foxwarm archive export-jsonl --output <directory>` provides an explicit SQLite-backed compatibility export for training and inspection.
 
-The one-time SQLite-only startup migration streams and strictly verifies any legacy active JSONL before moving it under the migration backup tree. Normal runtime never reads or appends that JSONL. SQLite uses WAL, `synchronous=FULL`, immediate writer transactions, and a bounded busy timeout for concurrent server and short-lived CLI writers. A request manifest and every attempt start commit before the corresponding provider send.
+The one-time SQLite-only startup migration streams and strictly verifies any legacy active JSONL before moving it under the migration backup tree. Shared stateful UTF-8 LF/CRLF framing preserves literal U+2028/U+2029 inside JSON strings, and an incremental import offset advances only after its selected source range succeeds. Normal runtime never reads or appends that JSONL. SQLite uses WAL, `synchronous=FULL`, immediate writer transactions, and a bounded busy timeout for concurrent server and short-lived CLI writers. A request manifest and every attempt start commit before the corresponding provider send.
 
 Full request/attempt row structure, object type/hash integrity, bounded delta ancestry, and reconstructed message count are checked during import and reconstruction. Corrupt records fail closed and are never labeled complete.
 
@@ -61,6 +61,7 @@ The normal journal never stores auth headers or provider-hydrated request payloa
 - [LLM module](../modules/llm.md)
 - [src-llm](../units/src-llm.md)
 - [src-llm-request-journal](../units/src-llm-request-journal.md)
+- [src-jsonl](../units/src-jsonl.md)
 - [src-session-history](../units/src-session-history.md)
 - [src-btw](../units/src-btw.md)
 - [src-toolscript](../units/src-toolscript.md)

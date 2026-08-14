@@ -29,7 +29,7 @@ async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 15_0
 
 function baseSession(id: string): Session {
   return {
-    id, agent: 'main', history: [], contextFrontier: [], persistentMemorySnapshot: 'destructive prompt',
+    id, agent: 'main', history: [], persistentMemorySnapshot: 'destructive prompt',
     systemPromptFiles: [], snapshotUpdatedAt: Date.now(),
     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
     busy: false, queue: [], meta: { lastMessageTime: 0 }, lastAppliedMailboxId: 0,
@@ -48,6 +48,10 @@ function makeFixture(
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, ...workerEnv }, stopCompletionTimeoutMs, readProcessIdentity,
+    getCatalogStub: sessionId => {
+      const session = sessionManager.getAllSessions().get(sessionId);
+      return session ? { agent: session.agent, aliases: session.aliases, parentSessionId: session.parentSessionId, displayName: session.displayName } : undefined;
+    },
     resolveExactFinalSourceContext: sourceContexts.resolve,
   });
   const ingress = new SessionWorkerIngressCoordinator(store, supervisor, sourceContexts, id => id, () => true);
@@ -334,35 +338,62 @@ test('fenced fork derives from the detached authority and archive stays Main-own
   }
 });
 
-test('parent moves on a fenced child stay catalog-only and never write the authority', async () => {
+test('live Worker parent moves propagate across IPC and stay out of semantic authority', async () => {
   const sessionId = `mc-move-${Date.now()}`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-move-'));
-  const fixture = makeFixture(root);
+  const fixture = makeFixture(root, {
+    FOXWARM_TEST_CHILD_REMINDER_NO_ACTION: '1', FOXWARM_TEST_ECHO_CATALOG_FIELDS: '1',
+  });
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
   try {
-    const session = await sessionManager.getSession(sessionId);
-    await sessionManager.appendSessionMessage(sessionId, { role: 'user', parts: [{ text: 'move guard message' }] } as any);
+    const session = baseSession(sessionId);
+    session.parentSessionId = 'old/parent';
+    sessionManager.getAllSessions().set('some/parent', baseSession('some/parent'));
+    sessionManager.getAllSessions().set(sessionId, session);
+    await fs.outputJson(statePath, serializeSessionHistoryPayload(session));
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await fixture.ingress.ensureWorkerOwner(sessionId);
     session.history = []; // production fenced stubs are unhydrated
-    fixture.store.beginGeneration(sessionId, 'inc-move');
-    fixture.store.registerCandidate(sessionId, 1, 'inc-move', 999_999, 'fake-identity');
-    fixture.store.activateCandidate(sessionId, 1, 'inc-move', 999_999, 'fake-identity');
     sessionManager.setSessionWorkerFenceChecker(id => {
       const ownership = fixture.store.findOwnership(id);
       return !!ownership && ownership.state !== 'inactive';
     });
-    const authorityBefore = await fs.readFile(getSessionHistoryFilePath(sessionId));
+    sessionManager.setSessionWorkerCatalogFieldsUpdater(
+      (id, patch) => fixture.ingress.updateCatalogFieldsWithinExistingAdmission(id, patch),
+    );
+    const authorityBefore = await fs.readFile(statePath);
 
     const moved = await sessionManager.setSessionParent(sessionId, 'some/parent');
     assert.equal(moved.parentSessionId, 'some/parent');
     assert.equal(sessionManager.getAllSessions().get(sessionId)!.parentSessionId, 'some/parent');
-    assert.deepEqual(await fs.readFile(getSessionHistoryFilePath(sessionId)), authorityBefore,
+    assert.deepEqual(await fs.readFile(statePath), authorityBefore,
       'the fenced authority is never written by a parent move');
+    const renamed: any = await fixture.runtime.call('updateSettings', {
+      sessionId, patch: { displayName: 'Live Worker name' },
+    });
+    assert.equal(renamed.current.displayName, 'Live Worker name');
+    assert.deepEqual(await fs.readFile(statePath), authorityBefore,
+      'the fenced authority is never written merely to propagate a display name');
+    await fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'answer after live reparent' }] });
+    const workerAuthority = await fs.readJson(statePath);
+    assert.match(JSON.stringify(workerAuthority.history), /catalog parent=some\/parent display=Live Worker name/,
+      'the next real Worker turn observes the propagated Main-owned display name and parent');
+    assert.match(JSON.stringify(workerAuthority.history), /parentSessionId=\\"some\/parent\\"/,
+      'next parent-dependent child reminder uses the propagated Main-owned parent');
     const detached = await sessionManager.setSessionParent(sessionId, undefined);
     assert.equal(detached.parentSessionId, undefined);
+    const updater = (sessionManager as any).setSessionWorkerCatalogFieldsUpdater;
+    updater(async () => { throw Object.assign(new Error('catalog propagation failed'), { code: 'TEST_PROPAGATION_FAILED' }); });
+    await assert.rejects(() => sessionManager.setSessionParent(sessionId, 'some/parent'), /catalog propagation failed/);
+    assert.equal(session.parentSessionId, undefined, 'Main parent rolls back when the live-Worker update fails');
+    updater((id: string, patch: any) => fixture.ingress.updateCatalogFieldsWithinExistingAdmission(id, patch));
   } finally {
+    sessionManager.setSessionWorkerCatalogFieldsUpdater(undefined);
     sessionManager.setSessionWorkerFenceChecker(undefined);
     fixture.transport.close();
     await fixture.supervisor.shutdown(3_000).catch(() => {});
     fixture.store.close();
+    sessionManager.getAllSessions().delete('some/parent');
     await sessionManager.deleteSession(sessionId).catch(() => {});
     await fs.remove(root);
   }
@@ -560,11 +591,13 @@ test('dequeue aborts a busy provider and the same worker action loop consumes qu
   }
 });
 
-test('tool-noise compaction is serialized behind a busy worker turn and persists the exact projection', async () => {
+test('historical tool-response pruning is serialized behind a busy worker turn and persists the exact projection', async () => {
   const sessionId = `mc-tool-compact-${Date.now()}`;
   const emptySessionId = `${sessionId}-empty`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-tool-compact-'));
-  const fixture = makeFixture(root, { FOXWARM_TEST_HOLD_PROVIDER: '1', FOXWARM_TEST_HOLD_SESSION: sessionId });
+  const fixture = makeFixture(root, {
+    FOXWARM_TEST_HOLD_PROVIDER: '1', FOXWARM_TEST_HOLD_SESSION: sessionId, FOXWARM_TEST_SEED_ARCHIVE: '1',
+  });
   const initial = baseSession(sessionId);
   const oversized = 'large-tool-payload '.repeat(2_000);
   initial.history = [
@@ -573,7 +606,6 @@ test('tool-noise compaction is serialized behind a busy worker turn and persists
     { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'large-call', name: 'read', response: { output: oversized } } }], __meta: { seq: 3, timestamp: 3 } },
     { role: 'user', parts: [{ text: 'recent tail' }], __meta: { seq: 4, timestamp: 4 } },
   ] as any;
-  initial.contextFrontier = [1, 2, 3, 4].map(seq => ({ kind: 'message' as const, seq }));
   initial.nextMessageSeq = 5;
   initial.historyVersion = 2;
   initial.meta.messageCount = 4;
@@ -603,14 +635,14 @@ test('tool-noise compaction is serialized behind a busy worker turn and persists
     await turn;
     const result: any = await compact;
     assert.equal(result.kind, 'tool-noise');
-    assert.equal(result.result.replacedFunctionCalls, 1);
+    assert.equal(result.result.replacedFunctionCalls, 0);
     assert.equal(result.result.replacedFunctionResponses, 1);
-    assert.equal(result.result.touchedMessages, 2);
+    assert.equal(result.result.touchedMessages, 1);
 
     const authority = await fs.readJson(statePath);
-    assert.equal(authority.history[1].parts[0].functionCall.args.__compacted, true);
-    assert.equal(authority.history[2].parts[0].functionResponse.response.__compacted, true);
-    assert.equal(JSON.stringify(authority.history).includes('large-tool-payload'), false);
+    assert.equal(authority.history[1].parts[0].functionCall.args.payload, oversized);
+    assert.match(authority.history[2].parts[0].functionResponse.response.output, /historical tool response pruned/);
+    assert.ok(authority.history[2].parts[0].functionResponse.response.output.length < oversized.length);
     assert.equal(authority.queue.length, 0);
     assert.equal(authority.busy, false);
     const projection = fixture.supervisor.projectionRegistry.get(sessionId)?.projection;
@@ -623,7 +655,7 @@ test('tool-noise compaction is serialized behind a busy worker turn and persists
       sessionId: emptySessionId, keepPercent: 0.5, toolNoise: true,
     }), { kind: 'empty' });
     assert.deepEqual(await fs.readFile(emptyStatePath), emptyBefore,
-      'empty tool-noise compaction has no persistence side effect');
+      'empty historical tool-response pruning has no persistence side effect');
   } finally {
     fixture.transport.close();
     await fixture.supervisor.shutdown(3_000).catch(() => {});
@@ -1055,5 +1087,60 @@ test('the real llm.chat pipeline dispatches its HTTP request through a worker tu
     fixture.store.close();
     sessionManager.getAllSessions().delete(sessionId);
     await fs.remove(root);
+  }
+});
+
+test('automatic Worker pruning persists, publishes, survives restart, and forks pruned active history while archive stays full', async () => {
+  const sessionId = `mc-auto-prune-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-auto-prune-'));
+  const fixture = makeFixture(root, { FOXWARM_TEST_FORCE_USAGE: '1', FOXWARM_TEST_SEED_ARCHIVE: '1' });
+  const originalOutput = 'WORKER-ARCHIVE-FULL '.repeat(3500);
+  const initial = baseSession(sessionId);
+  initial.compactThresholdTokens = 1;
+  initial.model = 'openai/gpt-5.6-sol';
+  initial.promptCacheKey = 'cccccccc-dddd-4eee-8fff-111111111111';
+  initial.nextMessageSeq = 1;
+  const messages: any[] = [
+    { role: 'model', parts: [{ functionCall: { id: 'worker-prune-call', name: 'read', args: { unchanged: true } } }], __meta: { timestamp: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'worker-prune-call', name: 'read', response: { output: originalOutput } } }], __meta: { timestamp: 2 } },
+    ...Array.from({ length: 8 }, (_, index) => ({ role: index % 2 ? 'model' : 'user', parts: [{ text: `protected-${index}` }], __meta: { timestamp: index + 3 } })),
+  ];
+  const archive = await import('./session/archive');
+  await archive.appendMessagesToArchive(initial, messages); initial.history = messages;
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(initial));
+  try {
+    sessionManager.getAllSessions().set(sessionId, { ...initial, history: [] });
+    await fixture.supervisor.reconcileStartupOwnerships();
+    await fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'trigger automatic pruning' }] });
+    let authority = await fs.readJson(statePath);
+    assert.match(authority.history[1].parts[0].functionResponse.response.output, /historical tool response pruned/);
+    assert.equal(authority.history[0].parts[0].functionCall.args.unchanged, true);
+    assert.equal(authority.promptCacheKey, 'cccccccc-dddd-4eee-8fff-111111111111');
+    assert.equal(fixture.supervisor.projectionRegistry.get(sessionId)?.projection?.messageCount, authority.history.length);
+
+    const effective = await archive.readArchiveMessagesBySeqRange(sessionId, 2, 2);
+    assert.equal(effective[0].message.parts[0].functionResponse?.response.output, originalOutput);
+
+    assert.equal(await fixture.supervisor.stopWorker(sessionId, 5_000), true);
+    await fixture.ingress.ensureWorkerOwner(sessionId);
+    authority = await fs.readJson(statePath);
+    assert.match(authority.history[1].parts[0].functionResponse.response.output, /historical tool response pruned/);
+
+    const canonicalAuthorityPath = getSessionHistoryFilePath(sessionId);
+    await fs.remove(canonicalAuthorityPath);
+    await fs.ensureSymlink(statePath, canonicalAuthorityPath);
+    sessionManager.setSessionWorkerForkSourceProvider(async id =>
+      fixture.store.findOwnership(id) ? readDetachedWorkerSession(id, sessionManager.getAllSessions().get(id)!) : undefined);
+    const forkedId = await sessionManager.forkSession(sessionId, 'auto-pruned', false);
+    const forked = await sessionManager.getSession(forkedId);
+    assert.match(JSON.stringify(forked.history), /historical tool response pruned/);
+    assert.ok(String(forked.history[1].parts[0].functionResponse?.response.output).length < originalOutput.length / 10);
+    await sessionManager.deleteSession(forkedId).catch(() => {});
+  } finally {
+    sessionManager.setSessionWorkerForkSourceProvider(undefined);
+    await fs.remove(getSessionHistoryFilePath(sessionId)).catch(() => {});
+    fixture.transport.close(); await fixture.supervisor.shutdown(5_000).catch(() => {}); fixture.store.close();
+    sessionManager.getAllSessions().delete(sessionId); await fs.remove(root);
   }
 });

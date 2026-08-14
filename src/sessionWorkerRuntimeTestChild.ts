@@ -16,7 +16,7 @@ import { ProcessRpcClientTransport, ProcessRpcServer, RpcError, RpcServiceRegist
 import { writeAuthoritativeSessionState } from './session/stateFile';
 import { readSessionHistorySnapshot } from './session/metadataStore';
 import { initArchiveStore } from './session/archiveStore';
-import { appendMessagesToArchive } from './session/archive';
+import { appendMessagesToArchive, readArchiveMessagesBySeqRange } from './session/archive';
 import { COMPACT_PLAN_TOOL_NAME } from './session/compactPlan';
 import {
   createSessionWorkerControlServiceHandler,
@@ -214,6 +214,15 @@ async function start(): Promise<void> {
     if (options?.purpose === 'compact-plan' && process.env.FOXWARM_TEST_COMPACT_PLAN) {
       return { toolCalls: [{ name: COMPACT_PLAN_TOOL_NAME, args: JSON.parse(process.env.FOXWARM_TEST_COMPACT_PLAN) }] };
     }
+    if (process.env.FOXWARM_TEST_CHILD_REMINDER_NO_ACTION === '1' && chatCount > 1) {
+      await options.appendMessage({ role: 'model', parts: [{ text: '[NO_ACTION]' }] });
+      return { text: '[NO_ACTION]' };
+    }
+    if (process.env.FOXWARM_TEST_ECHO_CATALOG_FIELDS === '1') {
+      const text = `catalog parent=${session.parentSessionId || ''} display=${session.displayName || ''}`;
+      await options.appendMessage({ role: 'model', parts: [{ text }] });
+      return { text };
+    }
     if (process.env.FOXWARM_TEST_FAIL_GOAL === '1' && chatCount === 2) {
       try {
         await tool_set_goal(
@@ -280,11 +289,19 @@ async function start(): Promise<void> {
       return { toolCalls: [call] };
     }
     await options.appendMessage({ role: 'model', parts: [{ text: 'deterministic child answer' }] });
-    return { text: 'deterministic child answer' };
+    return {
+      text: 'deterministic child answer',
+      ...(process.env.FOXWARM_TEST_FORCE_USAGE === '1'
+        ? { usage: { inputTokens: 2, outputTokens: 1, cachedTokens: 0 } }
+        : {}),
+    };
   };
 
   const store = new SessionWorkerStore(storePath); store.open();
   const identity = { sessionId, generation, incarnationId, pid: process.pid, processIdentity };
+  let catalogStub: any;
+  try { catalogStub = JSON.parse(process.env.FOXWARM_SESSION_WORKER_CATALOG_STUB || '{}'); }
+  catch { throw new Error('Session worker catalog stub is invalid JSON.'); }
   const gate = new SessionWorkerActivationGate();
   const reverseTransport = new ProcessRpcClientTransport(process, { generation, direction: 'reverse' });
   await reverseTransport.waitUntilReady();
@@ -297,6 +314,7 @@ async function start(): Promise<void> {
   await initializeMcpExternalService({ transport: reverseTransport, placement: 'child-reverse' });
   await vector.init({ transport: reverseTransport, placement: 'child-reverse' });
   const host = new SessionWorkerHost(identity, store, {
+    catalogStub,
     publishCommitted: projection => publishCommitted(identity, projection),
     deliverIntermediateText: (source, text) => deliverIntermediateText({ sourceSessionId: sessionId, source, text }).then(() => {}),
     deliverCommittedFinal: (source, text, outcome) => deliverCommittedFinal({ sourceSessionId: sessionId, source, text, outcome }).then(() => {}),
@@ -324,7 +342,11 @@ async function start(): Promise<void> {
       await Promise.all([initArchiveStore(), initLlmRequestJournal()]);
       if (process.env.FOXWARM_TEST_SEED_ARCHIVE === '1') {
         const seed = await readSessionHistorySnapshot(sessionId);
-        if (seed?.history?.length) { seed.id = sessionId; seed.agent ||= 'main'; await appendMessagesToArchive(seed as any, seed.history); }
+        if (seed?.history?.length) {
+          seed.id = sessionId; seed.agent ||= 'main';
+          const existing = await readArchiveMessagesBySeqRange(sessionId);
+          if (existing.length === 0) await appendMessagesToArchive(seed as any, seed.history);
+        }
       }
     },
   });

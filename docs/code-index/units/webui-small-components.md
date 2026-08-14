@@ -1,7 +1,7 @@
 # Unit: webui-small-components
 
 Files: packages/webui/src/components/ContentHeader.tsx, packages/webui/src/components/ContextMenu.tsx, packages/webui/src/components/AgentCreationMenu.tsx, packages/webui/src/agentCreation.ts, packages/webui/src/components/CreateTabButton.tsx, packages/webui/src/components/CodeLaunchButton.tsx, packages/webui/src/components/NodeTargetSelect.tsx, packages/webui/src/launcherDraft.ts, packages/webui/src/components/ImageParts.tsx, packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/components/ReasoningCard.tsx, packages/webui/src/components/ReloadAppButton.tsx, packages/webui/src/components/Sidebar.tsx, packages/webui/src/components/SpecialBlock.tsx, packages/webui/src/components/SyntaxHighlightedText.tsx, packages/webui/src/components/ThreadLineButton.tsx, packages/webui/src/utils/languages.ts, packages/webui/test/processingStatus.test.mjs, packages/webui/test/imageParts.e2e.mjs, packages/webui/test/launcherDraft.test.mjs, packages/webui/test/specialBlocks.e2e.mjs
-Secondary files: packages/webui/src/components/CollapsedSidebar.tsx
+Secondary files: packages/webui/src/components/CollapsedSidebar.tsx, packages/webui/src/components/ModelThreadCard.tsx
 
 ## Purpose
 
@@ -19,7 +19,7 @@ A collection of small, reusable React UI components and utility functions for th
 - `NodeTargetSelect` — Shared capability-aware Code/terminal node selector
 - `ImageParts` — Renders safe image attachments from legacy inline data or current authenticated blob URLs
 - `ProcessingStatus` — Canonical thinking/tool/waiting status indicator plus queued/loading actions
-- `ReasoningCard` — Collapsible card displaying AI reasoning/thinking content with markdown rendering
+- `ReasoningCard` — Collapsible card displaying AI reasoning/thinking content with markdown rendering through the shared model-thread-card chrome
 - `ReloadAppButton` — Button that clears service workers and caches before hard-reloading
 - `Sidebar` — Main application sidebar with session list, navigation, and settings
 - `SyntaxHighlightedText` — Lightweight regex-based syntax highlighter for code snippets
@@ -73,9 +73,9 @@ A collection of small, reusable React UI components and utility functions for th
 
 ## Behavior
 
-- `ContextMenu` uses `createPortal` to render outside the component tree, calculates position with `useLayoutEffect`, and auto-dismisses on outside click, Escape, scroll, or resize.
-- `CollapsedSidebar` filters to unarchived root sessions, shows at most 20 avatars, highlights the active session, and displays a busy dot for busy sessions.
-- `ReasoningCard` debounces content updates, detects OpenAI-style bold summary titles for collapsed preview, and renders full markdown when expanded.
+- `ContextMenu` uses `createPortal` to render outside the component tree, calculates position with `useLayoutEffect`, and auto-dismisses on outside click, Escape, or resize. Captured scroll keeps point-anchored menus open at their viewport position and dismisses rect-anchored menus whose trigger can move.
+- `CollapsedSidebar` filters to unarchived root sessions, shows at most 20 avatars, highlights the active session, displays the canonical runtime-state dot at top-right, and independently displays unread idle completion at bottom-right with accessible title/name text. The unread contract is canonical in [webui-session-list](./webui-session-list.md#design-decisions).
+- `ReasoningCard` debounces content updates, detects OpenAI-style bold summary titles for collapsed preview, and renders full markdown when expanded. Its chrome comes from the shared `ModelThreadCard` owned by [webui-chat-timeline](./webui-chat-timeline.md).
 - `ReasoningCard` exposes semantic CSS hooks (`foxwarm-reasoning-card`, `foxwarm-reasoning-card-*`, `foxwarm-reasoning-thread-line`, `foxwarm-reasoning-header`, `foxwarm-reasoning-tag`, `foxwarm-reasoning-preview`, `foxwarm-reasoning-body`) so optional UI style layers can retheme reasoning surfaces without duplicating reasoning rendering logic.
 - `ImageParts` renders PNG/JPEG/GIF/WebP through direct same-origin authenticated URLs with lazy loading, exposes active/unsafe formats as download links, and shows an explicit unavailable state for transport-marked legacy failures or load errors. Canonical persistence and transport behavior: [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - `ProcessingStatus` uses the shared runtime summary, but presents the requesting-model label as `Thinking...`: thinking is blue and animated, running tools are purple and animated, and waiting is amber with one static dot and no Stop action. Active states retain Stop, queued work retains Run queued and explains whether insertion follows the current tool call/model response or session resume, and idle queued work stays a pending action. An idle incomplete turn is an amber static `Turn interrupted` status with Continue; when queue work also exists it keeps the pending count, Run queued, and queued preview. Continue never appears while loading, active, or waiting. The loading indicator remains independent and unchanged.
@@ -96,3 +96,9 @@ A collection of small, reusable React UI components and utility functions for th
 - `ProcessingStatus` and `ImageParts` plug into the chat view to show session activity and inline images.
 - `ContentHeader` is a generic layout primitive used across detail/settings pages.
 - `inferSimpleLanguage` / `getMonacoLanguage` are shared by both `SyntaxHighlightedText` and the Monaco-based code editor elsewhere in the app.
+
+## Design Decisions
+
+### D-context-menu-scroll-policy
+
+[2026-08-14] Point-anchored context menus keep their captured viewport position through scroll events, including unrelated background streaming scroll. Rect-anchored menus close on scroll because their trigger geometry can move. Both forms continue to close on outside interaction, Escape, and viewport resize.

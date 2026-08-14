@@ -2,12 +2,8 @@ import fs from 'fs-extra';
 import path from 'path';
 import { logger } from '../common';
 import { SESSIONS_DIR, STATE_DIR } from '../config';
-import { ContextFrontierItem } from '../types';
 import { DiskJsonData } from '../utils/diskJsonData';
-import {
-  annotateHistoryWithContextFrontierMetadata,
-  ArchiveBlockRecord,
-} from '../session/layeredContext';
+import { ArchiveBlockRecord } from '../session/layeredContext';
 import {
   createSessionHistoryStore,
 } from '../session/metadataStore';
@@ -41,7 +37,7 @@ type LegacyFrontierPayload = {
   v: number;
   sessionId?: string;
   nextBlockId?: number;
-  frontier: ContextFrontierItem[];
+  frontier: unknown[];
 };
 
 function normalizeLegacyFrontierPayload(raw: any, filePath: string): LegacyFrontierPayload {
@@ -146,28 +142,22 @@ async function migrateOneFrontierFile(
     throw new Error('invalid session history payload');
   }
 
-  const frontier = structuredClone(frontierData.frontier) as ContextFrontierItem[];
-  const annotation = await annotateHistoryWithContextFrontierMetadata(sessionId, historyData.history, frontier, {
-    readBlocksByIdRange: options.readBlocksByIdRange,
-  });
-  if (!annotation.matched) {
-    throw new Error(`frontier did not match rendered history: ${annotation.warnings.join('; ')}`);
-  }
-
+  const frontierBlockIds = frontierData.frontier.flatMap((item: any) =>
+    item && typeof item === 'object' && item.kind === 'block' && Number.isSafeInteger(item.id) && item.id > 0 ? [item.id] : []);
   const nextBlockId = Math.max(
     typeof historyData.nextBlockId === 'number' ? historyData.nextBlockId : 1,
     typeof frontierData.nextBlockId === 'number' ? frontierData.nextBlockId : 1,
+    (frontierBlockIds.length ? Math.max(...frontierBlockIds) + 1 : 1),
   );
+  const { contextFrontier: _obsolete, ...historyAuthority } = historyData;
   await historyStore.write({
-    ...historyData,
-    history: annotation.history,
-    contextFrontier: frontier,
+    ...historyAuthority,
     nextBlockId,
   });
 
   const verified = await historyStore.readFromPath(historyFilePath);
-  if (!Array.isArray(verified?.contextFrontier) || verified.contextFrontier.length !== frontier.length) {
-    throw new Error('embedded contextFrontier verification failed after save');
+  if (!Array.isArray(verified?.history) || Object.prototype.hasOwnProperty.call(verified, 'contextFrontier')) {
+    throw new Error('history-authority migration verification failed after save');
   }
 
   const backupRoot = path.join(options.migrationBackupDir, options.migrationId);

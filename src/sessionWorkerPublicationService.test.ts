@@ -17,8 +17,10 @@ test('projection registry applies clones in order and fences stale identities an
   const order: number[] = [];
   registry.subscribe(async entry => { await Promise.resolve(); order.push(entry.projection!.messageCount); });
   const value = projection(first.sessionId); value.messageCount = 1;
+  value.historyVersion = 2;
   await registry.apply(first, value); value.messageCount = 99;
   assert.equal(registry.get(first.sessionId)?.projection?.messageCount, 1); assert.deepEqual(order, [1]);
+  assert.equal(registry.get(first.sessionId)?.projection?.historyVersion, 2);
   const returned = registry.get(first.sessionId)!; returned.projection!.messageCount = 88;
   assert.equal(registry.get(first.sessionId)?.projection?.messageCount, 1);
   const accessor: any = projection(first.sessionId); let accessorCalls = 0;
@@ -30,10 +32,12 @@ test('projection registry applies clones in order and fences stale identities an
   for (const runtimeState of [
     { ...projection(first.sessionId).runtimeState, active: { phase: 'unknown', extra: true } },
     { ...projection(first.sessionId).runtimeState, tool: { name: 'read', startedAt: 'bad' } },
+    { ...projection(first.sessionId).runtimeState, tool: { name: 'set_goal', argsPreview: true, startedAt: 1 } },
     { ...projection(first.sessionId).runtimeState, waiting: { waitId: 'w', waitingFor: 'network' } },
   ]) await assert.rejects(() => registry.apply(first, { ...projection(first.sessionId), runtimeState }), { code: 'SESSION_WORKER_PUBLICATION_INVALID' });
   await assert.rejects(() => registry.apply(first, { ...projection(first.sessionId), busy: true }), { code: 'SESSION_WORKER_PUBLICATION_INVALID' });
   await assert.rejects(() => registry.apply(first, { ...projection(first.sessionId), queueLength: 1 }), { code: 'SESSION_WORKER_PUBLICATION_INVALID' });
+  await assert.rejects(() => registry.apply(first, { ...projection(first.sessionId), historyVersion: -1 }), { code: 'SESSION_WORKER_PUBLICATION_INVALID' });
 
   const services = new RpcServiceRegistry();
   services.register(sessionWorkerPublicationServiceDescriptor, createSessionWorkerPublicationServiceHandler({ expected: first, registry }));

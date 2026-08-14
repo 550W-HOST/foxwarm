@@ -446,7 +446,7 @@ test('OpenAI Responses opt-in web search is appended to Foxwarm tools and exclud
     });
 
     assert.deepEqual(capturedBodies[0].tools, [
-      { type: 'function', name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } },
+      { type: 'function', name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} }, strict: false },
       {
         type: 'web_search',
         search_context_size: 'high',
@@ -456,13 +456,90 @@ test('OpenAI Responses opt-in web search is appended to Foxwarm tools and exclud
     ]);
     assert.equal(capturedBodies[0].tool_choice, 'required');
     assert.deepEqual(capturedBodies[1].tools, [
-      { type: 'function', name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } },
+      { type: 'function', name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} }, strict: false },
     ]);
     assert.equal(capturedBodies[1].tool_choice, 'auto');
     assert.deepEqual(capturedBodies[2].tools, [
-      { type: 'function', name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } },
+      { type: 'function', name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} }, strict: false },
     ]);
     assert.equal(capturedBodies[2].tool_choice, 'auto');
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('OpenAI custom function tools explicitly use non-strict mode without changing schema required keys', async () => {
+  const originalPost = axios.post;
+  const captured: Array<{ url: string; body: any }> = [];
+  (axios as any).post = async (url: string, body: any) => {
+    captured.push({ url, body });
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: url.endsWith('/responses') ? makeResponsesStream()
+        : url.endsWith('/chat/completions') ? makeChatCompletionStream()
+          : { content: [{ type: 'text', text: 'ok' }] },
+    };
+  };
+
+  const parameters = {
+    type: 'object',
+    properties: {
+      suffix: { type: 'string' },
+      model: { type: 'string' },
+      effort: { type: 'string' },
+    },
+    required: ['suffix'],
+  };
+  const toolDefinitions = [{ name: 'create_child_session', description: 'Create a child session', parameters }];
+  const entry = (providerType: string, webSearch?: any) => ({
+    providerKey: 'fixture', providerType, baseUrl: 'https://fixture.example/v1', model: 'model',
+    extraFields: {}, extraHeaders: {}, ...(webSearch ? { webSearch } : {}),
+  }) as any;
+
+  try {
+    await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'create child' }] }], systemPrompt: '',
+      modelEntryOverride: entry('openai-responses', { enabled: true }), toolDefinitions,
+      notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+    });
+    await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'create child' }] }], systemPrompt: '',
+      modelEntryOverride: entry('openai-completions'), toolDefinitions,
+      notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+    });
+    await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'create child' }] }], systemPrompt: '',
+      modelEntryOverride: entry('anthropic'), toolDefinitions,
+      notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+    });
+
+    const responsesTools = captured[0].body.tools;
+    assert.deepEqual(responsesTools[0], {
+      type: 'function', name: 'create_child_session', description: 'Create a child session',
+      parameters, strict: false,
+    });
+    assert.deepEqual(responsesTools[0].parameters.required, ['suffix']);
+    assert.equal(Object.prototype.hasOwnProperty.call(responsesTools[0].parameters, 'strict'), false);
+    assert.deepEqual(responsesTools[1], { type: 'web_search' });
+    assert.equal(Object.prototype.hasOwnProperty.call(responsesTools[1], 'strict'), false);
+
+    const chatTool = captured[1].body.tools[0];
+    assert.deepEqual(chatTool, {
+      type: 'function',
+      function: {
+        name: 'create_child_session', description: 'Create a child session', parameters, strict: false,
+      },
+    });
+    assert.deepEqual(chatTool.function.parameters.required, ['suffix']);
+    assert.equal(Object.prototype.hasOwnProperty.call(chatTool.function.parameters, 'strict'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(chatTool, 'strict'), false);
+
+    assert.deepEqual(captured[2].body.tools[0], {
+      name: 'create_child_session', description: 'Create a child session', input_schema: parameters,
+    });
+    assert.deepEqual(captured[2].body.tools[0].input_schema.required, ['suffix']);
   } finally {
     (axios as any).post = originalPost;
   }

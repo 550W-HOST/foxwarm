@@ -14,6 +14,7 @@ import {
   Power,
   SeparatorHorizontal,
   ScrollText,
+  Search,
   Target,
   Timer,
   Wrench,
@@ -271,7 +272,6 @@ export interface Message {
   __meta?: {
     timestamp?: number
     contextBlock?: ContextBlockMessageMeta
-    contextFrontierItem?: any
     preservedFromBlockId?: number
     [key: string]: any
   }
@@ -726,6 +726,7 @@ export const parseAnsi = (text: string): ReactNode[] => {
 
 const toolIcons: Record<string, LucideIcon> = {
   reasoning: Brain,
+  'web-search': Search,
   'ctx-block': BookOpen,
   read: BookOpen,
   write: Pencil,

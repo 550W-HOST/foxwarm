@@ -30,6 +30,7 @@ Renders an interactive terminal session in the browser using xterm.js, connectin
 - On mount, creates an xterm.js Terminal with a FitAddon and attaches a ResizeObserver to auto-fit and send resize messages over WebSocket. Initial/font-ready/window resize fit passes are repeated so the PTY dimensions converge after fonts and pane layout settle.
 - On mount, resolves a terminal ID by: checking an explicit `initialTerminalId`, listing existing terminals for exact normalized node-and-cwd reuse, or creating a new one via POST with the requested `nodeId`, `cwd`, `cols`, and `rows`. It never substitutes `master` for a valid requested remote node.
 - Opens a WebSocket to `/terminals/stream`, forwarding user keystrokes and xterm binary-input events as `input` messages and writing received `output` data to xterm.
+- Uses the browser WebSocket implementation, which automatically answers the server's protocol-level keepalive pings; no application-level ping/pong message handling is needed.
 - Handles `ready` (with backlog replay), `output`, `exit`, and `error` WebSocket message types, updating component status accordingly.
 - During `ready` backlog replay, temporarily suppresses xterm-generated `onData` forwarding so stale terminal query responses from replayed output are not injected into the live PTY; live output after readiness still forwards terminal emulator responses normally.
 - Invokes callbacks (`onTerminalReady`, `onTerminalClosed`, `onSessionsChanged`) at appropriate lifecycle points.

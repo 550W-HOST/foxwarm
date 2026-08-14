@@ -56,6 +56,7 @@ export type SessionRuntimeSessionDto = {
   pinned: boolean;
   sidebarOrder: number | null;
   messageCount: number;
+  historyVersion: number;
   lastMessageTime: number;
   tokenUsage: SessionRuntimeTokenTotalsDto;
   verbose: boolean;
@@ -140,7 +141,7 @@ export type SessionListProjectionBatchDto = {
   revision: string;
 };
 
-export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 7, {
+export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 9, {
   getSession: rpcMethod<{ sessionId: string }, { session: SessionRuntimeSessionDto | null }>(),
   listSessions: rpcMethod<{ limit?: number; offset?: number }, { sessions: SessionRuntimeSessionDto[]; total: number }>(),
   getSessionListProjections: rpcMethod<{ sessionIds: string[]; includeVolatile?: boolean; currentOwnersOnly?: boolean }, SessionListProjectionBatchDto>(),
@@ -263,6 +264,7 @@ export function buildSessionRuntimeSessionDto(session: Session): SessionRuntimeS
       ? session.sidebarOrder
       : null,
     messageCount,
+    historyVersion: session.historyVersion || 0,
     lastMessageTime,
     tokenUsage: {
       cachedTokens: session.stats?.totalCachedTokens || 0,
@@ -285,6 +287,7 @@ export function overlaySessionWorkerProjection(
     queueLength: projection.queueLength,
     runtimeState: structuredClone(projection.runtimeState),
     messageCount: projection.messageCount,
+    historyVersion: projection.historyVersion,
     lastMessageTime: projection.lastMessageTime,
     currentNode: projection.currentNode,
     cwd: projection.cwd,
@@ -389,7 +392,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
   };
   const listSignature = (session: SessionRuntimeSessionDto) => JSON.stringify({
     busy: session.busy, busyStartedAt: session.busyStartedAt, queueLength: session.queueLength,
-    runtimeState: session.runtimeState, messageCount: session.messageCount, lastMessageTime: session.lastMessageTime,
+    runtimeState: session.runtimeState, messageCount: session.messageCount, historyVersion: session.historyVersion, lastMessageTime: session.lastMessageTime,
     currentNode: session.currentNode, cwd: session.cwd, model: session.model,
     effort: session.effort, childModelDefault: session.childModelDefault,
     childEffortDefault: session.childEffortDefault, compactThresholdTokens: session.compactThresholdTokens,
@@ -730,11 +733,8 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
           const previous = settingsFromSession(stub);
           const normalized = normalizedStrings.get('displayName')!;
           const changed: Array<keyof SessionRuntimeSettingsPatchDto> = previous.displayName !== normalized ? ['displayName'] : [];
-          if (normalized === null) delete stub.displayName;
-          else stub.displayName = normalized;
           if (changed.length > 0) {
-            await sessionManager.saveSessionCatalogEntries([stub.id]);
-            sessionManager.notifySessionStateUpdated(stub.id);
+            await sessionManager.setSessionDisplayName(stub.id, normalized ?? undefined);
           }
           return { changed, previous, current: settingsFromSession(stub), session: projectedDto(stub, workerSelection(stub.id)) };
         }

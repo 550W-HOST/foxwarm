@@ -15,7 +15,6 @@ function createSession(id: string, text: string): Session {
     id,
     agent: 'main',
     history: [],
-    contextFrontier: [],
     persistentMemorySnapshot: 'detached system prompt',
     systemPromptFiles: [],
     snapshotUpdatedAt: Date.now(),
@@ -106,7 +105,7 @@ test('detached exact owner completes canonical foreground provider turn', async 
   try {
     await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
     assert.deepEqual(session.history.map(message => message.role), ['user', 'model']);
-    assert.equal(session.contextFrontier?.length, 2);
+    assert.equal(session.history.length, 2);
     assert.equal(session.busy, false);
     assert.equal(session.queue.length, 0);
     const archived = await readArchiveMessages(session.id);
@@ -350,7 +349,7 @@ test('detached exact owner completes one real local-tool iteration', async () =>
     await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
     assert.equal(session.goalState?.goal, 'detached goal');
     assert.deepEqual(session.history.map(message => message.role), ['user', 'model', 'tool', 'model']);
-    assert.equal(session.contextFrontier?.length, 4);
+    assert.equal(session.history.length, 4);
     assert.equal(session.busy, false);
     assert.equal(session.queue.length, 0);
     assert.deepEqual((await readArchiveMessages(session.id)).map(record => record.message.role), ['user', 'model', 'tool', 'model']);

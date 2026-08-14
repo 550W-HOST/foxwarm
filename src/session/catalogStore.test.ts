@@ -168,7 +168,6 @@ test('normal writes persist only the narrow catalog projection, never semantic b
   fixture.store.upsertMany([metadata('narrow', {
     queue: [{ type: 'background', parts: [{ text: 'queued' }] }],
     history: [{ role: 'user', parts: [{ text: 'history' }] }],
-    contextFrontier: [{ kind: 'message', seq: 1 }],
     promptCacheKey: 'secret-routing-key', lastAppliedMailboxId: 7,
     goalState: { goal: 'body' }, systemPromptFiles: ['MEMORY.md'], indexingState: { inProgress: true },
     meta: {
@@ -213,7 +212,7 @@ test('strict migration publishes SQLite atomically, keeps one evidence copy, tol
       aliases: ['shared'], parentSessionId: 'missing-parent', lastMessageTime: 2,
       queue: [{ type: 'background', parts: [{ text: 'legacy queue' }] }],
       history: [{ role: 'user', parts: [{ text: 'legacy catalog history' }] }],
-      contextFrontier: [{ kind: 'message', seq: 1 }], promptCacheKey: 'legacy-key', lastAppliedMailboxId: 4,
+      promptCacheKey: 'legacy-key', lastAppliedMailboxId: 4,
       goalState: { goal: 'legacy goal' }, systemPromptFiles: ['MEMORY.md'], indexingState: { inProgress: true },
       vectorIndexPosition: 1,
       meta: { lastMessageTime: 2, messageCount: 1, managedSession: { pendingInbox: [{ type: 'background', parts: [{ text: 'managed' }] }] } },
@@ -225,8 +224,7 @@ test('strict migration publishes SQLite atomically, keeps one evidence copy, tol
   await fs.outputJson(path.join(state, 'sessions.json.1.bak'), source, { spaces: 2 });
   await fs.outputJson(path.join(state, 'sessions', 'first.json'), { id: 'first' });
   await fs.outputJson(path.join(state, 'sessions', 'second.json'), {
-    id: 'second', sessionStateVersion: 1, history: [], queue: [], contextFrontier: [],
-    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    id: 'second', sessionStateVersion: 1, history: [], queue: [],     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
     meta: { lastMessageTime: 1 }, lastAppliedMailboxId: 0,
   });
   await writeAuthority(dataRoot, 'orphan');
@@ -389,7 +387,6 @@ test('malformed current authority is fatal and never falls through to a stale ca
   const cases: Array<[string, Record<string, any>, RegExp]> = [
     ['history', { sessionStateVersion: 1, history: [{}] }, /history\[0\]/],
     ['queue', { sessionStateVersion: 1, history: [], queue: [{}] }, /invalid current QueueItem/],
-    ['frontier', { sessionStateVersion: 1, history: [], contextFrontier: [{}] }, /contextFrontier\[0\]/],
     ['version', { sessionStateVersion: 99, history: [] }, /Unsupported per-session state format version 99/],
   ];
   for (const [name, authority, expected] of cases) {
@@ -430,6 +427,12 @@ test('bounded presentation queries preserve modes, pinned roots, canonical paths
   assert.equal(fixture.store.listPresentationPage({ mode: 'time', roots: true, limit: 20 }).rows.some(row => row.id === 'dangling'), true);
   const previews = fixture.store.listChildrenPreviews(['root'], 'default', 1)[0];
   assert.equal(previews.total, 2); assert.deepEqual(previews.rows.map(row => row.id), ['child-a']); assert.ok(previews.nextKey);
+  assert.deepEqual(fixture.store.getPresentationChildCounts(['root','child-a','deep','pinned-child']), {
+    root: 2, 'child-a': 1,
+  }, 'Sidebar counts exclude pinned children and omit zero rows');
+  assert.deepEqual(fixture.store.getPresentationChildCounts(['root','child-a'], 'main'), {
+    root: 3, 'child-a': 1,
+  }, 'agent-forest counts preserve pinned children in their real relation');
   const continuation = fixture.store.listChildrenContinuations([{ parentSessionId: 'root', after: previews.nextKey }], 'default', 10)[0];
   assert.deepEqual(continuation.rows.map(row => row.id), ['child-b']);
   const childB = fixture.store.get('child-b')!; childB.pinned = true; fixture.store.upsertMany([childB]);
