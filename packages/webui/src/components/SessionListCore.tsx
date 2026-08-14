@@ -1083,7 +1083,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       bounded: !!bounded,
       loadedCount: children.length,
       boundedTotal: boundedChildPage?.total,
-      allowUnknown: !!bounded && !isFiltering && viewMode !== 'flat-time',
+      itemTotal: session.childTotal,
+      allowTree: !isFiltering && viewMode !== 'flat-time',
     })
     const childTotal = childDisclosure.total
     const hasChildren = childDisclosure.canExpand
@@ -1203,7 +1204,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                           )}
                         </svg>
-                        <span>{childTotal === null ? 'Children' : `${childTotal} ${childTotal === 1 ? 'child' : 'children'}`}</span>
+                        <span>{childTotal} {childTotal === 1 ? 'child' : 'children'}</span>
                         {descendantBusyCount > 0 && (
                           <>
                             <span>•</span>

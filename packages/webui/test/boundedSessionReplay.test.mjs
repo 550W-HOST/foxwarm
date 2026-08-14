@@ -83,6 +83,23 @@ test('newer SSE deltas and tombstones win over older HTTP rows', () => {
   assert.equal(state.rows.get('untouched').value, 'http')
 })
 
+test('state-only SSE deltas preserve an exact bounded child count until topology refetch', () => {
+  const existing = new Map([['child', { id: 'child', childTotal: 1, runtime: 'idle' }]])
+  const rows = replay.preserveKnownChildTotals(existing, [{ id: 'child', runtime: 'busy' }, { id: 'new', runtime: 'idle' }])
+  assert.deepEqual(rows, [{ id: 'child', childTotal: 1, runtime: 'busy' }, { id: 'new', runtime: 'idle' }])
+  assert.deepEqual(replay.preserveKnownChildTotals(existing, [{ id: 'child', childTotal: 0, runtime: 'busy' }]),
+    [{ id: 'child', childTotal: 0, runtime: 'busy' }], 'an explicit topology count is never replaced by the cache')
+
+  const state = replay.createEpochRows()
+  replay.mergeDeltaRows(state, [{ id: 'child', childTotal: 1, runtime: 'idle' }])
+  const refreshStart = replay.beginHttpRowsRequest(state)
+  replay.mergeDeltaRows(state, replay.preserveKnownChildTotals(state.rows, [{ id: 'child', runtime: 'busy' }]))
+  replay.mergeHttpRows(state, [{ id: 'child', childTotal: 0, runtime: 'stale-http' }], refreshStart)
+  assert.deepEqual(state.rows.get('child'), { id: 'child', childTotal: 0, runtime: 'busy' },
+    'topology refetch updates only the count when a newer state delta owns the rest of the row')
+  replay.endHttpRowsRequest(state, refreshStart)
+})
+
 test('exact by-id miss tombstone prevents an older root or search response from resurrecting the row', () => {
   const state = replay.createEpochRows(); const rootSearchStart = state.epoch
   replay.mergeDeltaRows(state, [], ['gone'])

@@ -15,25 +15,25 @@ async function loadTypeScriptModule(relativePath) {
   return import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
 }
 
-test('bounded tree rows stay expandable until an exact child page proves they are leaves', async () => {
+test('bounded tree rows use exact item counts before loading arbitrary-depth branches', async () => {
   const { collapseSessionListExpandedBranch, getSessionListChildDisclosure } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
 
-  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 0, allowUnknown: true }), {
-    total: null,
-    canExpand: true,
-  }, 'a newly loaded child can request its own child window')
-  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 1, boundedTotal: 1, allowUnknown: true }), {
+  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 0, itemTotal: 1, allowTree: true }), {
     total: 1,
     canExpand: true,
-  }, 'the nested expansion response exposes the grandchild count')
-  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 0, boundedTotal: 0, allowUnknown: true }), {
+  }, 'a newly loaded child exposes its exact count before its own child window is requested')
+  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 1, boundedTotal: 1, itemTotal: 9, allowTree: true }), {
+    total: 1,
+    canExpand: true,
+  }, 'an exact loaded child page takes precedence over the item projection')
+  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 0, itemTotal: 0, allowTree: true }), {
     total: 0,
     canExpand: false,
-  }, 'an exact empty child page turns the row into a known leaf')
-  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 0, allowUnknown: false }), {
-    total: null,
+  }, 'a true leaf never shows a disclosure')
+  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 0, itemTotal: 2, allowTree: false }), {
+    total: 2,
     canExpand: false,
-  }, 'flat and search presentations do not probe hidden tree branches')
+  }, 'flat and search presentations carry counts without probing hidden tree branches')
 
   const collapsed = collapseSessionListExpandedBranch(
     new Set(['root', 'child', 'grandchild', 'unrelated', 'unrelated-child']),

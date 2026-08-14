@@ -135,6 +135,29 @@ test('Sidebar collapse prunes nested expansion state without clearing unrelated 
   const page = await browser.newPage()
   await page.setViewport({ width: 1440, height: 900 })
   const createdIds = []
+  await page.evaluateOnNewDocument(() => {
+    const nativeFetch = window.fetch.bind(window)
+    window.__foxwarmE2eChildTotals = {}
+    window.fetch = async (input, init) => {
+      const response = await nativeFetch(input, init)
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href)
+      if (!['/api/session-list/sidebar', '/api/session-list/children', '/api/session-list/by-id', '/api/session-list/search']
+        .some(suffix => url.pathname.endsWith(suffix))) return response
+      const body = await response.clone().json().catch(() => null)
+      if (!body) return response
+      const addCounts = value => {
+        if (Array.isArray(value)) return value.map(addCounts)
+        if (!value || typeof value !== 'object') return value
+        if (typeof value.id === 'string' && value.runtimeState && value.tokenUsage) {
+          return { ...value, childTotal: window.__foxwarmE2eChildTotals[value.id] || 0 }
+        }
+        return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, addCounts(entry)]))
+      }
+      return new Response(JSON.stringify(addCounts(body)), {
+        status: response.status, statusText: response.statusText, headers: response.headers,
+      })
+    }
+  })
 
   const createSession = async () => {
     const sessionId = await page.evaluate(async () => {
@@ -170,6 +193,10 @@ test('Sidebar collapse prunes nested expansion state without clearing unrelated 
     const row = document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)
     return row?.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded') || null
   }, sessionId)
+  const disclosureText = sessionId => page.evaluate(id => {
+    const row = document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)
+    return row?.querySelector('button[aria-expanded]')?.textContent?.trim() || null
+  }, sessionId)
   const waitForBranchReplay = (includedIds, excludedIds = []) => page.waitForResponse(response => {
     const request = response.request()
     if (request.method() !== 'POST' || !new URL(request.url()).pathname.endsWith('/api/session-list/children')) return false
@@ -188,6 +215,11 @@ test('Sidebar collapse prunes nested expansion state without clearing unrelated 
     const grandchild = await createSession()
     const unrelatedRoot = await createSession()
     const unrelatedChild = await createSession()
+    await page.evaluate(({ root, child, grandchild, unrelatedRoot, unrelatedChild }) => {
+      window.__foxwarmE2eChildTotals = {
+        [root]: 1, [child]: 1, [grandchild]: 0, [unrelatedRoot]: 1, [unrelatedChild]: 0,
+      }
+    }, { root, child, grandchild, unrelatedRoot, unrelatedChild })
     await moveSession(child, root)
     await moveSession(grandchild, child)
     await moveSession(unrelatedChild, unrelatedRoot)
@@ -198,16 +230,20 @@ test('Sidebar collapse prunes nested expansion state without clearing unrelated 
     await clickDisclosure(unrelatedRoot)
     await replay
     await waitForRow(unrelatedChild)
+    assert.equal(await disclosureText(unrelatedChild), null, 'a true leaf has no disclosure before any child query')
 
     replay = waitForBranchReplay([root, unrelatedRoot])
     await clickDisclosure(root)
     await replay
     await waitForRow(child)
+    assert.match(await disclosureText(child), /1 child/, 'the child has an exact numbered disclosure before nested expansion')
+    assert.equal(await rowExists(grandchild), false)
 
     replay = waitForBranchReplay([root, child, unrelatedRoot])
     await clickDisclosure(child)
     await replay
     await waitForRow(grandchild)
+    assert.equal(await disclosureText(grandchild), null)
 
     replay = waitForBranchReplay([unrelatedRoot], [root, child])
     await clickDisclosure(root)

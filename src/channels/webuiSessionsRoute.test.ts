@@ -8,7 +8,7 @@ test.before(() => {
 import assert from 'node:assert/strict';
 import { HttpServer, setHttpServer } from '../httpServer';
 import * as sessionManager from '../sessionManager';
-import { setWebUiDeleteLifecycleTestHookForTests, WebUIChannel } from './webuiChannel';
+import { getBoundedSessionListChildTotal, setWebUiDeleteLifecycleTestHookForTests, WebUIChannel } from './webuiChannel';
 import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload } from '../session/metadataStore';
 import { markSessionCatalogStub } from '../sessionRuntimeState';
 import type { Session } from '../types';
@@ -193,6 +193,7 @@ test('bounded session-list routes preserve tree modes, focus paths, aliases, sea
   await configure(ids.dangling, { parentSessionId: `${prefix}_missing`, meta: { lastMessageTime: now - 5 } });
   await configure(ids.volatile, { meta: { lastMessageTime: 1 } });
   const volatile = sessionManager.getAllSessions().get(ids.volatile)!; volatile.meta.lastMessageTime = now + 1000; volatile.busy = true;
+  const deepBusy = sessionManager.getAllSessions().get(ids.deep)!;
 
   const port = 34900 + Math.floor(Math.random() * 300); const token = 'bounded-list-token';
   const server = new HttpServer(port, token); setHttpServer(server);
@@ -200,19 +201,34 @@ test('bounded session-list routes preserve tree modes, focus paths, aliases, sea
   const request = (route: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${port}${route}`, {
     ...init, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...init.headers },
   });
+  const assertEveryProjectedRowHasChildTotal = (value: any) => {
+    const rows: any[] = [];
+    const collect = (entry: any) => {
+      if (Array.isArray(entry)) { entry.forEach(collect); return; }
+      if (!entry || typeof entry !== 'object') return;
+      if (typeof entry.id === 'string' && entry.runtimeState && entry.tokenUsage) { rows.push(entry); return; }
+      Object.values(entry).forEach(collect);
+    };
+    collect(value); assert.ok(rows.length > 0); assert.ok(rows.every(row => Number.isInteger(row.childTotal) && row.childTotal >= 0));
+  };
   try {
     let response = await request(`/api/session-list/sidebar?mode=default&limit=100&childLimit=1&focusSessionId=${encodeURIComponent(ids.deep)}`);
     assert.equal(response.status, 200); const sidebar = await response.json() as any;
+    assertEveryProjectedRowHasChildTotal(sidebar);
     assert.equal(sidebar.version, 1); assert.ok(sidebar.sessions.some((item: any) => item.id === ids.root));
     assert.ok(sidebar.sessions.some((item: any) => item.id === ids.pinned), 'pinned child is presentation-elevated');
     assert.ok(sidebar.sessions.some((item: any) => item.id === ids.dangling), 'dangling canonical parent projects as root');
     assert.equal(sidebar.sessions.find((item: any) => item.id === ids.pinned).parentSessionId, ids.root, 'elevation does not mutate real parent');
     assert.equal(sidebar.sessions.find((item: any) => item.id === ids.dangling).parentSessionId, null);
+    assert.equal(sidebar.sessions.find((item: any) => item.id === ids.root).childTotal, 2, 'Sidebar root count excludes the elevated pinned child');
+    assert.equal(sidebar.sessions.find((item: any) => item.id === ids.pinned).childTotal, 0, 'true leaves are explicit');
     assert.deepEqual(sidebar.presentationPaths[ids.deep], [ids.root, ids.child, ids.deep]);
     assert.deepEqual(sidebar.forcedChildren[ids.root], [ids.child]);
     assert.ok(sidebar.pathContext.some((item: any) => item.session?.id === ids.root));
     const rootChildren = sidebar.children.find((item: any) => item.parentSessionId === ids.root);
     assert.equal(rootChildren.sessions.length, 1); assert.equal(rootChildren.total, 2); assert.ok(rootChildren.nextCursor);
+    assert.equal(rootChildren.sessions[0].id, ids.child); assert.equal(rootChildren.sessions[0].childTotal, 1,
+      'a returned child carries its own direct child count before nested expansion');
 
     response = await request('/api/session-list/sidebar?mode=flat-time&limit=100');
     const flat = await response.json() as any; assert.ok(flat.sessions.some((item: any) => item.id === ids.deep), 'flat mode ignores real parents');
@@ -223,20 +239,46 @@ test('bounded session-list routes preserve tree modes, focus paths, aliases, sea
     response = await request('/api/session-list/children', { method: 'POST', body: JSON.stringify({ mode: 'default', limit: 10,
       parents: [{ parentSessionId: ids.root, cursor: rootChildren.nextCursor }] }) });
     assert.equal(response.status, 200); const continued = await response.json() as any;
+    assertEveryProjectedRowHasChildTotal(continued);
     assert.deepEqual(continued.children[0].sessions.map((item: any) => item.id), [ids.child2]);
+    assert.equal(continued.children[0].sessions[0].childTotal, 0);
 
     response = await request('/api/session-list/children', { method: 'POST', body: JSON.stringify({ mode: 'default', limit: 10,
       parents: [{ parentSessionId: ids.child }] }) });
     assert.equal(response.status, 200); const nested = await response.json() as any;
+    assertEveryProjectedRowHasChildTotal(nested);
     assert.deepEqual(nested.children[0].sessions.map((item: any) => item.id), [ids.deep],
       'the bounded child route supports root -> child -> grandchild expansion');
+    assert.equal(nested.children[0].sessions[0].childTotal, 0);
 
-    response = await request('/api/session-list/by-id', { method: 'POST', body: JSON.stringify({ ids: [`${prefix}_unique`, `${prefix}_shared`], includePaths: true }) });
+    response = await request('/api/session-list/by-id', { method: 'POST', body: JSON.stringify({ ids: [`${prefix}_unique`, `${prefix}_shared`, ids.child, ids.deep], includePaths: true }) });
     const byId = await response.json() as any; assert.equal(byId.results[0].resolution.kind, 'alias');
+    assertEveryProjectedRowHasChildTotal(byId);
     assert.equal(byId.results[0].session.id, ids.root); assert.equal(byId.results[1].resolution.kind, 'ambiguous');
+    assert.equal(byId.results[0].session.childTotal, 2); assert.equal(byId.results[2].session.childTotal, 1);
+    assert.equal(byId.results[3].session.childTotal, 0);
 
     response = await request(`/api/session-list/search?q=${encodeURIComponent('search display')}&limit=10`);
-    const search = await response.json() as any; assert.ok(search.sessions.some((item: any) => item.id === ids.root));
+    const search = await response.json() as any; assertEveryProjectedRowHasChildTotal(search);
+    assert.equal(search.sessions.find((item: any) => item.id === ids.root)?.childTotal, 2);
+
+    const child2 = sessionManager.getAllSessions().get(ids.child2)!; child2.pinned = true; await sessionManager.saveSessionCatalogEntries([ids.child2]);
+    response = await request('/api/session-list/sidebar?mode=default&limit=100&childLimit=10');
+    const pinnedSidebar = await response.json() as any;
+    assert.equal(pinnedSidebar.sessions.find((item: any) => item.id === ids.root).childTotal, 1,
+      'pinning immediately removes the elevated child from the parent presentation count');
+    assert.equal(pinnedSidebar.sessions.find((item: any) => item.id === ids.child2).childTotal, 0);
+    child2.pinned = false; await sessionManager.saveSessionCatalogEntries([ids.child2]);
+
+    deepBusy.parentSessionId = ids.child2; await sessionManager.saveSessionCatalogEntries([ids.deep]);
+    response = await request('/api/session-list/children', { method: 'POST', body: JSON.stringify({ mode: 'default', limit: 10,
+      parents: [{ parentSessionId: ids.child }, { parentSessionId: ids.child2 }] }) });
+    const reparented = await response.json() as any;
+    assert.equal(reparented.children.find((item: any) => item.parentSessionId === ids.child).total, 0);
+    const child2Children = reparented.children.find((item: any) => item.parentSessionId === ids.child2);
+    assert.equal(child2Children.total, 1); assert.equal(child2Children.sessions[0].id, ids.deep);
+    assert.equal(child2Children.sessions[0].childTotal, 0);
+    deepBusy.parentSessionId = ids.child; await sessionManager.saveSessionCatalogEntries([ids.deep]);
 
     await configure(cross.childB, { parentSessionId: ids.root, meta: { lastMessageTime: now - 10 } });
     const crossB = sessionManager.getAllSessions().get(cross.childB)!; crossB.agent = `${agent}_b`; await sessionManager.saveSessionCatalogEntries([cross.childB]);
@@ -260,7 +302,7 @@ test('bounded session-list routes preserve tree modes, focus paths, aliases, sea
 
     response = await request(`/api/session-list/descendants/${encodeURIComponent(ids.root)}?limit=10`);
     const descendants = await response.json() as any; assert.equal(descendants.previewOnly, true); assert.equal(descendants.total, 6);
-    const deepBusy = sessionManager.getAllSessions().get(ids.deep)!; deepBusy.busy = true; await sessionManager.saveSessionCatalogEntries([ids.deep]);
+    deepBusy.busy = true; await sessionManager.saveSessionCatalogEntries([ids.deep]);
     response = await request('/api/session-list/descendant-activity', { method: 'POST', body: JSON.stringify({ ids: [ids.root, `${prefix}_unique`, ids.child, ids.deep] }) });
     const activity = await response.json() as any;
     assert.equal(activity.results.find((item: any) => item.requestedId === `${prefix}_unique`).sessionId, ids.root);
@@ -297,6 +339,12 @@ test('bounded session-list routes preserve tree modes, focus paths, aliases, sea
     volatile.busy = false;
     for (const id of [cross.deepA, cross.childB, ids.deep, ids.child, ids.child2, ids.pinned, ids.dangling, ids.volatile, ids.root]) await sessionManager.deleteSession(id).catch(() => {});
   }
+});
+
+test('bounded child-count lookup ignores inherited Object.prototype properties', () => {
+  assert.equal(getBoundedSessionListChildTotal({}, 'toString'), 0);
+  assert.equal(typeof getBoundedSessionListChildTotal({}, 'toString'), 'number');
+  assert.equal(getBoundedSessionListChildTotal({ toString: 2 }, 'toString'), 2);
 });
 
 test('sidebar focus query keeps comma IDs, repeatable focus values, and a complete 105-deep render path', async () => {
@@ -1019,7 +1067,9 @@ test('global SSE sends bounded watched-row deltas plus catalog invalidation with
     assert.equal((await sse.read()).type, 'connected');
     const initial = await sse.read(); assert.equal(initial.type, 'session-list-delta');
     assert.deepEqual(initial.sessions.map((item: any) => item.id), [sessionId]); assert.equal(initial.sessions[0].history, undefined); assert.equal(initial.sessions[0].busy, false);
+    assert.equal(initial.sessions[0].childTotal, 0, 'initial watched-row projection carries the exact child count');
     const delta = await sse.read(); assert.equal(delta.type, 'session-list-delta'); assert.equal(delta.sessions[0].busy, true);
+    assert.equal(delta.sessions[0].childTotal, undefined, 'state-only deltas do not repeat unchanged topology counts');
     channel.broadcastSessionListUpdate();
     const invalidation = await sse.read(); assert.equal(invalidation.type, 'sessions-updated'); assert.equal(invalidation.catalogInvalidated, true);
     assert.equal(typeof invalidation.eventId, 'number'); assert.equal(typeof invalidation.presentationRevision, 'string');

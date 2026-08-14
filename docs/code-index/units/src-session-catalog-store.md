@@ -36,6 +36,9 @@ The cross-module admission and scaling policy is canonical in
 - `listPresentationPage()` / `listChildrenPreviews()` /
   `listChildrenContinuations()` — indexed mode-aware root/flat/child keyset
   queries and one compound request of bounded per-parent child seeks.
+- `getPresentationChildCounts()` — one bounded maintained-count lookup for the
+  direct children of returned list rows; Sidebar counts exclude elevated pinned
+  children, while agent-scoped Architecture counts retain real same-agent edges.
 - `listAgentForestPage()` — indexed Architecture roots where canonical parent
   is absent or belongs to another agent; agent children retain real relations.
 - `getMany()` / `resolveMany()` / `getPresentationPaths()` — bounded exact,

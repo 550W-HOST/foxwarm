@@ -427,6 +427,12 @@ test('bounded presentation queries preserve modes, pinned roots, canonical paths
   assert.equal(fixture.store.listPresentationPage({ mode: 'time', roots: true, limit: 20 }).rows.some(row => row.id === 'dangling'), true);
   const previews = fixture.store.listChildrenPreviews(['root'], 'default', 1)[0];
   assert.equal(previews.total, 2); assert.deepEqual(previews.rows.map(row => row.id), ['child-a']); assert.ok(previews.nextKey);
+  assert.deepEqual(fixture.store.getPresentationChildCounts(['root','child-a','deep','pinned-child']), {
+    root: 2, 'child-a': 1,
+  }, 'Sidebar counts exclude pinned children and omit zero rows');
+  assert.deepEqual(fixture.store.getPresentationChildCounts(['root','child-a'], 'main'), {
+    root: 3, 'child-a': 1,
+  }, 'agent-forest counts preserve pinned children in their real relation');
   const continuation = fixture.store.listChildrenContinuations([{ parentSessionId: 'root', after: previews.nextKey }], 'default', 10)[0];
   assert.deepEqual(continuation.rows.map(row => row.id), ['child-b']);
   const childB = fixture.store.get('child-b')!; childB.pinned = true; fixture.store.upsertMany([childB]);

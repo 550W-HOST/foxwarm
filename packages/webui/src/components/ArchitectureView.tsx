@@ -309,8 +309,6 @@ export default function ArchitectureView({
     for (const [parent, branch] of branches) { ids.set(parent, branch.items.map(row => row.id)); totals.set(parent, branch.total); cursors.set(parent, branch.nextCursor); rows.push(...branch.items) }
     rows.push(...focus.rows)
     const forced = mergeForcedPresentationPath(roots.rootIds, ids, focus.path); roots.rootIds = forced.rootIds; for (const [parent, children] of forced.childIds) ids.set(parent, children)
-    const focusRows = new Map(focus.rows.map(row => [row.id, row]))
-    for (const parent of focus.path.slice(0, -1)) { const total = focusRows.get(parent)?.childTotal; if (typeof total === 'number') totals.set(parent, total) }
     const reachable = new Set(roots.rootIds); let changed = true
     while (changed) { changed = false; for (const [parent, children] of ids) if (reachable.has(parent)) for (const child of children) if (!reachable.has(child)) { reachable.add(child); changed = true } }
     for (const parent of [...branchTargets.keys()]) if (!reachable.has(parent)) { branchTargets.delete(parent); ids.delete(parent); totals.delete(parent); cursors.delete(parent) }

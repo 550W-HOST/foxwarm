@@ -37,6 +37,7 @@ Renders a bounded hierarchical architecture view with global catalog summary sta
 - Computes active/busy summary stats from canonical runtime state (`requesting-model` / `running-tool`) with legacy `busy` fallback, and displays richer status text such as `tool: exec` or `waiting: sessions 1/2` when available.
 - Maintains local state for: expanded nodes (`expandedSessions`), "show more" children toggles, selected agent filter, and a `now` timestamp that ticks every second for live busy-duration updates
 - Agent selection asks the backend for the canonical same-agent forest; it does not infer a complete forest from partial browser rows.
+- Architecture branch totals come only from its real-forest root/child queries. Exact focus rows may also carry Sidebar presentation counts for shared DTO compatibility, but Architecture does not use those counts to redefine pinned or cross-agent edges.
 - `SessionNode` recursively renders children with configurable preview counts (10 for root, 8 for nested) and a "show more" toggle
 - Uses `useEffect` with a 1-second interval to keep busy durations updating in real time
 - The 1-second timer runs while any session is active according to runtime state, so active durations update for model requests and tool execution without treating `waiting` as busy.

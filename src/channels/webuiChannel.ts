@@ -594,7 +594,7 @@ function buildWebUiSessionState(session: any) {
   };
 }
 
-function buildWebUiSessionListProjection(session: SessionRuntimeSessionDto) {
+function buildWebUiSessionListProjection(session: SessionRuntimeSessionDto, childTotal?: number) {
   return {
     ...buildWebUiSessionState(session),
     lastMessageTime: session.lastMessageTime,
@@ -606,15 +606,36 @@ function buildWebUiSessionListProjection(session: SessionRuntimeSessionDto) {
       inputTokens: session.tokenUsage.inputTokens,
       outputTokens: session.tokenUsage.outputTokens,
     },
+    ...(typeof childTotal === 'number' ? { childTotal } : {}),
   };
 }
 
-function mapSessionListQueryPayload(value: any): any {
-  if (Array.isArray(value)) return value.map(mapSessionListQueryPayload);
+function collectSessionListProjectionIds(value: any, ids = new Set<string>()): Set<string> {
+  if (Array.isArray(value)) { for (const item of value) collectSessionListProjectionIds(item, ids); return ids; }
+  if (!value || typeof value !== 'object') return ids;
+  if (typeof value.id === 'string' && value.runtimeState && value.tokenUsage) ids.add(value.id);
+  else for (const entry of Object.values(value)) collectSessionListProjectionIds(entry, ids);
+  return ids;
+}
+
+export function getBoundedSessionListChildTotal(childTotals: Record<string, number>, sessionId: string): number {
+  return Object.prototype.hasOwnProperty.call(childTotals, sessionId) ? childTotals[sessionId] : 0;
+}
+
+function mapSessionListQueryPayload(value: any, childTotals?: Record<string, number>): any {
+  if (Array.isArray(value)) return value.map(entry => mapSessionListQueryPayload(entry, childTotals));
   if (!value || typeof value !== 'object') return value;
-  if (typeof value.id === 'string' && value.runtimeState && value.tokenUsage) return buildWebUiSessionListProjection(value);
+  if (typeof value.id === 'string' && value.runtimeState && value.tokenUsage) {
+    return buildWebUiSessionListProjection(value, childTotals ? getBoundedSessionListChildTotal(childTotals, value.id) : undefined);
+  }
   return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'rows')
-    .map(([key, entry]) => [key, mapSessionListQueryPayload(entry)]));
+    .map(([key, entry]) => [key, mapSessionListQueryPayload(entry, childTotals)]));
+}
+
+function mapBoundedSessionListQueryPayload(value: any, agent?: string): any {
+  const ids = [...collectSessionListProjectionIds(value)];
+  const childTotals = sessionCatalogStore.getPresentationChildCounts(ids, agent);
+  return mapSessionListQueryPayload(value, childTotals);
 }
 
 function sendSessionListQueryError(res: express.Response, error: any, logMessage: string): void {
@@ -1326,7 +1347,7 @@ export class WebUIChannel implements Channel {
             for (let index = 0; index < pathContextIds.length; index += 100) {
               pathContext.results.push(...(await queryExactSessions(pathContextIds.slice(index, index + 100), false)).results);
             }
-            res.json(mapSessionListQueryPayload({ ...roots, children: children.children, focus: focus.results,
+            res.json(mapBoundedSessionListQueryPayload({ ...roots, children: children.children, focus: focus.results,
               presentationPaths: focus.paths || {}, pathContext: pathContext.results, forcedChildren }));
           } catch (e: any) {
             sendSessionListQueryError(res, e, 'Failed session-list sidebar query');
@@ -1347,7 +1368,7 @@ export class WebUIChannel implements Channel {
             const agent = req.body.agent as string | undefined;
             if (agent && mode !== 'time') return res.status(400).json({ error: 'agent-scoped children require time mode.', code: 'SESSION_LIST_MODE_INVALID' });
             const result = await queryChildrenContinuations(req.body?.parents, mode, limit, agent);
-            res.json(mapSessionListQueryPayload(result));
+            res.json(mapBoundedSessionListQueryPayload(result, agent));
           } catch (e: any) {
             sendSessionListQueryError(res, e, 'Failed session-list children query');
           }
@@ -1362,7 +1383,7 @@ export class WebUIChannel implements Channel {
             if (req.body.includePaths !== undefined && typeof req.body.includePaths !== 'boolean') {
               return res.status(400).json({ error: 'includePaths must be boolean.', code: 'SESSION_LIST_DTO_INVALID' });
             }
-            res.json(mapSessionListQueryPayload(await queryExactSessions(req.body.ids, req.body.includePaths === true)));
+            res.json(mapBoundedSessionListQueryPayload(await queryExactSessions(req.body.ids, req.body.includePaths === true)));
           }
           catch (e: any) {
             sendSessionListQueryError(res, e, 'Failed session-list by-id query');
@@ -1446,7 +1467,8 @@ export class WebUIChannel implements Channel {
             const matches = sessions.filter((session: any) => [session.displayName,session.id,...(session.aliases || []),session.agent,
               session.currentNode,session.cwd,session.model,session.modelKey,session.defaultModelKey,session.childModelDefault,
               session.effectiveChildModelKey].filter(value => typeof value === 'string' && value.trim()).some(value => value.toLowerCase().includes(normalized)));
-            res.json({ version: 1, query, sessions: matches.slice(0, limit), hasMore: matches.length > limit, candidateCount: sessions.length });
+            res.json(mapBoundedSessionListQueryPayload({ version: 1, query, sessions: matches.slice(0, limit),
+              hasMore: matches.length > limit, candidateCount: sessions.length }));
           } catch (e: any) {
             sendSessionListQueryError(res, e, 'Failed session-list search');
           }
@@ -2528,7 +2550,8 @@ export class WebUIChannel implements Channel {
           if (requestedSessionIds.length) {
             const initial = await queryExactSessions(requestedSessionIds, false);
             if (closed) return;
-            const sessions = initial.results.flatMap(item => item.session ? [mapSessionListQueryPayload(item.session)] : []);
+            const mappedInitial = mapBoundedSessionListQueryPayload(initial);
+            const sessions = mappedInitial.results.flatMap((item: any) => item.session ? [item.session] : []);
             const deletedIds = initial.results.filter(item => !item.session).map(item => item.requestedId);
             const canonicalSubscriptions = this.globalSseSessionIds.get(res)!;
             for (const session of sessions) if (typeof session.id === 'string') canonicalSubscriptions.add(session.id);

@@ -55,6 +55,11 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
   focus paths, exact/alias batches, Architecture summaries, descendant preview,
   and explicit JavaScript-compatible search. It does not hydrate semantic
   history or replace the legacy all-list route.
+- Sidebar root/child, exact/by-ID, forced-focus, search, and initial watched-row
+  projections attach numeric direct Sidebar child counts through one maintained
+  catalog-count batch over the rows in that response. Later state-only SSE
+  deltas may omit the unchanged count; the browser preserves it until catalog
+  invalidation refetches topology.
 - Sidebar focus is a repeatable capped `focusSessionId` query (commas remain
   literal ID content), with complete chunked ancestor context. New route DTOs
   reject unknown keys, wrong scalar/container types, and out-of-bound values;

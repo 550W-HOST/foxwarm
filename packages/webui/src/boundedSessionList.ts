@@ -3,7 +3,7 @@ import { API_BASE_PATH } from './config'
 import type { Session } from './components/SessionListCore'
 import { createSessionListRefreshScheduler, requestSessionListStreamOpenResync, type SessionListRefreshScheduler } from './sessionListRefresh'
 import type { SessionListOrderMode } from './sessionListPresentation'
-import { applyExactMissTombstone, captureExactAliasKeys, chunkBoundedIds, createEpochRows, mergeDeltaRows, mergeHttpRows, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from './boundedSessionReplay'
+import { applyExactMissTombstone, captureExactAliasKeys, chunkBoundedIds, createEpochRows, mergeDeltaRows, mergeHttpRows, preserveKnownChildTotals, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from './boundedSessionReplay'
 import { dispatchSessionIdleDeleted, getSessionIdleUnreadIds, SESSION_IDLE_UNREAD_EVENT } from './sessionIdleAttention'
 
 export interface BoundedChildPage { parentSessionId: string; ids: string[]; total: number; nextCursor: string | null }
@@ -159,7 +159,7 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
       const params = new URLSearchParams(); controller.batch.forEach(id => params.append('sessionId', id)); const queryString = params.toString()
       const source = new EventSource(`${API_BASE_PATH}/sessions/stream${queryString ? `?${queryString}` : ''}`); controller.source = source
       source.onopen = () => { controller.delay = 1000; requestSessionListStreamOpenResync(schedulerRef.current) }
-      source.onmessage = event => { try { const data = JSON.parse(event.data); if (data.type === 'session-list-delta') { const deletedIds = Array.isArray(data.deletedIds) ? data.deletedIds.filter((value: unknown): value is string => typeof value === 'string') : []; mergeDeltaRows(rowStoreRef.current, data.sessions || [], deletedIds); dispatchSessionIdleDeleted(deletedIds); const next = { ...stateRef.current, rows: new Map(rowStoreRef.current.rows) }; stateRef.current = next; setState(next) } if (data.type === 'sessions-updated' || data.type === 'session-list-invalidated') handleInvalidation(data) } catch {} }
+      source.onmessage = event => { try { const data = JSON.parse(event.data); if (data.type === 'session-list-delta') { const deletedIds = Array.isArray(data.deletedIds) ? data.deletedIds.filter((value: unknown): value is string => typeof value === 'string') : []; mergeDeltaRows(rowStoreRef.current, preserveKnownChildTotals(rowStoreRef.current.rows, data.sessions || []), deletedIds); dispatchSessionIdleDeleted(deletedIds); const next = { ...stateRef.current, rows: new Map(rowStoreRef.current.rows) }; stateRef.current = next; setState(next) } if (data.type === 'sessions-updated' || data.type === 'session-list-invalidated') handleInvalidation(data) } catch {} }
       source.onerror = () => { source.close(); if (disposed) return; controller.timer = window.setTimeout(() => { invalidate(); connect(controller); controller.delay = Math.min(controller.delay * 2, 30000) }, controller.delay) }
     }
     controllers.forEach(connect)

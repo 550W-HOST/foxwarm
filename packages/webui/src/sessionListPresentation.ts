@@ -12,16 +12,16 @@ export function getSessionListChildDisclosure(options: {
   bounded: boolean
   loadedCount: number
   boundedTotal?: number
-  allowUnknown: boolean
+  itemTotal?: number
+  allowTree: boolean
 }): { total: number | null; canExpand: boolean } {
   if (!options.bounded) {
     return { total: options.loadedCount, canExpand: options.loadedCount > 0 }
   }
-  if (typeof options.boundedTotal === 'number') {
-    const total = Math.max(0, options.boundedTotal)
-    return { total, canExpand: total > 0 }
-  }
-  return { total: null, canExpand: options.allowUnknown }
+  const rawTotal = typeof options.boundedTotal === 'number' ? options.boundedTotal : options.itemTotal
+  if (typeof rawTotal !== 'number') return { total: null, canExpand: false }
+  const total = Math.max(0, rawTotal)
+  return { total, canExpand: options.allowTree && total > 0 }
 }
 
 export function collapseSessionListExpandedBranch(
