@@ -73,7 +73,7 @@ A collection of small, reusable React UI components and utility functions for th
 
 ## Behavior
 
-- `ContextMenu` uses `createPortal` to render outside the component tree, calculates position with `useLayoutEffect`, and auto-dismisses on outside click, Escape, scroll, or resize.
+- `ContextMenu` uses `createPortal` to render outside the component tree, calculates position with `useLayoutEffect`, and auto-dismisses on outside click, Escape, or resize. Captured scroll keeps point-anchored menus open at their viewport position and dismisses rect-anchored menus whose trigger can move.
 - `CollapsedSidebar` filters to unarchived root sessions, shows at most 20 avatars, highlights the active session, displays the canonical runtime-state dot at top-right, and independently displays unread idle completion at bottom-right with accessible title/name text. The unread contract is canonical in [webui-session-list](./webui-session-list.md#design-decisions).
 - `ReasoningCard` debounces content updates, detects OpenAI-style bold summary titles for collapsed preview, and renders full markdown when expanded. Its chrome comes from the shared `ModelThreadCard` owned by [webui-chat-timeline](./webui-chat-timeline.md).
 - `ReasoningCard` exposes semantic CSS hooks (`foxwarm-reasoning-card`, `foxwarm-reasoning-card-*`, `foxwarm-reasoning-thread-line`, `foxwarm-reasoning-header`, `foxwarm-reasoning-tag`, `foxwarm-reasoning-preview`, `foxwarm-reasoning-body`) so optional UI style layers can retheme reasoning surfaces without duplicating reasoning rendering logic.
@@ -96,3 +96,9 @@ A collection of small, reusable React UI components and utility functions for th
 - `ProcessingStatus` and `ImageParts` plug into the chat view to show session activity and inline images.
 - `ContentHeader` is a generic layout primitive used across detail/settings pages.
 - `inferSimpleLanguage` / `getMonacoLanguage` are shared by both `SyntaxHighlightedText` and the Monaco-based code editor elsewhere in the app.
+
+## Design Decisions
+
+### D-context-menu-scroll-policy
+
+[2026-08-14] Point-anchored context menus keep their captured viewport position through scroll events, including unrelated background streaming scroll. Rect-anchored menus close on scroll because their trigger geometry can move. Both forms continue to close on outside interaction, Escape, and viewport resize.

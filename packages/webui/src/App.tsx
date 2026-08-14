@@ -503,7 +503,8 @@ function App() {
   const [draggingItem, setDraggingItem] = useState<{ type: 'tab' | 'session'; id: string; title: string } | null>(null)
 
   const pendingRouteTabIdRef = useRef<string | null>(null)
-  const closingRouteTabIdRef = useRef<string | null>(null)
+  const currentRouteTabIdRef = useRef<string | null>(route.tabId)
+  const closingRouteTabIdsRef = useRef<Set<string>>(new Set())
   const didInitializeEmptyWorkbenchRef = useRef(false)
   const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
@@ -838,9 +839,11 @@ function App() {
     }
   }, [route, tabsById])
 
+  currentRouteTabIdRef.current = route.tabId
+
   useEffect(() => {
-    if (closingRouteTabIdRef.current && route.tabId !== closingRouteTabIdRef.current) {
-      closingRouteTabIdRef.current = null
+    if (!route.tabId || !closingRouteTabIdsRef.current.has(route.tabId)) {
+      closingRouteTabIdsRef.current.clear()
     }
   }, [route.tabId])
 
@@ -894,6 +897,7 @@ function App() {
 
   const navigateToTab = (tabId: string, origin: SessionNavigationOrigin = 'user') => {
     pendingRouteTabIdRef.current = tabId
+    currentRouteTabIdRef.current = tabId
     activateTab(tabId)
     setRoute({ view: 'tab', tabId })
     setTabHash(tabId)
@@ -1122,7 +1126,7 @@ function App() {
     navigateToTab(tab.id)
   }
 
-  const closeWorkbenchTab = async (tabId: string) => {
+  const closeWorkbenchTab = async (tabId: string, options?: { deferRoute?: boolean }) => {
     const targetTab = tabsById[tabId] || null
     if (targetTab?.type === 'setup' && setupOobe) {
       return
@@ -1146,14 +1150,18 @@ function App() {
       setVscodeFrameStarted((started) => selectCodeFrameStarted(started, [], { explicitlyClosed: true }))
     }
 
-    if (route.tabId === tabId) {
+    if (currentRouteTabIdRef.current === tabId) {
       // Zustand publishes removeTab synchronously, before React's route state
       // update is committed. Mark this route as intentionally closing so the
       // route-restoration effect cannot recreate the tab in that brief render.
-      closingRouteTabIdRef.current = tabId
+      closingRouteTabIdsRef.current.add(tabId)
     }
 
     removeTab(tabId)
+
+    if (options?.deferRoute) {
+      return
+    }
 
     if (route.tabId === tabId || wasFocusedActiveTab) {
       const stateAfterClose = useWorkbenchStore.getState()
@@ -1168,6 +1176,7 @@ function App() {
         navigateToTab(nextTabId)
       } else {
         pendingRouteTabIdRef.current = null
+        currentRouteTabIdRef.current = null
         localStorage.removeItem(LAST_ACTIVE_TAB_STORAGE_KEY)
         setRoute({ view: 'tab', tabId: null })
         setTabHash(null)
@@ -1224,8 +1233,34 @@ function App() {
       .filter((tab): tab is WorkbenchTab => !!tab)
       .filter(predicate)
 
-    for (const tab of tabsToClose) {
-      await closeWorkbenchTab(tab.id)
+    tabsToClose.forEach((tab) => {
+      if (tab.type !== 'setup' || !setupOobe) {
+        closingRouteTabIdsRef.current.add(tab.id)
+      }
+    })
+
+    try {
+      for (const tab of tabsToClose) {
+        await closeWorkbenchTab(tab.id, { deferRoute: true })
+      }
+    } finally {
+      const stateAfterClose = useWorkbenchStore.getState()
+      const focusedPaneAfterClose = stateAfterClose.focusedPaneId
+        ? findPaneNode(stateAfterClose.root, stateAfterClose.focusedPaneId)
+        : null
+      const nextTabId = focusedPaneAfterClose?.activeTabId
+        || getPaneNodes(stateAfterClose.root)[0]?.activeTabId
+        || null
+
+      if (!nextTabId) {
+        pendingRouteTabIdRef.current = null
+        currentRouteTabIdRef.current = null
+        localStorage.removeItem(LAST_ACTIVE_TAB_STORAGE_KEY)
+        setRoute({ view: 'tab', tabId: null })
+        setTabHash(null)
+      } else {
+        navigateToTab(nextTabId)
+      }
     }
   }
 
@@ -1394,7 +1429,7 @@ function App() {
       return
     }
 
-    if (closingRouteTabIdRef.current === route.tabId) {
+    if (closingRouteTabIdsRef.current.has(route.tabId)) {
       return
     }
 

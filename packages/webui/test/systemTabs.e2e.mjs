@@ -136,6 +136,68 @@ test('model popup refreshes models and opens the singleton Setup models editor',
   assert.ok(modelListRequestCount > previousRequests)
 })
 
+test('Close all directly empties a multi-tab pane without route hydration', async () => {
+  const closeAllPage = await browser.newPage()
+  await closeAllPage.setViewport({ width: 1440, height: 900 })
+  await closeAllPage.evaluateOnNewDocument(() => {
+    const paneId = 'pane-e2e-close-all'
+    localStorage.setItem('foxwarm_workbench_state_v4', JSON.stringify({
+      state: {
+        version: 4,
+        tabsById: {
+          'system:setup': { id: 'system:setup', type: 'setup', title: 'Setup' },
+        },
+        root: { id: paneId, kind: 'pane', tabIds: ['system:setup'], activeTabId: 'system:setup' },
+        focusedPaneId: paneId,
+      },
+      version: 1,
+    }))
+    localStorage.removeItem('foxwarm_last_active_tab_v1')
+  })
+
+  try {
+    await closeAllPage.goto(`${baseUrl}/#token=${encodeURIComponent(authToken)}`, { waitUntil: 'networkidle2' })
+    await closeAllPage.waitForSelector('[data-tab-id="system:setup"]', { timeout: 15_000 })
+    await closeAllPage.click('button[title="Open agents overview"]')
+    await closeAllPage.waitForSelector('[data-tab-id="system:agents"]', { timeout: 15_000 })
+
+    const sessionId = 'e2e-close-all-session'
+    const chatTabId = `chat:${sessionId}`
+    await closeAllPage.evaluate((id) => { window.location.hash = `session/${encodeURIComponent(id)}` }, sessionId)
+    await closeAllPage.waitForSelector(`[data-tab-id=${JSON.stringify(chatTabId)}]`, { timeout: 15_000 })
+    await closeAllPage.click('[data-tab-id="system:agents"]')
+
+    assert.deepEqual(
+      await closeAllPage.$$eval('[data-pane-id="pane-e2e-close-all"] [data-tab-id]', (elements) => elements.map((element) => element.getAttribute('data-tab-id')).sort()),
+      ['chat:e2e-close-all-session', 'system:agents', 'system:setup'],
+    )
+
+    await closeAllPage.click('[data-tab-id="system:agents"]', { button: 'right' })
+    await closeAllPage.waitForSelector('[role="menu"]', { timeout: 5_000 })
+    const clicked = await closeAllPage.evaluate(() => {
+      const button = Array.from(document.querySelectorAll('[role="menu"] button'))
+        .find((element) => element.textContent?.trim() === 'Close all')
+      if (!(button instanceof HTMLButtonElement) || button.disabled) return false
+      button.click()
+      return true
+    })
+    assert.equal(clicked, true)
+
+    await closeAllPage.waitForFunction(() => {
+      const pane = document.querySelector('[data-pane-id="pane-e2e-close-all"]')
+      return !!pane
+        && pane.querySelectorAll('[data-tab-id]').length === 0
+        && /Empty pane/.test(pane.textContent || '')
+        && window.location.hash === ''
+        && localStorage.getItem('foxwarm_last_active_tab_v1') === null
+    }, { timeout: 5_000 })
+
+    assert.equal(await closeAllPage.$$eval('[data-tab-id]', (elements) => elements.length), 0)
+  } finally {
+    await closeAllPage.close()
+  }
+})
+
 test('tab context menu survives background scroll and bulk close actions remain distinct', async () => {
   await page.setViewport({ width: 1440, height: 900 })
   await page.evaluate(() => { window.location.hash = 'setup' })

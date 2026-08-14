@@ -74,7 +74,7 @@ Workbench store/layout, Sidebar, Chat, Architecture, Setup, terminal view, WebUI
 
 ### D-webui-app-route-close
 
-Advance the route/hash to the workbench fallback before a closed active tab can be rehydrated.
+[2026-08-14] App owns route publication for Workbench close actions. An ordinary active-tab close fences the routed tab before the synchronous store removal, then immediately publishes the store-selected fallback; when the final closable tab has no protected forced Setup fallback, the Workbench may remain empty for the rest of the current mount and App clears the hash plus last-active-tab preference. Bulk close pre-fences every closable target, runs the sequential per-tab resource and component close lifecycle with intermediate route/hash publication deferred, and publishes exactly one final store-selected fallback afterward. `Close others` therefore preserves its selected target, while `Close all` leaves an empty pane/hash/preference when no protected Setup tab remains. Reload or explicit navigation may create or restore a tab later.
 
 ### D-webui-app-global-list-gate
 

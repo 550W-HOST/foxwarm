@@ -76,6 +76,7 @@ Manages a multi-pane workbench UI with tabbed panels, drag-and-drop tab reorderi
 - Drag-and-drop uses `@dnd-kit` with sortable tabs within rows and droppable zones on pane edges/center for cross-pane moves and splits.
 - Wheel events on tab strips are intercepted to enable horizontal scrolling, and active tabs are auto-scrolled into view.
 - Context menus support keep (promote from preview), copy ID/path, close, and bulk close operations.
+- Bulk close operations still run each tab's ordinary resource and component close lifecycle. `Close others` preserves its target tab, while `Close all` may leave the pane empty and a forced Setup tab remains protected. Route fencing and final publication are canonical in [D-webui-app-route-close](./webui-app.md#d-webui-app-route-close).
 - Tab-level pinning has been removed. Persisted v4 and migrated v3 records may still contain a legacy `pinned` key; normalization accepts the record, strips that key, and future writes preserve the existing tab order in one row.
 - Persisted state normalization intentionally drops old `workspace` and `file` tab records; preserves current `vscode`, `agents`, and `setup` tabs (normalizing the Code title); and prunes panes that only referenced removed tab types.
 
