@@ -502,6 +502,8 @@ function App() {
   const [draggingItem, setDraggingItem] = useState<{ type: 'tab' | 'session'; id: string; title: string } | null>(null)
 
   const pendingRouteTabIdRef = useRef<string | null>(null)
+  const closingRouteTabIdRef = useRef<string | null>(null)
+  const didInitializeEmptyWorkbenchRef = useRef(false)
   const dragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
   const allTabs = useMemo(() => Object.values(tabsById), [tabsById])
@@ -824,6 +826,12 @@ function App() {
   }, [route, tabsById])
 
   useEffect(() => {
+    if (closingRouteTabIdRef.current && route.tabId !== closingRouteTabIdRef.current) {
+      closingRouteTabIdRef.current = null
+    }
+  }, [route.tabId])
+
+  useEffect(() => {
     if (focusedActiveTabId) {
       localStorage.setItem(LAST_ACTIVE_TAB_STORAGE_KEY, focusedActiveTabId)
     }
@@ -856,9 +864,14 @@ function App() {
   }, [route, tabsById, focusedActiveTabId])
 
   useEffect(() => {
-    if (flattenedTabIds.length > 0) return
+    if (flattenedTabIds.length > 0) {
+      didInitializeEmptyWorkbenchRef.current = true
+      return
+    }
+    if (didInitializeEmptyWorkbenchRef.current) return
     if (route.tabId && isRestorableRouteTabId(route.tabId)) return
 
+    didInitializeEmptyWorkbenchRef.current = true
     const fallbackSessionId = loadStoredLastVisitedSession()
     const tab = makeChatTab(fallbackSessionId, sessionTitle(fallbackSessionId), { preview: true })
     upsertTab(tab, { paneId: focusedPaneId || paneIds[0], activate: true })
@@ -1117,6 +1130,13 @@ function App() {
       setVscodeFrameStarted((started) => selectCodeFrameStarted(started, [], { explicitlyClosed: true }))
     }
 
+    if (route.tabId === tabId) {
+      // Zustand publishes removeTab synchronously, before React's route state
+      // update is committed. Mark this route as intentionally closing so the
+      // route-restoration effect cannot recreate the tab in that brief render.
+      closingRouteTabIdRef.current = tabId
+    }
+
     removeTab(tabId)
 
     if (route.tabId === tabId || wasFocusedActiveTab) {
@@ -1132,6 +1152,7 @@ function App() {
         navigateToTab(nextTabId)
       } else {
         pendingRouteTabIdRef.current = null
+        localStorage.removeItem(LAST_ACTIVE_TAB_STORAGE_KEY)
         setRoute({ view: 'tab', tabId: null })
         setTabHash(null)
       }
@@ -1354,6 +1375,10 @@ function App() {
 
   useEffect(() => {
     if (!route.tabId || tabsById[route.tabId]) {
+      return
+    }
+
+    if (closingRouteTabIdRef.current === route.tabId) {
       return
     }
 

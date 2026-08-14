@@ -29,6 +29,18 @@ async function closeTab(tabId) {
   assert.equal(await page.$(`[data-tab-id=${JSON.stringify(tabId)}]`), null)
 }
 
+async function clickContextMenuItem(label) {
+  await page.waitForSelector('[role="menu"]', { timeout: 5_000 })
+  const clicked = await page.evaluate((expectedLabel) => {
+    const button = Array.from(document.querySelectorAll('[role="menu"] button'))
+      .find((element) => element.textContent?.trim() === expectedLabel)
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return false
+    button.click()
+    return true
+  }, label)
+  assert.equal(clicked, true, `Expected enabled context-menu item: ${label}`)
+}
+
 before(async () => {
   authToken = (await readFile(tokenFile, 'utf8')).trim()
   browser = await puppeteer.launch({
@@ -122,6 +134,38 @@ test('model popup refreshes models and opens the singleton Setup models editor',
   }, { timeout: 15_000 })
   assert.equal(await page.$$eval('[data-tab-id="system:setup"]', (elements) => elements.length), 1)
   assert.ok(modelListRequestCount > previousRequests)
+})
+
+test('tab context menu survives background scroll and bulk close actions remain distinct', async () => {
+  await page.setViewport({ width: 1440, height: 900 })
+  await page.evaluate(() => { window.location.hash = 'setup' })
+  await waitForSystemTab('system:setup', 'Foxwarm Setup')
+  await page.click('button[title="Open agents overview"]')
+  await waitForSystemTab('system:agents', 'Agents')
+
+  await page.click('[data-tab-id="system:setup"]', { button: 'right' })
+  await page.waitForSelector('[role="menu"]', { timeout: 5_000 })
+  await page.evaluate(() => {
+    document.querySelector('[data-pane-id]')?.dispatchEvent(new Event('scroll'))
+  })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.ok(await page.$('[role="menu"]'), 'point-anchored tab menu should survive unrelated scroll events')
+
+  await clickContextMenuItem('Close others')
+  await page.waitForFunction(() => {
+    const target = document.querySelector('[data-tab-id="system:setup"]')
+    const pane = target?.closest('[data-pane-id]')
+    return !!pane && pane.querySelectorAll('[data-tab-id]').length === 1
+  }, { timeout: 5_000 })
+  assert.ok(await page.$('[data-tab-id="system:setup"]'))
+  assert.equal(await page.$('[data-tab-id="system:agents"]'), null)
+
+  await page.click('[data-tab-id="system:setup"]', { button: 'right' })
+  await clickContextMenuItem('Close all')
+  await page.waitForFunction(() => document.querySelectorAll('[data-tab-id]').length === 0, { timeout: 5_000 })
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  assert.equal(await page.$$eval('[data-tab-id]', (elements) => elements.length), 0)
+  assert.match(await page.$eval('[data-pane-id]', (element) => element.textContent || ''), /Empty pane/)
 })
 
 test('system tabs remain workbench tabs on a mobile viewport', async () => {

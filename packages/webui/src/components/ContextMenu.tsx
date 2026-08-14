@@ -68,24 +68,34 @@ export default function ContextMenu({
       }
     }
 
-    const handleViewportChange = () => {
+    const handleResize = () => {
       onClose()
+    }
+
+    const handleScroll = () => {
+      // A point-anchored context menu has a stable viewport position. Keep it
+      // open when unrelated content (for example, a streaming chat) scrolls
+      // underneath it. Rect-anchored menus still close because their trigger
+      // can move with the scrolled content.
+      if (preferredPlacement !== 'point') {
+        onClose()
+      }
     }
 
     document.addEventListener('mousedown', handlePointerDown)
     document.addEventListener('touchstart', handlePointerDown)
     document.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('resize', handleViewportChange)
-    window.addEventListener('scroll', handleViewportChange, true)
+    window.addEventListener('resize', handleResize)
+    window.addEventListener('scroll', handleScroll, true)
 
     return () => {
       document.removeEventListener('mousedown', handlePointerDown)
       document.removeEventListener('touchstart', handlePointerDown)
       document.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('resize', handleViewportChange)
-      window.removeEventListener('scroll', handleViewportChange, true)
+      window.removeEventListener('resize', handleResize)
+      window.removeEventListener('scroll', handleScroll, true)
     }
-  }, [open, onClose])
+  }, [open, onClose, preferredPlacement])
 
   useLayoutEffect(() => {
     if (!open || !menuRef.current) {
