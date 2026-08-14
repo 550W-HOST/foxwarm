@@ -5,7 +5,7 @@ import { logger } from '../common';
 import { SESSIONS_DIR, SESSIONS_FILE } from '../config';
 import { DiskJsonData } from '../utils/diskJsonData';
 import { isSessionCatalogInitialized, sessionCatalogStore } from './catalogStore';
-import { CURRENT_SESSION_STATE_VERSION, normalizeAndValidateSessionAuthorityPayload } from './stateValidation';
+import { CURRENT_SESSION_STATE_VERSION, normalizeAndValidateSessionAuthorityPayload, omitObsoleteContextFrontierItem } from './stateValidation';
 
 export const SESSION_STATE_FORMAT_VERSION = CURRENT_SESSION_STATE_VERSION;
 
@@ -114,7 +114,7 @@ export function serializeSessionHistoryPayload(session: Session): Record<string,
   }
   return {
     sessionStateVersion: SESSION_STATE_FORMAT_VERSION,
-    history: session.history,
+    history: session.history.map(omitObsoleteContextFrontierItem),
     persistentMemorySnapshot: session.persistentMemorySnapshot,
     ...state,
   };

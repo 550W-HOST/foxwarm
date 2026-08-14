@@ -72,7 +72,7 @@ Manages authoritative per-session JSON serialization/hydration and the compatibi
 - `sidebarOrder` and `pinned` are WebUI/session-list metadata fields saved in the shared metadata index only. They are excluded from per-session history serialization/application so reorder/pin operations do not touch or risk stale rewrites of history JSON files.
 - Uses an in-memory `Map` cache for history store instances to avoid recreating them.
 - The real per-session file reader applies tolerant history shape normalization only to unversioned legacy payloads. Versioned payloads pass the shared strict history/queue/version validator before hydration, so malformed v1 data and unknown versions fail closed without an empty-history rewrite.
-- Per-session normalization drops obsolete `contextFrontier` regardless of shape; it never rejects or rewrites valid history.
+- Per-session normalization drops obsolete top-level `contextFrontier` and per-message `__meta.contextFrontierItem` regardless of shape; current hydration no longer retains either field and serialization omits them, while preserving `__meta.contextBlock`.
 - Legacy goal-state end-turn flags remain readable, but current history serialization removes the obsolete flag and the catalog projection omits goal bodies entirely. The canonical goal contract is [D-goal-direct-safe-boundary](src-session-goal.md#d-goal-direct-safe-boundary).
 - History-scan rebuild helpers remain available for explicit repair/recovery composition, but normal startup does not silently replace a missing SQLite catalog from authority files because catalog-only topology/presentation fields are not recoverable.
 - Metadata recovery deliberately ignores legacy `*.frontier.json` files so they are not mistaken for sessions named `*.frontier`.
@@ -87,7 +87,7 @@ Manages authoritative per-session JSON serialization/hydration and the compatibi
 
 ## Design Decisions
 
-- [2026-08-13] Persist only `history` as active timeline authority. Ignore old embedded frontier data, omit it from current writes, and exclude standalone frontier files from metadata recovery scans.
+- [2026-08-13] Persist only `history` as active timeline authority. Ignore old standalone/top-level `contextFrontier` and per-message `__meta.contextFrontierItem`, omit them from current writes, and exclude standalone frontier files from metadata recovery scans. Preserve `__meta.contextBlock` as current semantic history metadata.
 - [2026-07-09] WebUI sidebar ordering belongs to the Main catalog, not per-session history JSON; drag reorder must not risk stale semantic history/queue/context rewrites.
 - [2026-07-10] WebUI session pin state follows the same catalog-only boundary as `sidebarOrder`; current history payloads intentionally never contain `pinned`.
 

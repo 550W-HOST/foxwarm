@@ -829,6 +829,49 @@ test('historical pruning requires exact effective archive provenance and accepts
   assert.deepEqual(inheritedPlan.validatedArchiveSeqs, [2]);
 });
 
+test('retired contextFrontierItem does not block pruning, but recent tail and real content conflicts remain protected', async () => {
+  const { sessionHistory, archive } = await loadDeps();
+  const id = makeSessionId('prune_legacy_frontier_item');
+  const oldOutput = 'OLD-LEGACY-FRONTIER '.repeat(2200);
+  const recentOutput = 'RECENT-LEGACY-FRONTIER '.repeat(2200);
+  const clean: Message[] = [
+    { role: 'model', parts: [{ functionCall: { id: 'old-frontier', name: 'read', args: {} } }], __meta: { seq: 1, timestamp: 1 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'old-frontier', name: 'read', response: { output: oldOutput } } }], __meta: { seq: 2, timestamp: 2 } },
+    { role: 'user', parts: [{ text: 'middle' }], __meta: { seq: 3, timestamp: 3 } },
+    { role: 'model', parts: [{ functionCall: { id: 'recent-frontier', name: 'read', args: {} } }], __meta: { seq: 4, timestamp: 4 } },
+    { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'recent-frontier', name: 'read', response: { output: recentOutput } } }], __meta: { seq: 5, timestamp: 5 } },
+    { role: 'user', parts: [{ text: 'tail' }], __meta: { seq: 6, timestamp: 6 } },
+  ];
+  await archive.appendMessagesToArchive({ id, agent: 'main', history: [], nextMessageSeq: 1 } as Session, clean);
+  const legacy = structuredClone(clean) as any[];
+  legacy[1].__meta.contextFrontierItem = { kind: 'message', seq: 2 };
+  legacy[4].__meta.contextFrontierItem = { kind: 'message', seq: 5 };
+  const plan = await sessionHistory.buildToolResponsePrunePlan(id, { history: legacy, persistentMemorySnapshot: '' }, 0.5);
+  assert.equal(plan.replacedFunctionResponses, 1);
+  assert.match(String(plan.rewrittenHistory[1].parts[0].functionResponse?.response.output), /historical tool response pruned/);
+  assert.equal(plan.rewrittenHistory[4].parts[0].functionResponse?.response.output, recentOutput);
+
+  const conflicted = structuredClone(legacy);
+  conflicted[1].parts[0].functionResponse.response.output += ' real content edit';
+  const conflictPlan = await sessionHistory.buildToolResponsePrunePlan(id, { history: conflicted, persistentMemorySnapshot: '' }, 0.5);
+  assert.equal(conflictPlan.replacedFunctionResponses, 0);
+  assert.deepEqual(conflictPlan.rewrittenHistory, conflicted);
+});
+
+test('retired contextFrontierItem does not create a layered-compaction raw provenance barrier', async () => {
+  const { sessionHistory, archive } = await loadDeps();
+  const id = makeSessionId('compact_legacy_frontier_item');
+  const clean: Message = {
+    role: 'user', parts: [{ text: `large legacy raw ${'candidate '.repeat(2600)}` }], __meta: { seq: 1, timestamp: 1 },
+  };
+  await archive.appendMessagesToArchive({ id, agent: 'main', history: [], nextMessageSeq: 1 } as Session, [clean]);
+  const legacy = structuredClone(clean) as any;
+  legacy.__meta.contextFrontierItem = { kind: 'message', seq: 1 };
+  const built = await sessionHistory.buildLayeredCompactCandidateEntries(id, [legacy]);
+  assert.equal(built.candidateEntries.some(entry => entry.item.kind === 'message'
+    && entry.item.startSeq === 1 && entry.item.endSeq === 1), true);
+});
+
 test('duplicate effective archive seq identity is nonprunable', async () => {
   const { sessionHistory, archive } = await loadDeps();
   const archiveStore = await import('./archiveStore');

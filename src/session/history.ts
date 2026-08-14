@@ -13,6 +13,7 @@ import {
 import { estimateSessionTokens, estimateTokenCount } from '../tokenCount';
 import * as vector from '../vector';
 import { appendMessagesToArchive, readArchiveMessages, readArchiveMessagesBySeqRange, rollbackUncommittedMessages } from './archive';
+import { omitObsoleteContextFrontierItem } from './stateValidation';
 import {
   buildBlockCandidateItem,
   calculateBlockCompactionWindow,
@@ -576,7 +577,7 @@ type LayeredCompactCandidateBuildResult = {
 };
 
 function normalizedRawMessageForArchiveComparison(message: Message): Message {
-  const normalized = structuredClone(message);
+  const normalized = structuredClone(omitObsoleteContextFrontierItem(message));
   if (normalized.__meta) {
     delete normalized.__meta.preservedFromBlockId;
     delete normalized.__meta.goalAnchorSeq;

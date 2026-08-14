@@ -1,4 +1,4 @@
-import { isQueueItem } from '../types';
+import { isQueueItem, type Message } from '../types';
 import { MODEL_EFFORTS, type ModelEffort } from '../config';
 
 export const CURRENT_SESSION_STATE_VERSION = 1;
@@ -10,6 +10,14 @@ export type SessionAuthorityMailboxCursor = {
 
 function isRecord(value: unknown): value is Record<string, any> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Read-old/write-new compatibility for the retired per-message Frontier marker. */
+export function omitObsoleteContextFrontierItem(message: Message): Message {
+  const meta = message?.__meta;
+  if (!isRecord(meta) || !Object.prototype.hasOwnProperty.call(meta, 'contextFrontierItem')) return message;
+  const { contextFrontierItem: _obsolete, ...currentMeta } = meta as Record<string, unknown>;
+  return { ...message, __meta: currentMeta } as Message;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -80,6 +88,8 @@ export function normalizeAndValidateSessionAuthorityPayload(raw: unknown, label 
     value.history = Array.isArray(value.history) ? value.history : [];
   }
   delete value.contextFrontier;
+  if (Array.isArray(value.history)) value.history = value.history.map(message => isRecord(message)
+    ? omitObsoleteContextFrontierItem(message as Message) : message);
   if (value.history !== undefined && !Array.isArray(value.history)) throw new Error(`${label} history must be an array.`);
   if (current) validateCurrentHistory(value.history || [], label);
   if (value.persistentMemorySnapshot !== undefined && typeof value.persistentMemorySnapshot !== 'string') {
