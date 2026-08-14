@@ -5,7 +5,7 @@ import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUp
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
-import { compareSessionListSessions, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
+import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListChildDisclosure, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
 import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
 import { dispatchSessionIdleDeleted } from '../sessionIdleAttention'
 
@@ -771,16 +771,16 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   }, [renameSessionId])
 
   const toggleExpand = (sessionId: string) => {
-    const newExpanded = new Set(expandedSessions)
-    const wasExpanded = newExpanded.has(sessionId)
+    const wasExpanded = expandedSessions.has(sessionId)
+    const newExpanded = wasExpanded
+      ? collapseSessionListExpandedBranch(expandedSessions, childrenMap, sessionId)
+      : new Set(expandedSessions).add(sessionId)
     if (wasExpanded) {
-      newExpanded.delete(sessionId)
+      bounded?.onCollapseBranch(sessionId)
     } else {
-      newExpanded.add(sessionId)
+      bounded?.onExpandBranch(sessionId)
     }
     setExpandedSessions(newExpanded)
-    if (wasExpanded) bounded?.onCollapseBranch(sessionId)
-    else bounded?.onExpandBranch(sessionId)
   }
 
   const cycleViewMode = () => {
@@ -1079,13 +1079,19 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const renderSession = (session: Session, level: number = 0, parentSession: Session | null = null) => {
     const children = childrenMap.get(session.id) || []
     const boundedChildPage = bounded?.childPages.get(session.id)
-    const childTotal = boundedChildPage?.total ?? children.length
-    const hasChildren = childTotal > 0
+    const childDisclosure = getSessionListChildDisclosure({
+      bounded: !!bounded,
+      loadedCount: children.length,
+      boundedTotal: boundedChildPage?.total,
+      allowUnknown: !!bounded && !isFiltering && viewMode !== 'flat-time',
+    })
+    const childTotal = childDisclosure.total
+    const hasChildren = childDisclosure.canExpand
     const descendantBusyCount = bounded?.descendantBusy.get(session.id) ?? descendantSummaries.get(session.id)?.busy ?? 0
     const isExpanded = isFiltering || expandedSessions.has(session.id)
     const visibleCount = visibleChildCounts.get(session.id) ?? DEFAULT_VISIBLE_CHILDREN
     const visibleChildren = bounded ? children : children.slice(0, visibleCount)
-    const hiddenCount = Math.max(0, childTotal - visibleChildren.length)
+    const hiddenCount = childTotal === null ? 0 : Math.max(0, childTotal - visibleChildren.length)
     const contentPaddingLeft = `${12 + level * 16}px`
 
     // Get display ID (with parent prefix removed if applicable)
@@ -1197,7 +1203,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                           )}
                         </svg>
-                        <span>{childTotal} {childTotal === 1 ? 'child' : 'children'}</span>
+                        <span>{childTotal === null ? 'Children' : `${childTotal} ${childTotal === 1 ? 'child' : 'children'}`}</span>
                         {descendantBusyCount > 0 && (
                           <>
                             <span>•</span>

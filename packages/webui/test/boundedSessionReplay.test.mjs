@@ -40,6 +40,39 @@ test('branch replay handles 25-child and one-child owned branches in batches of 
   assert.ok(calls.some(call => call.parents.length === 20), 'expanded parents are batched')
 })
 
+test('nested branch replay materializes only explicitly expanded parent windows', async () => {
+  const data = new Map([
+    ['root', [{ id: 'child' }]],
+    ['child', [{ id: 'grandchild' }]],
+    ['unrelated', [{ id: 'unrelated-child' }]],
+  ])
+  const calls = []
+  const fetchBatch = async parents => {
+    calls.push(parents.map(parent => parent.parentSessionId))
+    return { revision: 'r1', groups: parents.map(parent => ({
+      parentSessionId: parent.parentSessionId,
+      items: data.get(parent.parentSessionId) || [],
+      total: (data.get(parent.parentSessionId) || []).length,
+      nextCursor: null,
+    })) }
+  }
+
+  const collapsed = await replay.replayCursorBranches({
+    targets: new Map([['root', 5]]), pageCap: 20, parentBatchCap: 20, expectedRevision: 'r1', fetchBatch,
+  })
+  assert.deepEqual(collapsed.get('root').items.map(row => row.id), ['child'])
+  assert.equal(collapsed.has('child'), false)
+  assert.deepEqual(calls.flat(), ['root'], 'collapsed descendants and unrelated rows are not requested')
+
+  calls.length = 0
+  const expanded = await replay.replayCursorBranches({
+    targets: new Map([['root', 5], ['child', 5]]), pageCap: 20, parentBatchCap: 20, expectedRevision: 'r1', fetchBatch,
+  })
+  assert.deepEqual(expanded.get('child').items.map(row => row.id), ['grandchild'])
+  assert.deepEqual(new Set(calls.flat()), new Set(['root', 'child']))
+  assert.equal(calls.flat().includes('unrelated'), false)
+})
+
 test('newer SSE deltas and tombstones win over older HTTP rows', () => {
   const state = replay.createEpochRows()
   const start = state.epoch

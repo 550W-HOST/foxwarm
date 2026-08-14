@@ -8,6 +8,40 @@ export interface SessionListSortable {
   sidebarOrder?: number | null
 }
 
+export function getSessionListChildDisclosure(options: {
+  bounded: boolean
+  loadedCount: number
+  boundedTotal?: number
+  allowUnknown: boolean
+}): { total: number | null; canExpand: boolean } {
+  if (!options.bounded) {
+    return { total: options.loadedCount, canExpand: options.loadedCount > 0 }
+  }
+  if (typeof options.boundedTotal === 'number') {
+    const total = Math.max(0, options.boundedTotal)
+    return { total, canExpand: total > 0 }
+  }
+  return { total: null, canExpand: options.allowUnknown }
+}
+
+export function collapseSessionListExpandedBranch(
+  expanded: ReadonlySet<string>,
+  childrenByParent: ReadonlyMap<string, readonly { id: string }[]>,
+  rootId: string,
+): Set<string> {
+  const collapsed = new Set([rootId])
+  const pending = [rootId]
+  while (pending.length) {
+    const parentId = pending.pop()!
+    for (const child of childrenByParent.get(parentId) || []) {
+      if (collapsed.has(child.id)) continue
+      collapsed.add(child.id)
+      pending.push(child.id)
+    }
+  }
+  return new Set([...expanded].filter(sessionId => !collapsed.has(sessionId)))
+}
+
 function getSidebarOrder(session: SessionListSortable): number | undefined {
   return typeof session.sidebarOrder === 'number' && Number.isFinite(session.sidebarOrder)
     ? session.sidebarOrder

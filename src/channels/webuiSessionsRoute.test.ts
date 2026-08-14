@@ -225,6 +225,12 @@ test('bounded session-list routes preserve tree modes, focus paths, aliases, sea
     assert.equal(response.status, 200); const continued = await response.json() as any;
     assert.deepEqual(continued.children[0].sessions.map((item: any) => item.id), [ids.child2]);
 
+    response = await request('/api/session-list/children', { method: 'POST', body: JSON.stringify({ mode: 'default', limit: 10,
+      parents: [{ parentSessionId: ids.child }] }) });
+    assert.equal(response.status, 200); const nested = await response.json() as any;
+    assert.deepEqual(nested.children[0].sessions.map((item: any) => item.id), [ids.deep],
+      'the bounded child route supports root -> child -> grandchild expansion');
+
     response = await request('/api/session-list/by-id', { method: 'POST', body: JSON.stringify({ ids: [`${prefix}_unique`, `${prefix}_shared`], includePaths: true }) });
     const byId = await response.json() as any; assert.equal(byId.results[0].resolution.kind, 'alias');
     assert.equal(byId.results[0].session.id, ids.root); assert.equal(byId.results[1].resolution.kind, 'ambiguous');

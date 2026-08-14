@@ -15,6 +15,43 @@ async function loadTypeScriptModule(relativePath) {
   return import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
 }
 
+test('bounded tree rows stay expandable until an exact child page proves they are leaves', async () => {
+  const { collapseSessionListExpandedBranch, getSessionListChildDisclosure } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
+
+  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 0, allowUnknown: true }), {
+    total: null,
+    canExpand: true,
+  }, 'a newly loaded child can request its own child window')
+  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 1, boundedTotal: 1, allowUnknown: true }), {
+    total: 1,
+    canExpand: true,
+  }, 'the nested expansion response exposes the grandchild count')
+  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 0, boundedTotal: 0, allowUnknown: true }), {
+    total: 0,
+    canExpand: false,
+  }, 'an exact empty child page turns the row into a known leaf')
+  assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 0, allowUnknown: false }), {
+    total: null,
+    canExpand: false,
+  }, 'flat and search presentations do not probe hidden tree branches')
+
+  const collapsed = collapseSessionListExpandedBranch(
+    new Set(['root', 'child', 'grandchild', 'unrelated', 'unrelated-child']),
+    new Map([
+      ['root', [{ id: 'child' }]],
+      ['child', [{ id: 'grandchild' }]],
+      ['unrelated', [{ id: 'unrelated-child' }]],
+    ]),
+    'root',
+  )
+  assert.deepEqual(collapsed, new Set(['unrelated', 'unrelated-child']),
+    'collapsing an ancestor clears only its loaded descendant expansion state')
+  collapsed.add('root')
+  assert.equal(collapsed.has('child'), false, 're-expanding the ancestor leaves its child disclosure collapsed')
+  collapsed.add('child')
+  assert.equal(collapsed.has('child'), true, 'one explicit child expansion can reload the grandchild window')
+})
+
 test('agent/session creation helpers keep an empty session ID random', async () => {
   const {
     RANDOM_SESSION_ID_PLACEHOLDER,
