@@ -994,7 +994,7 @@ test('retrySession enters the router directly and runs one ordinary turn without
   }
 });
 
-test('exact turn owner rejects continuation after a completed model answer', async () => {
+test('exact turn owner rejects continuation after a completed model answer followed by compact-completion goal reminder', async () => {
   const router = new MessageRouter() as any;
   const session = await createRouterQueueTestSession('continue_completed_session');
   const originalChat = llm.chat;
@@ -1002,6 +1002,14 @@ test('exact turn owner rejects continuation after a completed model answer', asy
   await sessionManager.appendSessionMessages(session, [
     { role: 'user', parts: [{ text: 'completed request' }] },
     { role: 'model', parts: [{ text: 'completed answer' }] },
+    {
+      role: 'user',
+      parts: [
+        { system: '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="none" currentSessionId="fixture/main" />' },
+        { system: '<foxwarm-system kind="goal-reminder">\nFinish the requested work\nKeep this long-term goal in mind when deciding what to do next.\n</foxwarm-system>' },
+      ],
+      __meta: { goalReminder: true, goalReminderKind: 'compact-completion' },
+    },
   ]);
   (llm as any).chat = async () => { chatCalls += 1; throw new Error('must not run'); };
 
@@ -1013,7 +1021,7 @@ test('exact turn owner rejects continuation after a completed model answer', asy
     );
     assert.equal(chatCalls, 0);
     assert.equal(session.busy, false);
-    assert.equal(session.history.length, 2);
+    assert.equal(session.history.length, 3);
   } finally {
     (llm as any).chat = originalChat;
     sessionManager.clearActiveSessionRuntimeState(session.id);
