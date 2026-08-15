@@ -98,7 +98,7 @@ outbox, or persisted adapter state.
 
 ### D-channel-file-descriptor
 
-Inbound file context reports node plus path and does not instruct the agent to use a specific tool or assume every file is text.
+[2026-08-15] Current inbound attachment context uses one self-closing metadata line with ordered, XML-escaped attributes: images write `<foxwarm-image name="..." node="..." path="..." />`; generic files write `<foxwarm-file name="..." node="..." path="..." mime="..." />`. Every attribute uses the shared Foxwarm attribute normalization/escaping boundary, so quotes, ampersands, angle brackets, controls, and newlines cannot alter the tag grammar. A caption/body remains ordinary text before the descriptor with the existing blank-line separation. The descriptor reports node plus path without prescribing a tool or assuming every file is text. WebUI optimistic previews use the same tag formatter but omit node/path until canonical server reconciliation rather than exposing the temporary upload spool. Existing persisted bracket descriptors require no special handling: they remain ordinary message text and are neither parsed nor migrated.
 
 ## Canonical ownership
 

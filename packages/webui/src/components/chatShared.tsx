@@ -351,7 +351,7 @@ export const copyTextToClipboard = async (text: string) => {
   }
 }
 
-export const FOXWARM_METADATA_LINE_RE = /^\s*<\/?foxwarm-(system|metadata|message)\b/i
+export const FOXWARM_METADATA_LINE_RE = /^\s*<\/?foxwarm-(system|metadata|message|image|file)\b/i
 const FOXWARM_TAG_LINE_RE = /^\s*<\/?foxwarm-([a-zA-Z0-9_-]+)\b([^>]*)\/?\s*>\s*$/i
 
 export const isFoxwarmMetadataLine = (text: string): boolean => FOXWARM_METADATA_LINE_RE.test(text)
@@ -384,6 +384,7 @@ export const isLightweightFoxwarmMetadataLine = (text: string): boolean => {
   const tag = parseFoxwarmMetadataLine(text)
   if (!tag) return false
   if (tag.closing) return true
+  if (tag.tagName === 'foxwarm-image' || tag.tagName === 'foxwarm-file') return true
   if (tag.tagName === 'foxwarm-message') return tag.attrs.type === 'channel'
   if (tag.tagName === 'foxwarm-metadata') return true
   if (tag.tagName !== 'foxwarm-system') return false

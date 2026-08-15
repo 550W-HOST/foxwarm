@@ -34,6 +34,10 @@
     "./configSchemas": {
       "types": "./dist/configSchemas.d.ts",
       "default": "./dist/configSchemas.js"
+    },
+    "./foxwarmMarkup": {
+      "types": "./dist/foxwarmMarkup.d.ts",
+      "default": "./dist/foxwarmMarkup.js"
     }
   },
   "dependencies": {

@@ -52,6 +52,7 @@ import {
   querySessionListPage,
   repeatedFocusIds,
 } from '../webuiSessionListQueries';
+import { normalizeWebUiMultipartFilename } from './webuiUpload';
 
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 const MAX_QUEUED_PREVIEW_ITEMS = 20;
@@ -2613,19 +2614,21 @@ export class WebUIChannel implements Channel {
                 return;
               }
               
+              const originalName = normalizeWebUiMultipartFilename(req.file.originalname);
+
               // Generate unique filename
-              const ext = path.extname(req.file.originalname);
+              const ext = path.extname(originalName);
               const filename = `${crypto.randomBytes(16).toString('hex')}${ext}`;
               const finalPath = path.join(os.tmpdir(), 'foxwarm-uploads', filename);
               
               // Move file to final path
               await fs.move(req.file.path, finalPath, { overwrite: true });
               
-              logger.info({ filename, originalName: req.file.originalname, size: req.file.size }, 'File uploaded');
+              logger.info({ filename, originalName, size: req.file.size }, 'File uploaded');
               
               res.json({ 
                 path: finalPath,
-                filename: req.file.originalname,
+                filename: originalName,
                 mimeType: req.file.mimetype,
                 size: req.file.size
               });

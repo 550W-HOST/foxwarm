@@ -40,6 +40,8 @@ test('foxwarm metadata tags are recognized as system-like small metadata lines',
     '<foxwarm-system kind="time" />',
     '<foxwarm-metadata hint="compat" />',
     '<foxwarm-message type="channel">',
+    '<foxwarm-image name="photo.png" node="master" path="/tmp/photo.png" />',
+    '<foxwarm-file name="notes.txt" node="master" path="/tmp/notes.txt" mime="text/plain" />',
     '</foxwarm-message>',
   ]
 
@@ -50,6 +52,18 @@ test('foxwarm metadata tags are recognized as system-like small metadata lines',
     assert.equal(isHeavySystemTextLine(line), false)
     assert.equal(formatStructuredSystemText(line), line)
   }
+})
+
+test('attachment descriptor tags parse as lightweight direct-user metadata', () => {
+  const file = '<foxwarm-file name="a&amp;b.txt" node="master" path="/tmp/a&amp;b.txt" mime="text/plain" />'
+  assert.deepEqual(parseFoxwarmMetadataLine(file), {
+    tagName: 'foxwarm-file',
+    closing: false,
+    attrs: { name: 'a&b.txt', node: 'master', path: '/tmp/a&b.txt', mime: 'text/plain' },
+  })
+  assert.equal(isLightweightSystemTextLine(file), true)
+  assert.equal(isHeavySystemTextLine(file), false)
+  assert.equal(isCollapsibleSystemText(file), false)
 })
 
 test('non-channel foxwarm-message wrappers are heavy system-like messages for left-side rendering', () => {

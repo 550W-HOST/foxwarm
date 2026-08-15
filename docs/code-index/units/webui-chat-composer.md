@@ -68,6 +68,7 @@ A rich chat composer component for the web UI that handles text input with slash
 - Relies on `chatShared` utilities for slash-command logic and textarea auto-resize.
 - Model/effort changes propagate up through paired callbacks to the existing session model and child-model endpoints. Model refresh and settings navigation propagate through `onRefreshModels`/`onOpenModelSettings`; canonical navigation behavior is [D-webui-model-settings-navigation](../modules/webui.md#d-webui-model-settings-navigation).
 - Attachments and text are bundled and sent via `onSend` to the parent message-handling layer.
+- The composer keeps browser `File` objects unchanged; Chat owns upload reconciliation and builds optimistic attachment metadata from the corrected upload response through the shared descriptor formatter. Optimistic tags include only known name/MIME facts and never expose the temporary upload-spool path. Canonical grammar: [D-channel-file-descriptor](../modules/channels.md#d-channel-file-descriptor).
 
 ## Design decisions
 
