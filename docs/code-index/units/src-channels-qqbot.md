@@ -124,8 +124,8 @@ upload flow.
   boundary after restart. It sends locally prepared files smaller than 5 MiB
   through the destination-specific direct base64 flow, and uses the official
   streamed chunk flow at or above 5 MiB. Images are sent only for
-  format-probed PNG/JPEG bytes within the image cap; other images downgrade to
-  generic files within the file cap. Outbound local files are hard-capped at
+  byte-probed JPEG/PNG/GIF/WebP/BMP within the image cap; other images downgrade
+  to generic files within the file cap. Outbound local files are hard-capped at
   100 MiB; this is lower than the 200 MiB inbound configuration hard cap.
 - `SessionTurnRunner` carries only the current turn's QQ source metadata through
   the in-process tool context to `send_file`. An explicit target receives that
@@ -279,9 +279,19 @@ permission result.
 ### D-qqbot-outbound-media
 
 [2026-08-10] QQ outbound media is limited to C2C and Group `Channel.sendFile` using an
-already prepared safe local file. Supported PNG/JPEG files within the
-configured image threshold use QQ `file_type=1`; other or oversized images use
-`file_type=4` when within the generic-file cap. Files smaller than 5 MiB use
+already prepared safe local file. Tencent's current JPEG/PNG/GIF/WebP/BMP
+image formats within the configured image threshold use QQ `file_type=1`;
+other or oversized images use `file_type=4` when within the generic-file cap.
+The adapter probes actual local bytes rather than trusting extension, MIME, or
+`ChannelFile.isImage`: Sharp metadata identifies JPEG/PNG/GIF/WebP, while a
+strict coherently sized common uncompressed BMP file/DIB-header check covers
+deployments whose optional Sharp BMP loader is absent: CORE headers accept 24
+bpp, while INFO-family headers accept 24/32 bpp. Indexed 1/4/8,
+16-bpp, compressed, bitfield, and RLE BMP variants remain generic unless Sharp
+itself recognizes them. SVG, ICO, malformed, pixel-truncated, palette-less,
+mislabeled, and unknown bytes remain
+generic. Probing never decodes/re-encodes the upload, so animated GIF/WebP and
+all other accepted bytes are uploaded unchanged. Files smaller than 5 MiB use
 the destination-specific `/files` direct-upload body with `srv_send_msg: false`
 and bounded base64 `file_data`; generic direct uploads also include the
 sanitized `file_name`. Files at or above 5 MiB use the existing

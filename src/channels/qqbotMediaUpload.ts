@@ -190,13 +190,60 @@ async function hashFile(snapshot: LocalFileSnapshot): Promise<FileHashes> {
   }
 }
 
-async function probeOfficialRasterImage(snapshot: LocalFileSnapshot): Promise<boolean> {
+async function hasValidBmpHeader(snapshot: LocalFileSnapshot): Promise<boolean> {
+  if (snapshot.sizeBytes < 26) return false;
+  const handle = await fs.open(snapshot.path, 'r');
+  try {
+    const header = Buffer.alloc(Math.min(snapshot.sizeBytes, 138));
+    const result = await handle.read(header, 0, header.length, 0);
+    if (result.bytesRead !== header.length || header.toString('ascii', 0, 2) !== 'BM') return false;
+    const declaredSize = header.readUInt32LE(2);
+    const pixelOffset = header.readUInt32LE(10);
+    const dibSize = header.readUInt32LE(14);
+    if (declaredSize < 26 || declaredSize > snapshot.sizeBytes || pixelOffset >= declaredSize) return false;
+    let width: number;
+    let height: number;
+    let bitsPerPixel: number;
+    if (dibSize === 12) {
+      if (pixelOffset < 26 || header.readUInt16LE(22) !== 1) return false;
+      width = header.readUInt16LE(18);
+      height = header.readUInt16LE(20);
+      bitsPerPixel = header.readUInt16LE(24);
+      if (width <= 0 || height <= 0 || bitsPerPixel !== 24) return false;
+    } else {
+      if (dibSize < 40 || dibSize > 124 || header.length < 54 || pixelOffset < 14 + dibSize) return false;
+      width = header.readInt32LE(18);
+      height = header.readInt32LE(22);
+      bitsPerPixel = header.readUInt16LE(28);
+      if (width <= 0
+        || height === 0
+        || header.readUInt16LE(26) !== 1
+        || ![24, 32].includes(bitsPerPixel)
+        || header.readUInt32LE(30) !== 0) {
+        return false;
+      }
+    }
+    const rowStride = ((BigInt(width) * BigInt(bitsPerPixel) + 31n) / 32n) * 4n;
+    const requiredPixelSpan = rowStride * BigInt(Math.abs(height));
+    const requiredEnd = BigInt(pixelOffset) + requiredPixelSpan;
+    return requiredPixelSpan > 0n
+      && requiredEnd <= BigInt(declaredSize)
+      && requiredEnd <= BigInt(snapshot.sizeBytes);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function probeOfficialQQImage(snapshot: LocalFileSnapshot): Promise<boolean> {
   try {
     const metadata = await sharp(snapshot.path, { limitInputPixels: 64 * 1024 * 1024 }).metadata();
-    return metadata.format === 'png' || metadata.format === 'jpeg';
+    if (metadata.format === 'png' || metadata.format === 'jpeg' || metadata.format === 'gif' || metadata.format === 'webp') {
+      return true;
+    }
   } catch {
-    return false;
+    // This Sharp/libvips build may not include its optional BMP loader.
   }
+  return hasValidBmpHeader(snapshot);
 }
 
 function buildPath(target: QQBotMediaTarget, targetId: string, suffix: string): string {
@@ -416,7 +463,7 @@ export async function uploadQQBotFile(
     throw new Error('QQ Bot file exceeds the configured media limit');
   }
   const safeImage = snapshot.sizeBytes <= limits.imageMaxBytes
-    && await probeOfficialRasterImage(snapshot);
+    && await probeOfficialQQImage(snapshot);
   const sendAsImage = safeImage && snapshot.sizeBytes <= limits.imageMaxBytes;
   const fileType: 1 | 4 = sendAsImage ? 1 : 4;
   if (!sendAsImage && snapshot.sizeBytes > limits.fileMaxBytes) {

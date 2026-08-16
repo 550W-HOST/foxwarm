@@ -16,15 +16,18 @@ const COS_PREFIX = 'https://cos.ap-guangzhou.myqcloud.com';
 
 type Call = { url: string; init?: RequestInit };
 
-async function withTempFiles(callback: (paths: { png: string; generic: string }) => Promise<void>): Promise<void> {
+async function withTempFiles(callback: (paths: { png: string; gif: string; generic: string }) => Promise<void>): Promise<void> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-qqbot-channel-send-test-'));
   const png = path.join(dir, 'photo.png');
+  const gif = path.join(dir, 'photo.gif');
   const generic = path.join(dir, 'report.txt');
   const pngBytes = await sharp({ create: { width: 2, height: 1, channels: 3, background: { r: 10, g: 20, b: 30 } } }).png().toBuffer();
+  const gifBytes = await sharp({ create: { width: 2, height: 1, channels: 4, background: { r: 30, g: 20, b: 10, alpha: 1 } } }).gif().toBuffer();
   await fs.writeFile(png, pngBytes);
+  await fs.writeFile(gif, gifBytes);
   await fs.writeFile(generic, Buffer.from('generic-payload'));
   try {
-    await callback({ png, generic });
+    await callback({ png, gif, generic });
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -144,6 +147,30 @@ test('QQ Bot sendFile uses latest C2C passive ID and direct-small image/file upl
     assert.equal(apiCalls(transport, '/upload_part_finish').length, 0);
     const putCalls = transport.calls.filter(call => call.url.startsWith(COS_PREFIX));
     assert.equal(putCalls.length, 0);
+  });
+});
+
+test('QQ Bot sendFile uses the image rich-media flow for byte-probed GIF input', async () => {
+  await withTempFiles(async paths => {
+    const transport = createFetchTransport();
+    const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-send-gif', { fetch: transport.fetch });
+    activate(channel);
+    await channel.sendFile('group:group-openid', file(paths.gif, 'claimed-file.bin', 'application/octet-stream', false), { caption: 'gif caption' });
+
+    const upload = apiCalls(transport, '/files')[0];
+    assert.equal(upload.url, `${API_PREFIX}/v2/groups/group-openid/files`);
+    assert.deepEqual(body(upload), {
+      file_type: 1,
+      srv_send_msg: false,
+      file_data: (await fs.readFile(paths.gif)).toString('base64'),
+    });
+    const message = apiCalls(transport, '/messages')[0];
+    assert.deepEqual(body(message), {
+      msg_type: 7,
+      media: { file_info: 'file-info-group' },
+      content: 'gif caption',
+      msg_seq: 1,
+    });
   });
 });
 
