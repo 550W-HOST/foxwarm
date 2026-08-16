@@ -1,6 +1,6 @@
 # Unit: src-vector
 
-Files: src/vector.ts, src/vectorRuntime.ts, src/vectorMaintenance.ts, src/vectorService.ts, src/vectorServiceDescriptor.ts, src/vectorFacadeProxy.ts, src/vectorServiceManager.ts, src/vectorWorker.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.lineage.test.ts, src/vector.memoryFacts.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.segmentBuilder.test.ts, src/vector.upsert.test.ts, src/vectorMaintenance.test.ts, src/vectorMaintenanceRuntime.test.ts, src/vectorService.smoke.test.ts, src/vectorServiceManager.test.ts, src/vectorExternalPlacement.test.ts, src/vectorPlacementConcurrency.test.ts
+Files: src/vector.ts, src/vectorRuntime.ts, src/vectorMaintenance.ts, src/vectorService.ts, src/vectorServiceDescriptor.ts, src/vectorFacadeProxy.ts, src/vectorServiceManager.ts, src/vectorWorker.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.indexFailure.test.ts, src/vector.lineage.test.ts, src/vector.memoryFacts.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.segmentBuilder.test.ts, src/vector.upsert.test.ts, src/vectorMaintenance.test.ts, src/vectorMaintenanceRuntime.test.ts, src/vectorService.smoke.test.ts, src/vectorServiceManager.test.ts, src/vectorExternalPlacement.test.ts, src/vectorPlacementConcurrency.test.ts
 Secondary files: src/workerConfig.test.ts
 
 ## Purpose
@@ -54,6 +54,7 @@ Model-facing `contentFilter` and final preview filtering are owned by the shared
 - Raw rebuild queries local message stats first, then loads only the saved overlap tail/new-message range. A saved tail beyond the durable maximum safely falls back to the local minimum, preserving the prior rebuild behavior without materializing the checkpointed prefix. Block indexing reads only IDs after `lastIndexedBlockId`. Bounded batches and safe checkpoint advancement remain unchanged.
 - Startup backfill is asynchronous. Search can be temporarily incomplete while checkpoints show pending archive content. Raw messages and full block summaries archived while Vector is disabled retain old checkpoints and are discovered after later enablement. Fact text remains inside the formatted block summary, but dedicated fact rows are not reconstructed for disabled-period compactions; see [D-context-optional-vector](../threads/context-compaction-and-recall.md#d-context-optional-vector).
 - Concurrent index requests for one session are coalesced/scheduled rather than running duplicate rebuilds.
+- Per-session queue cleanup observes both fulfillment and rejection without creating an unhandled rejecting derivative. Direct forced indexing does not allocate an otherwise unconsumed batch waiter; it still rejects to its caller, while real scheduled/coalesced waiters retain one shared completion or rejection and clear state for retry.
 - The RPC scheduling method acknowledges accepted hints immediately rather than holding a transport request open until a future indexing threshold flushes.
 - Lone UTF-16 surrogates are replaced before embedding calls.
 - Display-only messages are not indexed.

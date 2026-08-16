@@ -1249,11 +1249,12 @@ function queueArchiveIndexRun(sessionId: string, targetLatestSeqHint?: number, t
         .then(() => indexSessionArchiveInternal(sessionId, targetLatestSeqHint, targetLatestBlockIdHint));
 
     indexingChains.set(sessionId, next);
-    next.finally(() => {
+    const cleanup = () => {
         if (indexingChains.get(sessionId) === next) {
             indexingChains.delete(sessionId);
         }
-    });
+    };
+    void next.then(cleanup, cleanup);
 
     return next;
 }
@@ -1387,7 +1388,6 @@ async function indexSessionArchive(sessionId: string, latestSeqHint?: number, la
         return lastIndexedSeq;
     }
 
-    ensureBatchPromise(state);
     state.pendingEstimatedTokens = 0;
     state.flushQueued = true;
 
