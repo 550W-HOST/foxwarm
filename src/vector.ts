@@ -105,13 +105,6 @@ export async function search(
   return callVector('search', { query, limit, format, options });
 }
 
-export async function getContextAround(
-  timestamp: number,
-  limit = 10,
-): Promise<Awaited<ReturnType<typeof runtime.getContextAround>>> {
-  return callVector('getContextAround', { timestamp, limit });
-}
-
 export async function waitForStartupArchiveVectorBackfill(): Promise<void> {
   await callVector('waitForStartupBackfill', {});
 }

@@ -7,11 +7,10 @@ export type VectorIndexStatus = {
   lastIndexedBlockId: number;
 };
 
-export const vectorServiceDescriptor = defineRpcService('vector', 1, {
+export const vectorServiceDescriptor = defineRpcService('vector', 2, {
   init: rpcMethod<Record<string, never>, { ready: true }>(),
   waitForStartupBackfill: rpcMethod<Record<string, never>, { completed: true }>(),
   search: rpcMethod<{ query: string; limit?: number; format?: boolean; options?: runtime.SearchOptions }, unknown>(),
-  getContextAround: rpcMethod<{ timestamp: number; limit?: number }, unknown>(),
   getArchiveIndexStatus: rpcMethod<{ sessionId: string }, VectorIndexStatus>(),
   scheduleIndex: rpcMethod<{
     sessionId: string; latestSeqHint?: number; latestMessageTokenEstimate?: number; latestBlockIdHint?: number;

@@ -41,7 +41,7 @@ Session context owns model-context budgeting, layered compaction and direct acti
 - Lineage caps prevent post-fork parent content from reaching a child.
 - Vector is an optional derived layer that defaults disabled. Optional memory facts and startup vector backfill are best-effort and never block a compact commit or service readiness; raw messages and full block summaries archived while disabled remain pending for later checkpoint-based backfill. Dedicated fact rows are not reconstructed, though fact text remains in block summaries.
 - Display-only messages are excluded from model context, candidate quota denominators, and embeddings.
-- Read-only recall/expansion may update archive import caches but never live history/queue.
+- Ordinary archive, recall, expansion, image-source, and vector-lineage reads are pure with respect to archive branches and session-ID reservations; explicit lifecycle/write/migration paths alone establish branch ownership. Canonical semantics: [D-archive-read-purity](../units/src-session-archive-store.md#d-archive-read-purity).
 - Retained branch/log discovery plus the committed moved-ID alias ledger supplies the archive side of exact internal session-ID reservation and canonical historical reads; lifecycle semantics are canonical in [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 
 ## Compatibility

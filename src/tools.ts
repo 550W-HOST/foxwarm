@@ -54,7 +54,7 @@ import { tool_image_crop, tool_image_write_to_file } from './tools/imageTools';
 import { tool_browse_open, tool_browse_list, tool_browse_get, tool_browse_close, tool_browse_interact } from './tools/browserTools';
 import { tool_mcp_config, tool_call_mcp, tool_search_mcp_tools, tool_list_mcp_servers } from './tools/mcpTools';
 import { tool_copy_between_nodes, tool_remote_node, tool_node, tool_node_bootstrap_info, tool_node_pair_approve, tool_node_pair_list } from './tools/nodeTools';
-import { tool_get_memory_context, resolveMemorySearchOptions } from './tools/vectorTools';
+import { resolveMemorySearchOptions } from './tools/vectorTools';
 import { tool_search_tools, tool_call_tool, setDefinitionsRef } from './tools/unifiedSearch';
 import { definitions } from './tools/definitions';
 
@@ -88,7 +88,6 @@ setDefinitionsRef(definitions, isToolDirectlyExposedToModel, getToolPermissionNo
 
 const WORKER_UNSUPPORTED_TOOLS = new Set([
     'set_agent_inherit', 'set_agent_isolated', 'move_session',
-    'get_memory_context',
 ]);
 
 function workerUnavailable(toolName: string): never {
@@ -152,7 +151,6 @@ export async function callTool(toolName: string, args: any, context: any): Promi
         node_bootstrap_info: tool_node_bootstrap_info,
         node_pair_approve: tool_node_pair_approve,
         node_pair_list: tool_node_pair_list,
-        get_memory_context: tool_get_memory_context,
         search_tools: tool_search_tools,
         call_tool: tool_call_tool,
         create_child_session: tool_create_child_session,
@@ -214,7 +212,6 @@ export const copy_between_nodes = tool_copy_between_nodes;
 export const image_crop = tool_image_crop;
 export const image_write_to_file = tool_image_write_to_file;
 export const exec = tool_exec;
-export const get_memory_context = tool_get_memory_context;
 // Lazy wrappers: these facade functions live in mainManagementTools, whose
 // dependency chain can require this module before it finishes evaluating in
 // some process load orders (worker boot). Eagerly copying the binding would

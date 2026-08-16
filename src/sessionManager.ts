@@ -21,7 +21,7 @@ import * as sessionAgentMetadata from './session/agentMetadata';
 import { appendMessagesToArchive, ensureMessageSeq, getNextSessionMessageSeq, rollbackUncommittedMessages } from './session/archive';
 import { externalizeMessages, externalizeQueueItemImages } from './imageBlobs';
 import { readArchiveBlocksByIdRange } from './session/layeredContext';
-import { ensureSessionBranch, hasArchivedSessionId, rollbackUncommittedSessionArchive } from './session/archiveStore';
+import { ensureSessionBranch, hasArchivedSessionId, initArchiveStore, rollbackUncommittedSessionArchive } from './session/archiveStore';
 import { captureSessionSemanticState, getSessionHistoryFilePath, loadSessionsMetadataSnapshot, readSessionHistorySnapshot, restoreSessionSemanticState, withSessionsMetadataWriteLock } from './session/metadataStore';
 import { buildSessionCatalogProjection, readLegacyChannelAttachmentsFromCatalogMigrationEvidence, sessionCatalogStore } from './session/catalogStore';
 import { externalizeAuthoritativeSessionImages, externalizeAuthoritativeSessionQueueImages, isSessionAuthorityPostCommitError, SessionAuthorityPostCommitError, writeAuthoritativeSessionState } from './session/stateFile';
@@ -392,6 +392,7 @@ async function hasPersistedLiveSessionId(sessionId: string): Promise<boolean> {
 }
 
 async function getSessionIdReservation(sessionId: string): Promise<SessionIdReservation> {
+  await initArchiveStore();
   const resolvedSessionId = await resolveSessionId(sessionId);
   if (resolvedSessionId !== sessionId) {
     if (await hasPersistedLiveSessionId(resolvedSessionId)) {
@@ -1961,6 +1962,10 @@ export async function loadSessions(): Promise<void> {
       logger.info({ migrationSummary }, 'Startup migration finished');
     }
   }
+  // Startup is not ready until the independent session-ID reservation ledger
+  // and its SQLite mirror have been validated/repaired. Ordinary archive reads
+  // remain pure and therefore cannot serve as a deferred initialization path.
+  await initArchiveStore();
   if (!catalogExisted) catalogMigration = await sessionCatalogStore.initialize();
   logger.info({ ...catalogMigration!, databasePath: CATALOG_DB_PATH }, 'Session catalog initialized');
   try {

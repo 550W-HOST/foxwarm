@@ -16,6 +16,7 @@ import {
 } from '../contextPreviewRenderer';
 import { truncateUnicodeSafe } from '../utils/unicode';
 import { formatLocalTimestamp } from '../utils/localTime';
+import { logger } from '../common';
 import { requireNotIsolated, requireNotIsolatedForSession, checkArchivedReadPermission, checkArchivedReadPermissionForSession } from '../isolatedCheck';
 import { resolveMemorySearchOptions } from '../tools/vectorTools';
 import {
@@ -1109,12 +1110,46 @@ function vectorHitRawRange(hit: any): { startSeq: number; endSeq: number } | und
   return { startSeq: range.start, endSeq: range.end };
 }
 
+type VectorRecallFallbackReason =
+  | 'archive-block-source-missing'
+  | 'archive-message-source-missing'
+  | 'legacy-source-identity-unavailable';
+
+function boundedVectorSourceIdentity(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  return normalized ? normalized.slice(0, 160) : undefined;
+}
+
+function warnVectorRecallCompatibilityFallback(
+  hit: any,
+  sourceSessionId: string,
+  range: { startSeq: number; endSeq: number } | undefined,
+  reason: VectorRecallFallbackReason,
+): void {
+  try {
+    logger.warn({
+      classification: 'vector-recall-compatibility-fallback',
+      reason,
+      sourceSessionId: boundedVectorSourceIdentity(sourceSessionId),
+      agent: boundedVectorSourceIdentity(hit.agent),
+      memoryKind: boundedVectorSourceIdentity(hit.kind ?? hit.memory_kind),
+      sourceKind: boundedVectorSourceIdentity(hit.source_kind),
+      ...(typeof hit.block_id === 'number' ? { blockId: hit.block_id } : {}),
+      ...(range ? { rawStartSeq: range.startSeq, rawEndSeq: range.endSeq } : {}),
+    }, 'Vector recall used compatibility text because its authoritative archive source was unavailable');
+  } catch {
+    // Compatibility recall must not fail because observability is unavailable.
+  }
+}
+
 async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRenderOptions): Promise<ContextPreviewItem[]> {
   const sourceSessionId = String(hit.session_id || '');
   if (!sourceSessionId) {
     return [];
   }
 
+  let missingBlockSource = false;
   if (hit.kind === 'block' && typeof hit.block_id === 'number') {
     const result = await sessionManager.getArchivedBlocks(sourceSessionId, {
       startId: hit.block_id,
@@ -1130,9 +1165,11 @@ async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRe
         includeSourceText: formatArchiveSourceLabel(hydrated.sourceKind, hydrated.sourceStart, hydrated.sourceEnd, hydrated.sourceBlockIds),
       })];
     }
+    missingBlockSource = true;
   }
 
   const range = vectorHitRawRange(hit);
+  let missingMessageSource = false;
   if (range) {
     const result = await sessionManager.getArchivedMessages(sourceSessionId, {
       startSeq: range.startSeq,
@@ -1152,8 +1189,19 @@ async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRe
         renderOptions,
       }));
     }
+    missingMessageSource = true;
   }
 
+  warnVectorRecallCompatibilityFallback(
+    hit,
+    sourceSessionId,
+    range,
+    missingBlockSource
+      ? 'archive-block-source-missing'
+      : missingMessageSource
+        ? 'archive-message-source-missing'
+        : 'legacy-source-identity-unavailable',
+  );
   const seqLabel = range ? formatMessageLogRange(range.startSeq, range.endSeq) : `seq:${hit.seq ?? '?'}`;
   return [{
     key: `vector:fallback:${String(hit.id || `${sourceSessionId}:${seqLabel}`)}`,

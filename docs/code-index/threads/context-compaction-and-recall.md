@@ -45,7 +45,7 @@ Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelFor
 - Vector is optional and defaults disabled. Archive/compaction and exact recall remain fully functional without LanceDB; semantic requests fail with a stable disabled classification.
 - `scheduleSessionArchiveIndex()` batches archive indexing at 50 pending messages or 8,000 estimated tokens.
 - When enabled, LanceDB `messages_v7` stores raw segments, block rows, and compact-extracted fact rows. Startup backfill uses SQLite checkpoints and can continue after the service becomes ready. Raw messages and full block summaries accumulated while disabled remain pending and are discovered from archive maxima after a later enable/restart. Fact text embedded in those summaries is therefore searchable through block rows, but startup backfill does not reconstruct dedicated fact rows.
-- `vector.search(query, limit, format, options)` returns metadata-rich locations. Model-facing recall reloads original archive messages/blocks from those locations before rendering; vector chunks are not the final quoted history.
+- `vector.search(query, limit, format, options)` returns metadata-rich locations. Model-facing recall reloads original archive messages/blocks from those locations before rendering. A tolerated legacy/stale compatibility fallback may render the stored vector text only when the referenced archive source cannot be reloaded; one bounded metadata-only warning records that fallback without logging query or user content.
 
 ### 6. Recall and preview
 
@@ -161,7 +161,7 @@ Exact selection (`target`), semantic location (`vector_query`), and literal post
 
 ### D-context-source-backed-recall
 
-Vector hits locate archive sources; recall presents reloaded source messages/blocks through the shared renderer rather than exposing embedding chunks as authoritative history.
+[2026-08-16] Vector hits locate archive sources; recall normally presents reloaded source messages/blocks through the shared renderer rather than treating embedding chunks as authoritative history. For legacy or stale rows whose referenced block/message source is unavailable, preserve the existing vector-text compatibility preview, but classify it as a non-authoritative fallback and emit exactly one structured warning per affected hit. Warning fields are limited to bounded source identity and kind/range metadata; query text, vector text/chunks, embeddings, credentials, and unbounded hit payloads must never be logged.
 
 ### D-context-optional-vector
 

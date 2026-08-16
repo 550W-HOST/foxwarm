@@ -1,5 +1,4 @@
 import { ToolContext } from './helpers';
-import * as vector from '../vector';
 import * as sessionManager from '../sessionManager';
 import { getVectorSearchLineage } from '../session/archiveStore';
 
@@ -85,32 +84,4 @@ export async function resolveMemorySearchOptions(
         searchOptions: { agent: agentName },
         effectiveScope: 'current-agent',
     };
-}
-
-export async function tool_get_memory_context({ timestamp, limit = 10 }: { timestamp: number; limit?: number }) {
-    const results = await vector.getContextAround(timestamp, limit);
-    if (!results || results.length === 0) return 'No context found around this time.';
-
-    return results.map(r => {
-        const ts = r.timestamp != null && !isNaN(Number(r.timestamp)) ? Number(r.timestamp) : null;
-        const date = ts ? new Date(ts) : null;
-        const dateStr = (date && !isNaN(date.getTime())) ? date.toISOString() : 'unknown';
-        const idStr = (r.id && typeof r.id === 'string') ? `${r.id.substring(0, 8)}...` : 'N/A';
-        const seqLabel = r.start_seq != null && r.end_seq != null && Number(r.start_seq) !== Number(r.end_seq)
-            ? `${r.start_seq}-${r.end_seq}`
-            : `${r.start_seq ?? r.seq}`;
-        const messageLabel = r.message_count > 1
-            ? `[messages: ${r.message_count}]`
-            : '';
-        const chunkLabel = r.chunk_count > 1
-            ? `[chunk ${Number(r.chunk_index) + 1}/${r.chunk_count}]`
-            : '';
-
-        return [
-            `[${dateStr}] [session: ${r.session_id}] [seq: ${seqLabel}]`,
-            messageLabel,
-            chunkLabel,
-            `[ID: ${idStr}]`,
-        ].filter(Boolean).join(' ') + `\n${r.text}`;
-    }).join('\n\n---\n\n');
 }

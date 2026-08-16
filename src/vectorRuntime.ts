@@ -1758,58 +1758,6 @@ async function searchWithVector(vector: number[], limit = 5, format = true, opti
     }).join('\n\n---\n\n');
 }
 
-async function getContextAround(timestamp: number, limit = 10) {
-    return tableOperationGate.runRegular(() => getContextAroundUnderLease(timestamp, limit));
-}
-
-async function getContextAroundUnderLease(timestamp: number, limit = 10) {
-    const ts = Number(timestamp);
-    const lower = ts - 1800000;
-    const upper = ts + 1800000;
-    const results: any[] = [];
-
-    const iterator = await table.query()
-        .where(`memory_kind = 'raw' AND start_timestamp <= ${upper} AND end_timestamp >= ${lower}`)
-        .limit(limit)
-        .execute();
-
-    for await (const row of iterator) {
-        const records = row.toArray();
-        for (const record of records) {
-            if (!record.text || record.session_id === '__init__') continue;
-            results.push({
-                id: record.id,
-                kind: record.memory_kind || 'raw',
-                message_id: record.message_id,
-                session_id: record.session_id,
-                agent: record.agent,
-                seq: record.start_seq ?? record.seq,
-                start_seq: record.start_seq ?? record.seq,
-                end_seq: record.end_seq ?? record.seq,
-                raw_start_seq: record.raw_start_seq ?? record.start_seq ?? record.seq,
-                raw_end_seq: record.raw_end_seq ?? record.end_seq ?? record.seq,
-                message_count: record.message_count ?? 1,
-                role: record.role,
-                timestamp: record.timestamp,
-                start_timestamp: record.start_timestamp ?? record.timestamp,
-                end_timestamp: record.end_timestamp ?? record.timestamp,
-                chunk_index: record.chunk_index,
-                chunk_count: record.chunk_count,
-                text: record.text,
-                chunk_text: record.chunk_text,
-            });
-        }
-    }
-
-    return results.sort((a, b) => {
-        const timestampDelta = Number(a.start_timestamp) - Number(b.start_timestamp);
-        if (timestampDelta !== 0) return timestampDelta;
-        const seqDelta = Number(a.start_seq) - Number(b.start_seq);
-        if (seqDelta !== 0) return seqDelta;
-        return Number(a.chunk_index) - Number(b.chunk_index);
-    });
-}
-
 async function init() {
     if (table) {
         return;
@@ -1928,6 +1876,5 @@ export {
     scheduleSessionArchiveIndex,
     search,
     shutdown,
-    getContextAround,
     waitForStartupArchiveVectorBackfill,
 };

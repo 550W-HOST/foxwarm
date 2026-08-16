@@ -13,7 +13,6 @@ Provides one asynchronous, optionally disabled vector facade with local and supe
 - `setVectorServiceManagerFactoryForTests()` — narrow test-only delayed-manager factory seam for placement-race coverage; production retains dynamic manager import.
 - `getVectorServiceStatus()` — report local/worker readiness and worker generation/PID for diagnostics.
 - `search(query, limit=5, format=true, options?)` — vector query with session/agent/lineage scope, optional regex candidate filters, and block preference.
-- `getContextAround(timestamp, limit=10)` — raw rows overlapping a 30-minute window around a timestamp.
 - `indexSessionArchive(sessionId, latestSeqHint?, latestBlockIdHint?)` — index one archive.
 - `scheduleSessionArchiveIndex(sessionId, latestSeqHint?, latestMessageTokenEstimate?, latestBlockIdHint?)` — pending-threshold scheduler.
 - `indexAllSessionArchives(sessionIds?)`, `waitForStartupArchiveVectorBackfill()` — backfill controls.
