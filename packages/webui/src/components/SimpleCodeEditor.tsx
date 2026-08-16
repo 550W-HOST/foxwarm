@@ -49,6 +49,8 @@ export default function SimpleCodeEditor({
     let markerDisposable: { dispose: () => void } | null = null
     let themeObserver: MutationObserver | null = null
     let activeModelUri = ''
+    let inputArea: HTMLTextAreaElement | null = null
+    let repairReverseSelectionInput: ((event: InputEvent) => void) | null = null
 
     const start = async () => {
       let support
@@ -77,6 +79,29 @@ export default function SimpleCodeEditor({
         theme: currentTheme(),
         wordWrap: 'on',
       })
+
+      inputArea = editor.getDomNode()?.querySelector<HTMLTextAreaElement>('textarea.inputarea') || null
+      if (inputArea) {
+        repairReverseSelectionInput = (event) => {
+          const selection = editor.getSelection()
+          if (!event.cancelable
+            || event.inputType !== 'insertText'
+            || event.data === null
+            || event.isComposing
+            || !selection
+            || selection.isEmpty()
+            || selection.getDirection() !== monaco.SelectionDirection.RTL
+            || inputArea?.selectionStart !== inputArea?.selectionEnd) return
+
+          // Monaco 0.54 writes RTL selections to its Firefox textarea with reversed
+          // selectionStart/selectionEnd values. Firefox collapses that invalid native range,
+          // so the first input only repairs Monaco's hidden state instead of editing the model.
+          // Route that desynchronized input through Monaco's normal type command instead.
+          event.preventDefault()
+          editor.trigger('foxwarm-reverse-selection-input', 'type', { text: event.data })
+        }
+        inputArea.addEventListener('beforeinput', repairReverseSelectionInput, { capture: true })
+      }
 
       const updateMarkerCount = () => {
         if (!wrapperRef.current) return
@@ -113,6 +138,9 @@ export default function SimpleCodeEditor({
       themeObserver?.disconnect()
       markerDisposable?.dispose()
       changeDisposable?.dispose()
+      if (inputArea && repairReverseSelectionInput) {
+        inputArea.removeEventListener('beforeinput', repairReverseSelectionInput, { capture: true })
+      }
       editorRef.current?.dispose()
       modelRef.current?.dispose()
       if (activeModelUri) {

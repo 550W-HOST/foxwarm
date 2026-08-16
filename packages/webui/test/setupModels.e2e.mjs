@@ -1,6 +1,7 @@
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { createServer } from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,6 +12,7 @@ const webuiRoot = path.resolve(__dirname, '..')
 const port = 4176
 const baseUrl = `http://127.0.0.1:${port}`
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
+const firefoxPath = process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox-esr'
 
 let vite
 let preview
@@ -125,7 +127,7 @@ function respondJson(request, body, status = 200) {
 
 async function attachRequestMocks(targetPage, options = {}) {
   let mockModelsRawYaml = options.oobe ? '' : statusPayload.models.rawYaml
-  let mockConfigRawYaml = statusPayload.config.rawYaml
+  let mockConfigRawYaml = options.configRawYaml ?? statusPayload.config.rawYaml
   let mockOobe = !!options.oobe
   let mockSessionModel = 'route'
   let mockSessionEffort = null
@@ -307,11 +309,14 @@ async function runMonacoEditorAction(targetPage, modelUri, action, payload = {})
     }
 
     const selection = editor.getSelection()
+    const model = editor.getModel()
     return {
       value: editor.getValue(),
       direction: selection?.getDirection(),
       rtlDirection: monaco.SelectionDirection.RTL,
       ltrDirection: monaco.SelectionDirection.LTR,
+      selectionStartOffset: selection && model ? model.getOffsetAt(selection.getStartPosition()) : null,
+      selectionEndOffset: selection && model ? model.getOffsetAt(selection.getEndPosition()) : null,
       selection: selection ? {
         startLineNumber: selection.startLineNumber,
         startColumn: selection.startColumn,
@@ -352,6 +357,16 @@ async function waitForMonacoValue(targetPage, modelUri, expectedValue) {
   }
   const state = await runMonacoEditorAction(targetPage, modelUri, 'snapshot')
   assert.equal(state.value, expectedValue)
+}
+
+async function dragMonacoSelection(targetPage, modelUri, start, end) {
+  const dragStart = await runMonacoEditorAction(targetPage, modelUri, 'screen-position', start)
+  const dragEnd = await runMonacoEditorAction(targetPage, modelUri, 'screen-position', end)
+  await targetPage.mouse.move(dragStart.x, dragStart.y)
+  await targetPage.mouse.down()
+  await targetPage.mouse.move(dragEnd.x, dragEnd.y, { steps: 8 })
+  await targetPage.mouse.up()
+  return runMonacoEditorAction(targetPage, modelUri, 'snapshot')
 }
 
 before(async () => {
@@ -529,13 +544,7 @@ test('both Setup Monaco editors preserve controlled selection replacement', asyn
   const configUri = 'inmemory://foxwarm/setup/foxwarm-config.yaml'
   const originalModels = (await runMonacoEditorAction(page, modelsUri, 'snapshot')).value
 
-  const dragStart = await runMonacoEditorAction(page, modelsUri, 'screen-position', { line: 1, column: 12 })
-  const dragEnd = await runMonacoEditorAction(page, modelsUri, 'screen-position', { line: 1, column: 10 })
-  await page.mouse.move(dragStart.x, dragStart.y)
-  await page.mouse.down()
-  await page.mouse.move(dragEnd.x, dragEnd.y, { steps: 8 })
-  await page.mouse.up()
-  let state = await runMonacoEditorAction(page, modelsUri, 'snapshot')
+  let state = await dragMonacoSelection(page, modelsUri, { line: 1, column: 12 }, { line: 1, column: 10 })
   assert.equal(state.direction, state.rtlDirection)
   await page.keyboard.press('x')
   await new Promise((resolve) => setTimeout(resolve, 100))
@@ -561,9 +570,7 @@ test('both Setup Monaco editors preserve controlled selection replacement', asyn
   await page.waitForSelector(`[data-monaco-model-uri="${configUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
   const originalConfig = (await runMonacoEditorAction(page, configUri, 'snapshot')).value
   await runMonacoEditorAction(page, configUri, 'replace-value', { value: 'alpha beta\nsecond line\nthird line\n' })
-  state = await runMonacoEditorAction(page, configUri, 'select', {
-    anchorLine: 3, anchorColumn: 6, activeLine: 2, activeColumn: 1,
-  })
+  state = await dragMonacoSelection(page, configUri, { line: 3, column: 6 }, { line: 2, column: 1 })
   assert.equal(state.direction, state.rtlDirection)
   await page.keyboard.type('Y')
   await new Promise((resolve) => setTimeout(resolve, 100))
@@ -585,6 +592,98 @@ test('both Setup Monaco editors preserve controlled selection replacement', asyn
 
   await page.click('[data-setup-tab="models"]')
   await page.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
+})
+
+test('Firefox replaces real reverse mouse selections on the first physical key', {
+  skip: existsSync(firefoxPath) ? false : `Firefox is not available at ${firefoxPath}`,
+}, async () => {
+  const firefox = await puppeteer.launch({
+    browser: 'firefox',
+    executablePath: firefoxPath,
+    headless: true,
+  })
+  const firefoxPage = await firefox.newPage()
+  const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
+  const configUri = 'inmemory://foxwarm/setup/foxwarm-config.yaml'
+  const configRawYaml = 'name: Foxwarm\nchannels: {}\n'
+
+  await attachRequestMocks(firefoxPage, { configRawYaml })
+  try {
+    await firefoxPage.goto(`${baseUrl}/firefox-reverse-selection/#setup`, { waitUntil: 'domcontentloaded' })
+    await firefoxPage.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 20_000 })
+
+    const scenarios = [
+      {
+        tab: 'models',
+        uri: modelsUri,
+        start: { line: 1, column: 11 },
+        end: { line: 1, column: 7 },
+        key: 'x',
+      },
+      {
+        tab: 'config',
+        uri: configUri,
+        start: { line: 3, column: 6 },
+        end: { line: 2, column: 1 },
+        key: 'Y',
+      },
+    ]
+
+    for (const scenario of scenarios) {
+      await firefoxPage.click(`[data-setup-tab="${scenario.tab}"]`)
+      await firefoxPage.waitForSelector(`[data-setup-section="${scenario.tab}"]:not([hidden]) [data-editor-ready="true"]`, { timeout: 15_000 })
+      await runMonacoEditorAction(firefoxPage, scenario.uri, 'replace-value', {
+        value: 'alpha beta\nsecond line\nthird line\n',
+      })
+      const selection = await dragMonacoSelection(firefoxPage, scenario.uri, scenario.start, scenario.end)
+      assert.equal(selection.direction, selection.rtlDirection)
+      assert.equal(await firefoxPage.$eval(`[data-monaco-model-uri="${scenario.uri}"] textarea.inputarea`, (input) => (
+        input.selectionStart === input.selectionEnd
+      )), true)
+
+      await firefoxPage.keyboard.press(scenario.key)
+      const expected = selection.value.slice(0, selection.selectionStartOffset)
+        + scenario.key
+        + selection.value.slice(selection.selectionEndOffset)
+      assert.equal((await runMonacoEditorAction(firefoxPage, scenario.uri, 'snapshot')).value, expected)
+    }
+
+    await firefoxPage.click('[data-setup-tab="models"]')
+    await runMonacoEditorAction(firefoxPage, modelsUri, 'replace-value', {
+      value: 'default: XX\nproviders: {}\n',
+    })
+    let selection = await dragMonacoSelection(firefoxPage, modelsUri, { line: 1, column: 12 }, { line: 1, column: 10 })
+    assert.equal(selection.direction, selection.rtlDirection)
+    const modelsStartOffset = selection.selectionStartOffset
+    const modelsEndOffset = selection.selectionEndOffset
+    await firefoxPage.click('button::-p-text(Refresh)')
+    await waitForMonacoValue(firefoxPage, modelsUri, statusPayload.models.rawYaml)
+    selection = await runMonacoEditorAction(firefoxPage, modelsUri, 'snapshot')
+    assert.equal(selection.direction, selection.rtlDirection)
+    await runMonacoEditorAction(firefoxPage, modelsUri, 'focus')
+    await firefoxPage.keyboard.press('r')
+    assert.equal((await runMonacoEditorAction(firefoxPage, modelsUri, 'snapshot')).value,
+      statusPayload.models.rawYaml.slice(0, modelsStartOffset) + 'r' + statusPayload.models.rawYaml.slice(modelsEndOffset))
+
+    await firefoxPage.click('[data-setup-tab="config"]')
+    await runMonacoEditorAction(firefoxPage, configUri, 'replace-value', {
+      value: 'name: TEMP123\nchannels: {}\n',
+    })
+    selection = await dragMonacoSelection(firefoxPage, configUri, { line: 1, column: 14 }, { line: 1, column: 7 })
+    assert.equal(selection.direction, selection.rtlDirection)
+    const configStartOffset = selection.selectionStartOffset
+    const configEndOffset = selection.selectionEndOffset
+    await firefoxPage.click('button::-p-text(Refresh)')
+    await waitForMonacoValue(firefoxPage, configUri, configRawYaml)
+    selection = await runMonacoEditorAction(firefoxPage, configUri, 'snapshot')
+    assert.equal(selection.direction, selection.rtlDirection)
+    await runMonacoEditorAction(firefoxPage, configUri, 'focus')
+    await firefoxPage.keyboard.press('C')
+    assert.equal((await runMonacoEditorAction(firefoxPage, configUri, 'snapshot')).value,
+      configRawYaml.slice(0, configStartOffset) + 'C' + configRawYaml.slice(configEndOffset))
+  } finally {
+    await firefox.close()
+  }
 })
 
 test('local and schema completions replace the current punctuated YAML scalar', async () => {
