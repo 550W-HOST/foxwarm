@@ -6,6 +6,7 @@ import * as sessionManager from '../sessionManager';
 import { executeTools } from '../llm';
 import * as nodeExecution from '../nodeExecution';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
+import * as tools from '../tools';
 import {
   call_mcp,
   call_tool,
@@ -684,7 +685,6 @@ test('default model-facing tool definitions exclude hidden browser and legacy wr
     'search_mcp_tools',
     'get_archived_messages',
     'get_archived_blocks',
-    'get_memory_context',
     'delete_session',
     'stop_session',
     'compact_session',
@@ -845,11 +845,13 @@ test('default model-facing tool names and serialized schema size stay consolidat
   ]);
 
   const serializedBytes = Buffer.byteLength(JSON.stringify(modelFacingDefinitions), 'utf8');
-  assert.equal(serializedBytes, 34_583);
+  assert.equal(serializedBytes, 34_573);
   assert.ok(serializedBytes < 38_069, 'serialized default schema should stay below the pre-consolidation baseline');
 });
 
-test('change_directory, compress_session, and list_sessions are removed entirely', () => {
+test('obsolete context and resource builtins are removed entirely', () => {
+  assert.equal(definitions.some(def => def.name === 'get_memory_context'), false);
+  assert.equal((tools as any).get_memory_context, undefined);
   assert.equal(definitions.some(def => def.name === 'change_directory'), false);
   assert.equal(definitions.some(def => def.name === 'compress_session'), false);
   assert.equal(definitions.some(def => def.name === 'list_sessions'), false);

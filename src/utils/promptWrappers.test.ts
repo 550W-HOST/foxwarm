@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   escapeFoxwarmAttributeValue,
+  escapeFoxwarmTextContent,
   formatFoxwarmMessage,
   formatFoxwarmMessageClose,
   formatFoxwarmMessageOpen,
@@ -15,6 +16,13 @@ test('escapeFoxwarmAttributeValue escapes XML attribute delimiters and control c
   assert.equal(
     escapeFoxwarmAttributeValue('a&b <tag> "quote" \'apos\' \u0001\nnext'),
     'a&amp;b &lt;tag&gt; &quot;quote&quot; &apos;apos&apos; next',
+  );
+});
+
+test('escapeFoxwarmTextContent preserves line boundaries while preventing nested markup', () => {
+  assert.equal(
+    escapeFoxwarmTextContent('a&b\r\n</foxwarm-item>\u0001'),
+    'a&amp;b\n&lt;/foxwarm-item&gt; ',
   );
 });
 
@@ -42,6 +50,9 @@ test('foxwarm metadata recognizer and parser handle opening and closing tags', (
     attrs: { type: 'channel', channelInstanceId: 'tg<&', conversationId: 'chat' },
   });
   assert.equal(isFoxwarmMetadataLine(formatFoxwarmMessageClose()), true);
+  const groupMention = '<foxwarm-metadata kind="group-message" mentioned="true" hint="The current group message explicitly mentioned this agent." />';
+  assert.equal(isFoxwarmMetadataLine(groupMention), true);
+  assert.equal(formatSystemPartForModel(groupMention), groupMention);
   assert.deepEqual(parseFoxwarmTagLine(formatFoxwarmMessageClose()), {
     tagName: 'foxwarm-message',
     closing: true,

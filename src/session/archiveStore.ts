@@ -47,6 +47,12 @@ export type ArchiveVectorBackfillCandidate = {
   checkpointLastIndexedBlockId: number;
 };
 
+export type ArchiveMessageStats = {
+  count: number;
+  minSeq?: number;
+  maxSeq?: number;
+};
+
 type LineageEntry = {
   sessionId: string;
   inherited: boolean;
@@ -381,9 +387,27 @@ async function resolveArchivedRecordSessionId(sessionId: string): Promise<string
   return resolveCanonicalReservation(reservations, sessionId);
 }
 
+function resolveArchivedRecordSessionIdReadOnly(sessionId: string): string {
+  let current = sessionId;
+  const seen = new Set<string>();
+  const select = getDb().prepare(`
+    SELECT canonical_session_id
+    FROM archive_session_id_reservations
+    WHERE session_id = ?
+  `);
+  while (!seen.has(current)) {
+    seen.add(current);
+    const row = select.get(current) as { canonical_session_id?: string } | undefined;
+    const next = row?.canonical_session_id;
+    if (!next || next === current) return current;
+    current = next;
+  }
+  throw new Error(`Session ID reservation state contains an alias cycle involving "${current}".`);
+}
+
 export async function resolveArchivedSessionId(sessionId: string): Promise<string> {
-  await initArchiveStore();
-  return resolveArchivedRecordSessionId(sessionId);
+  initArchiveStoreSync();
+  return resolveArchivedRecordSessionIdReadOnly(sessionId);
 }
 
 function openArchiveStore(): void {
@@ -1017,10 +1041,6 @@ async function importSessionBlocksFromJsonl(sessionId: string): Promise<void> {
   });
 }
 
-async function ensureImported(sessionId: string): Promise<void> {
-  if (sessionId) await ensureSessionBranch(sessionId);
-}
-
 function parseMemoryFactsJson(value: unknown): ExtractedMemoryFact[] | undefined {
   if (typeof value !== 'string' || !value.trim()) return undefined;
   try {
@@ -1111,7 +1131,7 @@ export async function hasArchivedSessionId(sessionId: string): Promise<boolean> 
     return false;
   }
 
-  await initArchiveStore();
+  initArchiveStoreSync();
   const reservation = getDb().prepare(`
     SELECT 1
     FROM archive_session_id_reservations
@@ -1169,8 +1189,8 @@ export async function ensureSessionBranch(
 }
 
 export async function getSessionBranch(sessionId: string): Promise<ArchiveBranchRecord | null> {
-  await initArchiveStore();
-  await ensureImported(sessionId);
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
   return getBranchInternal(sessionId);
 }
 
@@ -1315,9 +1335,8 @@ export async function rollbackUncommittedArchiveBlocks(records: ArchiveBlockReco
 }
 
 export async function readLocalArchiveMessages(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageRecord[]> {
-  await initArchiveStore();
-  sessionId = await resolveArchivedRecordSessionId(sessionId);
-  await ensureImported(sessionId);
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
 
   const rows = getDb().prepare(`
     SELECT agent, seq, timestamp, role, message_json
@@ -1340,16 +1359,36 @@ export async function readLocalArchiveMessages(sessionId: string, startSeq?: num
   }));
 }
 
+function readLocalArchiveMessageStatsByCanonicalId(sessionId: string, startSeq?: number, endSeq?: number): ArchiveMessageStats {
+  const row = getDb().prepare(`
+    SELECT COUNT(*) AS count, MIN(seq) AS min_seq, MAX(seq) AS max_seq
+    FROM archive_messages
+    WHERE session_id = ?
+      AND (? IS NULL OR seq >= ?)
+      AND (? IS NULL OR seq <= ?)
+  `).get(sessionId, startSeq ?? null, startSeq ?? null, endSeq ?? null, endSeq ?? null) as any;
+
+  const count = Number(row?.count) || 0;
+  return {
+    count,
+    ...(count > 0 ? { minSeq: Number(row.min_seq), maxSeq: Number(row.max_seq) } : {}),
+  };
+}
+
+export async function getLocalArchiveMessageStats(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageStats> {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+  return readLocalArchiveMessageStatsByCanonicalId(sessionId, startSeq, endSeq);
+}
+
 export async function readEffectiveArchiveMessages(sessionId: string, startSeq?: number, endSeq?: number): Promise<EffectiveArchiveMessageRecord[]> {
-  await initArchiveStore();
-  sessionId = await resolveArchivedRecordSessionId(sessionId);
-  await ensureImported(sessionId);
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
 
   const lineage = buildLineage(sessionId);
   const results: EffectiveArchiveMessageRecord[] = [];
 
   for (const entry of lineage) {
-    await ensureImported(entry.sessionId);
     const effectiveStart = typeof startSeq === 'number' ? startSeq : undefined;
     const cappedEnd = typeof entry.maxMessageSeq === 'number'
       ? (typeof endSeq === 'number' ? Math.min(endSeq, entry.maxMessageSeq) : entry.maxMessageSeq)
@@ -1373,10 +1412,37 @@ export async function readEffectiveArchiveMessages(sessionId: string, startSeq?:
   return results.sort((a, b) => a.seq - b.seq || Number(a.timestamp) - Number(b.timestamp));
 }
 
+export async function getEffectiveArchiveMessageStats(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageStats> {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+
+  let count = 0;
+  let minSeq: number | undefined;
+  let maxSeq: number | undefined;
+  for (const entry of buildLineage(sessionId)) {
+    const cappedEnd = typeof entry.maxMessageSeq === 'number'
+      ? (typeof endSeq === 'number' ? Math.min(endSeq, entry.maxMessageSeq) : entry.maxMessageSeq)
+      : endSeq;
+    if (typeof entry.maxMessageSeq === 'number' && entry.maxMessageSeq <= 0) continue;
+    if (typeof startSeq === 'number' && typeof cappedEnd === 'number' && startSeq > cappedEnd) continue;
+
+    const canonicalEntryId = resolveArchivedRecordSessionIdReadOnly(entry.sessionId);
+    const local = readLocalArchiveMessageStatsByCanonicalId(canonicalEntryId, startSeq, cappedEnd);
+    count += local.count;
+    if (typeof local.minSeq === 'number') minSeq = typeof minSeq === 'number' ? Math.min(minSeq, local.minSeq) : local.minSeq;
+    if (typeof local.maxSeq === 'number') maxSeq = typeof maxSeq === 'number' ? Math.max(maxSeq, local.maxSeq) : local.maxSeq;
+  }
+
+  return {
+    count,
+    ...(typeof minSeq === 'number' ? { minSeq } : {}),
+    ...(typeof maxSeq === 'number' ? { maxSeq } : {}),
+  };
+}
+
 export async function readLocalArchiveBlocks(sessionId: string, startId?: number, endId?: number): Promise<ArchiveBlockRecord[]> {
-  await initArchiveStore();
-  sessionId = await resolveArchivedRecordSessionId(sessionId);
-  await ensureImported(sessionId);
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
 
   const rows = getDb().prepare(`
     SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json, raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
@@ -1409,15 +1475,13 @@ export async function readLocalArchiveBlocks(sessionId: string, startId?: number
 }
 
 export async function readEffectiveArchiveBlocks(sessionId: string, startId?: number, endId?: number): Promise<EffectiveArchiveBlockRecord[]> {
-  await initArchiveStore();
-  sessionId = await resolveArchivedRecordSessionId(sessionId);
-  await ensureImported(sessionId);
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
 
   const lineage = buildLineage(sessionId);
   const results: EffectiveArchiveBlockRecord[] = [];
 
   for (const entry of lineage) {
-    await ensureImported(entry.sessionId);
     const effectiveStart = typeof startId === 'number' ? startId : undefined;
     const cappedEnd = typeof entry.maxBlockId === 'number'
       ? (typeof endId === 'number' ? Math.min(endId, entry.maxBlockId) : entry.maxBlockId)
@@ -1850,9 +1914,8 @@ export async function exportSessionArchivesJsonl(outputRoot: string): Promise<{ 
 }
 
 export async function getVectorSearchLineage(sessionId: string): Promise<LineageEntry[]> {
-  await initArchiveStore();
-  sessionId = await resolveArchivedRecordSessionId(sessionId);
-  await ensureImported(sessionId);
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
   return buildLineage(sessionId);
 }
 

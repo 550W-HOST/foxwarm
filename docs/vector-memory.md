@@ -90,14 +90,3 @@ recall({
 ```
 
 `recall({ vector_query })` searches raw segments, compact blocks, and facts, then reloads original archive ranges through the shared preview renderer. Exact target selection and literal result filtering remain separate operations.
-
-Time-near raw context remains available through:
-
-```ts
-get_memory_context({
-  timestamp: Date.now(),
-  limit: 10,
-})
-```
-
-`get_memory_context` remains raw-only and does not return block summaries.

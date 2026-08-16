@@ -34,7 +34,27 @@ function isCompactCompletedPart(part: MessagePart): boolean {
   return values.length > 0 && values.every(isCompactCompletedText);
 }
 
+function isCanonicalSystemOnlyPart(part: MessagePart, predicate: (value: unknown) => boolean): boolean {
+  return Object.keys(part).length === 1 && predicate(part.system);
+}
+
+function isCompactCompletionGoalReminderText(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const match = value.match(/^<foxwarm-system kind="goal-reminder">\n([\s\S]+)\n<\/foxwarm-system>$/);
+  return !!match && match[1].trim().length > 0;
+}
+
+function isGeneratedCompactCompletionMessage(message: Message): boolean {
+  return message.role === 'user'
+    && message.__meta?.goalReminder === true
+    && message.__meta?.goalReminderKind === 'compact-completion'
+    && message.parts.length === 2
+    && isCanonicalSystemOnlyPart(message.parts[0], isCompactCompletedText)
+    && isCanonicalSystemOnlyPart(message.parts[1], isCompactCompletionGoalReminderText);
+}
+
 function isCompactCompletedMessage(message: Message): boolean {
+  if (isGeneratedCompactCompletionMessage(message)) return true;
   const meaningfulParts = message.parts.filter(part => (
     part.functionCall
     || part.functionResponse

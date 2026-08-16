@@ -123,7 +123,7 @@ test('QQ direct video and voice are bounded generic files while nested attachmen
   assert.equal(saves[0].isImage, false);
   assert.equal(saves[1].mimeType, 'audio/wav');
   assert.equal(saves[1].isImage, false);
-  assert.match(parts[1].text || '', /File:/);
+  assert.match(parts[1].text || '', /^<foxwarm-file\b/);
   assert.match(parts[2].text || '', /ASR hint/);
   assert.match(parts[3].text || '', /nested QQ media is deferred/);
 });
@@ -190,7 +190,7 @@ test('QQ media materialization downloads a raster image, saves a safe descriptor
   assert.doesNotMatch(saves[0].fileName || '', /[\\/]/);
   assert.match(saves[0].fileName || '', /\.png$/);
   assert.equal(parts[0].text, 'look');
-  assert.match(parts[1].text || '', /Image:/);
+  assert.match(parts[1].text || '', /^<foxwarm-image name=".+" node="master" path="\/tmp\/.+" \/>$/);
   assert.equal(parts[1].inlineData?.mimeType, 'image/png');
   assert.equal(Buffer.from(parts[1].inlineData?.data || '', 'base64').toString('hex'), image.toString('hex'));
   assert.equal(parts[1].imageMeta?.width, 2);
@@ -365,7 +365,7 @@ test('QQ media treats an image hint whose bytes do not decode as a generic saved
 
   assert.equal(saveCount, 1);
   assert.equal(parts.some(part => part.inlineData), false);
-  assert.match(parts[1].text || '', /File:/);
+  assert.match(parts[1].text || '', /^<foxwarm-file\b/);
 });
 
 test('QQ media bounds header and streamed bytes before saving', async () => {
@@ -582,7 +582,7 @@ test('QQ isolated media uses the bounded whole-buffer node path and keeps raster
   assert.equal(saves[1].buffer.toString(), 'small file');
   assert.equal(parts[1].inlineData?.mimeType, 'image/png');
   assert.equal(Buffer.from(parts[1].inlineData?.data || '', 'base64').toString('hex'), image.toString('hex'));
-  assert.match(parts[2].text || '', /File:/);
+  assert.match(parts[2].text || '', /^<foxwarm-file\b/);
 });
 
 test('QQ isolated media rejects over-cap attachments before Buffer/node transfer', async () => {
@@ -645,7 +645,7 @@ test('QQ isolated per-attachment cap does not exhaust the independent total boun
   assert.equal(fetchCount, 2);
   assert.deepEqual(savedBuffers.map(buffer => buffer.toString()), ['small file']);
   assert.match(parts[1].text || '', /configured size limit/);
-  assert.match(parts[2].text || '', /File:/);
+  assert.match(parts[2].text || '', /^<foxwarm-file\b/);
 });
 
 test('QQ real master save copy errors become controlled storage errors without path leakage', async () => {

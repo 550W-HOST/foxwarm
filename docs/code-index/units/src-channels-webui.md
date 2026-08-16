@@ -1,6 +1,6 @@
 # Unit: src-channels-webui
 
-Files: src/channels/webuiChannel.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTerminalStream.test.ts
+Files: src/channels/webuiChannel.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTerminalStream.test.ts
 Secondary files: src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
 
 ## Purpose
@@ -85,6 +85,7 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
 - The former custom workspace filesystem routes remain removed; authenticated file download remains available for tool/file affordances.
 - `GET /api/nodes` returns `master` plus approved remote node IDs, public labels/types, current online state, last-seen time, and only the allowlisted Code/terminal launcher service versions. Pending pairings, credentials, token hashes, model-tool schemas, other backend services, and private configuration are not part of this DTO.
 - `sendFile` is a channel no-op because the browser consumes file information through tool result metadata and authenticated download routes.
+- The ordinary multipart upload route normalizes only the Busboy Latin-1 representation of valid UTF-8 filename bytes. ASCII, already-correct Unicode, and invalid/non-UTF-8 Latin-1-shaped names remain unchanged. The corrected name is returned to the browser and then reused by the canonical session-file save, so optimistic and persisted descriptors agree without changing temporary-spool or unique-storage behavior.
 - After terminal-stream authentication and successful PTY attachment, the route sends a WebSocket protocol ping every 30 seconds while the socket remains open. Close or error clears the unreferenced timer and detaches the browser client without closing the PTY; only the existing explicit terminal-close message/API kills it. This is transport keepalive, not an application JSON message or terminal lifecycle timeout. Canonical semantics: [D-code-terminal-lifecycle](../threads/code-integration.md#d-code-terminal-lifecycle).
 
 ## Compatibility

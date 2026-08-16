@@ -63,6 +63,10 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 
 ## Design decisions
 
+### D-webui-product-language
+
+[2026-08-16] Normal WebUI surfaces use concise product language rather than source comments, storage-path explanations, protocol details, or developer documentation. User actions, useful status, and actionable errors stay visible; implementation diagnostics belong in explicit debug or documentation surfaces instead of ordinary headings, subtitles, and help copy.
+
 ### D-webui-dynamic-base-path
 
 All REST, SSE, WebSocket, download, Code, extension, and embedded URLs derive from the active deployment path/origin. Site-root assumptions are invalid.

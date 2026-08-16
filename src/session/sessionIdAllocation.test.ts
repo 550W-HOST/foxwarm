@@ -914,6 +914,79 @@ test('moved historical ids remain reserved while the ledger repairs and missing 
   }
 });
 
+test('production startup validates and repairs reservation state before ordinary reads', () => {
+  const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');
+  const oldSessionId = 'startup_reservation_old';
+  const newSessionId = 'startup_reservation_new';
+
+  const run = (tempRoot: string, source: string) => execFileSync(process.execPath, ['-e', source], {
+    env: { ...process.env, FOXWARM_DATA_DIR: tempRoot, FOXWARM_SYNC_FILE_LOG: '1' },
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const prepareMovedReservation = (tempRoot: string) => run(tempRoot, `
+    const sm = require(${JSON.stringify(sessionManagerPath)});
+    (async () => {
+      await sm.loadSessions();
+      const created = await sm.createEmptySession(${JSON.stringify(oldSessionId)});
+      await sm.appendSessionMessage(created.session, {
+        role: 'user', parts: [{ text: 'startup reservation history' }], __meta: { timestamp: 1 },
+      });
+      await sm.moveSessionToTarget({ sourceSessionId: ${JSON.stringify(oldSessionId)}, newSessionId: ${JSON.stringify(newSessionId)} });
+      process.exit(0);
+    })().catch(error => { console.error(error); process.exit(1); });
+  `);
+
+  const conflictRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-startup-reservation-conflict-'));
+  try {
+    prepareMovedReservation(conflictRoot);
+    const ledgerPath = path.join(conflictRoot, 'state', 'session-id-reservations.jsonl');
+    const records = fs.readFileSync(ledgerPath, 'utf8').trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+    const oldReservation = records.find(record => record.sessionId === oldSessionId);
+    assert.ok(oldReservation, 'setup must persist the historical alias');
+    oldReservation.canonicalSessionId = 'startup_conflicting_target';
+    fs.writeFileSync(ledgerPath, `${records.map(record => JSON.stringify(record)).join('\n')}\n`);
+
+    run(conflictRoot, `
+      const sm = require(${JSON.stringify(sessionManagerPath)});
+      (async () => {
+        try {
+          await sm.loadSessions();
+          throw new Error('conflicting reservation state unexpectedly reached startup readiness');
+        } catch (error) {
+          if (!String(error).includes('between ledger and SQLite')) throw error;
+        }
+        process.exit(0);
+      })().catch(error => { console.error(error); process.exit(1); });
+    `);
+  } finally {
+    fs.removeSync(conflictRoot);
+  }
+
+  const repairRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-startup-reservation-repair-'));
+  try {
+    prepareMovedReservation(repairRoot);
+    const ledgerPath = path.join(repairRoot, 'state', 'session-id-reservations.jsonl');
+    fs.removeSync(ledgerPath);
+    run(repairRoot, `
+      const fs = require('fs-extra');
+      const sm = require(${JSON.stringify(sessionManagerPath)});
+      (async () => {
+        await sm.loadSessions();
+        if (!await fs.pathExists(${JSON.stringify(ledgerPath)})) throw new Error('startup did not repair the missing ledger');
+        const records = (await fs.readFile(${JSON.stringify(ledgerPath)}, 'utf8')).trim().split(/\\r?\\n/).filter(Boolean).map(line => JSON.parse(line));
+        const reservation = records.find(record => record.sessionId === ${JSON.stringify(oldSessionId)});
+        if (reservation?.canonicalSessionId !== ${JSON.stringify(newSessionId)}) throw new Error('startup repaired the wrong alias mapping');
+        const archive = await sm.getArchivedMessages(${JSON.stringify(oldSessionId)});
+        if (archive.records[0]?.message?.parts?.[0]?.text !== 'startup reservation history') throw new Error('ordinary read did not see the repaired alias');
+        process.exit(0);
+      })().catch(error => { console.error(error); process.exit(1); });
+    `);
+  } finally {
+    fs.removeSync(repairRoot);
+  }
+});
+
 test('pre-ledger mismatched path and payload reserve both ids without inventing an alias', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-preledger-moved-deleted-'));
   const sessionManagerPath = path.resolve(__dirname, '../sessionManager.js');

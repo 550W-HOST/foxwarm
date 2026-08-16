@@ -1,5 +1,5 @@
 import { Message, Session, ContextBlockMessageMeta } from '../types';
-import { readArchiveMessagesBySeqRange, SessionArchiveCommitError } from './archive';
+import { SessionArchiveCommitError } from './archive';
 import { formatLocalTimeRange } from '../utils/localTime';
 import {
   ensureSessionBranch,
@@ -51,6 +51,8 @@ export interface CreateArchiveBlockInput {
   sourceBlockIds?: number[];
   rawStartSeq: number;
   rawEndSeq: number;
+  rawStartTimestamp?: number;
+  rawEndTimestamp?: number;
   summary: string;
   memoryFacts?: ExtractedMemoryFact[];
 }
@@ -155,13 +157,9 @@ function getNextSessionBlockId(session: Session): number {
 
 async function buildArchiveBlockRecords(session: Session, blocks: CreateArchiveBlockInput[]): Promise<ArchiveBlockRecord[]> {
   const createdAt = Date.now();
-  return Promise.all(blocks.map(async (block) => {
+  return blocks.map((block) => {
     const id = getNextSessionBlockId(session);
     session.nextBlockId = id + 1;
-    const [startRecord, endRecord] = await Promise.all([
-      readArchiveMessagesBySeqRange(session.id, block.rawStartSeq, block.rawStartSeq),
-      readArchiveMessagesBySeqRange(session.id, block.rawEndSeq, block.rawEndSeq),
-    ]);
     return {
       v: 1,
       kind: 'block',
@@ -177,13 +175,13 @@ async function buildArchiveBlockRecords(session: Session, blocks: CreateArchiveB
         : {}),
       rawStartSeq: block.rawStartSeq,
       rawEndSeq: block.rawEndSeq,
-      rawStartTimestamp: startRecord[0]?.timestamp,
-      rawEndTimestamp: endRecord[0]?.timestamp,
+      ...(typeof block.rawStartTimestamp === 'number' && Number.isFinite(block.rawStartTimestamp) ? { rawStartTimestamp: block.rawStartTimestamp } : {}),
+      ...(typeof block.rawEndTimestamp === 'number' && Number.isFinite(block.rawEndTimestamp) ? { rawEndTimestamp: block.rawEndTimestamp } : {}),
       summary: formatArchiveBlockSummary(block.summary, block.memoryFacts),
       ...(block.memoryFacts?.length ? { memoryFacts: block.memoryFacts } : {}),
       createdAt,
     };
-  }));
+  });
 }
 
 export async function appendBlocksToArchiveWithCommitInfo(

@@ -20,9 +20,6 @@ export function createVectorServiceHandler(): RpcServiceHandler<typeof vectorSer
     async search(input) {
       return runtime.search(input.query, input.limit, input.format, input.options);
     },
-    async getContextAround(input) {
-      return runtime.getContextAround(input.timestamp, input.limit);
-    },
     async getArchiveIndexStatus(input) {
       return runtime.getArchiveIndexStatus(input.sessionId);
     },
@@ -46,10 +43,6 @@ export function createVectorServiceHandler(): RpcServiceHandler<typeof vectorSer
         input.latestBlockIdHint,
       );
       return { lastIndexedSeq };
-    },
-    async indexAllSessionArchives(input) {
-      await runtime.indexAllSessionArchives(input.sessionIds);
-      return { completed: true };
     },
     async indexMemoryFacts(input) {
       return { indexed: await runtime.indexMemoryFactsFromCompaction(input) };

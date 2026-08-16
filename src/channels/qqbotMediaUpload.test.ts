@@ -7,7 +7,6 @@ import sharp from 'sharp';
 import type { ChannelFile } from '../channel';
 import { QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES, uploadQQBotFile } from './qqbotMediaUpload';
 
-const PNG_HEADER = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const PART_HOST = 'https://cos.ap-guangzhou.myqcloud.com';
 
 async function validPng(): Promise<Buffer> {
@@ -16,6 +15,71 @@ async function validPng(): Promise<Buffer> {
 
 async function validJpeg(): Promise<Buffer> {
   return sharp({ create: { width: 2, height: 1, channels: 3, background: { r: 30, g: 20, b: 10 } } }).jpeg().toBuffer();
+}
+
+async function validGif(): Promise<Buffer> {
+  return sharp({ create: { width: 2, height: 1, channels: 4, background: { r: 20, g: 30, b: 40, alpha: 1 } } }).gif().toBuffer();
+}
+
+async function validWebp(): Promise<Buffer> {
+  return sharp({ create: { width: 2, height: 1, channels: 4, background: { r: 40, g: 30, b: 20, alpha: 1 } } }).webp().toBuffer();
+}
+
+function validBmp(): Buffer {
+  const data = Buffer.alloc(58);
+  data.write('BM', 0, 'ascii');
+  data.writeUInt32LE(data.length, 2);
+  data.writeUInt32LE(54, 10);
+  data.writeUInt32LE(40, 14);
+  data.writeInt32LE(1, 18);
+  data.writeInt32LE(1, 22);
+  data.writeUInt16LE(1, 26);
+  data.writeUInt16LE(24, 28);
+  data.writeUInt32LE(4, 34);
+  data.set([30, 20, 10, 0], 54);
+  return data;
+}
+
+function pixelTruncatedBmp(): Buffer {
+  const data = Buffer.alloc(55);
+  data.write('BM', 0, 'ascii');
+  data.writeUInt32LE(data.length, 2);
+  data.writeUInt32LE(54, 10);
+  data.writeUInt32LE(40, 14);
+  data.writeInt32LE(1_000, 18);
+  data.writeInt32LE(1_000, 22);
+  data.writeUInt16LE(1, 26);
+  data.writeUInt16LE(24, 28);
+  data.writeUInt32LE(0, 30);
+  return data;
+}
+
+function paletteLessIndexedBmp(): Buffer {
+  const data = Buffer.alloc(58);
+  data.write('BM', 0, 'ascii');
+  data.writeUInt32LE(data.length, 2);
+  data.writeUInt32LE(54, 10);
+  data.writeUInt32LE(40, 14);
+  data.writeInt32LE(1, 18);
+  data.writeInt32LE(1, 22);
+  data.writeUInt16LE(1, 26);
+  data.writeUInt16LE(1, 28);
+  data.writeUInt32LE(0, 30);
+  data.writeUInt32LE(4, 34);
+  return data;
+}
+
+function invalidCore32Bmp(): Buffer {
+  const data = Buffer.alloc(30);
+  data.write('BM', 0, 'ascii');
+  data.writeUInt32LE(data.length, 2);
+  data.writeUInt32LE(26, 10);
+  data.writeUInt32LE(12, 14);
+  data.writeUInt16LE(1, 18);
+  data.writeUInt16LE(1, 20);
+  data.writeUInt16LE(1, 22);
+  data.writeUInt16LE(32, 24);
+  return data;
 }
 
 type RequestRecord = { path: string; body: Record<string, unknown> };
@@ -118,6 +182,93 @@ test('QQ outbound uploader sends tiny JPEG and generic Group files directly', as
   });
 });
 
+test('QQ outbound uploader sends byte-probed GIF, WebP, and BMP through the direct image flow', async () => {
+  const fixtures = [
+    ['image.gif', await validGif()],
+    ['image.webp', await validWebp()],
+    ['image.bmp', validBmp()],
+  ] as const;
+  for (const [name, data] of fixtures) {
+    await withTempFile(data, name, async filePath => {
+      const transport = createMockTransport(64, 1);
+      const result = await uploadQQBotFile(
+        'group',
+        'group-openid',
+        channelFile(filePath, `mislabeled-${name}.bin`, 'application/octet-stream', false),
+        undefined,
+        { request: transport.request, fetch: transport.fetchFn },
+      );
+      assert.deepEqual(result, { fileInfo: 'opaque-file-info', fileType: 1, sizeBytes: data.length, isImage: true });
+      assert.equal(transport.requests.length, 1);
+      assert.equal(transport.requests[0].path, '/v2/groups/group-openid/files');
+      assert.deepEqual(transport.requests[0].body, {
+        file_type: 1,
+        srv_send_msg: false,
+        file_data: data.toString('base64'),
+      });
+      assert.equal(transport.puts.length, 0);
+    });
+  }
+});
+
+test('QQ outbound uploader keeps mislabeled non-image bytes generic', async () => {
+  for (const [name, data] of [
+    ['fake.gif', Buffer.from('not an image despite every caller hint')],
+    ['pixel-truncated.bmp', pixelTruncatedBmp()],
+    ['palette-less-indexed.bmp', paletteLessIndexedBmp()],
+    ['invalid-core-32.bmp', invalidCore32Bmp()],
+  ] as const) {
+    await withTempFile(data, name, async filePath => {
+      const transport = createMockTransport(64, 1);
+      const result = await uploadQQBotFile(
+        'c2c',
+        'user-openid',
+        channelFile(filePath, name, `image/${path.extname(name).slice(1)}`, true),
+        undefined,
+        { request: transport.request, fetch: transport.fetchFn },
+      );
+      assert.equal(result.fileType, 4);
+      assert.equal(result.isImage, false);
+      assert.deepEqual(transport.requests[0].body, {
+        file_type: 4,
+        srv_send_msg: false,
+        file_data: data.toString('base64'),
+        file_name: name,
+      });
+    });
+  }
+});
+
+test('QQ outbound uploader streams a byte-probed WebP through the chunked image flow unchanged', async () => {
+  const webp = await validWebp();
+  const data = Buffer.concat([
+    webp,
+    Buffer.alloc(QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES - webp.length, 0),
+  ]);
+  await withTempFile(data, 'large.webp', async filePath => {
+    const transport = createMockTransport(data.length, 1);
+    const result = await uploadQQBotFile(
+      'group',
+      'group-openid',
+      channelFile(filePath, 'large.webp', 'application/octet-stream', false),
+      undefined,
+      { request: transport.request, fetch: transport.fetchFn },
+    );
+    assert.equal(result.fileType, 1);
+    assert.equal(result.isImage, true);
+    assert.equal(transport.requests[0].path, '/v2/groups/group-openid/upload_prepare');
+    assert.equal(transport.requests[0].body.file_type, 1);
+    assert.equal(transport.requests[0].body.file_size, data.length);
+    assert.equal(transport.requests[0].body.file_name, 'large.webp');
+    assert.deepEqual(transport.requests.at(-1), {
+      path: '/v2/groups/group-openid/files',
+      body: { upload_id: 'upload-id-1' },
+    });
+    assert.equal(transport.puts.length, 1);
+    assert.deepEqual(transport.puts[0].body, data);
+  });
+});
+
 test('QQ outbound uploader keeps the exact 5 MiB boundary and larger files on streamed chunk flow', async () => {
   const threshold = QQBOT_MEDIA_DIRECT_UPLOAD_THRESHOLD_BYTES;
   for (const [size, name] of [[threshold, 'exact.bin'], [threshold + 1, 'larger.bin']] as const) {
@@ -198,7 +349,7 @@ test('QQ outbound direct upload requires a bounded opaque file_info and honors g
 });
 
 test('QQ outbound uploader downgrades oversized raster images to generic files within file cap', async () => {
-  const data = Buffer.concat([PNG_HEADER, Buffer.alloc(20, 7)]);
+  const data = await validPng();
   await withTempFile(data, 'large.png', async filePath => {
     const transport = createMockTransport(128, 1);
     const result = await uploadQQBotFile('c2c', 'user-openid', channelFile(filePath, 'large.png', 'image/png', true), {

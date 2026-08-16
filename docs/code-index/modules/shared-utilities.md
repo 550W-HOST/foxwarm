@@ -23,7 +23,7 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 - patch parsing/content-application functions plus per-operation change-count summaries.
 - `PersistentExecManager` and shared timeout/cwd resolution.
 - `truncateOutputForDisplay`.
-- `formatToolResponsePayload`, `formatStructuredValue`, token estimation, and small WebUI rendering helpers.
+- `formatToolResponsePayload`, `formatStructuredValue`, token estimation, Foxwarm attribute/attachment markup formatting, and small WebUI rendering helpers.
 - `APP_CONFIG_SCHEMA`, `MODELS_CONFIG_SCHEMA`, and `KNOWN_PROVIDER_TYPES` through the `configSchemas` package export.
 - `executeVscodeNodeService`, `VSCODE_NODE_SERVICE_VERSIONS`.
 - `CodeHelperIpcServer` and fixed open/add request types.

@@ -101,7 +101,11 @@ export class MessageRouter {
   /**
    * Add source/runtime system parts for incoming user messages.
    */
-  private addSourceSystemParts(parts: MessagePart[], source: QueueSource): void {
+  private addSourceSystemParts(
+    parts: MessagePart[],
+    source: QueueSource,
+    ingressMetadataParts: MessagePart[] = [],
+  ): void {
     if (!source.platform) {
       return;
     }
@@ -149,20 +153,28 @@ export class MessageRouter {
     }
 
     const textOnlyContent = getPlainTextOnlyContent(parts);
-    if (textOnlyContent !== undefined) {
+    if (textOnlyContent !== undefined && ingressMetadataParts.length === 0) {
       parts.splice(0, parts.length, ...systemParts, { system: formatFoxwarmMessage(sourceAttrs, textOnlyContent) });
       return;
     }
 
-    parts.unshift(...systemParts, { system: formatFoxwarmMessageOpen(sourceAttrs) });
+    parts.unshift(
+      ...systemParts,
+      { system: formatFoxwarmMessageOpen(sourceAttrs) },
+      ...ingressMetadataParts.map(part => ({ ...part })),
+    );
     parts.push({ system: formatFoxwarmMessageClose() });
   }
 
 
-  private prepareUserParts(parts: MessagePart[], source?: QueueSource): MessagePart[] {
+  private prepareUserParts(
+    parts: MessagePart[],
+    source?: QueueSource,
+    ingressMetadataParts: MessagePart[] = [],
+  ): MessagePart[] {
     const preparedParts = [...parts];
     if (source) {
-      this.addSourceSystemParts(preparedParts, source);
+      this.addSourceSystemParts(preparedParts, source, ingressMetadataParts);
     }
     return preparedParts;
   }
@@ -173,7 +185,7 @@ export class MessageRouter {
       type: 'user',
       source,
       ...(message.clientMessageId ? { clientMessageId: message.clientMessageId } : {}),
-      parts: this.prepareUserParts(message.parts, source),
+      parts: this.prepareUserParts(message.parts, source, message.ingressMetadataParts),
     };
   }
 

@@ -98,7 +98,36 @@ outbox, or persisted adapter state.
 
 ### D-channel-file-descriptor
 
-Inbound file context reports node plus path and does not instruct the agent to use a specific tool or assume every file is text.
+[2026-08-15] Current inbound attachment context uses one self-closing metadata line with ordered, XML-escaped attributes: images write `<foxwarm-image name="..." node="..." path="..." />`; generic files write `<foxwarm-file name="..." node="..." path="..." mime="..." />`. Every attribute uses the shared Foxwarm attribute normalization/escaping boundary, so quotes, ampersands, angle brackets, controls, and newlines cannot alter the tag grammar. A caption/body remains ordinary text before the descriptor with the existing blank-line separation. The descriptor reports node plus path without prescribing a tool or assuming every file is text. WebUI optimistic previews use the same tag formatter but omit node/path until canonical server reconciliation rather than exposing the temporary upload spool. Existing persisted bracket descriptors require no special handling: they remain ordinary message text and are neither parsed nor migrated.
+
+### D-channel-current-group-trigger-metadata
+
+[2026-08-16] A channel adapter may provide an ephemeral structured metadata
+part when it has a reliable native signal about the **current** group trigger.
+The Router detects slash commands from the original user text first, then
+places the metadata part inside the canonical direct-channel
+`<foxwarm-message>` wrapper so the tag survives queueing, Worker serialization,
+history, provider formatting, and authorization-gated media materialization
+without persisting a parallel flag. A command receives neither the metadata as
+arguments nor a queued metadata row. Channels without a reliable signal emit
+nothing and must not guess `false`.
+
+QQ group ingress uses exactly:
+
+- Mention trigger: `<foxwarm-metadata kind="group-message" mentioned="true" hint="The current group message explicitly mentioned this agent." />`
+- Ordinary trigger: `<foxwarm-metadata kind="group-message" mentioned="false" hint="The current group message is ordinary group chat and did not mention this agent." />`
+
+QQ treats the current trigger as mentioned only when the native event is
+`GROUP_AT_MESSAGE_CREATE` or a bounded structured `mentions` entry has
+`is_you === true`. The latter is authoritative for all-message mode, where QQ
+can deliver a real self-mention as `GROUP_MESSAGE_CREATE`. `bot: true` alone,
+content `<@...>` tokens, configured app IDs, READY identities, display names,
+and learned/persisted IDs are not mention signals. Missing, malformed, or
+false `is_you` remains an ordinary QQ group trigger.
+
+The marker describes only the current trigger, never buffered/local/platform
+history. It is lightweight direct-user metadata in WebUI, not a heavy system
+card.
 
 ## Canonical ownership
 

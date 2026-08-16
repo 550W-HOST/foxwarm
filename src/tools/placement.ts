@@ -32,7 +32,6 @@ export const BUILTIN_TOOL_PLACEMENTS = {
   image_crop: { owner: 'session-owner' },
   image_write_to_file: { owner: 'dispatcher/container' },
   exec: { owner: 'node-environment' },
-  get_memory_context: { owner: 'external-service' },
   create_child_session: { owner: 'dispatcher/container' },
   send_to_session: { owner: 'main-management' },
   wait: { owner: 'dispatcher/container' },

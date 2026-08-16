@@ -15,7 +15,8 @@ upload flow.
 ## Key exports
 
 - `QQBotChannel` — managed `Channel` implementation for official QQ Bot text
-  ingress, bounded C2C/group media ingress, and text delivery.
+  ingress, bounded group context/batching, bounded C2C/group media ingress,
+  and text delivery.
 - `parseQQBotConversationId()` — validates the scoped outbound target format.
 - `isQQBotChannelConfigReady()` — validates the two required credentials for
   runtime factory/status handling.
@@ -38,7 +39,7 @@ upload flow.
 | --- | --- |
 | `QQBotChannel.start()` / `stop()` | Obtains a token, opens or closes the gateway, and fences reconnect/heartbeat callbacks by connection generation. |
 | `QQBotChannel.handleGatewayMessage()` | Identifies or resumes after `HELLO`, retains dispatch sequence/session state, handles gateway control frames, and accepts supported message events. |
-| `QQBotChannel.routeInboundMessage()` | Deduplicates supported events, creates scoped identity, keeps C2C/group attachment metadata URL-free, and attaches an ephemeral media materializer. |
+| `QQBotChannel.routeInboundMessage()` | Deduplicates supported events, creates scoped identity, buffers/batches group input, keeps C2C/group attachment metadata URL-free, and attaches an ephemeral current-message media materializer. |
 | `QQBotChannel.sendMessage()` | Routes C2C, group, guild-channel, and guild-DM text to their official REST endpoint. |
 | `QQBotChannel.sendFile()` | Sends C2C/group images or generic files through destination-specific direct-small or streamed-large upload and one rich-media message; rejects guild/DM media. |
 | `QQBotChannel.sendTyping()` | Uses the official C2C input-notify message with the latest conversation-local inbound message ID when available. |
@@ -54,8 +55,9 @@ upload flow.
   authorization use `allowedUsers` normally rather than treating a group or
   channel target as its sender.
 - The adapter accepts `content` plus attachments from `C2C_MESSAGE_CREATE`,
-  `GROUP_AT_MESSAGE_CREATE`, and (when `requireMention: false`) ordinary
-  `GROUP_MESSAGE_CREATE` events. Attachment-only C2C/group events are retained as
+  `GROUP_AT_MESSAGE_CREATE`, and ordinary `GROUP_MESSAGE_CREATE` events. Group
+  ordinary events are either bounded mention-triggered context or fixed-window
+  always-mode batches according to `requireMention`. Attachment-only C2C/group events are retained as
   safe filename/MIME/size metadata and can be materialized only after the
   canonical router has already authorized the sender. Supported raster images
   become transient inline parts and other direct files (including video/voice)
@@ -63,6 +65,11 @@ upload flow.
   bytes with references. Voice prefers an allowlisted WAV URL and preserves
   bounded ASR reference text. Guild channel/DM media remains unsupported, and
   empty guild/DM events are ignored; nested attachments remain deferred.
+- QQ group current triggers attach the adapter's reliable current-mention
+  classification through the generic channel-ingress metadata boundary. The
+  same classification drives mention policy and batch flushing. Exact signals,
+  grammar, command ordering, persistence, and no-guess behavior are canonical in
+  [D-channel-current-group-trigger-metadata](../modules/channels.md#d-channel-current-group-trigger-metadata).
 - Attachment materialization uses HTTPS-only allowlisted hosts, manually
   revalidates each redirect, forwards no bot authorization/cookies, streams to
   a bounded temporary file with a timeout, enforces per-file/total/count
@@ -118,8 +125,8 @@ upload flow.
   boundary after restart. It sends locally prepared files smaller than 5 MiB
   through the destination-specific direct base64 flow, and uses the official
   streamed chunk flow at or above 5 MiB. Images are sent only for
-  format-probed PNG/JPEG bytes within the image cap; other images downgrade to
-  generic files within the file cap. Outbound local files are hard-capped at
+  byte-probed JPEG/PNG/GIF/WebP/BMP within the image cap; other images downgrade
+  to generic files within the file cap. Outbound local files are hard-capped at
   100 MiB; this is lower than the 200 MiB inbound configuration hard cap.
 - `SessionTurnRunner` carries only the current turn's QQ source metadata through
   the in-process tool context to `send_file`. An explicit target receives that
@@ -130,7 +137,9 @@ upload flow.
 ## Runtime and configuration
 
 - `QQBotConfig` in `src/config.ts` accepts `appId`, `clientSecret`, `enabled`,
-  `requireMention` (default `true`), `allowedUsers`, `allowAllUsers`, and bounded `media` limits
+  `requireMention` (default `true`), `groupContextLimit` (default 10, range 0-50),
+  `groupBatchWindowMs` (default 5000; 0 or range 250-30000), `allowedUsers`,
+  `allowAllUsers`, and bounded `media` limits
   (`imageMaxBytes` safe inline-image cap, `fileMaxBytes`, `maxTotalBytes`,
   `maxAttachments`). Main-hosted materialization uses the path saver; isolated
   or bound-node QQ media uses the existing whole-buffer saver only for files up
@@ -165,8 +174,10 @@ validation, safe generic-file storage, safe-inline-cap image fallback, best-effo
 raster format probing, controlled error categories/path scrubbing, and
 transient image data crossing into a canonical blob reference, isolated
 whole-buffer saves, and the fixed isolated transfer cap. Channel tests also
-cover ordinary group events, default mention gating, AT/non-AT business
-deduplication, passive replies retaining the inbound `msg_id`, the three-minute
+cover the three group-delivery patterns, mention context, fixed always-mode
+batching, AT immediate flush, context markup escaping, group bounds/TTL,
+slash/media boundaries, lifecycle timer fences, AT/non-AT business
+deduplication, passive replies retaining the trigger `msg_id`, the three-minute
 boundary, structured expiration fallback, and media final retry without a
 second upload. Upload-unit tests cover tiny PNG/JPEG/generic direct bodies,
   the exact 5 MiB boundary, larger streamed files, bounded direct responses,
@@ -225,23 +236,63 @@ introduces no new node protocol or configuration.
 
 ### D-qqbot-group-mention-policy
 
-`QQBotConfig.requireMention` defaults to `true` to preserve the original
-AT-only behavior. When explicitly `false`, the adapter accepts both
-`GROUP_AT_MESSAGE_CREATE` and `GROUP_MESSAGE_CREATE` through the same group
-identity, authorization, attachment, source metadata, and latest-message
-context path. Replies keep the inbound `msg_id` and therefore remain passive
-when the QQ passive window permits it. The two event types share one canonical
-business dedup key so a duplicate delivery does not enqueue twice. This first
-version has no per-group policy matrix, history-buffer changes, special slash
-command policy, or proactive-send changes; a true proactive failure such as
-QQ `40034105` remains a platform permission result.
+`QQBotConfig.requireMention` defaults to `true`. One configured adapter owns a
+bounded in-memory accumulator per scoped group so the same implementation works
+with QQ platform delivery configured as AT-only, AT plus previous group
+messages, or all group messages. QQ's AT-plus-history mode may deliver exactly
+one `GROUP_AT_MESSAGE_CREATE` whose `msg_elements[*].content` contains the
+previous-message bundle instead of replaying ordinary gateway frames.
+
+When mention is required, group events not classified as a current mention are
+untrusted context only. The adapter keeps the latest `groupContextLimit`
+entries and flushes them with one later mention trigger as exactly one
+`ChannelMessage` and one Router call. When no local context exists, the adapter
+may instead parse the bounded platform history bundle from the AT event. These
+records remain untrusted context and use `source="platform-history"` without
+sender/time attributes because QQ does not provide that attribution in the
+bundle; local sender-labelled context takes precedence to avoid duplicates.
+When mention is not required, the first
+ordinary event opens a fixed, non-sliding `groupBatchWindowMs` window; later
+ordinary events join without moving the deadline. The latest event is the
+current trigger, previous events are context, and a mention trigger or
+current-message media flushes immediately. A zero window preserves immediate per-event routing.
+Slash-command triggers bypass aggregation, clear pending context, and retain
+the Router's existing command parser input.
+
+The trigger/current event alone owns Router authorization, sender/source
+metadata, the passive `msg_id`, and latest-message state. Prior context is
+serialized inside the Router's outer direct-channel wrapper as
+`<foxwarm-qqbot-context count="..." untrusted="true">` with escaped
+sender-labelled items and a blank line before current text. Ambient attachment
+metadata remains URL-free and is never materialized; only current-message media
+uses the existing authorization-gated materializer. Context is bounded to 50
+configurable entries, expires five minutes after local arrival, and the adapter
+keeps at most 1,000 group accumulators. Stop/reload clears timers and buffers;
+gateway reconnect/resume preserves them. A flush detaches state before awaiting
+the Router, retains ordinary busy-queue behavior, and has no retry/outbox.
+
+Mention and ordinary native forms share the existing canonical business dedup namespace.
+The live buffer is checked first so an ordinary representation can be upgraded
+in place by a later AT representation rather than appearing twice or suppressing
+the trigger. A true proactive failure such as QQ `40034105` remains a platform
+permission result.
 
 ### D-qqbot-outbound-media
 
 [2026-08-10] QQ outbound media is limited to C2C and Group `Channel.sendFile` using an
-already prepared safe local file. Supported PNG/JPEG files within the
-configured image threshold use QQ `file_type=1`; other or oversized images use
-`file_type=4` when within the generic-file cap. Files smaller than 5 MiB use
+already prepared safe local file. Tencent's current JPEG/PNG/GIF/WebP/BMP
+image formats within the configured image threshold use QQ `file_type=1`;
+other or oversized images use `file_type=4` when within the generic-file cap.
+The adapter probes actual local bytes rather than trusting extension, MIME, or
+`ChannelFile.isImage`: Sharp metadata identifies JPEG/PNG/GIF/WebP, while a
+strict coherently sized common uncompressed BMP file/DIB-header check covers
+deployments whose optional Sharp BMP loader is absent: CORE headers accept 24
+bpp, while INFO-family headers accept 24/32 bpp. Indexed 1/4/8,
+16-bpp, compressed, bitfield, and RLE BMP variants remain generic unless Sharp
+itself recognizes them. SVG, ICO, malformed, pixel-truncated, palette-less,
+mislabeled, and unknown bytes remain
+generic. Probing never decodes/re-encodes the upload, so animated GIF/WebP and
+all other accepted bytes are uploaded unchanged. Files smaller than 5 MiB use
 the destination-specific `/files` direct-upload body with `srv_send_msg: false`
 and bounded base64 `file_data`; generic direct uploads also include the
 sanitized `file_name`. Files at or above 5 MiB use the existing

@@ -212,18 +212,6 @@ Example:
             }
         },
         {
-            name: 'get_memory_context',
-            description: 'Retrieve messages around a specific point in time to see conversation flow.',
-            parameters: {
-                type: 'object',
-                properties: { 
-                    timestamp: { type: 'number', description: 'The center timestamp to search around' },
-                    limit: { type: 'number', description: 'Total messages to fetch' }
-                },
-                required: ['timestamp']
-            }
-        },
-        {
             name: 'create_child_session',
             defaultInject: true,
             description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. Set waitAfterHandoff=true to finish this turn and enter the existing generic wait after a successful initial handoff. When the current session is an agent main session such as `agent/main` (or bare `main`), the child id replaces the `main` leaf with the suffix (for example `agent/main` + `task1` => `agent/task1`); other sessions append the suffix as before.',

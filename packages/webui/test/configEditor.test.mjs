@@ -50,6 +50,11 @@ test('app config schema suggests all managed channel types and QQ credential key
   assert.equal(channel.properties.appId.type, 'string')
   assert.equal(channel.properties.clientSecret.type, 'string')
   assert.equal(channel.properties.requireMention.type, 'boolean')
+  assert.equal(channel.properties.groupContextLimit.minimum, 0)
+  assert.equal(channel.properties.groupContextLimit.maximum, 50)
+  assert.equal(channel.properties.groupBatchWindowMs.anyOf[0].const, 0)
+  assert.equal(channel.properties.groupBatchWindowMs.anyOf[1].minimum, 250)
+  assert.equal(channel.properties.groupBatchWindowMs.anyOf[1].maximum, 30000)
   assert.equal(channel.properties.media.properties.imageMaxBytes.maximum, 20971520)
   assert.equal(channel.properties.media.properties.fileMaxBytes.maximum, 209715200)
   assert.match(channel.properties.media.properties.fileMaxBytes.description, /100 MiB/)
@@ -75,6 +80,8 @@ test('app config schema suggests all managed channel types and QQ credential key
         appId: 'app-id',
         clientSecret: 'secret',
         requireMention: false,
+        groupContextLimit: 10,
+        groupBatchWindowMs: 5000,
         allowedUsers: ['openid'],
         media: { imageMaxBytes: 20971520, fileMaxBytes: 52428800, maxTotalBytes: 209715200, maxAttachments: 8 },
       },
@@ -87,6 +94,9 @@ test('app config schema suggests all managed channel types and QQ credential key
   assert.equal(validateAppConfigSchema({ vector: false }), true)
   assert.equal(validateAppConfigSchema({ vector: { baseUrl: 'https://example.test/openai/v1' } }), true)
   assert.equal(validateAppConfigSchema({ vector: true }), false)
+  assert.equal(validateAppConfigSchema({ channels: { qq: { type: 'qqbot', groupContextLimit: 51 } } }), false)
+  assert.equal(validateAppConfigSchema({ channels: { qq: { type: 'qqbot', groupBatchWindowMs: 249 } } }), false)
+  assert.equal(validateAppConfigSchema({ channels: { qq: { type: 'qqbot', groupBatchWindowMs: 0 } } }), true)
 })
 
 test('WebUI schema wrappers reuse the shared canonical schema objects without a duplicate copy', async () => {

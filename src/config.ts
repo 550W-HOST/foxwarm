@@ -74,6 +74,10 @@ export type QQBotConfig = {
   clientSecret?: string;
   /** Whether QQ group messages require an @mention before routing. */
   requireMention?: boolean;
+  /** Number of prior QQ group messages retained as untrusted context. Defaults to 10. */
+  groupContextLimit?: number;
+  /** Fixed non-sliding ordinary-group batch window. Defaults to 5000; 0 disables batching. */
+  groupBatchWindowMs?: number;
   allowedUsers?: string[];
   allowAllUsers?: boolean;
   guestAgent?: GuestAgentConfig;

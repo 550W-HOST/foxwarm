@@ -15,7 +15,7 @@ Core utility functions for durable JSON file persistence with write coalescing a
 - `formatLocalTimestamp`, `formatLocalTimeRange` — local time formatting with numeric UTC offset
 - `buildSystemMessageParts`, `isSystemPayloadTextPart` — split system messages into header + payload parts
 - `buildTimestampedSystemMessageParts`, `withInputTimePart` — freeze source-boundary timestamps on one model-visible input wrapper without standalone time parts
-- `escapeFoxwarmAttributeValue`, `formatFoxwarmSystemTag`, `formatFoxwarmMessageOpen`, `formatFoxwarmMessageClose`, `formatSystemPartForModel`, `parseFoxwarmTagLine` — build/parse Foxwarm XML-ish prompt wrapper tags with escaped attrs and raw message bodies
+- `escapeFoxwarmAttributeValue`, `escapeFoxwarmTextContent`, `formatFoxwarmSystemTag`, `formatFoxwarmMessageOpen`, `formatFoxwarmMessageClose`, `formatSystemPartForModel`, `parseFoxwarmTagLine` — build/parse Foxwarm XML-ish prompt wrapper tags with escaped attrs, opt-in escaped nested text, and raw outer message bodies
 - `replaceLoneSurrogates`, `containsLoneSurrogate`, `containsAnySurrogate` — surrogate detection/replacement
 - `takeUnicodeSafe`, `takeUnicodeSafeEnd`, `truncateUnicodeSafe`, `truncateUnicodeSafeWithEllipsis` — grapheme-aware truncation
 - `sanitizeLoneSurrogatesInPayload` — deep object sanitization of lone surrogates
@@ -61,6 +61,7 @@ Core utility functions for durable JSON file persistence with write coalescing a
 | `buildSystemMessageParts(message)` | ~3 | Splits system message at first newline |
 | `isSystemPayloadTextPart(part)` | ~18 | Checks if part is a system payload text |
 | `escapeFoxwarmAttributeValue(value)` | promptWrappers | Escapes `& < > " '`, control chars, and newlines for tag attribute values |
+| `escapeFoxwarmTextContent(value)` | promptWrappers | Escapes `& < >` and controls while preserving line boundaries for explicitly structured nested text |
 | `formatFoxwarmSystemTag(attrs)` / `formatFoxwarmSystemHint(hint, attrs)` | promptWrappers | Formats pure metadata as `<foxwarm-system ... />` |
 | `formatFoxwarmMessageOpen(attrs)` / `formatFoxwarmMessageClose()` / `formatFoxwarmMessage(attrs, content)` | promptWrappers | Formats source wrappers around raw content |
 | `isFoxwarmMetadataLine` / `parseFoxwarmTagLine` / `parseFoxwarmOpeningTag` / `parseFoxwarmWrappedContent` / `formatSystemPartForModel` | promptWrappers | Recognizes wrapper tag lines/full wrappers, parses escaped attrs, and maps `MessagePart.system` to model-facing foxwarm-system wrappers, including known legacy identity/time/session/goal-reminder/child-reminder text upgrades |
@@ -93,7 +94,13 @@ Core utility functions for durable JSON file persistence with write coalescing a
 
 ### D-prompt-wrapper-boundary
 
-Foxwarm prompt wrappers are XML-like metadata envelopes, not full XML serialization of message bodies. Generated attributes are escaped while `<foxwarm-message>` body content remains raw. New system parts use canonical wrappers; supported legacy system text and split `systemPayload` are read compatibility only.
+Foxwarm prompt wrappers are XML-like metadata envelopes, not full XML
+serialization of message bodies. Generated attributes are escaped while the
+outer `<foxwarm-message>` body remains raw. Code that introduces a nested
+structured subgrammar inside that raw body must explicitly escape its untrusted
+text nodes with `escapeFoxwarmTextContent`; this does not make arbitrary outer
+message content XML. New system parts use canonical wrappers; supported legacy
+system text and split `systemPayload` are read compatibility only.
 - `../session/messageVisibility` — `formatModelVisibilitySuffix`, `redactDisplayOnlyMessageForModel` for visibility-aware previews
 
 ## Behavior

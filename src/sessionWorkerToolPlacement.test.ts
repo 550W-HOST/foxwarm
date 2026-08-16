@@ -71,7 +71,6 @@ test('worker guards run before unsupported handlers and exact current state tool
   (sessionManager as any).getArchivedBlocks = async () => ({ records: [] as any[], totalMatched: 0, requestedRange: {} });
   try {
   for (const [name, args, extra] of [
-    ['get_memory_context', { timestamp: 1 }],
     ['create_agent', { agentName: 'unsafe', convertSession: true }],
     ['create_agent', { agentName: 'unsafe', sourceSessionId: 'other/session' }],
     ['remote_node', { action: ' list ' }], ['node_tools', { action: 'List' }],

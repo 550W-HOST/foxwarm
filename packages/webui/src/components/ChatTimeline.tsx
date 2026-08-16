@@ -335,6 +335,7 @@ const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser }: { sy
         return (
           <span
             key={lineIdx}
+            className={isMetaLine ? 'foxwarm-lightweight-metadata-line' : undefined}
             style={isMetaLine
               ? { display: 'block', fontSize: '70%', lineHeight: '1.1em', opacity: 0.7 }
               : { display: 'block', fontSize: '100%', lineHeight: '1.5em', opacity: 1 }
@@ -362,6 +363,7 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ text }: { text: 
             return (
               <span
                 key={lineIdx}
+                className={isPrefix ? 'foxwarm-lightweight-metadata-line' : undefined}
                 style={isPrefix
                   ? { display: 'block', fontSize: '70%', lineHeight: '1em', opacity: 0.7 }
                   : { display: 'block' }

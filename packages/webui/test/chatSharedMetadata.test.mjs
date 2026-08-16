@@ -40,6 +40,8 @@ test('foxwarm metadata tags are recognized as system-like small metadata lines',
     '<foxwarm-system kind="time" />',
     '<foxwarm-metadata hint="compat" />',
     '<foxwarm-message type="channel">',
+    '<foxwarm-image name="photo.png" node="master" path="/tmp/photo.png" />',
+    '<foxwarm-file name="notes.txt" node="master" path="/tmp/notes.txt" mime="text/plain" />',
     '</foxwarm-message>',
   ]
 
@@ -50,6 +52,37 @@ test('foxwarm metadata tags are recognized as system-like small metadata lines',
     assert.equal(isHeavySystemTextLine(line), false)
     assert.equal(formatStructuredSystemText(line), line)
   }
+})
+
+test('QQ group mention metadata remains lightweight direct-user metadata', () => {
+  for (const [mentioned, hint] of [
+    ['true', 'The current group message explicitly mentioned this agent.'],
+    ['false', 'The current group message is ordinary group chat and did not mention this agent.'],
+  ]) {
+    const line = `<foxwarm-metadata kind="group-message" mentioned="${mentioned}" hint="${hint}" />`
+    assert.deepEqual(parseFoxwarmMetadataLine(line), {
+      tagName: 'foxwarm-metadata',
+      closing: false,
+      attrs: { kind: 'group-message', mentioned, hint },
+    })
+    assert.equal(isFoxwarmMetadataLine(line), true)
+    assert.equal(isLightweightStructuredSystem(line), true)
+    assert.equal(isLightweightSystemTextLine(line), true)
+    assert.equal(isHeavySystemTextLine(line), false)
+    assert.equal(isCollapsibleSystemText(line), false)
+  }
+})
+
+test('attachment descriptor tags parse as lightweight direct-user metadata', () => {
+  const file = '<foxwarm-file name="a&amp;b.txt" node="master" path="/tmp/a&amp;b.txt" mime="text/plain" />'
+  assert.deepEqual(parseFoxwarmMetadataLine(file), {
+    tagName: 'foxwarm-file',
+    closing: false,
+    attrs: { name: 'a&b.txt', node: 'master', path: '/tmp/a&b.txt', mime: 'text/plain' },
+  })
+  assert.equal(isLightweightSystemTextLine(file), true)
+  assert.equal(isHeavySystemTextLine(file), false)
+  assert.equal(isCollapsibleSystemText(file), false)
 })
 
 test('non-channel foxwarm-message wrappers are heavy system-like messages for left-side rendering', () => {

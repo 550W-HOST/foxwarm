@@ -14,6 +14,7 @@ import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
 import { isSessionTurnIncomplete } from '../sessionContinuation'
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
+import { appendOptimisticAttachmentTag } from '../utils/attachmentPreview'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
 import { createLatestRequestGate, runLatestModelOptionsRequest } from '../modelOptionsLoader'
 import {
@@ -1299,16 +1300,15 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         }
 
         const uploadData = await uploadRes.json()
-        uploadedFiles.push({
+        const uploadedFile = {
           path: uploadData.path,
           filename: uploadData.filename || file.name,
           mimeType: uploadData.mimeType || file.type || 'application/octet-stream',
           size: uploadData.size,
-        })
+        }
+        uploadedFiles.push(uploadedFile)
 
-        messageText += file.type.startsWith('image/')
-          ? `\n\n[Image: ${file.name}]`
-          : `\n\n[File: ${file.name}]`
+        messageText = appendOptimisticAttachmentTag(messageText, uploadedFile)
       } catch (err) {
         console.error('File upload failed:', err)
         messageText += `\n\n[Failed to upload: ${file.name}]`

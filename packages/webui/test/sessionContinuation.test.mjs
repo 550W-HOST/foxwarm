@@ -37,6 +37,20 @@ const compactCompleted = () => ({
   role: 'user',
   parts: [{ system: '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="none" currentSessionId="fixture/main" />' }],
 })
+const compactCompletionGoalReminderText = '<foxwarm-system kind="goal-reminder">\nFinish the requested work\nKeep this long-term goal in mind when deciding what to do next.\n</foxwarm-system>'
+const compactCompletedWithGoalReminder = () => ({
+  role: 'user',
+  parts: [
+    { system: '<foxwarm-system kind="session-boundary" event="compact-completed" parentSessionId="none" currentSessionId="fixture/main" />' },
+    { system: compactCompletionGoalReminderText },
+  ],
+  __meta: { goalReminder: true, goalReminderKind: 'compact-completion' },
+})
+const intervalGoalReminder = () => ({
+  role: 'user',
+  parts: [{ system: compactCompletionGoalReminderText }],
+  __meta: { goalReminder: true, goalReminderKind: 'interval' },
+})
 const llmRetry = () => ({
   role: 'model', modelVisible: false, parts: [{ text: 'provider failed' }], __meta: { noticeType: 'llm-retry' },
 })
@@ -57,6 +71,38 @@ const cases = [
   { name: 'compact marker over final model remains complete', messages: [userText(), modelText(), compactCompleted()], incomplete: false },
   { name: 'compact marker over user remains incomplete', messages: [modelText(), userText(), compactCompleted()], incomplete: true },
   { name: 'compact marker over dangling tool result remains incomplete', messages: [callMessage('read-1', 'read'), toolMessage('read-1', 'read'), compactCompleted()], incomplete: true },
+  { name: 'compact marker with its generated goal reminder over final model remains complete', messages: [userText(), modelText(), compactCompletedWithGoalReminder()], incomplete: false },
+  { name: 'compact marker with its generated goal reminder over user remains incomplete', messages: [modelText(), userText(), compactCompletedWithGoalReminder()], incomplete: true },
+  { name: 'compact marker with its generated goal reminder over dangling tool result remains incomplete', messages: [callMessage('read-compact-goal', 'read'), toolMessage('read-compact-goal', 'read'), compactCompletedWithGoalReminder()], incomplete: true },
+  { name: 'ordinary interval goal reminder remains incomplete system input', messages: [userText(), modelText(), intervalGoalReminder()], incomplete: true },
+  { name: 'compact marker mixed with unrelated system content remains incomplete', messages: [userText(), modelText(), {
+    role: 'user',
+    parts: [
+      compactCompleted().parts[0],
+      { system: '<foxwarm-system kind="event" type="trigger">real input</foxwarm-system>' },
+    ],
+    __meta: { goalReminder: true, goalReminderKind: 'compact-completion' },
+  }], incomplete: true },
+  { name: 'compact-completion goal metadata without the compact marker remains incomplete', messages: [userText(), modelText(), {
+    role: 'user',
+    parts: [{ system: compactCompletionGoalReminderText }],
+    __meta: { goalReminder: true, goalReminderKind: 'compact-completion' },
+  }], incomplete: true },
+  { name: 'compact marker with alternate historical goal guidance remains complete', messages: [userText(), modelText(), {
+    role: 'user',
+    parts: [
+      compactCompleted().parts[0],
+      { system: '<foxwarm-system kind="goal-reminder">\nFinish the requested work\nRemember this goal while continuing after compaction.\n</foxwarm-system>' },
+    ],
+    __meta: { goalReminder: true, goalReminderKind: 'compact-completion' },
+  }], incomplete: false },
+  { name: 'compact marker and canonical goal reminder mixed with additional content remains incomplete', messages: [userText(), modelText(), {
+    ...compactCompletedWithGoalReminder(),
+    parts: [
+      ...compactCompletedWithGoalReminder().parts,
+      { system: '<foxwarm-system kind="event">real input</foxwarm-system>' },
+    ],
+  }], incomplete: true },
   { name: 'llm retry notice is incomplete despite display-only visibility', messages: [userText(), llmRetry()], incomplete: true },
   { name: 'BTW notice is transparent over a complete model', messages: [userText(), modelText(), displayOnly()], incomplete: false },
   { name: 'BTW notice is transparent over an incomplete user message', messages: [modelText(), userText(), displayOnly()], incomplete: true },

@@ -31,6 +31,11 @@ authorization-gated media. It is not a persisted queue field; adapters use it
 only when a router can defer network/storage work until after canonical source
 authorization.
 
+`ChannelMessage.ingressMetadataParts` is the parallel ephemeral structured
+metadata boundary. Router placement and current-group-trigger semantics are
+canonical in
+[D-channel-current-group-trigger-metadata](../modules/channels.md#d-channel-current-group-trigger-metadata).
+
 ## Registry and authorization
 
 - The registry is one in-memory map keyed by channel instance ID.
@@ -41,7 +46,7 @@ authorization.
 
 - The current session/agent determines whether storage occurs on master or the isolated agent's node.
 - Stored names use sanitized path segments and unique timestamps under the agent's temporary channel-files area. Master buffer/path writes use a unique temporary file followed by atomic rename and cleanup; ordinary isolated remote-node buffer writes continue through the node transfer contract, while path-based QQ media is intentionally Main-hosted only and rejects when that contract would require whole-buffer transfer.
-- The model-facing descriptor gives node/path facts without prescribing a particular file tool.
+- The model-facing attachment descriptor is one ordered self-closing `foxwarm-image` or `foxwarm-file` tag. It uses the shared Foxwarm attribute formatter, retains caption/body text before the tag, and gives node/path facts without prescribing a particular file tool. Canonical grammar: [D-channel-file-descriptor](../modules/channels.md#d-channel-file-descriptor).
 
 ## Runtime behavior
 

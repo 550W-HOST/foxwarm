@@ -9,7 +9,7 @@ Provides session archiving (persisting messages with canonical image references)
 ## Key Exports
 
 - `ArchiveMessageRecord` — interface for serialized archive message entries
-- `buildArchiveRecord`, `appendMessagesToArchive`, `readArchiveMessages`, `readLocalArchiveMessages`, `readArchiveMessagesBySeqRange`, `readLocalArchiveMessagesBySeqRange` — archive read/write functions
+- `buildArchiveRecord`, `appendMessagesToArchive`, `readArchiveMessages`, `readLocalArchiveMessages`, `readArchiveMessagesBySeqRange`, `readLocalArchiveMessagesBySeqRange`, `getArchiveMessageStats`, `getLocalArchiveMessageStats` — archive write, bounded content-read, and pure count/range-stat façades
 - `ensureMessageSeq`, `getNextSessionMessageSeq`, `stripMessageSeq` — message sequence utilities
 - `setSessionParent`, `resolveSessionParentId`, `updateChildSessionParentIds`, `getChildSessionIds`, `getCanonicalChildSessionIds`, `collectSessionDescendants`, `isDirectSessionLink` — session relationship management and alias-normalized lifecycle traversal
 - `resolvePermittedSessionTarget`, `sendToSession` — inter-session messaging with special target resolution (`<main>`, `<parent>`), isolation checks, self-send rejection, and source-boundary timestamped metadata
@@ -32,6 +32,8 @@ Provides session archiving (persisting messages with canonical image references)
 | `stripMessageSeq(message)` | ~151 | Removes seq metadata from a message clone |
 | `readArchiveMessagesBySeqRange(sessionId, start, end)` | ~163 | Reads archive messages within a seq range |
 | `readLocalArchiveMessagesBySeqRange(sessionId, start, end)` | ~167 | Reads local archive messages within a seq range |
+| `getArchiveMessageStats(sessionId, start?, end?)` | archive.ts | Returns effective lineage-bounded count/min/max without materializing message payloads |
+| `getLocalArchiveMessageStats(sessionId, start?, end?)` | archive.ts | Returns local-only count/min/max without materializing message payloads |
 | `persistSessionMetadataUpdate(deps, sessionId, updates)` | ~20 | Persists partial session metadata to history file |
 | `getChildSessionIds(sessions, parentSessionId)` | ~34 | Returns IDs of child sessions for a parent |
 | `getCanonicalChildSessionIds(sessions, parentSessionId)` | relations.ts | Returns alias-normalized direct child IDs without traversing deeper relations |

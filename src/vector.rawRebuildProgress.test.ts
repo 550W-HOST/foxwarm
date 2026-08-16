@@ -178,6 +178,92 @@ test('startup backfill runs in background and advances raw checkpoints batch-by-
     const searchResults = await vector.search('progress batch', 10, false, { sessionIds: [sessionId] }) as any[];
     assert.ok(searchResults.some(result => String(result.text || '').includes('progress batch message')),
       'session should remain searchable after background rebuild completes');
+
+    const archive = require('./session/archive') as typeof import('./session/archive');
+    const layeredContext = require('./session/layeredContext') as typeof import('./session/layeredContext');
+    const originalMessageRead = archive.readLocalArchiveMessagesBySeqRange;
+    const originalBlockRead = layeredContext.readLocalArchiveBlocksByIdRange;
+    const messageReads: Array<{ sessionId: string; startSeq?: number; endSeq?: number }> = [];
+    const blockReads: Array<{ sessionId: string; startId?: number; endId?: number }> = [];
+
+    (archive as any).readLocalArchiveMessagesBySeqRange = async (id: string, startSeq?: number, endSeq?: number) => {
+      messageReads.push({ sessionId: id, startSeq, endSeq });
+      return originalMessageRead(id, startSeq, endSeq);
+    };
+    (layeredContext as any).readLocalArchiveBlocksByIdRange = async (id: string, startId?: number, endId?: number) => {
+      blockReads.push({ sessionId: id, startId, endId });
+      return originalBlockRead(id, startId, endId);
+    };
+
+    try {
+      const incrementalSessionId = 'incremental/session';
+      const incrementalLines = Array.from({ length: 100 }, (_, index) => makeMessageRecord(
+        incrementalSessionId,
+        index + 1,
+        `incremental message ${index + 1}`,
+        1700000100000 + index,
+      ));
+      const incrementalBlocks = Array.from({ length: 7 }, (_, index) => makeBlockRecord(
+        incrementalSessionId,
+        index + 1,
+        94 + index,
+        94 + index,
+        `incremental block ${index + 1}`,
+      ));
+      await archiveStore.ensureSessionBranch(incrementalSessionId);
+      await archiveStore.writeArchiveMessages(incrementalLines);
+      await archiveStore.writeArchiveBlocks(incrementalBlocks);
+      archiveStore.setVectorCheckpointSync(incrementalSessionId, {
+        rawLastIndexedSeq: 90,
+        rawTailStartSeq: 85,
+        lastIndexedBlockId: 5,
+      });
+
+      await vector.indexSessionArchive(incrementalSessionId, 100, 7);
+      const incrementalMessageReads = messageReads.filter(call => call.sessionId === incrementalSessionId);
+      assert.deepEqual(
+        incrementalMessageReads.filter(call => call.endSeq === undefined),
+        [{ sessionId: incrementalSessionId, startSeq: 85, endSeq: undefined }],
+        'checkpointed prefixes must not enter the message parsing path',
+      );
+      assert.ok(incrementalMessageReads.every(call => (call.startSeq ?? 0) >= 85),
+        'new-block timestamp hydration must not load the checkpointed message prefix');
+      assert.deepEqual(
+        blockReads.filter(call => call.sessionId === incrementalSessionId),
+        [{ sessionId: incrementalSessionId, startId: 6, endId: undefined }],
+        'only blocks after the durable checkpoint should be loaded',
+      );
+      assert.equal((await vector.getArchiveIndexStatus(incrementalSessionId)).lastIndexedSeq, 100);
+      assert.equal((await vector.getArchiveIndexStatus(incrementalSessionId)).lastIndexedBlockId, 7);
+
+      const missingTailSessionId = 'missing-tail/session';
+      const missingTailLines = Array.from({ length: 6 }, (_, index) => makeMessageRecord(
+        missingTailSessionId,
+        index + 1,
+        `missing tail message ${index + 1}`,
+        1700000200000 + index,
+      ));
+      await archiveStore.ensureSessionBranch(missingTailSessionId);
+      await archiveStore.writeArchiveMessages(missingTailLines);
+      archiveStore.setVectorCheckpointSync(missingTailSessionId, {
+        rawLastIndexedSeq: 4,
+        rawTailStartSeq: 999,
+        lastIndexedBlockId: 0,
+      });
+
+      await vector.indexSessionArchive(missingTailSessionId, 6, 0);
+      assert.deepEqual(
+        messageReads.filter(call => call.sessionId === missingTailSessionId),
+        [{ sessionId: missingTailSessionId, startSeq: 1, endSeq: undefined }],
+        'a tail beyond the durable range must safely fall back to the local minimum sequence',
+      );
+      assert.equal((await vector.getArchiveIndexStatus(missingTailSessionId)).lastIndexedSeq, 6);
+    } finally {
+      (archive as any).readLocalArchiveMessagesBySeqRange = originalMessageRead;
+      (layeredContext as any).readLocalArchiveBlocksByIdRange = originalBlockRead;
+    }
+
+    await vector.shutdown();
   } finally {
     global.fetch = originalFetch;
     delete process.env.FOXWARM_VECTOR_RAW_REBUILD_BATCH_SEGMENTS;

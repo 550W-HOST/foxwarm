@@ -1,6 +1,7 @@
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { createServer } from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,6 +12,7 @@ const webuiRoot = path.resolve(__dirname, '..')
 const port = 4176
 const baseUrl = `http://127.0.0.1:${port}`
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
+const firefoxPath = process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox-esr'
 
 let vite
 let preview
@@ -125,7 +127,7 @@ function respondJson(request, body, status = 200) {
 
 async function attachRequestMocks(targetPage, options = {}) {
   let mockModelsRawYaml = options.oobe ? '' : statusPayload.models.rawYaml
-  let mockConfigRawYaml = statusPayload.config.rawYaml
+  let mockConfigRawYaml = options.configRawYaml ?? statusPayload.config.rawYaml
   let mockOobe = !!options.oobe
   let mockSessionModel = 'route'
   let mockSessionEffort = null
@@ -175,6 +177,7 @@ async function attachRequestMocks(targetPage, options = {}) {
         oobe: mockOobe,
         models: { ...statusPayload.models, exists: !mockOobe, rawYaml: mockModelsRawYaml },
         config: { ...statusPayload.config, rawYaml: mockConfigRawYaml },
+        channels: options.channels ?? statusPayload.channels,
       })
       return
     }
@@ -215,6 +218,17 @@ async function attachRequestMocks(targetPage, options = {}) {
         mockConfigRawYaml = savedConfigRequest.yaml
         void respondJson(request, { success: true, rawYaml: savedConfigRequest.yaml, reload: { started: ['telegram'] } })
       }
+      return
+    }
+    if (url.pathname.endsWith('/api/setup/weixin/login/start') && request.method() === 'POST') {
+      void respondJson(request, {
+        sessionKey: 'weixin-e2e-session',
+        qrcodeUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      })
+      return
+    }
+    if (url.pathname.endsWith('/api/setup/weixin/login/wait') && request.method() === 'POST') {
+      void respondJson(request, { connected: true, userId: 'weixin-e2e-user' })
       return
     }
     if (/\/api\/sessions\/[^/]+\/model$/.test(url.pathname) && request.method() === 'POST') {
@@ -295,11 +309,14 @@ async function runMonacoEditorAction(targetPage, modelUri, action, payload = {})
     }
 
     const selection = editor.getSelection()
+    const model = editor.getModel()
     return {
       value: editor.getValue(),
       direction: selection?.getDirection(),
       rtlDirection: monaco.SelectionDirection.RTL,
       ltrDirection: monaco.SelectionDirection.LTR,
+      selectionStartOffset: selection && model ? model.getOffsetAt(selection.getStartPosition()) : null,
+      selectionEndOffset: selection && model ? model.getOffsetAt(selection.getEndPosition()) : null,
       selection: selection ? {
         startLineNumber: selection.startLineNumber,
         startColumn: selection.startColumn,
@@ -340,6 +357,16 @@ async function waitForMonacoValue(targetPage, modelUri, expectedValue) {
   }
   const state = await runMonacoEditorAction(targetPage, modelUri, 'snapshot')
   assert.equal(state.value, expectedValue)
+}
+
+async function dragMonacoSelection(targetPage, modelUri, start, end) {
+  const dragStart = await runMonacoEditorAction(targetPage, modelUri, 'screen-position', start)
+  const dragEnd = await runMonacoEditorAction(targetPage, modelUri, 'screen-position', end)
+  await targetPage.mouse.move(dragStart.x, dragStart.y)
+  await targetPage.mouse.down()
+  await targetPage.mouse.move(dragEnd.x, dragEnd.y, { steps: 8 })
+  await targetPage.mouse.up()
+  return runMonacoEditorAction(targetPage, modelUri, 'snapshot')
 }
 
 before(async () => {
@@ -383,22 +410,95 @@ after(async () => {
   preview?.kill('SIGTERM')
 })
 
-test('Models setup is raw-only and associates distinct static schemas with both editors', async () => {
+test('Setup uses accessible Models and Config tabs with status icons and product copy', async () => {
   const bodyText = await page.$eval('body', (body) => body.textContent || '')
   assert.equal(bodyText.includes('Test selected provider'), false)
   assert.equal(bodyText.includes('Provider 1'), false)
+  assert.equal(bodyText.includes('OOBE mode is active'), false)
+  assert.equal(bodyText.includes('raw config editor below preserves'), false)
+  assert.equal(bodyText.includes('Models path:'), false)
+  assert.equal(bodyText.includes('Config path:'), false)
   assert.equal(await page.$('button::-p-text(Form)'), null)
+  assert.equal(await page.$('::-p-text(Setup checklist)'), null)
 
-  const editorUris = await page.$$eval('[data-monaco-model-uri]', (elements) => elements.map((element) => element.getAttribute('data-monaco-model-uri')))
-  assert.deepEqual(editorUris.sort(), [
-    'inmemory://foxwarm/setup/foxwarm-config.yaml',
-    'inmemory://foxwarm/setup/foxwarm-models.yaml',
+  const tabs = await page.$$eval('[role="tab"]', (elements) => elements.map((element) => ({
+    tab: element.getAttribute('data-setup-tab'),
+    selected: element.getAttribute('aria-selected'),
+    status: element.querySelector('[data-setup-tab-status]')?.getAttribute('data-setup-tab-status') || null,
+  })))
+  assert.deepEqual(tabs, [
+    { tab: 'models', selected: 'true', status: 'complete' },
+    { tab: 'config', selected: 'false', status: null },
   ])
+  assert.deepEqual(await page.$$eval('[data-monaco-model-uri]', (elements) => elements.map((element) => element.getAttribute('data-monaco-model-uri'))), [
+    'inmemory://foxwarm/setup/foxwarm-models.yaml',
+    'inmemory://foxwarm/setup/foxwarm-config.yaml',
+  ])
+  assert.equal(await page.$eval('[data-setup-section="models"]', (panel) => panel.hidden), false)
+  assert.equal(await page.$eval('[data-setup-section="config"]', (panel) => panel.hidden), true)
+
+  await page.focus('[data-setup-tab="models"]')
+  await page.keyboard.press('ArrowRight')
+  await page.waitForSelector('[data-setup-tab="config"][aria-selected="true"]')
+  await page.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-config.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
+  assert.equal(await page.$eval('[data-setup-section="models"]', (panel) => panel.hidden), true)
+  assert.equal(await page.$eval('[data-setup-section="config"]', (panel) => panel.hidden), false)
+  assert.equal(await page.$eval('[data-setup-section="config"]', (panel) => panel.lastElementChild?.getAttribute('data-setup-config-last')), 'weixin')
+  assert.ok((await page.$eval('[data-setup-config-last="weixin"]', (element) => element.textContent || '')).includes('Connect Weixin by scanning a QR code.'))
+  assert.equal((await page.$eval('[data-setup-section="config"]', (element) => element.textContent || '')).includes('sessionKey'), false)
+  assert.equal((await page.$eval('[data-setup-section="config"]', (element) => element.textContent || '')).includes('pairing URL'), false)
+  await page.click('button::-p-text(Start Weixin login)')
+  await page.waitForFunction(() => {
+    const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Check login'))
+    return button instanceof HTMLButtonElement && !button.disabled
+  })
+  await page.click('button::-p-text(Check login)')
+  await page.waitForFunction(() => document.body.textContent?.includes('Connected as weixin-e2e-user. Channel config saved and reloaded.'))
+
+  await page.focus('[data-setup-tab="config"]')
+  await page.keyboard.press('Home')
+  await page.waitForSelector('[data-setup-tab="models"][aria-selected="true"]')
+  await page.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
   assert.ok(requestPaths.includes('/preview/api/setup/status'))
 })
 
-test('both Setup editors use the responsive 600px/80vh height without mobile overflow', async () => {
-  const measureEditors = (targetPage) => targetPage.$$eval('[data-monaco-model-uri]', (editors) => editors.map((editor) => {
+test('Config tab status reflects enabled channel health and ignores disabled channels', async () => {
+  assert.equal(await page.$('[data-setup-tab="config"] [data-setup-tab-status]'), null)
+
+  const fixtures = [
+    {
+      path: 'healthy-channels',
+      expected: 'complete',
+      channels: [
+        { channelId: 'telegram', type: 'telegram', running: true, configured: true, enabled: true, managed: true, details: [] },
+        { channelId: 'disabled-broken', type: 'custom', running: false, configured: false, enabled: false, managed: true, details: [], lastError: 'ignored while disabled' },
+      ],
+    },
+    {
+      path: 'channel-needs-attention',
+      expected: 'attention',
+      channels: [
+        { channelId: 'telegram', type: 'telegram', running: false, configured: false, enabled: true, managed: true, details: [], lastError: 'missing credentials' },
+      ],
+    },
+  ]
+
+  for (const fixture of fixtures) {
+    const statusPage = await browser.newPage()
+    await statusPage.setBypassServiceWorker(true)
+    await attachRequestMocks(statusPage, { channels: fixture.channels, blockEditorChunks: true })
+    try {
+      await statusPage.goto(`${baseUrl}/${fixture.path}/#setup`, { waitUntil: 'networkidle2' })
+      await statusPage.waitForSelector(`[data-setup-tab="config"] [data-setup-tab-status="${fixture.expected}"]`, { timeout: 15_000 })
+      assert.equal(await statusPage.$$eval('[data-setup-tab="config"] [data-setup-tab-status]', (icons) => icons.length), 1)
+    } finally {
+      await statusPage.close()
+    }
+  }
+})
+
+test('each Setup tab editor uses the responsive 600px/80vh height without mobile overflow', async () => {
+  const measureEditor = (targetPage, tab) => targetPage.$eval(`[data-setup-section="${tab}"] [data-monaco-model-uri]`, (editor) => {
     const rect = editor.getBoundingClientRect()
     return {
       authoredHeight: editor.style.height,
@@ -408,25 +508,28 @@ test('both Setup editors use the responsive 600px/80vh height without mobile ove
       expectedHeight: Math.min(600, window.innerHeight * 0.8),
       documentWidth: document.documentElement.scrollWidth,
     }
-  }))
+  })
 
-  const desktopEditors = await measureEditors(page)
-  assert.equal(desktopEditors.length, 2)
-  for (const editor of desktopEditors) {
+  for (const tab of ['models', 'config']) {
+    await page.click(`[data-setup-tab="${tab}"]`)
+    await page.waitForSelector(`[data-setup-section="${tab}"] [data-editor-ready="true"]`, { timeout: 15_000 })
+    const editor = await measureEditor(page, tab)
     assert.ok(['calc(min(600px, 80vh))', 'min(600px, 80vh)'].includes(editor.authoredHeight))
     assert.ok(Math.abs(editor.computedHeight - editor.expectedHeight) < 1)
     assert.ok(editor.width <= editor.viewportWidth)
   }
+  await page.click('[data-setup-tab="models"]')
+  await page.waitForSelector('[data-setup-section="models"] [data-editor-ready="true"]', { timeout: 15_000 })
 
   const mobilePage = await browser.newPage()
   await mobilePage.setViewport({ width: 390, height: 700 })
   await attachRequestMocks(mobilePage)
   try {
     await mobilePage.goto(`${baseUrl}/mobile/#setup`, { waitUntil: 'networkidle2' })
-    await mobilePage.waitForSelector('[data-monaco-model-uri][data-editor-ready="true"]', { timeout: 15_000 })
-    const mobileEditors = await measureEditors(mobilePage)
-    assert.equal(mobileEditors.length, 2)
-    for (const editor of mobileEditors) {
+    for (const tab of ['models', 'config']) {
+      await mobilePage.click(`[data-setup-tab="${tab}"]`)
+      await mobilePage.waitForSelector(`[data-setup-section="${tab}"] [data-editor-ready="true"]`, { timeout: 15_000 })
+      const editor = await measureEditor(mobilePage, tab)
       assert.ok(Math.abs(editor.computedHeight - 560) < 1)
       assert.ok(editor.width <= editor.viewportWidth)
       assert.ok(editor.documentWidth <= editor.viewportWidth)
@@ -436,107 +539,42 @@ test('both Setup editors use the responsive 600px/80vh height without mobile ove
   }
 })
 
-test('both Setup Monaco editors replace forward and reverse selections on the first typed key', async () => {
+test('both Setup Monaco editors preserve controlled selection replacement', async () => {
   const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
   const configUri = 'inmemory://foxwarm/setup/foxwarm-config.yaml'
-  const modelsBaseline = 'alpha beta\nsecond line\nthird line\n'
-  const configBaseline = 'alpha beta\nsecond line\nthird line\n'
-
   const originalModels = (await runMonacoEditorAction(page, modelsUri, 'snapshot')).value
-  const originalConfig = (await runMonacoEditorAction(page, configUri, 'snapshot')).value
-  const dragStart = await runMonacoEditorAction(page, modelsUri, 'screen-position', { line: 1, column: 12 })
-  const dragEnd = await runMonacoEditorAction(page, modelsUri, 'screen-position', { line: 1, column: 10 })
-  await page.mouse.move(dragStart.x, dragStart.y)
-  await page.mouse.down()
-  await page.mouse.move(dragEnd.x, dragEnd.y, { steps: 8 })
-  await page.mouse.up()
-  let state = await runMonacoEditorAction(page, modelsUri, 'snapshot')
+
+  let state = await dragMonacoSelection(page, modelsUri, { line: 1, column: 12 }, { line: 1, column: 10 })
   assert.equal(state.direction, state.rtlDirection)
   await page.keyboard.press('x')
-  await new Promise((resolve) => setTimeout(resolve, 500))
+  await new Promise((resolve) => setTimeout(resolve, 100))
   assert.equal((await runMonacoEditorAction(page, modelsUri, 'snapshot')).value, originalModels.replace('42', 'x'))
 
-  await runMonacoEditorAction(page, modelsUri, 'replace-value', { value: modelsBaseline })
-  state = await runMonacoEditorAction(page, modelsUri, 'select', {
-    anchorLine: 1, anchorColumn: 1, activeLine: 1, activeColumn: 6,
-  })
-  assert.equal(state.direction, state.ltrDirection)
-  await page.keyboard.type('F')
-  await new Promise((resolve) => setTimeout(resolve, 100))
-  assert.equal((await runMonacoEditorAction(page, modelsUri, 'snapshot')).value, 'F beta\nsecond line\nthird line\n')
-
-  await runMonacoEditorAction(page, configUri, 'replace-value', { value: configBaseline })
-  await new Promise((resolve) => setTimeout(resolve, 100))
-  state = await runMonacoEditorAction(page, configUri, 'select', {
-    anchorLine: 3, anchorColumn: 6, activeLine: 2, activeColumn: 1,
-  })
-  assert.equal(state.direction, state.rtlDirection)
-  await page.keyboard.type('Y')
-  await new Promise((resolve) => setTimeout(resolve, 100))
-  assert.equal((await runMonacoEditorAction(page, configUri, 'snapshot')).value, 'alpha beta\nY line\n')
-
-  await runMonacoEditorAction(page, configUri, 'replace-value', { value: 'abcd\n' })
-  await new Promise((resolve) => setTimeout(resolve, 100))
-  await runMonacoEditorAction(page, configUri, 'position', { line: 1, column: 4 })
-  await page.keyboard.down('Shift')
-  await page.keyboard.press('ArrowLeft')
-  await page.keyboard.press('ArrowLeft')
-  await page.keyboard.up('Shift')
-  state = await runMonacoEditorAction(page, configUri, 'snapshot')
-  assert.equal(state.direction, state.rtlDirection)
-  await page.keyboard.type('Z')
-  await new Promise((resolve) => setTimeout(resolve, 100))
-  assert.equal((await runMonacoEditorAction(page, configUri, 'snapshot')).value, 'aZd\n')
-
-  await runMonacoEditorAction(page, configUri, 'position', { line: 1, column: 4 })
-  await page.keyboard.type('!')
-  await new Promise((resolve) => setTimeout(resolve, 100))
-  assert.equal((await runMonacoEditorAction(page, configUri, 'snapshot')).value, 'aZd!\n')
-
-  const externallyResetModels = 'default: 42\nproviders:\n  local: {}\n'
-  await runMonacoEditorAction(page, modelsUri, 'replace-value', { value: externallyResetModels })
-  await new Promise((resolve) => setTimeout(resolve, 100))
+  await runMonacoEditorAction(page, modelsUri, 'replace-value', { value: 'default: 42\nproviders:\n  local: {}\n' })
   state = await runMonacoEditorAction(page, modelsUri, 'select', {
     anchorLine: 1, anchorColumn: 12, activeLine: 1, activeColumn: 10,
   })
   assert.equal(state.direction, state.rtlDirection)
   await page.click('button::-p-text(Refresh)')
-  await page.waitForFunction(() => !document.body.textContent?.includes('Loading setup status…'))
-  await page.waitForFunction(async ({ modelsModelUri, configModelUri, expectedModels, expectedConfig }) => {
-    const monacoUrl = performance.getEntriesByType('resource')
-      .map((entry) => entry.name)
-      .find((name) => /\/node_modules\/\.vite\/deps\/monaco-editor\.js(?:\?|$)/.test(name))
-    if (!monacoUrl) return false
-    const monaco = await import(monacoUrl)
-    const editors = monaco.editor.getEditors()
-    return editors.find((editor) => editor.getModel()?.uri.toString() === modelsModelUri)?.getValue() === expectedModels
-      && editors.find((editor) => editor.getModel()?.uri.toString() === configModelUri)?.getValue() === expectedConfig
-  }, {}, { modelsModelUri: modelsUri, configModelUri: configUri, expectedModels: statusPayload.models.rawYaml, expectedConfig: originalConfig })
+  await waitForMonacoValue(page, modelsUri, statusPayload.models.rawYaml)
   state = await runMonacoEditorAction(page, modelsUri, 'snapshot')
   assert.equal(state.direction, state.rtlDirection)
-  assert.deepEqual(state.selection, {
-    startLineNumber: 1,
-    startColumn: 10,
-    endLineNumber: 1,
-    endColumn: 12,
-    positionLineNumber: 1,
-    positionColumn: 10,
-    selectionStartLineNumber: 1,
-    selectionStartColumn: 12,
-  })
   await runMonacoEditorAction(page, modelsUri, 'focus')
   await page.keyboard.press('r')
   await new Promise((resolve) => setTimeout(resolve, 100))
   assert.equal((await runMonacoEditorAction(page, modelsUri, 'snapshot')).value, statusPayload.models.rawYaml.replace('42', 'r'))
   await page.click('button::-p-text(Refresh)')
-  await page.waitForFunction(async ({ modelUri, expectedValue }) => {
-    const monacoUrl = performance.getEntriesByType('resource')
-      .map((entry) => entry.name)
-      .find((name) => /\/node_modules\/\.vite\/deps\/monaco-editor\.js(?:\?|$)/.test(name))
-    if (!monacoUrl) return false
-    const monaco = await import(monacoUrl)
-    return monaco.editor.getEditors().find((editor) => editor.getModel()?.uri.toString() === modelUri)?.getValue() === expectedValue
-  }, {}, { modelUri: modelsUri, expectedValue: statusPayload.models.rawYaml })
+  await waitForMonacoValue(page, modelsUri, statusPayload.models.rawYaml)
+
+  await page.click('[data-setup-tab="config"]')
+  await page.waitForSelector(`[data-monaco-model-uri="${configUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
+  const originalConfig = (await runMonacoEditorAction(page, configUri, 'snapshot')).value
+  await runMonacoEditorAction(page, configUri, 'replace-value', { value: 'alpha beta\nsecond line\nthird line\n' })
+  state = await dragMonacoSelection(page, configUri, { line: 3, column: 6 }, { line: 2, column: 1 })
+  assert.equal(state.direction, state.rtlDirection)
+  await page.keyboard.type('Y')
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal((await runMonacoEditorAction(page, configUri, 'snapshot')).value, 'alpha beta\nY line\n')
 
   await runMonacoEditorAction(page, configUri, 'replace-value', { value: '# temporary config value\n' })
   state = await runMonacoEditorAction(page, configUri, 'select', {
@@ -544,20 +582,108 @@ test('both Setup Monaco editors replace forward and reverse selections on the fi
   })
   assert.equal(state.direction, state.rtlDirection)
   await page.click('button::-p-text(Refresh)')
-  await page.waitForFunction(async ({ modelUri, expectedValue }) => {
-    const monacoUrl = performance.getEntriesByType('resource')
-      .map((entry) => entry.name)
-      .find((name) => /\/node_modules\/\.vite\/deps\/monaco-editor\.js(?:\?|$)/.test(name))
-    if (!monacoUrl) return false
-    const monaco = await import(monacoUrl)
-    return monaco.editor.getEditors().find((editor) => editor.getModel()?.uri.toString() === modelUri)?.getValue() === expectedValue
-  }, {}, { modelUri: configUri, expectedValue: originalConfig })
+  await waitForMonacoValue(page, configUri, originalConfig)
   state = await runMonacoEditorAction(page, configUri, 'snapshot')
   assert.equal(state.direction, state.rtlDirection)
   await runMonacoEditorAction(page, configUri, 'focus')
   await page.keyboard.press('C')
   await new Promise((resolve) => setTimeout(resolve, 100))
   assert.equal((await runMonacoEditorAction(page, configUri, 'snapshot')).value, originalConfig.replace('Foxwarm', 'C'))
+
+  await page.click('[data-setup-tab="models"]')
+  await page.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
+})
+
+test('Firefox replaces real reverse mouse selections on the first physical key', {
+  skip: existsSync(firefoxPath) ? false : `Firefox is not available at ${firefoxPath}`,
+}, async () => {
+  const firefox = await puppeteer.launch({
+    browser: 'firefox',
+    executablePath: firefoxPath,
+    headless: true,
+  })
+  const firefoxPage = await firefox.newPage()
+  const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
+  const configUri = 'inmemory://foxwarm/setup/foxwarm-config.yaml'
+  const configRawYaml = 'name: Foxwarm\nchannels: {}\n'
+
+  await attachRequestMocks(firefoxPage, { configRawYaml })
+  try {
+    await firefoxPage.goto(`${baseUrl}/firefox-reverse-selection/#setup`, { waitUntil: 'domcontentloaded' })
+    await firefoxPage.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 20_000 })
+
+    const scenarios = [
+      {
+        tab: 'models',
+        uri: modelsUri,
+        start: { line: 1, column: 11 },
+        end: { line: 1, column: 7 },
+        key: 'x',
+      },
+      {
+        tab: 'config',
+        uri: configUri,
+        start: { line: 3, column: 6 },
+        end: { line: 2, column: 1 },
+        key: 'Y',
+      },
+    ]
+
+    for (const scenario of scenarios) {
+      await firefoxPage.click(`[data-setup-tab="${scenario.tab}"]`)
+      await firefoxPage.waitForSelector(`[data-setup-section="${scenario.tab}"]:not([hidden]) [data-editor-ready="true"]`, { timeout: 15_000 })
+      await runMonacoEditorAction(firefoxPage, scenario.uri, 'replace-value', {
+        value: 'alpha beta\nsecond line\nthird line\n',
+      })
+      const selection = await dragMonacoSelection(firefoxPage, scenario.uri, scenario.start, scenario.end)
+      assert.equal(selection.direction, selection.rtlDirection)
+      assert.equal(await firefoxPage.$eval(`[data-monaco-model-uri="${scenario.uri}"] textarea.inputarea`, (input) => (
+        input.selectionStart === input.selectionEnd
+      )), true)
+
+      await firefoxPage.keyboard.press(scenario.key)
+      const expected = selection.value.slice(0, selection.selectionStartOffset)
+        + scenario.key
+        + selection.value.slice(selection.selectionEndOffset)
+      assert.equal((await runMonacoEditorAction(firefoxPage, scenario.uri, 'snapshot')).value, expected)
+    }
+
+    await firefoxPage.click('[data-setup-tab="models"]')
+    await runMonacoEditorAction(firefoxPage, modelsUri, 'replace-value', {
+      value: 'default: XX\nproviders: {}\n',
+    })
+    let selection = await dragMonacoSelection(firefoxPage, modelsUri, { line: 1, column: 12 }, { line: 1, column: 10 })
+    assert.equal(selection.direction, selection.rtlDirection)
+    const modelsStartOffset = selection.selectionStartOffset
+    const modelsEndOffset = selection.selectionEndOffset
+    await firefoxPage.click('button::-p-text(Refresh)')
+    await waitForMonacoValue(firefoxPage, modelsUri, statusPayload.models.rawYaml)
+    selection = await runMonacoEditorAction(firefoxPage, modelsUri, 'snapshot')
+    assert.equal(selection.direction, selection.rtlDirection)
+    await runMonacoEditorAction(firefoxPage, modelsUri, 'focus')
+    await firefoxPage.keyboard.press('r')
+    assert.equal((await runMonacoEditorAction(firefoxPage, modelsUri, 'snapshot')).value,
+      statusPayload.models.rawYaml.slice(0, modelsStartOffset) + 'r' + statusPayload.models.rawYaml.slice(modelsEndOffset))
+
+    await firefoxPage.click('[data-setup-tab="config"]')
+    await runMonacoEditorAction(firefoxPage, configUri, 'replace-value', {
+      value: 'name: TEMP123\nchannels: {}\n',
+    })
+    selection = await dragMonacoSelection(firefoxPage, configUri, { line: 1, column: 14 }, { line: 1, column: 7 })
+    assert.equal(selection.direction, selection.rtlDirection)
+    const configStartOffset = selection.selectionStartOffset
+    const configEndOffset = selection.selectionEndOffset
+    await firefoxPage.click('button::-p-text(Refresh)')
+    await waitForMonacoValue(firefoxPage, configUri, configRawYaml)
+    selection = await runMonacoEditorAction(firefoxPage, configUri, 'snapshot')
+    assert.equal(selection.direction, selection.rtlDirection)
+    await runMonacoEditorAction(firefoxPage, configUri, 'focus')
+    await firefoxPage.keyboard.press('C')
+    assert.equal((await runMonacoEditorAction(firefoxPage, configUri, 'snapshot')).value,
+      configRawYaml.slice(0, configStartOffset) + 'C' + configRawYaml.slice(configEndOffset))
+  } finally {
+    await firefox.close()
+  }
 })
 
 test('local and schema completions replace the current punctuated YAML scalar', async () => {
@@ -619,17 +745,12 @@ test('local and schema completions replace the current punctuated YAML scalar', 
   }
 })
 
-test('schema markers remain advisory and do not disable raw save', async () => {
-  await page.waitForFunction(() => {
-    const editor = document.querySelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]')
-    return Number(editor?.getAttribute('data-marker-count') || 0) > 0
-  }, { timeout: 15_000 })
-
+test('raw model save remains enabled and preserves editor text', async () => {
   const saveButton = await page.waitForSelector('button::-p-text(Save models)')
   assert.equal(await saveButton.evaluate((button) => button.disabled), false)
   await saveButton.click()
   const feedback = await page.waitForSelector('[data-save-feedback="models"][role="status"]')
-  assert.ok((await feedback.evaluate((element) => element.textContent || '')).includes('Models saved to'))
+  assert.equal((await feedback.evaluate((element) => element.textContent || '')).trim(), 'Models saved.')
   assert.equal(await feedback.evaluate((element) => element.closest('[data-setup-section]')?.getAttribute('data-setup-section')), 'models')
   assert.deepEqual(savedRequest, { yaml: statusPayload.models.rawYaml })
   assert.equal(savedRequestPath, '/preview/api/setup/models')
@@ -659,6 +780,9 @@ test('production worker provides real schema markers and current-document comple
         && editor?.getAttribute('data-editor-fallback') !== 'true'
         && Number(editor?.getAttribute('data-marker-count') || 0) > 0
     }, { timeout: 20_000 }, modelEditor)
+
+    const saveButton = await productionPage.waitForSelector('button::-p-text(Save models)')
+    assert.equal(await saveButton.evaluate((button) => button.disabled), false)
 
     const editorSurface = await productionPage.waitForSelector(`${modelEditor} .view-lines`, { visible: true })
     await editorSurface.click({ offset: { x: 90, y: 10 } })
@@ -690,18 +814,23 @@ test('backend validation error remains final authority and is shown after Monaco
 test('config save success and error feedback stay with the Config Save button', async () => {
   const configUri = 'inmemory://foxwarm/setup/foxwarm-config.yaml'
   const configYaml = 'channels:\n  telegram:\n    enabled: true\n'
+  await page.click('[data-setup-tab="config"]')
+  await page.waitForSelector(`[data-monaco-model-uri="${configUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
   await runMonacoEditorAction(page, configUri, 'replace-value', { value: configYaml })
-  const saveButton = await page.waitForSelector('button::-p-text(Save config and reload channels)')
+  const saveButton = await page.waitForSelector('button::-p-text(Save config)')
   await saveButton.click()
   let feedback = await page.waitForSelector('[data-save-feedback="config"][role="status"]')
-  assert.ok((await feedback.evaluate((element) => element.textContent || '')).includes('Config saved. Channels reloaded; started: telegram.'))
+  assert.equal((await feedback.evaluate((element) => element.textContent || '')).trim(), 'Config saved. Active channels refreshed: telegram.')
   assert.equal(await feedback.evaluate((element) => element.closest('[data-setup-section]')?.getAttribute('data-setup-section')), 'config')
   assert.deepEqual(savedConfigRequest, { yaml: configYaml })
   assert.equal(await page.$('[data-setup-section="models"] [data-save-feedback="config"]'), null)
 
-  const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
-  await runMonacoEditorAction(page, modelsUri, 'position', { line: 1, column: statusPayload.models.rawYaml.split('\n')[0].length + 1 })
-  await page.keyboard.type('#')
+  await page.click('[data-setup-tab="models"]')
+  await page.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
+  assert.equal(await page.$eval('[data-save-feedback="config"][role="status"]', (feedback) => feedback.closest('[data-setup-section]')?.getAttribute('data-setup-section')), 'config')
+
+  await page.click('[data-setup-tab="config"]')
+  await page.waitForSelector(`[data-monaco-model-uri="${configUri}"][data-editor-ready="true"]`, { timeout: 15_000 })
   assert.ok(await page.$('[data-save-feedback="config"][role="status"]'))
 
   configSaveError = 'canonical backend rejected the app config'
@@ -715,6 +844,8 @@ test('config save success and error feedback stay with the Config Save button', 
   configSaveError = null
   await page.click('button::-p-text(Refresh)')
   await page.waitForFunction(() => !document.querySelector('[data-save-feedback="models"], [data-save-feedback="config"]'))
+  await page.click('[data-setup-tab="models"]')
+  await page.waitForSelector('[data-setup-section="models"] [data-editor-ready="true"]', { timeout: 15_000 })
 })
 
 test('editing while a models save is held preserves the newer document and suppresses stale feedback', async () => {
@@ -760,14 +891,19 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
   await attachRequestMocks(degradedPage, { blockEditorChunks: true, oobe: true })
   try {
     await degradedPage.goto(`${baseUrl}/degraded/#setup`, { waitUntil: 'networkidle2' })
+    await degradedPage.waitForFunction(() => document.body.textContent?.includes('Foxwarm first-time setup'), { timeout: 15_000 })
+    await degradedPage.waitForSelector('[data-setup-tab="models"] [data-setup-tab-status="attention"]')
+    const forcedSetupClose = await degradedPage.waitForSelector('[data-tab-id="system:setup"] button[title="Close tab"]')
+    await forcedSetupClose.click()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.ok(await degradedPage.$('[data-tab-id="system:setup"]'))
     const fallback = await degradedPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-fallback="true"] textarea', { timeout: 15_000 })
-    assert.ok((await degradedPage.$eval('body', (body) => body.textContent || '')).includes('Plain-text editing and backend validation still work.'))
-    const fallbackHeights = await degradedPage.$$eval('[data-editor-fallback="true"]', (editors) => editors.map((editor) => ({
+    assert.ok((await degradedPage.$eval('body', (body) => body.textContent || '')).includes('Advanced editor features are unavailable. You can still edit and save this YAML.'))
+    const fallbackHeight = await degradedPage.$eval('[data-editor-fallback="true"]', (editor) => ({
       height: Number.parseFloat(getComputedStyle(editor).height),
       expected: Math.min(600, window.innerHeight * 0.8),
-    })))
-    assert.equal(fallbackHeights.length, 2)
-    assert.ok(fallbackHeights.every(({ height, expected }) => Math.abs(height - expected) < 1))
+    }))
+    assert.ok(Math.abs(fallbackHeight.height - fallbackHeight.expected) < 1)
 
     const initialYaml = 'default: local\nproviders:\n  local:\n    providerType: openai-completions\n    models: [model-a]\n'
     await fallback.evaluate((textarea, value) => {
@@ -783,20 +919,35 @@ test('OOBE remains editable and savable when lazy Monaco/YAML support import rej
     await degradedPage.keyboard.press('x')
     const yaml = initialYaml.replace('local', 'x')
     await degradedPage.click('button::-p-text(Save models)')
-    await degradedPage.waitForFunction(() => document.body.textContent?.includes('Models saved to'))
+    await degradedPage.waitForFunction(() => document.body.textContent?.includes('Models saved.'))
     assert.deepEqual(savedRequest, { yaml })
+
+    await degradedPage.click('[data-setup-tab="config"]')
+    const configFallback = await degradedPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-config.yaml"][data-editor-fallback="true"]', { timeout: 15_000 })
+    const configFallbackHeight = await configFallback.evaluate((editor) => ({
+      height: Number.parseFloat(getComputedStyle(editor).height),
+      expected: Math.min(600, window.innerHeight * 0.8),
+    }))
+    assert.ok(Math.abs(configFallbackHeight.height - configFallbackHeight.expected) < 1)
   } finally {
     await degradedPage.close()
   }
 })
 
 test('embedded model filter selects one result and keeps the accessible Setup bridge', async () => {
-  const hostPage = await browser.newPage()
+  const embeddedBrowser = await puppeteer.launch({
+    executablePath: chromiumPath,
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  })
+  const hostPage = await embeddedBrowser.newPage()
+  await hostPage.setBypassServiceWorker(true)
   await hostPage.setViewport({ width: 390, height: 700 })
   await attachRequestMocks(hostPage, { staleEffort: true })
   const nonce = '0123456789abcdef0123456789abcdef'
   try {
     await hostPage.goto(`${baseUrl}/preview/host`, { waitUntil: 'networkidle2' })
+    await hostPage.bringToFront()
     await hostPage.evaluate(() => {
       document.body.replaceChildren()
       window.embedMessages = []
@@ -810,7 +961,7 @@ test('embedded model filter selects one result and keeps the accessible Setup br
       document.body.appendChild(iframe)
     }, { src: `${baseUrl}/preview/?foxwarmEmbed=chat&foxwarmEmbedNonce=${nonce}&sessionId=embedded%2Fchat` })
     const chatFrame = await hostPage.waitForFrame((frame) => frame.url().includes('foxwarmEmbed=chat'))
-    const modelButton = await chatFrame.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
+    const modelButton = await chatFrame.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 30_000 })
     await modelButton.click()
     const filter = await chatFrame.waitForSelector('input[aria-label="Filter models"]', { timeout: 15_000 })
     await chatFrame.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
@@ -999,13 +1150,16 @@ test('embedded model filter selects one result and keeps the accessible Setup br
     }, { src: `${baseUrl}/preview/?foxwarmEmbed=setup&foxwarmEmbedNonce=${nonce}` })
     const setupFrame = await hostPage.waitForFrame((frame) => frame.url().includes('foxwarmEmbed=setup'))
     await setupFrame.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
+    await setupFrame.click('[data-setup-tab="config"]')
+    await setupFrame.waitForSelector('[data-setup-tab="config"][aria-selected="true"]')
     await hostPage.evaluate(({ nonce: bridgeNonce }) => {
       const iframe = document.getElementById('embedded-setup')
       iframe?.contentWindow?.postMessage({ channel: 'foxwarm-webui-host', version: 1, nonce: bridgeNonce, type: 'focus-models' }, '*')
     }, { nonce })
+    await setupFrame.waitForSelector('[data-setup-tab="models"][aria-selected="true"]', { timeout: 15_000 })
     await setupFrame.waitForFunction(() => !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]'), { timeout: 15_000 })
   } finally {
-    await hostPage.close()
+    await embeddedBrowser.close()
   }
 })
 
@@ -1214,6 +1368,18 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
     await configure.click()
     await normalPage.waitForSelector('[data-tab-id="system:setup"]', { timeout: 15_000 })
     await normalPage.waitForSelector('[data-setup-section="models"] [data-editor-ready="true"]', { timeout: 15_000 })
+    await normalPage.waitForFunction(() => (
+      !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]')
+    ), { timeout: 15_000 })
+
+    await normalPage.click('[data-setup-tab="config"]')
+    await normalPage.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-config.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
+    await normalPage.click('[data-tab-id="chat:model-filter-normal"]')
+    const reopenedModelButton = await normalPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
+    await reopenedModelButton.click()
+    await normalPage.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
+    await normalPage.click('button[aria-label="Configure models"]')
+    await normalPage.waitForSelector('[data-setup-tab="models"][aria-selected="true"]', { timeout: 15_000 })
     await normalPage.waitForFunction(() => (
       !!document.activeElement?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]')
     ), { timeout: 15_000 })

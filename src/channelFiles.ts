@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import * as sessionManager from './sessionManager';
 import { getAgentDir } from './config';
 import { nodesManager } from './nodes/manager';
+import { buildFoxwarmAttachmentText } from '../packages/shared/dist/foxwarmMarkup';
 
 const EXT_BY_MIME: Record<string, string> = {
   'image/jpeg': '.jpg',
@@ -268,15 +269,12 @@ export async function saveInboundChannelFile(options: {
   });
 }
 
-function prependMessageDescriptor(text: string | undefined, descriptor: string): string {
-  if (text && text.trim()) {
-    return `${text.trim()}\n\n${descriptor}`;
-  }
-  return descriptor;
-}
-
 export function buildSavedFileText(saved: SavedChannelFile, kind: 'image' | 'file', extraText?: string): string {
-  const label = kind === 'image' ? 'Image' : 'File';
-  const descriptor = `[${label}: ${saved.fileName}]\nNode: ${saved.nodeId}\nPath: ${saved.promptPath}` + (kind === 'file' ? `\nMIME: ${saved.mimeType}` : '');
-  return prependMessageDescriptor(extraText, descriptor);
+  return buildFoxwarmAttachmentText({
+    kind,
+    name: saved.fileName,
+    node: saved.nodeId,
+    path: saved.promptPath,
+    mime: saved.mimeType,
+  }, extraText);
 }

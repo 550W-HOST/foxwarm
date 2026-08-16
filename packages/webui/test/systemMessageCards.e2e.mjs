@@ -33,7 +33,7 @@ async function buildFixtureBundle() {
       systemPrompt: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="system-prompt">\\nprompt body\\n</foxwarm-system>' }], __meta: { seq: 23 } }] },
       unknown: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="future-system-kind">\\nunknown body\\n</foxwarm-system>' }], __meta: { seq: 24 } }] },
       legacy: { messages: [{ role: 'user', parts: [{ system: 'legacy system notification' }], __meta: { seq: 3 } }] },
-      direct: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="channel">\\ndirect user body\\n</foxwarm-message>' }], __meta: { seq: 4 } }] },
+      direct: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="channel">\\ndirect user body\\n</foxwarm-message>\\n<foxwarm-file name="中文测试.txt" node="master" path="/tmp/中文测试.txt" mime="text/plain" />' }, { inlineData: image }], __meta: { seq: 4 } }] },
       mixed: { messages: [{ role: 'user', parts: [{ text: '<foxwarm-message type="channel">\\nold wrapper\\n</foxwarm-message>\\n<foxwarm-system kind="event">\\n' + longBody + '\\n</foxwarm-system>' }], __meta: { seq: 5 } }] },
       nested: { nestedDepth: 1, messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="snapshot">\\nnested system body\\n</foxwarm-system>' }], __meta: { seq: 6 } }] },
       spacing: { messages: [
@@ -147,6 +147,16 @@ test('heavy system and non-channel messages use kind-tagged thread cards while d
   assert.equal(await page.$$('#direct [data-system-message-card]').then(nodes => nodes.length), 0)
   assert.equal(await page.$$('#direct .foxwarm-user-message-bubble').then(nodes => nodes.length), 1)
   assert.equal(await page.$eval('#direct .foxwarm-chat-timeline > div', row => getComputedStyle(row).justifyContent), 'flex-end')
+  assert.deepEqual(await page.$eval('#direct .foxwarm-lightweight-metadata-line:last-of-type', line => ({
+    text: line.textContent,
+    fontSize: line.style.fontSize,
+    opacity: line.style.opacity,
+  })), {
+    text: '<foxwarm-file name="中文测试.txt" node="master" path="/tmp/中文测试.txt" mime="text/plain" />',
+    fontSize: '70%',
+    opacity: '0.7',
+  })
+  assert.equal(await page.$$('#direct img').then(nodes => nodes.length), 1, 'direct attachment metadata preserves inline image rendering')
   assert.equal(await page.$eval('#event .foxwarm-chat-timeline > div', row => getComputedStyle(row).justifyContent), 'flex-start')
   assert.equal(await page.$eval('#event .foxwarm-system-message-preview', preview => preview.textContent), 'wait-timeout: wait timeout reached for sessionId: `child/session`')
   assert.equal(await page.$eval('#interAgent .foxwarm-system-message-preview', preview => preview.textContent), 'From parent/child:')

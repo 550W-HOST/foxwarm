@@ -216,6 +216,14 @@ const channelEntry = {
     appId: { type: 'string' },
     clientSecret: { type: 'string' },
     requireMention: { type: 'boolean', description: 'Require @mention in QQ groups; defaults to true.' },
+    groupContextLimit: { type: 'integer', minimum: 0, maximum: 50, description: 'Prior QQ group messages retained as untrusted context; defaults to 10.' },
+    groupBatchWindowMs: {
+      anyOf: [
+        { const: 0 },
+        { type: 'integer', minimum: 250, maximum: 30000 },
+      ],
+      description: 'Fixed non-sliding ordinary QQ group batch window in milliseconds; defaults to 5000 and 0 disables batching.',
+    },
     media: {
       type: 'object',
       additionalProperties: true,

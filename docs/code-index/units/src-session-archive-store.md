@@ -1,6 +1,6 @@
 # Unit: src-session-archive-store
 
-Files: src/session/archiveStore.ts, src/session/archiveBootstrapImport.test.ts, src/session/archiveImportState.test.ts, src/session/archiveLineageStore.test.ts
+Files: src/session/archiveStore.ts, src/session/archiveBootstrapImport.test.ts, src/session/archiveImportState.test.ts, src/session/archiveLineageStore.test.ts, src/session/archiveMessageStats.test.ts, src/session/archivePureReads.test.ts
 Secondary files: src/session/sessionIdAllocation.test.ts
 
 ## Purpose
@@ -21,6 +21,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 - `rollbackUncommittedArchiveMessages`, `rollbackUncommittedArchiveBlocks` — exact-payload cleanup for rows newly inserted by a larger active-authority commit that then failed before publication; pre-existing replay rows are never eligible.
 - `readLocalArchiveMessages`, `readLocalArchiveBlocks` — current-branch rows only.
 - `readEffectiveArchiveMessages`, `readEffectiveArchiveBlocks` — lineage-bounded inherited plus local rows.
+- `getLocalArchiveMessageStats`, `getEffectiveArchiveMessageStats` — pure SQLite `count`/`minSeq`/`maxSeq` summaries with the same optional bounds, alias resolution, lineage walk, and cumulative fork caps as the corresponding readers.
 - `getVectorCheckpoint`, `getVectorCheckpointSync`, `setVectorCheckpointSync` — vector progress.
 - `getVectorSearchLineage`, `listSessionsNeedingVectorBackfill` — vector scope/backfill inputs.
 - `renameSessionArchiveStore` — bootstrapped transactional ID/parent/checkpoint/import-state rename.
@@ -37,7 +38,6 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 | reservation-ledger load/persist/canonical-resolution helpers | Validate committed alias graphs, rebuild exact moved-ID reservations, and map proven historical aliases |
 | message/block import functions | Batched parse/upsert and per-source import-state updates |
 | `bootstrapArchiveStoreFromLegacy` / `ensureBootstrapped` | Migration-only streaming import of legacy JSONL before strict verification and backup movement |
-| `ensureImported` | Migration-only helper for a discovered legacy source |
 | `buildLineage` | Parent walk with cumulative message/block fork caps |
 | local/effective readers | SQL range query and inherited-source annotation |
 
@@ -53,11 +53,13 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 
 ## Behavior
 
-- `initArchiveStore()` opens the database and starts one bootstrap promise. Known sessions come from the metadata snapshot.
+- `initArchiveStore()` opens the database and validates/repairs the independent reservation ledger against its SQLite mirror. `sessionManager.loadSessions()` awaits it after startup migrations and before normal agent/channel/session loading; Session-worker initialization may idempotently join the same process-local promise.
 - Ordinary legacy bootstrap accepts only whole-line canonical JSON and never inserts a torn-concatenated suffix. After structural validation, migration-only fork-cap inference may count the narrow recovered suffix as copied parent history without inserting it; the dedicated recovery transaction remains the sole row writer and atomically writes its durable audit marker. Raw files remain unchanged for backup audit.
 - Migration-only message validation recognizes two proven historical writer variants without changing current writer types: message-level `providerMeta` may carry a record-valued `providerSpecificFields` without the later `sourceModelId`, and `functionResponse.response` may be any defined JSON value rather than only an object. SQLite preserves those payload values as written, unscoped provider fields are not replayed to a guessed model, and all outer record identity, role, tool-call identity, duplicate, and lineage checks remain strict.
 - Migration import-state rows avoid reparsing unchanged legacy sources while a failed migration is being repaired and retried.
 - Effective reads walk current session then ancestors, cap each ancestor at cumulative fork points, annotate `sourceSessionId`/`inherited`, and sort by source sequence or block ID.
+- Message statistics aggregate covering `(session_id, seq)` range scans per lineage branch without materializing message JSON. Empty, unknown, aliased, inherited, capped, and out-of-range queries match the corresponding local/effective reader result exactly.
+- Ordinary local/effective readers, branch lookup, archived-ID lookup, and vector-lineage lookup open the SQLite schema and resolve committed aliases without creating branches or repairing/re-writing reservation state. Startup initialization and explicit lifecycle/write operations retain the repair/ownership path.
 - Current message/block writes return only rows actually inserted by that call. The active-history commit path may delete those exact rows if authoritative JSON persistence fails, so a retry can reuse the same identity without overwriting or deleting an older immutable replay row.
 - Child branch creation seeds vector checkpoints at its fork boundaries.
 - Backfill candidates are sessions whose latest local message/block exceeds the checkpoint.
@@ -90,3 +92,7 @@ Internal session-ID lifetime reservation is canonical in [D-lifecycle-archived-i
 Archive inheritance is resolved at read time and capped at each fork boundary; a child never copies or sees post-fork parent rows.
 
 Existing SQLite branches are authoritative during legacy cleanup. Parent metadata heuristics may infer a missing branch but never rewrite an established branch.
+
+### D-archive-read-purity
+
+[2026-08-16] Ordinary archive content, branch, reservation-status, and vector-lineage reads are pure with respect to archive identity state. Reading an unknown or mistyped Session ID returns the existing empty/not-found shape and must not insert `archive_branches`, rewrite the reservation ledger or SQLite mirror, or reserve that ID. Committed aliases already present in SQLite remain readable. Branch creation and reservation repair belong only to explicit Session create/fork/write/move paths and startup migration/recovery; a later legitimate owner may therefore create or write the previously unknown ID normally.

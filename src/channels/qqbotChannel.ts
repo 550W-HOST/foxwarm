@@ -2,6 +2,7 @@ import WebSocket, { RawData } from 'ws';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { logger } from '../common';
 import type { QQBotConfig } from '../config';
+import { escapeFoxwarmTextContent, formatFoxwarmAttributes } from '../utils/promptWrappers';
 import { buildQQBotAttachmentPreviewParts, materializeQQBotAttachments } from './qqbotMedia';
 import { uploadQQBotFile } from './qqbotMediaUpload';
 
@@ -21,6 +22,15 @@ const MAX_PASSIVE_REPLY_CHAINS = 10_000;
 const MAX_MESSAGE_SCENE_EXT_ITEMS = 32;
 const MAX_MESSAGE_SCENE_EXT_ITEM_LENGTH = 256;
 const QQBOT_MAX_TEXT_LENGTH = 2_000;
+const DEFAULT_GROUP_CONTEXT_LIMIT = 10;
+const MAX_GROUP_CONTEXT_LIMIT = 50;
+const DEFAULT_GROUP_BATCH_WINDOW_MS = 5_000;
+const MIN_GROUP_BATCH_WINDOW_MS = 250;
+const MAX_GROUP_BATCH_WINDOW_MS = 30_000;
+const GROUP_CONTEXT_TTL_MS = 5 * 60 * 1_000;
+const MAX_GROUP_ACCUMULATORS = 1_000;
+const MAX_GROUP_MENTION_ENTRIES = 64;
+const MAX_PLATFORM_GROUP_HISTORY_SOURCE_CHARS = MAX_GROUP_CONTEXT_LIMIT * QQBOT_MAX_TEXT_LENGTH;
 
 type QQBotConversationKind = 'c2c' | 'group' | 'guild' | 'dm';
 
@@ -37,6 +47,9 @@ type QQBotChannelDeps = {
   createWebSocket?: (url: string) => QQBotSocket;
   reconnectDelaysMs?: number[];
   invalidSessionReconnectDelayMs?: number;
+  now?: () => number;
+  setTimer?: (callback: () => void, delayMs: number) => NodeJS.Timeout;
+  clearTimer?: (timer: NodeJS.Timeout) => void;
 };
 
 type QQBotGatewayFrame = {
@@ -65,6 +78,130 @@ type PassiveReplyChain = {
   generation: number;
   barrier: Promise<void>;
 };
+
+type NormalizedInboundEvent = {
+  kind: QQBotConversationKind;
+  conversationId: string;
+  senderId: string;
+  username: string;
+  messageId: string;
+};
+
+type BufferedGroupEvent = {
+  dedupKey: string;
+  eventType: 'GROUP_AT_MESSAGE_CREATE' | 'GROUP_MESSAGE_CREATE';
+  receivedAt: number;
+  inbound: NormalizedInboundEvent;
+  content: string;
+  attachments: unknown[];
+  mentioned: boolean;
+};
+
+type GroupAccumulator = {
+  context: BufferedGroupEvent[];
+  current?: BufferedGroupEvent;
+  openedAt?: number;
+  timer?: NodeJS.Timeout;
+};
+
+type PlatformGroupHistoryItem = {
+  content: string;
+};
+
+function isQQBotGroupMention(eventType: string, event: unknown): boolean {
+  if (eventType === 'GROUP_AT_MESSAGE_CREATE') return true;
+  if (eventType !== 'GROUP_MESSAGE_CREATE' || !Array.isArray((event as any)?.mentions)) return false;
+  return (event as any).mentions
+    .slice(0, MAX_GROUP_MENTION_ENTRIES)
+    .some((mention: unknown) => Boolean(mention && typeof mention === 'object' && (mention as any).is_you === true));
+}
+
+function buildQQBotGroupTriggerMetadata(mentioned: boolean): { system: string } {
+  const attrs = formatFoxwarmAttributes({
+    kind: 'group-message',
+    mentioned: mentioned ? 'true' : 'false',
+    hint: mentioned
+      ? 'The current group message explicitly mentioned this agent.'
+      : 'The current group message is ordinary group chat and did not mention this agent.',
+  });
+  return { system: `<foxwarm-metadata ${attrs} />` };
+}
+
+function normalizePlatformHistoryComparable(value: string): string {
+  return value.replace(/\r\n?/g, '\n').trim();
+}
+
+function parsePlatformGroupHistoryBody(body: string): string[] | null {
+  const lines = body.replace(/\r\n?/g, '\n').split('\n');
+  const records: string[] = [];
+  let index = 0;
+  while (index < lines.length && !lines[index].trim()) index += 1;
+  while (index < lines.length) {
+    if (!/^===\s*消息\s+\d+\s*===$/.test(lines[index].trim())) return null;
+    index += 1;
+    if (index >= lines.length) return null;
+    const contentMatch = /^\[消息内容\][ \t]*(.*)$/.exec(lines[index]);
+    if (!contentMatch) return null;
+    const contentLines = [contentMatch[1]];
+    index += 1;
+    while (index < lines.length && !/^===\s*消息\s+\d+\s*===$/.test(lines[index].trim())) {
+      contentLines.push(lines[index]);
+      index += 1;
+    }
+    while (contentLines.length > 1 && !contentLines[contentLines.length - 1].trim()) contentLines.pop();
+    const content = contentLines.join('\n').trim();
+    if (content) records.push(content);
+  }
+  return records.length > 0 ? records : null;
+}
+
+function extractPlatformGroupHistory(
+  value: unknown,
+  currentContent: string,
+  limit: number,
+): PlatformGroupHistoryItem[] {
+  if (limit <= 0 || !Array.isArray(value)) return [];
+  const records: Array<{ content: string; parsed: boolean }> = [];
+  let remainingChars = MAX_PLATFORM_GROUP_HISTORY_SOURCE_CHARS;
+  for (const element of value.slice(0, MAX_GROUP_CONTEXT_LIMIT)) {
+    if (records.length >= MAX_GROUP_CONTEXT_LIMIT || remainingChars <= 0) break;
+    if (typeof element?.content !== 'string') continue;
+    const boundedBody = element.content.slice(0, remainingChars);
+    remainingChars -= boundedBody.length;
+    if (!boundedBody.trim()) continue;
+    const parsed = parsePlatformGroupHistoryBody(boundedBody);
+    if (parsed) {
+      for (const record of parsed) {
+        if (records.length >= MAX_GROUP_CONTEXT_LIMIT) break;
+        records.push({ content: record, parsed: true });
+      }
+    }
+    else records.push({ content: boundedBody.trim(), parsed: false });
+  }
+  if (records.length > 0 && records[records.length - 1].parsed
+    && normalizePlatformHistoryComparable(records[records.length - 1].content)
+      === normalizePlatformHistoryComparable(currentContent)) {
+    records.pop();
+  }
+  return records.slice(-limit).map(record => ({ content: record.content }));
+}
+
+function normalizeGroupContextLimit(value: unknown): number {
+  if (value === undefined) return DEFAULT_GROUP_CONTEXT_LIMIT;
+  if (!Number.isInteger(value) || Number(value) < 0 || Number(value) > MAX_GROUP_CONTEXT_LIMIT) {
+    throw new Error(`QQ Bot groupContextLimit must be an integer between 0 and ${MAX_GROUP_CONTEXT_LIMIT}`);
+  }
+  return Number(value);
+}
+
+function normalizeGroupBatchWindowMs(value: unknown): number {
+  if (value === undefined) return DEFAULT_GROUP_BATCH_WINDOW_MS;
+  if (!Number.isInteger(value)
+    || (Number(value) !== 0 && (Number(value) < MIN_GROUP_BATCH_WINDOW_MS || Number(value) > MAX_GROUP_BATCH_WINDOW_MS))) {
+    throw new Error(`QQ Bot groupBatchWindowMs must be 0 or an integer between ${MIN_GROUP_BATCH_WINDOW_MS} and ${MAX_GROUP_BATCH_WINDOW_MS}`);
+  }
+  return Number(value);
+}
 
 function toText(data: RawData | string): string {
   if (typeof data === 'string') {
@@ -215,12 +352,17 @@ export class QQBotChannel implements Channel {
   private readonly appId: string;
   private readonly clientSecret: string;
   private readonly requireMention: boolean;
+  private readonly groupContextLimit: number;
+  private readonly groupBatchWindowMs: number;
   private readonly mediaConfig: QQBotConfig['media'];
   private readonly saveInboundSessionFileFromPath?: QQBotChannelDeps['saveInboundSessionFileFromPath'];
   private readonly fetchFn: typeof fetch;
   private readonly createWebSocket: (url: string) => QQBotSocket;
   private readonly reconnectDelaysMs: number[];
   private readonly invalidSessionReconnectDelayMs: number;
+  private readonly now: () => number;
+  private readonly setTimer: (callback: () => void, delayMs: number) => NodeJS.Timeout;
+  private readonly clearTimer: (timer: NodeJS.Timeout) => void;
 
   private messageHandler?: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>;
   private socket?: QQBotSocket;
@@ -240,6 +382,8 @@ export class QQBotChannel implements Channel {
   private replySequences = new Map<string, number>();
   private passiveReplyContexts = new Map<string, PassiveReplyContext>();
   private passiveReplyChains = new Map<string, PassiveReplyChain>();
+  private groupAccumulators = new Map<string, GroupAccumulator>();
+  private groupBufferGeneration = 0;
 
   constructor(config: QQBotConfig, name = 'qqbot', deps: QQBotChannelDeps = {}) {
     this.name = name;
@@ -247,12 +391,17 @@ export class QQBotChannel implements Channel {
     this.appId = config.appId?.trim() || '';
     this.clientSecret = config.clientSecret?.trim() || '';
     this.requireMention = config.requireMention !== false;
+    this.groupContextLimit = normalizeGroupContextLimit(config.groupContextLimit);
+    this.groupBatchWindowMs = normalizeGroupBatchWindowMs(config.groupBatchWindowMs);
     this.mediaConfig = config.media;
     this.fetchFn = deps.fetch || globalThis.fetch;
     this.saveInboundSessionFileFromPath = deps.saveInboundSessionFileFromPath;
     this.createWebSocket = deps.createWebSocket || ((url) => new WebSocket(url));
     this.reconnectDelaysMs = deps.reconnectDelaysMs || RECONNECT_DELAY_MS;
     this.invalidSessionReconnectDelayMs = deps.invalidSessionReconnectDelayMs ?? 3_000;
+    this.now = deps.now || Date.now;
+    this.setTimer = deps.setTimer || ((callback, delayMs) => setTimeout(callback, delayMs));
+    this.clearTimer = deps.clearTimer || clearTimeout;
   }
 
   async start(): Promise<void> {
@@ -266,6 +415,7 @@ export class QQBotChannel implements Channel {
     }
     this.stopped = false;
     this.reconnectAttempt = 0;
+    this.groupBufferGeneration += 1;
     const generation = ++this.connectionGeneration;
     await this.connect(generation);
     logger.info({ channelId: this.channelId }, 'QQ Bot channel started');
@@ -274,6 +424,7 @@ export class QQBotChannel implements Channel {
   async stop(): Promise<void> {
     this.stopped = true;
     this.connectionGeneration += 1;
+    this.groupBufferGeneration += 1;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
@@ -284,6 +435,7 @@ export class QQBotChannel implements Channel {
     this.replySequences.clear();
     this.passiveReplyContexts.clear();
     this.passiveReplyChains.clear();
+    this.clearAllGroupAccumulators();
     const socket = this.socket;
     this.socket = undefined;
     if (socket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)) {
@@ -754,12 +906,6 @@ export class QQBotChannel implements Channel {
 
   private async routeInboundMessage(eventType: string, event: any, sequence?: number): Promise<void> {
     const content = typeof event?.content === 'string' ? event.content : '';
-
-    if (eventType === 'GROUP_MESSAGE_CREATE' && this.requireMention) {
-      logger.debug({ channelId: this.channelId, eventType, messageId: event?.id }, 'Ignoring non-mention QQ Bot group event');
-      return;
-    }
-
     const inbound = this.normalizeInboundEvent(eventType, event);
     if (!inbound) {
       logger.warn({ channelId: this.channelId, eventType, messageId: event?.id }, 'Ignoring QQ Bot event without a stable identity');
@@ -773,12 +919,107 @@ export class QQBotChannel implements Channel {
       return;
     }
 
+    if (inbound.kind === 'group'
+      && (eventType === 'GROUP_AT_MESSAGE_CREATE' || eventType === 'GROUP_MESSAGE_CREATE')) {
+      await this.routeGroupInboundMessage(eventType, inbound, content, attachments, event, sequence);
+      return;
+    }
+
     if (this.isDuplicateInboundEvent(eventType, inbound.messageId, event)) {
       logger.info({ channelId: this.channelId, eventType, messageId: inbound.messageId, sequence }, 'Ignoring duplicate QQ Bot inbound event');
       return;
     }
+    await this.dispatchInboundMessage(eventType, inbound, content, attachments);
+  }
+
+  private async routeGroupInboundMessage(
+    eventType: 'GROUP_AT_MESSAGE_CREATE' | 'GROUP_MESSAGE_CREATE',
+    inbound: NormalizedInboundEvent,
+    content: string,
+    attachments: unknown[],
+    event: any,
+    sequence?: number,
+  ): Promise<void> {
+    const dedupKey = this.buildInboundEventKey(eventType, inbound.messageId, event);
+    const isMention = isQQBotGroupMention(eventType, event);
+    let accumulator = this.getGroupAccumulator(inbound.conversationId);
+    if (accumulator) this.pruneGroupAccumulator(accumulator);
+    const bufferedDuplicate = accumulator ? this.findBufferedGroupEvent(accumulator, dedupKey) : undefined;
+
+    if (bufferedDuplicate && !isMention) {
+      logger.info({ channelId: this.channelId, eventType, messageId: inbound.messageId, sequence }, 'Ignoring duplicate buffered QQ Bot group event');
+      return;
+    }
+    if (bufferedDuplicate && accumulator) {
+      this.removeBufferedGroupEvent(accumulator, dedupKey);
+    }
+    if (!bufferedDuplicate && this.recentInboundEvents.has(dedupKey)) {
+      logger.info({ channelId: this.channelId, eventType, messageId: inbound.messageId, sequence }, 'Ignoring duplicate QQ Bot inbound event');
+      return;
+    }
+    if (!bufferedDuplicate) {
+      this.rememberInboundEventKey(dedupKey);
+    }
+    accumulator ||= this.getOrCreateGroupAccumulator(inbound.conversationId);
+
+    const buffered: BufferedGroupEvent = {
+      dedupKey,
+      eventType,
+      receivedAt: this.now(),
+      inbound,
+      content,
+      attachments,
+      mentioned: isMention,
+    };
+    const isSlashCommand = content.trimStart().startsWith('/');
+
+    if (isSlashCommand && (isMention || !this.requireMention)) {
+      this.clearGroupAccumulator(inbound.conversationId);
+      await this.dispatchInboundMessage(eventType, inbound, content, attachments, isMention);
+      return;
+    }
+
+    if (this.requireMention) {
+      if (!isMention) {
+        this.appendGroupContext(accumulator, buffered);
+        return;
+      }
+      const context = this.getDispatchContext(this.detachGroupAccumulator(inbound.conversationId)?.context || []);
+      const platformHistory = context.length === 0
+        ? extractPlatformGroupHistory(event?.msg_elements, content, this.groupContextLimit)
+        : [];
+      await this.dispatchGroupBatch(context, buffered, platformHistory);
+      return;
+    }
+
+    if (accumulator.current) {
+      this.appendGroupContext(accumulator, accumulator.current);
+    }
+    accumulator.current = buffered;
+    if (accumulator.openedAt === undefined) {
+      accumulator.openedAt = buffered.receivedAt;
+    }
+
+    if (isMention || attachments.length > 0 || this.groupBatchWindowMs === 0) {
+      const detached = this.detachGroupAccumulator(inbound.conversationId);
+      if (detached?.current) {
+        await this.dispatchGroupBatch(this.getDispatchContext(detached.context), detached.current);
+      }
+      return;
+    }
+    this.scheduleGroupBatch(inbound.conversationId, accumulator);
+  }
+
+  private async dispatchInboundMessage(
+    eventType: string,
+    inbound: NormalizedInboundEvent,
+    content: string,
+    attachments: unknown[],
+    groupMentioned?: boolean,
+  ): Promise<void> {
     this.rememberPassiveReplyContext(inbound.messageId);
     this.rememberLatestMessageId(inbound.conversationId, inbound.messageId);
+    const supportsInboundMedia = inbound.kind === 'c2c' || inbound.kind === 'group';
 
     const context: ChannelContext = {
       channelId: this.channelId,
@@ -803,6 +1044,9 @@ export class QQBotChannel implements Channel {
       parts: attachments.length > 0 && supportsInboundMedia
         ? buildQQBotAttachmentPreviewParts(content, attachments, this.mediaConfig)
         : [{ text: content }],
+      ...(inbound.kind === 'group'
+        ? { ingressMetadataParts: [buildQQBotGroupTriggerMetadata(groupMentioned === true)] }
+        : {}),
       channelUserId: inbound.conversationId,
       conversationId: inbound.conversationId,
       username: inbound.username,
@@ -828,7 +1072,51 @@ export class QQBotChannel implements Channel {
     }
   }
 
-  private normalizeInboundEvent(eventType: string, event: any): { kind: QQBotConversationKind; conversationId: string; senderId: string; username: string; messageId: string } | null {
+  private async dispatchGroupBatch(
+    contextEvents: BufferedGroupEvent[],
+    current: BufferedGroupEvent,
+    platformHistory: PlatformGroupHistoryItem[] = [],
+  ): Promise<void> {
+    const freshContext = contextEvents.filter(item => current.receivedAt - item.receivedAt <= GROUP_CONTEXT_TTL_MS);
+    const content = this.buildGroupBatchContent(freshContext, current, platformHistory);
+    await this.dispatchInboundMessage(current.eventType, current.inbound, content, current.attachments, current.mentioned);
+  }
+
+  private buildGroupBatchContent(
+    contextEvents: BufferedGroupEvent[],
+    current: BufferedGroupEvent,
+    platformHistory: PlatformGroupHistoryItem[] = [],
+  ): string {
+    if (contextEvents.length === 0 && platformHistory.length === 0) {
+      return current.content;
+    }
+    const localItems = contextEvents.map((item) => {
+      const attrs = formatFoxwarmAttributes({
+        senderId: item.inbound.senderId,
+        senderName: item.inbound.username,
+        time: new Date(item.receivedAt).toISOString(),
+      });
+      const preview = buildQQBotAttachmentPreviewParts(item.content, item.attachments, this.mediaConfig)
+        .map(part => part.text || '')
+        .filter(Boolean)
+        .join('\n');
+      return `<foxwarm-qqbot-context-item ${attrs}>\n${escapeFoxwarmTextContent(preview)}\n</foxwarm-qqbot-context-item>`;
+    });
+    const platformItems = platformHistory.map(item => [
+      '<foxwarm-qqbot-context-item source="platform-history">',
+      escapeFoxwarmTextContent(item.content),
+      '</foxwarm-qqbot-context-item>',
+    ].join('\n'));
+    const items = localItems.length > 0 ? localItems : platformItems;
+    const contextBlock = [
+      `<foxwarm-qqbot-context count="${items.length}" untrusted="true">`,
+      ...items,
+      '</foxwarm-qqbot-context>',
+    ].join('\n');
+    return current.content ? `${contextBlock}\n\n${current.content}` : contextBlock;
+  }
+
+  private normalizeInboundEvent(eventType: string, event: any): NormalizedInboundEvent | null {
     const messageId = typeof event?.id === 'string' ? event.id.trim() : '';
     if (!messageId) {
       return null;
@@ -858,23 +1146,136 @@ export class QQBotChannel implements Channel {
       : null;
   }
 
-  private isDuplicateInboundEvent(eventType: string, messageId: string, event: any): boolean {
+  private getOrCreateGroupAccumulator(conversationId: string): GroupAccumulator {
+    const existing = this.getGroupAccumulator(conversationId);
+    if (existing) {
+      return existing;
+    }
+    if (this.groupAccumulators.size >= MAX_GROUP_ACCUMULATORS) {
+      const oldestConversationId = this.groupAccumulators.keys().next().value;
+      if (oldestConversationId) this.clearGroupAccumulator(oldestConversationId);
+    }
+    const accumulator: GroupAccumulator = { context: [] };
+    this.groupAccumulators.set(conversationId, accumulator);
+    return accumulator;
+  }
+
+  private getGroupAccumulator(conversationId: string): GroupAccumulator | undefined {
+    const accumulator = this.groupAccumulators.get(conversationId);
+    if (!accumulator) return undefined;
+    this.groupAccumulators.delete(conversationId);
+    this.groupAccumulators.set(conversationId, accumulator);
+    return accumulator;
+  }
+
+  private appendGroupContext(accumulator: GroupAccumulator, event: BufferedGroupEvent): void {
+    accumulator.context.push(event);
+    const retainedLimit = Math.max(1, this.groupContextLimit);
+    if (accumulator.context.length > retainedLimit) {
+      accumulator.context.splice(0, accumulator.context.length - retainedLimit);
+    }
+  }
+
+  private getDispatchContext(context: BufferedGroupEvent[]): BufferedGroupEvent[] {
+    return this.groupContextLimit === 0 ? [] : context.slice(-this.groupContextLimit);
+  }
+
+  private pruneGroupAccumulator(accumulator: GroupAccumulator): void {
+    const cutoff = this.now() - GROUP_CONTEXT_TTL_MS;
+    accumulator.context = accumulator.context.filter(item => item.receivedAt >= cutoff);
+    if (accumulator.current && accumulator.current.receivedAt < cutoff) {
+      accumulator.current = undefined;
+      accumulator.openedAt = undefined;
+      if (accumulator.timer) {
+        this.clearTimer(accumulator.timer);
+        accumulator.timer = undefined;
+      }
+    }
+  }
+
+  private findBufferedGroupEvent(accumulator: GroupAccumulator, dedupKey: string): BufferedGroupEvent | undefined {
+    return accumulator.current?.dedupKey === dedupKey
+      ? accumulator.current
+      : accumulator.context.find(item => item.dedupKey === dedupKey);
+  }
+
+  private removeBufferedGroupEvent(accumulator: GroupAccumulator, dedupKey: string): BufferedGroupEvent | undefined {
+    if (accumulator.current?.dedupKey === dedupKey) {
+      const duplicate = accumulator.current;
+      accumulator.current = undefined;
+      return duplicate;
+    }
+    const index = accumulator.context.findIndex(item => item.dedupKey === dedupKey);
+    if (index === -1) return undefined;
+    return accumulator.context.splice(index, 1)[0];
+  }
+
+  private scheduleGroupBatch(conversationId: string, accumulator: GroupAccumulator): void {
+    if (accumulator.timer || this.groupBatchWindowMs === 0) return;
+    const generation = this.groupBufferGeneration;
+    const elapsed = Math.max(0, this.now() - (accumulator.openedAt ?? this.now()));
+    const delayMs = Math.max(0, this.groupBatchWindowMs - elapsed);
+    const timer = this.setTimer(() => {
+      if (generation !== this.groupBufferGeneration
+        || this.groupAccumulators.get(conversationId) !== accumulator
+        || accumulator.timer !== timer) {
+        return;
+      }
+      accumulator.timer = undefined;
+      const detached = this.detachGroupAccumulator(conversationId);
+      if (detached?.current) {
+        void this.dispatchGroupBatch(this.getDispatchContext(detached.context), detached.current);
+      }
+    }, delayMs);
+    timer.unref?.();
+    accumulator.timer = timer;
+  }
+
+  private detachGroupAccumulator(conversationId: string): GroupAccumulator | undefined {
+    const accumulator = this.groupAccumulators.get(conversationId);
+    if (!accumulator) return undefined;
+    this.groupAccumulators.delete(conversationId);
+    if (accumulator.timer) {
+      this.clearTimer(accumulator.timer);
+      accumulator.timer = undefined;
+    }
+    return accumulator;
+  }
+
+  private clearGroupAccumulator(conversationId: string): void {
+    this.detachGroupAccumulator(conversationId);
+  }
+
+  private clearAllGroupAccumulators(): void {
+    for (const accumulator of this.groupAccumulators.values()) {
+      if (accumulator.timer) this.clearTimer(accumulator.timer);
+    }
+    this.groupAccumulators.clear();
+  }
+
+  private buildInboundEventKey(eventType: string, messageId: string, event: any): string {
     const messageSequence = normalizeBusinessScalar(event?.msg_seq);
     const messageIndex = getMessageSceneIndex(event?.message_scene?.ext);
     const canonicalEventType = eventType === 'GROUP_AT_MESSAGE_CREATE' || eventType === 'GROUP_MESSAGE_CREATE'
       ? 'GROUP_MESSAGE_CREATE'
       : eventType;
-    const key = `${canonicalEventType}:${messageId}:${messageSequence ? `seq=${messageSequence}` : 'seq=-'}:${messageIndex ? `idx=${messageIndex}` : 'idx=-'}`;
+    return `${canonicalEventType}:${messageId}:${messageSequence ? `seq=${messageSequence}` : 'seq=-'}:${messageIndex ? `idx=${messageIndex}` : 'idx=-'}`;
+  }
+
+  private rememberInboundEventKey(key: string): void {
+    if (this.recentInboundEvents.size >= MAX_RECENT_INBOUND_EVENTS) {
+      const oldest = this.recentInboundEvents.keys().next().value;
+      if (oldest) this.recentInboundEvents.delete(oldest);
+    }
+    this.recentInboundEvents.set(key, true);
+  }
+
+  private isDuplicateInboundEvent(eventType: string, messageId: string, event: any): boolean {
+    const key = this.buildInboundEventKey(eventType, messageId, event);
     if (this.recentInboundEvents.has(key)) {
       return true;
     }
-    if (this.recentInboundEvents.size >= MAX_RECENT_INBOUND_EVENTS) {
-      const oldest = this.recentInboundEvents.keys().next().value;
-      if (oldest) {
-        this.recentInboundEvents.delete(oldest);
-      }
-    }
-    this.recentInboundEvents.set(key, true);
+    this.rememberInboundEventKey(key);
     return false;
   }
 
