@@ -1,5 +1,6 @@
 import {
   escapeFoxwarmAttributeValue,
+  escapeFoxwarmTextContent,
   formatFoxwarmAttributes,
   unescapeFoxwarmAttributeValue,
   type FoxwarmAttributeValue,
@@ -7,6 +8,7 @@ import {
 
 export {
   escapeFoxwarmAttributeValue,
+  escapeFoxwarmTextContent,
   formatFoxwarmAttributes,
   unescapeFoxwarmAttributeValue,
   type FoxwarmAttributeValue,

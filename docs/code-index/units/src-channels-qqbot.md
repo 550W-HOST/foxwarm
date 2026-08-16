@@ -15,7 +15,8 @@ upload flow.
 ## Key exports
 
 - `QQBotChannel` — managed `Channel` implementation for official QQ Bot text
-  ingress, bounded C2C/group media ingress, and text delivery.
+  ingress, bounded group context/batching, bounded C2C/group media ingress,
+  and text delivery.
 - `parseQQBotConversationId()` — validates the scoped outbound target format.
 - `isQQBotChannelConfigReady()` — validates the two required credentials for
   runtime factory/status handling.
@@ -38,7 +39,7 @@ upload flow.
 | --- | --- |
 | `QQBotChannel.start()` / `stop()` | Obtains a token, opens or closes the gateway, and fences reconnect/heartbeat callbacks by connection generation. |
 | `QQBotChannel.handleGatewayMessage()` | Identifies or resumes after `HELLO`, retains dispatch sequence/session state, handles gateway control frames, and accepts supported message events. |
-| `QQBotChannel.routeInboundMessage()` | Deduplicates supported events, creates scoped identity, keeps C2C/group attachment metadata URL-free, and attaches an ephemeral media materializer. |
+| `QQBotChannel.routeInboundMessage()` | Deduplicates supported events, creates scoped identity, buffers/batches group input, keeps C2C/group attachment metadata URL-free, and attaches an ephemeral current-message media materializer. |
 | `QQBotChannel.sendMessage()` | Routes C2C, group, guild-channel, and guild-DM text to their official REST endpoint. |
 | `QQBotChannel.sendFile()` | Sends C2C/group images or generic files through destination-specific direct-small or streamed-large upload and one rich-media message; rejects guild/DM media. |
 | `QQBotChannel.sendTyping()` | Uses the official C2C input-notify message with the latest conversation-local inbound message ID when available. |
@@ -54,8 +55,9 @@ upload flow.
   authorization use `allowedUsers` normally rather than treating a group or
   channel target as its sender.
 - The adapter accepts `content` plus attachments from `C2C_MESSAGE_CREATE`,
-  `GROUP_AT_MESSAGE_CREATE`, and (when `requireMention: false`) ordinary
-  `GROUP_MESSAGE_CREATE` events. Attachment-only C2C/group events are retained as
+  `GROUP_AT_MESSAGE_CREATE`, and ordinary `GROUP_MESSAGE_CREATE` events. Group
+  ordinary events are either bounded mention-triggered context or fixed-window
+  always-mode batches according to `requireMention`. Attachment-only C2C/group events are retained as
   safe filename/MIME/size metadata and can be materialized only after the
   canonical router has already authorized the sender. Supported raster images
   become transient inline parts and other direct files (including video/voice)
@@ -130,7 +132,9 @@ upload flow.
 ## Runtime and configuration
 
 - `QQBotConfig` in `src/config.ts` accepts `appId`, `clientSecret`, `enabled`,
-  `requireMention` (default `true`), `allowedUsers`, `allowAllUsers`, and bounded `media` limits
+  `requireMention` (default `true`), `groupContextLimit` (default 10, range 0-50),
+  `groupBatchWindowMs` (default 5000; 0 or range 250-30000), `allowedUsers`,
+  `allowAllUsers`, and bounded `media` limits
   (`imageMaxBytes` safe inline-image cap, `fileMaxBytes`, `maxTotalBytes`,
   `maxAttachments`). Main-hosted materialization uses the path saver; isolated
   or bound-node QQ media uses the existing whole-buffer saver only for files up
@@ -165,8 +169,10 @@ validation, safe generic-file storage, safe-inline-cap image fallback, best-effo
 raster format probing, controlled error categories/path scrubbing, and
 transient image data crossing into a canonical blob reference, isolated
 whole-buffer saves, and the fixed isolated transfer cap. Channel tests also
-cover ordinary group events, default mention gating, AT/non-AT business
-deduplication, passive replies retaining the inbound `msg_id`, the three-minute
+cover the three group-delivery patterns, mention context, fixed always-mode
+batching, AT immediate flush, context markup escaping, group bounds/TTL,
+slash/media boundaries, lifecycle timer fences, AT/non-AT business
+deduplication, passive replies retaining the trigger `msg_id`, the three-minute
 boundary, structured expiration fallback, and media final retry without a
 second upload. Upload-unit tests cover tiny PNG/JPEG/generic direct bodies,
   the exact 5 MiB boundary, larger streamed files, bounded direct responses,
@@ -225,16 +231,39 @@ introduces no new node protocol or configuration.
 
 ### D-qqbot-group-mention-policy
 
-`QQBotConfig.requireMention` defaults to `true` to preserve the original
-AT-only behavior. When explicitly `false`, the adapter accepts both
-`GROUP_AT_MESSAGE_CREATE` and `GROUP_MESSAGE_CREATE` through the same group
-identity, authorization, attachment, source metadata, and latest-message
-context path. Replies keep the inbound `msg_id` and therefore remain passive
-when the QQ passive window permits it. The two event types share one canonical
-business dedup key so a duplicate delivery does not enqueue twice. This first
-version has no per-group policy matrix, history-buffer changes, special slash
-command policy, or proactive-send changes; a true proactive failure such as
-QQ `40034105` remains a platform permission result.
+`QQBotConfig.requireMention` defaults to `true`. One configured adapter owns a
+bounded in-memory accumulator per scoped group so the same implementation works
+with QQ platform delivery configured as AT-only, AT plus a replay of previous
+group messages, or all group messages.
+
+When mention is required, ordinary `GROUP_MESSAGE_CREATE` events are untrusted
+context only. The adapter keeps the latest `groupContextLimit` entries and
+flushes them with one later `GROUP_AT_MESSAGE_CREATE` as exactly one
+`ChannelMessage` and one Router call. When mention is not required, the first
+ordinary event opens a fixed, non-sliding `groupBatchWindowMs` window; later
+ordinary events join without moving the deadline. The latest event is the
+current trigger, previous events are context, and AT or current-message media
+flushes immediately. A zero window preserves immediate per-event routing.
+Slash-command triggers bypass aggregation, clear pending context, and retain
+the Router's existing command parser input.
+
+The trigger/current event alone owns Router authorization, sender/source
+metadata, the passive `msg_id`, and latest-message state. Prior context is
+serialized inside the Router's outer direct-channel wrapper as
+`<foxwarm-qqbot-context count="..." untrusted="true">` with escaped
+sender-labelled items and a blank line before current text. Ambient attachment
+metadata remains URL-free and is never materialized; only current-message media
+uses the existing authorization-gated materializer. Context is bounded to 50
+configurable entries, expires five minutes after local arrival, and the adapter
+keeps at most 1,000 group accumulators. Stop/reload clears timers and buffers;
+gateway reconnect/resume preserves them. A flush detaches state before awaiting
+the Router, retains ordinary busy-queue behavior, and has no retry/outbox.
+
+AT and ordinary forms share the existing canonical business dedup namespace.
+The live buffer is checked first so an ordinary representation can be upgraded
+in place by a later AT representation rather than appearing twice or suppressing
+the trigger. A true proactive failure such as QQ `40034105` remains a platform
+permission result.
 
 ### D-qqbot-outbound-media
 

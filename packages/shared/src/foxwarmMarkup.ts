@@ -2,6 +2,15 @@ export type FoxwarmAttributeValue = string | number | boolean | null | undefined
 
 const CONTROL_CHARS_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 
+export function escapeFoxwarmTextContent(value: string): string {
+  return String(value ?? '')
+    .replace(/\r\n?/g, '\n')
+    .replace(CONTROL_CHARS_RE, ' ')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 export function escapeFoxwarmAttributeValue(value: FoxwarmAttributeValue): string {
   const normalized = String(value ?? '')
     .replace(/\r\n?/g, '\n')

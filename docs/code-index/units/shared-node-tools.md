@@ -22,11 +22,16 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `resolveExecCwd`, `validateResolvedExecCwd`, `resolveValidatedExecCwd` — exec working directory resolution and validation
 - `estimateTokenCount` — lightweight token count estimator
 - `formatStructuredValue`, `formatToolResponsePayload`, `formatCompactObjectPreview` — YAML-based response formatting for model-facing and WebUI display paths
-- `escapeFoxwarmAttributeValue`, `formatFoxwarmAttributes`, `formatFoxwarmAttachmentTag`, `buildFoxwarmAttachmentText` — browser/server parity helpers for safe ordered Foxwarm metadata attributes and attachment descriptors
+- `escapeFoxwarmAttributeValue`, `escapeFoxwarmTextContent`, `formatFoxwarmAttributes`, `formatFoxwarmAttachmentTag`, `buildFoxwarmAttachmentText` — browser/server parity helpers for safe ordered Foxwarm metadata attributes, explicitly structured nested text, and attachment descriptors
 - Shared patch parsing, line-count, and per-operation summary helpers are re-exported from the package index.
 - `truncateOutputForDisplay` — line-aware excerpt helper used by tool-output guard and persistent exec output formatting
 - `parseSessionLinkText`, `shouldUseStreamingToolPlaceholder` — small pure helpers used by WebUI tool/text renderers and covered by shared Node tests
-- Foxwarm markup helpers normalize control/newline whitespace and escape XML delimiters once in the shared package. Root channel descriptors consume the built shared module, while WebUI optimistic previews consume the same source implementation. The attachment grammar itself is canonical in [D-channel-file-descriptor](../modules/channels.md#d-channel-file-descriptor).
+- Foxwarm markup helpers normalize controls and escape XML delimiters once in
+  the shared package. Attribute escaping flattens whitespace, while the opt-in
+  nested-text helper preserves line boundaries. Root channel descriptors and
+  prompt wrappers consume the built shared module, while WebUI optimistic
+  previews consume the same source implementation. The attachment grammar
+  itself is canonical in [D-channel-file-descriptor](../modules/channels.md#d-channel-file-descriptor).
 
 ## Function Index
 
@@ -120,7 +125,7 @@ Non-image file reads above 1 MiB must not full-read or decode their source befor
 - `nodeFileTransfer` supports inter-node file transfer operations (read/write with base64 encoding and SHA-256 verification)
 - `toolResponseFormatting` is used upstream to serialize tool results into YAML for LLM consumption and by WebUI to format full tool response payloads consistently
 - `webuiToolRendering` supplies pure, testable helper logic for WebUI session-link text parsing and streaming partial tool-call guards
-- `foxwarmMarkup` supplies one attribute-escaping and attachment-tag implementation to root channel code and WebUI previews.
+- `foxwarmMarkup` supplies one attribute/nested-text escaping and attachment-tag implementation to root channel code and WebUI previews.
 - `estimateTokenCount` is shared across master and node packages for context budget management
 - Re-exported from `index.ts` as the public API surface of the `shared` package
 - Master-side `src/tools/helpers.ts` imports `fileToolCore` from `packages/shared/dist/fileToolCore`, so the root build must build `packages/shared` before compiling `src`.

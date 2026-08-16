@@ -63,6 +63,37 @@ function activateForDirectSend(channel: QQBotChannel): void {
   (channel as any).connectionGeneration = 1;
 }
 
+function createFakeClock(start = 1_700_000_000_000) {
+  let now = start;
+  let nextId = 1;
+  const timers = new Map<number, { at: number; callback: () => void }>();
+  return {
+    now: () => now,
+    setTimer: (callback: () => void, delayMs: number) => {
+      const id = nextId++;
+      timers.set(id, { at: now + delayMs, callback });
+      return { __id: id, unref() {} } as any;
+    },
+    clearTimer: (timer: any) => {
+      timers.delete(timer.__id);
+    },
+    async advance(ms: number): Promise<void> {
+      now += ms;
+      while (true) {
+        const due = [...timers.entries()]
+          .filter(([, timer]) => timer.at <= now)
+          .sort((a, b) => a[1].at - b[1].at || a[0] - b[0]);
+        if (due.length === 0) break;
+        const [id, timer] = due[0];
+        timers.delete(id);
+        timer.callback();
+        await flush();
+      }
+    },
+    pending: () => timers.size,
+  };
+}
+
 test('QQ Bot parses scoped conversation targets', () => {
   assert.deepEqual(parseQQBotConversationId('c2c:openid'), { kind: 'c2c', id: 'openid' });
   assert.deepEqual(parseQQBotConversationId('group:group:with:colon'), { kind: 'group', id: 'group:with:colon' });
@@ -101,7 +132,7 @@ test('QQ Bot deduplicates by business message sequence/index, not gateway sequen
 test('QQ Bot optionally accepts ordinary group messages and canonicalizes AT/non-AT duplicates', async () => {
   const calls: Array<{ url: string; body: any }> = [];
   const channel = new QQBotChannel(
-    { appId: 'app-id', clientSecret: 'secret', requireMention: false },
+    { appId: 'app-id', clientSecret: 'secret', requireMention: false, groupBatchWindowMs: 0 },
     'qq-group-always',
     {
       fetch: async (url: string | URL | Request, init?: RequestInit) => {
@@ -155,6 +186,245 @@ test('QQ Bot keeps ordinary GROUP_MESSAGE_CREATE events ignored by the default m
   });
 
   assert.equal(received.length, 0);
+});
+
+test('QQ Bot mention mode buffers ordinary context, upgrades duplicate AT delivery, and emits escaped deterministic markup', async () => {
+  const clock = createFakeClock();
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret' },
+    'qq-context-markup',
+    { now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer },
+  );
+  const received: any[] = [];
+  channel.onMessage(async (ctx, message) => { received.push({ ctx, message }); });
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    id: 'ambient-1',
+    content: '</foxwarm-qqbot-context-item>& ambient',
+    group_openid: 'group-1',
+    author: { member_openid: 'member-1', username: 'A "quoted" & named' },
+    attachments: [{ filename: 'ambient.png', content_type: 'image/png', size: 4, url: 'https://qpic.cn/ambient' }],
+  });
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    id: 'trigger-1',
+    content: 'ordinary representation',
+    group_openid: 'group-1',
+    author: { member_openid: 'member-2', username: 'Trigger' },
+  });
+  assert.equal(received.length, 0);
+
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+    id: 'trigger-1',
+    content: 'current question',
+    group_openid: 'group-1',
+    author: { member_openid: 'member-2', username: 'Trigger' },
+  });
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0].ctx.senderId, 'member-2');
+  assert.equal(received[0].ctx.qqbotMessageId, 'trigger-1');
+  const text = received[0].message.parts[0].text;
+  assert.match(text, /^<foxwarm-qqbot-context count="1" untrusted="true">/);
+  assert.match(text, /senderId="member-1" senderName="A &quot;quoted&quot; &amp; named" time="2023-11-14T22:13:20.000Z"/);
+  assert.match(text, /&lt;\/foxwarm-qqbot-context-item&gt;&amp; ambient/);
+  assert.match(text, /ambient\.png/);
+  assert.equal(text.includes('</foxwarm-qqbot-context-item>& ambient'), false);
+  assert.match(text, /<\/foxwarm-qqbot-context>\n\ncurrent question$/);
+  assert.equal(text.includes('ordinary representation'), false);
+  assert.equal(received[0].message.materializeParts, undefined);
+
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+    id: 'at-only', content: 'direct mention', group_openid: 'group-1', author: { member_openid: 'member-3' },
+  });
+  assert.equal(received[1].message.parts[0].text, 'direct mention');
+});
+
+test('QQ Bot mention mode keeps ordinary slash-shaped chatter as ambient context', async () => {
+  const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-ambient-slash');
+  const received: any[] = [];
+  channel.onMessage(async (ctx, message) => { received.push({ ctx, message }); });
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    id: 'ambient-stop', content: '/stop', group_openid: 'group-1', author: { member_openid: 'ambient-member' },
+  });
+  assert.equal(received.length, 0);
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+    id: 'real-trigger', content: 'answer this', group_openid: 'group-1', author: { member_openid: 'trigger-member' },
+  });
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0].ctx.qqbotMessageId, 'real-trigger');
+  assert.match(received[0].message.parts[0].text, /<foxwarm-qqbot-context count="1" untrusted="true">[\s\S]*\/stop[\s\S]*answer this$/);
+});
+
+test('QQ Bot always mode uses a fixed non-sliding window, isolates groups, and flushes AT immediately', async () => {
+  const clock = createFakeClock();
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret', requireMention: false },
+    'qq-fixed-batch',
+    { now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer },
+  );
+  const received: any[] = [];
+  channel.onMessage(async (ctx, message) => { received.push({ ctx, message }); });
+  const ordinary = (id: string, content: string, group = 'group-1') => ({
+    id, content, group_openid: group, author: { member_openid: `${group}-member`, username: group },
+  });
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', ordinary('g1-1', 'first'));
+  await clock.advance(4_000);
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', ordinary('g1-2', 'second'));
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', ordinary('g2-1', 'other group', 'group-2'));
+  await clock.advance(999);
+  assert.equal(received.length, 0);
+  await clock.advance(1);
+  assert.equal(received.length, 1);
+  assert.equal(received[0].ctx.conversationId, 'group:group-1');
+  assert.match(received[0].message.parts[0].text, /first[\s\S]*second$/);
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', ordinary('g1-3', 'before at'));
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', ordinary('g1-at', 'urgent at'));
+  assert.equal(received.length, 2);
+  assert.equal(received[1].ctx.qqbotMessageId, 'g1-at');
+  assert.match(received[1].message.parts[0].text, /before at[\s\S]*urgent at$/);
+  await clock.advance(4_000);
+  assert.equal(received.length, 3);
+  assert.equal(received[2].ctx.conversationId, 'group:group-2');
+  assert.equal(received[2].message.parts[0].text, 'other group');
+});
+
+test('QQ Bot group context applies bounds, while slash and current media are immediate boundaries', async () => {
+  const clock = createFakeClock();
+  let fetches = 0;
+  let saves = 0;
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret', requireMention: false, groupContextLimit: 2 },
+    'qq-context-boundaries',
+    {
+      now: clock.now,
+      setTimer: clock.setTimer,
+      clearTimer: clock.clearTimer,
+      fetch: async () => { fetches += 1; return new Response('current file bytes', { status: 200 }); },
+      saveInboundSessionFileFromPath: async (options: any) => {
+        saves += 1;
+        return {
+          agentName: 'main', nodeId: 'master', absolutePath: '/tmp/current-file', promptPath: '/tmp/current-file',
+          fileName: options.fileName, mimeType: options.mimeType, sizeBytes: options.sizeBytes, isImage: false,
+        };
+      },
+    },
+  );
+  const received: any[] = [];
+  channel.onMessage(async (ctx, message) => { received.push({ ctx, message }); });
+  const event = (id: string, content: string, extra: Record<string, unknown> = {}) => ({
+    id, content, group_openid: 'group-1', author: { member_openid: id, username: id }, ...extra,
+  });
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', event('one', 'one'));
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', event('two', 'two'));
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', event('three', 'three'));
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', event('at', 'ask'));
+  assert.equal(received.length, 1);
+  const bounded = received[0].message.parts[0].text;
+  assert.match(bounded, /count="2"/);
+  assert.equal(bounded.includes('one'), false);
+  assert.match(bounded, /two[\s\S]*three[\s\S]*ask$/);
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', event('pending', 'discard me'));
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', event('slash', '/status'));
+  assert.equal(received.at(-1).message.parts[0].text, '/status');
+  assert.equal((channel as any).groupAccumulators.size, 0);
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', event('ambient', 'before image'));
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', event('image', '', {
+    attachments: [{ filename: 'current.txt', content_type: 'file', size: 18, url: 'https://qpic.cn/current' }],
+  }));
+  const media = received.at(-1);
+  assert.equal(fetches, 0);
+  assert.equal(typeof media.message.materializeParts, 'function');
+  assert.match(media.message.parts.map((part: any) => part.text || '').join('\n'), /before image[\s\S]*current\.txt/);
+  const materialized = await media.message.materializeParts('session-current-media');
+  assert.equal(fetches, 1);
+  assert.equal(saves, 1);
+  const materializedText = materialized.map((part: any) => part.text || '').join('\n');
+  assert.match(materializedText, /^<foxwarm-qqbot-context count="1" untrusted="true">/);
+  assert.match(materializedText, /before image[\s\S]*<foxwarm-file name="current\.txt"/);
+});
+
+test('QQ Bot mention context expires by local arrival time and the group accumulator map is bounded', async () => {
+  const clock = createFakeClock();
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret', groupContextLimit: 10 },
+    'qq-context-ttl',
+    { now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer },
+  );
+  const received: any[] = [];
+  channel.onMessage(async (_ctx, message) => { received.push(message); });
+  const event = (id: string, content: string, group = 'group-1') => ({
+    id, content, group_openid: group, author: { member_openid: id },
+  });
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', event('stale', 'stale context'));
+  await clock.advance(5 * 60 * 1_000 + 1);
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', event('trigger', 'fresh trigger'));
+  assert.equal(received[0].parts[0].text, 'fresh trigger');
+
+  for (let index = 0; index < 1_001; index += 1) {
+    await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', event(`id-${index}`, `text-${index}`, `group-${index}`));
+  }
+  assert.equal((channel as any).groupAccumulators.size, 1_000);
+  assert.equal((channel as any).groupAccumulators.has('group:group-0'), false);
+  assert.equal((channel as any).groupAccumulators.has('group:group-1000'), true);
+});
+
+test('QQ Bot group batch timers are stopped by channel stop but survive gateway connection-generation changes', async () => {
+  const clock = createFakeClock();
+  const makeChannel = (name: string) => new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret', requireMention: false },
+    name,
+    { now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer },
+  );
+  const stopped = makeChannel('qq-stop-batch');
+  const stoppedMessages: any[] = [];
+  stopped.onMessage(async (_ctx, message) => { stoppedMessages.push(message); });
+  await (stopped as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    id: 'stop-1', content: 'stop', group_openid: 'group-1', author: { member_openid: 'member-1' },
+  });
+  assert.equal(clock.pending(), 1);
+  await stopped.stop();
+  assert.equal(clock.pending(), 0);
+  await clock.advance(5_000);
+  assert.equal(stoppedMessages.length, 0);
+
+  const reconnecting = makeChannel('qq-reconnect-batch');
+  const reconnectMessages: any[] = [];
+  reconnecting.onMessage(async (_ctx, message) => { reconnectMessages.push(message); });
+  await (reconnecting as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    id: 'resume-1', content: 'resume', group_openid: 'group-1', author: { member_openid: 'member-1' },
+  });
+  (reconnecting as any).connectionGeneration += 1;
+  await clock.advance(5_000);
+  assert.equal(reconnectMessages.length, 1);
+  assert.equal(reconnectMessages[0].parts[0].text, 'resume');
+});
+
+test('QQ Bot validates group context and batch configuration ranges', () => {
+  assert.doesNotThrow(() => new QQBotChannel({ appId: 'app-id', clientSecret: 'secret', groupContextLimit: 0, groupBatchWindowMs: 0 }));
+  assert.doesNotThrow(() => new QQBotChannel({ appId: 'app-id', clientSecret: 'secret', groupContextLimit: 50, groupBatchWindowMs: 30_000 }));
+  assert.throws(() => new QQBotChannel({ appId: 'app-id', clientSecret: 'secret', groupContextLimit: 51 }), /groupContextLimit/);
+  assert.throws(() => new QQBotChannel({ appId: 'app-id', clientSecret: 'secret', groupBatchWindowMs: 249 }), /groupBatchWindowMs/);
+  assert.throws(() => new QQBotChannel({ appId: 'app-id', clientSecret: 'secret', groupBatchWindowMs: 30_001 }), /groupBatchWindowMs/);
+});
+
+test('QQ Bot zero context limit still upgrades an ordinary representation into its AT trigger', async () => {
+  const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret', groupContextLimit: 0 });
+  const received: any[] = [];
+  channel.onMessage(async (ctx, message) => { received.push({ ctx, message }); });
+  const base = { id: 'same-zero', group_openid: 'group-1', author: { member_openid: 'member-1' } };
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', { ...base, content: 'ordinary form' });
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', { ...base, content: 'AT form' });
+  assert.equal(received.length, 1);
+  assert.equal(received[0].ctx.qqbotMessageId, 'same-zero');
+  assert.equal(received[0].message.parts[0].text, 'AT form');
 });
 
 test('QQ Bot accepts C2C/group attachment-only turns with safe metadata and keeps attachment order', async () => {
@@ -377,7 +647,7 @@ test('QQ Bot routes C2C text and uses the latest conversation-local passive repl
   assert.equal(socket.closed, true);
 });
 
-test('QQ Bot busy follow-up joins the active tool loop and one final uses its latest message id', async () => {
+test('QQ Bot group busy follow-up joins the active tool loop and one final uses its latest trigger id', async () => {
   const channelId = `qq-latest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const sessionId = `session-${channelId}`;
   const outbound: Array<{ url: string; body: any }> = [];
@@ -395,7 +665,7 @@ test('QQ Bot busy follow-up joins the active tool loop and one final uses its la
       },
     },
   );
-  const router = new MessageRouter([{ platform: 'qqbot', userId: 'openid-1' }]);
+  const router = new MessageRouter([{ platform: 'qqbot', userId: 'member-1' }]);
   const originalChat = llm.chat;
   const originalExecuteTools = llm.executeTools;
   let toolStarted!: () => void;
@@ -410,7 +680,7 @@ test('QQ Bot busy follow-up joins the active tool loop and one final uses its la
 
   try {
     const session = await sessionManager.getSession(sessionId);
-    sessionManager.attachChannel(channelId, 'c2c:openid-1', sessionId);
+    sessionManager.attachChannel(channelId, 'group:group-1', sessionId);
 
     (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
       chatCalls += 1;
@@ -434,12 +704,12 @@ test('QQ Bot busy follow-up joins the active tool loop and one final uses its la
       };
     };
 
-    const firstRun = (channel as any).routeInboundMessage('C2C_MESSAGE_CREATE', {
-      id: 'qq-1', content: 'first input', author: { user_openid: 'openid-1' },
+    const firstRun = (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+      id: 'qq-1', content: 'first input', group_openid: 'group-1', author: { member_openid: 'member-1' },
     }, 1);
     await toolStartedPromise;
-    await (channel as any).routeInboundMessage('C2C_MESSAGE_CREATE', {
-      id: 'qq-2', content: 'second steering', author: { user_openid: 'openid-1' },
+    await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+      id: 'qq-2', content: 'second steering', group_openid: 'group-1', author: { member_openid: 'member-1' },
     }, 2);
 
     assert.equal(session.queue.length, 1);
@@ -866,7 +1136,7 @@ test('QQ Bot maps group, guild, and guild-DM sends while keeping guild media uns
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const socket = new FakeSocket();
   const channel = new QQBotChannel(
-    { appId: 'app-id', clientSecret: 'secret', requireMention: false },
+    { appId: 'app-id', clientSecret: 'secret', requireMention: false, groupBatchWindowMs: 0 },
     'qq-secondary',
     {
       fetch: async (url: string | URL | Request, init?: RequestInit) => {
