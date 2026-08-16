@@ -91,16 +91,6 @@ function makeDepsForSession(session: Session, saveCounter: { count: number }) {
   };
 }
 
-async function waitForCompactReady(sessionHistory: LoadedDeps['sessionHistory'], sessionId: string): Promise<void> {
-  for (let index = 0; index < 200; index += 1) {
-    if (sessionHistory.hasPendingCompactWork(sessionId)) {
-      await new Promise(resolve => setTimeout(resolve, 5));
-      continue;
-    }
-    throw new Error('compact job disappeared before commit');
-  }
-}
-
 test('compact planning retries plain-text/no-tool response and succeeds on a later submit_compact_plan call', async () => {
   const { sessionHistory, archive, llm } = await loadDeps();
   const session = await makeCompactableSession(archive, makeSessionId('compact_retry_plain_text_success'));
@@ -272,25 +262,61 @@ test('block compaction cannot consume a filtered short raw-message barrier', asy
     ...blocks.slice(1).map(layeredContext.renderBlockMessage),
   ];
   const before = structuredClone(shortRaw);
-  const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.id, session.history);
+  const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.history);
   const firstTwo = built.candidateEntries.filter(entry => entry.item.kind === 'block').slice(0, 2);
   assert.notEqual(firstTwo[0]?.item.segmentId, firstTwo[1]?.item.segmentId);
   assert.deepEqual(session.history[1], before);
 });
 
-test('missing or conflicting active/archive provenance becomes a compact barrier without editing history', async () => {
-  const { sessionHistory, archive } = await loadDeps();
-  const session = await makeCompactableSession(archive, makeSessionId('compact_provenance_barriers'));
-  const original = structuredClone(session.history);
-  session.history[0].parts = [{ text: 'offline same-seq wording edit' }];
-  session.history.splice(1, 0, structuredClone(session.history[0]));
-  const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.id, session.history);
-  assert.equal(built.candidateEntries.some(entry => entry.item.kind === 'message' && entry.item.startSeq === 1), false);
-  assert.deepEqual(session.history[0].parts, [{ text: 'offline same-seq wording edit' }]);
-  assert.deepEqual(original[2], session.history[3]);
+test('layered candidates consume active call and edited tool responses atomically without archive input', async () => {
+  const { sessionHistory } = await loadDeps();
+  const call: Message = {
+    role: 'model',
+    parts: [{ functionCall: { id: 'active-call', name: 'read', args: { path: '/active' } } }],
+    __meta: { seq: 1, timestamp: 1000 },
+  };
+  const response: Message = {
+    role: 'tool',
+    parts: [{ functionResponse: {
+      tool_use_id: 'active-call', name: 'read',
+      response: { output: `offline-active-response ${'edited '.repeat(4000)}\n--- [foxwarm: historical tool response pruned] ---` },
+    } }],
+    __meta: { seq: 2, timestamp: 2000 },
+  };
+
+  const built = await sessionHistory.buildLayeredCompactCandidateEntries([call, response]);
+  const messages = built.candidateEntries.filter(entry => entry.item.kind === 'message');
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].item.kind, 'message');
+  assert.deepEqual([messages[0].item.startSeq, messages[0].item.endSeq], [1, 2]);
+  assert.equal(messages[0].historyStartIndex, 0);
+  assert.equal(messages[0].historyEndIndex, 1);
+  assert.equal(messages[0].rawStartTimestamp, 1000);
+  assert.equal(messages[0].rawEndTimestamp, 2000);
+  assert(built.messagePolicy.effectiveMinTokens > 0);
 });
 
-test('invalid preserved raw provenance is retained and never offered for removal', async () => {
+test('missing or different immutable raw rows do not affect layered active-history candidates', async () => {
+  const { sessionHistory, archive } = await loadDeps();
+  const archiveSession = { id: makeSessionId('compact_archive_difference'), agent: 'main', history: [], nextMessageSeq: 1 } as Session;
+  const archived: Message[] = [
+    { role: 'user', parts: [{ text: 'immutable wording differs' }], __meta: { timestamp: 10 } },
+    { role: 'model', parts: [{ text: 'immutable response differs' }], __meta: { timestamp: 20 } },
+  ];
+  await archive.appendMessagesToArchive(archiveSession, archived);
+  const active: Message[] = [
+    { role: 'user', parts: [{ text: `active wording ${'alpha '.repeat(3000)}` }], __meta: { seq: 1, timestamp: 1000 } },
+    { role: 'model', parts: [{ text: `active response ${'bravo '.repeat(3000)}` }], __meta: { seq: 2, timestamp: 2000 } },
+  ];
+
+  const built = await sessionHistory.buildLayeredCompactCandidateEntries(active);
+  const messages = built.candidateEntries.filter(entry => entry.item.kind === 'message');
+  assert.deepEqual(messages.map(entry => entry.item.kind === 'message' ? [entry.item.startSeq, entry.item.endSeq] : []), [[1, 1], [2, 2]]);
+  assert.match(messages[0].item.preview, /active wording/);
+  assert.match(messages[1].item.preview, /active response/);
+});
+
+test('preserved raw removal eligibility depends on active structure rather than Archive identity', async () => {
   const { sessionHistory, archive, compactPlan } = await loadDeps();
   for (const scenario of ['missing', 'conflicting', 'duplicate'] as const) {
     const session = await makeCompactableSession(archive, makeSessionId(`compact_preserved_${scenario}`));
@@ -302,14 +328,65 @@ test('invalid preserved raw provenance is retained and never offered for removal
       ? [preserved, structuredClone(preserved), ...session.history.slice(1)]
       : [preserved, ...session.history.slice(1)];
     const before = structuredClone(session.history);
-    const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.id, session.history);
-    assert.equal(built.preservedMessageCandidates.length, 0, scenario);
-    assert.throws(() => compactPlan.validateCompactPlanArgs(
+    const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.history);
+    const expectedCount = scenario === 'duplicate' ? 0 : 1;
+    assert.equal(built.preservedMessageCandidates.length, expectedCount, scenario);
+    const validate = () => compactPlan.validateCompactPlanArgs(
       { createBlocksJson: '[]', removePreservedMessages: [preserved.__meta!.seq] },
       built.candidateEntries.map(entry => entry.item),
       { removablePreservedMessages: built.preservedMessageCandidates },
-    ), /removePreservedMessages/i, scenario);
+    );
+    if (scenario === 'duplicate') assert.throws(validate, /removePreservedMessages/i, scenario);
+    else assert.doesNotThrow(validate, scenario);
     assert.deepEqual(session.history, before, `${scenario} preserved rows remain byte-semantic exact`);
+  }
+});
+
+test('duplicate, missing, and reversed active raw sequence structure remains a compact barrier', async () => {
+  const { sessionHistory } = await loadDeps();
+  const make = (seq: number | undefined, label: string): Message => ({
+    role: 'user', parts: [{ text: `${label} ${'large '.repeat(2500)}` }],
+    __meta: { ...(seq === undefined ? {} : { seq }), timestamp: seq || 99 },
+  });
+  const duplicate = make(4, 'duplicate');
+  const history = [make(1, 'first'), make(undefined, 'missing'), make(2, 'after missing'), make(5, 'reversed first'), make(3, 'reversed second'), duplicate, structuredClone(duplicate)];
+  const built = await sessionHistory.buildLayeredCompactCandidateEntries(history);
+  const messages = built.candidateEntries.filter(entry => entry.item.kind === 'message');
+  assert.deepEqual(messages.map(entry => entry.item.kind === 'message' ? entry.item.startSeq : 0), [1, 2]);
+  assert.notEqual(messages[0].item.segmentId, messages[1].item.segmentId, 'missing seq splits otherwise contiguous raw candidates');
+  assert.equal(messages.some(entry => entry.item.kind === 'message' && entry.item.startSeq === 5), false, 'forward gap is a barrier');
+  assert.equal(messages.some(entry => entry.item.kind === 'message' && entry.item.startSeq === 3), false, 'reversed row is not admitted after seq 5');
+  assert.equal(messages.some(entry => entry.item.kind === 'message' && entry.item.startSeq === 4), false, 'duplicate seq rows are not admitted');
+});
+
+test('a malformed consecutive tool run makes the whole active call exchange a hard barrier', async () => {
+  const { sessionHistory } = await loadDeps();
+  const response = (id: string, seq: number | undefined, label: string): Message => ({
+    role: 'tool', parts: [{ functionResponse: { tool_use_id: id, name: 'exec', response: { output: label } } }],
+    __meta: { ...(seq === undefined ? {} : { seq }), timestamp: seq || 99 },
+  });
+  for (const scenario of [
+    { name: 'missing seq after valid response', callSeq: 1, validSeq: 2, malformedSeq: undefined, followingSeq: 3 },
+    { name: 'duplicate seq after valid-position response', callSeq: 1, validSeq: 2, malformedSeq: 2, followingSeq: 3 },
+    { name: 'nonmonotonic seq after valid response', callSeq: 10, validSeq: 11, malformedSeq: 9, followingSeq: 12 },
+  ]) {
+    const id = `broken-${scenario.name}`;
+    const call: Message = {
+      role: 'model', parts: [{ functionCall: { id, name: 'exec', args: {} } }],
+      __meta: { seq: scenario.callSeq, timestamp: 1 },
+    };
+    const following: Message = {
+      role: 'user', parts: [{ text: `following independent valid raw ${'large '.repeat(3000)}` }],
+      __meta: { seq: scenario.followingSeq, timestamp: 3 },
+    };
+    const built = await sessionHistory.buildLayeredCompactCandidateEntries([
+      call,
+      response(id, scenario.validSeq, 'valid response'),
+      response(id, scenario.malformedSeq, 'malformed response'),
+      following,
+    ]);
+    const messages = built.candidateEntries.filter(entry => entry.item.kind === 'message');
+    assert.deepEqual(messages.map(entry => entry.item.kind === 'message' ? entry.item.startSeq : 0), [scenario.followingSeq], scenario.name);
   }
 });
 
@@ -321,8 +398,98 @@ test('raw continuity resets across a valid intervening block', async () => {
     summary: `valid intervening block ${'block '.repeat(1800)}`,
   }]);
   session.history = [session.history[0], layeredContext.renderBlockMessage(block), session.history[2]];
-  const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.id, session.history);
+  const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.history);
   assert.deepEqual(built.candidateEntries.filter(entry => entry.item.kind === 'message').map(entry => (entry.item as any).startSeq), [1, 3]);
+});
+
+test('awaited compaction lifts an active response island to L1 and then compacts the contiguous L1 chain to L2', async () => {
+  const { sessionHistory, archive, layeredContext, llm } = await loadDeps();
+  const session: Session = {
+    id: makeSessionId('compact_pruned_island_lift'), agent: 'main', history: [], persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false, queue: [], meta: { lastMessageTime: Date.now() },
+    nextMessageSeq: 1, nextBlockId: 1, historyVersion: 0,
+    promptCacheKey: '12345678-1234-1234-1234-123456789abc',
+  } as Session;
+  const archivedRaw: Message[] = Array.from({ length: 8 }, (_, index) => ({
+    role: index === 1 ? 'tool' : 'user',
+    parts: index === 1
+      ? [{ functionResponse: { tool_use_id: 'archived-call', name: 'exec', response: { output: 'immutable raw response differs from active' } } }]
+      : [{ text: `immutable raw ${index + 1}` }],
+    __meta: { timestamp: (index + 1) * 1000 },
+  }));
+  await archive.appendMessagesToArchive(session, archivedRaw);
+  const sourceSeqs = [1, 3, 4, 5, 6, 7, 8];
+  const blocks = await layeredContext.appendBlocksToArchive(session, sourceSeqs.map(seq => ({
+    level: 1, sourceKind: 'message' as const, sourceStart: seq, sourceEnd: seq, rawStartSeq: seq, rawEndSeq: seq,
+    rawStartTimestamp: seq * 1000, rawEndTimestamp: seq * 1000,
+    summary: `existing L1 block for ${seq} ${'block '.repeat(1800)}`,
+  })));
+  const activeResponse: Message = {
+    role: 'tool',
+    parts: [{ functionResponse: {
+      tool_use_id: 'hidden-call-in-block-1', name: 'exec',
+      response: { output: `active edited pruned response ${'response '.repeat(3000)}\n--- [foxwarm: historical tool response pruned] ---` },
+    } }],
+    __meta: { seq: 2, timestamp: 2000 },
+  };
+  session.history = [
+    layeredContext.renderBlockMessage(blocks[0]),
+    activeResponse,
+    ...blocks.slice(1).map(layeredContext.renderBlockMessage),
+  ];
+
+  const originalChat = llm.chat;
+  let pass = 0;
+  try {
+    (llm as any).chat = async (parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
+      pass += 1;
+      const prompt = flattenPrompt(parts);
+      const createBlocks = pass === 1
+        ? [{ level: 1, sourceKind: 'message', sourceStart: 2, sourceEnd: 2, summary: 'pass one active response summary' }]
+        : [{ level: 2, sourceKind: 'block', sourceStart: blocks[0].id, sourceEnd: blocks[1].id, summary: 'pass two contiguous L1 summary' }];
+      if (pass === 1) assert.match(prompt, /active edited pruned response/);
+      else {
+        assert.match(prompt, new RegExp(`B#${blocks[0].id}`));
+        assert.match(prompt, /pass one active response summary/);
+        assert.match(prompt, new RegExp(`B#${blocks[1].id}`));
+      }
+      const toolCall = { id: `island-pass-${pass}`, name: 'submit_compact_plan', args: { createBlocksJson: JSON.stringify(createBlocks) } };
+      await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0 }, 'await');
+    const afterFirstBlocks = await layeredContext.readLocalArchiveBlocks(session.id);
+    const lifted = afterFirstBlocks.find(block => block.id === 8)!;
+    assert.deepEqual({
+      level: lifted.level, sourceKind: lifted.sourceKind, sourceStart: lifted.sourceStart, sourceEnd: lifted.sourceEnd,
+      rawStartSeq: lifted.rawStartSeq, rawEndSeq: lifted.rawEndSeq,
+      rawStartTimestamp: lifted.rawStartTimestamp, rawEndTimestamp: lifted.rawEndTimestamp,
+      summary: lifted.summary,
+    }, {
+      level: 1, sourceKind: 'message', sourceStart: 2, sourceEnd: 2,
+      rawStartSeq: 2, rawEndSeq: 2, rawStartTimestamp: 2000, rawEndTimestamp: 2000,
+      summary: 'pass one active response summary',
+    });
+    assert.deepEqual(session.history.filter(message => message.__meta?.contextBlock).map(message => message.__meta!.contextBlock!.id), [1, 8, 2, 3, 4, 5, 6, 7]);
+
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0 }, 'await');
+    const afterSecondBlocks = await layeredContext.readLocalArchiveBlocks(session.id);
+    const liftedChain = afterSecondBlocks.find(block => block.id === 9)!;
+    assert.deepEqual({
+      level: liftedChain.level, sourceKind: liftedChain.sourceKind, sourceStart: liftedChain.sourceStart, sourceEnd: liftedChain.sourceEnd,
+      sourceBlockIds: liftedChain.sourceBlockIds, rawStartSeq: liftedChain.rawStartSeq, rawEndSeq: liftedChain.rawEndSeq,
+      rawStartTimestamp: liftedChain.rawStartTimestamp, rawEndTimestamp: liftedChain.rawEndTimestamp,
+      summary: liftedChain.summary,
+    }, {
+      level: 2, sourceKind: 'block', sourceStart: 1, sourceEnd: 2, sourceBlockIds: [1, 8, 2],
+      rawStartSeq: 1, rawEndSeq: 3, rawStartTimestamp: 1000, rawEndTimestamp: 3000,
+      summary: 'pass two contiguous L1 summary',
+    });
+    assert.deepEqual(session.history.filter(message => message.__meta?.contextBlock).map(message => message.__meta!.contextBlock!.id), [9, 3, 4, 5, 6, 7]);
+    assert.equal(pass, 2);
+  } finally { (llm as any).chat = originalChat; }
 });
 
 test('reordered block raw lineage is an end-to-end compact barrier', async () => {
@@ -334,7 +501,7 @@ test('reordered block raw lineage is an end-to-end compact barrier', async () =>
   })));
   session.history = [blocks[1], blocks[0], ...blocks.slice(2)].map(layeredContext.renderBlockMessage);
   const before = structuredClone(session.history);
-  const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.id, session.history);
+  const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.history);
   const firstTwo = built.candidateEntries.filter(entry => entry.item.kind === 'block').slice(0, 2);
   assert.notEqual(firstTwo[0]?.item.segmentId, firstTwo[1]?.item.segmentId);
   const originalChat = llm.chat;
@@ -350,6 +517,59 @@ test('reordered block raw lineage is an end-to-end compact barrier', async () =>
       makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0 }, 'await',
     ), /no valid plan was produced/);
     assert.deepEqual(session.history, before);
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('layered compact plans from active wording and timestamps even when raw Archive rows are absent', async () => {
+  const { sessionHistory, layeredContext, llm } = await loadDeps();
+  const session: Session = {
+    id: makeSessionId('compact_active_only_source'),
+    agent: 'main',
+    history: [
+      {
+        role: 'model',
+        parts: [{ functionCall: { id: 'active-only-call', name: 'exec', args: { command: 'active' } } }],
+        __meta: { seq: 1, timestamp: 1111 },
+      },
+      {
+        role: 'tool',
+        parts: [{ functionResponse: {
+          tool_use_id: 'active-only-call', name: 'exec',
+          response: { output: `offline-edited-active-response ${'active '.repeat(4000)}` },
+        } }],
+        __meta: { seq: 2, timestamp: 2222 },
+      },
+    ],
+    persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false,
+    queue: [],
+    meta: { lastMessageTime: Date.now() },
+    nextMessageSeq: 3,
+    nextBlockId: 1,
+    historyVersion: 0,
+    promptCacheKey: '12345678-1234-1234-1234-123456789abc',
+  } as Session;
+  const originalChat = llm.chat;
+  let prompt = '';
+  try {
+    (llm as any).chat = async (parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
+      prompt = flattenPrompt(parts);
+      const toolCall = { id: 'active-only-plan', name: 'submit_compact_plan', args: { createBlocksJson: JSON.stringify([{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'summary based on active edited response',
+      }]) } };
+      await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    await sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0 }, 'await');
+    assert.match(prompt, /offline-edited-active-response/);
+    const [block] = await layeredContext.readLocalArchiveBlocks(session.id);
+    assert.equal(block.sourceStart, 1);
+    assert.equal(block.sourceEnd, 2);
+    assert.equal(block.rawStartTimestamp, 1111);
+    assert.equal(block.rawEndTimestamp, 2222);
+    assert.match(block.summary, /summary based on active edited response/);
+    assert.equal(session.history[0].__meta?.contextBlock?.id, block.id);
   } finally { (llm as any).chat = originalChat; }
 });
 
@@ -635,6 +855,8 @@ test('compact commit persists block facts and survives best-effort fact indexing
 
     const [block] = await layeredContext.readArchiveBlocksByIdRange(session.id, 1, 1);
     assert.deepEqual(block.memoryFacts, [{ kind: 'decision', text: 'Keep compact facts attached to their creating block.', attributedTo: 'user' }]);
+    assert.equal(block.rawStartTimestamp, 1000);
+    assert.equal(block.rawEndTimestamp, 2000);
     assert.match(block.summary, /### Memory facts/);
     assert.match(String(session.history[0].parts[0].text), /### Memory facts/);
     assert(session.history.some(message => message.parts.some(part => (part.system || '').includes('event="compact-completed"'))));
@@ -668,6 +890,40 @@ test('compact authority persistence failure restores active state and removes un
     assert.equal(session.historyVersion, originalHistoryVersion);
     assert.equal((await layeredContext.readLocalArchiveBlocks(session.id)).length, 0);
     assert.equal((await archive.readArchiveMessages(session.id)).length, originalHistory.length);
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('conflicting required Archive block append fails closed before active history replacement', async () => {
+  const { sessionHistory, archive, layeredContext, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_block_append_conflict'));
+  const seedSession = { ...session, history: [], nextBlockId: 1 } as Session;
+  await layeredContext.appendBlocksToArchive(seedSession, [{
+    level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, rawStartSeq: 1, rawEndSeq: 2,
+    rawStartTimestamp: 1000, rawEndTimestamp: 2000, summary: 'preexisting immutable block identity',
+  }]);
+  session.nextBlockId = 1;
+  const originalHistory = structuredClone(session.history);
+  const originalNextBlockId = session.nextBlockId;
+  const originalHistoryVersion = session.historyVersion;
+  const originalChat = llm.chat;
+  try {
+    (llm as any).chat = async (_parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
+      const toolCall = { id: 'conflicting-block-plan', name: 'submit_compact_plan', args: { createBlocksJson: JSON.stringify([{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'different block content must conflict',
+      }]) } };
+      await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    await assert.rejects(
+      () => sessionHistory.processSessionCompactionRequest(makeDepsForSession(session, { count: 0 }), session.id, { keepPercent: 0.5 }, 'await'),
+      /Required archive block commit failed.*Immutable archive block conflict/,
+    );
+    assert.deepEqual(session.history, originalHistory);
+    assert.equal(session.nextBlockId, originalNextBlockId);
+    assert.equal(session.historyVersion, originalHistoryVersion);
+    const blocks = await layeredContext.readLocalArchiveBlocks(session.id);
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0].summary, 'preexisting immutable block identity');
   } finally { (llm as any).chat = originalChat; }
 });
 
@@ -858,7 +1114,7 @@ test('retired contextFrontierItem does not block pruning, but recent tail and re
   assert.deepEqual(conflictPlan.rewrittenHistory, conflicted);
 });
 
-test('retired contextFrontierItem does not create a layered-compaction raw provenance barrier', async () => {
+test('retired contextFrontierItem does not create a layered-compaction active-structure barrier', async () => {
   const { sessionHistory, archive } = await loadDeps();
   const id = makeSessionId('compact_legacy_frontier_item');
   const clean: Message = {
@@ -867,7 +1123,7 @@ test('retired contextFrontierItem does not create a layered-compaction raw prove
   await archive.appendMessagesToArchive({ id, agent: 'main', history: [], nextMessageSeq: 1 } as Session, [clean]);
   const legacy = structuredClone(clean) as any;
   legacy.__meta.contextFrontierItem = { kind: 'message', seq: 1 };
-  const built = await sessionHistory.buildLayeredCompactCandidateEntries(id, [legacy]);
+  const built = await sessionHistory.buildLayeredCompactCandidateEntries([legacy]);
   assert.equal(built.candidateEntries.some(entry => entry.item.kind === 'message'
     && entry.item.startSeq === 1 && entry.item.endSeq === 1), true);
 });

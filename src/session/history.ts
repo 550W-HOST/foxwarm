@@ -41,7 +41,7 @@ import { buildSystemMessageParts } from '../utils/systemMessageParts';
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
 import { formatLocalTimestamp } from '../utils/localTime';
 import { formatSessionGoalReminderText } from './goal';
-import { appendBlocksToArchiveWithCommitInfo, readArchiveBlocksByIdRange, renderBlockMessage, rollbackUncommittedBlocks, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
+import { appendBlocksToArchiveWithCommitInfo, renderBlockMessage, rollbackUncommittedBlocks, shouldIgnoreMessageInCompactCandidates, shouldRemoveOldCompactCompletionMessage } from './layeredContext';
 import { isModelVisibleMessage } from './messageVisibility';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './metadataStore';
 import { isSessionAuthorityPostCommitError } from './stateFile';
@@ -147,6 +147,8 @@ type CompactJobOperation = {
   historyEndIndex: number;
   rawStartSeq: number;
   rawEndSeq: number;
+  rawStartTimestamp?: number;
+  rawEndTimestamp?: number;
   sourceKind: 'message' | 'block';
   level: number;
   sourceStart: number;
@@ -179,6 +181,8 @@ type CompactJobResult =
         sourceBlockIds?: number[];
         rawStartSeq: number;
         rawEndSeq: number;
+        rawStartTimestamp?: number;
+        rawEndTimestamp?: number;
         summary: string;
         memoryFacts?: ExtractedMemoryFact[];
       }>;
@@ -567,6 +571,8 @@ export type LayeredCompactCandidateEntry = {
   item: CompactCandidateItem;
   historyStartIndex: number;
   historyEndIndex: number;
+  rawStartTimestamp?: number;
+  rawEndTimestamp?: number;
 };
 
 type LayeredCompactCandidateBuildResult = {
@@ -643,21 +649,11 @@ export function removePreservedMessages(history: Message[], removeSeqs: Set<numb
   return history.filter(message => !(isPreservedMessage(message) && removeSeqs.has(message.__meta?.seq || 0)));
 }
 
-export async function buildLayeredCompactCandidateEntries(sessionId: string, olderHistory: Message[]): Promise<LayeredCompactCandidateBuildResult> {
-  const [archiveMessages, archiveBlocks] = await Promise.all([
-    readArchiveMessages(sessionId),
-    readArchiveBlocksByIdRange(sessionId),
-  ]);
-  const archiveMessagesBySeq = new Map<number, typeof archiveMessages>();
-  for (const record of archiveMessages) {
-    const records = archiveMessagesBySeq.get(record.seq) || [];
-    records.push(record); archiveMessagesBySeq.set(record.seq, records);
-  }
-  const archiveBlocksById = new Map<number, typeof archiveBlocks>();
-  for (const record of archiveBlocks) {
-    const records = archiveBlocksById.get(record.id) || [];
-    records.push(record); archiveBlocksById.set(record.id, records);
-  }
+function normalizeActiveHistoryTimestamp(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+export async function buildLayeredCompactCandidateEntries(olderHistory: Message[]): Promise<LayeredCompactCandidateBuildResult> {
   const activeSeqCounts = new Map<number, number>();
   const activeBlockIdCounts = new Map<number, number>();
   for (const message of olderHistory) {
@@ -667,52 +663,36 @@ export async function buildLayeredCompactCandidateEntries(sessionId: string, old
     else if (isPositiveSafeInteger(seq)) activeSeqCounts.set(seq, (activeSeqCounts.get(seq) || 0) + 1);
   }
 
-  const hasValidRawProvenance = (message: Message): boolean => {
+  const hasValidRawStructure = (message: Message): boolean => {
     const seq = message.__meta?.seq;
-    if (!isPositiveSafeInteger(seq) || activeSeqCounts.get(seq) !== 1) return false;
-    const records = archiveMessagesBySeq.get(seq);
-    return records?.length === 1 && isDeepStrictEqual(
-      normalizedRawMessageForArchiveComparison(message),
-      normalizedRawMessageForArchiveComparison(records[0].message),
-    );
+    return isPositiveSafeInteger(seq) && activeSeqCounts.get(seq) === 1;
   };
-  const hasValidBlockProvenance = (message: Message): boolean => {
+  const hasValidBlockStructure = (message: Message): boolean => {
     const block = message.__meta?.contextBlock;
     if (!block || !isPositiveSafeInteger(block.id) || activeBlockIdCounts.get(block.id) !== 1
       || !isPositiveSafeInteger(block.level) || !isPositiveSafeInteger(block.sourceStart)
       || !isPositiveSafeInteger(block.sourceEnd) || !isPositiveSafeInteger(block.rawStartSeq)
-      || !isPositiveSafeInteger(block.rawEndSeq) || block.rawStartSeq > block.rawEndSeq) return false;
-    const records = archiveBlocksById.get(block.id);
-    if (records?.length !== 1) return false;
-    const record = records[0];
-    const expected = renderBlockMessage(record);
-    const expectedBlock = expected.__meta!.contextBlock!;
-    const activeBlock = message.__meta!.contextBlock!;
-    const { sourceSessionId: expectedSourceSessionId, inherited: expectedInherited, ...expectedCore } = expectedBlock;
-    const { sourceSessionId: activeSourceSessionId, inherited: activeInherited, ...activeCore } = activeBlock;
-    if (message.role !== expected.role || !isDeepStrictEqual(message.parts, expected.parts)
-      || message.__meta?.timestamp !== expected.__meta?.timestamp || !isDeepStrictEqual(activeCore, expectedCore)
-      || (activeSourceSessionId !== undefined && activeSourceSessionId !== expectedSourceSessionId)
-      || (activeInherited !== undefined && activeInherited !== expectedInherited)) return false;
-    if (record.sourceKind === 'message') {
-      if (record.sourceStart > record.sourceEnd) return false;
-      for (let seq = record.sourceStart; seq <= record.sourceEnd; seq += 1) {
-        if (archiveMessagesBySeq.get(seq)?.length !== 1) return false;
-      }
-      return true;
+      || !isPositiveSafeInteger(block.rawEndSeq) || block.rawStartSeq > block.rawEndSeq
+      || message.role !== 'model') return false;
+    const rawStartTimestamp = normalizeActiveHistoryTimestamp(block.rawStartTimestamp);
+    const rawEndTimestamp = normalizeActiveHistoryTimestamp(block.rawEndTimestamp);
+    if ((block.rawStartTimestamp !== undefined && rawStartTimestamp === undefined)
+      || (block.rawEndTimestamp !== undefined && rawEndTimestamp === undefined)
+      || (rawStartTimestamp !== undefined && rawEndTimestamp !== undefined && rawStartTimestamp > rawEndTimestamp)) return false;
+    if (block.sourceKind === 'message') {
+      return block.level === 1 && block.sourceStart <= block.sourceEnd
+        && block.sourceStart === block.rawStartSeq && block.sourceEnd === block.rawEndSeq;
     }
-    if (!Array.isArray(record.sourceBlockIds) || record.sourceBlockIds.length === 0
-      || record.sourceBlockIds[0] !== record.sourceStart || record.sourceBlockIds.at(-1) !== record.sourceEnd
-      || new Set(record.sourceBlockIds).size !== record.sourceBlockIds.length) return false;
-    return record.sourceBlockIds.every(sourceId => {
-      const sources = archiveBlocksById.get(sourceId);
-      return sources?.length === 1 && sources[0].level === record.level - 1;
-    });
+    return block.sourceKind === 'block' && block.level > 1
+      && Array.isArray(block.sourceBlockIds) && block.sourceBlockIds.length > 0
+      && block.sourceBlockIds.every(isPositiveSafeInteger)
+      && block.sourceBlockIds[0] === block.sourceStart && block.sourceBlockIds.at(-1) === block.sourceEnd
+      && new Set(block.sourceBlockIds).size === block.sourceBlockIds.length;
   };
   const blockRecordsByLevel = new Map<number, Array<{ id: number; summary: string }>>();
   for (const message of olderHistory) {
     const block = message.__meta?.contextBlock;
-    if (!block) continue;
+    if (!block || !hasValidBlockStructure(message)) continue;
     const records = blockRecordsByLevel.get(block.level) || [];
     records.push({ id: block.id, summary: formatMessagePreviewText(message, Number.MAX_SAFE_INTEGER, { skipThinking: true }) });
     blockRecordsByLevel.set(block.level, records);
@@ -747,7 +727,7 @@ export async function buildLayeredCompactCandidateEntries(sessionId: string, old
   for (let historyIndex = 0; historyIndex < olderHistory.length; historyIndex += 1) {
     const message = olderHistory[historyIndex];
     if (isPreservedMessage(message)) {
-      if (hasValidRawProvenance(message) && !shouldIgnoreMessageInCompactCandidates(message)) {
+      if (hasValidRawStructure(message) && !shouldIgnoreMessageInCompactCandidates(message)) {
         const seq = message.__meta!.seq!;
         preservedMessageCandidates.push({
           seq, key: `M#${seq}`, preservedFromBlockId: message.__meta!.preservedFromBlockId!,
@@ -762,7 +742,7 @@ export async function buildLayeredCompactCandidateEntries(sessionId: string, old
     const block = message.__meta?.contextBlock;
     if (block) {
       previousRawSeq = undefined;
-      if (!hasValidBlockProvenance(message)) {
+      if (!hasValidBlockStructure(message)) {
         compactSegmentId += 1; priorCandidateKind = undefined; previousBlockRawEndSeq = undefined; continue;
       }
       if (priorCandidateKind && priorCandidateKind !== 'block') compactSegmentId += 1;
@@ -776,6 +756,8 @@ export async function buildLayeredCompactCandidateEntries(sessionId: string, old
           estimateTokenCount(formatMessagePreviewText(message, Number.MAX_SAFE_INTEGER, { skipThinking: true })),
           isSingleBlockCompactionStrandedBetweenHigherLevelBlocks(olderHistory, historyIndex), compactSegmentId),
         historyStartIndex: historyIndex, historyEndIndex: historyIndex,
+        rawStartTimestamp: normalizeActiveHistoryTimestamp(block.rawStartTimestamp),
+        rawEndTimestamp: normalizeActiveHistoryTimestamp(block.rawEndTimestamp),
       });
       priorCandidateKind = 'block';
       previousBlockRawEndSeq = block.rawEndSeq;
@@ -784,7 +766,7 @@ export async function buildLayeredCompactCandidateEntries(sessionId: string, old
     previousBlockRawEndSeq = undefined;
     const seq = message.__meta?.seq;
     if (!Number.isSafeInteger(seq) || (seq || 0) < 1) { compactSegmentId += 1; priorCandidateKind = undefined; continue; }
-    if (!hasValidRawProvenance(message) || (previousRawSeq !== undefined && seq !== previousRawSeq + 1)) {
+    if (!hasValidRawStructure(message) || (previousRawSeq !== undefined && seq !== previousRawSeq + 1)) {
       compactSegmentId += 1; priorCandidateKind = undefined; previousRawSeq = seq; continue;
     }
     if (!isModelVisibleMessage(message) || shouldRemoveOldCompactCompletionMessage(message)) {
@@ -796,14 +778,33 @@ export async function buildLayeredCompactCandidateEntries(sessionId: string, old
 
     let groupedEndHistoryIndex = historyIndex;
     const groupedMessages = [message];
-    if (message.role === 'model' && message.parts?.some(part => !!part.functionCall)) {
+    const startsToolExchange = message.role === 'model' && message.parts?.some(part => !!part.functionCall);
+    let validToolExchange = !startsToolExchange;
+    let toolExchangeEndHistoryIndex = historyIndex;
+    if (startsToolExchange) {
+      let sawToolResponse = false;
+      let invalidToolExchange = false;
       for (let nextIndex = historyIndex + 1; nextIndex < olderHistory.length; nextIndex += 1) {
         const next = olderHistory[nextIndex];
-        if (next.__meta?.contextBlock || isPreservedMessage(next) || next.role !== 'tool' || !Number.isSafeInteger(next.__meta?.seq)) break;
+        if (next.role !== 'tool') break;
+        sawToolResponse = true;
+        toolExchangeEndHistoryIndex = nextIndex;
         const previousGroupedSeq = groupedMessages[groupedMessages.length - 1].__meta?.seq;
-        if (!hasValidRawProvenance(next) || next.__meta!.seq !== (previousGroupedSeq || 0) + 1) break;
-        groupedMessages.push(next); groupedEndHistoryIndex = nextIndex;
+        if (next.__meta?.contextBlock || isPreservedMessage(next) || !Number.isSafeInteger(next.__meta?.seq)
+          || !hasValidRawStructure(next)
+          || next.__meta!.seq !== (previousGroupedSeq || 0) + 1) {
+          invalidToolExchange = true;
+          continue;
+        }
+        if (!invalidToolExchange) {
+          groupedMessages.push(next); groupedEndHistoryIndex = nextIndex;
+        }
       }
+      validToolExchange = sawToolResponse && !invalidToolExchange;
+    }
+    if (!validToolExchange) {
+      historyIndex = toolExchangeEndHistoryIndex;
+      compactSegmentId += 1; priorCandidateKind = undefined; previousRawSeq = undefined; continue;
     }
     const preview = groupedMessages.filter(isModelVisibleMessage).map(item => formatMessagePreviewText(item, 50, {
       skipEphemeralSystem: true, skipRagMemorySnippets: true, skipThinking: true,
@@ -814,6 +815,8 @@ export async function buildLayeredCompactCandidateEntries(sessionId: string, old
     entries.push({
       item: buildMessageCandidateItem(seq!, groupedMessages[groupedMessages.length - 1].__meta!.seq!, preview, estimatedTokens, compactSegmentId),
       historyStartIndex: historyIndex, historyEndIndex: groupedEndHistoryIndex,
+      rawStartTimestamp: normalizeActiveHistoryTimestamp(groupedMessages[0].__meta?.timestamp),
+      rawEndTimestamp: normalizeActiveHistoryTimestamp(groupedMessages[groupedMessages.length - 1].__meta?.timestamp),
     });
     priorCandidateKind = 'message';
     previousRawSeq = groupedMessages[groupedMessages.length - 1].__meta!.seq!;
@@ -857,8 +860,8 @@ function filterRetainedHistory(history: Message[], removePreservedSeqs: Set<numb
     .filter(message => isModelVisibleMessage(message) && !shouldRemoveOldCompactCompletionMessage(message));
 }
 
-export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<{ planIndex: number; startIndex: number; endIndex: number; historyStartIndex: number; historyEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; memoryFacts?: ExtractedMemoryFact[]; }> {
-  const operations: Array<{ planIndex: number; startIndex: number; endIndex: number; historyStartIndex: number; historyEndIndex: number; rawStartSeq: number; rawEndSeq: number; sourceKind: 'message' | 'block'; level: number; sourceStart: number; sourceEnd: number; sourceBlockIds?: number[]; summary: string; memoryFacts?: ExtractedMemoryFact[]; }> = [];
+export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<CompactJobOperation & { planIndex: number; startIndex: number; endIndex: number }> {
+  const operations: Array<CompactJobOperation & { planIndex: number; startIndex: number; endIndex: number }> = [];
   const candidateItems = candidateEntries.map(entry => entry.item);
 
   for (let planIndex = 0; planIndex < plan.createBlocks.length; planIndex += 1) {
@@ -901,6 +904,8 @@ export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: La
         historyEndIndex: endEntry.historyEndIndex,
         rawStartSeq: block.sourceStart,
         rawEndSeq: block.sourceEnd,
+        rawStartTimestamp: startEntry.rawStartTimestamp,
+        rawEndTimestamp: endEntry.rawEndTimestamp,
         sourceKind: block.sourceKind,
         level: block.level,
         sourceStart: block.sourceStart,
@@ -950,6 +955,8 @@ export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: La
       historyEndIndex: endEntry.historyEndIndex,
       rawStartSeq: startItem.rawStartSeq,
       rawEndSeq: endItem.rawEndSeq,
+      rawStartTimestamp: startEntry.rawStartTimestamp,
+      rawEndTimestamp: endEntry.rawEndTimestamp,
       sourceKind: block.sourceKind,
       level: block.level,
       sourceStart: block.sourceStart,
@@ -1082,7 +1089,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
 
   const olderHistory = historySnapshot.slice(0, splitIndex);
   const forceKeptRecentHistory = splitIndex < historySnapshot.length ? historySnapshot.slice(splitIndex) : [];
-  const { candidateEntries, preservedMessageCandidates, messagePolicy, blockPolicies } = await buildLayeredCompactCandidateEntries(sessionId, olderHistory);
+  const { candidateEntries, preservedMessageCandidates, messagePolicy, blockPolicies } = await buildLayeredCompactCandidateEntries(olderHistory);
   const candidateItems = candidateEntries.map(entry => entry.item);
 
   if (candidateItems.length === 0 && preservedMessageCandidates.length === 0) {
@@ -1212,6 +1219,8 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       historyEndIndex: operation.historyEndIndex,
       rawStartSeq: operation.rawStartSeq,
       rawEndSeq: operation.rawEndSeq,
+      rawStartTimestamp: operation.rawStartTimestamp,
+      rawEndTimestamp: operation.rawEndTimestamp,
       sourceKind: operation.sourceKind,
       level: operation.level,
       sourceStart: operation.sourceStart,
@@ -1228,6 +1237,8 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       sourceBlockIds: operation.sourceBlockIds,
       rawStartSeq: operation.rawStartSeq,
       rawEndSeq: operation.rawEndSeq,
+      rawStartTimestamp: operation.rawStartTimestamp,
+      rawEndTimestamp: operation.rawEndTimestamp,
       summary: operation.summary,
       memoryFacts: operation.memoryFacts,
     })),

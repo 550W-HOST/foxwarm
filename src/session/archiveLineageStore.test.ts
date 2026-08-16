@@ -35,6 +35,8 @@ test('archive store reads inherited and local messages/blocks without copying pa
     sourceEnd: 2,
     rawStartSeq: 1,
     rawEndSeq: 2,
+    rawStartTimestamp: 1000,
+    rawEndTimestamp: 2000,
     summary: 'alpha summary block',
     memoryFacts: [{ kind: 'convention', text: 'Archive block facts stay with their block.', attributedTo: 'assistant' }],
   }]);
@@ -67,6 +69,8 @@ test('archive store reads inherited and local messages/blocks without copying pa
     sourceEnd: child.nextMessageSeq - 1,
     rawStartSeq: child.nextMessageSeq - 1,
     rawEndSeq: child.nextMessageSeq - 1,
+    rawStartTimestamp: 4000,
+    rawEndTimestamp: 4000,
     summary: 'gamma child local block',
   }]);
 

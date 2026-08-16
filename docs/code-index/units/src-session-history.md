@@ -20,6 +20,7 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 ### Candidate and commit helpers
 
 - `resolveCompactionSplitIndex` — recent-tail split that keeps tool-call/response group boundaries.
+- `buildLayeredCompactCandidateEntries` — active-history-only raw/block candidate construction with structural barriers and token policies.
 - `isSingleBlockCompactionStrandedBetweenHigherLevelBlocks` — narrow single-block lift exception.
 - `resolveCreateBlockRanges` — validated candidate-to-history mapping.
 - `buildCreatedBlockHistoryWithPreservedMessages`, `removePreservedMessages` — exact raw-message preservation/removal in authoritative history.
@@ -38,16 +39,16 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 ## Internal sections
 
 - **Snapshot creation:** captures exact active history, prompt/cache context, request options, and a transient session clone; automatic tool-response pruning uses the same complete-history snapshot discipline.
-- **Candidate construction:** applies visibility, exact active/archive provenance validation, protected/noncandidate barriers, atomic tool grouping, recent-tail keep, and raw/block policies without repairing history from archive. Raw comparison ignores only approved transient provenance plus retired per-message `__meta.contextFrontierItem`; block metadata remains semantic.
+- **Candidate construction:** consumes only the cloned authoritative active history. It applies visibility, positive unique/ordered raw sequence structure, semantic block metadata and raw coverage, protected/noncandidate barriers, preserved-raw rules, atomic tool grouping, recent-tail keep, and raw/block policies without reading or repairing from Archive. Active pruned responses and edited wording are summarized exactly as active history presents them.
 - **Planning loop:** calls the model, accepts only `submit_compact_plan`, appends actionable feedback, and stops after `COMPACT_FLOW_MAX_ROUNDS`.
-- **Result construction:** creates block archive records and replacement history messages without touching the live session.
+- **Result construction:** derives raw ranges and timestamps from active raw/block metadata, then creates block archive records and replacement history messages without touching the live session.
 - **Compatible commit:** verifies the consumed snapshot prefix, writes archive/block state, replaces only that prefix while retaining appended suffixes and preserving the prompt-cache key, persists, and emits completion/reminder events.
 - **Background mode:** stores pending job state and later commits through the same compatibility path as awaited mode.
 
 ## Dependencies
 
 - `src/session/compactPlan.ts` owns prompt/schema/quota validation.
-- `src/session/layeredContext.ts` owns block rendering and provenance operations.
+- `src/session/layeredContext.ts` owns block rendering and immutable block append operations.
 - `src/session/archive.ts` and `archiveStore.ts` own durable source history.
 - `src/vector.ts` owns archive and compact-fact indexing.
 - `src/llm.ts` owns provider requests and `LlmRequestError`.
@@ -64,6 +65,7 @@ Transient compact-job Session clones preserve raw `effort`, `childModelDefault`,
 - Async planning may start from a compatible snapshot while the live session is busy. Planning itself is not queued; background completion enqueues only `compact-commit` for safe live application. Canonical scheduling: [D-context-compact-scheduling-boundary](../threads/context-compaction-and-recall.md#d-context-compact-scheduling-boundary).
 - Successful compaction preserves `promptCacheKey`; `/clear` remains the lineage rotation boundary.
 - At the automatic usage trigger, response-only pruning dry-runs first. It retains Unicode-safe line-aware 500/500 response excerpts plus exact recall guidance, commits only when the complete estimated Session falls to at most 50% of model context, and otherwise leaves history untouched for layered planning. Manual `/compact tools` uses the same primitive without that recovery gate and performs no save/version increment on no-op.
+- Historical response pruning alone proves exact Archive identity for its recall footer. A committed pruned response then becomes ordinary active-history input to layered compaction; layered planning does not repeat that Archive proof.
 - Protected lifecycle/history items are segment barriers; display-only messages are transparent and not summarized. Prior pure compact-completion notices are the narrow exception: they are transparent to candidate ranges and removed from the entire compatible active history only on successful commit, before one current notice is appended. Canonical contract: [D-context-compact-completion](../threads/context-compaction-and-recall.md#d-context-compact-completion).
 - Each created block carries its normalized facts through archive append; its facts are indexed only after success with that block identity/level/raw range, and indexing is best-effort.
 - Goal reminders remain separate system parts from compact-completion metadata.

@@ -19,7 +19,7 @@ Owns immutable archive block construction, CTX-BLOCK rendering, structured `__me
 - Active CTX-BLOCK messages are ordinary entries in authoritative Session `history` and carry `__meta.contextBlock`.
 - Exact preserved raw messages remain ordinary history entries carrying `__meta.seq` plus `__meta.preservedFromBlockId`.
 - New block IDs are allocated from `nextBlockId`, with current history block metadata as the fallback maximum.
-- Block raw timestamp ranges may consult the immutable archive, but archive reads never materialize or repair active history.
+- New block raw timestamp ranges are supplied from the layered compact job's active raw/block metadata. Block append does not read raw Archive rows to recover timestamps or source semantics.
 - Legacy standalone or embedded frontier handling belongs only to tolerant migration/authority readers and is not a runtime layered-context responsibility.
 
 ## Design Decisions
