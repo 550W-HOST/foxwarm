@@ -1,6 +1,6 @@
 # Unit: src-session-archive-store
 
-Files: src/session/archiveStore.ts, src/session/archiveBootstrapImport.test.ts, src/session/archiveImportState.test.ts, src/session/archiveLineageStore.test.ts, src/session/archivePureReads.test.ts
+Files: src/session/archiveStore.ts, src/session/archiveBootstrapImport.test.ts, src/session/archiveImportState.test.ts, src/session/archiveLineageStore.test.ts, src/session/archiveMessageStats.test.ts, src/session/archivePureReads.test.ts
 Secondary files: src/session/sessionIdAllocation.test.ts
 
 ## Purpose
@@ -21,6 +21,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 - `rollbackUncommittedArchiveMessages`, `rollbackUncommittedArchiveBlocks` — exact-payload cleanup for rows newly inserted by a larger active-authority commit that then failed before publication; pre-existing replay rows are never eligible.
 - `readLocalArchiveMessages`, `readLocalArchiveBlocks` — current-branch rows only.
 - `readEffectiveArchiveMessages`, `readEffectiveArchiveBlocks` — lineage-bounded inherited plus local rows.
+- `getLocalArchiveMessageStats`, `getEffectiveArchiveMessageStats` — pure SQLite `count`/`minSeq`/`maxSeq` summaries with the same optional bounds, alias resolution, lineage walk, and cumulative fork caps as the corresponding readers.
 - `getVectorCheckpoint`, `getVectorCheckpointSync`, `setVectorCheckpointSync` — vector progress.
 - `getVectorSearchLineage`, `listSessionsNeedingVectorBackfill` — vector scope/backfill inputs.
 - `renameSessionArchiveStore` — bootstrapped transactional ID/parent/checkpoint/import-state rename.
@@ -57,6 +58,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 - Migration-only message validation recognizes two proven historical writer variants without changing current writer types: message-level `providerMeta` may carry a record-valued `providerSpecificFields` without the later `sourceModelId`, and `functionResponse.response` may be any defined JSON value rather than only an object. SQLite preserves those payload values as written, unscoped provider fields are not replayed to a guessed model, and all outer record identity, role, tool-call identity, duplicate, and lineage checks remain strict.
 - Migration import-state rows avoid reparsing unchanged legacy sources while a failed migration is being repaired and retried.
 - Effective reads walk current session then ancestors, cap each ancestor at cumulative fork points, annotate `sourceSessionId`/`inherited`, and sort by source sequence or block ID.
+- Message statistics aggregate covering `(session_id, seq)` range scans per lineage branch without materializing message JSON. Empty, unknown, aliased, inherited, capped, and out-of-range queries match the corresponding local/effective reader result exactly.
 - Ordinary local/effective readers, branch lookup, archived-ID lookup, and vector-lineage lookup open the SQLite schema and resolve committed aliases without creating branches or repairing/re-writing reservation state. Startup initialization and explicit lifecycle/write operations retain the repair/ownership path.
 - Current message/block writes return only rows actually inserted by that call. The active-history commit path may delete those exact rows if authoritative JSON persistence fails, so a retry can reuse the same identity without overwriting or deleting an older immutable replay row.
 - Child branch creation seeds vector checkpoints at its fork boundaries.

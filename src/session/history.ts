@@ -12,7 +12,7 @@ import {
 } from '../config';
 import { estimateSessionTokens, estimateTokenCount } from '../tokenCount';
 import * as vector from '../vector';
-import { appendMessagesToArchive, readArchiveMessages, readArchiveMessagesBySeqRange, rollbackUncommittedMessages } from './archive';
+import { appendMessagesToArchive, getArchiveMessageStats, readArchiveMessagesBySeqRange, rollbackUncommittedMessages } from './archive';
 import { omitObsoleteContextFrontierItem } from './stateValidation';
 import {
   buildBlockCandidateItem,
@@ -1571,21 +1571,14 @@ export async function clearSession(deps: SessionHistoryDeps, sessionId: string):
 export async function getArchivedMessages(sessionId: string, options: ArchivedMessagesQueryOptions = {}): Promise<ArchivedMessagesQueryResult> {
   const { startSeq, endSeq } = normalizeSeqRange(options.startSeq, options.endSeq);
 
-  const archiveMessages = await readArchiveMessages(sessionId);
+  const [archiveStats, matched] = await Promise.all([
+    getArchiveMessageStats(sessionId),
+    readArchiveMessagesBySeqRange(sessionId, startSeq, endSeq),
+  ]);
   const availableRange = {
-    startSeq: archiveMessages[0]?.seq,
-    endSeq: archiveMessages[archiveMessages.length - 1]?.seq,
+    startSeq: archiveStats.minSeq,
+    endSeq: archiveStats.maxSeq,
   };
-
-  const matched = archiveMessages.filter(record => {
-    if (typeof startSeq === 'number' && record.seq < startSeq) {
-      return false;
-    }
-    if (typeof endSeq === 'number' && record.seq > endSeq) {
-      return false;
-    }
-    return true;
-  });
 
   const sliced = matched.map(record => ({
     seq: record.seq,

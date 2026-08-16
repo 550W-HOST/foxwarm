@@ -15,7 +15,7 @@ Provides one asynchronous, optionally disabled vector facade with local and supe
 - `search(query, limit=5, format=true, options?)` — vector query with session/agent/lineage scope, optional regex candidate filters, and block preference.
 - `indexSessionArchive(sessionId, latestSeqHint?, latestBlockIdHint?)` — index one archive.
 - `scheduleSessionArchiveIndex(sessionId, latestSeqHint?, latestMessageTokenEstimate?, latestBlockIdHint?)` — pending-threshold scheduler.
-- `indexAllSessionArchives(sessionIds?)`, `waitForStartupArchiveVectorBackfill()` — backfill controls.
+- `waitForStartupArchiveVectorBackfill()` — waits for the real checkpoint-selected startup backfill. There is no disconnected global reindex RPC/facade surface.
 - `indexMemoryFactsFromCompaction(input)` — best-effort fact upsert.
 - `renameSessionArchiveIndex`, `copySessionArchiveIndexCheckpoint`, `getArchiveIndexStatus`, `getArchiveIndexBatchDecision` — lifecycle/checkpoint helpers.
 - Segment/row construction, token estimation, overlap, and embedding-sanitization helpers exported for tests and callers.
@@ -51,7 +51,7 @@ Model-facing `contentFilter` and final preview filtering are owned by the shared
 - Block rows use deterministic IDs and one atomic ID-keyed merge per hydrated batch, so retrying after a Lance commit but before its SQLite checkpoint updates the same rows instead of creating duplicates.
 - Compact facts use deterministic normalized-text IDs scoped to their creating block and encode fact kind/attribution, block identity/level, and that block's raw source range in existing columns.
 - Inherited fact rows use the block fork cap. Legacy null-block facts require their entire raw range to precede the message fork cap and are discarded rather than clipped if they cross it.
-- Raw rebuild writes bounded batches and advances a safe checkpoint after each completed batch.
+- Raw rebuild queries local message stats first, then loads only the saved overlap tail/new-message range. A saved tail beyond the durable maximum safely falls back to the local minimum, preserving the prior rebuild behavior without materializing the checkpointed prefix. Block indexing reads only IDs after `lastIndexedBlockId`. Bounded batches and safe checkpoint advancement remain unchanged.
 - Startup backfill is asynchronous. Search can be temporarily incomplete while checkpoints show pending archive content. Raw messages and full block summaries archived while Vector is disabled retain old checkpoints and are discovered after later enablement. Fact text remains inside the formatted block summary, but dedicated fact rows are not reconstructed for disabled-period compactions; see [D-context-optional-vector](../threads/context-compaction-and-recall.md#d-context-optional-vector).
 - Concurrent index requests for one session are coalesced/scheduled rather than running duplicate rebuilds.
 - The RPC scheduling method acknowledges accepted hints immediately rather than holding a transport request open until a future indexing threshold flushes.

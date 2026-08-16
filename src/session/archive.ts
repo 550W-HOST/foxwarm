@@ -1,7 +1,10 @@
 import { Message, Session } from '../types';
 import { externalizeMessageImages } from '../imageBlobs';
 import {
+  ArchiveMessageStats,
   ensureSessionBranch,
+  getEffectiveArchiveMessageStats,
+  getLocalArchiveMessageStats as getLocalArchiveMessageStatsFromStore,
   readEffectiveArchiveMessages,
   readLocalArchiveMessages as readLocalArchiveMessagesFromStore,
   rollbackUncommittedArchiveMessages,
@@ -130,6 +133,14 @@ export async function readArchiveMessages(sessionId: string): Promise<ArchiveMes
 
 export async function readLocalArchiveMessages(sessionId: string): Promise<ArchiveMessageRecord[]> {
   return readLocalArchiveMessagesFromStore(sessionId);
+}
+
+export async function getArchiveMessageStats(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageStats> {
+  return getEffectiveArchiveMessageStats(sessionId, startSeq, endSeq);
+}
+
+export async function getLocalArchiveMessageStats(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageStats> {
+  return getLocalArchiveMessageStatsFromStore(sessionId, startSeq, endSeq);
 }
 
 export function stripMessageSeq(message: Message): Message {

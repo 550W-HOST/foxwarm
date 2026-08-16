@@ -47,6 +47,12 @@ export type ArchiveVectorBackfillCandidate = {
   checkpointLastIndexedBlockId: number;
 };
 
+export type ArchiveMessageStats = {
+  count: number;
+  minSeq?: number;
+  maxSeq?: number;
+};
+
 type LineageEntry = {
   sessionId: string;
   inherited: boolean;
@@ -1353,6 +1359,28 @@ export async function readLocalArchiveMessages(sessionId: string, startSeq?: num
   }));
 }
 
+function readLocalArchiveMessageStatsByCanonicalId(sessionId: string, startSeq?: number, endSeq?: number): ArchiveMessageStats {
+  const row = getDb().prepare(`
+    SELECT COUNT(*) AS count, MIN(seq) AS min_seq, MAX(seq) AS max_seq
+    FROM archive_messages
+    WHERE session_id = ?
+      AND (? IS NULL OR seq >= ?)
+      AND (? IS NULL OR seq <= ?)
+  `).get(sessionId, startSeq ?? null, startSeq ?? null, endSeq ?? null, endSeq ?? null) as any;
+
+  const count = Number(row?.count) || 0;
+  return {
+    count,
+    ...(count > 0 ? { minSeq: Number(row.min_seq), maxSeq: Number(row.max_seq) } : {}),
+  };
+}
+
+export async function getLocalArchiveMessageStats(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageStats> {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+  return readLocalArchiveMessageStatsByCanonicalId(sessionId, startSeq, endSeq);
+}
+
 export async function readEffectiveArchiveMessages(sessionId: string, startSeq?: number, endSeq?: number): Promise<EffectiveArchiveMessageRecord[]> {
   initArchiveStoreSync();
   sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
@@ -1382,6 +1410,34 @@ export async function readEffectiveArchiveMessages(sessionId: string, startSeq?:
   }
 
   return results.sort((a, b) => a.seq - b.seq || Number(a.timestamp) - Number(b.timestamp));
+}
+
+export async function getEffectiveArchiveMessageStats(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageStats> {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+
+  let count = 0;
+  let minSeq: number | undefined;
+  let maxSeq: number | undefined;
+  for (const entry of buildLineage(sessionId)) {
+    const cappedEnd = typeof entry.maxMessageSeq === 'number'
+      ? (typeof endSeq === 'number' ? Math.min(endSeq, entry.maxMessageSeq) : entry.maxMessageSeq)
+      : endSeq;
+    if (typeof entry.maxMessageSeq === 'number' && entry.maxMessageSeq <= 0) continue;
+    if (typeof startSeq === 'number' && typeof cappedEnd === 'number' && startSeq > cappedEnd) continue;
+
+    const canonicalEntryId = resolveArchivedRecordSessionIdReadOnly(entry.sessionId);
+    const local = readLocalArchiveMessageStatsByCanonicalId(canonicalEntryId, startSeq, cappedEnd);
+    count += local.count;
+    if (typeof local.minSeq === 'number') minSeq = typeof minSeq === 'number' ? Math.min(minSeq, local.minSeq) : local.minSeq;
+    if (typeof local.maxSeq === 'number') maxSeq = typeof maxSeq === 'number' ? Math.max(maxSeq, local.maxSeq) : local.maxSeq;
+  }
+
+  return {
+    count,
+    ...(typeof minSeq === 'number' ? { minSeq } : {}),
+    ...(typeof maxSeq === 'number' ? { maxSeq } : {}),
+  };
 }
 
 export async function readLocalArchiveBlocks(sessionId: string, startId?: number, endId?: number): Promise<ArchiveBlockRecord[]> {

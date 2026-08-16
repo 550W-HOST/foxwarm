@@ -19,7 +19,7 @@ Session context owns model-context budgeting, layered compaction and direct acti
 - `getDefaultCompactThresholdTokens`, `getEffectiveCompactThresholdTokens`, `checkAndCompactIfNeeded`, `processSessionCompactionRequest`, `applyCompletedCompactJob`.
 - `COMPACT_PLAN_TOOL_DEFINITION`, `buildCompactPromptText`, and `validateCompactPlanArgs`.
 - Direct history compaction helpers, CTX-BLOCK formatting/rendering, and structured provenance helpers.
-- `initArchiveStore`, `hasArchivedSessionId`, `ensureSessionBranch`, `readEffectiveArchiveMessages`, `readEffectiveArchiveBlocks`, and vector checkpoint APIs.
+- `initArchiveStore`, `hasArchivedSessionId`, `ensureSessionBranch`, effective/local archive message stats and bounded readers, `readEffectiveArchiveBlocks`, and vector checkpoint APIs.
 - `vector.search`, archive indexing/backfill APIs, and compact-fact indexing.
 - Tool-layer `recall` and `get_session_messages` retrieval/preview paths.
 
@@ -42,6 +42,7 @@ Session context owns model-context budgeting, layered compaction and direct acti
 - Vector is an optional derived layer that defaults disabled. Optional memory facts and startup vector backfill are best-effort and never block a compact commit or service readiness; raw messages and full block summaries archived while disabled remain pending for later checkpoint-based backfill. Dedicated fact rows are not reconstructed, though fact text remains in block summaries.
 - Display-only messages are excluded from model context, candidate quota denominators, and embeddings.
 - Ordinary archive, recall, expansion, image-source, and vector-lineage reads are pure with respect to archive branches and session-ID reservations; explicit lifecycle/write/migration paths alone establish branch ownership. Canonical semantics: [D-archive-read-purity](../units/src-session-archive-store.md#d-archive-read-purity).
+- Exact range retrieval and incremental vector indexing use covering archive stats plus bounded SQLite source reads; they do not materialize unrelated message prefixes merely to discover counts or maxima.
 - Retained branch/log discovery plus the committed moved-ID alias ledger supplies the archive side of exact internal session-ID reservation and canonical historical reads; lifecycle semantics are canonical in [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 
 ## Compatibility

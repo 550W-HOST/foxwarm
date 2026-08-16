@@ -19,7 +19,6 @@ export function createVectorFacadeProxyHandler(): RpcServiceHandler<typeof vecto
     async forceIndexSession(input) {
       return { lastIndexedSeq: await vector.indexSessionArchive(input.sessionId, input.latestSeqHint, input.latestBlockIdHint) };
     },
-    async indexAllSessionArchives(input) { await vector.indexAllSessionArchives(input.sessionIds); return { completed: true }; },
     async indexMemoryFacts(input) { return { indexed: await vector.indexMemoryFactsFromCompaction(input) }; },
     async renameSessionArchiveIndex(input) {
       await vector.renameSessionArchiveIndex(input.oldSessionId, input.newSessionId); return { completed: true };

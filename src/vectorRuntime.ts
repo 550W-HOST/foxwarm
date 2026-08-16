@@ -1,9 +1,8 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
-import path from 'path';
 import { Message } from './types';
 import { estimateTokenCount } from './tokenCount';
-import { DB_DIR, SESSION_LOGS_DIR, VECTOR_BASE_URL, VECTOR_MAINTENANCE_CONFIG } from './config';
+import { DB_DIR, VECTOR_BASE_URL, VECTOR_MAINTENANCE_CONFIG } from './config';
 import { logger } from './common';
 import {
     FairTableOperationGate,
@@ -19,6 +18,7 @@ import {
 } from './session/layeredContext';
 import {
     ArchiveMessageRecord,
+    getLocalArchiveMessageStats,
     readLocalArchiveMessagesBySeqRange,
 } from './session/archive';
 import {
@@ -973,12 +973,12 @@ function getArchiveIndexBatchDecision({
     };
 }
 
-async function readArchiveLines(sessionId: string): Promise<ArchiveMessageLine[]> {
-    return readLocalArchiveMessagesBySeqRange(sessionId);
+async function readArchiveLines(sessionId: string, startSeq?: number, endSeq?: number): Promise<ArchiveMessageLine[]> {
+    return readLocalArchiveMessagesBySeqRange(sessionId, startSeq, endSeq);
 }
 
-async function readLocalBlockLines(sessionId: string): Promise<ArchiveBlockRecord[]> {
-    return readLocalArchiveBlocksByIdRange(sessionId);
+async function readLocalBlockLines(sessionId: string, startId?: number, endId?: number): Promise<ArchiveBlockRecord[]> {
+    return readLocalArchiveBlocksByIdRange(sessionId, startId, endId);
 }
 
 async function replaceIndexedArchiveTail(sessionId: string, rewindStartSeq: number, archiveLines: ArchiveMessageLine[]): Promise<{ lastIndexedSeq: number; tailStartSeq: number; rowCount: number; segmentCount: number; rebuiltMessageCount: number; rebuiltStartSeq: number; rebuiltEndSeq: number; }> {
@@ -1119,10 +1119,10 @@ async function indexSessionArchiveUnderLease(sessionId: string, latestSeqHint?: 
         return lastIndexedSeq;
     }
 
-    const archiveLines = await readArchiveLines(sessionId);
-    const blockLines = await readLocalBlockLines(sessionId);
-
-    if (archiveLines.length === 0 && blockLines.length === 0) {
+    const messageStats = await getLocalArchiveMessageStats(sessionId);
+    const latestArchivedSeq = messageStats.maxSeq || 0;
+    const blockLines = await readLocalBlockLines(sessionId, lastIndexedBlockId + 1);
+    if (messageStats.count === 0 && blockLines.length === 0) {
         return lastIndexedSeq;
     }
 
@@ -1134,14 +1134,16 @@ async function indexSessionArchiveUnderLease(sessionId: string, latestSeqHint?: 
     let rebuiltStartSeq = 0;
     let rebuiltEndSeq = 0;
 
-    const latestArchivedSeq = archiveLines[archiveLines.length - 1]?.seq || 0;
-    if (archiveLines.length > 0 && latestArchivedSeq > lastIndexedSeq) {
-        const rewindStartSeqCandidate = checkpoint.tailStartSeq > 0 ? checkpoint.tailStartSeq : archiveLines[0].seq;
-        const rewindStartSeq = archiveLines.some(line => line.seq >= rewindStartSeqCandidate)
+    if (typeof messageStats.minSeq === 'number' && latestArchivedSeq > lastIndexedSeq) {
+        const rewindStartSeqCandidate = checkpoint.tailStartSeq > 0 ? checkpoint.tailStartSeq : messageStats.minSeq;
+        // This mirrors the prior full-array `some(seq >= candidate)` fallback:
+        // a stale tail beyond the durable local maximum safely rebuilds from
+        // the first available local sequence, while an in-range gap keeps the
+        // candidate and lets the bounded SQL query start at the next row.
+        const rewindStartSeq = rewindStartSeqCandidate <= latestArchivedSeq
             ? rewindStartSeqCandidate
-            : archiveLines[0].seq;
-
-        const rebuildLines = archiveLines.filter(line => line.seq >= rewindStartSeq);
+            : messageStats.minSeq;
+        const rebuildLines = await readArchiveLines(sessionId, rewindStartSeq);
         const startTime = Date.now();
 
         logger.info({
@@ -1156,7 +1158,7 @@ async function indexSessionArchiveUnderLease(sessionId: string, latestSeqHint?: 
             rebuildEndSeq: rebuildLines[rebuildLines.length - 1]?.seq,
         }, 'Starting session archive vector raw index rebuild');
 
-        const result = await replaceIndexedArchiveTail(sessionId, rewindStartSeq, archiveLines);
+        const result = await replaceIndexedArchiveTail(sessionId, rewindStartSeq, rebuildLines);
         nextLastIndexedSeq = result.lastIndexedSeq;
         nextTailStartSeq = result.tailStartSeq;
         rawRowCount = result.rowCount;
@@ -1418,46 +1420,6 @@ async function indexSessionArchive(sessionId: string, latestSeqHint?: number, la
         }
         rejectBatchState(sessionId, err);
         throw err;
-    }
-}
-
-async function getAllArchiveSessionIds(): Promise<string[]> {
-    if (!await fs.pathExists(SESSION_LOGS_DIR)) {
-        return [];
-    }
-
-    const sessionIds: string[] = [];
-
-    const walk = async (dir: string) => {
-        const entries = await fs.readdir(dir, { withFileTypes: true });
-        for (const entry of entries) {
-            const fullPath = path.join(dir, entry.name);
-            if (entry.isDirectory()) {
-                await walk(fullPath);
-                continue;
-            }
-
-            if (!entry.isFile() || !entry.name.endsWith('.jsonl') || entry.name.endsWith('.blocks.jsonl')) {
-                continue;
-            }
-
-            const relativePath = path.relative(SESSION_LOGS_DIR, fullPath);
-            const sessionId = relativePath.slice(0, -'.jsonl'.length).split(path.sep).join('/');
-            sessionIds.push(sessionId);
-        }
-    };
-
-    await walk(SESSION_LOGS_DIR);
-    return sessionIds.sort();
-}
-
-async function indexAllSessionArchives(sessionIds?: string[]): Promise<void> {
-    const targetSessionIds = sessionIds && sessionIds.length > 0
-        ? [...new Set(sessionIds)]
-        : await getAllArchiveSessionIds();
-
-    for (const sessionId of targetSessionIds) {
-        await indexSessionArchive(sessionId);
     }
 }
 
@@ -1766,7 +1728,6 @@ async function init() {
     startupWorkCompleted = false;
     tableOperationGate = new FairTableOperationGate();
     await fs.ensureDir(DB_PATH);
-    await fs.ensureDir(SESSION_LOGS_DIR);
     await initArchiveStore();
     // Keep the native LanceDB module out of the main process when the vector
     // service is placed in its default child process.
@@ -1866,7 +1827,6 @@ export {
     estimateArchiveMessageTokenCount,
     getArchiveIndexBatchDecision,
     getArchiveIndexStatus,
-    indexAllSessionArchives,
     indexMemoryFactsFromCompaction,
     indexNewMessages,
     indexSessionArchive,

@@ -37,6 +37,7 @@ Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelFor
 
 - Raw messages and summary blocks commit to `archive-store.sqlite` before active-history replacement.
 - SQLite uses durable WAL/FULL transactions, archive branches, lineage-bounded effective reads, and vector checkpoints.
+- Effective/local message stats use covering SQLite count/min/max scans with the same alias, range, and cumulative lineage caps as content reads. Exact message retrieval keeps the complete effective available range while loading only the selected sequence range.
 - A one-time startup migration strictly imports and verifies every legacy active JSONL before moving it under `state/migration-backup/sqlite-only-large-archives-v1/`. Shared stateful UTF-8 LF/CRLF framing preserves literal U+2028/U+2029 inside JSON strings. Runtime does not dual-write or lazy-import JSONL.
 - Fork branches inherit only parent messages/blocks at or before their fork points.
 
@@ -44,7 +45,7 @@ Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelFor
 
 - Vector is optional and defaults disabled. Archive/compaction and exact recall remain fully functional without LanceDB; semantic requests fail with a stable disabled classification.
 - `scheduleSessionArchiveIndex()` batches archive indexing at 50 pending messages or 8,000 estimated tokens.
-- When enabled, LanceDB `messages_v7` stores raw segments, block rows, and compact-extracted fact rows. Startup backfill uses SQLite checkpoints and can continue after the service becomes ready. Raw messages and full block summaries accumulated while disabled remain pending and are discovered from archive maxima after a later enable/restart. Fact text embedded in those summaries is therefore searchable through block rows, but startup backfill does not reconstruct dedicated fact rows.
+- When enabled, LanceDB `messages_v7` stores raw segments, block rows, and compact-extracted fact rows. Startup backfill uses SQLite checkpoints and can continue after the service becomes ready. Each incremental flush reads message maxima through local stats, loads only the saved overlap tail/new-message range, and reads blocks only after the block checkpoint; a stale tail beyond the durable local range falls back to the local minimum. Raw messages and full block summaries accumulated while disabled remain pending and are discovered from archive maxima after a later enable/restart. Fact text embedded in those summaries is therefore searchable through block rows, but startup backfill does not reconstruct dedicated fact rows.
 - `vector.search(query, limit, format, options)` returns metadata-rich locations. Model-facing recall reloads original archive messages/blocks from those locations before rendering. A tolerated legacy/stale compatibility fallback may render the stored vector text only when the referenced archive source cannot be reloaded; one bounded metadata-only warning records that fallback without logging query or user content.
 
 ### 6. Recall and preview
@@ -58,7 +59,7 @@ Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelFor
 
 ### 7. WebUI expansion
 
-The WebUI block endpoint expands exactly one layer into structured timeline messages. A block backed by lower-level blocks returns child CTX-BLOCK messages; a message-backed/L1 block returns raw archive messages. Expansion is local read-only UI state and never changes history, queue, or broadcasts.
+The WebUI block endpoint expands exactly one layer into structured timeline messages. A block backed by lower-level blocks returns child CTX-BLOCK messages; a message-backed/L1 block returns raw archive messages. Parent and immediate source records are loaded once and shared by structured output plus the compatible text formatter. Expansion is local read-only UI state and never changes history, queue, or broadcasts.
 
 ## Modules and units
 

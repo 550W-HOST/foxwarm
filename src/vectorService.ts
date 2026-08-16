@@ -44,10 +44,6 @@ export function createVectorServiceHandler(): RpcServiceHandler<typeof vectorSer
       );
       return { lastIndexedSeq };
     },
-    async indexAllSessionArchives(input) {
-      await runtime.indexAllSessionArchives(input.sessionIds);
-      return { completed: true };
-    },
     async indexMemoryFacts(input) {
       return { indexed: await runtime.indexMemoryFactsFromCompaction(input) };
     },

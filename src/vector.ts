@@ -142,10 +142,6 @@ export async function indexSessionArchive(
   return result.lastIndexedSeq;
 }
 
-export async function indexAllSessionArchives(sessionIds?: string[]): Promise<void> {
-  await callVector('indexAllSessionArchives', { sessionIds });
-}
-
 export async function indexMemoryFactsFromCompaction(input: runtime.CompactMemoryFactIndexInput): Promise<number> {
   if (isDisabled()) return 0;
   const result = await callVector('indexMemoryFacts', input);

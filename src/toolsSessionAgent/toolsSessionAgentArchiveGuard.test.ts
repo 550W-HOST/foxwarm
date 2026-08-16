@@ -430,42 +430,74 @@ test('renderContextBlockExpansion returns structured child block/raw message ite
 
   const before = await deps.sessionManager.getExistingSession(sessionId);
   const beforeHistory = JSON.stringify(before?.history || []);
+  const mutableSessionManager = require('../sessionManager') as typeof import('../sessionManager');
+  const originalGetArchivedBlocks = mutableSessionManager.getArchivedBlocks;
+  const originalGetArchivedMessages = mutableSessionManager.getArchivedMessages;
+  const blockReads: Array<{ startId?: number; endId?: number }> = [];
+  const messageReads: Array<{ startSeq?: number; endSeq?: number }> = [];
+  (mutableSessionManager as any).getArchivedBlocks = async (targetSessionId: string, options: any) => {
+    if (targetSessionId === sessionId) blockReads.push({ startId: options?.startId, endId: options?.endId });
+    return originalGetArchivedBlocks(targetSessionId, options);
+  };
+  (mutableSessionManager as any).getArchivedMessages = async (targetSessionId: string, options: any) => {
+    if (targetSessionId === sessionId) messageReads.push({ startSeq: options?.startSeq, endSeq: options?.endSeq });
+    return originalGetArchivedMessages(targetSessionId, options);
+  };
 
-  const detail = await deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 4, previewLength: 2000 });
-  assert.equal(detail.expansionKind, 'child-blocks');
-  assert.equal(detail.target, 'B#4');
-  assert.equal(detail.block.id, 4);
-  assert.equal(detail.totalItems, 2);
-  assert.equal(detail.items.length, 2);
-  assert.equal(detail.messages.length, 2);
-  assert.equal(detail.items[0].kind, 'block');
-  assert.equal(detail.items[0].block?.id, 1);
-  assert.equal(detail.items[0].message.role, 'model');
-  assert.equal(detail.items[0].message.__meta?.contextBlock?.id, 1);
-  assert.equal(detail.items[1].message.__meta?.contextBlock?.id, 2);
-  assert.match(detail.items[0].message.parts[0].text || '', /block alpha/);
-  assert.match(detail.items[1].message.parts[0].text || '', /block beta/);
-  assert.doesNotMatch(detail.items[0].message.parts[0].text || '', /archived alpha/);
-  assert.match(detail.text, /Immediate child blocks/);
-  assert.match(detail.text, /block alpha/);
-  assert.match(detail.text, /block beta/);
-  assert.doesNotMatch(detail.text, /archived alpha/);
-  assert.doesNotMatch(detail.text, /Suggestions/);
+  try {
+    const detail = await deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 4, previewLength: 2000 });
+    assert.deepEqual(blockReads, [{ startId: 4, endId: 4 }, { startId: 1, endId: 2 }],
+      'parent and immediate child blocks should each be read once');
+    assert.deepEqual(messageReads, [{ startSeq: 1, endSeq: 1 }, { startSeq: 2, endSeq: 2 }],
+      'each immediate child should hydrate its single-message timestamp once');
+    assert.equal(detail.expansionKind, 'child-blocks');
+    assert.equal(detail.target, 'B#4');
+    assert.equal(detail.block.id, 4);
+    assert.equal(detail.totalItems, 2);
+    assert.equal(detail.items.length, 2);
+    assert.equal(detail.messages.length, 2);
+    assert.equal(detail.items[0].kind, 'block');
+    assert.equal(detail.items[0].block?.id, 1);
+    assert.equal(detail.items[0].message.role, 'model');
+    assert.equal(detail.items[0].message.__meta?.contextBlock?.id, 1);
+    assert.equal(detail.items[1].message.__meta?.contextBlock?.id, 2);
+    assert.match(detail.items[0].message.parts[0].text || '', /block alpha/);
+    assert.match(detail.items[1].message.parts[0].text || '', /block beta/);
+    assert.doesNotMatch(detail.items[0].message.parts[0].text || '', /archived alpha/);
+    assert.match(detail.text, /Immediate child blocks/);
+    assert.match(detail.text, /block alpha/);
+    assert.match(detail.text, /block beta/);
+    assert.doesNotMatch(detail.text, /archived alpha/);
+    assert.doesNotMatch(detail.text, /Suggestions/);
+    const detailRecallText = String(await deps.toolsSessionAgent.tool_recall({ sessionId, target: 'B#4', previewLength: 2000 }));
+    assert.equal(detail.text, detailRecallText.split('\n\nSuggestions')[0],
+      'structured expansion text must remain exactly compatible with ordinary block detail formatting');
 
-  const raw = await deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 1, previewLength: 2000 });
-  assert.equal(raw.expansionKind, 'messages');
-  assert.equal(raw.target, 'B#1');
-  assert.equal(raw.totalItems, 1);
-  assert.equal(raw.items[0].kind, 'message');
-  assert.equal(raw.items[0].seq, 1);
-  assert.equal(raw.messages[0].role, 'user');
-  assert.equal(raw.messages[0].__meta?.seq, 1);
-  assert.match(raw.messages[0].parts[0].text || '', /archived alpha/);
-  assert.equal(raw.messages[0].__meta?.contextBlock, undefined);
-  assert.match(raw.text, /Source messages/);
-  assert.match(raw.text, /archived alpha/);
-  assert.doesNotMatch(raw.text, /archived beta/);
-  assert.doesNotMatch(raw.text, /Suggestions/);
+    blockReads.length = 0;
+    messageReads.length = 0;
+    const raw = await deps.archiveRecall.renderContextBlockExpansion({ sessionId, blockId: 1, previewLength: 2000 });
+    assert.deepEqual(blockReads, [{ startId: 1, endId: 1 }], 'message-backed parent block should be read once');
+    assert.deepEqual(messageReads, [{ startSeq: 1, endSeq: 1 }], 'immediate source messages should be read once');
+    assert.equal(raw.expansionKind, 'messages');
+    assert.equal(raw.target, 'B#1');
+    assert.equal(raw.totalItems, 1);
+    assert.equal(raw.items[0].kind, 'message');
+    assert.equal(raw.items[0].seq, 1);
+    assert.equal(raw.messages[0].role, 'user');
+    assert.equal(raw.messages[0].__meta?.seq, 1);
+    assert.match(raw.messages[0].parts[0].text || '', /archived alpha/);
+    assert.equal(raw.messages[0].__meta?.contextBlock, undefined);
+    assert.match(raw.text, /Source messages/);
+    assert.match(raw.text, /archived alpha/);
+    assert.doesNotMatch(raw.text, /archived beta/);
+    assert.doesNotMatch(raw.text, /Suggestions/);
+    const rawRecallText = String(await deps.toolsSessionAgent.tool_recall({ sessionId, target: 'B#1', previewLength: 2000 }));
+    assert.equal(raw.text, rawRecallText.split('\n\nSuggestions')[0],
+      'message expansion text must remain exactly compatible with ordinary block detail formatting');
+  } finally {
+    (mutableSessionManager as any).getArchivedBlocks = originalGetArchivedBlocks;
+    (mutableSessionManager as any).getArchivedMessages = originalGetArchivedMessages;
+  }
 
   const after = await deps.sessionManager.getExistingSession(sessionId);
   assert.equal(JSON.stringify(after?.history || []), beforeHistory);

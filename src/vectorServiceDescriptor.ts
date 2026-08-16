@@ -18,7 +18,6 @@ export const vectorServiceDescriptor = defineRpcService('vector', 2, {
   forceIndexSession: rpcMethod<{
     sessionId: string; latestSeqHint?: number; latestBlockIdHint?: number;
   }, { lastIndexedSeq: number }>(),
-  indexAllSessionArchives: rpcMethod<{ sessionIds?: string[] }, { completed: true }>(),
   indexMemoryFacts: rpcMethod<runtime.CompactMemoryFactIndexInput, { indexed: number }>(),
   renameSessionArchiveIndex: rpcMethod<{ oldSessionId: string; newSessionId: string }, { completed: true }>(),
   copySessionArchiveIndexCheckpoint: rpcMethod<{ sourceSessionId: string; targetSessionId: string }, { completed: true }>(),

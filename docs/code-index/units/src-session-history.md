@@ -1,6 +1,6 @@
 # Unit: src-session-history
 
-Files: src/session/history.ts, src/session/history.test.ts, src/session/historyCompactRanges.test.ts, src/session/historyCompactPlanRetry.test.ts
+Files: src/session/history.ts, src/session/history.test.ts, src/session/historyArchiveRange.test.ts, src/session/historyCompactRanges.test.ts, src/session/historyCompactPlanRetry.test.ts
 
 ## Purpose
 
@@ -76,6 +76,7 @@ Transient compact-job Session clones preserve raw `effort`, `childModelDefault`,
 
 - `compactHistoryWithSummary` remains an exported manual façade over the current compact engine.
 - `getArchivedMessages` uses the SQLite archive authority; legacy JSONL compatibility is owned only by the startup migration.
+- `getArchivedMessages` derives the complete effective `availableRange` from archive statistics and reads selected records through the bounded sequence-range query. Point/range requests therefore do not materialize unrelated archive message payloads; result ordering/count/error semantics are unchanged.
 - Compact completion follows [D-context-compact-completion](../threads/context-compaction-and-recall.md#d-context-compact-completion); this unit does not define a second wire contract.
 
 ## Design decisions
