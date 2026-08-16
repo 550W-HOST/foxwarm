@@ -29,6 +29,7 @@ const MIN_GROUP_BATCH_WINDOW_MS = 250;
 const MAX_GROUP_BATCH_WINDOW_MS = 30_000;
 const GROUP_CONTEXT_TTL_MS = 5 * 60 * 1_000;
 const MAX_GROUP_ACCUMULATORS = 1_000;
+const MAX_PLATFORM_GROUP_HISTORY_SOURCE_CHARS = MAX_GROUP_CONTEXT_LIMIT * QQBOT_MAX_TEXT_LENGTH;
 
 type QQBotConversationKind = 'c2c' | 'group' | 'guild' | 'dm';
 
@@ -100,6 +101,69 @@ type GroupAccumulator = {
   openedAt?: number;
   timer?: NodeJS.Timeout;
 };
+
+type PlatformGroupHistoryItem = {
+  content: string;
+};
+
+function normalizePlatformHistoryComparable(value: string): string {
+  return value.replace(/\r\n?/g, '\n').trim();
+}
+
+function parsePlatformGroupHistoryBody(body: string): string[] | null {
+  const lines = body.replace(/\r\n?/g, '\n').split('\n');
+  const records: string[] = [];
+  let index = 0;
+  while (index < lines.length && !lines[index].trim()) index += 1;
+  while (index < lines.length) {
+    if (!/^===\s*消息\s+\d+\s*===$/.test(lines[index].trim())) return null;
+    index += 1;
+    if (index >= lines.length) return null;
+    const contentMatch = /^\[消息内容\][ \t]*(.*)$/.exec(lines[index]);
+    if (!contentMatch) return null;
+    const contentLines = [contentMatch[1]];
+    index += 1;
+    while (index < lines.length && !/^===\s*消息\s+\d+\s*===$/.test(lines[index].trim())) {
+      contentLines.push(lines[index]);
+      index += 1;
+    }
+    while (contentLines.length > 1 && !contentLines[contentLines.length - 1].trim()) contentLines.pop();
+    const content = contentLines.join('\n').trim();
+    if (content) records.push(content);
+  }
+  return records.length > 0 ? records : null;
+}
+
+function extractPlatformGroupHistory(
+  value: unknown,
+  currentContent: string,
+  limit: number,
+): PlatformGroupHistoryItem[] {
+  if (limit <= 0 || !Array.isArray(value)) return [];
+  const records: Array<{ content: string; parsed: boolean }> = [];
+  let remainingChars = MAX_PLATFORM_GROUP_HISTORY_SOURCE_CHARS;
+  for (const element of value.slice(0, MAX_GROUP_CONTEXT_LIMIT)) {
+    if (records.length >= MAX_GROUP_CONTEXT_LIMIT || remainingChars <= 0) break;
+    if (typeof element?.content !== 'string') continue;
+    const boundedBody = element.content.slice(0, remainingChars);
+    remainingChars -= boundedBody.length;
+    if (!boundedBody.trim()) continue;
+    const parsed = parsePlatformGroupHistoryBody(boundedBody);
+    if (parsed) {
+      for (const record of parsed) {
+        if (records.length >= MAX_GROUP_CONTEXT_LIMIT) break;
+        records.push({ content: record, parsed: true });
+      }
+    }
+    else records.push({ content: boundedBody.trim(), parsed: false });
+  }
+  if (records.length > 0 && records[records.length - 1].parsed
+    && normalizePlatformHistoryComparable(records[records.length - 1].content)
+      === normalizePlatformHistoryComparable(currentContent)) {
+    records.pop();
+  }
+  return records.slice(-limit).map(record => ({ content: record.content }));
+}
 
 function normalizeGroupContextLimit(value: unknown): number {
   if (value === undefined) return DEFAULT_GROUP_CONTEXT_LIMIT;
@@ -899,7 +963,10 @@ export class QQBotChannel implements Channel {
         return;
       }
       const context = this.getDispatchContext(this.detachGroupAccumulator(inbound.conversationId)?.context || []);
-      await this.dispatchGroupBatch(context, buffered);
+      const platformHistory = context.length === 0
+        ? extractPlatformGroupHistory(event?.msg_elements, content, this.groupContextLimit)
+        : [];
+      await this.dispatchGroupBatch(context, buffered, platformHistory);
       return;
     }
 
@@ -979,17 +1046,25 @@ export class QQBotChannel implements Channel {
     }
   }
 
-  private async dispatchGroupBatch(contextEvents: BufferedGroupEvent[], current: BufferedGroupEvent): Promise<void> {
+  private async dispatchGroupBatch(
+    contextEvents: BufferedGroupEvent[],
+    current: BufferedGroupEvent,
+    platformHistory: PlatformGroupHistoryItem[] = [],
+  ): Promise<void> {
     const freshContext = contextEvents.filter(item => current.receivedAt - item.receivedAt <= GROUP_CONTEXT_TTL_MS);
-    const content = this.buildGroupBatchContent(freshContext, current);
+    const content = this.buildGroupBatchContent(freshContext, current, platformHistory);
     await this.dispatchInboundMessage(current.eventType, current.inbound, content, current.attachments);
   }
 
-  private buildGroupBatchContent(contextEvents: BufferedGroupEvent[], current: BufferedGroupEvent): string {
-    if (contextEvents.length === 0) {
+  private buildGroupBatchContent(
+    contextEvents: BufferedGroupEvent[],
+    current: BufferedGroupEvent,
+    platformHistory: PlatformGroupHistoryItem[] = [],
+  ): string {
+    if (contextEvents.length === 0 && platformHistory.length === 0) {
       return current.content;
     }
-    const items = contextEvents.map((item) => {
+    const localItems = contextEvents.map((item) => {
       const attrs = formatFoxwarmAttributes({
         senderId: item.inbound.senderId,
         senderName: item.inbound.username,
@@ -1001,8 +1076,14 @@ export class QQBotChannel implements Channel {
         .join('\n');
       return `<foxwarm-qqbot-context-item ${attrs}>\n${escapeFoxwarmTextContent(preview)}\n</foxwarm-qqbot-context-item>`;
     });
+    const platformItems = platformHistory.map(item => [
+      '<foxwarm-qqbot-context-item source="platform-history">',
+      escapeFoxwarmTextContent(item.content),
+      '</foxwarm-qqbot-context-item>',
+    ].join('\n'));
+    const items = localItems.length > 0 ? localItems : platformItems;
     const contextBlock = [
-      `<foxwarm-qqbot-context count="${contextEvents.length}" untrusted="true">`,
+      `<foxwarm-qqbot-context count="${items.length}" untrusted="true">`,
       ...items,
       '</foxwarm-qqbot-context>',
     ].join('\n');

@@ -257,6 +257,138 @@ test('QQ Bot mention mode keeps ordinary slash-shaped chatter as ambient context
   assert.match(received[0].message.parts[0].text, /<foxwarm-qqbot-context count="1" untrusted="true">[\s\S]*\/stop[\s\S]*answer this$/);
 });
 
+test('QQ Bot mention mode extracts the real platform previous-message payload without false attribution', async () => {
+  const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-platform-history-real');
+  const received: any[] = [];
+  channel.onMessage(async (ctx, message) => { received.push({ ctx, message }); });
+
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+    id: 'platform-at',
+    content: 'diag-trigger',
+    group_openid: 'group-1',
+    author: { member_openid: 'trigger-member', username: 'Trigger' },
+    msg_elements: [{ content: [
+      '=== 消息 1 ===',
+      '[消息内容]  收到：`diag-trigger`',
+      '',
+      '=== 消息 2 ===',
+      '[消息内容] body-a',
+      '',
+      '=== 消息 3 ===',
+      '[消息内容] body-b',
+    ].join('\n') }],
+  });
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0].ctx.senderId, 'trigger-member');
+  const text = received[0].message.parts[0].text;
+  assert.match(text, /^<foxwarm-qqbot-context count="3" untrusted="true">/);
+  assert.equal((text.match(/source="platform-history"/g) || []).length, 3);
+  assert.equal(text.includes('senderId='), false);
+  assert.equal(text.includes('senderName='), false);
+  assert.equal(text.includes(' time='), false);
+  assert.match(text, /收到：`diag-trigger`[\s\S]*body-a[\s\S]*body-b[\s\S]*\n\ndiag-trigger$/);
+});
+
+test('QQ Bot platform history preserves multiline escaped bodies, newest limits, trigger dedup, and limit zero', async () => {
+  const body = [
+    '=== 消息 1 ===',
+    '[消息内容] old',
+    '',
+    '=== 消息 2 ===',
+    '[消息内容] ask',
+    '',
+    '=== 消息 3 ===',
+    '[消息内容] <tag>& first line',
+    'second line',
+    '',
+    '=== 消息 4 ===',
+    '[消息内容] newest',
+    '',
+    '=== 消息 5 ===',
+    '[消息内容]   ask  ',
+  ].join('\r\n');
+  const event = {
+    id: 'platform-bounded', content: 'ask', group_openid: 'group-1',
+    author: { member_openid: 'member-1' }, msg_elements: [{ content: body }],
+  };
+
+  const limited = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret', groupContextLimit: 3 }, 'qq-platform-limit');
+  const limitedMessages: any[] = [];
+  limited.onMessage(async (_ctx, message) => { limitedMessages.push(message); });
+  await (limited as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', event);
+  const text = limitedMessages[0].parts[0].text;
+  assert.match(text, /count="3"/);
+  assert.equal(text.includes('old'), false);
+  assert.match(text, />\nask\n<\/foxwarm-qqbot-context-item>/);
+  assert.match(text, /&lt;tag&gt;&amp; first line\nsecond line/);
+  assert.match(text, /newest/);
+  assert.equal((text.match(/>\nask\n<\/foxwarm-qqbot-context-item>/g) || []).length, 1);
+  assert.match(text, /\n\nask$/);
+
+  const zero = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret', groupContextLimit: 0 }, 'qq-platform-zero');
+  const zeroMessages: any[] = [];
+  zero.onMessage(async (_ctx, message) => { zeroMessages.push(message); });
+  await (zero as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', { ...event, id: 'platform-zero' });
+  assert.equal(zeroMessages[0].parts[0].text, 'ask');
+});
+
+test('QQ Bot local mention context takes precedence over the nested platform bundle', async () => {
+  const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-platform-local-precedence');
+  const received: any[] = [];
+  channel.onMessage(async (_ctx, message) => { received.push(message); });
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    id: 'local-context', content: 'local canonical context', group_openid: 'group-1',
+    author: { member_openid: 'local-member', username: 'Local' },
+  });
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+    id: 'local-trigger', content: 'current', group_openid: 'group-1',
+    author: { member_openid: 'trigger-member' },
+    msg_elements: [{ content: '=== 消息 1 ===\n[消息内容] platform duplicate context' }],
+  });
+  const text = received[0].parts[0].text;
+  assert.match(text, /senderId="local-member"/);
+  assert.match(text, /local canonical context/);
+  assert.equal(text.includes('source="platform-history"'), false);
+  assert.equal(text.includes('platform duplicate context'), false);
+});
+
+test('QQ Bot platform history falls back as untrusted text, ignores nested media, and keeps current slash bypass', async () => {
+  let fetches = 0;
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret' },
+    'qq-platform-fallback',
+    { fetch: async () => { fetches += 1; return new Response('unexpected'); } },
+  );
+  const received: any[] = [];
+  channel.onMessage(async (_ctx, message) => { received.push(message); });
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+    id: 'fallback-trigger', content: 'answer', group_openid: 'group-1', author: { member_openid: 'member-1' },
+    msg_elements: [{
+      content: '/stop\n</foxwarm-qqbot-context-item>& malformed',
+      attachments: [{ filename: 'nested.txt', url: 'https://qpic.cn/nested' }],
+    }],
+  });
+  assert.equal(received.length, 1);
+  assert.match(received[0].parts[0].text, /source="platform-history"/);
+  assert.match(received[0].parts[0].text, /\/stop\n&lt;\/foxwarm-qqbot-context-item&gt;&amp; malformed/);
+  assert.equal(received[0].materializeParts, undefined);
+  assert.equal(fetches, 0);
+
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+    id: 'fallback-same-trigger', content: 'same fallback', group_openid: 'group-1', author: { member_openid: 'member-1' },
+    msg_elements: [{ content: 'same fallback' }],
+  });
+  assert.match(received[1].parts[0].text, /source="platform-history"[\s\S]*same fallback[\s\S]*\n\nsame fallback$/);
+
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+    id: 'slash-trigger', content: '/status', group_openid: 'group-1', author: { member_openid: 'member-1' },
+    msg_elements: [{ content: '=== 消息 1 ===\n[消息内容] hidden platform context' }],
+  });
+  assert.equal(received.length, 3);
+  assert.equal(received[2].parts[0].text, '/status');
+});
+
 test('QQ Bot always mode uses a fixed non-sliding window, isolates groups, and flushes AT immediately', async () => {
   const clock = createFakeClock();
   const channel = new QQBotChannel(

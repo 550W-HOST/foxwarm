@@ -233,13 +233,20 @@ introduces no new node protocol or configuration.
 
 `QQBotConfig.requireMention` defaults to `true`. One configured adapter owns a
 bounded in-memory accumulator per scoped group so the same implementation works
-with QQ platform delivery configured as AT-only, AT plus a replay of previous
-group messages, or all group messages.
+with QQ platform delivery configured as AT-only, AT plus previous group
+messages, or all group messages. QQ's AT-plus-history mode may deliver exactly
+one `GROUP_AT_MESSAGE_CREATE` whose `msg_elements[*].content` contains the
+previous-message bundle instead of replaying ordinary gateway frames.
 
 When mention is required, ordinary `GROUP_MESSAGE_CREATE` events are untrusted
 context only. The adapter keeps the latest `groupContextLimit` entries and
 flushes them with one later `GROUP_AT_MESSAGE_CREATE` as exactly one
-`ChannelMessage` and one Router call. When mention is not required, the first
+`ChannelMessage` and one Router call. When no local context exists, the adapter
+may instead parse the bounded platform history bundle from the AT event. These
+records remain untrusted context and use `source="platform-history"` without
+sender/time attributes because QQ does not provide that attribution in the
+bundle; local sender-labelled context takes precedence to avoid duplicates.
+When mention is not required, the first
 ordinary event opens a fixed, non-sliding `groupBatchWindowMs` window; later
 ordinary events join without moving the deadline. The latest event is the
 current trigger, previous events are context, and AT or current-message media
