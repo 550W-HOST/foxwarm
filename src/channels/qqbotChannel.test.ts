@@ -58,6 +58,9 @@ function emitGateway(socket: FakeSocket, frame: object): void {
   socket.emit('message', Buffer.from(JSON.stringify(frame)));
 }
 
+const QQ_GROUP_MENTIONED_METADATA = '<foxwarm-metadata kind="group-message" mentioned="true" hint="The current group message explicitly mentioned this agent." />';
+const QQ_GROUP_ORDINARY_METADATA = '<foxwarm-metadata kind="group-message" mentioned="false" hint="The current group message is ordinary group chat and did not mention this agent." />';
+
 function activateForDirectSend(channel: QQBotChannel): void {
   (channel as any).stopped = false;
   (channel as any).connectionGeneration = 1;
@@ -223,6 +226,7 @@ test('QQ Bot mention mode buffers ordinary context, upgrades duplicate AT delive
   assert.equal(received.length, 1);
   assert.equal(received[0].ctx.senderId, 'member-2');
   assert.equal(received[0].ctx.qqbotMessageId, 'trigger-1');
+  assert.deepEqual(received[0].message.ingressMetadataParts, [{ system: QQ_GROUP_MENTIONED_METADATA }]);
   const text = received[0].message.parts[0].text;
   assert.match(text, /^<foxwarm-qqbot-context count="1" untrusted="true">/);
   assert.match(text, /senderId="member-1" senderName="A &quot;quoted&quot; &amp; named" time="2023-11-14T22:13:20.000Z"/);
@@ -237,6 +241,7 @@ test('QQ Bot mention mode buffers ordinary context, upgrades duplicate AT delive
     id: 'at-only', content: 'direct mention', group_openid: 'group-1', author: { member_openid: 'member-3' },
   });
   assert.equal(received[1].message.parts[0].text, 'direct mention');
+  assert.deepEqual(received[1].message.ingressMetadataParts, [{ system: QQ_GROUP_MENTIONED_METADATA }]);
 });
 
 test('QQ Bot mention mode keeps ordinary slash-shaped chatter as ambient context', async () => {
@@ -411,17 +416,20 @@ test('QQ Bot always mode uses a fixed non-sliding window, isolates groups, and f
   await clock.advance(1);
   assert.equal(received.length, 1);
   assert.equal(received[0].ctx.conversationId, 'group:group-1');
+  assert.deepEqual(received[0].message.ingressMetadataParts, [{ system: QQ_GROUP_ORDINARY_METADATA }]);
   assert.match(received[0].message.parts[0].text, /first[\s\S]*second$/);
 
   await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', ordinary('g1-3', 'before at'));
   await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', ordinary('g1-at', 'urgent at'));
   assert.equal(received.length, 2);
   assert.equal(received[1].ctx.qqbotMessageId, 'g1-at');
+  assert.deepEqual(received[1].message.ingressMetadataParts, [{ system: QQ_GROUP_MENTIONED_METADATA }]);
   assert.match(received[1].message.parts[0].text, /before at[\s\S]*urgent at$/);
   await clock.advance(4_000);
   assert.equal(received.length, 3);
   assert.equal(received[2].ctx.conversationId, 'group:group-2');
   assert.equal(received[2].message.parts[0].text, 'other group');
+  assert.deepEqual(received[2].message.ingressMetadataParts, [{ system: QQ_GROUP_ORDINARY_METADATA }]);
 });
 
 test('QQ Bot group context applies bounds, while slash and current media are immediate boundaries', async () => {
@@ -473,6 +481,7 @@ test('QQ Bot group context applies bounds, while slash and current media are imm
   const media = received.at(-1);
   assert.equal(fetches, 0);
   assert.equal(typeof media.message.materializeParts, 'function');
+  assert.deepEqual(media.message.ingressMetadataParts, [{ system: QQ_GROUP_ORDINARY_METADATA }]);
   assert.match(media.message.parts.map((part: any) => part.text || '').join('\n'), /before image[\s\S]*current\.txt/);
   const materialized = await media.message.materializeParts('session-current-media');
   assert.equal(fetches, 1);
@@ -583,10 +592,12 @@ test('QQ Bot accepts C2C/group attachment-only turns with safe metadata and keep
 
   assert.equal(received.length, 2);
   assert.equal(received[0].ctx.conversationId, 'c2c:openid-1');
+  assert.equal(received[0].message.ingressMetadataParts, undefined);
   assert.match(received[0].message.parts[0].text || '', /first\.png/);
   assert.match(received[0].message.parts[1].text || '', /second\.txt/);
   assert.equal(typeof received[0].message.materializeParts, 'function');
   assert.equal(received[1].ctx.conversationId, 'group:group-1');
+  assert.deepEqual(received[1].message.ingressMetadataParts, [{ system: QQ_GROUP_MENTIONED_METADATA }]);
   assert.match(received[1].message.parts[0].text || '', /group\.bin/);
 });
 
@@ -853,7 +864,8 @@ test('QQ Bot group busy follow-up joins the active tool loop and one final uses 
     assert.equal(session.queue.length, 0);
     const userMessages = session.history.filter(message => message.role === 'user');
     assert.equal(userMessages.length, 2);
-    assert.equal(userMessages.some(message => message.parts.some(part => part.system?.includes('second steering'))), true);
+    assert.equal(userMessages.some(message => message.parts.some(part => part.text === 'second steering')), true);
+    assert.equal(userMessages.every(message => message.parts.some(part => part.system === QQ_GROUP_MENTIONED_METADATA)), true);
     const finals = outbound.filter(call => call.body.content === 'combined final');
     assert.equal(finals.length, 1);
     assert.equal(finals[0].body.msg_id, 'qq-2');

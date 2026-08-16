@@ -31,6 +31,11 @@ authorization-gated media. It is not a persisted queue field; adapters use it
 only when a router can defer network/storage work until after canonical source
 authorization.
 
+`ChannelMessage.ingressMetadataParts` is the parallel ephemeral structured
+metadata boundary. Router placement and current-group-trigger semantics are
+canonical in
+[D-channel-current-group-trigger-metadata](../modules/channels.md#d-channel-current-group-trigger-metadata).
+
 ## Registry and authorization
 
 - The registry is one in-memory map keyed by channel instance ID.

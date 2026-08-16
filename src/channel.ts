@@ -7,6 +7,12 @@ import { MessagePart } from './types';
 
 export interface ChannelMessage {
   parts: MessagePart[];
+  /**
+   * Ephemeral structured metadata inserted inside the canonical channel
+   * wrapper after command detection. The router copies these parts into the
+   * queued user message; this field itself is never persisted.
+   */
+  ingressMetadataParts?: MessagePart[];
   channelUserId: string; // Legacy field: channel-side conversation/chat/room target id
   conversationId?: string; // Preferred name for channel-side conversation/chat/room target id
   username?: string;

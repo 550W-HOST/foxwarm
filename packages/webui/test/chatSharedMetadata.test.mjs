@@ -54,6 +54,25 @@ test('foxwarm metadata tags are recognized as system-like small metadata lines',
   }
 })
 
+test('QQ group mention metadata remains lightweight direct-user metadata', () => {
+  for (const [mentioned, hint] of [
+    ['true', 'The current group message explicitly mentioned this agent.'],
+    ['false', 'The current group message is ordinary group chat and did not mention this agent.'],
+  ]) {
+    const line = `<foxwarm-metadata kind="group-message" mentioned="${mentioned}" hint="${hint}" />`
+    assert.deepEqual(parseFoxwarmMetadataLine(line), {
+      tagName: 'foxwarm-metadata',
+      closing: false,
+      attrs: { kind: 'group-message', mentioned, hint },
+    })
+    assert.equal(isFoxwarmMetadataLine(line), true)
+    assert.equal(isLightweightStructuredSystem(line), true)
+    assert.equal(isLightweightSystemTextLine(line), true)
+    assert.equal(isHeavySystemTextLine(line), false)
+    assert.equal(isCollapsibleSystemText(line), false)
+  }
+})
+
 test('attachment descriptor tags parse as lightweight direct-user metadata', () => {
   const file = '<foxwarm-file name="a&amp;b.txt" node="master" path="/tmp/a&amp;b.txt" mime="text/plain" />'
   assert.deepEqual(parseFoxwarmMetadataLine(file), {

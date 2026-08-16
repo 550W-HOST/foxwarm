@@ -106,6 +106,19 @@ type PlatformGroupHistoryItem = {
   content: string;
 };
 
+function buildQQBotGroupTriggerMetadata(eventType: string): { system: string } | undefined {
+  if (eventType !== 'GROUP_AT_MESSAGE_CREATE' && eventType !== 'GROUP_MESSAGE_CREATE') return undefined;
+  const mentioned = eventType === 'GROUP_AT_MESSAGE_CREATE';
+  const attrs = formatFoxwarmAttributes({
+    kind: 'group-message',
+    mentioned: mentioned ? 'true' : 'false',
+    hint: mentioned
+      ? 'The current group message explicitly mentioned this agent.'
+      : 'The current group message is ordinary group chat and did not mention this agent.',
+  });
+  return { system: `<foxwarm-metadata ${attrs} />` };
+}
+
 function normalizePlatformHistoryComparable(value: string): string {
   return value.replace(/\r\n?/g, '\n').trim();
 }
@@ -1021,6 +1034,9 @@ export class QQBotChannel implements Channel {
       parts: attachments.length > 0 && supportsInboundMedia
         ? buildQQBotAttachmentPreviewParts(content, attachments, this.mediaConfig)
         : [{ text: content }],
+      ...(inbound.kind === 'group'
+        ? { ingressMetadataParts: [buildQQBotGroupTriggerMetadata(eventType)!] }
+        : {}),
       channelUserId: inbound.conversationId,
       conversationId: inbound.conversationId,
       username: inbound.username,

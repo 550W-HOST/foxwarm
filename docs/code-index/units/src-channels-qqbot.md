@@ -65,6 +65,10 @@ upload flow.
   bytes with references. Voice prefers an allowlisted WAV URL and preserves
   bounded ASR reference text. Guild channel/DM media remains unsupported, and
   empty guild/DM events are ignored; nested attachments remain deferred.
+- QQ group current triggers attach the native AT/ordinary distinction through
+  the generic channel-ingress metadata boundary. Exact grammar, command
+  ordering, persistence, and no-guess behavior are canonical in
+  [D-channel-current-group-trigger-metadata](../modules/channels.md#d-channel-current-group-trigger-metadata).
 - Attachment materialization uses HTTPS-only allowlisted hosts, manually
   revalidates each redirect, forwards no bot authorization/cookies, streams to
   a bounded temporary file with a timeout, enforces per-file/total/count

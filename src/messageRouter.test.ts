@@ -6,6 +6,9 @@ import * as sessionHistory from './session/history';
 import * as llm from './llm';
 import type { Message, MessagePart, Session } from './types';
 
+const GROUP_MENTIONED_METADATA = '<foxwarm-metadata kind="group-message" mentioned="true" hint="The current group message explicitly mentioned this agent." />';
+const GROUP_ORDINARY_METADATA = '<foxwarm-metadata kind="group-message" mentioned="false" hint="The current group message is ordinary group chat and did not mention this agent." />';
+
 function makeRouterQueueTestId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -111,6 +114,7 @@ test('MessageRouter materializes deferred channel media only after canonical aut
     router.resolveSessionForIncomingMessage = async () => ({ sessionId: session.id, session });
     await router.handleMessage(ctx, {
       ...deferred,
+      ingressMetadataParts: [{ system: GROUP_ORDINARY_METADATA }],
       materializeParts: async (sessionId: string) => {
         materializeCount += 1;
         assert.equal(sessionId, session.id);
@@ -118,8 +122,11 @@ test('MessageRouter materializes deferred channel media only after canonical aut
       },
     });
     assert.equal(materializeCount, 1);
-    assert.equal(queued[0].parts.length, 1);
-    assert.match(queued[0].parts[0].system || '', /downloaded image/);
+    assert.equal(queued[0].parts.length, 4);
+    assert.match(queued[0].parts[0].system || '', /^<foxwarm-message /);
+    assert.equal(queued[0].parts[1].system, GROUP_ORDINARY_METADATA);
+    assert.equal(queued[0].parts[2].text, 'downloaded image');
+    assert.equal(queued[0].parts[3].system, '</foxwarm-message>');
   } finally {
     (sessionManager as any).enqueueSessionItem = originalEnqueue;
   }
@@ -413,6 +420,97 @@ test('MessageRouter does not inject source prefix twice for drained queued parts
   assert.match(sourcePart?.system || '', /\n在吗\n<\/foxwarm-message>$/);
   assert.match(sourcePart?.system || '', /time="\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}"/);
   assert.equal(queueItem.clientMessageId, 'webui-client-message-1');
+});
+
+test('MessageRouter keeps channel ingress metadata in one serializable queued/history user message', async () => {
+  const router = new MessageRouter() as any;
+  const ctx = {
+    channelUserId: 'group:group-a', conversationId: 'group:group-a',
+    channelId: 'qq-a', channelType: 'qqbot', platform: 'qqbot',
+    username: 'member-a', senderId: 'member-a',
+    reply: async () => {}, sendTyping: async () => {},
+  };
+  const queueItem = router.buildChannelUserQueueItem(ctx, {
+    parts: [{ text: 'current group text' }],
+    ingressMetadataParts: [{ system: GROUP_MENTIONED_METADATA }],
+    channelUserId: 'group:group-a', conversationId: 'group:group-a',
+  });
+  const roundTrip = JSON.parse(JSON.stringify(queueItem));
+  assert.equal(roundTrip.parts.length, 4);
+  assert.match(roundTrip.parts[0].system, /^<foxwarm-message /);
+  assert.equal(roundTrip.parts[1].system, GROUP_MENTIONED_METADATA);
+  assert.equal(roundTrip.parts[2].text, 'current group text');
+  assert.equal(roundTrip.parts[3].system, '</foxwarm-message>');
+  assert.equal('ingressMetadataParts' in roundTrip, false);
+
+  const session = await createRouterQueueTestSession('group_ingress_metadata');
+  try {
+    await router.turnRunner.appendQueuedTurnInputs(session, session.id, [roundTrip]);
+    assert.equal(session.history.length, 1);
+    assert.equal(countHistoryPartSystem(session.history, GROUP_MENTIONED_METADATA), 1);
+    assert.equal(countHistoryPartText(session.history, 'current group text'), 1);
+  } finally {
+    await sessionManager.deleteSession(session.id).catch(() => {});
+  }
+});
+
+test('MessageRouter submits channel ingress metadata as ordinary Worker-serializable parts', async () => {
+  const submitted: any[] = [];
+  const session = { id: 'worker-group-metadata', busy: false, queue: [], meta: {} } as any;
+  const router = new MessageRouter(
+    [{ platform: 'qqbot', userId: 'member-a' }],
+    async (sessionId, item) => {
+      submitted.push({ sessionId, item: JSON.parse(JSON.stringify(item)) });
+      return { status: 'accepted' } as any;
+    },
+  ) as any;
+  router.resolveSessionForIncomingMessage = async () => ({ sessionId: session.id, session });
+
+  await router.handleMessage({
+    channelUserId: 'group:group-a', conversationId: 'group:group-a',
+    channelId: 'qq-a', channelType: 'qqbot', platform: 'qqbot',
+    username: 'member-a', senderId: 'member-a',
+    reply: async () => {}, sendTyping: async () => {},
+  }, {
+    parts: [{ text: 'worker current' }],
+    ingressMetadataParts: [{ system: GROUP_MENTIONED_METADATA }],
+    channelUserId: 'group:group-a', conversationId: 'group:group-a',
+  });
+
+  assert.equal(submitted.length, 1);
+  assert.equal(submitted[0].sessionId, session.id);
+  assert.equal(submitted[0].item.parts[1].system, GROUP_MENTIONED_METADATA);
+  assert.equal(submitted[0].item.parts[2].text, 'worker current');
+  assert.equal('ingressMetadataParts' in submitted[0].item, false);
+});
+
+test('MessageRouter detects commands before channel ingress metadata injection', async () => {
+  const originalEnqueue = sessionManager.enqueueSessionItem;
+  const router = new MessageRouter() as any;
+  const calls: Array<{ command: string; args: string[]; rawArgs?: string }> = [];
+  let enqueueCount = 0;
+  (sessionManager as any).enqueueSessionItem = async () => { enqueueCount += 1; };
+  router.isAuthorized = () => true;
+  router.setCommandHandler(async (_ctx: any, command: string, args: string[], rawArgs?: string) => {
+    calls.push({ command, args, rawArgs });
+    return true;
+  });
+  try {
+    await router.handleMessage({
+      channelUserId: 'group:group-a', conversationId: 'group:group-a',
+      channelId: 'qq-a', channelType: 'qqbot', platform: 'qqbot',
+      username: 'member-a', senderId: 'member-a',
+      reply: async () => {}, sendTyping: async () => {},
+    }, {
+      parts: [{ text: '/session list' }],
+      ingressMetadataParts: [{ system: GROUP_MENTIONED_METADATA }],
+      channelUserId: 'group:group-a', conversationId: 'group:group-a',
+    });
+    assert.deepEqual(calls, [{ command: '/session', args: ['list'], rawArgs: 'list' }]);
+    assert.equal(enqueueCount, 0);
+  } finally {
+    (sessionManager as any).enqueueSessionItem = originalEnqueue;
+  }
 });
 
 test('MessageRouter persists each queued WebUI client message identity on its user row', async () => {

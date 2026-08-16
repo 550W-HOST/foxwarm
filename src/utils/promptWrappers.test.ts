@@ -50,6 +50,9 @@ test('foxwarm metadata recognizer and parser handle opening and closing tags', (
     attrs: { type: 'channel', channelInstanceId: 'tg<&', conversationId: 'chat' },
   });
   assert.equal(isFoxwarmMetadataLine(formatFoxwarmMessageClose()), true);
+  const groupMention = '<foxwarm-metadata kind="group-message" mentioned="true" hint="The current group message explicitly mentioned this agent." />';
+  assert.equal(isFoxwarmMetadataLine(groupMention), true);
+  assert.equal(formatSystemPartForModel(groupMention), groupMention);
   assert.deepEqual(parseFoxwarmTagLine(formatFoxwarmMessageClose()), {
     tagName: 'foxwarm-message',
     closing: true,
