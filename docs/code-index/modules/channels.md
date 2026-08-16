@@ -117,6 +117,14 @@ QQ group ingress uses exactly:
 - Mention trigger: `<foxwarm-metadata kind="group-message" mentioned="true" hint="The current group message explicitly mentioned this agent." />`
 - Ordinary trigger: `<foxwarm-metadata kind="group-message" mentioned="false" hint="The current group message is ordinary group chat and did not mention this agent." />`
 
+QQ treats the current trigger as mentioned only when the native event is
+`GROUP_AT_MESSAGE_CREATE` or a bounded structured `mentions` entry has
+`is_you === true`. The latter is authoritative for all-message mode, where QQ
+can deliver a real self-mention as `GROUP_MESSAGE_CREATE`. `bot: true` alone,
+content `<@...>` tokens, configured app IDs, READY identities, display names,
+and learned/persisted IDs are not mention signals. Missing, malformed, or
+false `is_you` remains an ordinary QQ group trigger.
+
 The marker describes only the current trigger, never buffered/local/platform
 history. It is lightweight direct-user metadata in WebUI, not a heavy system
 card.

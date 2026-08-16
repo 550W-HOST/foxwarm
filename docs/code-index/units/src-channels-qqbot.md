@@ -65,9 +65,10 @@ upload flow.
   bytes with references. Voice prefers an allowlisted WAV URL and preserves
   bounded ASR reference text. Guild channel/DM media remains unsupported, and
   empty guild/DM events are ignored; nested attachments remain deferred.
-- QQ group current triggers attach the native AT/ordinary distinction through
-  the generic channel-ingress metadata boundary. Exact grammar, command
-  ordering, persistence, and no-guess behavior are canonical in
+- QQ group current triggers attach the adapter's reliable current-mention
+  classification through the generic channel-ingress metadata boundary. The
+  same classification drives mention policy and batch flushing. Exact signals,
+  grammar, command ordering, persistence, and no-guess behavior are canonical in
   [D-channel-current-group-trigger-metadata](../modules/channels.md#d-channel-current-group-trigger-metadata).
 - Attachment materialization uses HTTPS-only allowlisted hosts, manually
   revalidates each redirect, forwards no bot authorization/cookies, streams to
@@ -242,9 +243,9 @@ messages, or all group messages. QQ's AT-plus-history mode may deliver exactly
 one `GROUP_AT_MESSAGE_CREATE` whose `msg_elements[*].content` contains the
 previous-message bundle instead of replaying ordinary gateway frames.
 
-When mention is required, ordinary `GROUP_MESSAGE_CREATE` events are untrusted
-context only. The adapter keeps the latest `groupContextLimit` entries and
-flushes them with one later `GROUP_AT_MESSAGE_CREATE` as exactly one
+When mention is required, group events not classified as a current mention are
+untrusted context only. The adapter keeps the latest `groupContextLimit`
+entries and flushes them with one later mention trigger as exactly one
 `ChannelMessage` and one Router call. When no local context exists, the adapter
 may instead parse the bounded platform history bundle from the AT event. These
 records remain untrusted context and use `source="platform-history"` without
@@ -253,8 +254,8 @@ bundle; local sender-labelled context takes precedence to avoid duplicates.
 When mention is not required, the first
 ordinary event opens a fixed, non-sliding `groupBatchWindowMs` window; later
 ordinary events join without moving the deadline. The latest event is the
-current trigger, previous events are context, and AT or current-message media
-flushes immediately. A zero window preserves immediate per-event routing.
+current trigger, previous events are context, and a mention trigger or
+current-message media flushes immediately. A zero window preserves immediate per-event routing.
 Slash-command triggers bypass aggregation, clear pending context, and retain
 the Router's existing command parser input.
 
@@ -270,7 +271,7 @@ keeps at most 1,000 group accumulators. Stop/reload clears timers and buffers;
 gateway reconnect/resume preserves them. A flush detaches state before awaiting
 the Router, retains ordinary busy-queue behavior, and has no retry/outbox.
 
-AT and ordinary forms share the existing canonical business dedup namespace.
+Mention and ordinary native forms share the existing canonical business dedup namespace.
 The live buffer is checked first so an ordinary representation can be upgraded
 in place by a later AT representation rather than appearing twice or suppressing
 the trigger. A true proactive failure such as QQ `40034105` remains a platform

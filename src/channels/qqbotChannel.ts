@@ -29,6 +29,7 @@ const MIN_GROUP_BATCH_WINDOW_MS = 250;
 const MAX_GROUP_BATCH_WINDOW_MS = 30_000;
 const GROUP_CONTEXT_TTL_MS = 5 * 60 * 1_000;
 const MAX_GROUP_ACCUMULATORS = 1_000;
+const MAX_GROUP_MENTION_ENTRIES = 64;
 const MAX_PLATFORM_GROUP_HISTORY_SOURCE_CHARS = MAX_GROUP_CONTEXT_LIMIT * QQBOT_MAX_TEXT_LENGTH;
 
 type QQBotConversationKind = 'c2c' | 'group' | 'guild' | 'dm';
@@ -93,6 +94,7 @@ type BufferedGroupEvent = {
   inbound: NormalizedInboundEvent;
   content: string;
   attachments: unknown[];
+  mentioned: boolean;
 };
 
 type GroupAccumulator = {
@@ -106,9 +108,15 @@ type PlatformGroupHistoryItem = {
   content: string;
 };
 
-function buildQQBotGroupTriggerMetadata(eventType: string): { system: string } | undefined {
-  if (eventType !== 'GROUP_AT_MESSAGE_CREATE' && eventType !== 'GROUP_MESSAGE_CREATE') return undefined;
-  const mentioned = eventType === 'GROUP_AT_MESSAGE_CREATE';
+function isQQBotGroupMention(eventType: string, event: unknown): boolean {
+  if (eventType === 'GROUP_AT_MESSAGE_CREATE') return true;
+  if (eventType !== 'GROUP_MESSAGE_CREATE' || !Array.isArray((event as any)?.mentions)) return false;
+  return (event as any).mentions
+    .slice(0, MAX_GROUP_MENTION_ENTRIES)
+    .some((mention: unknown) => Boolean(mention && typeof mention === 'object' && (mention as any).is_you === true));
+}
+
+function buildQQBotGroupTriggerMetadata(mentioned: boolean): { system: string } {
   const attrs = formatFoxwarmAttributes({
     kind: 'group-message',
     mentioned: mentioned ? 'true' : 'false',
@@ -933,11 +941,12 @@ export class QQBotChannel implements Channel {
     sequence?: number,
   ): Promise<void> {
     const dedupKey = this.buildInboundEventKey(eventType, inbound.messageId, event);
+    const isMention = isQQBotGroupMention(eventType, event);
     let accumulator = this.getGroupAccumulator(inbound.conversationId);
     if (accumulator) this.pruneGroupAccumulator(accumulator);
     const bufferedDuplicate = accumulator ? this.findBufferedGroupEvent(accumulator, dedupKey) : undefined;
 
-    if (bufferedDuplicate && eventType !== 'GROUP_AT_MESSAGE_CREATE') {
+    if (bufferedDuplicate && !isMention) {
       logger.info({ channelId: this.channelId, eventType, messageId: inbound.messageId, sequence }, 'Ignoring duplicate buffered QQ Bot group event');
       return;
     }
@@ -960,13 +969,13 @@ export class QQBotChannel implements Channel {
       inbound,
       content,
       attachments,
+      mentioned: isMention,
     };
-    const isMention = eventType === 'GROUP_AT_MESSAGE_CREATE';
     const isSlashCommand = content.trimStart().startsWith('/');
 
     if (isSlashCommand && (isMention || !this.requireMention)) {
       this.clearGroupAccumulator(inbound.conversationId);
-      await this.dispatchInboundMessage(eventType, inbound, content, attachments);
+      await this.dispatchInboundMessage(eventType, inbound, content, attachments, isMention);
       return;
     }
 
@@ -1006,6 +1015,7 @@ export class QQBotChannel implements Channel {
     inbound: NormalizedInboundEvent,
     content: string,
     attachments: unknown[],
+    groupMentioned?: boolean,
   ): Promise<void> {
     this.rememberPassiveReplyContext(inbound.messageId);
     this.rememberLatestMessageId(inbound.conversationId, inbound.messageId);
@@ -1035,7 +1045,7 @@ export class QQBotChannel implements Channel {
         ? buildQQBotAttachmentPreviewParts(content, attachments, this.mediaConfig)
         : [{ text: content }],
       ...(inbound.kind === 'group'
-        ? { ingressMetadataParts: [buildQQBotGroupTriggerMetadata(eventType)!] }
+        ? { ingressMetadataParts: [buildQQBotGroupTriggerMetadata(groupMentioned === true)] }
         : {}),
       channelUserId: inbound.conversationId,
       conversationId: inbound.conversationId,
@@ -1069,7 +1079,7 @@ export class QQBotChannel implements Channel {
   ): Promise<void> {
     const freshContext = contextEvents.filter(item => current.receivedAt - item.receivedAt <= GROUP_CONTEXT_TTL_MS);
     const content = this.buildGroupBatchContent(freshContext, current, platformHistory);
-    await this.dispatchInboundMessage(current.eventType, current.inbound, content, current.attachments);
+    await this.dispatchInboundMessage(current.eventType, current.inbound, content, current.attachments, current.mentioned);
   }
 
   private buildGroupBatchContent(

@@ -191,6 +191,89 @@ test('QQ Bot keeps ordinary GROUP_MESSAGE_CREATE events ignored by the default m
   assert.equal(received.length, 0);
 });
 
+test('QQ Bot all-message mode trusts structured is_you mentions and preserves the current trigger through batching', async () => {
+  const clock = createFakeClock();
+  const channel = new QQBotChannel(
+    { appId: 'app-id', clientSecret: 'secret', requireMention: false, groupBatchWindowMs: 1_000 },
+    'qq-structured-mention-always',
+    { now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer },
+  );
+  const received: any[] = [];
+  channel.onMessage(async (ctx, message) => { received.push({ ctx, message }); });
+  const base = { group_openid: 'group-1', author: { member_openid: 'member-1' } };
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    ...base,
+    id: 'other-bot',
+    content: '<@other> ordinary context',
+    mentions: [{ is_you: false, bot: true, id: 'other', member_openid: 'other' }],
+  });
+  assert.equal(received.length, 0);
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    ...base,
+    id: 'structured-at',
+    content: '<@agent-token> reply ok',
+    mentions: [{ is_you: true, bot: true, scope: 'single', id: 'agent-token', member_openid: 'agent-token' }],
+  });
+  assert.equal(received.length, 1);
+  assert.deepEqual(received[0].message.ingressMetadataParts, [{ system: QQ_GROUP_MENTIONED_METADATA }]);
+  assert.match(received[0].message.parts[0].text, /ordinary context[\s\S]*<@agent-token> reply ok$/);
+
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+    ...base, id: 'structured-at', content: 'duplicate native AT',
+  });
+  assert.equal(received.length, 1);
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    ...base, id: 'content-only-marker', content: '<@agent-token> not structured', mentions: { is_you: true },
+  });
+  assert.equal(received.length, 1);
+  await clock.advance(1_000);
+  assert.equal(received.length, 2);
+  assert.deepEqual(received[1].message.ingressMetadataParts, [{ system: QQ_GROUP_ORDINARY_METADATA }]);
+
+  await (channel as any).routeInboundMessage('GROUP_AT_MESSAGE_CREATE', {
+    ...base, id: 'native-at', content: 'native AT without mentions',
+  });
+  assert.equal(received.length, 3);
+  assert.deepEqual(received[2].message.ingressMetadataParts, [{ system: QQ_GROUP_MENTIONED_METADATA }]);
+});
+
+test('QQ Bot mention-required mode routes structured is_you and keeps other/content-only mentions as context', async () => {
+  const channel = new QQBotChannel({ appId: 'app-id', clientSecret: 'secret' }, 'qq-structured-mention-required');
+  const received: any[] = [];
+  channel.onMessage(async (ctx, message) => { received.push({ ctx, message }); });
+  const base = { group_openid: 'group-1', author: { member_openid: 'member-1' } };
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    ...base,
+    id: 'other-mention-context',
+    content: 'mentioning another bot',
+    mentions: [{ is_you: false, bot: true, id: 'other-bot' }],
+  });
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    ...base,
+    id: 'guessed-marker-context',
+    content: '<@agent-token> content alone must not trigger',
+  });
+  assert.equal(received.length, 0);
+
+  await (channel as any).routeInboundMessage('GROUP_MESSAGE_CREATE', {
+    ...base,
+    id: 'real-structured-trigger',
+    content: '<@agent-token> real structured trigger',
+    mentions: [{ is_you: true, bot: true, scope: 'single', id: 'agent-token', member_openid: 'agent-token' }],
+  });
+  assert.equal(received.length, 1);
+  assert.deepEqual(received[0].message.ingressMetadataParts, [{ system: QQ_GROUP_MENTIONED_METADATA }]);
+  const text = received[0].message.parts[0].text;
+  assert.match(text, /^<foxwarm-qqbot-context count="2" untrusted="true">/);
+  assert.match(text, /mentioning another bot/);
+  assert.match(text, /content alone must not trigger/);
+  assert.match(text, /<@agent-token> real structured trigger$/);
+  assert.equal(text.includes('<foxwarm-metadata'), false);
+});
+
 test('QQ Bot mention mode buffers ordinary context, upgrades duplicate AT delivery, and emits escaped deterministic markup', async () => {
   const clock = createFakeClock();
   const channel = new QQBotChannel(
