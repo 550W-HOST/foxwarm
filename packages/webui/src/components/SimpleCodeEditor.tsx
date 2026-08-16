@@ -171,7 +171,7 @@ export default function SimpleCodeEditor({
       >
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-            Editor assistance is unavailable. Plain-text editing and backend validation still work.
+            Advanced editor features are unavailable. You can still edit and save this YAML.
           </div>
           <textarea
             ref={fallbackRef}

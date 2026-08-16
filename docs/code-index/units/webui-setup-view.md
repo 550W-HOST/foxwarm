@@ -31,13 +31,15 @@ The server retains structured `/setup/models` request handling and `/setup/model
 - The generated initial YAML defaults to `openai/gpt-5.6-sol` and lists `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
 - Raw model and app-config saves preserve user text after canonical backend validation. Comments, key order, quoting, custom fields, and formatting survive.
 - Each Models or Config save reports its success or validation error beside (or immediately below on narrow layouts) that section's own Save button using an announced status. Load and Weixin errors remain in the page-level error area.
+- Setup presents Models and Config as an accessible two-tab surface. The inactive panel is hidden while both editor instances remain mounted, preserving Monaco model/diagnostic lifecycle and each tab's local state without visibly stacking the editors.
+- The former checklist is removed. Completion/attention icons appear in the tab labels: Models reflects usable model configuration; Config reflects enabled channel health and omits its icon when no enabled channel provides a meaningful status. Disabled channels do not create attention state.
 - The two editors use distinct model URIs and static frontend schemas. Suggestions/markers are advisory and never disable Save; canonical behavior is [D-editor-local-yaml-assistance](./webui-editor.md#d-editor-local-yaml-assistance).
 - Both YAML editor wrappers use the exact responsive height `calc(min(600px, 80vh))`; the same wrapper height applies to Monaco and the plain-text fallback without widening the mobile layout.
 - Model suggestions are derived from current unsaved YAML: defaults include concrete and virtual keys, while virtual targets include concrete keys only.
 - App-config save reloads every managed channel and reports started results.
-- Weixin start renders image/base64/pairing payloads; wait persists connected token/user/channel fields server-side.
+- Weixin login is the final section in the Config tab. Start renders image/base64/pairing payloads as a QR code without exposing internal session keys or pairing payload text; wait persists connected token/user/channel fields server-side.
 - Forced mode is closable only after the active models file exists. WebUI itself makes the channel-availability check non-blocking.
-- A positive `focusModelsRequest` scrolls to the Models section and focuses its Monaco editor.
+- A positive `focusModelsRequest` activates the Models tab, scrolls to its panel, and focuses its Monaco editor.
 - If lazy editor support loading or configuration rejects, the Models and app-config surfaces remain controlled plain-text editors, so OOBE can still be completed and canonical backend validation still owns Save. Internal worker health is not probed after initialization; Monaco remains editable if schema assistance later degrades.
 
 ## Integration
@@ -50,7 +52,7 @@ The server retains structured `/setup/models` request handling and `/setup/model
 
 ## Function index
 
-- `SetupView` — loads status and renders checklist, raw models/config editors, channel status, and Weixin controls.
+- `SetupView` — loads status and renders accessible Models/Config tabs, raw editors, channel status, and bottom-of-Config Weixin controls.
 - `loadStatus` — refreshes diagnostics and hydrates raw editor text.
 - `saveModels` / `saveConfig` — send raw YAML to backend-authoritative validators/writers.
 - `startWeixinLogin` / `waitWeixinLogin` — manage pairing and persisted channel setup.
@@ -77,6 +79,10 @@ The Models YAML and app-config YAML areas both use the exact CSS height `calc(mi
 ### D-setup-save-feedback
 
 Models save success/errors belong beside or immediately below the Models Save button, and Config save success/errors belong beside or immediately below the Config Save button. Each result belongs to the exact submitted document revision: editing that section or hydrating a new status clears it, and an older save/status response must neither publish stale feedback nor overwrite a newer edit. Keep the two results independent, responsive, and accessibly announced rather than placing them in the page-top notice area; unrelated load and Weixin failures remain page-level.
+
+### D-setup-tab-layout
+
+[2026-08-16] Setup uses two accessible tabs, `Models` and `Config`, instead of stacked editor cards and a separate checklist. Completion/attention status is shown in the tab labels. Only the active panel is visible, while both editor instances remain mounted to preserve editor lifecycle and document state. Weixin login is the final section of Config. Model-focus requests always activate Models before focusing its editor, including the Code-embedded Setup surface.
 
 ## Canonical ownership
 

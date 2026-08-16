@@ -47,9 +47,7 @@ interface SetupViewProps {
 const DEFAULT_MODELS_YAML = buildModelsYaml([makeDefaultProvider(0)], 'openai/gpt-5.6-sol')
 const SETUP_EDITOR_HEIGHT = 'calc(min(600px, 80vh))'
 
-const DEFAULT_CONFIG_YAML = `# Foxwarm config. Changes to channels are hot-reloaded after Save.
-# Other settings may require a process restart to take effect.
-#
+const DEFAULT_CONFIG_YAML = `# Foxwarm settings.
 # bot:
 #   name: foxwarm
 #   httpPort: 3001
@@ -81,6 +79,7 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
 }
 
 type SaveResult = { kind: 'success' | 'error'; message: string }
+type SetupTab = 'models' | 'config'
 
 function SaveFeedback({ section, result }: { section: 'models' | 'config'; result: SaveResult | null }) {
   if (!result) return null
@@ -108,6 +107,8 @@ function normalizeWeixinQrPayload(value: string): { imageSrc: string | null; raw
 }
 
 export default function SetupView({ forced = false, onClose, onSetupChanged, focusModelsRequest = 0 }: SetupViewProps) {
+  const [activeTab, setActiveTab] = useState<SetupTab>('models')
+  const [modelsEditorFocusRequest, setModelsEditorFocusRequest] = useState(0)
   const [status, setStatus] = useState<SetupStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -121,9 +122,10 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   const [weixinBusy, setWeixinBusy] = useState(false)
   const [weixinSessionKey, setWeixinSessionKey] = useState('')
   const [weixinQrSrc, setWeixinQrSrc] = useState('')
-  const [weixinRawPairingUrl, setWeixinRawPairingUrl] = useState('')
   const [weixinMessage, setWeixinMessage] = useState<string | null>(null)
   const modelsSectionRef = useRef<HTMLElement | null>(null)
+  const modelsTabRef = useRef<HTMLButtonElement | null>(null)
+  const configTabRef = useRef<HTMLButtonElement | null>(null)
   const rawModelsYamlRef = useRef(rawModelsYaml)
   const configYamlRef = useRef(configYaml)
   const modelsRevisionRef = useRef(0)
@@ -131,6 +133,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   const modelsSaveGenerationRef = useRef(0)
   const configSaveGenerationRef = useRef(0)
   const loadGenerationRef = useRef(0)
+  const handledFocusModelsRequestRef = useRef(0)
 
   rawModelsYamlRef.current = rawModelsYaml
   configYamlRef.current = configYaml
@@ -139,6 +142,13 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   const channelAvailable = (status?.channels || []).some((channel) => channel.running) || true // WebUI itself is available when this page is open.
   const canLeave = !forced || (modelConfigured && channelAvailable)
   const channelRows = useMemo(() => status?.channels || [], [status])
+  const configTabStatus = useMemo(() => {
+    const enabledChannels = channelRows.filter((channel) => channel.enabled)
+    if (enabledChannels.length === 0) return null
+    return enabledChannels.some((channel) => !channel.configured || !channel.running || !!channel.lastError)
+      ? 'attention'
+      : 'complete'
+  }, [channelRows])
 
   const updateModelsYaml = (nextValue: string) => {
     if (rawModelsYamlRef.current === nextValue) return
@@ -210,8 +220,33 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
 
   useEffect(() => {
     if (focusModelsRequest <= 0) return
-    modelsSectionRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    setActiveTab('models')
   }, [focusModelsRequest])
+
+  useEffect(() => {
+    if (focusModelsRequest <= 0 || activeTab !== 'models') return
+    if (handledFocusModelsRequestRef.current === focusModelsRequest) return
+    handledFocusModelsRequestRef.current = focusModelsRequest
+    setModelsEditorFocusRequest((current) => current + 1)
+    const frame = requestAnimationFrame(() => modelsSectionRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }))
+    return () => cancelAnimationFrame(frame)
+  }, [activeTab, focusModelsRequest])
+
+  const activateTab = (tab: SetupTab, focus = false) => {
+    setActiveTab(tab)
+    if (focus) requestAnimationFrame(() => (tab === 'models' ? modelsTabRef.current : configTabRef.current)?.focus())
+  }
+
+  const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+    event.preventDefault()
+    const nextTab = event.key === 'Home'
+      ? 'models'
+      : event.key === 'End'
+        ? 'config'
+        : activeTab === 'models' ? 'config' : 'models'
+    activateTab(nextTab, true)
+  }
 
   const saveModels = async () => {
     const saveGeneration = ++modelsSaveGenerationRef.current
@@ -231,7 +266,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
       if (saveGeneration !== modelsSaveGenerationRef.current) return
       const submissionIsCurrent = modelsRevisionRef.current === submittedRevision && rawModelsYamlRef.current === submittedYaml
       if (submissionIsCurrent) {
-        setModelsSaveResult({ kind: 'success', message: `Models saved to ${data.models?.path || 'state/models.yaml'}.` })
+        setModelsSaveResult({ kind: 'success', message: 'Models saved.' })
       }
       await loadStatus({ clearSaveResults: false, hydrateConfig: false, expectedModelsRevision: submittedRevision })
       onSetupChanged?.()
@@ -264,7 +299,8 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
       if (saveGeneration !== configSaveGenerationRef.current) return
       const submissionIsCurrent = configRevisionRef.current === submittedRevision && configYamlRef.current === submittedYaml
       if (submissionIsCurrent) {
-        setConfigSaveResult({ kind: 'success', message: `Config saved. Channels reloaded; started: ${(data.reload?.started || []).join(', ') || 'none'}.` })
+        const startedChannels = (data.reload?.started || []).join(', ')
+        setConfigSaveResult({ kind: 'success', message: startedChannels ? `Config saved. Active channels refreshed: ${startedChannels}.` : 'Config saved.' })
         if (typeof data.rawYaml === 'string') updateConfigYaml(data.rawYaml)
       }
       await loadStatus({ clearSaveResults: false, hydrateModels: false, expectedConfigRevision: submittedRevision })
@@ -294,7 +330,6 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
       if (!res.ok) throw new Error(data.error || `Failed to start Weixin login (${res.status})`)
       setWeixinSessionKey(data.sessionKey || '')
       const rawQr = data.qrcodeUrl || ''
-      setWeixinRawPairingUrl(rawQr)
       const normalized = normalizeWeixinQrPayload(rawQr)
       if (normalized.imageSrc) {
         setWeixinQrSrc(normalized.imageSrc)
@@ -343,7 +378,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
       <ContentHeader
         icon={<Settings className="h-5 w-5" />}
         title={forced ? 'Foxwarm first-time setup' : 'Foxwarm Setup'}
-        subtitle={forced ? 'Configure models before using Foxwarm. This setup cannot be closed yet.' : 'Models and channels can be updated here without restarting.'}
+        subtitle={forced ? 'Add your model settings to continue.' : 'Manage models, channels, and app settings.'}
         actions={
           <div className="flex items-center gap-2">
             <button
@@ -367,100 +402,119 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">
-        <div className="mx-auto max-w-5xl space-y-4">
+        <div className="mx-auto max-w-5xl">
           {loading && <div className="rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-600 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300">Loading setup status…</div>}
-          {error && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200">{error}</div>}
+          {error && <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200">{error}</div>}
 
-          <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <h2 className="text-base font-semibold text-gray-900 dark:text-white">Setup checklist</h2>
-              <StatusPill ok={!!status?.models.exists} label={status?.models.exists ? 'models configured' : 'models missing'} />
-              <StatusPill ok={true} label="WebUI available" />
-              {status?.models.hasPlaceholderSecrets && <StatusPill ok={false} label="placeholder API key detected" />}
-            </div>
-            <p className="text-sm text-gray-600 dark:text-gray-300">
-              OOBE mode is active when <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">state/models.yaml</code> does not exist.
-              After saving models, you can ask the agent how to explore Foxwarm. The raw config editor below preserves the current <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">state/config.yaml</code> text.
-            </p>
-            {status && (
-              <div className="mt-3 grid gap-2 text-xs text-gray-500 dark:text-gray-400 md:grid-cols-2">
-                <div>Models path: <code>{status.models.path}</code></div>
-                <div>Config path: <code>{status.config.appConfigPath}</code></div>
+          <div className="mt-4 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <div className="border-b border-gray-200 px-2 pt-2 dark:border-gray-800">
+              <div role="tablist" aria-label="Setup sections" className="flex gap-1">
+                <button
+                  ref={modelsTabRef}
+                  id="setup-tab-models"
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'models'}
+                  aria-controls="setup-panel-models"
+                  tabIndex={activeTab === 'models' ? 0 : -1}
+                  data-setup-tab="models"
+                  onClick={() => activateTab('models')}
+                  onKeyDown={handleTabKeyDown}
+                  className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'models' ? 'border-blue-600 text-blue-700 dark:border-blue-400 dark:text-blue-300' : 'border-transparent text-gray-600 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white'}`}
+                >
+                  <span>Models</span>
+                  {status && (status.models.exists && !status.models.hasPlaceholderSecrets ? (
+                    <CheckCircle2 data-setup-tab-status="complete" className="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" aria-hidden="true" />
+                  ) : (
+                    <XCircle data-setup-tab-status="attention" className="h-4 w-4 shrink-0 text-amber-500 dark:text-amber-300" aria-hidden="true" />
+                  ))}
+                  {status && <span className="sr-only">{status.models.exists && !status.models.hasPlaceholderSecrets ? 'Configured' : 'Needs attention'}</span>}
+                </button>
+                <button
+                  ref={configTabRef}
+                  id="setup-tab-config"
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'config'}
+                  aria-controls="setup-panel-config"
+                  tabIndex={activeTab === 'config' ? 0 : -1}
+                  data-setup-tab="config"
+                  onClick={() => activateTab('config')}
+                  onKeyDown={handleTabKeyDown}
+                  className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'config' ? 'border-blue-600 text-blue-700 dark:border-blue-400 dark:text-blue-300' : 'border-transparent text-gray-600 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white'}`}
+                >
+                  <span>Config</span>
+                  {configTabStatus === 'complete' && <CheckCircle2 data-setup-tab-status="complete" className="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" aria-hidden="true" />}
+                  {configTabStatus === 'attention' && <XCircle data-setup-tab-status="attention" className="h-4 w-4 shrink-0 text-amber-500 dark:text-amber-300" aria-hidden="true" />}
+                  {configTabStatus && <span className="sr-only">{configTabStatus === 'complete' ? 'Channels ready' : 'Channels need attention'}</span>}
+                </button>
               </div>
-            )}
-          </section>
-
-          <section ref={modelsSectionRef} data-setup-section="models" className="scroll-mt-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <div>
-              <h2 className="text-base font-semibold text-gray-900 dark:text-white">Models</h2>
-              <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Edit <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">state/models.yaml</code> as raw YAML. Schema suggestions and diagnostics are advisory; Save always uses the backend's canonical validator and preserves your text exactly.</p>
             </div>
 
-            <div className="mt-4">
-              <SimpleCodeEditor
-                value={rawModelsYaml}
-                onChange={updateModelsYaml}
-                language="yaml"
-                height={SETUP_EDITOR_HEIGHT}
-                modelUri={MODELS_YAML_MODEL_URI}
-                focusRequest={focusModelsRequest}
-                ariaLabel="Models YAML editor"
-              />
-            </div>
+            <section ref={modelsSectionRef} id="setup-panel-models" role="tabpanel" aria-labelledby="setup-tab-models" data-setup-section="models" hidden={activeTab !== 'models'} className="scroll-mt-4 p-4 md:p-5">
+              <div>
+                <h2 className="text-base font-semibold text-gray-900 dark:text-white">Model settings</h2>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Configure model providers, routing, and your default model in YAML.</p>
+              </div>
 
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <button disabled={savingModels} onClick={() => void saveModels()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
-              <SaveFeedback section="models" result={modelsSaveResult} />
-              {forced && !canLeave && <span className="text-sm text-amber-600 dark:text-amber-300">Required for first-time setup.</span>}
-            </div>
-          </section>
+              <div className="mt-4">
+                <SimpleCodeEditor
+                  value={rawModelsYaml}
+                  onChange={updateModelsYaml}
+                  language="yaml"
+                  height={SETUP_EDITOR_HEIGHT}
+                  modelUri={MODELS_YAML_MODEL_URI}
+                  focusRequest={modelsEditorFocusRequest}
+                  ariaLabel="Models YAML editor"
+                />
+              </div>
 
-          <section data-setup-section="config" className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <h2 className="text-base font-semibold text-gray-900 dark:text-white">Config / Channels</h2>
-            <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Edit the full <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">state/config.yaml</code> file as raw YAML. Saving writes your text back directly, then hot-reloads managed channels without restarting Foxwarm.</p>
-
-            <div className="mt-4 rounded-xl border border-gray-200 p-4 dark:border-gray-700">
-              <h3 className="font-medium text-gray-900 dark:text-white">Weixin login</h3>
-              <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Start Weixin pairing from WebUI, scan the QR code, then check login. On success, Setup writes the Weixin channel config below and hot-reloads channels.</p>
               <div className="mt-4 flex flex-wrap items-center gap-2">
-                <button disabled={weixinBusy} onClick={() => void startWeixinLogin()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">{weixinBusy ? 'Working…' : 'Start Weixin login'}</button>
-                <button disabled={weixinBusy || !weixinSessionKey} onClick={() => void waitWeixinLogin()} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800">Check login</button>
+                <button disabled={savingModels} onClick={() => void saveModels()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
+                <SaveFeedback section="models" result={modelsSaveResult} />
+                {forced && !canLeave && <span className="text-sm text-amber-600 dark:text-amber-300">Save a valid model configuration to continue.</span>}
               </div>
-              {weixinMessage && <div className="mt-3 text-sm text-gray-600 dark:text-gray-300">{weixinMessage}</div>}
-              {weixinQrSrc && (
-                <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-start">
-                  <img src={weixinQrSrc} alt="Weixin login QR code" className="h-56 w-56 rounded-lg border border-gray-200 bg-white object-contain p-2 dark:border-gray-700" />
-                  <div className="min-w-0 text-xs text-gray-500 dark:text-gray-400">
-                    <div>sessionKey: <code>{weixinSessionKey}</code></div>
-                    {weixinRawPairingUrl && <div className="break-all">pairing URL: {weixinRawPairingUrl}</div>}
-                  </div>
+            </section>
+
+            <section id="setup-panel-config" role="tabpanel" aria-labelledby="setup-tab-config" data-setup-section="config" hidden={activeTab !== 'config'} className="p-4 md:p-5">
+              <h2 className="text-base font-semibold text-gray-900 dark:text-white">App and channel settings</h2>
+              <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Manage Foxwarm and channel settings in YAML.</p>
+
+              <div className="mt-4">
+                <SimpleCodeEditor value={configYaml} onChange={updateConfigYaml} language="yaml" height={SETUP_EDITOR_HEIGHT} modelUri={APP_CONFIG_YAML_MODEL_URI} ariaLabel="Application config YAML editor" />
+              </div>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <button disabled={savingConfig} onClick={() => void saveConfig()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">{savingConfig ? 'Saving…' : 'Save config'}</button>
+                <SaveFeedback section="config" result={configSaveResult} />
+              </div>
+              {channelRows.length > 0 && (
+                <div className="mt-4 overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800">
+                  {channelRows.map((channel) => (
+                    <div key={channel.channelId} className="border-t border-gray-100 px-3 py-2 text-sm first:border-t-0 dark:border-gray-800">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-gray-900 dark:text-white">{channel.channelId}</span>
+                        <span className="text-gray-500 dark:text-gray-400">{channel.type}</span>
+                        <StatusPill ok={channel.running} label={channel.running ? 'Running' : 'Stopped'} />
+                        <StatusPill ok={channel.configured} label={channel.configured ? 'Configured' : 'Needs setup'} />
+                      </div>
+                      {channel.lastError && <div className="mt-1 text-xs text-red-600 dark:text-red-300">{channel.lastError}</div>}
+                    </div>
+                  ))}
                 </div>
               )}
-            </div>
 
-            <div className="mt-4">
-              <SimpleCodeEditor value={configYaml} onChange={updateConfigYaml} language="yaml" height={SETUP_EDITOR_HEIGHT} modelUri={APP_CONFIG_YAML_MODEL_URI} ariaLabel="Application config YAML editor" />
-            </div>
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <button disabled={savingConfig} onClick={() => void saveConfig()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">{savingConfig ? 'Saving…' : 'Save config and reload channels'}</button>
-              <SaveFeedback section="config" result={configSaveResult} />
-            </div>
-            {channelRows.length > 0 && (
-              <div className="mt-4 overflow-hidden rounded-lg border border-gray-200 dark:border-gray-800">
-                {channelRows.map((channel) => (
-                  <div key={channel.channelId} className="border-t border-gray-100 px-3 py-2 text-sm first:border-t-0 dark:border-gray-800">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono font-medium text-gray-900 dark:text-white">{channel.channelId}</span>
-                      <span className="text-gray-500 dark:text-gray-400">type={channel.type}</span>
-                      <StatusPill ok={channel.running} label={channel.running ? 'running' : 'stopped'} />
-                      <StatusPill ok={channel.configured} label={channel.configured ? 'configured' : 'missing config'} />
-                    </div>
-                    {channel.lastError && <div className="mt-1 text-xs text-red-600 dark:text-red-300">{channel.lastError}</div>}
-                  </div>
-                ))}
+              <div data-setup-config-last="weixin" className="mt-6 border-t border-gray-200 pt-5 dark:border-gray-800">
+                <h3 className="font-medium text-gray-900 dark:text-white">Weixin login</h3>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Connect Weixin by scanning a QR code.</p>
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <button disabled={weixinBusy} onClick={() => void startWeixinLogin()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">{weixinBusy ? 'Working…' : 'Start Weixin login'}</button>
+                  <button disabled={weixinBusy || !weixinSessionKey} onClick={() => void waitWeixinLogin()} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800">Check login</button>
+                </div>
+                {weixinMessage && <div className="mt-3 text-sm text-gray-600 dark:text-gray-300">{weixinMessage}</div>}
+                {weixinQrSrc && <img src={weixinQrSrc} alt="Weixin login QR code" className="mt-4 h-56 w-56 rounded-lg border border-gray-200 bg-white object-contain p-2 dark:border-gray-700" />}
               </div>
-            )}
-          </section>
+            </section>
+          </div>
         </div>
       </div>
     </div>
