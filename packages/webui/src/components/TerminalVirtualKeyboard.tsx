@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Terminal } from '@xterm/xterm'
+import { ChevronDown, Keyboard } from 'lucide-react'
 import {
   REPEATING_TERMINAL_KEYS,
   TERMINAL_KEYBOARD_STORAGE_KEY,
@@ -22,7 +23,8 @@ type KeyDefinition = {
   label: string
   shiftedLabel?: string
   key?: TerminalVirtualKey
-  action?: 'shift' | 'symbols' | 'abc'
+  action?: 'shift' | 'symbols' | 'abc' | 'return' | 'native' | 'collapse'
+  icon?: 'native' | 'collapse'
   className?: string
 }
 
@@ -36,10 +38,10 @@ const ABC_ROWS: KeyDefinition[][] = [
   ],
   [
     { id: 'abc-symbols', label: '123', action: 'symbols', className: 'page' },
-    { id: 'abc-comma', label: ',', shiftedLabel: '<', key: { kind: 'printable', value: ',' } },
+    { id: 'abc-native', label: 'Native keyboard', action: 'native', icon: 'native', className: 'utility compact' },
     { id: 'abc-space', label: 'Space', key: { kind: 'printable', value: ' ' }, className: 'space' },
-    { id: 'abc-period', label: '.', shiftedLabel: '>', key: { kind: 'printable', value: '.' } },
-    { id: 'abc-enter', label: 'Enter', key: { kind: 'special', value: 'Enter' }, className: 'enter' },
+    { id: 'abc-collapse', label: 'Collapse keyboard', action: 'collapse', icon: 'collapse', className: 'utility compact' },
+    { id: 'abc-enter', label: 'Enter', key: { kind: 'special', value: 'Enter' }, className: 'enter utility' },
   ],
 ]
 
@@ -57,40 +59,47 @@ const SYMBOL_ROWS: KeyDefinition[][] = [
   ],
   [
     { id: 'symbol-abc', label: 'ABC', action: 'abc', className: 'page' },
-    { id: 'symbol-comma', label: ',', shiftedLabel: '<', key: { kind: 'printable', value: ',' } },
+    { id: 'symbol-native', label: 'Native keyboard', action: 'native', icon: 'native', className: 'utility compact' },
     { id: 'symbol-space', label: 'Space', key: { kind: 'printable', value: ' ' }, className: 'space' },
-    { id: 'symbol-period', label: '.', shiftedLabel: '>', key: { kind: 'printable', value: '.' } },
-    { id: 'symbol-enter', label: 'Enter', key: { kind: 'special', value: 'Enter' }, className: 'enter' },
+    { id: 'symbol-collapse', label: 'Collapse keyboard', action: 'collapse', icon: 'collapse', className: 'utility compact' },
+    { id: 'symbol-enter', label: 'Enter', key: { kind: 'special', value: 'Enter' }, className: 'enter utility' },
   ],
 ]
 
 const MORE_ROWS: KeyDefinition[][] = [
-  ['Home', 'End', 'PageUp', 'PageDown'].map(value => ({ id: `more-${value}`, label: value === 'PageUp' ? 'PgUp' : value === 'PageDown' ? 'PgDn' : value, key: { kind: 'special' as const, value: value as 'Home' | 'End' | 'PageUp' | 'PageDown' } })),
+  ['Home', 'End', 'PageUp', 'PageDown', 'Insert', 'Delete'].map(value => ({ id: `more-${value}`, label: value === 'PageUp' ? 'PgUp' : value === 'PageDown' ? 'PgDn' : value, key: { kind: 'special' as const, value: value as 'Home' | 'End' | 'PageUp' | 'PageDown' | 'Insert' | 'Delete' }, className: 'utility' })),
   [
-    { id: 'more-insert', label: 'Insert', key: { kind: 'special', value: 'Insert' } },
-    { id: 'more-delete', label: 'Delete', key: { kind: 'special', value: 'Delete' } },
-    { id: 'more-copy', label: 'Copy' },
-    { id: 'more-paste', label: 'Paste' },
+    { id: 'more-copy', label: 'Copy', className: 'utility' },
+    { id: 'more-paste', label: 'Paste', className: 'utility' },
+    ...Array.from({ length: 4 }, (_, index) => ({ id: `more-f${index + 1}`, label: `F${index + 1}`, key: { kind: 'special' as const, value: `F${index + 1}` as `F${number}` } })),
   ],
-  Array.from({ length: 6 }, (_, index) => ({ id: `more-f${index + 1}`, label: `F${index + 1}`, key: { kind: 'special' as const, value: `F${index + 1}` as `F${number}` } })),
-  Array.from({ length: 6 }, (_, index) => ({ id: `more-f${index + 7}`, label: `F${index + 7}`, key: { kind: 'special' as const, value: `F${index + 7}` as `F${number}` } })),
+  Array.from({ length: 8 }, (_, index) => ({ id: `more-f${index + 5}`, label: `F${index + 5}`, key: { kind: 'special' as const, value: `F${index + 5}` as `F${number}` } })),
+  [
+    { id: 'more-return', label: 'Return page', action: 'return', className: 'page' },
+    { id: 'more-native', label: 'Native keyboard', action: 'native', icon: 'native', className: 'utility compact' },
+    { id: 'more-space', label: 'Space', key: { kind: 'printable', value: ' ' }, className: 'space' },
+    { id: 'more-collapse', label: 'Collapse keyboard', action: 'collapse', icon: 'collapse', className: 'utility compact' },
+    { id: 'more-enter', label: 'Enter', key: { kind: 'special', value: 'Enter' }, className: 'enter utility' },
+  ],
 ]
 
 const SPECIAL_KEYS: KeyDefinition[] = [
-  { id: 'special-escape', label: 'Esc', key: { kind: 'special', value: 'Escape' } },
-  { id: 'special-tab', label: 'Tab', key: { kind: 'special', value: 'Tab' } },
-  { id: 'special-ctrl', label: 'Ctrl' },
-  { id: 'special-alt', label: 'Alt' },
-  { id: 'special-left', label: '←', key: { kind: 'special', value: 'ArrowLeft' } },
-  { id: 'special-up', label: '↑', key: { kind: 'special', value: 'ArrowUp' } },
-  { id: 'special-down', label: '↓', key: { kind: 'special', value: 'ArrowDown' } },
-  { id: 'special-right', label: '→', key: { kind: 'special', value: 'ArrowRight' } },
-  { id: 'special-more', label: 'More' },
+  { id: 'special-escape', label: 'Esc', key: { kind: 'special', value: 'Escape' }, className: 'utility' },
+  { id: 'special-tab', label: 'Tab', key: { kind: 'special', value: 'Tab' }, className: 'utility' },
+  { id: 'special-ctrl', label: 'Ctrl', className: 'utility' },
+  { id: 'special-alt', label: 'Alt', className: 'utility' },
+  { id: 'special-left', label: '←', key: { kind: 'special', value: 'ArrowLeft' }, className: 'utility' },
+  { id: 'special-up', label: '↑', key: { kind: 'special', value: 'ArrowUp' }, className: 'utility' },
+  { id: 'special-down', label: '↓', key: { kind: 'special', value: 'ArrowDown' }, className: 'utility' },
+  { id: 'special-right', label: '→', key: { kind: 'special', value: 'ArrowRight' }, className: 'utility' },
+  { id: 'special-more', label: 'More', className: 'utility' },
 ]
 
 interface TerminalVirtualKeyboardProps {
   terminal: Terminal | null
   resetToken: string
+  mode?: TerminalKeyboardMode
+  onModeChange?: (mode: TerminalKeyboardMode) => void
 }
 
 type ActiveGesture = {
@@ -108,7 +117,19 @@ type ActiveGesture = {
   intervalTimer?: number
 }
 
-function ReleaseActionButton({ children, onActivate }: { children: React.ReactNode; onActivate: () => void }) {
+function ReleaseActionButton({
+  children,
+  onActivate,
+  ariaLabel,
+  className,
+  style,
+}: {
+  children: React.ReactNode
+  onActivate: () => void
+  ariaLabel?: string
+  className?: string
+  style?: React.CSSProperties
+}) {
   const [pressed, setPressed] = useState(false)
   const pointerRef = useRef<{ id: number; element: HTMLButtonElement; cancelled: boolean } | null>(null)
   const suppressClickRef = useRef(false)
@@ -126,7 +147,9 @@ function ReleaseActionButton({ children, onActivate }: { children: React.ReactNo
   return (
     <button
       type="button"
-      className={pressed ? 'pressed' : ''}
+      aria-label={ariaLabel}
+      className={`${className ?? ''} ${pressed ? 'pressed' : ''}`}
+      style={style}
       onPointerDown={event => {
         event.preventDefault()
         pointerRef.current = { id: event.pointerId, element: event.currentTarget, cancelled: false }
@@ -166,11 +189,61 @@ function ReleaseActionButton({ children, onActivate }: { children: React.ReactNo
   )
 }
 
-export default function TerminalVirtualKeyboard({ terminal, resetToken }: TerminalVirtualKeyboardProps) {
+export function TerminalKeyboardHeaderControl({
+  nativeMode,
+  onActivate,
+}: {
+  nativeMode: boolean
+  onActivate: () => void
+}) {
+  const anchorRef = useRef<HTMLSpanElement | null>(null)
+  const [offset, setOffset] = useState(0)
+
+  useEffect(() => {
+    if (!nativeMode) { setOffset(0); return }
+    const update = () => {
+      const viewport = window.visualViewport
+      const anchor = anchorRef.current
+      if (!viewport || !anchor) { setOffset(0); return }
+      setOffset(terminalKeyboardViewportOverlap(
+        anchor.getBoundingClientRect().bottom,
+        viewport.offsetTop + viewport.height,
+      ))
+    }
+    update()
+    const resizeObserver = new ResizeObserver(update)
+    if (anchorRef.current) resizeObserver.observe(anchorRef.current)
+    window.visualViewport?.addEventListener('resize', update)
+    window.visualViewport?.addEventListener('scroll', update)
+    window.addEventListener('resize', update)
+    return () => {
+      resizeObserver.disconnect()
+      window.visualViewport?.removeEventListener('resize', update)
+      window.visualViewport?.removeEventListener('scroll', update)
+      window.removeEventListener('resize', update)
+    }
+  }, [nativeMode])
+
+  return (
+    <span ref={anchorRef} className="terminal-keyboard-header-anchor">
+      <ReleaseActionButton
+        ariaLabel="Show Web keyboard"
+        className="terminal-keyboard-header-control"
+        onActivate={onActivate}
+        style={nativeMode ? { transform: `translateY(-${offset}px)` } : undefined}
+      >
+        <Keyboard aria-hidden="true" size={16} strokeWidth={1.9} />
+      </ReleaseActionButton>
+    </span>
+  )
+}
+
+export default function TerminalVirtualKeyboard({ terminal, resetToken, mode: controlledMode, onModeChange }: TerminalVirtualKeyboardProps) {
   const coarsePointer = useMemo(() => window.matchMedia('(pointer: coarse)').matches, [])
-  const [mode, setMode] = useState<TerminalKeyboardMode>(() => {
+  const [internalMode, setInternalMode] = useState<TerminalKeyboardMode>(() => {
     try { return loadTerminalKeyboardMode(localStorage, coarsePointer) } catch { return coarsePointer ? 'web' : 'collapsed' }
   })
+  const mode = controlledMode ?? internalMode
   const [page, setPage] = useState<TerminalKeyboardPage>('abc')
   const [returnPage, setReturnPage] = useState<'abc' | 'symbols'>('abc')
   const [ctrl, setCtrl] = useState(false)
@@ -178,8 +251,6 @@ export default function TerminalVirtualKeyboard({ terminal, resetToken }: Termin
   const [shift, setShift] = useState<ShiftState>('off')
   const [pressed, setPressed] = useState<string | null>(null)
   const [feedback, setFeedback] = useState('')
-  const [nativeOffset, setNativeOffset] = useState(0)
-  const keyboardRef = useRef<HTMLDivElement | null>(null)
   const shiftTapAtRef = useRef(0)
   const gestureRef = useRef<ActiveGesture | null>(null)
   const suppressClickRef = useRef<string | null>(null)
@@ -222,7 +293,8 @@ export default function TerminalVirtualKeyboard({ terminal, resetToken }: Termin
   const changeMode = (nextMode: TerminalKeyboardMode) => {
     stopGesture(true)
     clearModifiers()
-    setMode(nextMode)
+    if (controlledMode === undefined) setInternalMode(nextMode)
+    onModeChange?.(nextMode)
     try { localStorage.setItem(TERMINAL_KEYBOARD_STORAGE_KEY, nextMode) } catch {}
     applyInputMode(nextMode, nextMode === 'native')
   }
@@ -234,33 +306,9 @@ export default function TerminalVirtualKeyboard({ terminal, resetToken }: Termin
   }, [resetToken, terminal])
 
   useEffect(() => {
+    clearModifiers()
     applyInputMode(mode, false)
   }, [mode, terminal])
-
-  useEffect(() => {
-    if (mode !== 'native') { setNativeOffset(0); return }
-    const update = () => {
-      const viewport = window.visualViewport
-      const keyboard = keyboardRef.current
-      if (!viewport || !keyboard) { setNativeOffset(0); return }
-      setNativeOffset(terminalKeyboardViewportOverlap(
-        keyboard.getBoundingClientRect().bottom,
-        viewport.offsetTop + viewport.height,
-      ))
-    }
-    update()
-    const resizeObserver = new ResizeObserver(update)
-    if (keyboardRef.current) resizeObserver.observe(keyboardRef.current)
-    window.visualViewport?.addEventListener('resize', update)
-    window.visualViewport?.addEventListener('scroll', update)
-    window.addEventListener('resize', update)
-    return () => {
-      resizeObserver.disconnect()
-      window.visualViewport?.removeEventListener('resize', update)
-      window.visualViewport?.removeEventListener('scroll', update)
-      window.removeEventListener('resize', update)
-    }
-  }, [mode])
 
   useEffect(() => () => stopGesture(true), [])
 
@@ -363,6 +411,9 @@ export default function TerminalVirtualKeyboard({ terminal, resetToken }: Termin
     }
     if (definition.action === 'symbols') { setPage('symbols'); return }
     if (definition.action === 'abc') { setPage('abc'); return }
+    if (definition.action === 'return') { setPage(returnPage); return }
+    if (definition.action === 'native') { changeMode('native'); return }
+    if (definition.action === 'collapse') { changeMode('collapsed'); return }
     if (definition.id === 'special-ctrl') { const next = !modifiersRef.current.ctrl; setCtrl(next); updateModifiersRef({ ctrl: next }); return }
     if (definition.id === 'special-alt') { const next = !modifiersRef.current.alt; setAlt(next); updateModifiersRef({ alt: next }); return }
     if (definition.id === 'special-more') {
@@ -402,7 +453,8 @@ export default function TerminalVirtualKeyboard({ terminal, resetToken }: Termin
   const shifted = shift !== 'off'
   const rows = page === 'more' ? MORE_ROWS : page === 'symbols' ? SYMBOL_ROWS : ABC_ROWS
   const renderButton = (definition: KeyDefinition) => {
-    const label = shifted && definition.shiftedLabel ? definition.shiftedLabel : definition.label
+    const baseLabel = definition.action === 'return' ? (returnPage === 'abc' ? 'ABC' : '123') : definition.label
+    const label = shifted && definition.shiftedLabel ? definition.shiftedLabel : baseLabel
     const isShift = definition.action === 'shift'
     const armed = definition.id === 'special-ctrl' ? ctrl : definition.id === 'special-alt' ? alt : isShift && shift !== 'off'
     return (
@@ -420,13 +472,17 @@ export default function TerminalVirtualKeyboard({ terminal, resetToken }: Termin
         onLostPointerCapture={() => { if (gestureRef.current?.id === definition.id) stopGesture(true) }}
         onClick={event => onClick(event, definition)}
       >
-        {label}
+        {definition.icon === 'native'
+          ? <Keyboard aria-hidden="true" size={18} strokeWidth={1.9} />
+          : definition.icon === 'collapse'
+            ? <ChevronDown aria-hidden="true" size={19} strokeWidth={2.1} />
+            : label}
       </button>
     )
   }
 
   return (
-    <div ref={keyboardRef} className={`terminal-keyboard terminal-keyboard-${mode}`} data-terminal-keyboard-mode={mode}>
+    <div className={`terminal-keyboard terminal-keyboard-${mode}`} data-terminal-keyboard-mode={mode}>
       {mode === 'web' && (
         <>
           <div className="terminal-special-bar" aria-label="Terminal special keys">
@@ -435,17 +491,9 @@ export default function TerminalVirtualKeyboard({ terminal, resetToken }: Termin
           <div className="terminal-keyboard-body" data-page={page}>
             {rows.map((row, index) => <div className={`terminal-key-row row-${index + 1}`} key={`${page}-${index}`}>{row.map(renderButton)}</div>)}
           </div>
+          {feedback && <div className="terminal-keyboard-feedback" role="status" aria-live="polite">{feedback}</div>}
         </>
       )}
-      <div className="terminal-keyboard-footer" style={mode === 'native' ? { transform: `translateY(-${nativeOffset}px)` } : undefined}>
-        <div className="terminal-keyboard-mode-actions" role="group" aria-label="Terminal keyboard mode">
-          {mode !== 'web' && <ReleaseActionButton onActivate={() => changeMode('web')}>Web keyboard</ReleaseActionButton>}
-          {mode !== 'native' && <ReleaseActionButton onActivate={() => changeMode('native')}>Native keyboard</ReleaseActionButton>}
-          {mode === 'native' && <ReleaseActionButton onActivate={() => applyInputMode('native', true)}>Open keyboard</ReleaseActionButton>}
-          {mode !== 'collapsed' && <ReleaseActionButton onActivate={() => changeMode('collapsed')}>Collapse</ReleaseActionButton>}
-        </div>
-        <div className="terminal-keyboard-feedback" role="status" aria-live="polite">{feedback}</div>
-      </div>
     </div>
   )
 }

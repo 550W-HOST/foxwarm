@@ -1,50 +1,57 @@
 .terminal-keyboard {
+  position: relative;
   flex: 0 0 auto;
   min-width: 0;
-  color: #111827;
-  background: #d1d5db;
-  border-top: 1px solid #9ca3af;
+  color: #242321;
+  background: #d1cec8;
+  border-top: 1px solid #b8b4ad;
   user-select: none;
   -webkit-user-select: none;
   touch-action: none;
 }
 
 .dark .terminal-keyboard {
-  color: #f3f4f6;
-  background: #111827;
-  border-color: #374151;
+  color: #f4f3f0;
+  background: #242321;
+  border-color: #3c3b38;
+}
+
+.terminal-keyboard-native,
+.terminal-keyboard-collapsed {
+  display: none;
 }
 
 .terminal-special-bar {
   display: grid;
   grid-template-columns: repeat(9, minmax(0, 1fr));
-  gap: 4px;
-  padding: 5px 5px 4px;
-  background: #e5e7eb;
+  gap: 5px;
+  padding: 6px 6px 5px;
+  background: #c4c1bb;
 }
 
 .dark .terminal-special-bar {
-  background: #0f172a;
+  background: #191918;
 }
 
 .terminal-keyboard-body {
+  box-sizing: border-box;
   display: grid;
   grid-template-rows: repeat(4, 44px);
   gap: 5px;
-  height: 191px;
-  padding: 4px 5px 5px;
-  background: #cbd5e1;
+  height: calc(200px + env(safe-area-inset-bottom));
+  padding: 4px 6px calc(5px + env(safe-area-inset-bottom));
+  background: #d1cec8;
 }
 
 .dark .terminal-keyboard-body {
-  background: #172033;
+  background: #242321;
 }
 
 .terminal-key-row {
   display: flex;
   min-width: 0;
   justify-content: center;
-  gap: 4px;
+  gap: 5px;
 }
 
 .terminal-keyboard-body[data-page="abc"] .row-2 {
@@ -55,27 +62,41 @@
   min-width: 0;
   min-height: 40px;
   flex: 1 1 0;
-  border: 1px solid #9ca3af;
-  border-radius: 7px;
-  background: #f9fafb;
-  color: #111827;
-  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.18);
-  font: 600 12px/1 system-ui, sans-serif;
+  border: 0;
+  border-radius: 6px;
+  background: #f7f6f3;
+  color: #242321;
+  box-shadow: 0 1px 0 rgba(55, 52, 47, 0.34), 0 1px 2px rgba(55, 52, 47, 0.1);
+  font: 500 14px/1 system-ui, sans-serif;
   touch-action: none;
   -webkit-tap-highlight-color: transparent;
 }
 
 .dark .terminal-key {
-  border-color: #475569;
-  background: #334155;
-  color: #f8fafc;
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.45);
+  background: #484744;
+  color: #faf9f6;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.75), 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+.terminal-key.utility,
+.terminal-key.page,
+.terminal-key.wide {
+  background: #aaa7a0;
+  color: #242321;
+  font-weight: 600;
+}
+
+.dark .terminal-key.utility,
+.dark .terminal-key.page,
+.dark .terminal-key.wide {
+  background: #6a6965;
+  color: #faf9f6;
 }
 
 .terminal-special-bar .terminal-key {
-  min-height: 36px;
+  min-height: 38px;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .terminal-key.wide {
@@ -87,119 +108,131 @@
   flex-grow: 1.35;
 }
 
+.terminal-key.compact {
+  flex-grow: 0.9;
+}
+
 .terminal-key.space {
-  flex-grow: 5;
+  flex-grow: 4.8;
+  background: #f7f6f3;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.dark .terminal-key.space {
+  background: #484744;
+}
+
+.terminal-key svg {
+  display: block;
+  margin: auto;
 }
 
 .terminal-key.pressed,
 .terminal-key:active {
   transform: translateY(1px);
-  background: #94a3b8;
+  background: #8e8a83;
   box-shadow: none;
 }
 
 .dark .terminal-key.pressed,
 .dark .terminal-key:active {
-  background: #64748b;
+  background: #85837e;
 }
 
 .terminal-key.armed {
-  border-color: #2563eb;
-  background: #bfdbfe;
-  color: #1e3a8a;
+  background: #5d5a55;
+  color: #faf9f6;
 }
 
 .dark .terminal-key.armed {
-  border-color: #60a5fa;
-  background: #1d4ed8;
-  color: #eff6ff;
+  background: #eceae5;
+  color: #242321;
 }
 
 .terminal-key.locked {
-  box-shadow: inset 0 0 0 2px #2563eb;
+  box-shadow: inset 0 0 0 2px #f7f6f3, 0 0 0 1px #4c4944;
 }
 
-.terminal-keyboard-footer {
-  position: relative;
-  z-index: 30;
-  display: flex;
-  min-height: 34px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 6px calc(4px + env(safe-area-inset-bottom));
-  border-top: 1px solid #9ca3af;
-  background: #e5e7eb;
-  transition: transform 100ms ease-out;
-}
-
-.dark .terminal-keyboard-footer {
-  border-color: #374151;
-  background: #0f172a;
-}
-
-.terminal-keyboard-mode-actions {
-  display: flex;
-  gap: 5px;
-}
-
-.terminal-keyboard-mode-actions button {
-  min-height: 28px;
-  border: 1px solid #9ca3af;
-  border-radius: 6px;
-  padding: 4px 9px;
-  background: #f9fafb;
-  color: #1f2937;
-  font: 600 11px/1 system-ui, sans-serif;
-}
-
-.terminal-keyboard-mode-actions button.pressed,
-.terminal-keyboard-mode-actions button:active {
-  transform: translateY(1px);
-  background: #cbd5e1;
-}
-
-.dark .terminal-keyboard-mode-actions button {
-  border-color: #475569;
-  background: #1e293b;
-  color: #e2e8f0;
-}
-
-.dark .terminal-keyboard-mode-actions button.pressed,
-.dark .terminal-keyboard-mode-actions button:active {
-  background: #475569;
+.dark .terminal-key.locked {
+  box-shadow: inset 0 0 0 2px #242321, 0 0 0 1px #eceae5;
 }
 
 .terminal-keyboard-feedback {
-  min-width: 0;
+  position: absolute;
+  z-index: 4;
+  top: 49px;
+  right: 8px;
+  max-width: 60%;
   overflow: hidden;
-  color: #4b5563;
-  font: 500 11px/1.2 system-ui, sans-serif;
+  border-radius: 5px;
+  padding: 4px 7px;
+  background: rgba(50, 48, 44, 0.9);
+  color: #fff;
+  font: 600 11px/1.2 system-ui, sans-serif;
   text-overflow: ellipsis;
   white-space: nowrap;
+  pointer-events: none;
 }
 
 .dark .terminal-keyboard-feedback {
-  color: #94a3b8;
+  background: rgba(239, 237, 232, 0.92);
+  color: #242321;
 }
 
-.terminal-keyboard-native,
-.terminal-keyboard-collapsed {
-  border-top: 0;
-  background: transparent;
+.terminal-keyboard-header-anchor {
+  position: relative;
+  z-index: 40;
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+}
+
+.terminal-keyboard-header-control {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: #dedbd5;
+  color: #4f4c47;
+  box-shadow: 0 1px 1px rgba(55, 52, 47, 0.18);
+  transition: transform 100ms ease-out, background-color 80ms ease-out;
+}
+
+.dark .terminal-keyboard-header-control {
+  background: #44433f;
+  color: #eeece7;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.4);
+}
+
+.terminal-keyboard-header-control.pressed,
+.terminal-keyboard-header-control:active {
+  background: #aaa7a0;
+}
+
+.dark .terminal-keyboard-header-control.pressed,
+.dark .terminal-keyboard-header-control:active {
+  background: #6a6965;
 }
 
 @media (orientation: landscape) and (max-height: 520px) {
   .terminal-keyboard-body {
     grid-template-rows: repeat(4, 36px);
-    height: 159px;
+    height: calc(168px + env(safe-area-inset-bottom));
   }
 
   .terminal-key {
     min-height: 34px;
+    font-size: 12px;
   }
 
   .terminal-special-bar .terminal-key {
-    min-height: 32px;
+    min-height: 34px;
+    font-size: 11px;
   }
 }

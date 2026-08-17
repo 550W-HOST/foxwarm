@@ -5,7 +5,8 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { API_BASE_PATH, makeWebSocketUrl } from '../config'
 import { buildTerminalCreateRequest, findTerminalForTarget, normalizeTerminalTarget } from '../terminalTarget'
-import TerminalVirtualKeyboard from './TerminalVirtualKeyboard'
+import { loadTerminalKeyboardMode, TERMINAL_KEYBOARD_STORAGE_KEY, type TerminalKeyboardMode } from '../terminalVirtualKeyboard'
+import TerminalVirtualKeyboard, { TerminalKeyboardHeaderControl } from './TerminalVirtualKeyboard'
 
 type TerminalStatus = 'connecting' | 'ready' | 'closed' | 'error'
 
@@ -50,6 +51,15 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
   const [terminalInfo, setTerminalInfo] = useState<TerminalInfo | null>(null)
   const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null)
   const [keyboardResetVersion, setKeyboardResetVersion] = useState(0)
+  const [keyboardMode, setKeyboardMode] = useState<TerminalKeyboardMode>(() => {
+    const coarsePointer = window.matchMedia('(pointer: coarse)').matches
+    try { return loadTerminalKeyboardMode(localStorage, coarsePointer) } catch { return coarsePointer ? 'web' : 'collapsed' }
+  })
+
+  const changeKeyboardMode = (nextMode: TerminalKeyboardMode) => {
+    setKeyboardMode(nextMode)
+    try { localStorage.setItem(TERMINAL_KEYBOARD_STORAGE_KEY, nextMode) } catch {}
+  }
 
   const requestedTarget = useMemo(() => normalizeTerminalTarget({ nodeId: initialNodeId, cwd: initialCwd }), [initialCwd, initialNodeId])
   const requestedTargetRef = useRef(requestedTarget)
@@ -343,6 +353,12 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
                 </button>
               )}
               <span>status {status}</span>
+              {keyboardMode !== 'web' && (
+                <TerminalKeyboardHeaderControl
+                  nativeMode={keyboardMode === 'native'}
+                  onActivate={() => changeKeyboardMode('web')}
+                />
+              )}
               {terminalInfo && (
                 <>
                   <span>node {terminalInfo.nodeId}</span>
@@ -365,6 +381,8 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
       <TerminalVirtualKeyboard
         terminal={terminalInstance}
         resetToken={`${terminalIdRef.current ?? 'pending'}:${keyboardResetVersion}`}
+        mode={keyboardMode}
+        onModeChange={changeKeyboardMode}
       />
     </div>
   )

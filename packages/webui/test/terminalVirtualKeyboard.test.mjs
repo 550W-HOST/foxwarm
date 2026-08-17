@@ -72,7 +72,7 @@ test('only the approved editing and navigation keys repeat', async () => {
   assert.deepEqual([...REPEATING_TERMINAL_KEYS], ['Backspace', 'Delete', 'ArrowLeft', 'ArrowUp', 'ArrowDown', 'ArrowRight', 'PageUp', 'PageDown'])
 })
 
-test('native footer offset uses only local pane overlap with the visible viewport', async () => {
+test('native header control offset uses only local pane overlap with the visible viewport', async () => {
   const { terminalKeyboardViewportOverlap } = await loadModule()
   assert.equal(terminalKeyboardViewportOverlap(420, 500), 0)
   assert.equal(terminalKeyboardViewportOverlap(500, 500), 0)

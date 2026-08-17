@@ -1,11 +1,14 @@
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
+import { mkdir } from 'node:fs/promises'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const componentEntry = new URL('../src/components/TerminalVirtualKeyboard.tsx', import.meta.url).pathname
+const keyboardEntry = new URL('../src/terminalVirtualKeyboard.ts', import.meta.url).pathname
+const screenshotDir = process.env.FOXWARM_KEYBOARD_SCREENSHOTS_DIR
 let browser
 let page
 let server
@@ -15,7 +18,8 @@ async function buildFixture() {
   const source = `
     import React, { useState } from 'react'
     import { createRoot } from 'react-dom/client'
-    import TerminalVirtualKeyboard from ${JSON.stringify(componentEntry)}
+    import TerminalVirtualKeyboard, { TerminalKeyboardHeaderControl } from ${JSON.stringify(componentEntry)}
+    import { loadTerminalKeyboardMode, TERMINAL_KEYBOARD_STORAGE_KEY } from ${JSON.stringify(keyboardEntry)}
 
     class FakeTerminal {
       constructor() {
@@ -43,6 +47,11 @@ async function buildFixture() {
 
     function Fixture() {
       const [resetToken, setResetToken] = useState('one')
+      const [mode, setMode] = useState(() => loadTerminalKeyboardMode(localStorage, window.matchMedia('(pointer: coarse)').matches))
+      const changeMode = value => {
+        setMode(value)
+        localStorage.setItem(TERMINAL_KEYBOARD_STORAGE_KEY, value)
+      }
       window.keyboardFixture = {
         terminal,
         inputs: () => [...terminal.inputs],
@@ -52,8 +61,12 @@ async function buildFixture() {
         clipboard: value => { navigator.clipboard.text = value },
         reset: () => setResetToken(value => value + '!'),
       }
-      return React.createElement('div', { style: { width: '390px' } },
-        React.createElement(TerminalVirtualKeyboard, { terminal, resetToken })
+      return React.createElement('div', { style: { width: '100%', height: '100vh', display: 'flex', flexDirection: 'column' } },
+        React.createElement('div', { className: 'fixture-header', style: { height: '34px', display: 'flex', alignItems: 'center', padding: '0 6px', background: '#e7e5e0' } },
+          mode !== 'web' ? React.createElement(TerminalKeyboardHeaderControl, { nativeMode: mode === 'native', onActivate: () => changeMode('web') }) : null
+        ),
+        React.createElement('div', { style: { minHeight: 0, flex: 1, background: '#111' } }),
+        React.createElement(TerminalVirtualKeyboard, { terminal, resetToken, mode, onModeChange: changeMode })
       )
     }
     createRoot(document.getElementById('root')).render(React.createElement(Fixture))
@@ -76,6 +89,7 @@ async function buildFixture() {
 }
 
 before(async () => {
+  if (screenshotDir) await mkdir(screenshotDir, { recursive: true })
   const fixture = await buildFixture()
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
@@ -120,14 +134,37 @@ test('mobile defaults to the Web keyboard and ABC, 123, and More keep one body h
   assert.equal(await page.$eval('[data-terminal-keyboard-mode]', element => element.dataset.terminalKeyboardMode), 'web')
   assert.deepEqual(await page.$$eval('.terminal-special-bar .terminal-key', buttons => buttons.map(button => button.textContent.trim())), ['Esc', 'Tab', 'Ctrl', 'Alt', '←', '↑', '↓', '→', 'More'])
   assert.ok(await page.evaluate(() => ['q', 'a', 'Shift', 'z', 'Backspace', '123', 'Space', 'Enter'].every(label => [...document.querySelectorAll('.terminal-key')].some(button => button.textContent.trim() === label || button.getAttribute('aria-label') === label))))
+  assert.deepEqual(await page.$$eval('.terminal-keyboard-body .row-4 .terminal-key', buttons => buttons.map(button => button.getAttribute('aria-label') || button.textContent.trim())), ['123', 'Native keyboard', 'Space', 'Collapse keyboard', 'Enter'])
+  const keyColors = await page.evaluate(() => ({
+    character: getComputedStyle(document.querySelector('[data-key-id="abc-q"]')).backgroundColor,
+    utility: getComputedStyle(document.querySelector('[data-key-id="abc-shift"]')).backgroundColor,
+  }))
+  assert.notEqual(keyColors.character, keyColors.utility)
+  if (screenshotDir) {
+    await page.screenshot({ path: `${screenshotDir}/terminal-keyboard-390x844.png` })
+    await page.evaluate(() => document.documentElement.classList.add('dark'))
+    await page.screenshot({ path: `${screenshotDir}/terminal-keyboard-dark-390x844.png` })
+    await page.evaluate(() => document.documentElement.classList.remove('dark'))
+  }
   const height = await page.$eval('.terminal-keyboard-body', element => element.getBoundingClientRect().height)
   await clickKey('123')
   assert.equal(await page.$eval('.terminal-keyboard-body', element => element.getBoundingClientRect().height), height)
   await clickKey('More')
   assert.equal(await page.$eval('.terminal-keyboard-body', element => element.getBoundingClientRect().height), height)
   assert.ok(await page.evaluate(() => ['Home', 'End', 'PgUp', 'PgDn', 'Insert', 'Delete', 'Copy', 'Paste', ...Array.from({ length: 12 }, (_, index) => `F${index + 1}`)].every(label => [...document.querySelectorAll('.terminal-key')].some(button => button.textContent.trim() === label))))
-  await clickKey('More')
+  assert.deepEqual(await page.$$eval('.terminal-keyboard-body .row-4 .terminal-key', buttons => buttons.map(button => button.getAttribute('aria-label') || button.textContent.trim())), ['123', 'Native keyboard', 'Space', 'Collapse keyboard', 'Enter'])
+  if (screenshotDir) await page.screenshot({ path: `${screenshotDir}/terminal-keyboard-more-390x844.png` })
+  await clickKey('123')
   assert.ok(await page.evaluate(() => [...document.querySelectorAll('.terminal-key')].some(button => button.textContent.trim() === 'ABC')))
+})
+
+test('compact landscape keeps the same integrated control row and neutral hierarchy', async () => {
+  await page.setViewport({ width: 844, height: 390, isMobile: true, hasTouch: true, deviceScaleFactor: 1 })
+  await mount()
+  assert.deepEqual(await page.$$eval('.terminal-keyboard-body .row-4 .terminal-key', buttons => buttons.map(button => button.getAttribute('aria-label') || button.textContent.trim())), ['123', 'Native keyboard', 'Space', 'Collapse keyboard', 'Enter'])
+  assert.ok((await page.$eval('.terminal-keyboard-body', element => element.getBoundingClientRect().height)) < 200)
+  if (screenshotDir) await page.screenshot({ path: `${screenshotDir}/terminal-keyboard-844x390.png` })
+  await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 1 })
 })
 
 test('pointer down sends nothing, release sends once, and drag outside cancels', async () => {
@@ -233,31 +270,31 @@ test('Copy and Paste use xterm selection/paste without consuming modifiers', asy
   assert.ok((await page.$$eval('button[aria-pressed="true"]', buttons => buttons.map(button => button.textContent.trim()))).includes('Ctrl'))
 })
 
-test('Web, Native, and Collapsed transitions keep a reachable footer and reset modifiers', async () => {
+test('integrated mode keys and the header control cover Web, Native, and Collapsed states', async () => {
   await mount()
   await clickKey('Ctrl')
   await page.evaluate(() => window.keyboardFixture.reset())
   await page.waitForFunction(() => ![...document.querySelectorAll('button[aria-pressed="true"]')].some(button => button.textContent.trim() === 'Ctrl'))
   await clickKey('Ctrl')
-  const nativeButton = await page.evaluateHandle(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Native keyboard'))
+  const nativeButton = await key('Native keyboard')
   const nativeBox = await nativeButton.boundingBox()
   await page.mouse.move(nativeBox.x + nativeBox.width / 2, nativeBox.y + nativeBox.height / 2)
   await page.mouse.down()
   await page.mouse.move(nativeBox.x + nativeBox.width + 30, nativeBox.y + nativeBox.height + 30)
   await page.mouse.up()
   assert.equal(await page.$eval('[data-terminal-keyboard-mode]', element => element.dataset.terminalKeyboardMode), 'web')
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Native keyboard').click())
+  await pressAndRelease('Native keyboard')
   assert.equal(await page.$eval('[data-terminal-keyboard-mode]', element => element.dataset.terminalKeyboardMode), 'native')
   assert.deepEqual(await page.$eval('#terminal-textarea', element => ({ readOnly: element.readOnly, inputMode: element.inputMode, focused: document.activeElement === element })), { readOnly: false, inputMode: 'text', focused: true })
-  assert.ok(await page.$eval('.terminal-keyboard-footer', element => element.textContent.includes('Web keyboard') && element.textContent.includes('Open keyboard') && element.textContent.includes('Collapse')))
-  await page.$eval('#terminal-textarea', element => element.blur())
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Open keyboard').click())
-  assert.equal(await page.$eval('#terminal-textarea', element => document.activeElement === element), true)
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Collapse').click())
+  assert.equal(await page.$('.terminal-keyboard-footer'), null)
+  assert.ok(await page.$('button[aria-label="Show Web keyboard"]'))
+  await page.click('button[aria-label="Show Web keyboard"]')
+  assert.equal(await page.$eval('[data-terminal-keyboard-mode]', element => element.dataset.terminalKeyboardMode), 'web')
+  await pressAndRelease('Collapse keyboard')
   assert.equal(await page.$eval('[data-terminal-keyboard-mode]', element => element.dataset.terminalKeyboardMode), 'collapsed')
   assert.deepEqual(await page.$eval('#terminal-textarea', element => ({ readOnly: element.readOnly, inputMode: element.inputMode })), { readOnly: true, inputMode: 'none' })
-  assert.ok(await page.$eval('.terminal-keyboard-footer', element => element.textContent.includes('Web keyboard') && element.textContent.includes('Native keyboard')))
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Web keyboard').click())
+  assert.ok(await page.$('button[aria-label="Show Web keyboard"]'))
+  await page.click('button[aria-label="Show Web keyboard"]')
   assert.equal(await page.$eval('[data-terminal-keyboard-mode]', element => element.dataset.terminalKeyboardMode), 'web')
 })
 
@@ -269,6 +306,8 @@ test('TerminalView keeps xterm onData as the canonical WebSocket input route', a
   const styles = await import('node:fs/promises').then(fs => fs.readFile(new URL('../src/components/TerminalVirtualKeyboard.css', import.meta.url), 'utf8'))
   assert.match(component, /window\.visualViewport/)
   assert.match(styles, /env\(safe-area-inset-bottom\)/)
+  assert.doesNotMatch(styles, /terminal-keyboard-footer/)
+  assert.doesNotMatch(styles, /#(?:2563eb|1d4ed8|60a5fa|bfdbfe|0f172a|172033|334155|475569|64748b|94a3b8)/i)
 })
 
 test('fine-pointer desktop defaults collapsed without disabling the physical-keyboard textarea', async () => {
