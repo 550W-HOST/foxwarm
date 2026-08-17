@@ -1,0 +1,205 @@
+.terminal-keyboard {
+  flex: 0 0 auto;
+  min-width: 0;
+  color: #111827;
+  background: #d1d5db;
+  border-top: 1px solid #9ca3af;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.dark .terminal-keyboard {
+  color: #f3f4f6;
+  background: #111827;
+  border-color: #374151;
+}
+
+.terminal-special-bar {
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 4px;
+  padding: 5px 5px 4px;
+  background: #e5e7eb;
+}
+
+.dark .terminal-special-bar {
+  background: #0f172a;
+}
+
+.terminal-keyboard-body {
+  display: grid;
+  grid-template-rows: repeat(4, 44px);
+  gap: 5px;
+  height: 191px;
+  padding: 4px 5px 5px;
+  background: #cbd5e1;
+}
+
+.dark .terminal-keyboard-body {
+  background: #172033;
+}
+
+.terminal-key-row {
+  display: flex;
+  min-width: 0;
+  justify-content: center;
+  gap: 4px;
+}
+
+.terminal-keyboard-body[data-page="abc"] .row-2 {
+  padding-inline: 4.5%;
+}
+
+.terminal-key {
+  min-width: 0;
+  min-height: 40px;
+  flex: 1 1 0;
+  border: 1px solid #9ca3af;
+  border-radius: 7px;
+  background: #f9fafb;
+  color: #111827;
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.18);
+  font: 600 12px/1 system-ui, sans-serif;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.dark .terminal-key {
+  border-color: #475569;
+  background: #334155;
+  color: #f8fafc;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.45);
+}
+
+.terminal-special-bar .terminal-key {
+  min-height: 36px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.terminal-key.wide {
+  flex-grow: 1.45;
+}
+
+.terminal-key.page,
+.terminal-key.enter {
+  flex-grow: 1.35;
+}
+
+.terminal-key.space {
+  flex-grow: 5;
+}
+
+.terminal-key.pressed,
+.terminal-key:active {
+  transform: translateY(1px);
+  background: #94a3b8;
+  box-shadow: none;
+}
+
+.dark .terminal-key.pressed,
+.dark .terminal-key:active {
+  background: #64748b;
+}
+
+.terminal-key.armed {
+  border-color: #2563eb;
+  background: #bfdbfe;
+  color: #1e3a8a;
+}
+
+.dark .terminal-key.armed {
+  border-color: #60a5fa;
+  background: #1d4ed8;
+  color: #eff6ff;
+}
+
+.terminal-key.locked {
+  box-shadow: inset 0 0 0 2px #2563eb;
+}
+
+.terminal-keyboard-footer {
+  position: relative;
+  z-index: 30;
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px calc(4px + env(safe-area-inset-bottom));
+  border-top: 1px solid #9ca3af;
+  background: #e5e7eb;
+  transition: transform 100ms ease-out;
+}
+
+.dark .terminal-keyboard-footer {
+  border-color: #374151;
+  background: #0f172a;
+}
+
+.terminal-keyboard-mode-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.terminal-keyboard-mode-actions button {
+  min-height: 28px;
+  border: 1px solid #9ca3af;
+  border-radius: 6px;
+  padding: 4px 9px;
+  background: #f9fafb;
+  color: #1f2937;
+  font: 600 11px/1 system-ui, sans-serif;
+}
+
+.terminal-keyboard-mode-actions button.pressed,
+.terminal-keyboard-mode-actions button:active {
+  transform: translateY(1px);
+  background: #cbd5e1;
+}
+
+.dark .terminal-keyboard-mode-actions button {
+  border-color: #475569;
+  background: #1e293b;
+  color: #e2e8f0;
+}
+
+.dark .terminal-keyboard-mode-actions button.pressed,
+.dark .terminal-keyboard-mode-actions button:active {
+  background: #475569;
+}
+
+.terminal-keyboard-feedback {
+  min-width: 0;
+  overflow: hidden;
+  color: #4b5563;
+  font: 500 11px/1.2 system-ui, sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dark .terminal-keyboard-feedback {
+  color: #94a3b8;
+}
+
+.terminal-keyboard-native,
+.terminal-keyboard-collapsed {
+  border-top: 0;
+  background: transparent;
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .terminal-keyboard-body {
+    grid-template-rows: repeat(4, 36px);
+    height: 159px;
+  }
+
+  .terminal-key {
+    min-height: 34px;
+  }
+
+  .terminal-special-bar .terminal-key {
+    min-height: 32px;
+  }
+}

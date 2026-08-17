@@ -5,6 +5,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { API_BASE_PATH, makeWebSocketUrl } from '../config'
 import { buildTerminalCreateRequest, findTerminalForTarget, normalizeTerminalTarget } from '../terminalTarget'
+import TerminalVirtualKeyboard from './TerminalVirtualKeyboard'
 
 type TerminalStatus = 'connecting' | 'ready' | 'closed' | 'error'
 
@@ -47,6 +48,8 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [error, setError] = useState<string | null>(null)
   const [terminalInfo, setTerminalInfo] = useState<TerminalInfo | null>(null)
+  const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null)
+  const [keyboardResetVersion, setKeyboardResetVersion] = useState(0)
 
   const requestedTarget = useMemo(() => normalizeTerminalTarget({ nodeId: initialNodeId, cwd: initialCwd }), [initialCwd, initialNodeId])
   const requestedTargetRef = useRef(requestedTarget)
@@ -114,6 +117,7 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
 
     if (hostRef.current) {
       term.open(hostRef.current)
+      setTerminalInstance(term)
       scheduleFit()
     }
 
@@ -148,6 +152,7 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
       term.dispose()
       xtermRef.current = null
       fitAddonRef.current = null
+      setTerminalInstance(null)
     }
   }, [])
 
@@ -160,6 +165,7 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
     let binaryDisposable: { dispose: () => void } | null = null
 
     setStatus('connecting')
+    setKeyboardResetVersion(version => version + 1)
     setError(null)
     setTerminalInfo(null)
     terminalIdRef.current = null
@@ -246,6 +252,7 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
             const payload = JSON.parse(event.data)
             if (payload.type === 'ready') {
               term.reset()
+              setKeyboardResetVersion(version => version + 1)
               suppressCloseCallbackRef.current = false
               setTerminalInfo(payload.terminal)
               setStatus('ready')
@@ -297,6 +304,7 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
 
         ws.onclose = () => {
           wsRef.current = null
+          setKeyboardResetVersion(version => version + 1)
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -354,6 +362,10 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
       <div className="min-h-0 flex-1 overflow-hidden bg-[#111827]">
         <div ref={hostRef} className="h-full w-full" />
       </div>
+      <TerminalVirtualKeyboard
+        terminal={terminalInstance}
+        resetToken={`${terminalIdRef.current ?? 'pending'}:${keyboardResetVersion}`}
+      />
     </div>
   )
 }
