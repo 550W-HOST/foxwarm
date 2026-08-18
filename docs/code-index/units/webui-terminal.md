@@ -1,6 +1,6 @@
 # Unit: webui-terminal
 
-Files: packages/webui/src/components/TerminalView.tsx, packages/webui/src/components/TerminalVirtualKeyboard.tsx, packages/webui/src/components/TerminalVirtualKeyboard.css, packages/webui/src/terminalVirtualKeyboard.ts, packages/webui/src/terminalTarget.ts
+Files: packages/webui/src/components/TerminalView.tsx, packages/webui/src/components/TerminalVirtualKeyboard.tsx, packages/webui/src/components/TerminalVirtualKeyboard.css, packages/webui/src/terminalVirtualKeyboard.ts, packages/webui/src/terminalPinchZoom.ts, packages/webui/src/terminalTarget.ts
 
 ## Purpose
 
@@ -12,6 +12,8 @@ Renders an interactive terminal session in the browser using xterm.js, connectin
 - `default` (TerminalVirtualKeyboard) — complete US-ASCII virtual keyboard bound to a public xterm input surface
 - `encodeTerminalVirtualKey(...)` — pure VT sequence encoder for printable, editing, navigation, and F1-F12 keys
 - `loadTerminalKeyboardMode(...)` — resolves persisted or pointer-aware default keyboard mode
+- `terminalPinchFontSize(...)` — calculates baseline-relative, clamped mobile pinch font size
+- `attachTerminalPinchZoom(...)` — installs and cleans up coalesced two-touch xterm zoom handling
 
 ## Function Index
 
@@ -30,11 +32,13 @@ Renders an interactive terminal session in the browser using xterm.js, connectin
 | `changeMode(...)` | TerminalVirtualKeyboard.tsx | Persists Web/native/collapsed mode and synchronously configures the xterm textarea |
 | `encodeTerminalVirtualKey(...)` | terminalVirtualKeyboard.ts | Encodes printable/control/Alt and mode-aware VT special-key sequences |
 | `nextShiftState(...)` | terminalVirtualKeyboard.ts | Applies one-shot, quick-double-tap lock, and unlock Shift transitions |
+| `terminalPinchDistance(...)` / `terminalPinchFontSize(...)` | terminalPinchZoom.ts | Measures two touches and derives a rounded 10–24px size from the gesture baseline |
+| `attachTerminalPinchZoom(...)` | terminalPinchZoom.ts | Handles standard two-touch events, coalesced option updates/refits, cancellation, and cleanup |
 
 ## Dependencies
 
 - `../config` — `API_BASE_PATH`, `makeWebSocketUrl` (server endpoint configuration)
-- `@xterm/xterm` public `input`, `paste`, `textarea`, `modes`, selection, focus, and blur APIs
+- `@xterm/xterm` public `input`, `paste`, `textarea`, `modes`, `options.fontSize`, selection, focus, and blur APIs
 
 ## Behavior
 
@@ -54,6 +58,7 @@ Renders an interactive terminal session in the browser using xterm.js, connectin
 - Copy writes the current nonempty xterm selection and gives concise inline feedback when unavailable; paste reads the Clipboard API and uses `term.paste` without consuming modifiers. No textarea fallback is created.
 - The keyboard is a flex child of the terminal pane, so its fixed body and integrated safe-area bottom row naturally participate in ResizeObserver/FitAddon refits. In Native mode, the header re-entry control compares its stable, untransformed anchor bottom with the `visualViewport` visible bottom and moves only by their local overlap; visual-viewport, window, and anchor resizes recompute it so split panes do not inherit a global full-keyboard translation.
 - The keyboard's visual hierarchy is neutral and iOS-inspired rather than literal: warm-gray wells, light character keys, darker utility/modifier/page keys, restrained radius/shadow/spacing, neutral pressed and modifier states, and charcoal/gray dark-mode equivalents. Terminal keyboard controls do not use blue accents.
+- Two-touch pinch gestures attached only to the xterm host scale from the gesture's starting distance and font size, round to 0.5px steps, and clamp to 10–24px around the 14px default. Effective changes write public `term.options.fontSize`, then use the existing FitAddon/PTY resize notifier at most once per animation frame. One-touch events are untouched; an active pinch prevents browser defaults and stops propagation before xterm's document-level touch gesture handling, including its terminating event, so pinch translation cannot scroll/select or leave stale tap state. Touch-count changes, cancellation, remount, and unmount clear pending work.
 
 ## Integration
 
@@ -65,4 +70,5 @@ Renders an interactive terminal session in the browser using xterm.js, connectin
 ## Design Decisions
 
 - [2026-07-09] WebUI terminal callers were updated to stop passing/depending on `sessionId`; persisted legacy terminal tab fields such as `contextSessionId` are tolerated as extra stored data but are ignored by current terminal logic.
-- <a id="d-webui-terminal-mobile-virtual-keyboard"></a> **[2026-08-17] Mobile terminal input uses a complete WebUI-rendered US-ASCII keyboard rather than a special-key-only bar.** Its immutable contract is a fixed Esc/Tab/Ctrl/Alt/arrows/More bar with no Shift; exactly three stable-height ABC, 123, and More bodies; one-shot Ctrl/Alt and one-shot-or-double-lock Shift; and release-to-send with bounded repeat only for Backspace/Delete/arrows/PgUp/PgDn. ABC/123 integrate page switch, Native, Space, Collapse, and Enter in the safe-area bottom row; More uses three content rows plus the same controls and returns to its source page. There is no separate footer. Native/Collapsed re-entry is one compact, pane-local keyboard icon in the terminal header. The keyboard follows a neutral iOS-inspired hierarchy with light character keys, darker utility keys, neutral dark-mode equivalents, and no blue accents. Web mode suppresses the native mobile textarea keyboard without `disableStdin`; Native restores and synchronously focuses it. Virtual input must stay on supported xterm public APIs and the existing `onData` WebSocket pipeline, with pure tested VT encoding and no private xterm members, new backend protocol, configurable layouts, macros, extra pages, CJK Web keyboard, haptics, gestures, or Kitty protocol in V1.
+- <a id="d-webui-terminal-mobile-virtual-keyboard"></a> **[2026-08-18] Mobile terminal input uses a complete WebUI-rendered US-ASCII keyboard rather than a special-key-only bar.** Its immutable contract is a fixed Esc/Tab/Ctrl/Alt/`← ↓ ↑ →`/More bar with no Shift; exactly three stable-height ABC, 123, and More bodies; one-shot Ctrl/Alt and one-shot-or-double-lock Shift; and release-to-send with bounded repeat only for Backspace/Delete/arrows/PgUp/PgDn. ABC/123 integrate page switch, Native, Space, Collapse, and Enter in the safe-area bottom row; More uses three content rows plus the same controls and returns to its source page. There is no separate footer. Native/Collapsed re-entry is one compact, pane-local keyboard icon in the terminal header. The neutral iOS-inspired hierarchy uses enlarged QWERTY labels and Backspace icon, slightly roomier row spacing with minimal non-safe-area bottom padding, extra Shift/Z and M/Backspace separation, a roughly 1.5x-wider Enter balanced by a narrower Space, darker utility keys, neutral dark-mode equivalents, and no blue accents. Web mode suppresses the native mobile textarea keyboard without `disableStdin`; Native restores and synchronously focuses it. Virtual input must stay on supported xterm public APIs and the existing `onData` WebSocket pipeline, with pure tested VT encoding and no private xterm members, new backend protocol, configurable layouts, macros, extra pages, CJK Web keyboard, haptics, gestures, or Kitty protocol in V1.
+- <a id="d-webui-terminal-mobile-pinch"></a> **[2026-08-18] Mobile xterm font zoom is a runtime-only two-finger pinch on the terminal viewport.** It uses standard Touch Events and public xterm `options.fontSize`, derives every update from the gesture's starting distance and font size to avoid cumulative drift, clamps to a readable range around the 14px default, coalesces changes before using the existing FitAddon and PTY resize path, and never adds a backend protocol or persistent setting. One-finger terminal scroll/selection and virtual-keyboard gestures remain unchanged. While an active pinch has exactly two touches, its events prevent browser defaults and stop propagation before xterm's document-level gesture handling; its terminating event is also contained so translated pinches cannot scroll/select or leave stale tap state. Touch-count changes, cancellation, remount, or unmount terminate the gesture cleanly.

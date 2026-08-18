@@ -132,7 +132,7 @@ async function pressAndRelease(label) {
 test('mobile defaults to the Web keyboard and ABC, 123, and More keep one body height', async () => {
   await mount()
   assert.equal(await page.$eval('[data-terminal-keyboard-mode]', element => element.dataset.terminalKeyboardMode), 'web')
-  assert.deepEqual(await page.$$eval('.terminal-special-bar .terminal-key', buttons => buttons.map(button => button.textContent.trim())), ['Esc', 'Tab', 'Ctrl', 'Alt', '←', '↑', '↓', '→', 'More'])
+  assert.deepEqual(await page.$$eval('.terminal-special-bar .terminal-key', buttons => buttons.map(button => button.textContent.trim())), ['Esc', 'Tab', 'Ctrl', 'Alt', '←', '↓', '↑', '→', 'More'])
   assert.ok(await page.evaluate(() => ['q', 'a', 'Shift', 'z', 'Backspace', '123', 'Space', 'Enter'].every(label => [...document.querySelectorAll('.terminal-key')].some(button => button.textContent.trim() === label || button.getAttribute('aria-label') === label))))
   assert.deepEqual(await page.$$eval('.terminal-keyboard-body .row-4 .terminal-key', buttons => buttons.map(button => button.getAttribute('aria-label') || button.textContent.trim())), ['123', 'Native keyboard', 'Space', 'Collapse keyboard', 'Enter'])
   const keyColors = await page.evaluate(() => ({
@@ -140,6 +140,31 @@ test('mobile defaults to the Web keyboard and ABC, 123, and More keep one body h
     utility: getComputedStyle(document.querySelector('[data-key-id="abc-shift"]')).backgroundColor,
   }))
   assert.notEqual(keyColors.character, keyColors.utility)
+  const layoutMetrics = await page.evaluate(() => {
+    const rect = id => document.querySelector(`[data-key-id="${id}"]`).getBoundingClientRect()
+    const style = id => getComputedStyle(document.querySelector(`[data-key-id="${id}"]`))
+    return {
+      letterFont: parseFloat(style('abc-q').fontSize),
+      utilityFont: parseFloat(style('abc-shift').fontSize),
+      backspaceIconWidth: rect('abc-backspace').width && document.querySelector('[data-key-id="abc-backspace"] svg').getBoundingClientRect().width,
+      rowGap: parseFloat(getComputedStyle(document.querySelector('.terminal-keyboard-body')).rowGap),
+      bottomPadding: parseFloat(getComputedStyle(document.querySelector('.terminal-keyboard-body')).paddingBottom),
+      enterToPageRatio: rect('abc-enter').width / rect('abc-symbols').width,
+      spaceWidth: rect('abc-space').width,
+      enterWidth: rect('abc-enter').width,
+      shiftGap: rect('abc-z').left - rect('abc-shift').right,
+      ordinaryGap: rect('abc-x').left - rect('abc-z').right,
+      backspaceGap: rect('abc-backspace').left - rect('abc-m').right,
+    }
+  })
+  assert.ok(layoutMetrics.letterFont > layoutMetrics.utilityFont)
+  assert.ok(layoutMetrics.backspaceIconWidth >= 24)
+  assert.equal(layoutMetrics.rowGap, 7)
+  assert.equal(layoutMetrics.bottomPadding, 1)
+  assert.ok(layoutMetrics.enterToPageRatio > 1.4 && layoutMetrics.enterToPageRatio < 1.6, JSON.stringify(layoutMetrics))
+  assert.ok(layoutMetrics.spaceWidth > layoutMetrics.enterWidth)
+  assert.ok(layoutMetrics.shiftGap > layoutMetrics.ordinaryGap)
+  assert.ok(layoutMetrics.backspaceGap > layoutMetrics.ordinaryGap)
   if (screenshotDir) {
     await page.screenshot({ path: `${screenshotDir}/terminal-keyboard-390x844.png` })
     await page.evaluate(() => document.documentElement.classList.add('dark'))
@@ -199,11 +224,19 @@ test('pointer down sends nothing, release sends once, and drag outside cancels',
   assert.ok(!(await page.$$eval('button[aria-pressed="true"]', buttons => buttons.map(button => button.textContent.trim()))).includes('Ctrl'))
 })
 
+test('Vim-order Down and Up keys retain their actual VT meanings', async () => {
+  await mount()
+  await page.evaluate(() => window.keyboardFixture.clear())
+  await pressAndRelease('↓')
+  await pressAndRelease('↑')
+  assert.deepEqual(await page.evaluate(() => window.keyboardFixture.inputs()), ['\x1b[B', '\x1b[A'])
+})
+
 test('repeat waits for the hold delay, repeats, and release adds no final key', async () => {
   await mount()
   await page.evaluate(() => window.keyboardFixture.clear())
   await clickKey('Alt')
-  const backspace = await key('⌫')
+  const backspace = await key('Backspace')
   const box = await backspace.boundingBox()
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
   await page.mouse.down()

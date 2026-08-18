@@ -6,6 +6,7 @@ import '@xterm/xterm/css/xterm.css'
 import { API_BASE_PATH, makeWebSocketUrl } from '../config'
 import { buildTerminalCreateRequest, findTerminalForTarget, normalizeTerminalTarget } from '../terminalTarget'
 import { loadTerminalKeyboardMode, TERMINAL_KEYBOARD_STORAGE_KEY, type TerminalKeyboardMode } from '../terminalVirtualKeyboard'
+import { attachTerminalPinchZoom } from '../terminalPinchZoom'
 import TerminalVirtualKeyboard, { TerminalKeyboardHeaderControl } from './TerminalVirtualKeyboard'
 
 type TerminalStatus = 'connecting' | 'ready' | 'closed' | 'error'
@@ -80,6 +81,7 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
 
   useEffect(() => {
     let disposed = false
+    let disposePinchZoom: (() => void) | null = null
     const scheduledFitHandles: number[] = []
     const term = new Terminal({
       cursorBlink: true,
@@ -128,6 +130,12 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
     if (hostRef.current) {
       term.open(hostRef.current)
       setTerminalInstance(term)
+      disposePinchZoom = attachTerminalPinchZoom({
+        target: hostRef.current,
+        getFontSize: () => term.options.fontSize ?? 14,
+        setFontSize: (fontSize) => { term.options.fontSize = fontSize },
+        refit: fitAndNotifyResize,
+      })
       scheduleFit()
     }
 
@@ -153,6 +161,8 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
     return () => {
       disposed = true
       scheduledFitHandles.forEach((handle) => window.clearTimeout(handle))
+      disposePinchZoom?.()
+      disposePinchZoom = null
       fitAndNotifyResizeRef.current = null
       window.removeEventListener('resize', fitAndNotifyResize)
       resizeObserverRef.current?.disconnect()

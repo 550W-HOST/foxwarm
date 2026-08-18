@@ -37,9 +37,9 @@
   box-sizing: border-box;
   display: grid;
   grid-template-rows: repeat(4, 44px);
-  gap: 5px;
+  gap: 7px;
   height: calc(200px + env(safe-area-inset-bottom));
-  padding: 4px 6px calc(5px + env(safe-area-inset-bottom));
+  padding: 2px 6px calc(1px + env(safe-area-inset-bottom));
   background: #d1cec8;
 }
 
@@ -56,6 +56,14 @@
 
 .terminal-keyboard-body[data-page="abc"] .row-2 {
   padding-inline: 4.5%;
+}
+
+.terminal-keyboard-body[data-page="abc"] [data-key-id="abc-shift"] {
+  margin-right: 3px;
+}
+
+.terminal-keyboard-body[data-page="abc"] [data-key-id="abc-backspace"] {
+  margin-left: 3px;
 }
 
 .terminal-key {
@@ -99,13 +107,25 @@
   font-size: 12px;
 }
 
+.terminal-key.letter {
+  font-size: 16px;
+}
+
+.terminal-key.backspace svg {
+  width: 24px;
+  height: 24px;
+}
+
 .terminal-key.wide {
   flex-grow: 1.45;
 }
 
-.terminal-key.page,
-.terminal-key.enter {
+.terminal-key.page {
   flex-grow: 1.35;
+}
+
+.terminal-key.enter {
+  flex-grow: 2.2;
 }
 
 .terminal-key.compact {
@@ -113,7 +133,7 @@
 }
 
 .terminal-key.space {
-  flex-grow: 4.8;
+  flex-grow: 3.95;
   background: #f7f6f3;
   font-size: 12px;
   font-weight: 500;
@@ -229,6 +249,15 @@
   .terminal-key {
     min-height: 34px;
     font-size: 12px;
+  }
+
+  .terminal-key.letter {
+    font-size: 14px;
+  }
+
+  .terminal-key.backspace svg {
+    width: 22px;
+    height: 22px;
   }
 
   .terminal-special-bar .terminal-key {

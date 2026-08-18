@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Terminal } from '@xterm/xterm'
-import { ChevronDown, Keyboard } from 'lucide-react'
+import { ChevronDown, Delete as BackspaceIcon, Keyboard } from 'lucide-react'
 import {
   REPEATING_TERMINAL_KEYS,
   TERMINAL_KEYBOARD_STORAGE_KEY,
@@ -24,17 +24,17 @@ type KeyDefinition = {
   shiftedLabel?: string
   key?: TerminalVirtualKey
   action?: 'shift' | 'symbols' | 'abc' | 'return' | 'native' | 'collapse'
-  icon?: 'native' | 'collapse'
+  icon?: 'native' | 'collapse' | 'backspace'
   className?: string
 }
 
 const ABC_ROWS: KeyDefinition[][] = [
-  [...'qwertyuiop'].map(value => ({ id: `abc-${value}`, label: value, shiftedLabel: value.toUpperCase(), key: { kind: 'printable', value } })),
-  [...'asdfghjkl'].map(value => ({ id: `abc-${value}`, label: value, shiftedLabel: value.toUpperCase(), key: { kind: 'printable', value } })),
+  [...'qwertyuiop'].map(value => ({ id: `abc-${value}`, label: value, shiftedLabel: value.toUpperCase(), key: { kind: 'printable', value }, className: 'letter' })),
+  [...'asdfghjkl'].map(value => ({ id: `abc-${value}`, label: value, shiftedLabel: value.toUpperCase(), key: { kind: 'printable', value }, className: 'letter' })),
   [
     { id: 'abc-shift', label: 'Shift', action: 'shift', className: 'wide' },
-    ...[...'zxcvbnm'].map(value => ({ id: `abc-${value}`, label: value, shiftedLabel: value.toUpperCase(), key: { kind: 'printable' as const, value } })),
-    { id: 'abc-backspace', label: '⌫', key: { kind: 'special', value: 'Backspace' }, className: 'wide' },
+    ...[...'zxcvbnm'].map(value => ({ id: `abc-${value}`, label: value, shiftedLabel: value.toUpperCase(), key: { kind: 'printable' as const, value }, className: 'letter' })),
+    { id: 'abc-backspace', label: '⌫', key: { kind: 'special', value: 'Backspace' }, icon: 'backspace', className: 'wide backspace' },
   ],
   [
     { id: 'abc-symbols', label: '123', action: 'symbols', className: 'page' },
@@ -55,7 +55,7 @@ const SYMBOL_ROWS: KeyDefinition[][] = [
     ...[
       ['.', '`'], [',', '^'], ['?', '+'], ['!', '='], ["'", '*'], ['[', '%'], [']', '#'],
     ].map(([label, shiftedLabel]) => ({ id: `symbol-lower-${label}`, label, shiftedLabel, key: { kind: 'printable' as const, value: label } })),
-    { id: 'symbol-backspace', label: '⌫', key: { kind: 'special', value: 'Backspace' }, className: 'wide' },
+    { id: 'symbol-backspace', label: '⌫', key: { kind: 'special', value: 'Backspace' }, icon: 'backspace', className: 'wide backspace' },
   ],
   [
     { id: 'symbol-abc', label: 'ABC', action: 'abc', className: 'page' },
@@ -89,8 +89,8 @@ const SPECIAL_KEYS: KeyDefinition[] = [
   { id: 'special-ctrl', label: 'Ctrl', className: 'utility' },
   { id: 'special-alt', label: 'Alt', className: 'utility' },
   { id: 'special-left', label: '←', key: { kind: 'special', value: 'ArrowLeft' }, className: 'utility' },
-  { id: 'special-up', label: '↑', key: { kind: 'special', value: 'ArrowUp' }, className: 'utility' },
   { id: 'special-down', label: '↓', key: { kind: 'special', value: 'ArrowDown' }, className: 'utility' },
+  { id: 'special-up', label: '↑', key: { kind: 'special', value: 'ArrowUp' }, className: 'utility' },
   { id: 'special-right', label: '→', key: { kind: 'special', value: 'ArrowRight' }, className: 'utility' },
   { id: 'special-more', label: 'More', className: 'utility' },
 ]
@@ -476,7 +476,9 @@ export default function TerminalVirtualKeyboard({ terminal, resetToken, mode: co
           ? <Keyboard aria-hidden="true" size={18} strokeWidth={1.9} />
           : definition.icon === 'collapse'
             ? <ChevronDown aria-hidden="true" size={19} strokeWidth={2.1} />
-            : label}
+            : definition.icon === 'backspace'
+              ? <BackspaceIcon aria-hidden="true" size={24} strokeWidth={1.9} />
+              : label}
       </button>
     )
   }
