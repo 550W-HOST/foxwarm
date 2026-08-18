@@ -288,6 +288,171 @@ test('collectOpenAIResponsesStream rebuilds streamed output items from SSE delta
   assert.ok(progress.some(snapshot => snapshot.toolCalls?.[0]?.name === 'read'));
 });
 
+test('collectOpenAIResponsesStream preserves indexed reasoning summary boundaries over condensed completed output', async () => {
+  const firstSummary = '**Preparing final test report and preview options**';
+  const secondSummary = '**Confirming no live deployment without user approval**';
+  const stream = makeStream([
+    {
+      type: 'response.output_item.added',
+      output_index: 0,
+      item: { type: 'reasoning', id: 'rs_summary', summary: [] },
+    },
+    {
+      type: 'response.reasoning_summary_part.added',
+      output_index: 0,
+      summary_index: 0,
+      part: { type: 'summary_text', text: '' },
+    },
+    {
+      type: 'response.reasoning_summary_text.delta',
+      output_index: 0,
+      summary_index: 0,
+      delta: firstSummary,
+    },
+    {
+      type: 'response.reasoning_summary_text.done',
+      output_index: 0,
+      summary_index: 0,
+      text: firstSummary,
+    },
+    {
+      type: 'response.reasoning_summary_part.done',
+      output_index: 0,
+      summary_index: 0,
+      part: { type: 'summary_text', text: firstSummary },
+    },
+    {
+      type: 'response.reasoning_summary_part.added',
+      output_index: 0,
+      summary_index: 1,
+      part: { type: 'summary_text', text: '' },
+    },
+    {
+      type: 'response.reasoning_summary_text.delta',
+      output_index: 0,
+      summary_index: 1,
+      delta: secondSummary,
+    },
+    {
+      type: 'response.reasoning_summary_text.done',
+      output_index: 0,
+      summary_index: 1,
+      text: secondSummary,
+    },
+    {
+      type: 'response.reasoning_summary_part.done',
+      output_index: 0,
+      summary_index: 1,
+      part: { type: 'summary_text', text: secondSummary },
+    },
+    {
+      type: 'response.output_item.done',
+      output_index: 0,
+      item: {
+        type: 'reasoning',
+        id: 'rs_summary',
+        status: 'completed',
+        summary: [
+          { type: 'summary_text', text: firstSummary },
+          { type: 'summary_text', text: secondSummary },
+        ],
+      },
+    },
+    {
+      type: 'response.output_item.added',
+      output_index: 1,
+      item: { type: 'message', id: 'msg_summary', role: 'assistant', content: [] },
+    },
+    {
+      type: 'response.content_part.added',
+      output_index: 1,
+      content_index: 0,
+      part: { type: 'output_text', text: '' },
+    },
+    {
+      type: 'response.output_text.done',
+      output_index: 1,
+      content_index: 0,
+      text: 'Done',
+    },
+    {
+      type: 'response.output_item.done',
+      output_index: 1,
+      item: {
+        type: 'message',
+        id: 'msg_summary',
+        role: 'assistant',
+        status: 'completed',
+        content: [{ type: 'output_text', text: 'Done' }],
+      },
+    },
+    {
+      type: 'response.completed',
+      response: {
+        output: [
+          {
+            type: 'reasoning',
+            id: 'rs_summary',
+            status: 'completed',
+            summary: [{ type: 'summary_text', text: `${firstSummary}${secondSummary}` }],
+          },
+          {
+            type: 'message',
+            id: 'msg_summary',
+            role: 'assistant',
+            status: 'completed',
+            content: [{ type: 'output_text', text: 'Done' }],
+          },
+        ],
+      },
+    },
+    '[DONE]',
+  ]);
+
+  const progress: any[] = [];
+  const response = await collectOpenAIResponsesStream(stream, new AbortController().signal, {
+    onProgress: snapshot => progress.push(structuredClone(snapshot)),
+  });
+
+  assert.deepEqual(response.output[0].summary, [
+    { type: 'summary_text', text: firstSummary },
+    { type: 'summary_text', text: secondSummary },
+  ]);
+  assert.ok(progress.some(snapshot => snapshot.reasoning === `${firstSummary}\n${secondSummary}`));
+});
+
+test('collectOpenAIResponsesStream uses completed reasoning summaries when the stream has none', async () => {
+  const stream = makeStream([
+    {
+      type: 'response.output_item.added',
+      output_index: 0,
+      item: { type: 'reasoning', id: 'rs_completed_only', summary: [] },
+    },
+    {
+      type: 'response.output_item.done',
+      output_index: 0,
+      item: { type: 'reasoning', id: 'rs_completed_only', status: 'completed', summary: [] },
+    },
+    {
+      type: 'response.completed',
+      response: {
+        output: [{
+          type: 'reasoning',
+          id: 'rs_completed_only',
+          status: 'completed',
+          summary: [{ type: 'summary_text', text: 'Completed-only summary' }],
+        }],
+      },
+    },
+    '[DONE]',
+  ]);
+
+  const response = await collectOpenAIResponsesStream(stream, new AbortController().signal);
+  assert.deepEqual(response.output[0].summary, [
+    { type: 'summary_text', text: 'Completed-only summary' },
+  ]);
+});
+
 test('collectOpenAIResponsesStream preserves web search calls and streamed URL annotations', async () => {
   const citation = {
     type: 'url_citation',

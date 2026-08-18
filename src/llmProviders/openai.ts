@@ -168,6 +168,13 @@ function mergeResponseOutputItem(existing: any, incoming: any): any {
     return merged;
 }
 
+function hasUsableReasoningSummary(summary: unknown): summary is any[] {
+    return Array.isArray(summary) && summary.some((entry: any) =>
+        typeof (entry?.text ?? entry?.summary) === 'string'
+        && (entry.text ?? entry.summary).length > 0,
+    );
+}
+
 function isProviderSpecificFields(value: unknown): value is Record<string, unknown> {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -726,7 +733,13 @@ export async function collectOpenAIResponsesStream(
                 // The completed payload is authoritative when the complete
                 // arrays are proven aligned; the streamed item fills fields
                 // omitted by compatible gateways and preserves annotations.
-                return mergeResponseOutputItem(entry.item, completedItems[index]);
+                const mergedItem = mergeResponseOutputItem(entry.item, completedItems[index]);
+                if (entry.item?.type === 'reasoning' && hasUsableReasoningSummary(entry.item.summary)) {
+                    // Indexed streamed summary parts preserve boundaries that
+                    // response.completed may condense into one string.
+                    mergedItem.summary = [...entry.item.summary];
+                }
+                return mergedItem;
             });
         };
 

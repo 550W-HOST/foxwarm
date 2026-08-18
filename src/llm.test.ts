@@ -131,6 +131,71 @@ function makeResponsesWebSearchStream(): PassThrough {
   return stream;
 }
 
+function makeResponsesSummaryBoundaryStream(): PassThrough {
+  const firstSummary = '**Preparing final test report and preview options**';
+  const secondSummary = '**Confirming no live deployment without user approval**';
+  const events: any[] = [
+    {
+      type: 'response.output_item.added', output_index: 0,
+      item: { type: 'reasoning', id: 'rs_summary', summary: [] },
+    },
+    {
+      type: 'response.reasoning_summary_text.done', output_index: 0, summary_index: 0, text: firstSummary,
+    },
+    {
+      type: 'response.reasoning_summary_part.done', output_index: 0, summary_index: 0,
+      part: { type: 'summary_text', text: firstSummary },
+    },
+    {
+      type: 'response.reasoning_summary_text.done', output_index: 0, summary_index: 1, text: secondSummary,
+    },
+    {
+      type: 'response.reasoning_summary_part.done', output_index: 0, summary_index: 1,
+      part: { type: 'summary_text', text: secondSummary },
+    },
+    {
+      type: 'response.output_item.done', output_index: 0,
+      item: {
+        type: 'reasoning', id: 'rs_summary', status: 'completed',
+        summary: [
+          { type: 'summary_text', text: firstSummary },
+          { type: 'summary_text', text: secondSummary },
+        ],
+      },
+    },
+    {
+      type: 'response.output_item.added', output_index: 1,
+      item: { type: 'message', id: 'msg_summary', role: 'assistant', content: [] },
+    },
+    {
+      type: 'response.output_text.done', output_index: 1, content_index: 0, text: 'Done',
+    },
+    {
+      type: 'response.completed',
+      response: {
+        output: [
+          {
+            type: 'reasoning', id: 'rs_summary', status: 'completed',
+            summary: [{ type: 'summary_text', text: `${firstSummary}${secondSummary}` }],
+          },
+          {
+            type: 'message', id: 'msg_summary', role: 'assistant', status: 'completed',
+            content: [{ type: 'output_text', text: 'Done' }],
+          },
+        ],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    },
+  ];
+  const stream = new PassThrough();
+  process.nextTick(() => {
+    for (const event of events) stream.write(`data: ${JSON.stringify(event)}\n\n`);
+    stream.write('data: [DONE]\n\n');
+    stream.end();
+  });
+  return stream;
+}
+
 function createOpenAITestSession(id: string): Session {
   return {
     id,
@@ -596,6 +661,47 @@ test('OpenAI Responses parsing persists native web search output and URL annotat
       url: 'https://example.com/article',
       title: 'Example article',
     }]);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('OpenAI Responses parsing preserves separate thinking summaries and newline display text', async () => {
+  const originalPost = axios.post;
+  const model = {
+    providerKey: 'fixture',
+    providerType: 'openai-responses',
+    baseUrl: 'https://fixture.example',
+    apiKey: '',
+    model: 'gpt-5.6',
+    extraFields: {},
+    extraHeaders: {},
+  } as any;
+  (axios as any).post = async () => ({
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    data: makeResponsesSummaryBoundaryStream(),
+  });
+
+  try {
+    const result = await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'summarize reasoning' }] }],
+      systemPrompt: '',
+      modelEntryOverride: model,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    const reasoningPart = result.allParts?.find(part => part.providerMeta?.thinkingSummaries);
+    assert.deepEqual(reasoningPart?.providerMeta?.thinkingSummaries, [
+      '**Preparing final test report and preview options**',
+      '**Confirming no live deployment without user approval**',
+    ]);
+    assert.equal(reasoningPart?.thinking,
+      '**Preparing final test report and preview options**\n**Confirming no live deployment without user approval**');
+    assert.equal(result.text, 'Done');
   } finally {
     (axios as any).post = originalPost;
   }
