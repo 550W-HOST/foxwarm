@@ -2,7 +2,6 @@ import { ToolArgs, ToolContext } from './helpers';
 import * as mcpExternal from '../mcpExternalService';
 import type { McpServerSummary } from '../mcpClient';
 import { resolveObjectArgWithJsonFallback, requireStringMapObject } from '../jsonObjectArgs';
-import { executeResolvedTool, resolveDirectTool } from './resolvedTools';
 
 function requireSourceSessionId(ctx?: ToolContext): string {
     if (!ctx?.sessionId) throw new Error('MCP tools require an active source session.');
@@ -44,44 +43,6 @@ export async function tool_mcp_config(args: ToolArgs, ctx?: ToolContext) {
     }).filter(([, value]) => value !== undefined));
     await mcpExternal.configureMcpServer({ sourceSessionId: requireSourceSessionId(ctx), name, action: 'upsert', config });
     return `MCP server \"${name}\" saved${enable === false ? ' (disabled)' : ''}.`;
-}
-
-export async function tool_call_mcp(args: ToolArgs, ctx?: ToolContext) {
-    const actualContext = ctx || ({} as ToolContext);
-    return executeResolvedTool(await resolveDirectTool('call_mcp', args, actualContext), actualContext);
-}
-
-export async function tool_search_mcp_tools(args: ToolArgs, ctx?: ToolContext) {
-    const { server, query } = args;
-    const tools = await mcpExternal.listMcpTools(requireSourceSessionId(ctx), server);
-    const list = Array.isArray(tools?.tools) ? tools.tools : tools;
-    const items = Array.isArray(list) ? list : [];
-
-    if (!items.length) {
-        return 'No MCP tools available.';
-    }
-
-    const normalizedQuery = (query || '').toLowerCase().trim();
-    const filtered = normalizedQuery
-        ? items.filter((t: any) => {
-            const name = String(t?.name || '').toLowerCase();
-            const desc = String(t?.description || '').toLowerCase();
-            return name.includes(normalizedQuery) || desc.includes(normalizedQuery);
-        })
-        : items;
-
-    const limited = filtered.slice(0, 50).map((t: any) => {
-        const name = t?.name || 'unknown';
-        const fullName = server ? `${server}/${name}` : name;
-        const desc = t?.description ? ` - ${t.description}` : '';
-        return `${fullName}${desc}`;
-    });
-
-    if (!limited.length) {
-        return 'No matching MCP tools.';
-    }
-
-    return `MCP tools (${limited.length}${filtered.length > limited.length ? ` of ${filtered.length}` : ''}):\n` + limited.join('\n');
 }
 
 export async function tool_list_mcp_servers(_args: ToolArgs, ctx?: ToolContext) {

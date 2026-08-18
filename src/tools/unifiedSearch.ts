@@ -1,18 +1,10 @@
 import { ToolArgs, ToolContext, UnifiedToolSource } from './helpers';
 import * as mcpExternal from '../mcpExternalService';
 import { nodesManager } from '../nodes/manager';
-import { tool_remote_node } from './nodeTools';
+import { listNodeTopology } from '../nodeExecution';
 import { buildUnifiedToolId, executeResolvedTool, resolveUnifiedTool } from './resolvedTools';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
-
-// Forward reference - will be set by the main tools module after definitions are created
-let _definitions: any[] = [];
-let _isToolDirectlyExposedToModel: (toolName: string) => boolean = () => false;
-
-export function setDefinitionsRef(defs: any[], isExposed: (n: string) => boolean) {
-    _definitions = defs;
-    _isToolDirectlyExposedToModel = isExposed;
-}
+import { definitions } from './definitions';
 
 function normalizeUnifiedToolSources(rawSources: unknown): UnifiedToolSource[] {
     const allowed: UnifiedToolSource[] = ['builtin', 'mcp', 'node'];
@@ -109,8 +101,8 @@ async function resolveDefaultNodeSearchTarget(ctx?: ToolContext): Promise<string
 }
 
 async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: boolean) {
-    return _definitions
-        .filter(def => !NODE_ENVIRONMENT_BUILTIN_NAMES.includes(def.name))
+    return definitions
+        .filter(def => !NODE_ENVIRONMENT_BUILTIN_NAMES.includes(def.name as any))
         .map(def => ({ def, score: scoreUnifiedToolQuery(query, [def.name, def.description]) }))
         .filter(entry => entry.score >= 0)
         .map(def => ({
@@ -120,8 +112,8 @@ async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: 
             name: def.def.name,
             description: def.def.description,
             ...(includeSchema ? { inputSchema: def.def.parameters } : {}),
-            directExposed: _isToolDirectlyExposedToModel(def.def.name),
-            hidden: !_isToolDirectlyExposedToModel(def.def.name),
+            directExposed: def.def.defaultInject === true,
+            hidden: def.def.defaultInject !== true,
         }));
 }
 
@@ -171,9 +163,10 @@ async function collectMcpUnifiedSearchResults(query: string, includeSchema: bool
 }
 
 async function collectNodeUnifiedSearchResults(query: string, includeSchema: boolean, nodeFilter: string | undefined, ctx?: ToolContext) {
-    const effectiveNodeId = nodeFilter || await resolveDefaultNodeSearchTarget(ctx);
-    const nodeListing = await tool_remote_node({ action: 'list', nodeId: effectiveNodeId }, (ctx || ({} as ToolContext))) as any;
-    const nodes = Array.isArray(nodeListing?.nodes) ? nodeListing.nodes : [];
+    if (!ctx?.sessionId) throw new Error('Node discovery requires session context.');
+    const currentNode = await resolveDefaultNodeSearchTarget(ctx);
+    const effectiveNodeId = nodeFilter || currentNode;
+    const nodes = await listNodeTopology(ctx.sessionId, effectiveNodeId, currentNode);
 
     const results: Array<Record<string, any>> = [];
     for (const node of nodes) {

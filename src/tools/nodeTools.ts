@@ -10,7 +10,6 @@ import { buildNodeBootstrapInfo, ensureNodePairingToken } from '../nodes/bootstr
 import { logger } from '../common';
 import { getAgentDir } from '../config';
 import { copyBetweenNodes, listNodeTopology, validateNodeSelection } from '../nodeExecution';
-import { executeResolvedTool, resolveDirectTool } from './resolvedTools';
 import { executeMainManagementTool } from '../mainManagementTools';
 
 export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
@@ -53,56 +52,6 @@ export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) 
         lines.push(`Target absolute path: ${result.absolutePath}`);
     }
     return lines.join('\n');
-}
-
-export async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
-    const { action, nodeId } = args;
-    
-    if (action === 'list' && ctx.sessionPlacement === 'session-worker') {
-        if (!ctx.sessionId || ctx.session?.id !== ctx.sessionId) throw new Error('Remote node listing requires exact session context.');
-        return { nodes: await listNodeTopology(ctx.sessionId, typeof nodeId === 'string' && nodeId.trim() ? nodeId.trim() : undefined, ctx.session.currentNode || 'master') };
-    }
-
-    // Get session for isolated check
-    const session = ctx.sessionPlacement === 'session-worker'
-        ? ctx.session
-        : (ctx.sessionId ? sessionManager.getSessionCatalog(ctx.sessionId) : undefined);
-    
-    // Isolated sessions can only call tools on their bound node
-    const isolatedAllowedRemoteNodes = sessionManager.isSessionEffectivelyIsolated(session)
-        ? Array.from(new Set([
-            sessionManager.getAgentIsolationNode(session?.agent || 'main') || session?.currentNode || 'master',
-            session?.currentNode,
-        ].filter((value): value is string => typeof value === 'string' && value.length > 0)))
-        : [];
-
-    if (action === 'list') {
-        // List visible nodes and their tools, with optional node filter
-        const nodes = nodesManager.listNodesWithTools();
-        const visibleNodes = sessionManager.isSessionEffectivelyIsolated(session)
-            ? nodes.filter((n: any) => isolatedAllowedRemoteNodes.includes(n.id))
-            : nodes;
-        const filteredNodes = typeof nodeId === 'string' && nodeId.trim().length > 0
-            ? visibleNodes.filter((n: any) => n.id === nodeId)
-            : visibleNodes;
-        return {
-            nodes: filteredNodes.map((n: any) => ({
-                id: n.id,
-                type: n.type,
-                tools: n.tools.map((t: any) => ({
-                    name: t.name,
-                    description: t.description,
-                    parameters: t.parameters
-                }))
-            }))
-        };
-    }
-    
-    if (action === 'call') {
-        return executeResolvedTool(await resolveDirectTool('remote_node', args, ctx), ctx);
-    }
-    
-    throw new Error(`Unknown action: ${action}`);
 }
 
 async function resolveCurrentNodeForList(ctx?: ToolContext): Promise<string> {

@@ -109,29 +109,11 @@ function resolveMcp(invocationName: string, server: string | undefined, name: st
   return { invocationName, source: 'mcp', server, name, args: { ...args }, executionNode: 'master', permissionNode: 'master' };
 }
 
-function resolveCompatibilityBuiltin(invocationName: string, name: string, args: ToolArgs, ctx: ToolContext, current: string): ResolvedTool | undefined {
-  if ((name === 'remote_node' || name === 'node_tools') && args.action === 'call') {
-    if (!args.nodeId || !args.tool) throw new Error('nodeId and tool are required for call action');
-    return resolveNode(invocationName, String(args.tool), args.args || {}, ctx, normalizeNodeId(args.nodeId, current), current);
-  }
-  if (name === 'call_mcp') {
-    let server = typeof args.server === 'string' ? args.server : undefined;
-    let tool = typeof args.tool === 'string' ? args.tool : '';
-    if (!server && tool.includes('/')) [server, tool] = [tool.slice(0, tool.indexOf('/')), tool.slice(tool.indexOf('/') + 1)];
-    if (!tool) throw new Error('call_mcp requires tool');
-    return resolveMcp(invocationName, server, tool, args.args || {});
-  }
-  return undefined;
-}
-
 function resolveBuiltin(invocationName: string, name: string, rawArgs: ToolArgs, ctx: ToolContext, current: string): ResolvedTool {
   if (NODE_ENVIRONMENT_BUILTIN_NAMES.includes(name as any)) {
     throw new Error(`Tool \`${name}\` is a node capability, not a builtin. Use the direct \`${name}\` tool or call_tool with source=\`node\`.`);
   }
-  const compatibility = resolveCompatibilityBuiltin(invocationName, name, rawArgs, ctx, current);
-  if (compatibility) return compatibility;
-  const lookupName = name === 'node_tools' ? 'remote_node' : name;
-  const definition = activeRuntime().definitions.find(item => item.name === lookupName);
+  const definition = activeRuntime().definitions.find(item => item.name === name);
   if (!definition) throw new Error(`Unknown builtin tool: ${name}`);
   const supportsNode = Object.prototype.hasOwnProperty.call(definition.parameters?.properties || {}, 'node');
   if (!supportsNode && Object.prototype.hasOwnProperty.call(rawArgs, 'node')) {
@@ -139,7 +121,7 @@ function resolveBuiltin(invocationName: string, name: string, rawArgs: ToolArgs,
   }
   const targetNode = supportsNode ? normalizeNodeId(rawArgs.node, current) : current;
   const args = { ...rawArgs }; if (supportsNode) delete args.node;
-  const placement = resolveBuiltinToolPlacement(lookupName, args, targetNode);
+  const placement = resolveBuiltinToolPlacement(name, args, targetNode);
   const permissionNode = name === 'send_file' || name === 'image_write_to_file' ? targetNode : placement.executionNode;
   return validatePlacement({ invocationName, source: 'builtin', name, args, executionNode: placement.executionNode,
     permissionNode, ...(supportsNode ? { targetNode } : {}) }, ctx);
@@ -164,8 +146,6 @@ export async function resolveUnifiedTool(input: ToolArgs, ctx: ToolContext, invo
 export async function resolveDirectTool(name: string, args: ToolArgs, ctx: ToolContext, snapshot?: { currentNode: string; cwd?: string }): Promise<ResolvedTool> {
   if (name === 'call_tool') return resolveUnifiedTool(args, ctx, name);
   const current = await currentNode(ctx, snapshot);
-  const compatibility = resolveCompatibilityBuiltin(name, name, args, ctx, current);
-  if (compatibility) return compatibility;
   if (NODE_ENVIRONMENT_BUILTIN_NAMES.includes(name as any)) {
     const resolved = resolveNode(name, name, args, ctx, current, current);
     if (snapshot) resolved.routingSnapshot = snapshot;

@@ -77,10 +77,7 @@ export const BUILTIN_TOOL_PLACEMENTS = {
   list_toolscript_runs: { owner: 'dispatcher/container' },
   get_toolscript_run: { owner: 'dispatcher/container' },
   cancel_toolscript_run: { owner: 'dispatcher/container' },
-  remote_node: { owner: 'dispatcher/container' },
   mcp_config: { owner: 'external-service' },
-  call_mcp: { owner: 'external-service' },
-  search_mcp_tools: { owner: 'external-service' },
   list_mcp_servers: { owner: 'external-service' },
   node: {
     owner: 'dispatcher/container',

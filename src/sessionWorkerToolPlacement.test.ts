@@ -73,7 +73,6 @@ test('worker guards run before unsupported handlers and exact current state tool
   for (const [name, args, extra] of [
     ['create_agent', { agentName: 'unsafe', convertSession: true }],
     ['create_agent', { agentName: 'unsafe', sourceSessionId: 'other/session' }],
-    ['remote_node', { action: ' list ' }], ['node_tools', { action: 'List' }],
     ['stop_session', { sessionId: '' }], ['stop_session', { sessionId: ' ' }],
     ['session', { action: 'update-display-name', sessionId: 'other/session', name: 'x' }],
     ['set_session_child_model', { sessionId: ' ', model: 'x' }],
@@ -85,10 +84,6 @@ test('worker guards run before unsupported handlers and exact current state tool
   }
   assert.match(String(await callTool('compact_session', {}, ctx)), /cannot start background compaction from a busy model tool call/);
   await assert.rejects(() => callTool('compact_session', { sessionId: 'other/session' }, ctx), /exact current session/);
-  await assert.rejects(() => tool_call_tool({ source: 'builtin', name: 'remote_node', args: { action: 'List' } }, ctx),
-    { code: 'SESSION_WORKER_TOOL_UNAVAILABLE', retryable: true });
-  const crafted = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="remote_node", args={"action":" list "})' }, ctx);
-  assert.equal(crafted.status, 'failed'); assert.match(String(crafted.error), /SESSION_WORKER_TOOL_UNAVAILABLE/);
   assert.match(String(await callTool('session', { action: 'status' }, ctx)), new RegExp(session.id));
   assert.match(String(await callTool('set_goal', { goal: 'stay exact' }, ctx)), /ok/);
   assert.match(String(await callTool('wait', { reason: 'pause' }, ctx)), /object Object|stopCurrentTurn/);
@@ -197,7 +192,6 @@ test('worker node topology select and compound copy use fixed facade with exact 
   const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => { persists += 1; } };
   try {
     assert.match(String(await callTool('node', { action: 'list' }, ctx)), /master/);
-    assert.equal((await callTool('remote_node', { action: 'list' }, ctx)).nodes[0].id, 'master');
     assert.equal((await tool_search_tools({ sources: ['node'], query: 'read' }, ctx)).tools[0].name, 'read');
     assert.match(String(await callTool('node', { action: 'select', nodeId: 'remote-a' }, ctx)), /remote\/default/);
     assert.equal(session.currentNode, 'remote-a'); assert.equal(session.cwd, undefined); assert.equal(persists, 1);

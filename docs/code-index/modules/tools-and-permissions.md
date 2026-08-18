@@ -60,7 +60,7 @@ Tool resolution across builtin, MCP, and remote-node sources is documented in [t
 
 ### D-tools-unified-discovery
 
-Less frequently used builtins, MCP tools, and node tools are discovered through `search_tools` and invoked through `call_tool`. Direct provider calls, unified calls, ToolScript nested calls, and retained compatibility adapters share the canonical resolved-operation boundary in [D-dispatch-resolved-target](../threads/tool-dispatch.md#d-dispatch-resolved-target).
+Less frequently used builtins, MCP tools, and node tools are discovered through `search_tools` and invoked through `call_tool`. Direct provider calls, unified calls, and ToolScript nested calls share the canonical resolved-operation boundary in [D-dispatch-resolved-target](../threads/tool-dispatch.md#d-dispatch-resolved-target).
 
 ### D-tools-write-parent-policy
 

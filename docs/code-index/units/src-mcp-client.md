@@ -57,12 +57,11 @@ Owns persisted MCP server configuration, safe summaries, transport connection li
 ## Compatibility
 
 - Config accepts legacy `type` as a reader and writes current `transport`.
-- The hidden runtime `call_mcp`/`search_mcp_tools` tools still exist for compatibility. They are not default model recommendations; agents should discover through `search_tools` and invoke through `call_tool`. Both paths enter the same MCP external service and authoritative client.
 
 ## Integration
 
 - `src/mcpExternalService.ts` is the sole production caller of raw list/discovery/call/config mutation exports. It owns the versioned local service boundary while this unit remains authoritative for the live snapshot, persistence, transports, pooling, and normalization.
-- `src/tools/mcpTools.ts` and `src/tools/unifiedSearch.ts` call the MCP external service for hidden compatibility tools and recommended unified discovery/invocation.
+- `src/tools/mcpTools.ts` calls the MCP external service for configuration/server summaries, while `src/tools/unifiedSearch.ts` owns MCP discovery and unified invocation.
 - ToolScript calls the unified `call_tool` wrapper and receives this client's normalized result through the same service.
 - `MCP_CONFIG_PATH` and durable JSON behavior come from config/utilities.
 
@@ -76,9 +75,9 @@ Normalize safe single-text results immediately after MCP invocation so every cal
 
 Model/admin summaries expose configuration shape, names, and counts, never token/header/env values or command argument content.
 
-### D-mcp-compatibility-tools
+### D-mcp-unified-tools
 
-Keep direct MCP runtime handlers as hidden compatibility paths while current model guidance uses unified discovery and dispatch.
+[2026-08-18] MCP discovery and invocation use only `search_tools` and `call_tool`. Dedicated runtime wrappers are removed rather than retained as callable aliases; configuration and safe server summaries remain separate hidden builtins.
 
 ### D-mcp-http-header-precedence
 

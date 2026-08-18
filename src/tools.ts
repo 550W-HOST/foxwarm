@@ -52,10 +52,10 @@ import { tool_read_memory, tool_write_memory, tool_edit_memory, tool_delete_memo
 import { tool_exec } from './tools/execTools';
 import { tool_image_crop, tool_image_write_to_file } from './tools/imageTools';
 import { tool_browse_open, tool_browse_list, tool_browse_get, tool_browse_close, tool_browse_interact } from './tools/browserTools';
-import { tool_mcp_config, tool_call_mcp, tool_search_mcp_tools, tool_list_mcp_servers } from './tools/mcpTools';
-import { tool_copy_between_nodes, tool_remote_node, tool_node, tool_node_bootstrap_info, tool_node_pair_approve, tool_node_pair_list } from './tools/nodeTools';
+import { tool_mcp_config, tool_list_mcp_servers } from './tools/mcpTools';
+import { tool_copy_between_nodes, tool_node, tool_node_bootstrap_info, tool_node_pair_approve, tool_node_pair_list } from './tools/nodeTools';
 import { resolveMemorySearchOptions } from './tools/vectorTools';
-import { tool_search_tools, tool_call_tool, setDefinitionsRef } from './tools/unifiedSearch';
+import { tool_search_tools, tool_call_tool } from './tools/unifiedSearch';
 import { executeResolvedTool, initializeResolvedToolRuntime, resolveDirectTool } from './tools/resolvedTools';
 import { definitions } from './tools/definitions';
 
@@ -97,10 +97,6 @@ export function assertToolAvailableForPlacement(toolName: string, args: any, ctx
         const action = typeof args?.action === 'string' && args.action.trim() ? args.action.trim().toLowerCase() : 'status';
         if (action === 'update-display-name' && !isCurrent(fallbackTarget)) workerUnavailable(toolName);
     }
-    if (toolName === 'remote_node' || toolName === 'node_tools') {
-        const action = args?.action;
-        if (action !== 'list') workerUnavailable(toolName);
-    }
     if (toolName === 'stop_session' && !isCurrent(literalTarget)) workerUnavailable(toolName);
     if (['set_session_child_model',
         'set_session_compact_threshold', 'update_session_snapshot'].includes(toolName) && !isCurrent(fallbackTarget)) workerUnavailable(toolName);
@@ -117,7 +113,6 @@ async function dispatchBuiltinRaw(toolName: string, args: any, context: any): Pr
 }
 
 initializeResolvedToolRuntime({ definitions, dispatchBuiltin: dispatchBuiltinRaw, guardBuiltin: assertToolAvailableForPlacement });
-setDefinitionsRef(definitions, isToolDirectlyExposedToModel);
 
 export async function callTool(toolName: string, args: any, context: any): Promise<any> {
     return executeResolvedTool(await resolveDirectTool(toolName, args || {}, context), context);
@@ -175,11 +170,7 @@ export const browse_list = tool_browse_list;
 export const browse_get = tool_browse_get;
 export const browse_close = tool_browse_close;
 export const browse_interact = tool_browse_interact;
-export const remote_node = tool_remote_node;
-export const node_tools = tool_remote_node;
 export const mcp_config = tool_mcp_config;
-export const call_mcp = tool_call_mcp;
-export const search_mcp_tools = tool_search_mcp_tools;
 export const list_mcp_servers = tool_list_mcp_servers;
 export const search_tools = tool_search_tools;
 export const call_tool = tool_call_tool;

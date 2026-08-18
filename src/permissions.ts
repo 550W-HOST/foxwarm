@@ -252,13 +252,6 @@ export function buildIsolatedToolRules(agentName: string, sessionId: string, bou
       agent: agentName,
       session: sessionId,
       target_node: 'master',
-      tool_name: 'remote_node',
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: 'master',
       tool_name: 'search_tools',
       action: 'accept',
     },

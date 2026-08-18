@@ -123,7 +123,7 @@ test('tool output guard keeps top-level error semantics when stage B truncates',
   assert.ok(formatToolResponsePayload(result).length < TOOL_OUTPUT_GUARD_CHAR_LIMIT);
 });
 
-test('MCP images below and above the text guard threshold stay structured on hidden and unified call paths', async () => {
+test('MCP images below and above the text guard threshold stay structured on unified call paths', async () => {
   const largePngBase64 = await makeLargePngBase64();
   assert.ok(TINY_PNG_BASE64.length < TOOL_OUTPUT_GUARD_CHAR_LIMIT);
   assert.ok(largePngBase64.length > TOOL_OUTPUT_GUARD_CHAR_LIMIT);
@@ -157,9 +157,9 @@ test('MCP images below and above the text guard threshold stay structured on hid
     await sessionManager.getSession(sessionId);
     const toolMessage = await executeTools([
       {
-        id: 'call_mcp_small_image',
-        name: 'call_mcp',
-        args: { server: 'fixture', tool: 'small_image', args: {} },
+        id: 'call_tool_small_image',
+        name: 'call_tool',
+        args: { toolId: 'mcp:fixture/small_image', args: {} },
       },
       {
         id: 'call_tool_large_image',
@@ -182,7 +182,7 @@ test('MCP images below and above the text guard threshold stay structured on hid
 
     const imageParts = toolMessage.parts.filter(part => part.inlineData);
     assert.equal(imageParts.length, 4);
-    assert.equal(imageParts[0].toolUseId, 'call_mcp_small_image');
+    assert.equal(imageParts[0].toolUseId, 'call_tool_small_image');
     assert.equal(imageParts[0].inlineData?.data, TINY_PNG_BASE64);
     assert.equal(imageParts[1].toolUseId, 'call_tool_large_image');
     assert.equal(imageParts[1].inlineData?.data, largePngBase64);
@@ -198,7 +198,7 @@ test('MCP images below and above the text guard threshold stay structured on hid
     assert.equal(responses.length, 3);
     for (const response of responses) {
       const serialized = JSON.stringify(response);
-      assert.match(String(response.output), /Inline data returned by (call_mcp|call_tool)/);
+      assert.match(String(response.output), /Inline data returned by call_tool/);
       assert.doesNotMatch(serialized, /TOOL OUTPUT TOO LONG|foxwarm: line too long/i);
       assert.equal(serialized.includes(TINY_PNG_BASE64), false);
       assert.equal(serialized.includes(largePngBase64), false);
@@ -233,7 +233,6 @@ test('builtin and MCP magic-looking text stays ordinary text outside remote-node
   try {
     const toolMessage = await executeTools([
       { id: 'builtin-magic', name: 'read', args: { filePath: relativePath } },
-      { id: 'hidden-mcp-magic', name: 'call_mcp', args: { server: 'fixture', tool: 'magic', args: {} } },
       { id: 'unified-mcp-magic', name: 'call_tool', args: { toolId: 'mcp:fixture/magic', args: {} } },
     ], {
       sessionId,
@@ -248,7 +247,7 @@ test('builtin and MCP magic-looking text stays ordinary text outside remote-node
     const responses = toolMessage.parts
       .map(part => part.functionResponse?.response)
       .filter((response): response is Record<string, any> => !!response);
-    assert.deepEqual(responses.map(response => response.output), [builtinMagic, mcpMagic, mcpMagic]);
+    assert.deepEqual(responses.map(response => response.output), [builtinMagic, mcpMagic]);
   } finally {
     (mcpClient as any).callTool = originalCallTool;
     await fs.remove(fullPath);

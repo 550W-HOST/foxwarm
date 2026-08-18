@@ -103,22 +103,6 @@ const normalizeToolLabelValue = (value: unknown): string | null => {
 }
 
 export const formatToolLabel = (name: string, args?: any): string => {
-  if (name === 'remote_node') {
-    const nodeId = normalizeToolLabelValue(args?.nodeId)
-    const tool = normalizeToolLabelValue(args?.tool)
-    if (nodeId && tool) {
-      return `node:${nodeId}:${tool}`
-    }
-  }
-
-  if (name === 'call_mcp') {
-    const tool = normalizeToolLabelValue(args?.tool)
-    if (tool) {
-      const server = normalizeToolLabelValue(args?.server) || 'default'
-      return `mcp:${server}:${tool}`
-    }
-  }
-
   if (name === 'call_tool') {
     const toolId = normalizeToolLabelValue(args?.toolId)
     if (toolId) {

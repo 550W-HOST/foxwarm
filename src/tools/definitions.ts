@@ -738,33 +738,6 @@ Example:
             }
         },
         {
-            name: 'remote_node',
-            description: 'Query and execute tools from dynamically registered remote nodes (browser-extension, android, etc). This is for remote hardware/browser nodes, NOT for MCP servers. Use this to discover what tools are available from connected remote nodes, then call them. Example: First call with action="list" to see available nodes and their tools, then call with action="call" to execute a specific tool on a remote node.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    action: {
-                        type: 'string',
-                        enum: ['list', 'call'],
-                        description: 'Action: "list" to see all connected remote nodes and their tools, "call" to execute a specific tool on a remote node'
-                    },
-                    nodeId: {
-                        type: 'string',
-                        description: 'Node ID (get from list action, required for call action)'
-                    },
-                    tool: {
-                        type: 'string',
-                        description: 'Tool name to call (required when action=call)'
-                    },
-                    args: {
-                        type: 'object',
-                        description: 'Tool arguments as key-value pairs (required when action=call)'
-                    }
-                },
-                required: ['action']
-            }
-        },
-        {
             name: 'mcp_config',
             description: 'Manage MCP server configuration through the authoritative live runtime. Successful changes apply immediately to subsequent MCP listing, discovery, and calls; no Foxwarm restart is required. Do not edit the backing state/config file manually because manual edits do not update the live configuration immediately. Use enable=false to disable an existing server.',
             parameters: {
@@ -787,30 +760,6 @@ Example:
                     enable: { type: 'boolean', description: 'Enable/disable this server' }
                 },
                 required: ['name']
-            }
-        },
-        {
-            name: 'call_mcp',
-            description: 'Call a tool from a configured MCP server. Use search_mcp_tools to list/search available tools first.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    server: { type: 'string', description: 'Server name (default: default)' },
-                    tool: { type: 'string', description: 'Tool name to call' },
-                    args: { type: 'object', description: 'Tool arguments' }
-                },
-                required: ['tool']
-            }
-        },
-        {
-            name: 'search_mcp_tools',
-            description: 'Search or list tools from an MCP server. Prefer using query to reduce output size.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    server: { type: 'string', description: 'Server name (default: default)' },
-                    query: { type: 'string', description: 'Search query (optional)' }
-                }
             }
         },
         {

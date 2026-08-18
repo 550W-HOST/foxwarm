@@ -8,16 +8,15 @@ import * as nodeExecution from '../nodeExecution';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
 import * as tools from '../tools';
 import {
-  call_mcp,
   call_tool,
   definitions,
   mcp_config,
   modelFacingDefinitions,
-  remote_node,
   search_tools,
 } from '../tools';
 
 test('search_tools returns structured builtin results with hidden/direct exposure metadata', async () => {
+  const mainSession = await sessionManager.getSession('main');
   const result: any = await search_tools({
     query: 'archived messages',
     sources: ['builtin'],
@@ -47,9 +46,10 @@ test('search_tools returns structured builtin results with hidden/direct exposur
   });
   assert.equal(builtinReadResult.tools.some((tool: any) => tool.name === 'read'), false);
 
+  mainSession.currentNode = 'master';
   const readResult: any = await search_tools({ query: 'read', sources: ['node'], includeSchema: false }, {
-    sessionId: 'main', session: { id: 'main', agent: 'main', currentNode: 'master' },
-  } as any);
+    sessionId: 'main', session: mainSession,
+  });
   const readTool = readResult.tools.find((tool: any) => tool.name === 'read');
   assert.ok(readTool);
   assert.equal(readTool.source, 'node');
@@ -449,27 +449,6 @@ test('call_tool passes parsed MCP JSON text results through as structured values
   }
 });
 
-test('legacy call_mcp wrapper returns normalized MCP values without re-stringifying', async () => {
-  await sessionManager.getSession('main');
-  const originalCallTool = mcpClient.callTool;
-
-  try {
-    (mcpClient as any).callTool = async () => mcpClient.normalizeMcpToolResult({
-      content: [{ type: 'text', text: '[{"name":"foxwarm"}]' }],
-    });
-
-    const result = await call_mcp({
-      server: 'github',
-      tool: 'search_repos',
-      args: { query: 'foxwarm' },
-    }, { sessionId: 'main' });
-
-    assert.deepEqual(result, [{ name: 'foxwarm' }]);
-  } finally {
-    (mcpClient as any).callTool = originalCallTool;
-  }
-});
-
 test('search_tools and call_tool cover remote node tools', async () => {
   const originalListNodesWithTools = nodesManager.listNodesWithTools;
   const originalExecuteTool = nodesManager.executeTool;
@@ -528,7 +507,7 @@ test('search_tools and call_tool cover remote node tools', async () => {
       sources: ['node'],
       nodeId: 'android-node',
       includeSchema: true,
-    });
+    }, { sessionId: 'main', session: sessionManager.getSessionCatalog('main') } as any);
 
     assert.equal(searchResult.count, 1);
     assert.equal(searchResult.tools[0].source, 'node');
@@ -558,10 +537,6 @@ test('search_tools and call_tool cover remote node tools', async () => {
       args: { inline: true },
       sessionId: 'main',
     });
-
-    assert.deepEqual(await remote_node({
-      action: 'call', nodeId: 'android-node', tool: 'android_screenshot', args: { inline: true },
-    }, { sessionId: 'main', session: { id: 'main', agent: 'main' } } as any), callResult);
 
     const defaultNodeSearchResult: any = await search_tools({
       sources: ['node'],
@@ -692,16 +667,13 @@ test('search_tools and call_tool descriptions include usage guidance and example
   assert.match(String(mcpConfigDef?.description), /Do not edit the backing state\/config file manually/i);
 });
 
-test('default model-facing tool definitions exclude hidden browser and legacy wrapper tools', () => {
+test('default model-facing tool definitions exclude hidden browser and advanced tools', () => {
   for (const name of [
     'browse_open',
     'browse_list',
     'browse_get',
     'browse_close',
     'browse_interact',
-    'remote_node',
-    'call_mcp',
-    'search_mcp_tools',
     'get_archived_messages',
     'get_archived_blocks',
     'delete_session',
@@ -868,7 +840,13 @@ test('default model-facing tool names and serialized schema size stay consolidat
   assert.ok(serializedBytes < 38_069, 'serialized default schema should stay below the pre-consolidation baseline');
 });
 
-test('obsolete context and resource builtins are removed entirely', () => {
+test('obsolete context and resource builtins are removed entirely', async () => {
+  const session = await sessionManager.getSession('main');
+  for (const name of ['remote_node', 'node_tools', 'call_mcp', 'search_mcp_tools']) {
+    assert.equal(definitions.some(def => def.name === name), false);
+    assert.equal((tools as any)[name], undefined);
+    await assert.rejects(() => tools.callTool(name, {}, { sessionId: session.id, session }), /Unknown builtin tool/);
+  }
   assert.equal(definitions.some(def => def.name === 'get_memory_context'), false);
   assert.equal((tools as any).get_memory_context, undefined);
   assert.equal(definitions.some(def => def.name === 'change_directory'), false);

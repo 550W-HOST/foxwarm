@@ -205,6 +205,8 @@ test('MCP external service rejects stale and isolated source sessions', async ()
     );
     await sessionManager.setAgentMetadata(agentName, { isolated: true, isolatedNode: 'test-node' });
     await assert.rejects(() => listMcpServers(sourceId), /restricted to agent-level allowed tools/i);
+    await assert.rejects(() => listMcpTools(sourceId), /unavailable to isolated sessions/i);
+    await assert.rejects(() => callMcpTool(sourceId, 'demo', 'probe', {}), /unavailable to isolated sessions/i);
   } finally {
     await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
     await cleanup(sourceId);
@@ -243,8 +245,8 @@ test('MCP call authorization receives the complete nested args object', async ()
   try {
     await callMcpTool(sourceId, 'demo', 'probe', { nested: { value: 7 }, items: [1, 2] });
     assert.deepEqual(captured, [[
-      'call_mcp', sourceId, 'master',
-      { server: 'demo', tool: 'probe', args: { nested: { value: 7 }, items: [1, 2] } },
+      'call_tool', sourceId, 'master',
+      { source: 'mcp', server: 'demo', name: 'probe', args: { nested: { value: 7 }, items: [1, 2] } },
     ]]);
   } finally {
     (isolatedCheck as any).checkToolPermission = originalPermission;

@@ -25,9 +25,9 @@ Direct adjacent `exec` calls pass the batch's captured node/cwd snapshot. Worker
 
 ## Integration
 
-- The canonical resolved-tool executor calls this service after a direct, unified, ToolScript, or compatibility invocation resolves to a remote Node target. A master target still invokes the local named Node-capability handler directly and never enters this service.
+- The canonical resolved-tool executor calls this service after a direct, unified, or ToolScript invocation resolves to a remote Node target. A master target still invokes the local named Node-capability handler directly and never enters this service.
 - Static node-environment capabilities retain their ordinary tool permission check before this boundary. Dynamic custom names are authorized here by exact source existence, isolated bound/current target restrictions, connection state, and the selected node's advertised tool set; Main-local and borrowed reverse callers share that behavior.
-- Remote `remote_node({ action: "call" })`, `call_tool(source=node)`, and ToolScript node/builtin wrappers converge on `executeRemoteNodeTool()`. An explicit `nodeId=master` call first passes the shared source/target isolation check, then bypasses RPC only when the tool belongs to `NODE_ENVIRONMENT_BUILTIN_NAMES`.
+- Direct Node capabilities, `call_tool(source=node)`, and ToolScript Node calls converge on `executeRemoteNodeTool()` for remote targets. An explicit `nodeId=master` call first passes the shared source/target isolation check, then bypasses RPC only when the tool belongs to `NODE_ENVIRONMENT_BUILTIN_NAMES`.
 - Worker node list/search and selection validation use the operation-specific facade. The Worker mutates/persists its exact hot owner only after validation; Main local selection retains its existing path. Master Node discovery derives definitions from canonical node-environment metadata.
 - `NodesManager.executeTool()` remains the authoritative WebSocket request/result/timeout and cwd-forwarding implementation after service validation.
 - `src/index.ts` initializes this service locally and terminally drains it before other Main services.

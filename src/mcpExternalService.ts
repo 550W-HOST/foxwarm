@@ -161,13 +161,17 @@ async function runWithAllSecretsRedacted<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-async function authorize(sourceSessionId: unknown, toolName: string, args: Record<string, unknown> = {}, expectedSourceSessionId?: string): Promise<string> {
+async function authorize(sourceSessionId: unknown, toolName: string, args: Record<string, unknown> = {}, expectedSourceSessionId?: string, denyIsolated = false): Promise<string> {
   const source = requireString(sourceSessionId, 'sourceSessionId');
   if (expectedSourceSessionId && source !== expectedSourceSessionId) {
     throw new RpcError('MCP_EXTERNAL_SOURCE_MISMATCH', `MCP external reverse source must be \`${expectedSourceSessionId}\`.`);
   }
-  if (!sessionManager.getSessionCatalog(source)) {
+  const sourceSession = sessionManager.getSessionCatalog(source);
+  if (!sourceSession) {
     throw new RpcError('MCP_EXTERNAL_SOURCE_NOT_FOUND', `Source session \`${source}\` was not found.`);
+  }
+  if (denyIsolated && sessionManager.isSessionEffectivelyIsolated(sourceSession)) {
+    throw new Error('MCP services are unavailable to isolated sessions.');
   }
   await checkToolPermission(toolName, source, 'master', args);
   return source;
@@ -183,7 +187,7 @@ export function createMcpExternalServiceHandler(options: { expectedSourceSession
     async listTools(input) {
       const request = requireExactRecord(input, 'listTools request', ['sourceSessionId', 'server']);
       const server = optionalString(request.server, 'server');
-      await authorize(request.sourceSessionId, 'search_mcp_tools', { server }, options.expectedSourceSessionId);
+      await authorize(request.sourceSessionId, 'search_tools', { sources: ['mcp'], ...(server ? { server } : {}) }, options.expectedSourceSessionId, true);
       return { result: await runWithAllSecretsRedacted(() => mcpClient.listTools(server)) };
     },
     async callTool(input) {
@@ -191,7 +195,7 @@ export function createMcpExternalServiceHandler(options: { expectedSourceSession
       const server = optionalString(request.server, 'server');
       const name = requireString(request.name, 'name');
       const args = requireJsonArgs(request.args);
-      await authorize(request.sourceSessionId, 'call_mcp', { server, tool: name, args }, options.expectedSourceSessionId);
+      await authorize(request.sourceSessionId, 'call_tool', { source: 'mcp', ...(server ? { server } : {}), name, args }, options.expectedSourceSessionId, true);
       return { result: await runWithAllSecretsRedacted(() => mcpClient.callTool(server, name, args)) };
     },
     async configure(input) {
