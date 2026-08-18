@@ -265,6 +265,22 @@ test('Sidebar collapse prunes nested expansion state without clearing unrelated 
     await clickDisclosure(child)
     await replay
     await waitForRow(grandchild)
+
+    await page.evaluate(id => {
+      const row = document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)
+      if (!(row instanceof HTMLElement)) throw new Error(`Missing session row for ${id}`)
+      row.click()
+    }, grandchild)
+    await page.waitForFunction(id => (
+      document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)?.className.includes('bg-blue')
+    ), { timeout: 5_000 }, grandchild)
+    assert.equal(await disclosureExpanded(root), 'true')
+
+    await clickDisclosure(root)
+    await new Promise(resolve => setTimeout(resolve, 800))
+    assert.equal(await disclosureExpanded(root), 'false', 'a refresh for the same active descendant must not reopen a manually collapsed ancestor')
+    assert.equal(await rowExists(child), false)
+    assert.equal(await rowExists(grandchild), false)
   } finally {
     for (const sessionId of createdIds.reverse()) {
       await page.evaluate(async id => { await fetch(`./api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }) }, sessionId).catch(() => {})
