@@ -12,7 +12,7 @@ Cross-module lifecycle for image bytes from transient ingress through canonical 
    image parts.
 2. Before a message or queue item is durably written, `src/imageBlobs.ts` validates supported raster bytes, writes a content-addressed blob under the data directory, and replaces top-level `inlineData`, structured function-response `inlineData`/`inlineDataItems`, or a legacy archive path with sibling `inlineDataRef.blobId` parts plus stable tool association metadata.
 3. Session history, queue/managed inbox, SQLite archive rows, forks, and compacted archive lineage keep references rather than duplicate base64.
-4. Provider requests clone canonical messages and hydrate referenced bytes only while building OpenAI Responses, OpenAI Chat Completions, or Anthropic payloads. Request diagnostics redact those hydrated payloads.
+4. Provider requests clone canonical messages and hydrate referenced bytes only while building OpenAI Responses, OpenAI Chat Completions, or Anthropic payloads. Claimed HEIC/HEIF bytes are decoded and normalized there to provider-safe JPEG or PNG without changing the durable blob/reference. Request diagnostics redact those hydrated payloads.
 5. WebUI history, message SSE, CTX-BLOCK expansion, and explicit Debug responses recursively remove inline bytes and legacy image paths, exposing only transport-safe references with deployment-relative authenticated blob API paths. Unmaterializable legacy images carry explicit unavailable metadata. The browser renders only safe raster MIME types inline.
 6. `image_crop` and `image_write_to_file` resolve current blob references while retaining old inline/path readers. A trusted passed current-session owner searches its live history and then reads that session's canonical archive directly; legacy and other-session calls retain the compatible ID-based lookup. Master-local writes reuse the passed image bytes and existing path/isolation checks, while remote transfer remains on the existing node-manager path.
 
@@ -22,6 +22,7 @@ Cross-module lifecycle for image bytes from transient ingress through canonical 
 - Legacy inline bytes and archive path references remain readable. Materialization failures leave the old persisted bytes intact; browser transport omits unavailable image bytes rather than returning base64.
 - Blob writes use temporary files plus atomic rename and content identity. A failed write never replaces a canonical message with a partial reference.
 - Provider hydration is clone-only; it never mutates or writes hydrated base64 back into canonical state.
+- Malformed, unsupported, or over-64-megapixel claimed HEIC/HEIF content fails during provider hydration before an HTTP request is sent.
 
 ## Retention and current non-goals
 
@@ -46,3 +47,5 @@ Retained archives may outlive live session deletion, so the first release perfor
 WebUI history, message SSE, CTX-BLOCK expansion, and explicit Debug output never return image base64 or legacy filesystem paths. They expose authenticated deployment-relative blob URLs. Only PNG, JPEG, GIF, and WebP are rendered directly; active or otherwise unsafe formats are download-only/unavailable and served with `nosniff`.
 
 Compatibility is read-old/write-new and lazy per accessed live session, not a full startup migration. A materialization failure keeps old bytes intact. Automatic garbage collection is deferred because retained archives outlive live session deletion; v1 retains blobs for archive lifetime.
+
+[2026-08-17] Canonical HEIC/HEIF blobs retain their original MIME and bytes. The generic provider-hydration boundary validates and decodes current `image/heic` and `image/heif` references, emits PNG when decoded pixels contain transparency and JPEG otherwise, and applies the existing 64-megapixel input spirit before pixel decode. This normalization is clone-only and shared by Anthropic, OpenAI Responses, and OpenAI Chat Completions serialization. PNG, JPEG, GIF, and WebP remain byte-identical pass-through formats; v1 does not broaden conversion to SVG or arbitrary unknown image types.

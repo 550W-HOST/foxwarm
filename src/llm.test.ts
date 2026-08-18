@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import axios from 'axios';
 import { PassThrough } from 'node:stream';
+import path from 'path';
 
 import { createDefaultCurrentSessionEffects, CurrentSessionEffects, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
 import { LOGS_DIR } from './config';
@@ -666,6 +667,91 @@ test('all provider protocols hydrate canonical image refs only in outbound paylo
       assert.equal(JSON.stringify(redactProviderImagesForLog(payload)).includes(imageBase64), false);
     }
     assert.equal(canonical[0].parts[0].inlineData, undefined, 'provider hydration must not mutate canonical messages');
+  } finally {
+    (axios as any).post = originalPost;
+    if (ref.blobId) await fs.remove(resolveImageBlobPath(ref.blobId));
+  }
+});
+
+test('all provider protocols receive the same provider-safe HEIC hydration clone', async t => {
+  const originalPost = axios.post;
+  const fixturePath = path.resolve(__dirname, '..', 'src', 'testFixtures', 'synthetic-3x2.heic');
+  const originalBytes = await fs.readFile(fixturePath);
+  const ref = await putImageBlob({ buffer: originalBytes, mimeType: 'image/heif', imageId: 'provider_heif#1' });
+  const canonical: Message[] = [{
+    role: 'user',
+    parts: [{ inlineDataRef: ref, imageMeta: { imageId: ref.imageId, mimeType: ref.mimeType } }],
+  }];
+  const canonicalSnapshot = structuredClone(canonical);
+  const captured: any[] = [];
+  const models = {
+    responses: { providerKey: 'fixture', providerType: 'openai-responses', baseUrl: 'https://fixture.example', apiKey: '', model: 'responses', extraFields: {}, extraHeaders: {} },
+    chat: { providerKey: 'fixture', providerType: 'openai-completions', baseUrl: 'https://fixture.example', apiKey: '', model: 'chat', extraFields: {}, extraHeaders: {} },
+    anthropic: { providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'claude', extraFields: {}, extraHeaders: {} },
+  } as const;
+
+  try {
+    await t.test('OpenAI Responses', async () => {
+      (axios as any).post = async (_url: string, data: any) => {
+        captured.push(data);
+        return { status: 200, statusText: 'OK', headers: {}, data: makeResponsesStream() };
+      };
+      await requestLlmOnce({ contents: canonical, systemPrompt: '', modelEntryOverride: models.responses as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    });
+    await t.test('OpenAI Chat Completions', async () => {
+      (axios as any).post = async (_url: string, data: any) => {
+        captured.push(data);
+        return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream() };
+      };
+      await requestLlmOnce({ contents: canonical, systemPrompt: '', modelEntryOverride: models.chat as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    });
+    await t.test('Anthropic Messages', async () => {
+      (axios as any).post = async (_url: string, data: any) => {
+        captured.push(data);
+        return { status: 200, statusText: 'OK', headers: {}, data: { content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } } };
+      };
+      await requestLlmOnce({ contents: canonical, systemPrompt: '', modelEntryOverride: models.anthropic as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    });
+
+    assert.equal(captured.length, 3);
+    for (const payload of captured) {
+      const serialized = JSON.stringify(payload);
+      assert.equal(serialized.includes('image/jpeg'), true);
+      assert.equal(/image\/(?:heic|heif)/.test(serialized), false);
+      assert.equal(serialized.includes(originalBytes.toString('base64')), false);
+    }
+    assert.deepEqual(canonical, canonicalSnapshot);
+  } finally {
+    (axios as any).post = originalPost;
+    if (ref.blobId) await fs.remove(resolveImageBlobPath(ref.blobId));
+  }
+});
+
+test('malformed claimed HEIC fails before a provider HTTP request', async () => {
+  const originalPost = axios.post;
+  let callCount = 0;
+  (axios as any).post = async () => {
+    callCount += 1;
+    throw new Error('provider should not be called');
+  };
+  const ref = await putImageBlob({
+    buffer: Buffer.from('not a HEIF container'),
+    mimeType: 'image/heic',
+    imageId: 'malformed-provider-image',
+  });
+  try {
+    await assert.rejects(
+      () => requestLlmOnce({
+        contents: [{ role: 'user', parts: [{ inlineDataRef: ref }] }],
+        systemPrompt: '',
+        modelEntryOverride: { providerKey: 'fixture', providerType: 'openai-responses', baseUrl: 'https://fixture.example', apiKey: '', model: 'responses', extraFields: {}, extraHeaders: {} } as any,
+        toolDefinitions: [],
+        notifySessionEvents: false,
+        registerAbortController: false,
+      }),
+      /Unable to normalize HEIC\/HEIF image malformed-provider-image for provider/,
+    );
+    assert.equal(callCount, 0);
   } finally {
     (axios as any).post = originalPost;
     if (ref.blobId) await fs.remove(resolveImageBlobPath(ref.blobId));

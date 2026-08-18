@@ -12,6 +12,12 @@ import {
   readImageRef,
   resolveImageBlobPath,
 } from './imageBlobs';
+import { convertToOpenAIFormat } from './llmProviders/openai';
+import type { Message } from './types';
+
+const TEST_FIXTURES_DIR = path.resolve(__dirname, '..', 'src', 'testFixtures');
+const SYNTHETIC_HEIC_FIXTURE = path.join(TEST_FIXTURES_DIR, 'synthetic-3x2.heic');
+const SYNTHETIC_ALPHA_HEIC_FIXTURE = path.join(TEST_FIXTURES_DIR, 'synthetic-alpha-3x2.heic');
 
 async function makePng(): Promise<Buffer> {
   return sharp({ create: { width: 3, height: 2, channels: 4, background: { r: 12, g: 34, b: 56, alpha: 1 } } })
@@ -60,6 +66,117 @@ test('externalization is idempotent, provider hydration is clone-only, and failu
     assert.equal(broken[0].parts[0].inlineData.data, '***not-base64***');
   } finally {
     if (ref.blobId) await fs.remove(resolveImageBlobPath(ref.blobId));
+  }
+});
+
+test('provider hydration normalizes real HEIC bytes for both MIME aliases without mutating canonical state', async () => {
+  const cases = [
+    {
+      buffer: await fs.readFile(SYNTHETIC_HEIC_FIXTURE),
+      mimeType: 'image/heic',
+      expectedProviderMime: 'image/jpeg',
+    },
+    {
+      buffer: await fs.readFile(SYNTHETIC_ALPHA_HEIC_FIXTURE),
+      mimeType: 'image/heif',
+      expectedProviderMime: 'image/png',
+    },
+  ];
+  const refs = await Promise.all(cases.map((item, index) => (
+    putImageBlob({ buffer: item.buffer, mimeType: item.mimeType, imageId: `synthetic-${index + 1}` })
+  )));
+  try {
+    for (let index = 0; index < refs.length; index += 1) {
+      const ref = refs[index];
+      const original: Message = {
+        role: 'tool',
+        parts: [{
+          toolUseId: 'call_synthetic',
+          inlineDataRef: ref,
+          imageMeta: { imageId: ref.imageId, mimeType: ref.mimeType, width: 3, height: 2 },
+        }],
+      };
+      const originalSnapshot = structuredClone(original);
+      const originalBlob = await readImageRef(ref);
+
+      const hydrated = await hydrateMessagesForProvider([original]);
+      const hydratedPart = hydrated[0].parts[0];
+      const providerBuffer = Buffer.from(hydratedPart.inlineData!.data, 'base64');
+      const metadata = await sharp(providerBuffer).metadata();
+      const pixels = await sharp(providerBuffer).ensureAlpha().raw().toBuffer();
+
+      assert.equal(hydratedPart.inlineData?.mimeType, cases[index].expectedProviderMime);
+      assert.deepEqual({ width: metadata.width, height: metadata.height, format: metadata.format }, {
+        width: 3,
+        height: 2,
+        format: cases[index].expectedProviderMime === 'image/png' ? 'png' : 'jpeg',
+      });
+      if (cases[index].expectedProviderMime === 'image/png') {
+        assert.equal(metadata.hasAlpha, true);
+        assert.ok(Array.from(pixels).filter((_value, offset) => offset % 4 === 3).some(alpha => alpha === 0));
+      } else {
+        assert.ok(pixels[0] > pixels[1] * 3 && pixels[0] > pixels[2] * 3, 'synthetic red pixels remain red-dominant');
+      }
+      assert.equal(hydratedPart.toolUseId, 'call_synthetic');
+      assert.strictEqual(hydratedPart.inlineDataRef, original.parts[0].inlineDataRef);
+      assert.deepEqual(hydratedPart.imageMeta, original.parts[0].imageMeta);
+      assert.deepEqual(original, originalSnapshot, 'canonical message and reference remain unchanged');
+      assert.deepEqual(await readImageRef(ref), originalBlob, 'canonical blob bytes remain unchanged');
+
+      const openAiPayload = convertToOpenAIFormat(hydrated);
+      const serialized = JSON.stringify(openAiPayload);
+      assert.match(serialized, new RegExp(`data:${cases[index].expectedProviderMime.replace('/', '\\/')};base64,`));
+      assert.doesNotMatch(serialized, /image\/(?:heic|heif)/);
+    }
+  } finally {
+    for (const blobId of new Set(refs.map(ref => ref.blobId).filter(Boolean) as string[])) {
+      await fs.remove(resolveImageBlobPath(blobId));
+    }
+  }
+});
+
+test('provider hydration rejects malformed claimed HEIC before serialization', async () => {
+  const ref = await putImageBlob({
+    buffer: Buffer.from('not an ISO BMFF image'),
+    mimeType: 'image/heic',
+    imageId: 'malformed-heic',
+  });
+  try {
+    await assert.rejects(
+      () => hydrateMessagesForProvider([{ role: 'user', parts: [{ inlineDataRef: ref }] }]),
+      /Unable to normalize HEIC\/HEIF image malformed-heic for provider: invalid or unsupported HEIF data\./,
+    );
+  } finally {
+    if (ref.blobId) await fs.remove(resolveImageBlobPath(ref.blobId));
+  }
+});
+
+test('provider hydration leaves native provider raster formats byte-identical', async () => {
+  const formats = [
+    { mimeType: 'image/png', buffer: await sharp({ create: { width: 2, height: 1, channels: 4, background: '#123456' } }).png().toBuffer() },
+    { mimeType: 'image/jpeg', buffer: await sharp({ create: { width: 2, height: 1, channels: 3, background: '#123456' } }).jpeg().toBuffer() },
+    { mimeType: 'image/gif', buffer: await sharp({ create: { width: 2, height: 1, channels: 4, background: '#123456' } }).gif().toBuffer() },
+    { mimeType: 'image/webp', buffer: await sharp({ create: { width: 2, height: 1, channels: 4, background: '#123456' } }).webp().toBuffer() },
+  ];
+  const refs = await Promise.all(formats.map((item, index) => putImageBlob({
+    buffer: item.buffer,
+    mimeType: item.mimeType,
+    imageId: `native-${index + 1}`,
+  })));
+  try {
+    const hydrated = await hydrateMessagesForProvider([{
+      role: 'user',
+      parts: refs.map(ref => ({ inlineDataRef: ref })),
+    }]);
+    for (let index = 0; index < formats.length; index += 1) {
+      const inline = hydrated[0].parts[index].inlineData!;
+      assert.equal(inline.mimeType, formats[index].mimeType);
+      assert.deepEqual(Buffer.from(inline.data, 'base64'), formats[index].buffer);
+    }
+  } finally {
+    for (const ref of refs) {
+      if (ref.blobId) await fs.remove(resolveImageBlobPath(ref.blobId));
+    }
   }
 });
 

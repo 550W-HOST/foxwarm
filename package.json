@@ -63,6 +63,7 @@
     "https-proxy-agent": "^7.0.6",
     "js-yaml": "^4.1.0",
     "lancedb": "^0.0.1",
+    "libheif-js": "^1.19.8",
     "matrix-js-sdk": "^41.0.0-rc.0",
     "multer": "^2.0.2",
     "node-pty": "^1.1.0",

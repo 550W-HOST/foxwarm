@@ -49,7 +49,7 @@ Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolRe
 ## Request behavior
 
 - Provider payloads are sanitized for lone surrogates and may be gzip/brotli compressed per model config.
-- Canonical image references are hydrated into cloned messages immediately before provider serialization for all three protocols. Persisted messages remain reference-only, and request/virtual-route diagnostics redact hydrated image payloads. Canonical contract: [image blob lifecycle](../threads/image-blob-lifecycle.md).
+- Canonical image references are hydrated into cloned messages immediately before provider serialization for all three protocols. That shared boundary normalizes current HEIC/HEIF references to provider-safe raster data while persisted messages remain reference-only, and request/virtual-route diagnostics redact hydrated image payloads. Canonical contract: [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - OpenAI and Anthropic payloads receive current tool schemas and current Foxwarm system/source wrappers.
 - OpenAI Responses and Chat Completions custom function tools explicitly set `strict: false` at their protocol-defined tool locations while preserving each JSON Schema `required` array unchanged. Anthropic continues to receive the same schema through `input_schema`.
 - Canonical history keeps logical queued messages separate. The Anthropic serializer coalesces adjacent same-role entries only in its outbound payload, while OpenAI serializers retain separate message entries. Queue-boundary ownership is [D-pipeline-canonical-queue-item-boundaries](../threads/message-processing-pipeline.md#d-pipeline-canonical-queue-item-boundaries).
