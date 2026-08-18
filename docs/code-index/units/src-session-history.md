@@ -22,7 +22,7 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 - `resolveCompactionSplitIndex` — recent-tail split that keeps tool-call/response group boundaries.
 - `buildLayeredCompactCandidateEntries` — active-history-only raw/block candidate construction with structural barriers and token policies.
 - `isSingleBlockCompactionStrandedBetweenHigherLevelBlocks` — narrow single-block lift exception.
-- `resolveCreateBlockRanges` — validated candidate-to-history mapping.
+- `resolveCreateBlockRanges` — materializes history/archive operation metadata from validator-resolved candidate ranges without re-walking source endpoints.
 - `buildCreatedBlockHistoryWithPreservedMessages`, `removePreservedMessages` — exact raw-message preservation/removal in authoritative history.
 - `formatCompactionCompletionMarker` — canonical compact-completion formatter.
 
@@ -40,8 +40,8 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 
 - **Snapshot creation:** captures exact active history, prompt/cache context, request options, and a transient session clone; automatic tool-response pruning uses the same complete-history snapshot discipline.
 - **Candidate construction:** consumes only the cloned authoritative active history. It applies visibility, positive unique/ordered raw sequence structure, semantic block metadata and raw coverage, protected/noncandidate barriers, preserved-raw rules, atomic grouping for present consecutive call/tool-response runs, recent-tail keep, and raw/block policies without reading or repairing from Archive. A valid call with no following tool row remains an ordinary single-message candidate. Active pruned responses and edited wording are summarized exactly as active history presents them.
-- **Planning loop:** calls the model, accepts only `submit_compact_plan`, appends actionable feedback, and stops after `COMPACT_FLOW_MAX_ROUNDS`.
-- **Result construction:** derives raw ranges and timestamps from active raw/block metadata, then creates block archive records and replacement history messages without touching the live session.
+- **Planning loop:** calls the model, accepts only `submit_compact_plan`, parses/normalizes/resolves each successful plan once, appends actionable feedback, and stops after `COMPACT_FLOW_MAX_ROUNDS`.
+- **Result construction:** maps validator-resolved candidate ranges to active-history indices, raw ranges, and timestamps, then creates block archive records and replacement history messages without touching the live session.
 - **Compatible commit:** verifies the consumed snapshot prefix, writes archive/block state, replaces only that prefix while retaining appended suffixes and preserving the prompt-cache key, persists, and emits completion/reminder events.
 - **Background mode:** stores pending job state and later commits through the same compatibility path as awaited mode.
 

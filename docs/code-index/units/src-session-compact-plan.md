@@ -10,9 +10,9 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 
 - `COMPACT_PLAN_TOOL_NAME` (`submit_compact_plan`) and `COMPACT_PLAN_TOOL_DEFINITION`.
 - `COMPACT_FLOW_MAX_ROUNDS` (`15`), `COMPACT_LEVEL_TOKEN_THRESHOLD` (`2000`), and preview constants.
-- Candidate, plan, policy, validation-detail, preserved-message, and memory-fact types.
+- Candidate, resolved-plan, policy, validation-detail, preserved-message, and memory-fact types.
 - `clampCompactFraction`, `calculateBlockCompactionWindow` — candidate/force window math.
-- `buildMessageCandidateItem`, `buildBlockCandidateItem`, target-level and filtering helpers.
+- `buildMessageCandidateItem`, `buildBlockCandidateItem`, and target-level selection helpers.
 - `buildCompactPromptText` — sectioned goal, range, summary, preservation, quota, and fact instructions.
 - `normalizeMemoryFacts` — best-effort per-block fact parsing/sanitization with plan-wide caps and deduplication.
 - `validateCompactPlanArgs` — structural, range, overlap, barrier, and quota validation.
@@ -25,7 +25,7 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 | `calculateBlockCompactionWindow` | Oldest candidate window, newest hard keep, and high-backlog requested coverage |
 | `buildCompactPromptText` | One planning prompt over validated candidate segments and run policies |
 | `normalizeMemoryFacts` | Optional `createBlocksJson[].memoryFacts` parsing that cannot invalidate the block plan |
-| `validateCompactPlanArgs` | Canonical tool-argument parser and validator |
+| `validateCompactPlanArgs` | Canonical one-pass tool-argument parser, range resolver, and validator |
 | `buildCompactPlanValidationFeedback` | Converts validation detail into bounded retry guidance |
 
 ## Current policy inputs
@@ -50,12 +50,14 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 - Preserved raw tokens do not count as replaced quota; stranded single-block lifts do not count as block reduction.
 - Quota coverage may accumulate across segments, but one operation never crosses a segment.
 - Optional malformed block memory facts are skipped rather than failing a valid compaction plan; the bounded total and text deduplication apply across all created blocks.
+- Successful validation returns each normalized create-block entry with its resolved candidate-index range; runtime commit consumes that range without reinterpreting source endpoints.
 
 ## Integration
 
 - `COMPACT_PLAN_TOOL_DEFINITION` keeps the stable plan-tool shape while facts are nested only in each `createBlocksJson` object; it has no top-level fact argument.
 - The dedicated compact runtime accepts the plan tool and rejects other calls with feedback.
-- Validated operations are consumed by [src-session-history](./src-session-history.md).
+- The supported tool input is `createBlocksJson` plus array-valued `preserveMessages` / `removePreservedMessages`; obsolete internal `createBlocks` arrays and JSON-string substitutes for array fields are rejected.
+- Validated resolved operations are consumed by [src-session-history](./src-session-history.md).
 - Cross-module behavior and rationale are canonical in [context compaction and recall](../threads/context-compaction-and-recall.md).
 
 ## Design decisions

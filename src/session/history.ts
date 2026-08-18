@@ -859,111 +859,34 @@ function filterRetainedHistory(history: Message[], removePreservedSeqs: Set<numb
 }
 
 export function resolveCreateBlockRanges(plan: CompactPlan, candidateEntries: LayeredCompactCandidateEntry[]): Array<CompactJobOperation & { planIndex: number; startIndex: number; endIndex: number }> {
-  const operations: Array<CompactJobOperation & { planIndex: number; startIndex: number; endIndex: number }> = [];
-  const candidateItems = candidateEntries.map(entry => entry.item);
-
-  for (let planIndex = 0; planIndex < plan.createBlocks.length; planIndex += 1) {
-    const block = plan.createBlocks[planIndex];
-    let startIndex = -1;
-    let endIndex = -1;
-
-    if (block.sourceKind === 'message') {
-      for (let index = 0; index < candidateItems.length; index += 1) {
-        const item = candidateItems[index];
-        if (item.kind === 'message' && item.startSeq === block.sourceStart) {
-          startIndex = index;
-          break;
-        }
-      }
-      if (startIndex < 0) {
-        throw new Error(`Unable to resolve layered compact message range ${block.sourceStart}-${block.sourceEnd}.`);
-      }
-      const startSegmentId = candidateItems[startIndex].segmentId ?? 0;
-      for (let index = startIndex; index < candidateItems.length; index += 1) {
-        const item = candidateItems[index];
-        if (item.kind !== 'message' || (item.segmentId ?? 0) !== startSegmentId) {
-          break;
-        }
-        endIndex = index;
-        if (item.endSeq === block.sourceEnd) {
-          break;
-        }
-      }
-      if (endIndex < startIndex || candidateItems[endIndex]?.kind !== 'message' || (candidateItems[endIndex] as Extract<CompactCandidateItem, { kind: 'message' }>).endSeq !== block.sourceEnd) {
-        throw new Error(`Unable to resolve layered compact message range ${block.sourceStart}-${block.sourceEnd}.`);
-      }
-      const startEntry = candidateEntries[startIndex];
-      const endEntry = candidateEntries[endIndex];
-      operations.push({
-        planIndex,
-        startIndex,
-        endIndex,
-        historyStartIndex: startEntry.historyStartIndex,
-        historyEndIndex: endEntry.historyEndIndex,
-        rawStartSeq: block.sourceStart,
-        rawEndSeq: block.sourceEnd,
-        rawStartTimestamp: startEntry.rawStartTimestamp,
-        rawEndTimestamp: endEntry.rawEndTimestamp,
-        sourceKind: block.sourceKind,
-        level: block.level,
-        sourceStart: block.sourceStart,
-        sourceEnd: block.sourceEnd,
-        summary: block.summary,
-        memoryFacts: block.memoryFacts,
-      });
-      continue;
-    }
-
-    for (let index = 0; index < candidateItems.length; index += 1) {
-      const item = candidateItems[index];
-      if (item.kind === 'block' && item.id === block.sourceStart && item.level === block.level - 1) {
-        startIndex = index;
-        break;
-      }
-    }
-    if (startIndex < 0) {
-      throw new Error(`Unable to resolve layered compact block range ${block.sourceStart}-${block.sourceEnd}.`);
-    }
-    const startSegmentId = candidateItems[startIndex].segmentId ?? 0;
-    for (let index = startIndex; index < candidateItems.length; index += 1) {
-      const item = candidateItems[index];
-      if (item.kind !== 'block' || item.level !== block.level - 1 || (item.segmentId ?? 0) !== startSegmentId) {
-        break;
-      }
-      endIndex = index;
-      if (item.id === block.sourceEnd) {
-        break;
-      }
-    }
-    const startItem = candidateItems[startIndex];
-    const endItem = candidateItems[endIndex];
-    if (endIndex < startIndex || startItem.kind !== 'block' || endItem?.kind !== 'block' || endItem.id !== block.sourceEnd) {
-      throw new Error(`Unable to resolve layered compact block range ${block.sourceStart}-${block.sourceEnd}.`);
-    }
+  const operations = plan.createBlocks.map((block, planIndex) => {
+    const [startIndex, endIndex] = block.candidateRange;
     const startEntry = candidateEntries[startIndex];
     const endEntry = candidateEntries[endIndex];
-    const sourceBlockIds = candidateItems
+    const startItem = startEntry.item;
+    const endItem = endEntry.item;
+    const sourceBlockIds = candidateEntries
       .slice(startIndex, endIndex + 1)
-      .flatMap(item => item.kind === 'block' ? [item.id] : []);
-    operations.push({
+      .flatMap(entry => entry.item.kind === 'block' ? [entry.item.id] : []);
+    return {
       planIndex,
       startIndex,
       endIndex,
       historyStartIndex: startEntry.historyStartIndex,
       historyEndIndex: endEntry.historyEndIndex,
-      rawStartSeq: startItem.rawStartSeq,
-      rawEndSeq: endItem.rawEndSeq,
+      rawStartSeq: startItem.kind === 'message' ? block.sourceStart : startItem.rawStartSeq,
+      rawEndSeq: endItem.kind === 'message' ? block.sourceEnd : endItem.rawEndSeq,
       rawStartTimestamp: startEntry.rawStartTimestamp,
       rawEndTimestamp: endEntry.rawEndTimestamp,
       sourceKind: block.sourceKind,
       level: block.level,
       sourceStart: block.sourceStart,
       sourceEnd: block.sourceEnd,
-      sourceBlockIds,
+      ...(sourceBlockIds.length > 0 ? { sourceBlockIds } : {}),
       summary: block.summary,
       memoryFacts: block.memoryFacts,
-    });
-  }
+    };
+  });
 
   return operations.sort((a, b) => a.startIndex - b.startIndex || a.planIndex - b.planIndex);
 }

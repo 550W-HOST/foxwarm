@@ -11,7 +11,6 @@ import {
   COMPACT_PLAN_TOOL_DEFINITION,
   COMPACT_PLAN_TOOL_NAME,
   CompactPlanValidationError,
-  filterCompactCandidateItemsByLevel,
   selectCompactCandidateTargetLevels,
   trimPreview,
   validateCompactPlanArgs,
@@ -317,7 +316,7 @@ test('trimPreview and compact prompt rendering do not split surrogate pairs at e
   assert.doesNotMatch(JSON.stringify(prompt), /\\ud83e(?!\\udd8a)/i);
 });
 
-test('filterCompactCandidateItemsByLevel removes levels at or below 2k tokens and block-only levels with fewer than two blocks', () => {
+test('selectCompactCandidateTargetLevels removes levels at or below 2k tokens and block-only levels with fewer than two blocks', () => {
   const candidates = [
     buildMessageCandidateItem(1, 1, 'small message a', COMPACT_LEVEL_TOKEN_THRESHOLD),
     buildMessageCandidateItem(2, 2, 'small message b', 0),
@@ -328,12 +327,9 @@ test('filterCompactCandidateItemsByLevel removes levels at or below 2k tokens an
 
   const allowedLevels = selectCompactCandidateTargetLevels(candidates);
   assert.deepStrictEqual([...allowedLevels].sort((a, b) => a - b), [3]);
-
-  const filtered = filterCompactCandidateItemsByLevel(candidates);
-  assert.deepStrictEqual(filtered.map(item => item.key), ['B#20', 'B#21']);
 });
 
-test('filterCompactCandidateItemsByLevel allows a stranded single block in a 3,3,2,3,3 pattern', () => {
+test('selectCompactCandidateTargetLevels allows a stranded single block in a 3,3,2,3,3 pattern', () => {
   const candidates = [
     buildBlockCandidateItem(1, 3, 1, 10, 'left higher block a', 200),
     buildBlockCandidateItem(2, 3, 11, 20, 'left higher block b', 200),
@@ -344,12 +340,9 @@ test('filterCompactCandidateItemsByLevel allows a stranded single block in a 3,3
 
   const allowedLevels = selectCompactCandidateTargetLevels(candidates);
   assert.deepStrictEqual([...allowedLevels].sort((a, b) => a - b), [3]);
-
-  const filtered = filterCompactCandidateItemsByLevel(candidates);
-  assert.deepStrictEqual(filtered.map(item => item.key), ['B#3']);
 });
 
-test('filterCompactCandidateItemsByLevel does not let an unsupported single block escape just because it is alone in its target level', () => {
+test('selectCompactCandidateTargetLevels does not let an unsupported single block escape just because it is alone in its target level', () => {
   const candidates = [
     buildBlockCandidateItem(1, 3, 1, 10, 'left higher block a', 200),
     buildBlockCandidateItem(2, 3, 11, 20, 'left higher block b', 200),
@@ -532,10 +525,11 @@ test('validateCompactPlanArgs rejects preserve/remove overlap', () => {
   }), /cannot appear in both preserveMessages and removePreservedMessages/i);
 });
 
-test('validateCompactPlanArgs ignores malformed block memory facts without invalidating the compact plan', () => {
+test('validateCompactPlanArgs ignores string-encoded block memory facts without invalidating the compact plan', () => {
   const plan = validateCompactPlanArgs({
     createBlocksJson: JSON.stringify([{
-      level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'summary for first two messages', memoryFacts: 'not an array',
+      level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'summary for first two messages',
+      memoryFacts: JSON.stringify([{ kind: 'decision', text: 'unsupported string-encoded fact array' }]),
     }]),
     memoryFactsJson: JSON.stringify([{ kind: 'decision', text: 'obsolete top-level facts are ignored' }]),
   }, messageCandidates);
@@ -564,6 +558,7 @@ test('validateCompactPlanArgs accepts history-contiguous block ranges with non-c
   assert.equal(plan.createBlocks.length, 1);
   assert.equal(plan.createBlocks[0].sourceStart, 10);
   assert.equal(plan.createBlocks[0].sourceEnd, 13);
+  assert.deepStrictEqual(plan.createBlocks[0].candidateRange, [0, 1]);
 });
 
 test('validateCompactPlanArgs accepts history-contiguous block ranges whose endpoint ids decrease', () => {
@@ -585,6 +580,7 @@ test('validateCompactPlanArgs accepts history-contiguous block ranges whose endp
   assert.equal(plan.createBlocks.length, 1);
   assert.equal(plan.createBlocks[0].sourceStart, 20);
   assert.equal(plan.createBlocks[0].sourceEnd, 13);
+  assert.deepStrictEqual(plan.createBlocks[0].candidateRange, [0, 1]);
 });
 
 test('validateCompactPlanArgs rejects ranges across an ignored lifecycle hard barrier', () => {
@@ -644,6 +640,7 @@ test('validateCompactPlanArgs treats grouped tool call/response candidates as at
   }, groupedCandidates);
 
   assert.equal(okPlan.createBlocks.length, 1);
+  assert.deepStrictEqual(okPlan.createBlocks[0].candidateRange, [0, 0]);
 
   assert.throws(() => validateCompactPlanArgs({
     createBlocksJson: JSON.stringify([{
@@ -703,6 +700,7 @@ test('validateCompactPlanArgs allows a stranded single block source when the can
   assert.equal(plan.createBlocks.length, 1);
   assert.equal(plan.createBlocks[0].sourceStart, 30);
   assert.equal(plan.createBlocks[0].sourceEnd, 30);
+  assert.deepStrictEqual(plan.createBlocks[0].candidateRange, [0, 0]);
 });
 
 test('validateCompactPlanArgs rejects non-continuous or overlapping ranges', () => {
@@ -736,8 +734,8 @@ test('validateCompactPlanArgs rejects non-continuous or overlapping ranges', () 
   }, messageCandidates), /overlaps another createBlocks range/i);
 });
 
-test('validateCompactPlanArgs still accepts legacy createBlocks arrays internally', () => {
-  const plan = validateCompactPlanArgs({
+test('validateCompactPlanArgs rejects unsupported legacy createBlocks arrays and string list fields', () => {
+  assert.throws(() => validateCompactPlanArgs({
     createBlocks: [{
       level: 1,
       sourceKind: 'message',
@@ -745,9 +743,14 @@ test('validateCompactPlanArgs still accepts legacy createBlocks arrays internall
       sourceEnd: 2,
       summary: 'legacy compatibility',
     }],
-  }, messageCandidates);
+  }, messageCandidates), /createBlocksJson must be a non-empty JSON array string/i);
 
-  assert.equal(plan.createBlocks.length, 1);
+  assert.throws(() => validateCompactPlanArgs({
+    createBlocksJson: JSON.stringify([{
+      level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'valid block',
+    }]),
+    preserveMessages: '[2]',
+  }, messageCandidates), /preserveMessages must be an array/i);
 });
 
 test('buildCompactPlanValidationFeedback explains invalid layered compact plans', () => {

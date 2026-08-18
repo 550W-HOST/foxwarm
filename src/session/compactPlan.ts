@@ -57,7 +57,7 @@ export interface ExtractedMemoryFact {
 }
 
 export interface CompactPlan {
-  createBlocks: LayeredCreateBlockPlan[];
+  createBlocks: Array<LayeredCreateBlockPlan & { candidateRange: [number, number] }>;
   preserveMessages?: number[];
   removePreservedMessages?: number[];
 }
@@ -189,46 +189,27 @@ function trimCompactFactText(text: string, limit: number): string {
   return normalized.length <= limit ? normalized : truncateUnicodeSafeWithEllipsis(normalized, limit, '…');
 }
 
-function parseOptionalJsonArray(rawValue: unknown): unknown[] | null {
-  if (Array.isArray(rawValue)) {
-    return rawValue;
-  }
-
-  if (typeof rawValue === 'string' && rawValue.trim()) {
-    try {
-      const parsed = JSON.parse(rawValue);
-      return Array.isArray(parsed) ? parsed : null;
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
-}
-
 function normalizePositiveIntegerArray(rawArgs: Record<string, any>, key: 'preserveMessages' | 'removePreservedMessages', details: CompactPlanValidationDetails): number[] {
   const rawValue = rawArgs[key];
-  if (rawValue === undefined || rawValue === null || rawValue === '') {
+  if (rawValue === undefined) {
     return [];
   }
 
-  const rawArray = parseOptionalJsonArray(rawValue);
-  if (!rawArray) {
+  if (!Array.isArray(rawValue)) {
     details.createBlockErrors.push(`${key} must be an array of positive integer message seq numbers.`);
     return [];
   }
 
   const result: number[] = [];
   const seen = new Set<number>();
-  rawArray.forEach((value, index) => {
-    const numberValue = Number(value);
-    if (!Number.isInteger(numberValue) || numberValue < 1) {
+  rawValue.forEach((value, index) => {
+    if (!Number.isInteger(value) || value < 1) {
       details.createBlockErrors.push(`${key}[${index}] must be a positive integer message seq number.`);
       return;
     }
-    if (!seen.has(numberValue)) {
-      seen.add(numberValue);
-      result.push(numberValue);
+    if (!seen.has(value)) {
+      seen.add(value);
+      result.push(value);
     }
   });
 
@@ -236,13 +217,12 @@ function normalizePositiveIntegerArray(rawArgs: Record<string, any>, key: 'prese
 }
 
 export function normalizeMemoryFacts(rawValue: unknown, options: { seenTexts?: Set<string>; maxFacts?: number } = {}): ExtractedMemoryFact[] {
-  const rawFacts = parseOptionalJsonArray(rawValue);
-  if (!rawFacts) return [];
+  if (!Array.isArray(rawValue)) return [];
 
   const facts: ExtractedMemoryFact[] = [];
   const seenTexts = options.seenTexts || new Set<string>();
   const maxFacts = options.maxFacts ?? MAX_MEMORY_FACTS_PER_PLAN;
-  for (const rawFact of rawFacts) {
+  for (const rawFact of rawValue) {
     if (facts.length >= maxFacts) break;
     if (!rawFact || typeof rawFact !== 'object') continue;
     const entry = rawFact as Record<string, any>;
@@ -352,11 +332,6 @@ export function selectCompactCandidateTargetLevels(items: CompactCandidateItem[]
   }
 
   return allowedLevels;
-}
-
-export function filterCompactCandidateItemsByLevel(items: CompactCandidateItem[]): CompactCandidateItem[] {
-  const allowedLevels = selectCompactCandidateTargetLevels(items);
-  return items.filter(item => allowedLevels.has(getCandidateTargetLevel(item)));
 }
 
 function canAppendToCandidateSegment(segment: CandidateSegment, item: CompactCandidateItem): boolean {
@@ -575,25 +550,23 @@ function buildCompactPlanValidationSummary(details: CompactPlanValidationDetails
 }
 
 function normalizeCreateBlocks(rawArgs: Record<string, any>, details: CompactPlanValidationDetails): LayeredCreateBlockPlan[] {
-  let rawCreateBlocks = rawArgs.createBlocks;
   const seenMemoryFactTexts = new Set<string>();
   let remainingMemoryFacts = MAX_MEMORY_FACTS_PER_PLAN;
+  let rawCreateBlocks: unknown;
 
-  if (typeof rawArgs.createBlocksJson === 'string' && rawArgs.createBlocksJson.trim()) {
-    try {
-      rawCreateBlocks = JSON.parse(rawArgs.createBlocksJson);
-    } catch (e: any) {
-      details.createBlockErrors.push(`createBlocksJson must be valid JSON: ${e.message}`);
-      return [];
-    }
+  if (typeof rawArgs.createBlocksJson !== 'string' || !rawArgs.createBlocksJson.trim()) {
+    details.createBlockErrors.push('createBlocksJson must be a non-empty JSON array string.');
+    return [];
   }
-
-  if (rawCreateBlocks === undefined || rawCreateBlocks === null || rawCreateBlocks === '') {
+  try {
+    rawCreateBlocks = JSON.parse(rawArgs.createBlocksJson);
+  } catch (e: any) {
+    details.createBlockErrors.push(`createBlocksJson must be valid JSON: ${e.message}`);
     return [];
   }
 
   if (!Array.isArray(rawCreateBlocks)) {
-    details.createBlockErrors.push('createBlocksJson must decode to an array (legacy createBlocks array is still accepted internally).');
+    details.createBlockErrors.push('createBlocksJson must decode to an array.');
     return [];
   }
 
@@ -708,7 +681,11 @@ function isSeqCoveredByCreatedMessageBlock(createBlocks: LayeredCreateBlockPlan[
   return createBlocks.some(block => block.sourceKind === 'message' && block.sourceStart <= seq && block.sourceEnd >= seq);
 }
 
-function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidateItems: CompactCandidateItem[], options: CompactPlanValidationOptions = {}): CompactPlanValidationDetails {
+function validateNormalizedCompactPlan(
+  rawArgs: Record<string, any>,
+  candidateItems: CompactCandidateItem[],
+  options: CompactPlanValidationOptions = {},
+): { details: CompactPlanValidationDetails; plan?: CompactPlan } {
   const details: CompactPlanValidationDetails = {
     createBlockErrors: [],
   };
@@ -717,12 +694,12 @@ function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidate
   const preserveMessages = normalizePositiveIntegerArray(rawArgs, 'preserveMessages', details);
   const removePreservedMessages = normalizePositiveIntegerArray(rawArgs, 'removePreservedMessages', details);
   if (details.createBlockErrors.length > 0) {
-    return details;
+    return { details };
   }
 
   if (createBlocks.length === 0 && removePreservedMessages.length === 0) {
     details.createBlockErrors.push('createBlocks must contain at least one block unless removePreservedMessages removes previously preserved raw messages.');
-    return details;
+    return { details };
   }
 
   const removeSet = new Set(removePreservedMessages);
@@ -753,12 +730,13 @@ function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidate
   }
 
   if (details.createBlockErrors.length > 0) {
-    return details;
+    return { details };
   }
 
   const usedIndices = new Set<number>();
   const coveredMessageIndices = new Set<number>();
   const coveredBlockIndicesByLevel = new Map<number, Set<number>>();
+  const resolvedCreateBlocks: CompactPlan['createBlocks'] = [];
   createBlocks.forEach((block, index) => {
     const range = block.sourceKind === 'message'
       ? findMessageRange(candidateItems, block.sourceStart, block.sourceEnd)
@@ -801,10 +779,11 @@ function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidate
       }
       coveredBlockIndicesByLevel.set(sourceLevel, covered);
     }
+    resolvedCreateBlocks.push({ ...block, candidateRange: range });
   });
 
   if (details.createBlockErrors.length > 0) {
-    return details;
+    return { details };
   }
 
   const preservedMessageIndices = new Set<number>();
@@ -837,22 +816,19 @@ function getCompactPlanValidationDetails(rawArgs: Record<string, any>, candidate
     }
   }
 
-  return details;
+  if (details.createBlockErrors.length > 0) {
+    return { details };
+  }
+  return {
+    details,
+    plan: { createBlocks: resolvedCreateBlocks, preserveMessages, removePreservedMessages },
+  };
 }
 
 export function validateCompactPlanArgs(rawArgs: Record<string, any>, candidateItems: CompactCandidateItem[], options: CompactPlanValidationOptions = {}): CompactPlan {
-  const details = getCompactPlanValidationDetails(rawArgs, candidateItems, options);
-  if (details.createBlockErrors.length > 0) {
-    throw new CompactPlanValidationError(details);
-  }
-
-  const noopDetails: CompactPlanValidationDetails = { createBlockErrors: [] };
-
-  return {
-    createBlocks: normalizeCreateBlocks(rawArgs, noopDetails),
-    preserveMessages: normalizePositiveIntegerArray(rawArgs, 'preserveMessages', noopDetails),
-    removePreservedMessages: normalizePositiveIntegerArray(rawArgs, 'removePreservedMessages', noopDetails),
-  };
+  const result = validateNormalizedCompactPlan(rawArgs, candidateItems, options);
+  if (!result.plan) throw new CompactPlanValidationError(result.details);
+  return result.plan;
 }
 
 export function buildCompactPlanValidationFeedback(error: CompactPlanValidationError): string {

@@ -416,7 +416,7 @@ async function main(): Promise<void> {
             id: 'compact-plan-invalid',
             name: 'submit_compact_plan',
             args: {
-              createBlocks: [] as any[],
+              createBlocksJson: '[]',
             },
           };
           appendLocalMessage(activeSession, 'model', [{ functionCall: toolCall }]);
@@ -433,13 +433,13 @@ async function main(): Promise<void> {
             id: 'compact-plan',
             name: 'submit_compact_plan',
             args: {
-              createBlocks: [{
+              createBlocksJson: JSON.stringify([{
                 level: 1,
                 sourceKind: 'message',
                 sourceStart: compactMessageRange.sourceStart,
                 sourceEnd: compactMessageRange.sourceEnd,
                 summary: 'layered compact summary',
-              }],
+              }]),
             },
           };
           appendLocalMessage(activeSession, 'model', [{ functionCall: toolCall }]);
@@ -516,13 +516,13 @@ async function main(): Promise<void> {
           id: 'async-compact-plan',
           name: 'submit_compact_plan',
           args: {
-            createBlocks: [{
+            createBlocksJson: JSON.stringify([{
               level: 1,
               sourceKind: 'message',
               sourceStart: 1,
               sourceEnd: 3,
               summary: 'async compact summary',
-            }],
+            }]),
           },
         };
         if (isCompactJob) {
@@ -658,13 +658,13 @@ async function main(): Promise<void> {
             id: 'auto-compact-plan',
             name: 'submit_compact_plan',
             args: {
-              createBlocks: [{
+              createBlocksJson: JSON.stringify([{
                 level: 1,
                 sourceKind: 'message',
                 sourceStart: autoCompactMessageRange.sourceStart,
                 sourceEnd: autoCompactMessageRange.sourceEnd,
                 summary: 'auto compact summary',
-              }],
+              }]),
             },
           };
           appendLocalMessage(activeSession, 'model', [{ functionCall: toolCall }]);
