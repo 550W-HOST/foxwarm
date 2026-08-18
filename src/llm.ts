@@ -9,11 +9,12 @@ import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig } from './config';
-import * as nodeExecution from './nodeExecution';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
-import { checkToolPermissionForSession, checkPathAccess } from './isolatedCheck';
+import { checkPathAccess } from './isolatedCheck';
+import type { ResolvedTool } from './tools/resolvedTools';
+import { executeResolvedTool, resolveDirectTool } from './tools/resolvedTools';
 import { expandHomePath } from './utils/pathResolve';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
@@ -906,27 +907,6 @@ function buildInvalidToolArgsResult(call: FunctionCall): { error: { type: string
     };
 }
 
-function normalizeRequestedNode(nodeParam: unknown, currentNode: string): string {
-    if (nodeParam === undefined || nodeParam === null) {
-        return currentNode;
-    }
-
-    if (typeof nodeParam !== 'string') {
-        return String(nodeParam) || currentNode;
-    }
-
-    const trimmed = nodeParam.trim();
-    if (!trimmed) {
-        return currentNode;
-    }
-
-    if (trimmed.toLowerCase() === 'current') {
-        return currentNode;
-    }
-
-    return trimmed;
-}
-
 async function appendMemoryFilesForAgent(agentName: string, kind: 'self' | 'inherited', sessionId?: string): Promise<string> {
     const agentMemoryDir = getAgentMemoryDir(agentName);
     if (!await fs.pathExists(agentMemoryDir)) {
@@ -1327,13 +1307,10 @@ type PreparedToolCall = {
     call: FunctionCall;
     index: number;
     toolId: string;
-    toolFn: any;
+    resolved?: ResolvedTool;
     toolArgs: Record<string, any>;
     sessionId: string;
-    sourceSession: Session;
-    targetNode: string;
     executionNode: string;
-    permissionNode: string;
     result?: any;
     sessionSnapshot?: ToolExecutionSnapshot;
     placementError?: any;
@@ -1403,36 +1380,17 @@ async function prepareToolCall(
     snapshot?: ToolExecutionSnapshot,
     notifyStart = true,
 ): Promise<PreparedToolCall> {
-    const toolFn = (tools as any)[call.name];
     const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const argsPreview = buildToolArgsPreview(call);
-
-    const toolDefinition = tools.definitions.find((def: any) => def.name === call.name);
-    const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition?.parameters?.properties || {}, 'node');
-    const nodeParam = supportsExplicitNode ? call.args?.node : undefined;
     const sessionId = session.id;
-    const currentNode = snapshot?.currentNode || session.currentNode || 'master';
-    const toolArgs = { ...call.args };
-    if (supportsExplicitNode) delete toolArgs.node;
     let placementError: any;
-    if (call.name !== 'image_write_to_file') {
-        try { tools.assertToolAvailableForPlacement(call.name, toolArgs, toolContext); }
-        catch (error) { placementError = error; }
-    }
-    const targetNode = placementError ? currentNode : normalizeRequestedNode(nodeParam, currentNode);
-    const executionNode = tools.resolveBuiltinToolPlacement(call.name, toolArgs, targetNode).executionNode;
-    const permissionNode = tools.getToolPermissionNode(call.name, executionNode, targetNode);
-    const guardContext = call.name === 'send_file' || call.name === 'image_write_to_file'
-        ? { ...toolContext, runtimeNodeId: targetNode }
-        : toolContext;
-    if (!placementError) {
-        try { tools.assertToolAvailableForPlacement(call.name, toolArgs, guardContext); }
-        catch (error) { placementError = error; }
-    }
-    const effectiveSnapshot = snapshot || (toolContext.sessionPlacement === 'session-worker'
-        && executionNode !== 'master' && executionNode === currentNode
-        ? { currentNode, ...(typeof session.cwd === 'string' ? { cwd: session.cwd } : {}) }
-        : undefined);
+    let resolved: ResolvedTool | undefined;
+    try {
+        if (call.argsParseError) tools.assertToolAvailableForPlacement(call.name, call.args || {}, toolContext);
+        else resolved = await resolveDirectTool(call.name, call.args || {}, toolContext, snapshot);
+    } catch (error) { placementError = error; }
+    const toolArgs = resolved?.args || { ...(call.args || {}) };
+    const executionNode = resolved?.executionNode || snapshot?.currentNode || session.currentNode || 'master';
     if (notifyStart && !placementError) {
         logger.info({ tool: call.name, args: argsPreview }, 'Executing tool');
         if (toolContext.broadcast && session.verbose) {
@@ -1454,15 +1412,12 @@ async function prepareToolCall(
         call,
         index,
         toolId,
-        toolFn,
+        resolved,
         toolArgs,
         sessionId,
-        sourceSession: session,
-        targetNode,
         executionNode,
-        permissionNode,
         result: call.argsParseError ? buildInvalidToolArgsResult(call) : undefined,
-        sessionSnapshot: effectiveSnapshot,
+        sessionSnapshot: resolved?.routingSnapshot,
         placementError,
     };
 }
@@ -1477,21 +1432,8 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
 
     try {
         if (prepared.placementError) throw prepared.placementError;
-        if (!result?.error) {
-            await checkToolPermissionForSession(prepared.sourceSession, prepared.call.name, prepared.permissionNode, prepared.toolArgs);
-        }
-        if (!result?.error && prepared.executionNode !== 'master') {
-            result = normalizeExecutedToolResult(await nodeExecution.executeRemoteNodeTool(
-                prepared.sessionId,
-                prepared.executionNode,
-                prepared.call.name,
-                prepared.toolArgs,
-                prepared.sessionSnapshot,
-            ));
-        } else if (!result?.error && prepared.toolFn) {
-            const runtimeContext = prepared.call.name === 'send_file' || prepared.call.name === 'image_write_to_file'
-                ? { ...toolContext, runtimeNodeId: prepared.targetNode, toolUseId: prepared.toolId }
-                : { ...toolContext, toolUseId: prepared.toolId };
+        if (!result?.error && prepared.resolved) {
+            const runtimeContext = { ...toolContext, toolUseId: prepared.toolId };
             const localToolContext = prepared.sessionSnapshot
                 ? {
                     ...runtimeContext,
@@ -1499,7 +1441,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
                     deferSessionCwdSync: prepared.call.name === 'exec',
                 }
                 : runtimeContext;
-            result = normalizeExecutedToolResult(await prepared.toolFn(prepared.toolArgs, localToolContext));
+            result = normalizeExecutedToolResult(await executeResolvedTool(prepared.resolved, localToolContext));
         } else if (!result?.error) {
             result = { error: `Unknown tool: ${prepared.call.name}` };
         }

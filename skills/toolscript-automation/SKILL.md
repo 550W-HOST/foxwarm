@@ -21,7 +21,8 @@ def main(args):
     base_dir = args.get("baseDir", "examples/toolscript").rstrip("/")
 
     listing = call_tool({
-        "toolId": "builtin:read",
+        "source": "node",
+        "name": "read",
         "args": {"filePath": base_dir},
     })
     print(listing[:200])
@@ -89,12 +90,13 @@ Use `call_tool("read", ...)`, `call_tool("write", ...)`, or `call_tool("exec", .
 
 ### `call_tool(...)`
 
-Use one bridge for builtin, MCP, and remote-node tools. The unified descriptor is the clearest form:
+Use one bridge for builtin, MCP, and node tools. Environment capabilities such as read/write/edit/apply_patch/exec/browse use `source: "node"`; omitting `nodeId` targets the session current node. The unified descriptor is the clearest form:
 
 ```python
 def main(args):
     content = call_tool({
-        "toolId": "builtin:read",
+        "source": "node",
+        "name": "read",
         "args": {"filePath": args["path"]},
     })
 

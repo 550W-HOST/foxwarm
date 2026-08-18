@@ -154,6 +154,7 @@ test('MCP images below and above the text guard threshold stay structured on hid
 
   try {
     const sessionId = makeSessionId('mcp_image_guard');
+    await sessionManager.getSession(sessionId);
     const toolMessage = await executeTools([
       {
         id: 'call_mcp_small_image',
@@ -218,6 +219,7 @@ test('MCP images below and above the text guard threshold stay structured on hid
 
 test('builtin and MCP magic-looking text stays ordinary text outside remote-node ingress', async () => {
   const sessionId = makeSessionId('magic_text_not_image');
+  await sessionManager.getSession(sessionId);
   const relativePath = path.join('.temp', 'tool-output-magic-text', `${sessionId}.txt`);
   const fullPath = path.join(getAgentDir('main'), relativePath);
   const builtinMagic = `__IMAGE__:image/png:${TINY_PNG_BASE64}`;
@@ -339,6 +341,7 @@ test('non-image MCP resources remain subject to the ordinary text output guard',
 
 test('read returns full content to unified guard instead of old 10000-char truncation', async () => {
   const sessionId = makeSessionId('tool_output_guard_read');
+  await sessionManager.getSession(sessionId);
   const relativePath = path.join('.temp', 'tool-output-guard-read', `${sessionId}.txt`);
   const fullPath = path.join(getAgentDir('main'), relativePath);
   const content = Array.from({ length: 1200 }, (_, index) => `READ_FULL_CONTENT_${index + 1}_${'R'.repeat(60)}`).join('\n');

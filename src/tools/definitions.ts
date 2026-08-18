@@ -622,7 +622,7 @@ Example:
         {
             name: 'search_tools',
             defaultInject: true,
-            description: 'Search or list callable tools across builtin, MCP, and remote-node sources. Builtin results include file/edit tools, exec, session/channel tools, vector/archive tools, timers, and wrapper tools such as MCP/node discovery helpers. Prefer this unified catalog before calling long-tail tools via call_tool; load the timer-automation skill before using timer tools and the mcp-management skill before changing MCP server configuration. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falls back to `master` when no current node is available, instead of listing every node). Example search_tools calls: `{query:"read file", sources:["builtin"]}` or `{query:"screenshot android", sources:["node"]}`.',
+            description: 'Search or list callable tools across builtin, MCP, and node sources. Builtin results contain Foxwarm control/session/management tools; Node results contain environment capabilities such as read/write/edit/apply_patch/exec/browse and node-advertised tools. Prefer this unified catalog before calling long-tail tools via call_tool; load the timer-automation skill before using timer tools and the mcp-management skill before changing MCP server configuration. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falling back to `master` when the session has no selected node rather than listing every node). Example search_tools calls: `{query:"read file", sources:["node"]}` or `{query:"session status", sources:["builtin"]}`.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -642,16 +642,16 @@ Example:
         {
             name: 'call_tool',
             defaultInject: true,
-            description: 'Unified tool caller for builtin, MCP, and remote-node tools. Prefer toolId returned by search_tools; explicit source/name/server/nodeId fields are also accepted. Put the target tool arguments inside `args` when visible, or use `argsJson` as a JSON object string fallback when the provider hides free-form object fields. Example using toolId: `{toolId:"builtin:read", args:{filePath:"README.md"}}` or `{toolId:"builtin:read", argsJson:"{\\"filePath\\":\\"README.md\\"}"}`. Example using explicit MCP fields: `{source:"mcp", server:"github", name:"search_repos", args:{query:"foxwarm"}}`. Example using explicit node fields: `{source:"node", nodeId:"android-node", name:"android_screenshot", args:{inline:true}}`.',
+            description: 'Unified tool caller for builtin, MCP, and node tools. Builtin identifies Foxwarm control/session/management tools; read/write/edit/apply_patch/exec/browse_* are node capabilities and must use source=node. Prefer toolId returned by search_tools; explicit source/name/server/nodeId fields are also accepted. For source=node, omitting nodeId targets the current node. Put target arguments inside `args`, or use `argsJson` as a JSON object string fallback. Example current-node read: `{source:"node", name:"read", args:{filePath:"README.md"}}`. Example MCP call: `{source:"mcp", server:"github", name:"search_repos", args:{query:"foxwarm"}}`.',
             parameters: {
                 type: 'object',
                 properties: {
-                    toolId: { type: 'string', description: 'Preferred unified tool identifier returned by search_tools (for example builtin:read, mcp:server/tool, node:node-id/tool).' },
+                    toolId: { type: 'string', description: 'Preferred unified tool identifier returned by search_tools (for example builtin:list_timers, mcp:server/tool, node:node-id/tool).' },
                     source: { type: 'string', enum: ['builtin', 'mcp', 'node'], description: 'Explicit source when not using toolId.' },
                     name: { type: 'string', description: 'Tool name when not using toolId.' },
                     server: { type: 'string', description: 'MCP server name; required when source=\"mcp\" and toolId is not provided.' },
-                    nodeId: { type: 'string', description: 'Remote node id for source=node.' },
-                    args: { type: 'object', description: 'Wrapper object containing the target tool arguments. Example: for builtin read, use `args: { filePath: "README.md" }`. Prefer this when visible.', additionalProperties: true },
+                    nodeId: { type: 'string', description: 'Node id for source=node. Omit or use `current` for the session current node.' },
+                    args: { type: 'object', description: 'Wrapper object containing the target tool arguments. Prefer this when visible.', additionalProperties: true },
                     argsJson: { type: 'string', description: 'JSON object string fallback for target tool arguments, for providers that do not expose free-form object fields. Example: `{"filePath":"README.md"}`. Used when `args` is not available.' }
                 }
             }

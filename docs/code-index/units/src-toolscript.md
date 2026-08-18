@@ -65,7 +65,7 @@ Unknown external function names are returned to Monty as runtime exceptions that
 
 ## Compatibility
 
-- `call_tool` accepts the supported string shorthand and the current unified descriptor. New examples use the descriptor.
+- `call_tool` accepts the supported string shorthand and the current unified descriptor. String shorthand for direct Node-capability names resolves to `source=node`; descriptor examples use `source=node` with omitted `nodeId` for the current execution target.
 - `continue_script.input` is a string at the tool boundary; structured input is passed as JSON text and parsed by the script.
 - Documented user automation may still call hidden `start_toolscript_run`; current model guidance and bundled skills use `run_script({ mode: "background" })`.
 - Hidden direct MCP runtime handlers still exist, but ToolScript examples use unified `call_tool` so builtin/MCP/node dispatch shares one path.

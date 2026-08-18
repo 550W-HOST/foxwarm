@@ -1,7 +1,7 @@
 # Unit: src-mcp-external-service
 
 Files: src/mcpExternalService.ts
-Secondary files: src/mcpExternalService.test.ts, src/tools/mcpTools.ts, src/tools/unifiedSearch.ts, src/index.ts
+Secondary files: src/mcpExternalService.test.ts, src/tools/resolvedTools.ts, src/tools/mcpTools.ts, src/tools/unifiedSearch.ts, src/index.ts
 
 ## Purpose
 
@@ -24,8 +24,8 @@ Provides the single versioned RPC owner through which direct, unified, ToolScrip
 
 ## Integration
 
-- `src/tools/mcpTools.ts` routes hidden compatibility list/search/call/config handlers through this facade.
-- `src/tools/unifiedSearch.ts` routes MCP discovery and invocation through this facade; ToolScript inherits the same path through nested `call_tool`.
+- `src/tools/mcpTools.ts` retains compatibility list/search/call/config handlers; call invocation delegates to the resolved-tool executor.
+- `src/tools/resolvedTools.ts` routes direct, unified, ToolScript, and retained compatibility MCP invocation through this facade; discovery remains in `src/tools/unifiedSearch.ts`.
 - `src/index.ts` initializes and terminally drains the service.
 - The authoritative live-configuration and safe-summary decisions remain canonical in [tool dispatch](../threads/tool-dispatch.md#d-dispatch-mcp-live-configuration) and [MCP client](src-mcp-client.md#d-mcp-safe-summary).
 

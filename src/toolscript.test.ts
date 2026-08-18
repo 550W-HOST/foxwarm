@@ -555,7 +555,7 @@ test('run_script nested remote builtin uses the Node execution service', async (
   const sessionId = makeId('toolscript_remote_builtin');
   const scriptName = `${makeId('script')}.py`;
   await writeScript(scriptName, asMain(
-    'return call_tool({"toolId": "builtin:read", "args": {"filePath": "remote.txt"}})',
+    'return call_tool({"source": "node", "name": "read", "args": {"filePath": "remote.txt"}})',
   ));
   const session = await sessionManager.getSession(sessionId);
   session.currentNode = 'remote-script';
@@ -795,7 +795,7 @@ test('run_script pauses on timeout checkpoints and continue_script can resume ex
   const scriptName = `${makeId('script')}.py`;
   await writeScript(scriptName, asMain([
     'print("before timeout")',
-    'call_tool({"toolId": "builtin:exec", "args": {"command": "sleep 1", "timeout": 3}})',
+    'call_tool({"source": "node", "name": "exec", "args": {"command": "sleep 1", "timeout": 3}})',
     'print("after timeout")',
     'return {"ok": True}',
   ].join('\n')));

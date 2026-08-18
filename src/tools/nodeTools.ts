@@ -9,9 +9,8 @@ import { nodesManager } from '../nodes/manager';
 import { buildNodeBootstrapInfo, ensureNodePairingToken } from '../nodes/bootstrapInfo';
 import { logger } from '../common';
 import { getAgentDir } from '../config';
-import { copyBetweenNodes, executeRemoteNodeTool, listNodeTopology, validateNodeSelection } from '../nodeExecution';
-import { requireNodeExecutionTarget } from '../nodeExecutionService';
-import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
+import { copyBetweenNodes, listNodeTopology, validateNodeSelection } from '../nodeExecution';
+import { executeResolvedTool, resolveDirectTool } from './resolvedTools';
 import { executeMainManagementTool } from '../mainManagementTools';
 
 export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
@@ -57,7 +56,7 @@ export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) 
 }
 
 export async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
-    const { action, nodeId, tool, args: toolArgs } = args;
+    const { action, nodeId } = args;
     
     if (action === 'list' && ctx.sessionPlacement === 'session-worker') {
         if (!ctx.sessionId || ctx.session?.id !== ctx.sessionId) throw new Error('Remote node listing requires exact session context.');
@@ -100,24 +99,7 @@ export async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
     }
     
     if (action === 'call') {
-        // Call a specific tool on a node
-        if (!nodeId || !tool) {
-            throw new Error('nodeId and tool are required for call action');
-        }
-        
-        if (!ctx.sessionId) {
-            throw new Error('Remote node calls require an active source session.');
-        }
-        if (nodeId === 'master') {
-            await requireNodeExecutionTarget(ctx.sessionId, nodeId);
-            if (!NODE_ENVIRONMENT_BUILTIN_NAMES.includes(tool as any)) {
-                throw new Error(`Tool \`${tool}\` not available on node \`master\``);
-            }
-            return nodesManager.executeNodeTool(nodeId, tool, toolArgs || {}, ctx.sessionId);
-        }
-        const result = await executeRemoteNodeTool(ctx.sessionId, nodeId, tool, toolArgs || {});
-        
-        return result;
+        return executeResolvedTool(await resolveDirectTool('remote_node', args, ctx), ctx);
     }
     
     throw new Error(`Unknown action: ${action}`);

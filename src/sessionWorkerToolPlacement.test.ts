@@ -25,7 +25,7 @@ async function catalogBytes(): Promise<Buffer | null> {
   return await fs.pathExists(SESSIONS_FILE) ? fs.readFile(SESSIONS_FILE) : null;
 }
 
-test('worker direct, unified, and ToolScript builtin dispatch retain exact owner without child globals', async () => {
+test('worker direct, unified, and ToolScript node dispatch retain exact owner without child globals', async () => {
   const session = owner();
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'worker-tool-placement-'));
   const filePath = path.join(dir, 'probe.txt');
@@ -45,8 +45,8 @@ test('worker direct, unified, and ToolScript builtin dispatch retain exact owner
     assert.match(JSON.stringify(await executeTools([{ id: 'direct-read', name: 'read', args: { filePath } }],
       { sessionId: session.id }, session, { currentSessionEffects: effects })), /exact-owner/);
     assert.match(String(await callTool('read', { filePath }, ctx)), /exact-owner/);
-    assert.match(String(await tool_call_tool({ source: 'builtin', name: 'read', args: { filePath } }, ctx)), /exact-owner/);
-    const script = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="read", args={"filePath": args["path"]})', args: { path: filePath } }, ctx);
+    assert.match(String(await tool_call_tool({ source: 'node', name: 'read', args: { filePath } }, ctx)), /exact-owner/);
+    const script = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="node", name="read", args={"filePath": args["path"]})', args: { path: filePath } }, ctx);
     assert.match(JSON.stringify(script.result), /exact-owner/);
     assert.match(String(await callTool('get_archived_messages', { sessionId: session.id }, ctx)), /No archived messages/);
     assert.match(String(await callTool('get_archived_blocks', { sessionId: session.id }, ctx)), /No archived blocks/);
@@ -116,7 +116,7 @@ test('worker direct and unified current-node routing carries exact cwd while exp
   const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
   try {
     await executeTools([{ id: 'direct', name: 'read', args: { filePath: 'x' } }], { sessionId: session.id }, session, { currentSessionEffects: effects });
-    await tool_call_tool({ source: 'builtin', name: 'read', args: { filePath: 'x' } }, ctx);
+    await tool_call_tool({ source: 'node', name: 'read', args: { filePath: 'x' } }, ctx);
     await tool_call_tool({ source: 'node', nodeId: 'remote-other', name: 'read', args: { filePath: 'x' } }, ctx);
     assert.deepEqual(calls.map(call => call[4]), [
       { currentNode: 'remote-current', cwd: '/exact/cwd' },
@@ -170,7 +170,7 @@ test('recursive Worker ToolScript guards drop transient progress while Main loca
     const filePath = path.join(dir, 'probe.txt');
     await fs.writeFile(filePath, 'local-progress');
     try {
-      const local = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="read", args={"filePath":args["path"]})', args: { path: filePath } },
+      const local = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="node", name="read", args={"filePath":args["path"]})', args: { path: filePath } },
         { ...workerCtx, sessionPlacement: 'local', toolUseId: 'outer-local' });
       assert.equal(local.status, 'completed');
       assert.ok(progressEvents >= 2);

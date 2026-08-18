@@ -2,6 +2,7 @@ import { ToolArgs, ToolContext } from './helpers';
 import * as mcpExternal from '../mcpExternalService';
 import type { McpServerSummary } from '../mcpClient';
 import { resolveObjectArgWithJsonFallback, requireStringMapObject } from '../jsonObjectArgs';
+import { executeResolvedTool, resolveDirectTool } from './resolvedTools';
 
 function requireSourceSessionId(ctx?: ToolContext): string {
     if (!ctx?.sessionId) throw new Error('MCP tools require an active source session.');
@@ -46,20 +47,8 @@ export async function tool_mcp_config(args: ToolArgs, ctx?: ToolContext) {
 }
 
 export async function tool_call_mcp(args: ToolArgs, ctx?: ToolContext) {
-    let { server, tool, args: toolArgs } = args;
-    if (!tool) {
-        throw new Error('call_mcp requires tool');
-    }
-
-    if (!server && typeof tool === 'string' && tool.includes('/')) {
-        const [serverName, ...rest] = tool.split('/');
-        if (serverName && rest.length) {
-            server = serverName;
-            tool = rest.join('/');
-        }
-    }
-
-    return await mcpExternal.callMcpTool(requireSourceSessionId(ctx), server, tool, toolArgs || {});
+    const actualContext = ctx || ({} as ToolContext);
+    return executeResolvedTool(await resolveDirectTool('call_mcp', args, actualContext), actualContext);
 }
 
 export async function tool_search_mcp_tools(args: ToolArgs, ctx?: ToolContext) {

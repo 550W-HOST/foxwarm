@@ -8,6 +8,7 @@ import * as managedSessions from './managedSessions';
 import { resolveAgentPath } from './utils/pathResolve';
 import * as sessionManager from './sessionManager';
 import { checkPathAccess } from './isolatedCheck';
+import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './tools/placement';
 import { resolveObjectArgWithJsonFallback } from './jsonObjectArgs';
 import type { Message, MessagePart, Session, ToolScriptSubCall } from './types';
 import { RpcError } from './rpc';
@@ -467,7 +468,7 @@ function buildCallToolWrapperArgs(positionalArgs: any[], kwargs: Record<string, 
     }
 
     return {
-      source: metadata.source || 'builtin',
+      source: metadata.source || (NODE_ENVIRONMENT_BUILTIN_NAMES.includes(first as any) ? 'node' : 'builtin'),
       name: first,
       ...(metadata.toolId !== undefined ? { toolId: metadata.toolId } : {}),
       ...(metadata.server !== undefined ? { server: metadata.server } : {}),
@@ -504,11 +505,15 @@ function buildCallToolWrapperArgs(positionalArgs: any[], kwargs: Record<string, 
       throw new Error('call_tool args must be an object.');
     }
 
+    const inferredName = kwMetadata.name ?? metadata.name;
     return {
       ...(metadata.toolId !== undefined ? { toolId: metadata.toolId } : {}),
       ...(kwMetadata.toolId !== undefined ? { toolId: kwMetadata.toolId } : {}),
       ...(metadata.source !== undefined ? { source: metadata.source } : {}),
       ...(kwMetadata.source !== undefined ? { source: kwMetadata.source } : {}),
+      ...(metadata.source === undefined && kwMetadata.source === undefined && typeof inferredName === 'string'
+        ? { source: NODE_ENVIRONMENT_BUILTIN_NAMES.includes(inferredName as any) ? 'node' : 'builtin' }
+        : {}),
       ...(metadata.name !== undefined ? { name: metadata.name } : {}),
       ...(kwMetadata.name !== undefined ? { name: kwMetadata.name } : {}),
       ...(metadata.server !== undefined ? { server: metadata.server } : {}),
@@ -534,6 +539,9 @@ function buildCallToolWrapperArgs(positionalArgs: any[], kwargs: Record<string, 
     return {
       ...(metadata.toolId !== undefined ? { toolId: metadata.toolId } : {}),
       ...(metadata.source !== undefined ? { source: metadata.source } : {}),
+      ...(metadata.source === undefined && typeof metadata.name === 'string'
+        ? { source: NODE_ENVIRONMENT_BUILTIN_NAMES.includes(metadata.name as any) ? 'node' : 'builtin' }
+        : {}),
       ...(metadata.name !== undefined ? { name: metadata.name } : {}),
       ...(metadata.server !== undefined ? { server: metadata.server } : {}),
       ...(metadata.nodeId !== undefined ? { nodeId: metadata.nodeId } : {}),
