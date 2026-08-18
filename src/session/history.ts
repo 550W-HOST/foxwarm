@@ -782,12 +782,10 @@ export async function buildLayeredCompactCandidateEntries(olderHistory: Message[
     let validToolExchange = !startsToolExchange;
     let toolExchangeEndHistoryIndex = historyIndex;
     if (startsToolExchange) {
-      let sawToolResponse = false;
       let invalidToolExchange = false;
       for (let nextIndex = historyIndex + 1; nextIndex < olderHistory.length; nextIndex += 1) {
         const next = olderHistory[nextIndex];
         if (next.role !== 'tool') break;
-        sawToolResponse = true;
         toolExchangeEndHistoryIndex = nextIndex;
         const previousGroupedSeq = groupedMessages[groupedMessages.length - 1].__meta?.seq;
         if (next.__meta?.contextBlock || isPreservedMessage(next) || !Number.isSafeInteger(next.__meta?.seq)
@@ -800,7 +798,7 @@ export async function buildLayeredCompactCandidateEntries(olderHistory: Message[
           groupedMessages.push(next); groupedEndHistoryIndex = nextIndex;
         }
       }
-      validToolExchange = sawToolResponse && !invalidToolExchange;
+      validToolExchange = !invalidToolExchange;
     }
     if (!validToolExchange) {
       historyIndex = toolExchangeEndHistoryIndex;

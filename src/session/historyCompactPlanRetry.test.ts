@@ -402,6 +402,26 @@ test('raw continuity resets across a valid intervening block', async () => {
   assert.deepEqual(built.candidateEntries.filter(entry => entry.item.kind === 'message').map(entry => (entry.item as any).startSeq), [1, 3]);
 });
 
+test('a call-only raw island between blocks remains an ordinary message candidate', async () => {
+  const { sessionHistory, archive, layeredContext } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_call_only_island'));
+  const blocks = await layeredContext.appendBlocksToArchive(session, [1, 3].map(seq => ({
+    level: 1, sourceKind: 'message' as const, sourceStart: seq, sourceEnd: seq, rawStartSeq: seq, rawEndSeq: seq,
+    summary: `existing L1 block for ${seq} ${'block '.repeat(1800)}`,
+  })));
+  const call: Message = {
+    role: 'model',
+    parts: [{ functionCall: { id: 'call-with-response-inside-block', name: 'exec', args: { payload: 'call '.repeat(3000) } } }],
+    __meta: { seq: 2, timestamp: 2000 },
+  };
+  session.history = [layeredContext.renderBlockMessage(blocks[0]), call, layeredContext.renderBlockMessage(blocks[1])];
+
+  const built = await sessionHistory.buildLayeredCompactCandidateEntries(session.history);
+  const messages = built.candidateEntries.filter(entry => entry.item.kind === 'message');
+  assert.deepEqual(messages.map(entry => entry.item.kind === 'message' ? [entry.item.startSeq, entry.item.endSeq] : []), [[2, 2]]);
+  assert.deepEqual([messages[0].historyStartIndex, messages[0].historyEndIndex], [1, 1]);
+});
+
 test('awaited compaction lifts an active response island to L1 and then compacts the contiguous L1 chain to L2', async () => {
   const { sessionHistory, archive, layeredContext, llm } = await loadDeps();
   const session: Session = {
