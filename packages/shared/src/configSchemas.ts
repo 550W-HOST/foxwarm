@@ -362,7 +362,7 @@ export const APP_CONFIG_SCHEMA = {
         compactBlockCandidateFraction: { type: 'number', minimum: 0, maximum: 1 },
         compactBlockForceCompactFraction: { type: 'number', minimum: 0, maximum: 1 },
         compactMessageForceCompactFraction: { type: 'number', minimum: 0, maximum: 1 },
-        maxOutput: { type: 'integer', minimum: 1 },
+        maxOutput: { type: 'integer', minimum: 1, default: 32768, description: 'Maximum provider output tokens. Defaults to 32768.' },
         openaiBaseUrl: { type: 'string' },
         openaiApiKey: { type: 'string' },
         anthropicBaseUrl: { type: 'string' },

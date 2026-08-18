@@ -567,7 +567,7 @@ export const COMPACT_BLOCK_FORCE_COMPACT_FRACTION = APP_CONFIG.llm?.compactBlock
 export const COMPACT_MESSAGE_FORCE_COMPACT_FRACTION = APP_CONFIG.llm?.compactMessageForceCompactFraction ?? 0.2;
 
 // TODO: move to models config
-export const MAX_OUTPUT = APP_CONFIG.llm?.maxOutput || 16384;
+export const MAX_OUTPUT = APP_CONFIG.llm?.maxOutput || 32768;
 
 // Models configuration
 export function resolveDataModelsConfigPath(dataRoot: string = DATA_ROOT_DIR): string {

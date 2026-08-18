@@ -2141,6 +2141,7 @@ function buildConcreteRequestPlan(options: {
             tool_choice: webSearchToolChoice,
             parallel_tool_calls: true,
             reasoning: effectiveEffort === 'none' ? undefined : { summary: 'auto' },
+            max_output_tokens: MAX_OUTPUT,
             store: false,
             include: effectiveEffort === 'none' ? undefined : ['reasoning.encrypted_content'],
             prompt_cache_key: promptCacheKey,

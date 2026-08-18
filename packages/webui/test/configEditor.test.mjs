@@ -42,6 +42,7 @@ test('static config schemas are distinct, permissive, and omit the removed model
   assert.equal(schemas.APP_CONFIG_SCHEMA.properties.channels.additionalProperties.additionalProperties, true)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.paths.properties, 'modelsConfigPath'), false)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.llm.properties, 'thinkingBudget'), false)
+  assert.equal(schemas.APP_CONFIG_SCHEMA.properties.llm.properties.maxOutput.default, 32768)
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.required?.includes('default') || false, false)
 })
 

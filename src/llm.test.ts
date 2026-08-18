@@ -5,7 +5,7 @@ import { PassThrough } from 'node:stream';
 import path from 'path';
 
 import { createDefaultCurrentSessionEffects, CurrentSessionEffects, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
-import { LOGS_DIR } from './config';
+import { LOGS_DIR, MAX_OUTPUT } from './config';
 import { formatDate } from './logRotation';
 import type { Message, Session } from './types';
 import { containsLoneSurrogate } from './utils/unicode';
@@ -20,6 +20,10 @@ import * as llmModule from './llm';
 import { nodesManager } from './nodes/manager';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+test('default maximum provider output is 32768 tokens', () => {
+  assert.equal(MAX_OUTPUT, 32768);
+});
 
 function makeChatCompletionStream(text = 'ok', usage: Record<string, unknown> = {
   prompt_tokens: 1,
@@ -282,6 +286,7 @@ test('first-class effort defaults high and maps every canonical level across pro
   try {
     await request('openai-responses');
     assert.equal(captured.at(-1)?.body.reasoning.effort, 'high');
+    assert.equal(captured.at(-1)?.body.max_output_tokens, MAX_OUTPUT);
     for (const effort of efforts) {
       await request('openai-responses', effort);
       const body = captured.at(-1)?.body;
@@ -298,11 +303,13 @@ test('first-class effort defaults high and maps every canonical level across pro
     for (const effort of efforts) {
       await request('openai-completions', effort);
       assert.equal(captured.at(-1)?.body.reasoning_effort, effort);
+      assert.equal(captured.at(-1)?.body.max_tokens, MAX_OUTPUT);
     }
 
     for (const effort of efforts) {
       await request('anthropic', effort);
       const body = captured.at(-1)?.body;
+      assert.equal(body.max_tokens, MAX_OUTPUT);
       assert.equal(JSON.stringify(body).includes('budget_tokens'), false);
       if (effort === 'none') {
         assert.deepEqual(body.thinking, { type: 'disabled' });

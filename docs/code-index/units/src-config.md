@@ -67,7 +67,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 | block eligibility / force tokens | `3000` / `5000` |
 | block candidate / force-coverage fraction | `0.4` / `0.2` |
 | raw required replacement fraction | `0.2` |
-| max output | `16384` |
+| max output | `32768` |
 | model effort | all six levels allowed / `high` default |
 | Vector / API base URL | disabled / none |
 | Session workers / idle release | disabled / `60` seconds |
@@ -126,6 +126,10 @@ The mutable models configuration has one active location: `<data-root>/state/mod
 [2026-08-11] User-approved feature toggles with explicitly designated tuning fields may accept `true`, `false`, or an options object. `true` enables the feature with defaults, `false` disables it, and an object opts in unless it explicitly sets `enabled:false`; normalizers run before inheritance, merge, or runtime use. Model-level `webSearch` booleans override only the inherited enabled state while retaining inherited tuning, and an object without `enabled` opts in while merging its tuning. This shorthand is not generalized to connection or credential objects.
 
 `vector` therefore deliberately does not accept `true`: it is a connection object requiring `baseUrl`, with only `false` as the disable shorthand.
+
+### D-config-default-max-output
+
+[2026-08-18] `llm.maxOutput` remains the single application-level provider output-token override and defaults to `32768` when omitted. The default applies as `max_output_tokens` for OpenAI Responses requests and `max_tokens` for OpenAI Chat Completions and Anthropic-compatible requests; provider/model `extraFields` retain their existing later override position.
 
 ## Canonical ownership
 

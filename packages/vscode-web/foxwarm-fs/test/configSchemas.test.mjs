@@ -60,6 +60,7 @@ test('schema contributor returns bundled shared schemas without config data or e
   const providerValue = models.properties.providers.additionalProperties;
   const aliasSchema = providerValue.oneOf.find(entry => entry.type === 'string');
   assert.equal(aliasSchema.pattern, '\\S');
+  assert.equal(app.properties.llm.properties.maxOutput.default, 32768);
   assert.equal(app.properties.vector.oneOf.some(entry => entry.const === false), true);
   assert.equal(app.properties.vector.oneOf.find(entry => entry.type === 'object').properties.baseUrl.pattern, '^https?://');
   assert.match(app.properties.llm.properties.ollamaBaseUrl.description, /Legacy vector endpoint root/);
