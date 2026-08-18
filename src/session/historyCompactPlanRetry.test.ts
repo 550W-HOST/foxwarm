@@ -359,7 +359,7 @@ test('duplicate, missing, and reversed active raw sequence structure remains a c
   assert.equal(messages.some(entry => entry.item.kind === 'message' && entry.item.startSeq === 4), false, 'duplicate seq rows are not admitted');
 });
 
-test('a malformed consecutive tool run makes the whole active call exchange a hard barrier', async () => {
+test('a malformed consecutive tool row is a local barrier after a valid atomic call/response prefix', async () => {
   const { sessionHistory } = await loadDeps();
   const response = (id: string, seq: number | undefined, label: string): Message => ({
     role: 'tool', parts: [{ functionResponse: { tool_use_id: id, name: 'exec', response: { output: label } } }],
@@ -386,7 +386,11 @@ test('a malformed consecutive tool run makes the whole active call exchange a ha
       following,
     ]);
     const messages = built.candidateEntries.filter(entry => entry.item.kind === 'message');
-    assert.deepEqual(messages.map(entry => entry.item.kind === 'message' ? entry.item.startSeq : 0), [scenario.followingSeq], scenario.name);
+    assert.deepEqual(messages.map(entry => entry.item.kind === 'message'
+      ? [entry.item.startSeq, entry.item.endSeq]
+      : []), [[scenario.callSeq, scenario.validSeq], [scenario.followingSeq, scenario.followingSeq]], scenario.name);
+    assert.deepEqual(messages.map(entry => [entry.historyStartIndex, entry.historyEndIndex]), [[0, 1], [3, 3]], `${scenario.name}: malformed row stays outside candidates`);
+    assert.notEqual(messages[0].item.segmentId, messages[1].item.segmentId, `${scenario.name}: malformed row starts a new segment`);
   }
 });
 

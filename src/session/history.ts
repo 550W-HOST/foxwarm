@@ -655,12 +655,17 @@ function normalizeActiveHistoryTimestamp(value: unknown): number | undefined {
 
 export async function buildLayeredCompactCandidateEntries(olderHistory: Message[]): Promise<LayeredCompactCandidateBuildResult> {
   const activeSeqCounts = new Map<number, number>();
+  const activeSeqFirstIndexes = new Map<number, number>();
   const activeBlockIdCounts = new Map<number, number>();
-  for (const message of olderHistory) {
+  for (let historyIndex = 0; historyIndex < olderHistory.length; historyIndex += 1) {
+    const message = olderHistory[historyIndex];
     const blockId = message.__meta?.contextBlock?.id;
     const seq = message.__meta?.seq;
     if (isPositiveSafeInteger(blockId)) activeBlockIdCounts.set(blockId, (activeBlockIdCounts.get(blockId) || 0) + 1);
-    else if (isPositiveSafeInteger(seq)) activeSeqCounts.set(seq, (activeSeqCounts.get(seq) || 0) + 1);
+    else if (isPositiveSafeInteger(seq)) {
+      activeSeqCounts.set(seq, (activeSeqCounts.get(seq) || 0) + 1);
+      if (!activeSeqFirstIndexes.has(seq)) activeSeqFirstIndexes.set(seq, historyIndex);
+    }
   }
 
   const hasValidRawStructure = (message: Message): boolean => {
@@ -765,9 +770,13 @@ export async function buildLayeredCompactCandidateEntries(olderHistory: Message[
     }
     previousBlockRawEndSeq = undefined;
     const seq = message.__meta?.seq;
-    if (!Number.isSafeInteger(seq) || (seq || 0) < 1) { compactSegmentId += 1; priorCandidateKind = undefined; continue; }
+    if (!Number.isSafeInteger(seq) || (seq || 0) < 1) {
+      compactSegmentId += 1; priorCandidateKind = undefined;
+      if (message.role === 'tool') previousRawSeq = undefined;
+      continue;
+    }
     if (!hasValidRawStructure(message) || (previousRawSeq !== undefined && seq !== previousRawSeq + 1)) {
-      compactSegmentId += 1; priorCandidateKind = undefined; previousRawSeq = seq; continue;
+      compactSegmentId += 1; priorCandidateKind = undefined; previousRawSeq = message.role === 'tool' ? undefined : seq; continue;
     }
     if (!isModelVisibleMessage(message) || shouldRemoveOldCompactCompletionMessage(message)) {
       previousRawSeq = seq;
@@ -779,30 +788,17 @@ export async function buildLayeredCompactCandidateEntries(olderHistory: Message[
     let groupedEndHistoryIndex = historyIndex;
     const groupedMessages = [message];
     const startsToolExchange = message.role === 'model' && message.parts?.some(part => !!part.functionCall);
-    let validToolExchange = !startsToolExchange;
-    let toolExchangeEndHistoryIndex = historyIndex;
     if (startsToolExchange) {
-      let invalidToolExchange = false;
       for (let nextIndex = historyIndex + 1; nextIndex < olderHistory.length; nextIndex += 1) {
         const next = olderHistory[nextIndex];
         if (next.role !== 'tool') break;
-        toolExchangeEndHistoryIndex = nextIndex;
         const previousGroupedSeq = groupedMessages[groupedMessages.length - 1].__meta?.seq;
-        if (next.__meta?.contextBlock || isPreservedMessage(next) || !Number.isSafeInteger(next.__meta?.seq)
-          || !hasValidRawStructure(next)
-          || next.__meta!.seq !== (previousGroupedSeq || 0) + 1) {
-          invalidToolExchange = true;
-          continue;
-        }
-        if (!invalidToolExchange) {
-          groupedMessages.push(next); groupedEndHistoryIndex = nextIndex;
-        }
+        const nextSeq = next.__meta?.seq;
+        if (next.__meta?.contextBlock || isPreservedMessage(next) || !isPositiveSafeInteger(nextSeq)
+          || activeSeqFirstIndexes.get(nextSeq) !== nextIndex
+          || nextSeq !== (previousGroupedSeq || 0) + 1) break;
+        groupedMessages.push(next); groupedEndHistoryIndex = nextIndex;
       }
-      validToolExchange = !invalidToolExchange;
-    }
-    if (!validToolExchange) {
-      historyIndex = toolExchangeEndHistoryIndex;
-      compactSegmentId += 1; priorCandidateKind = undefined; previousRawSeq = undefined; continue;
     }
     const preview = groupedMessages.filter(isModelVisibleMessage).map(item => formatMessagePreviewText(item, 50, {
       skipEphemeralSystem: true, skipRagMemorySnippets: true, skipThinking: true,
