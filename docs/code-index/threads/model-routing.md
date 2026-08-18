@@ -8,6 +8,8 @@ This thread owns the cross-module contract for concrete and virtual model select
 
 Concrete provider entries continue to use `providerType` plus provider connection fields and `models`. The preferred field remains `providerType`; persisted legacy `provider` is only a reader when `providerType` is absent.
 
+A non-empty string value in the preferred `providers` map is alias shorthand. At provider expansion it becomes exactly one virtual `session-hash` entry targeting the trimmed string; it does not create a separate alias or routing mechanism. The legacy root `models` naturally uses the same entry reader, while generated examples use `providers`.
+
 Two virtual `providerType` values are supported:
 
 - `session-hash` — stable session-prefix routing.
@@ -80,7 +82,7 @@ Across OpenAI Chat Completions, OpenAI Responses, Anthropic, and compatible conc
 
 - Session and WebUI model selection continue to expose the configured virtual key. Public session projections expose raw current/child effort overrides separately from their derived effective values, allowed sets, and concrete defaults; virtual defaults are represented as per-leaf rather than inventing one route-level default.
 - `ChatResult.modelId` and assistant `__meta.modelId` identify the canonical concrete leaf that actually succeeded. When the resolved route is virtual, successful results/messages additionally carry that resolved configuration key as optional `virtualModelKey`; concrete, user, tool, synthetic, failed, and legacy messages omit it. Logs and retry diagnostics continue to identify both the attempted concrete leaf and virtual route where applicable.
-- WebUI Setup presents Models as raw YAML only. Its local static schema and current-document suggestions are advisory; save uses the canonical config validator and remains byte-preserving after validation.
+- WebUI Setup presents Models as raw YAML only. Its local static schema accepts provider objects or non-whitespace alias strings, and current-document suggestions include string-alias keys for model/default values but exclude them from concrete `targets`. Save uses the canonical config validator and remains byte-preserving after validation.
 - Structured setup input accepts virtual targets and failover settings; setup diagnostics expose `isVirtual`, `targets`, `failureThreshold`, and `cooldownMs`. The model-list API also exposes provider type, virtual status, resolved targets, effective context limit, ordered allowed efforts, and a concrete default or `null` for virtual per-leaf defaulting, without leaf credentials.
 - `/model`, `/session child-model`, the existing model/child-model WebUI endpoints, and the compact Chat selector update model-plus-effort pairs through one SessionRuntime settings mutation. Property presence distinguishes omitted fields from explicit unset/default, and `none` remains an explicit value.
 - Model-facing `create_child_session` and `create_session` schemas expose optional canonical model effort. `set_session_child_model` sets or clears the future-child model and effort defaults without introducing another overlapping settings tool. Shared session status reports raw/effective current and child effort.
@@ -109,6 +111,8 @@ Virtual routing remains a `providerType` contract. `session-hash` and `failover`
 ### D-model-routing-leaf-only
 
 Version 1 virtual targets are strict concrete leaves. Canonical identity is the actual qualified expansion key, not a reconstruction from the raw model ID. Reject nesting and canonical duplicates rather than defining recursive health, attribution, or cycle semantics implicitly.
+
+[2026-08-18] A non-empty provider string is only syntax sugar for `{ providerType: 'session-hash', targets: [trimmedString] }` at the canonical provider-expansion boundary. The alias key remains a normal virtual model key and inherits all existing single-target session-hash resolution, validation, fingerprint, effort, context, compaction, display, default-selection, and attribution behavior. Empty targets, unknown/self targets, virtual-to-virtual nesting, and canonical duplicates remain rejected by the existing leaf-only graph rules; no recursive alias or second runtime alias mechanism is introduced.
 
 ### D-model-routing-prefix-hash
 

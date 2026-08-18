@@ -20,7 +20,7 @@ import { deleteSessionLifecycle } from '../sessionDeletion';
 import type { SessionRuntimeSessionDto } from '../sessionRuntime';
 import { buildSessionRuntimeSessionDto } from '../sessionRuntimeService';
 import { sessionCatalogStore } from '../session/catalogStore';
-import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, getActiveModelsConfigPath, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort } from '../config';
+import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, ProviderConfigValue, getActiveModelsConfigPath, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort } from '../config';
 import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
@@ -443,11 +443,11 @@ export function getModelsSetupDiagnostics(modelsPath: string = getActiveModelsCo
   const rawYaml = exists ? readRawTextFileIfExists(modelsPath) : '';
   const raw = rawYaml ? (yaml.load(rawYaml) as any) || {} : undefined;
   const providers = raw?.providers || raw?.models || {};
-  const providerEntries = providers && typeof providers === 'object' && !Array.isArray(providers) ? Object.entries(providers as Record<string, ProviderConfigEntry>) : [];
+  const providerEntries = providers && typeof providers === 'object' && !Array.isArray(providers) ? Object.entries(providers as Record<string, ProviderConfigValue>) : [];
   const providerCount = providerEntries.length;
   const defaultModel = typeof raw?.default === 'string' ? raw.default : null;
   const placeholderProviders = providerEntries
-    .filter(([, entry]) => isPlaceholderSecret((entry as ProviderConfigEntry).apiKey))
+    .filter(([, entry]) => typeof entry !== 'string' && isPlaceholderSecret(entry.apiKey))
     .map(([key]) => key);
 
   return {
@@ -458,9 +458,12 @@ export function getModelsSetupDiagnostics(modelsPath: string = getActiveModelsCo
     defaultModel,
     rawYaml,
     providers: providerEntries.map(([key, entry]) => {
-      const providerType = entry.providerType || entry.provider || 'openai-completions';
+      const normalizedEntry: ProviderConfigEntry = typeof entry === 'string'
+        ? { providerType: 'session-hash', targets: [entry.trim()] }
+        : entry;
+      const providerType = normalizedEntry.providerType || normalizedEntry.provider || 'openai-completions';
       const isVirtual = providerType === 'session-hash' || providerType === 'failover';
-      const rawModels = Array.isArray(entry.models) ? entry.models : Array.isArray(entry.model) ? entry.model : (entry.model ? [entry.model] : []);
+      const rawModels = Array.isArray(normalizedEntry.models) ? normalizedEntry.models : Array.isArray(normalizedEntry.model) ? normalizedEntry.model : (normalizedEntry.model ? [normalizedEntry.model] : []);
       const models = rawModels
         .map((item: any) => typeof item === 'string' ? item : item?.id)
         .filter((item: any) => typeof item === 'string' && item.trim())
@@ -470,12 +473,12 @@ export function getModelsSetupDiagnostics(modelsPath: string = getActiveModelsCo
         id: key,
         providerType,
         isVirtual,
-        baseUrl: entry.baseUrl || '',
-        apiKey: entry.apiKey || '',
+        baseUrl: normalizedEntry.baseUrl || '',
+        apiKey: normalizedEntry.apiKey || '',
         models,
-        targets: Array.isArray(entry.targets) ? entry.targets : [],
-        failureThreshold: entry.failureThreshold ?? (providerType === 'failover' ? 5 : null),
-        cooldownMs: entry.cooldownMs ?? (providerType === 'failover' ? 600_000 : null),
+        targets: Array.isArray(normalizedEntry.targets) ? normalizedEntry.targets : [],
+        failureThreshold: normalizedEntry.failureThreshold ?? (providerType === 'failover' ? 5 : null),
+        cooldownMs: normalizedEntry.cooldownMs ?? (providerType === 'failover' ? 600_000 : null),
         defaultModel: defaultModel?.startsWith(defaultPrefix) ? defaultModel.slice(defaultPrefix.length) : '',
       };
     }),

@@ -51,6 +51,25 @@ providers:
   await fs.remove(dir);
 });
 
+test('raw models setup preserves provider string alias YAML byte-for-byte after validation', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-setup-alias-models-'));
+  const filePath = path.join(dir, 'models.yaml');
+  const rawYaml = `# alias shorthand comment
+default: fast
+providers:
+  leaf:
+    providerType: anthropic
+    baseUrl: https://example.test
+    models: [org/model-a]
+  fast: "leaf/org/model-a" # keep inline comment
+`;
+
+  writeRawModelsConfig(rawYaml, filePath);
+
+  assert.equal(await fs.readFile(filePath, 'utf8'), rawYaml);
+  await fs.remove(dir);
+});
+
 test('raw app config setup save writes the provided YAML text exactly', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-setup-config-'));
   const filePath = path.join(dir, 'config.yaml');

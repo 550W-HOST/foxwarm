@@ -51,6 +51,10 @@ export function parseModelsYamlSuggestions(rawYaml: string): ModelsYamlSuggestio
   const concreteKeys: string[] = []
   const virtualKeys: string[] = []
   for (const [providerKey, rawEntry] of Object.entries(rawProviders as Record<string, unknown>)) {
+    if (typeof rawEntry === 'string') {
+      if (rawEntry.trim()) virtualKeys.push(providerKey)
+      continue
+    }
     if (!rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) continue
     const entry = rawEntry as ParsedProvider
     const providerType = String(entry.providerType ?? entry.provider ?? 'openai')

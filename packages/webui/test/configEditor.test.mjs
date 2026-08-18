@@ -37,7 +37,8 @@ test('static config schemas are distinct, permissive, and omit the removed model
   assert.equal(schemas.YAML_CONFIG_SCHEMAS.length, 2)
   assert.equal(schemas.MODELS_CONFIG_SCHEMA.additionalProperties, true)
   assert.equal(schemas.APP_CONFIG_SCHEMA.additionalProperties, true)
-  assert.equal(schemas.MODELS_CONFIG_SCHEMA.properties.providers.additionalProperties.additionalProperties, true)
+  const providerObject = schemas.MODELS_CONFIG_SCHEMA.properties.providers.additionalProperties.oneOf.find((entry) => entry.type === 'object')
+  assert.equal(providerObject.additionalProperties, true)
   assert.equal(schemas.APP_CONFIG_SCHEMA.properties.channels.additionalProperties.additionalProperties, true)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.paths.properties, 'modelsConfigPath'), false)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.llm.properties, 'thinkingBudget'), false)
@@ -148,10 +149,18 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
         precedence: { providerType: 'openai-completions', provider: 'failover', models: ['model-a'] },
       },
     },
+    {
+      default: 'fast',
+      providers: {
+        concrete: { providerType: 'openai-completions', models: ['model-a'] },
+        fast: 'concrete/model-a',
+      },
+    },
   ]
   for (const fixture of fixtures) {
     assert.equal(validateModelsSchema(fixture), true, JSON.stringify(validateModelsSchema.errors))
   }
+  assert.equal(validateModelsSchema({ providers: { empty: '   ' } }), false)
 })
 
 test('legacy virtual providers receive the same target and forbidden-field diagnostics', () => {
@@ -182,7 +191,10 @@ test('Setup gives both YAML editors the exact responsive height contract', async
 })
 
 test('models schema suggests known provider types while accepting custom strings and documents legacy readers', () => {
-  const provider = schemas.MODELS_CONFIG_SCHEMA.properties.providers.additionalProperties
+  const providerEntry = schemas.MODELS_CONFIG_SCHEMA.properties.providers.additionalProperties
+  const provider = providerEntry.oneOf.find((entry) => entry.type === 'object')
+  const alias = providerEntry.oneOf.find((entry) => entry.type === 'string')
+  assert.equal(alias.pattern, '\\S')
   assert.deepEqual(provider.properties.providerType.anyOf[0].enum, [...schemas.KNOWN_PROVIDER_TYPES])
   assert.equal(provider.properties.providerType.anyOf[1].type, 'string')
   assert.equal(provider.properties.provider.deprecated, true)
@@ -222,12 +234,13 @@ providers:
   sticky:
     providerType: session-hash
     targets: [one]
+  fast: one/model-a
   route:
     providerType: failover
     targets: [one, many/model-b]
 `)
   assert.deepEqual(parsed.concreteKeys, ['one', 'many/model-b', 'many/model-c', 'custom'])
-  assert.deepEqual(parsed.modelKeys, ['one', 'many/model-b', 'many/model-c', 'custom', 'sticky', 'route'])
+  assert.deepEqual(parsed.modelKeys, ['one', 'many/model-b', 'many/model-c', 'custom', 'sticky', 'fast', 'route'])
 })
 
 test('invalid partial YAML returns null so the editor can retain its last valid suggestions', () => {

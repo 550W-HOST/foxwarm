@@ -377,6 +377,62 @@ test('session-hash accepts one concrete target as an alias and canonicalizes sin
   assert.equal(parsed.models.alias.asyncCompact, true);
 });
 
+test('provider string alias is exactly equivalent to a single-target session-hash entry', () => {
+  const providers = {
+    concrete: {
+      providerType: 'openai-responses',
+      baseUrl: 'https://example.test/v1',
+      contextLimit: 123456,
+      asyncCompact: false,
+      effort: { allowed: ['low', 'high'], default: 'low' },
+      models: ['org/model-a'],
+    },
+  };
+  const shorthand = loadModelsConfigFromObject({
+    default: 'fast',
+    providers: { ...providers, fast: '  concrete/org/model-a  ' },
+  });
+  const objectForm = loadModelsConfigFromObject({
+    default: 'fast',
+    providers: {
+      ...providers,
+      fast: { providerType: 'session-hash', targets: ['concrete/org/model-a'] },
+    },
+  });
+
+  assert.equal(shorthand.default, 'fast');
+  assert.deepEqual(shorthand.displayModels, ['concrete', 'fast']);
+  assert.deepEqual(shorthand.models.fast, objectForm.models.fast);
+  assert.deepEqual(shorthand.models.fast.virtualRouting?.targets, ['concrete/org/model-a']);
+  assert.equal(shorthand.models.fast.contextLimit, 123456);
+  assert.equal(shorthand.models.fast.asyncCompact, false);
+  assert.deepEqual(shorthand.models.fast.effort, { allowed: ['low', 'high'] });
+});
+
+test('provider string aliases reuse strict virtual leaf validation', () => {
+  const concrete = {
+    providerType: 'openai-completions',
+    baseUrl: 'https://example.test/v1',
+    models: ['model-a'],
+  };
+  assert.throws(
+    () => loadModelsConfigFromObject({ providers: { concrete, empty: '   ' } }),
+    /alias `empty` must target a non-empty concrete model key/,
+  );
+  assert.throws(
+    () => loadModelsConfigFromObject({ providers: { concrete, missing: 'unknown/model' } }),
+    /unknown concrete target `unknown\/model`/,
+  );
+  assert.throws(
+    () => loadModelsConfigFromObject({ providers: { concrete, self: 'self' } }),
+    /cannot target itself/,
+  );
+  assert.throws(
+    () => loadModelsConfigFromObject({ providers: { concrete, first: 'concrete', second: 'first' } }),
+    /target `first` is virtual; nested virtual routing is not supported/,
+  );
+});
+
 test('virtual effort capabilities are the canonical union of concrete leaf sets', () => {
   const parsed = loadModelsConfigFromObject({
     default: 'route',
@@ -514,11 +570,11 @@ test('virtual schema rejects forbidden fields, invalid target counts, unknown/ne
 });
 
 test('provider entries and concrete/virtual routing fields are strictly separated', () => {
-  const invalidProviderValues: unknown[] = [null, 'text', 1, []];
+  const invalidProviderValues: unknown[] = [null, 1, []];
   for (const value of invalidProviderValues) {
     assert.throws(
       () => loadModelsConfigFromObject({ default: 'bad', providers: { bad: value } }),
-      /Provider `bad` must be a plain object/,
+      /Provider `bad` must be a plain object or non-empty alias string/,
     );
   }
 

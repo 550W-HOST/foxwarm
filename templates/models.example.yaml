@@ -51,5 +51,9 @@ providers:
     models:
       - claude-opus-5
 
+  # A non-empty provider string is shorthand for a single-target session-hash
+  # alias. The alias key remains selectable while resolving to this concrete leaf.
+  fast: openai/gpt-5.6-sol
+
   # For session-hash and failover configuration, see the repository's
   # docs/virtual-models.md guide.

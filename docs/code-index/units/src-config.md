@@ -20,7 +20,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 
 ### Model configuration
 
-- `ProviderConfigEntry`, `ProviderModelListItem`, `ModelConfigEntry` (including canonical concrete identity, first-class model effort capabilities/default, and optional OpenAI Responses `webSearch` settings), `ModelsConfig`, and virtual routing config types/guards. Raw `webSearch` provider/model values accept a boolean or an options object; resolved concrete entries contain normalized effort and web-search forms.
+- `ProviderConfigEntry`, `ProviderConfigValue`, `ProviderModelListItem`, `ModelConfigEntry` (including canonical concrete identity, first-class model effort capabilities/default, and optional OpenAI Responses `webSearch` settings), `ModelsConfig`, and virtual routing config types/guards. A raw provider value may also be a non-empty string alias; raw `webSearch` provider/model values accept a boolean or an options object, and resolved concrete entries contain normalized effort and web-search forms.
 - `MODEL_EFFORTS`, `ModelEffort`, `DEFAULT_MODEL_EFFORT`, `normalizeModelEffortConfig`, and `getConcreteModelEffortConfig`.
 - `expandModelsConfig`, `loadModelsConfig`, `loadModelsConfigFromObject`, `resolveModelConfig`.
 
@@ -84,13 +84,14 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - First-class `effort` uses `{ allowed, default }`. Omission allows `none`, `low`, `medium`, `high`, `xhigh`, and `max` with `high` as the default. A model-level `allowed` list replaces the provider list; omitted model fields inherit provider values, and the resulting default must be allowed. Virtual entries cannot configure effort directly and expose the canonical union of reachable concrete levels.
 - `openai`, `openai-responses`, and `openai-completions` receive OpenAI defaults; `anthropic` receives Anthropic defaults; custom types must provide their own base URL/protocol-compatible settings.
 - Invalid provider objects, model lists, and cross-strategy fields fail with provider-qualified validation errors.
+- A non-empty provider string is normalized at expansion to one `session-hash` target and then follows the canonical leaf-only virtual routing contract; it is not retained as a separate runtime alias type.
 - `session-hash` and `failover` entries resolve strict concrete lookup keys, safe context/async-compact values, and a stable full-leaf configuration fingerprint. Their schema and semantics are canonical in [model routing](../threads/model-routing.md).
 
 ## Persistence behavior
 
 - App YAML missing at read time yields an empty config.
 - Setup writes validate by parsing through the same current config readers before replacing files.
-- Structured setup accepts virtual target/failover fields; raw virtual YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including `effort` and `webSearch` are removed before the result is reparsed.
+- Structured setup accepts virtual target/failover fields; Models Setup remains a raw-YAML surface for string aliases, and raw virtual/alias YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including `effort` and `webSearch` are removed before the result is reparsed.
 - `writeAppConfigWithChannels` preserves surrounding raw YAML text/comments when possible.
 - Template models config is a read fallback only and logs once; it is not silently copied into mutable state.
 - Code's fixed workspace-root response consumes exported `BASE_DIR`, resolved `DATA_ROOT_DIR`, `APP_CONFIG_PATH`, and `DEFAULT_MODELS_CONFIG_PATH`; it does not introduce a second path resolver. See [D-code-master-workspace-roots](../threads/code-integration.md#d-code-master-workspace-roots) and [D-code-config-schema-assistance](../threads/code-integration.md#d-code-config-schema-assistance).

@@ -47,3 +47,35 @@ providers:
     await fs.remove(dir);
   }
 });
+
+test('setup diagnostics classify provider string aliases as single-target session-hash entries', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-webui-model-alias-diagnostics-'));
+  const modelsPath = path.join(dir, 'models.yaml');
+  await fs.writeFile(modelsPath, `
+default: fast
+providers:
+  leaf:
+    providerType: openai-completions
+    models: [model-a]
+  fast: " leaf/model-a "
+`, 'utf8');
+
+  try {
+    const diagnostics = getModelsSetupDiagnostics(modelsPath);
+    const fast = diagnostics.providers.find(provider => provider.id === 'fast');
+    assert.deepEqual(fast, {
+      id: 'fast',
+      providerType: 'session-hash',
+      isVirtual: true,
+      baseUrl: '',
+      apiKey: '',
+      models: '',
+      targets: ['leaf/model-a'],
+      failureThreshold: null,
+      cooldownMs: null,
+      defaultModel: '',
+    });
+  } finally {
+    await fs.remove(dir);
+  }
+});

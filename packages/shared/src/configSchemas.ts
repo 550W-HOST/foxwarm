@@ -110,7 +110,7 @@ const modelItem = {
   ],
 }
 
-const providerEntry = {
+const providerObjectEntry = {
   type: 'object',
   additionalProperties: true,
   properties: {
@@ -161,6 +161,17 @@ const providerEntry = {
         not: { anyOf: ['targets', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
+  ],
+}
+
+const providerEntry = {
+  oneOf: [
+    {
+      type: 'string',
+      pattern: '\\S',
+      description: 'Alias shorthand for a single-target session-hash virtual provider.',
+    },
+    providerObjectEntry,
   ],
 }
 

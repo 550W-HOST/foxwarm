@@ -728,6 +728,8 @@ export type ProviderConfigEntry = {
   cooldownMs?: number;
 };
 
+export type ProviderConfigValue = ProviderConfigEntry | string;
+
 export type VirtualProviderType = 'session-hash' | 'failover';
 
 export type VirtualModelRoutingConfig = {
@@ -978,7 +980,7 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
   };
 }
 
-export function expandModelsConfig(rawProviderEntries: Record<string, ProviderConfigEntry>) {
+export function expandModelsConfig(rawProviderEntries: Record<string, ProviderConfigValue>) {
   const models: Record<string, ModelConfigEntry> = {};
   const canonicalConcreteKeyByLookupKey = new Map<string, string>();
   const displayModels: string[] = [];
@@ -986,8 +988,16 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
   const virtualEntries: Array<[string, ProviderConfigEntry, VirtualProviderType]> = [];
 
   for (const [providerKey, rawProviderEntry] of Object.entries(rawProviderEntries || {})) {
+    if (typeof rawProviderEntry === 'string') {
+      const target = rawProviderEntry.trim();
+      if (!target) {
+        throw new Error(`Provider alias \`${providerKey}\` must target a non-empty concrete model key.`);
+      }
+      virtualEntries.push([providerKey, { providerType: 'session-hash', targets: [target] }, 'session-hash']);
+      continue;
+    }
     if (!isPlainObject(rawProviderEntry)) {
-      throw new Error(`Provider \`${providerKey}\` must be a plain object.`);
+      throw new Error(`Provider \`${providerKey}\` must be a plain object or non-empty alias string.`);
     }
     const providerEntry = rawProviderEntry as ProviderConfigEntry;
     const providerType = getProviderType(providerEntry);

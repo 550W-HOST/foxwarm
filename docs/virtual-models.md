@@ -43,6 +43,26 @@ providers:
     cooldownMs: 600000
 ```
 
+For a single-target `session-hash` entry, a provider string is a compact alias
+shorthand:
+
+```yaml
+default: fast
+providers:
+  openai:
+    providerType: openai-completions
+    baseUrl: https://api.openai.com/v1
+    apiKey: your-openai-key
+    models: [gpt-5.6-sol]
+
+  fast: openai/gpt-5.6-sol
+```
+
+`fast: openai/gpt-5.6-sol` is normalized exactly like
+`fast: { providerType: session-hash, targets: [openai/gpt-5.6-sol] }`. The
+alias remains the selectable/displayed model key while routing and successful
+model attribution use the existing virtual-model behavior.
+
 Targets must resolve directly to distinct concrete leaves in the same config.
 Virtual-to-virtual targets, unknown targets, self references, and duplicate
 aliases of the same concrete model are rejected. `session-hash` requires at
