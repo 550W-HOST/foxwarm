@@ -1,5 +1,41 @@
-export const TERMINAL_PINCH_MIN_FONT_SIZE = 10
+export const TERMINAL_FONT_SIZE_STORAGE_KEY = 'foxwarm.terminal.fontSize'
+export const TERMINAL_DEFAULT_FONT_SIZE = 14
+export const TERMINAL_PINCH_MIN_FONT_SIZE = 5
 export const TERMINAL_PINCH_MAX_FONT_SIZE = 24
+export const TERMINAL_KEYBOARD_FONT_SIZE_STEP = 1
+
+export function clampTerminalFontSize(fontSize: number, fallback = TERMINAL_DEFAULT_FONT_SIZE): number {
+  const safeValue = Number.isFinite(fontSize) ? fontSize : fallback
+  const rounded = Math.round(safeValue * 2) / 2
+  return Math.min(TERMINAL_PINCH_MAX_FONT_SIZE, Math.max(TERMINAL_PINCH_MIN_FONT_SIZE, rounded))
+}
+
+export function loadTerminalFontSize(storage: Pick<Storage, 'getItem'>): number {
+  try {
+    const stored = storage.getItem(TERMINAL_FONT_SIZE_STORAGE_KEY)
+    if (stored === null || stored.trim() === '') return TERMINAL_DEFAULT_FONT_SIZE
+    return clampTerminalFontSize(Number(stored))
+  } catch {
+    return TERMINAL_DEFAULT_FONT_SIZE
+  }
+}
+
+export function persistTerminalFontSize(storage: Pick<Storage, 'setItem'>, fontSize: number): boolean {
+  const nextFontSize = clampTerminalFontSize(fontSize)
+  try {
+    storage.setItem(TERMINAL_FONT_SIZE_STORAGE_KEY, String(nextFontSize))
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function terminalFontSizeShortcutDelta(event: Pick<KeyboardEvent, 'type' | 'code' | 'ctrlKey' | 'altKey' | 'metaKey'>): number | null {
+  if (event.type !== 'keydown' || !event.ctrlKey || event.altKey || event.metaKey) return null
+  if (event.code === 'Minus') return -TERMINAL_KEYBOARD_FONT_SIZE_STEP
+  if (event.code === 'Equal') return TERMINAL_KEYBOARD_FONT_SIZE_STEP
+  return null
+}
 
 export interface TerminalPinchPoint {
   clientX: number
@@ -18,7 +54,8 @@ export function terminalPinchFontSize(
   maxFontSize = TERMINAL_PINCH_MAX_FONT_SIZE,
 ): number {
   if (!Number.isFinite(startDistance) || startDistance <= 0 || !Number.isFinite(currentDistance)) {
-    return Math.min(maxFontSize, Math.max(minFontSize, startFontSize))
+    const safeStartFontSize = Number.isFinite(startFontSize) ? startFontSize : TERMINAL_DEFAULT_FONT_SIZE
+    return Math.min(maxFontSize, Math.max(minFontSize, safeStartFontSize))
   }
   const scaled = startFontSize * (currentDistance / startDistance)
   const rounded = Math.round(scaled * 2) / 2
@@ -28,7 +65,7 @@ export function terminalPinchFontSize(
 interface TerminalPinchZoomOptions {
   target: HTMLElement
   getFontSize: () => number
-  setFontSize: (fontSize: number) => void
+  setFontSize: (fontSize: number) => boolean | void
   refit: () => void
   requestFrame?: (callback: FrameRequestCallback) => number
   cancelFrame?: (handle: number) => void
@@ -54,8 +91,7 @@ export function attachTerminalPinchZoom({
     }
     gesture.appliedFontSize = pendingFontSize
     pendingFontSize = null
-    setFontSize(gesture.appliedFontSize)
-    refit()
+    if (setFontSize(gesture.appliedFontSize) !== false) refit()
   }
 
   const scheduleApply = () => {

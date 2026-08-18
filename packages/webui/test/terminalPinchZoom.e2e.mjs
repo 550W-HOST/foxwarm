@@ -17,27 +17,70 @@ let fixtureUrl
 
 before(async () => {
   const source = `
-    import { attachTerminalPinchZoom } from ${JSON.stringify(pinchEntry)}
+    import {
+      attachTerminalPinchZoom,
+      clampTerminalFontSize,
+      loadTerminalFontSize,
+      persistTerminalFontSize,
+      terminalFontSizeShortcutDelta,
+      TERMINAL_DEFAULT_FONT_SIZE,
+    } from ${JSON.stringify(pinchEntry)}
     import { Terminal } from ${JSON.stringify(xtermEntry)}
     import { FitAddon } from ${JSON.stringify(fitAddonEntry)}
     import ${JSON.stringify(xtermCssEntry)}
     const target = document.getElementById('terminal')
     const controlTarget = document.getElementById('control-terminal')
-    const terminal = new Terminal({ fontSize: 14, scrollback: 500, theme: { background: '#111111' } })
+    const otherTarget = document.getElementById('other-terminal')
+    const initialFontSize = loadTerminalFontSize(localStorage)
+    const terminal = new Terminal({ fontSize: initialFontSize, scrollback: 500, theme: { background: '#111111' } })
     const fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
     terminal.open(target)
     fitAddon.fit()
-    const controlTerminal = new Terminal({ fontSize: 14, scrollback: 500, theme: { background: '#111111' } })
+    const controlTerminal = new Terminal({ fontSize: initialFontSize, scrollback: 500, theme: { background: '#111111' } })
     const controlFitAddon = new FitAddon()
     controlTerminal.loadAddon(controlFitAddon)
     controlTerminal.open(controlTarget)
     controlFitAddon.fit()
-    const state = { updates: [], refits: 0, moves: [], ready: false }
+    const otherTerminal = new Terminal({ fontSize: initialFontSize, scrollback: 500, theme: { background: '#111111' } })
+    otherTerminal.open(otherTarget)
+    const state = { updates: [], refits: 0, moves: [], keyEvents: [], data: [], persists: 0, ready: false }
+    const save = value => {
+      if (persistTerminalFontSize(localStorage, value)) state.persists += 1
+    }
+    const applyShortcutSize = value => {
+      const next = clampTerminalFontSize(value)
+      const current = clampTerminalFontSize(terminal.options.fontSize ?? TERMINAL_DEFAULT_FONT_SIZE)
+      if (next === current) return false
+      terminal.options.fontSize = next
+      save(next)
+      fitAddon.fit()
+      state.refits += 1
+      return true
+    }
+    terminal.attachCustomKeyEventHandler(event => {
+      const delta = terminalFontSizeShortcutDelta(event)
+      if (delta === null) return true
+      event.preventDefault()
+      applyShortcutSize((terminal.options.fontSize ?? TERMINAL_DEFAULT_FONT_SIZE) + delta)
+      return false
+    })
+    terminal.onData(data => state.data.push(data))
+    terminal.element.querySelector('textarea').addEventListener('keydown', event => {
+      state.keyEvents.push({ code: event.code, prevented: event.defaultPrevented })
+    })
     const dispose = attachTerminalPinchZoom({
       target,
       getFontSize: () => terminal.options.fontSize,
-      setFontSize: value => { terminal.options.fontSize = value; controlTerminal.options.fontSize = value; state.updates.push(value) },
+      setFontSize: value => {
+        const next = clampTerminalFontSize(value)
+        if (next === terminal.options.fontSize) return false
+        terminal.options.fontSize = next
+        controlTerminal.options.fontSize = next
+        save(next)
+        state.updates.push(next)
+        return true
+      },
       refit: () => { fitAddon.fit(); controlFitAddon.fit(); state.refits += 1 },
     })
     target.addEventListener('touchmove', event => {
@@ -55,7 +98,22 @@ before(async () => {
     }
     terminal.write(content, markReady)
     controlTerminal.write(content, markReady)
-    window.pinchFixture = { terminal, controlTerminal, state, dispose, fitAddon, controlFitAddon }
+    window.pinchFixture = {
+      terminal,
+      controlTerminal,
+      otherTerminal,
+      state,
+      dispose,
+      fitAddon,
+      controlFitAddon,
+      resetTracking: () => {
+        state.updates.length = 0
+        state.refits = 0
+        state.keyEvents.length = 0
+        state.data.length = 0
+        state.persists = 0
+      },
+    }
   `
   const result = await build({
     stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'terminal-pinch-fixture.ts' },
@@ -71,7 +129,7 @@ before(async () => {
   const styles = result.outputFiles.find(file => file.path.endsWith('.css'))?.text || ''
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"><style>${styles}\nbody{margin:0}#terminal,#control-terminal{width:390px;height:700px;background:#111}#control-terminal{position:absolute;left:-1000px;top:0}</style></head><body><div id="terminal"></div><div id="control-terminal"></div><script>${script}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"><style>${styles}\nbody{margin:0}#terminal,#control-terminal,#other-terminal{width:390px;height:700px;background:#111}#control-terminal,#other-terminal{position:absolute;left:-1000px;top:0}</style></head><body><script>if(localStorage.getItem('foxwarm.terminal.fontSize')===null)localStorage.setItem('foxwarm.terminal.fontSize','12')</script><div id="terminal"></div><div id="control-terminal"></div><div id="other-terminal"></div><script>${script}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -104,6 +162,11 @@ async function endTouches() {
   await touch('touchEnd', [])
 }
 
+async function ctrlKey(code, key, windowsVirtualKeyCode) {
+  await client.send('Input.dispatchKeyEvent', { type: 'keyDown', code, key, modifiers: 2, windowsVirtualKeyCode })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', code, key, modifiers: 2, windowsVirtualKeyCode })
+}
+
 test('actual xterm pinch changes font/refits without terminal gesture drift and later one-touch scroll still works', async (context) => {
   const consoleMessages = []
   const onConsole = message => consoleMessages.push(message.text())
@@ -111,10 +174,15 @@ test('actual xterm pinch changes font/refits without terminal gesture drift and 
   context.after(() => page.off('console', onConsole))
   await page.goto(fixtureUrl, { waitUntil: 'load' })
   await page.waitForFunction(() => window.pinchFixture?.state.ready)
+  assert.deepEqual(await page.evaluate(() => ({
+    fontSize: window.pinchFixture.terminal.options.fontSize,
+    controlFontSize: window.pinchFixture.controlTerminal.options.fontSize,
+    otherFontSize: window.pinchFixture.otherTerminal.options.fontSize,
+  })), { fontSize: 12, controlFontSize: 12, otherFontSize: 12 })
 
   await startPinch(100, 200, 240)
   await movePinch(75, 225, 320)
-  await page.waitForFunction(() => window.pinchFixture.terminal.options.fontSize === 21)
+  await page.waitForFunction(() => window.pinchFixture.terminal.options.fontSize === 18)
   await endTouches()
   await new Promise(resolve => setTimeout(resolve, 150))
   const afterPinch = await page.evaluate(() => ({
@@ -126,24 +194,81 @@ test('actual xterm pinch changes font/refits without terminal gesture drift and 
     selection: window.pinchFixture.terminal.getSelection(),
     controlViewportY: window.pinchFixture.controlTerminal.buffer.active.viewportY,
     controlSelection: window.pinchFixture.controlTerminal.getSelection(),
+    otherFontSize: window.pinchFixture.otherTerminal.options.fontSize,
+    storedFontSize: localStorage.getItem('foxwarm.terminal.fontSize'),
+    persists: window.pinchFixture.state.persists,
   }))
-  assert.equal(afterPinch.fontSize, 21)
-  assert.deepEqual(afterPinch.updates, [21])
+  assert.equal(afterPinch.fontSize, 18)
+  assert.deepEqual(afterPinch.updates, [18])
   assert.equal(afterPinch.refits, 1)
   assert.deepEqual(afterPinch.lastMove, { touches: 2, prevented: true })
   assert.equal(afterPinch.viewportY, afterPinch.controlViewportY)
   assert.equal(afterPinch.selection, afterPinch.controlSelection)
   assert.equal(afterPinch.selection, '')
+  assert.equal(afterPinch.otherFontSize, 12)
+  assert.equal(afterPinch.storedFontSize, '18')
+  assert.equal(afterPinch.persists, 1)
+
+  await page.reload({ waitUntil: 'load' })
+  await page.waitForFunction(() => window.pinchFixture?.state.ready)
+  assert.deepEqual(await page.evaluate(() => ({
+    fontSize: window.pinchFixture.terminal.options.fontSize,
+    otherFontSize: window.pinchFixture.otherTerminal.options.fontSize,
+    storedFontSize: localStorage.getItem('foxwarm.terminal.fontSize'),
+  })), { fontSize: 18, otherFontSize: 18, storedFontSize: '18' })
 
   await startPinch(100, 200)
   await movePinch(40, 340)
   await page.waitForFunction(() => window.pinchFixture.terminal.options.fontSize === 24)
   await endTouches()
 
+  await page.evaluate(() => { window.pinchFixture.resetTracking(); window.pinchFixture.terminal.focus() })
+  await ctrlKey('Equal', '=', 187)
+  assert.deepEqual(await page.evaluate(() => ({
+    fontSize: window.pinchFixture.terminal.options.fontSize,
+    refits: window.pinchFixture.state.refits,
+    persists: window.pinchFixture.state.persists,
+    data: window.pinchFixture.state.data,
+    keyEvent: window.pinchFixture.state.keyEvents.at(-1),
+  })), { fontSize: 24, refits: 0, persists: 0, data: [], keyEvent: { code: 'Equal', prevented: true } })
+
+  await ctrlKey('Minus', '-', 189)
+  assert.deepEqual(await page.evaluate(() => ({
+    fontSize: window.pinchFixture.terminal.options.fontSize,
+    storedFontSize: localStorage.getItem('foxwarm.terminal.fontSize'),
+    refits: window.pinchFixture.state.refits,
+    persists: window.pinchFixture.state.persists,
+    data: window.pinchFixture.state.data,
+    otherFontSize: window.pinchFixture.otherTerminal.options.fontSize,
+  })), { fontSize: 23, storedFontSize: '23', refits: 1, persists: 1, data: [], otherFontSize: 18 })
+
+  await ctrlKey('Equal', '=', 187)
+  assert.equal(await page.evaluate(() => window.pinchFixture.terminal.options.fontSize), 24)
+
   await startPinch(80, 280)
-  await movePinch(155, 205)
-  await page.waitForFunction(() => window.pinchFixture.terminal.options.fontSize === 10)
+  await movePinch(160, 200)
+  await page.waitForFunction(() => window.pinchFixture.terminal.options.fontSize === 5)
   await endTouches()
+
+  await page.evaluate(() => { window.pinchFixture.resetTracking(); window.pinchFixture.terminal.focus() })
+  await ctrlKey('Minus', '-', 189)
+  assert.deepEqual(await page.evaluate(() => ({
+    fontSize: window.pinchFixture.terminal.options.fontSize,
+    refits: window.pinchFixture.state.refits,
+    persists: window.pinchFixture.state.persists,
+    data: window.pinchFixture.state.data,
+    keyEvent: window.pinchFixture.state.keyEvents.at(-1),
+  })), { fontSize: 5, refits: 0, persists: 0, data: [], keyEvent: { code: 'Minus', prevented: true } })
+
+  await ctrlKey('Equal', '=', 187)
+  assert.deepEqual(await page.evaluate(() => ({
+    fontSize: window.pinchFixture.terminal.options.fontSize,
+    storedFontSize: localStorage.getItem('foxwarm.terminal.fontSize'),
+    refits: window.pinchFixture.state.refits,
+    persists: window.pinchFixture.state.persists,
+    data: window.pinchFixture.state.data,
+    otherFontSize: window.pinchFixture.otherTerminal.options.fontSize,
+  })), { fontSize: 6, storedFontSize: '6', refits: 1, persists: 1, data: [], otherFontSize: 18 })
 
   await page.evaluate(() => {
     window.pinchFixture.terminal.scrollToTop()
@@ -186,6 +311,9 @@ test('actual xterm pinch changes font/refits without terminal gesture drift and 
 
   const terminalViewSource = await import('node:fs/promises').then(fs => fs.readFile(new URL('../src/components/TerminalView.tsx', import.meta.url), 'utf8'))
   assert.match(terminalViewSource, /attachTerminalPinchZoom\(\{[\s\S]*target: hostRef\.current/)
-  assert.match(terminalViewSource, /term\.options\.fontSize = fontSize/)
+  assert.match(terminalViewSource, /fontSize: initialFontSize/)
+  assert.match(terminalViewSource, /term\.attachCustomKeyEventHandler/)
+  assert.match(terminalViewSource, /term\.options\.fontSize = nextFontSize/)
+  assert.match(terminalViewSource, /persistTerminalFontSize\(terminalStorage, nextFontSize\)/)
   assert.match(terminalViewSource, /refit: fitAndNotifyResize/)
 })

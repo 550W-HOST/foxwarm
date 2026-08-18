@@ -42,6 +42,60 @@ const points = distance => [
   { clientX: distance, clientY: 0 },
 ]
 
+class FakeStorage {
+  values = new Map()
+  writes = []
+
+  getItem(key) {
+    return this.values.has(key) ? this.values.get(key) : null
+  }
+
+  setItem(key, value) {
+    this.values.set(key, value)
+    this.writes.push([key, value])
+  }
+}
+
+test('global font preference loads, rounds, clamps to 5–24px, and persists safely', async () => {
+  const {
+    clampTerminalFontSize,
+    loadTerminalFontSize,
+    persistTerminalFontSize,
+    TERMINAL_DEFAULT_FONT_SIZE,
+    TERMINAL_FONT_SIZE_STORAGE_KEY,
+  } = await loadModule()
+  const storage = new FakeStorage()
+
+  assert.equal(loadTerminalFontSize(storage), TERMINAL_DEFAULT_FONT_SIZE)
+  storage.values.set(TERMINAL_FONT_SIZE_STORAGE_KEY, '')
+  assert.equal(loadTerminalFontSize(storage), TERMINAL_DEFAULT_FONT_SIZE)
+  storage.values.set(TERMINAL_FONT_SIZE_STORAGE_KEY, '12.3')
+  assert.equal(loadTerminalFontSize(storage), 12.5)
+  storage.values.set(TERMINAL_FONT_SIZE_STORAGE_KEY, '-4')
+  assert.equal(loadTerminalFontSize(storage), 5)
+  storage.values.set(TERMINAL_FONT_SIZE_STORAGE_KEY, '80')
+  assert.equal(loadTerminalFontSize(storage), 24)
+  storage.values.set(TERMINAL_FONT_SIZE_STORAGE_KEY, 'not-a-number')
+  assert.equal(loadTerminalFontSize(storage), TERMINAL_DEFAULT_FONT_SIZE)
+  assert.equal(clampTerminalFontSize(Infinity), TERMINAL_DEFAULT_FONT_SIZE)
+
+  assert.equal(persistTerminalFontSize(storage, 7.24), true)
+  assert.deepEqual(storage.writes.at(-1), [TERMINAL_FONT_SIZE_STORAGE_KEY, '7'])
+})
+
+test('desktop Ctrl physical Minus and Equal map to one-pixel steps only', async () => {
+  const { terminalFontSizeShortcutDelta } = await loadModule()
+  const event = (overrides = {}) => ({ type: 'keydown', code: 'Minus', ctrlKey: true, altKey: false, metaKey: false, ...overrides })
+
+  assert.equal(terminalFontSizeShortcutDelta(event()), -1)
+  assert.equal(terminalFontSizeShortcutDelta(event({ code: 'Equal' })), 1)
+  assert.equal(terminalFontSizeShortcutDelta(event({ type: 'keyup' })), null)
+  assert.equal(terminalFontSizeShortcutDelta(event({ ctrlKey: false })), null)
+  assert.equal(terminalFontSizeShortcutDelta(event({ altKey: true })), null)
+  assert.equal(terminalFontSizeShortcutDelta(event({ metaKey: true })), null)
+  assert.equal(terminalFontSizeShortcutDelta(event({ code: 'Digit0' })), null)
+})
+
 test('pinch distance and font calculation zoom in/out from the gesture baseline and clamp', async () => {
   const {
     terminalPinchDistance,

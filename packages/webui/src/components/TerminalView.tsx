@@ -6,7 +6,14 @@ import '@xterm/xterm/css/xterm.css'
 import { API_BASE_PATH, makeWebSocketUrl } from '../config'
 import { buildTerminalCreateRequest, findTerminalForTarget, normalizeTerminalTarget } from '../terminalTarget'
 import { loadTerminalKeyboardMode, TERMINAL_KEYBOARD_STORAGE_KEY, type TerminalKeyboardMode } from '../terminalVirtualKeyboard'
-import { attachTerminalPinchZoom } from '../terminalPinchZoom'
+import {
+  attachTerminalPinchZoom,
+  clampTerminalFontSize,
+  loadTerminalFontSize,
+  persistTerminalFontSize,
+  terminalFontSizeShortcutDelta,
+  TERMINAL_DEFAULT_FONT_SIZE,
+} from '../terminalPinchZoom'
 import TerminalVirtualKeyboard, { TerminalKeyboardHeaderControl } from './TerminalVirtualKeyboard'
 
 type TerminalStatus = 'connecting' | 'ready' | 'closed' | 'error'
@@ -83,9 +90,12 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
     let disposed = false
     let disposePinchZoom: (() => void) | null = null
     const scheduledFitHandles: number[] = []
+    let terminalStorage: Storage | null = null
+    try { terminalStorage = window.localStorage } catch {}
+    const initialFontSize = terminalStorage ? loadTerminalFontSize(terminalStorage) : TERMINAL_DEFAULT_FONT_SIZE
     const term = new Terminal({
       cursorBlink: true,
-      fontSize: 14,
+      fontSize: initialFontSize,
       convertEol: false,
       scrollback: 5000,
       theme: {
@@ -116,6 +126,29 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
 
     fitAndNotifyResizeRef.current = fitAndNotifyResize
 
+    const setFontSize = (fontSize: number, persist: boolean) => {
+      const nextFontSize = clampTerminalFontSize(fontSize)
+      const currentFontSize = clampTerminalFontSize(term.options.fontSize ?? TERMINAL_DEFAULT_FONT_SIZE)
+      if (nextFontSize === currentFontSize) return false
+      term.options.fontSize = nextFontSize
+      if (persist && terminalStorage) persistTerminalFontSize(terminalStorage, nextFontSize)
+      return true
+    }
+
+    const applyFontSize = (fontSize: number, persist: boolean) => {
+      if (!setFontSize(fontSize, persist)) return false
+      fitAndNotifyResize()
+      return true
+    }
+
+    term.attachCustomKeyEventHandler((event) => {
+      const delta = terminalFontSizeShortcutDelta(event)
+      if (delta === null) return true
+      event.preventDefault()
+      applyFontSize((term.options.fontSize ?? TERMINAL_DEFAULT_FONT_SIZE) + delta, true)
+      return false
+    })
+
     const scheduleFit = () => {
       fitAndNotifyResize()
       scheduledFitHandles.push(window.setTimeout(fitAndNotifyResize, 50))
@@ -132,8 +165,8 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
       setTerminalInstance(term)
       disposePinchZoom = attachTerminalPinchZoom({
         target: hostRef.current,
-        getFontSize: () => term.options.fontSize ?? 14,
-        setFontSize: (fontSize) => { term.options.fontSize = fontSize },
+        getFontSize: () => term.options.fontSize ?? TERMINAL_DEFAULT_FONT_SIZE,
+        setFontSize: (fontSize) => setFontSize(fontSize, true),
         refit: fitAndNotifyResize,
       })
       scheduleFit()
