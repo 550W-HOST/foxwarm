@@ -530,6 +530,10 @@ input, textarea, select {
     padding-top: 2rem;
   }
 
+  .foxwarm-special-block[data-special-block-kind="latex"] .katex-display {
+    margin: 0;
+  }
+
   .foxwarm-special-block [data-special-block-controls] {
     opacity: 0;
     transition: opacity 150ms ease;

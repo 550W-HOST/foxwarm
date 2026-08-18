@@ -40,7 +40,7 @@ const SpecialBlock = memo(function SpecialBlock({ kind, label, raw, children }: 
     <section
       data-special-block
       data-special-block-kind={kind}
-      className="foxwarm-special-block not-prose group/special relative my-2 min-w-0 max-w-full overflow-hidden rounded-md border border-slate-200 bg-slate-50/60 dark:border-slate-700 dark:bg-slate-900/40"
+      className={`foxwarm-special-block not-prose group/special relative my-2 min-w-0 max-w-full overflow-hidden ${kind === 'latex' ? '' : 'rounded-md border border-slate-200 bg-slate-50/60 dark:border-slate-700 dark:bg-slate-900/40'}`}
     >
       {hasVisibleHeader ? (
         <span data-special-block-header className="pointer-events-none absolute left-2 top-1.5 z-10 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">

@@ -88,7 +88,7 @@ await writeFile(entryPath, `
       <div className="w-full min-w-0 max-w-[80%]">
         <div id="latex-layout-fixture">
           <SpecialBlock kind="latex" label="LaTeX" raw={latexRaw}>
-            <div data-latex-fixture>rendered latex</div>
+            <span className="katex-display"><span className="katex" data-latex-fixture>rendered latex</span></span>
           </SpecialBlock>
         </div>
         <div id="mermaid-layout-fixture">
@@ -232,14 +232,22 @@ test('ordinary code and special-block chrome keep their compact spacing and hove
     const latex = document.querySelector('#latex-layout-fixture [data-special-block]')
     const mermaid = document.querySelector('#mermaid-layout-fixture [data-special-block]')
     const latexRendered = latex.querySelector('[data-special-block-rendered]')
+    const latexDisplay = latex.querySelector('.katex-display')
     const mermaidRendered = mermaid.querySelector('[data-special-block-rendered]')
     return {
       codeMarginTop: getComputedStyle(code).marginTop,
       codeMarginBottom: getComputedStyle(code).marginBottom,
       latexHeaders: latex.querySelectorAll('[data-special-block-header]').length,
+      latexHasBorderClass: latex.classList.contains('border'),
+      latexBorderTopWidth: getComputedStyle(latex).borderTopWidth,
+      latexBackgroundColor: getComputedStyle(latex).backgroundColor,
       latexPaddingTop: getComputedStyle(latexRendered).paddingTop,
       latexPaddingBottom: getComputedStyle(latexRendered).paddingBottom,
+      latexDisplayMarginTop: getComputedStyle(latexDisplay).marginTop,
+      latexDisplayMarginBottom: getComputedStyle(latexDisplay).marginBottom,
       mermaidHeader: mermaid.querySelector('[data-special-block-header]')?.textContent?.trim(),
+      mermaidHasBorderClass: mermaid.classList.contains('border'),
+      mermaidHasBackgroundClass: mermaid.classList.contains('bg-slate-50/60'),
       mermaidPaddingTop: getComputedStyle(mermaidRendered).paddingTop,
       mermaidPaddingBottom: getComputedStyle(mermaidRendered).paddingBottom,
       latexControlsOpacity: getComputedStyle(latex.querySelector('[data-special-block-controls]')).opacity,
@@ -250,9 +258,16 @@ test('ordinary code and special-block chrome keep their compact spacing and hove
   assert.equal(initial.codeMarginTop, '8px')
   assert.equal(initial.codeMarginBottom, '8px')
   assert.equal(initial.latexHeaders, 0)
+  assert.equal(initial.latexHasBorderClass, false)
+  assert.equal(initial.latexBorderTopWidth, '0px')
+  assert.equal(initial.latexBackgroundColor, 'rgba(0, 0, 0, 0)')
   assert.equal(initial.latexPaddingTop, initial.latexPaddingBottom)
   assert.equal(initial.latexPaddingTop, '8px')
+  assert.equal(initial.latexDisplayMarginTop, '0px')
+  assert.equal(initial.latexDisplayMarginBottom, '0px')
   assert.equal(initial.mermaidHeader, 'Mermaid')
+  assert.equal(initial.mermaidHasBorderClass, true)
+  assert.equal(initial.mermaidHasBackgroundClass, true)
   assert.equal(initial.mermaidPaddingTop, '32px')
   assert.equal(initial.mermaidPaddingBottom, '8px')
   assert.equal(initial.latexControlsOpacity, '0')
