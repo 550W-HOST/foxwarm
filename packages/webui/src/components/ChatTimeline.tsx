@@ -417,7 +417,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
   const headerHoverClass = 'hover:text-blue-950 dark:hover:text-white'
 
   return (
-    <div className="w-full min-w-0 overflow-x-hidden">
+    <div className="w-full min-w-0">
       <div
         data-system-message-card
         data-system-message-kind={messageKind.kind}
@@ -662,7 +662,6 @@ const MessageRow = memo(function MessageRow({
   const imageParts = useMemo(() => msg.parts.filter(p => p.inlineData || p.inlineDataRef || p.inlineDataUnavailable), [msg.parts])
   const usage = useMemo(() => getModelMessageUsage(msg), [msg])
   const isInToolGroup = summaryTagItems.length > 0
-  const hasToolParts = useMemo(() => msg.parts.some(p => p.functionCall || p.functionResponse || p.thinking), [msg.parts])
   const hasVisibleTextContent = useMemo(() => msg.parts.some(p => (p.text && p.text.trim()) || (p.system && String(p.system).trim())), [msg.parts])
   const systemLikeMessage = useMemo(() => isHeavySystemLikeMessage(msg), [msg])
   const isThreadLikeMessage = systemLikeMessage || msg.role === 'model' || msg.role === 'tool'
@@ -675,7 +674,6 @@ const MessageRow = memo(function MessageRow({
     : null
   const displayUsageCallCount = isCollapsedToolGroup && showToolGroupSummary && groupUsageCallCount > 0 ? groupUsageCallCount : undefined
   const displayUsageAttribution = isCollapsedToolGroup ? groupUsageAttribution : usage ? getMessageUsageAttribution(msg) : null
-  const allowOverflow = (displayUsage && !isMobile) || hasToolParts || isInToolGroup
   const contextBlock = useMemo(() => msg.role === 'model' ? getContextBlockMetaFromMessage(msg) : null, [msg])
   const firstTextPartIndex = useMemo(() => msg.parts.findIndex(p => typeof p.text === 'string' && p.text.trim()), [msg.parts])
   const marginClass = nestedDepth > 0 ? 'mt-2' : (shouldSkipMargin ? '' : 'mt-4')
@@ -698,7 +696,7 @@ const MessageRow = memo(function MessageRow({
           !systemLikeMessage && msg.role === 'user'
             ? 'foxwarm-user-message-bubble bg-blue-500 dark:bg-blue-600 text-white px-4 py-2 rounded-lg'
             : ''
-        } ${allowOverflow ? 'overflow-visible' : 'overflow-x-hidden'}`}
+        }`}
       >
         {systemLikeMessage ? (
           <SystemLikeMessageCard msg={msg} messageKey={messageKey} />
@@ -961,7 +959,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
   }, [])
 
   return (
-    <div className="foxwarm-chat-timeline min-w-0 max-w-full overflow-x-hidden">
+    <div className="foxwarm-chat-timeline min-w-0 max-w-full">
       {messages.map((msg, idx) => {
         if (toolGroupMeta.handledByPreviousGroup[idx]) {
           return null

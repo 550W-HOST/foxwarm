@@ -84,7 +84,7 @@ await writeFile(entryPath, `
   }
 
   createRoot(document.getElementById('root')).render(
-    <main className="foxwarm-chat-timeline w-full min-w-0 max-w-full overflow-x-hidden p-4">
+    <main className="foxwarm-chat-messages w-full min-w-0 max-w-full overflow-x-hidden p-4">
       <div className="w-full min-w-0 max-w-[80%]">
         <div id="latex-layout-fixture">
           <SpecialBlock kind="latex" label="LaTeX" raw={latexRaw}>

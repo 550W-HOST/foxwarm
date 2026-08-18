@@ -1668,13 +1668,13 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
               />
             </div>
           )}
-          <div ref={messagesContentRef} className="foxwarm-chat-messages-content min-w-0 max-w-full overflow-x-hidden">
+          <div ref={messagesContentRef} className="foxwarm-chat-messages-content min-w-0 max-w-full">
             {hiddenMessageCount > 0 && !showFullTimeline && (
               <div className="mb-3 rounded-lg border border-gray-200 bg-white/80 px-3 py-2 text-xs text-gray-500 shadow-sm dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-300">
                 Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
               </div>
             )}
-            <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full overflow-x-hidden">
+            <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ToolScriptProgressContext.Provider value={toolScriptProgress}>
                 <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
               </ToolScriptProgressContext.Provider>
@@ -1691,7 +1691,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
               onContinue={handleContinue}
             />
             {queuedMessages.length > 0 && (
-              <div className="foxwarm-queued-preview min-w-0 max-w-full overflow-x-hidden" data-queued-preview="true" aria-label="Queued messages">
+              <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
                 <ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
               </div>
             )}

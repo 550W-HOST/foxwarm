@@ -147,7 +147,7 @@ test('desktop preserves the longstanding 80% model/tool/system and capped user m
 
   for (const sample of Object.values(widths).filter(value => typeof value === 'object')) {
     assert.ok(sample.overflow <= 1)
-    assert.equal(sample.timelineOverflowX, 'hidden')
+    assert.equal(sample.timelineOverflowX, 'visible')
   }
   assert.ok(widths.documentOverflow <= 1)
 })
@@ -158,7 +158,7 @@ test('mobile model/tool/system messages remain full-width without horizontal doc
   for (const key of ['shortModel', 'longModel', 'shortTool', 'longTool', 'systemMessage', 'nestedSystemMessage']) assertRatio(widths[key], 1, key)
   for (const sample of Object.values(widths).filter(value => typeof value === 'object')) {
     assert.ok(sample.overflow <= 1)
-    assert.equal(sample.timelineOverflowX, 'hidden')
+    assert.equal(sample.timelineOverflowX, 'visible')
   }
   assert.ok(widths.documentOverflow <= 1)
 })
