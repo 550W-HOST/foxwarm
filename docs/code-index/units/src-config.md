@@ -1,6 +1,6 @@
 # Unit: src-config
 
-Files: src/config.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts
+Files: src/config.ts, src/compactionConfig.test.ts, src/setupConfig.ts, src/setupConfig.test.ts, src/modelsConfigSchema.test.ts, src/modelsConfigPath.test.ts, src/workerConfig.test.ts
 Secondary files: templates/models.example.yaml, README.md, docs/virtual-models.md, docs/vector-memory.md
 
 ## Purpose
@@ -15,6 +15,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
   QQ generic-file media limits), guest-agent,
   ASR, and `AppConfig` types.
 - `readAppConfigFile`, `writeAppConfigFile`.
+- `normalizeCompactionConfig`, `COMPACT_KEEP_PERCENT`, and `COMPACT_THRESHOLD_PERCENT` — finite `(0, 1]` keep/trigger fractions with current defaults and the narrow legacy keep-key fallback.
 - `getNormalizedChannelConfigs`, `getChannelConfigById`, `getChannelConfigsByType`, `getDefaultChannelConfigByType`, `getDefaultChannelIdByType`.
 - Resolved path/server/context constants and agent/session path helpers.
 
@@ -63,7 +64,8 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 | WebUI / trigger | enabled unless explicitly `false` |
 | TUI | disabled unless configured or `--tui` is present |
 | context limit | `122880` |
-| recent compact keep fraction (`compactPercent`) | `0.3` |
+| recent compact keep fraction (`compactKeepPercent`) | `0.3` |
+| automatic compact threshold fraction (`compactThresholdPercent`) | `0.85` |
 | block eligibility / force tokens | `3000` / `5000` |
 | block candidate / force-coverage fraction | `0.4` / `0.2` |
 | raw required replacement fraction | `0.2` |
@@ -98,7 +100,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 
 ## Compatibility
 
-- `CONFIG_PATH`, model-root `models`, provider `model`, provider `provider`, and legacy `llm.ollamaBaseUrl` are documented readers. Legacy Ollama roots normalize to a Vector API root ending in `/v1` only when top-level `vector` is absent. The removed app-config `paths.modelsConfigPath` and generic `MODELS_CONFIG_PATH` override are not readers.
+- `CONFIG_PATH`, model-root `models`, provider `model`, provider `provider`, legacy `llm.ollamaBaseUrl`, and legacy `llm.compactPercent` are documented readers. Legacy `compactPercent` supplies the compact keep fraction only when current `llm.compactKeepPercent` is absent; current configuration and schemas expose only `compactKeepPercent`. Legacy Ollama roots normalize to a Vector API root ending in `/v1` only when top-level `vector` is absent. The removed app-config `paths.modelsConfigPath` and generic `MODELS_CONFIG_PATH` override are not readers.
 - Pre-Session-worker code may read and rewrite a never-enabled/cursor-0 Session, after which the current legacy reader restores cursor `0`. A nonzero Worker lineage is not backward-compatible with old saves because they remove the authoritative JSON cursor while SQLite retains its acknowledgement; current code deliberately fails that SQLite-ahead condition closed.
 - `TRIGGER_PORT`, `WEBUI_PORT`, and `WORKSPACE_DIR` remain exported compatibility aliases.
 - New writes use current YAML shapes; no `.env` migration contract exists.

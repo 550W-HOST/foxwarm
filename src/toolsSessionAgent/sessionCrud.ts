@@ -1,6 +1,6 @@
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
-import { COMPACT_PERCENT } from '../config';
+import { COMPACT_KEEP_PERCENT } from '../config';
 import { requireNotIsolated } from '../isolatedCheck';
 import { executeMainManagementTool } from '../mainManagementTools';
 import { ToolArgs, ToolContext } from './helpers';
@@ -125,7 +125,7 @@ export async function tool_stop_session(args: ToolArgs, ctx?: ToolContext) {
   return `Stop signal sent to session \`${sessionId}\`. It will stop after the current tool call completes.`;
 }
 
-function normalizeKeepPercent(value: unknown, defaultPercent = COMPACT_PERCENT): number {
+function normalizeKeepPercent(value: unknown, defaultPercent = COMPACT_KEEP_PERCENT): number {
   if (typeof value !== 'number' || Number.isNaN(value)) {
     return defaultPercent;
   }

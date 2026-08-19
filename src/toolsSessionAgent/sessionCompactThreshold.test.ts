@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from '../sessionManager';
+import { COMPACT_THRESHOLD_PERCENT, resolveModelConfig } from '../config';
 import { tool_set_session_compact_threshold } from '../toolsSessionAgent';
 import { Session } from '../types';
 
@@ -23,7 +24,9 @@ function createBaseSession(id: string): Session {
 
 test('compact threshold defaults to model-derived threshold unless overridden', () => {
   const inherited = sessionManager.getEffectiveCompactThresholdTokens({ model: undefined } as any);
-  assert(inherited > 0);
+  const expectedDefault = Math.max(1, Math.floor(resolveModelConfig(undefined).contextLimit * COMPACT_THRESHOLD_PERCENT));
+  assert.equal(COMPACT_THRESHOLD_PERCENT, 0.85);
+  assert.equal(inherited, expectedDefault);
   assert.equal(sessionManager.getDefaultCompactThresholdTokens({ model: undefined } as any), inherited);
   assert.equal(
     sessionManager.getEffectiveCompactThresholdTokens({ model: undefined, compactThresholdTokens: 4321 } as any),

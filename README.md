@@ -228,12 +228,22 @@ bot:
   httpPort: 3001
   enableWebUI: true
   enableTrigger: true
+llm:
+  compactKeepPercent: 0.3
+  compactThresholdPercent: 0.85
 vector:
   baseUrl: http://localhost:11434/v1
 vectorMaintenance:
   enabled: true
   retentionHours: 24
 ```
+
+`llm.compactKeepPercent` controls the fraction of recent rendered history kept
+by default during compaction. `llm.compactThresholdPercent` controls the
+automatic compaction trigger as a fraction of the resolved model context
+window. Both values must be greater than `0` and at most `1`; their defaults
+are `0.3` and `0.85`, respectively. A positive per-session threshold-token
+override still takes precedence over the global threshold percentage.
 
 Vector search is disabled by default. Omit `vector` or set `vector: false` to
 keep semantic indexing and recall disabled. Supplying a `vector` object opts in

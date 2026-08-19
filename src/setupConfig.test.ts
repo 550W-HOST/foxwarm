@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'os';
 import path from 'path';
 import fs from 'fs-extra';
-import { buildModelsConfigFromSetupForm, writeAppConfigWithChannels, writeRawAppConfig, writeRawModelsConfig } from './setupConfig';
+import { buildModelsConfigFromSetupForm, validateAppConfigYaml, writeAppConfigWithChannels, writeRawAppConfig, writeRawModelsConfig } from './setupConfig';
 import { loadModelsConfigFromObject } from './config';
 
 test('raw models setup save writes the provided YAML text exactly', async () => {
@@ -89,6 +89,43 @@ channels:
 
   assert.equal(await fs.readFile(filePath, 'utf8'), rawYaml);
   await fs.remove(dir);
+});
+
+test('raw app config setup validates current compaction percentages and preserves YAML text', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-setup-compaction-'));
+  const filePath = path.join(dir, 'config.yaml');
+  const rawYaml = `# keep compaction comment
+llm:
+  compactKeepPercent: 0.4
+  compactThresholdPercent: 0.9
+`;
+
+  const parsed = writeRawAppConfig(rawYaml, filePath);
+
+  assert.equal(parsed.llm?.compactKeepPercent, 0.4);
+  assert.equal(parsed.llm?.compactThresholdPercent, 0.9);
+  assert.equal(await fs.readFile(filePath, 'utf8'), rawYaml);
+  await fs.remove(dir);
+});
+
+test('raw app config setup rejects invalid compaction percentages', () => {
+  for (const [field, value] of [
+    ['compactKeepPercent', 'true'],
+    ['compactKeepPercent', '"0.5"'],
+    ['compactKeepPercent', '.inf'],
+    ['compactKeepPercent', '0'],
+    ['compactKeepPercent', '1.1'],
+    ['compactThresholdPercent', 'true'],
+    ['compactThresholdPercent', '"0.85"'],
+    ['compactThresholdPercent', '.nan'],
+    ['compactThresholdPercent', '-0.1'],
+    ['compactThresholdPercent', '1.1'],
+  ]) {
+    assert.throws(
+      () => validateAppConfigYaml(`llm:\n  ${field}: ${value}\n`),
+      new RegExp(`llm\\.${field}.*finite number`),
+    );
+  }
 });
 
 test('models setup form preserves unknown provider and model fields', () => {

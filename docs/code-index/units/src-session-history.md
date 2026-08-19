@@ -12,7 +12,7 @@ Canonical end-to-end contract: [context compaction and recall](../threads/contex
 
 ### Threshold and job state
 
-- `getDefaultCompactThresholdTokens(session)` — 80% of the resolved model context window.
+- `getDefaultCompactThresholdTokens(session)` — `llm.compactThresholdPercent` (85% by default) of the resolved model context window.
 - `getEffectiveCompactThresholdTokens(session)` — positive session override or default.
 - `isAsyncCompactEnabled(session)` — true unless the resolved model explicitly sets `asyncCompact:false`.
 - `hasPendingCompactWork`, `discardPendingCompactWork`, `applyCompletedCompactJob` — compact-job lifecycle.

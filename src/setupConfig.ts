@@ -8,6 +8,7 @@ import {
   ProviderConfigEntry,
   loadModelsConfigFromObject,
   normalizeDbWorkersEnabled,
+  normalizeCompactionConfig,
   normalizeSessionWorkersConfig,
   normalizeVectorConfig,
   normalizeVectorMaintenanceConfig,
@@ -87,6 +88,7 @@ export function validateAppConfigYaml(rawYaml: string): AppConfig {
   }
   normalizeSessionWorkersConfig(config.sessionWorkers);
   normalizeDbWorkersEnabled(config.dbWorkers);
+  normalizeCompactionConfig(config.llm);
   normalizeVectorConfig(config.vector, config.llm?.ollamaBaseUrl);
   normalizeVectorMaintenanceConfig(config.vectorMaintenance);
   return config;

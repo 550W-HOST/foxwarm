@@ -15,7 +15,7 @@ import { buildChildCompletionInstruction } from './session/childSessionReminder'
 import { cloneQueueItem, getManagedSessionState, isManagedSessionLeaseExpired, ManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
 import * as vector from './vector';
 import { VECTOR_ENABLED } from './config';
-import { CATALOG_DB_PATH, CHANNELS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getLegacySessionFrontierPath, type ModelEffort, type ModelsConfig } from './config';
+import { CATALOG_DB_PATH, CHANNELS_FILE, SESSIONS_DIR, COMPACT_KEEP_PERCENT, getAgentDir, getLegacySessionFrontierPath, type ModelEffort, type ModelsConfig } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
 import { normalizeAgentToolRules } from './permissions';
@@ -2046,11 +2046,11 @@ export async function forceIndexSession(sessionId: string): Promise<void> {
   await sessionHistory.forceIndexSession(getSessionHistoryDeps(), sessionId);
 }
 
-export async function compactHistory(sessionId: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Compaction completed.'): Promise<void> {
+export async function compactHistory(sessionId: string, keepPercent: number = COMPACT_KEEP_PERCENT, completionMarker: string = 'Compaction completed.'): Promise<void> {
   await sessionHistory.compactHistory(getSessionHistoryDeps(), sessionId, keepPercent, completionMarker);
 }
 
-export async function compactHistoryWithSummary(sessionId: string, summary: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Manual compaction completed.'): Promise<void> {
+export async function compactHistoryWithSummary(sessionId: string, summary: string, keepPercent: number = COMPACT_KEEP_PERCENT, completionMarker: string = 'Manual compaction completed.'): Promise<void> {
   await sessionHistory.compactHistoryWithSummary(getSessionHistoryDeps(), sessionId, summary, keepPercent, completionMarker);
 }
 
@@ -2727,7 +2727,7 @@ export async function getArchivedBlocks(sessionId: string, options: {
   };
 }
 
-export async function compactSessionToolMessages(sessionId: string, keepPercent: number = COMPACT_PERCENT, thresholdTokens?: number) {
+export async function compactSessionToolMessages(sessionId: string, keepPercent: number = COMPACT_KEEP_PERCENT, thresholdTokens?: number) {
   return sessionHistory.compactToolMessages(getSessionHistoryDeps(), sessionId, keepPercent, thresholdTokens);
 }
 

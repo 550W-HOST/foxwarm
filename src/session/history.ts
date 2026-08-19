@@ -7,7 +7,8 @@ import {
   COMPACT_BLOCK_LEVEL_FORCE_TOKENS,
   COMPACT_BLOCK_LEVEL_MIN_TOKENS,
   COMPACT_MESSAGE_FORCE_COMPACT_FRACTION,
-  COMPACT_PERCENT,
+  COMPACT_KEEP_PERCENT,
+  COMPACT_THRESHOLD_PERCENT,
   resolveModelConfig,
 } from '../config';
 import { estimateSessionTokens, estimateTokenCount } from '../tokenCount';
@@ -86,7 +87,7 @@ export interface ToolNoiseCompactionResult {
 
 export function getDefaultCompactThresholdTokens(session: Pick<Session, 'model'>): number {
   const { contextLimit } = resolveModelConfig(session.model);
-  return Math.max(1, Math.floor(contextLimit * 0.8));
+  return Math.max(1, Math.floor(contextLimit * COMPACT_THRESHOLD_PERCENT));
 }
 
 export function getEffectiveCompactThresholdTokens(session: Pick<Session, 'model' | 'compactThresholdTokens'>): number {
@@ -364,7 +365,7 @@ function toolResponsePruneResult(plan: ToolResponsePrunePlan): ToolNoiseCompacti
 export async function buildToolResponsePrunePlan(
   sessionId: string,
   session: Pick<Session, 'history' | 'persistentMemorySnapshot'>,
-  keepPercent: number = COMPACT_PERCENT,
+  keepPercent: number = COMPACT_KEEP_PERCENT,
 ): Promise<ToolResponsePrunePlan> {
   const snapshotHistory = structuredClone(session.history);
   const splitIndex = resolveCompactionSplitIndex(snapshotHistory, keepPercent);
@@ -519,7 +520,7 @@ function cloneSessionForCompactJob(session: Session, historySnapshot: Message[])
 }
 
 function buildCompactJobSnapshot(session: Session, options: CompactionRunOptions = {}): CompactJobSnapshot | null {
-  const keepPercent = typeof options.keepPercent === 'number' ? options.keepPercent : COMPACT_PERCENT;
+  const keepPercent = typeof options.keepPercent === 'number' ? options.keepPercent : COMPACT_KEEP_PERCENT;
   const completionMarker = options.completionMarker || 'Compaction completed.';
   const completionBroadcastMessage = options.completionBroadcastMessage?.trim() || undefined;
   const compactGuidance = options.compactGuidance?.trim();
@@ -1405,7 +1406,7 @@ export async function applyCompletedCompactJob(deps: SessionHistoryDeps, session
   return applied;
 }
 
-export async function compactHistory(deps: SessionHistoryDeps, sessionId: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Compaction completed.'): Promise<void> {
+export async function compactHistory(deps: SessionHistoryDeps, sessionId: string, keepPercent: number = COMPACT_KEEP_PERCENT, completionMarker: string = 'Compaction completed.'): Promise<void> {
   await runCompactionWithMode(deps, sessionId, {
     keepPercent,
     completionMarker,
@@ -1414,7 +1415,7 @@ export async function compactHistory(deps: SessionHistoryDeps, sessionId: string
   }, 'await');
 }
 
-export async function compactHistoryWithSummary(deps: SessionHistoryDeps, sessionId: string, summary: string, keepPercent: number = COMPACT_PERCENT, completionMarker: string = 'Manual compaction completed.'): Promise<void> {
+export async function compactHistoryWithSummary(deps: SessionHistoryDeps, sessionId: string, summary: string, keepPercent: number = COMPACT_KEEP_PERCENT, completionMarker: string = 'Manual compaction completed.'): Promise<void> {
   if (!summary || !summary.trim()) {
     throw new Error('Summary is required for manual compaction.');
   }
@@ -1516,7 +1517,7 @@ export async function getArchivedMessages(sessionId: string, options: ArchivedMe
 export async function compactToolMessages(
   deps: SessionHistoryDeps,
   sessionId: string,
-  keepPercent: number = COMPACT_PERCENT,
+  keepPercent: number = COMPACT_KEEP_PERCENT,
   _thresholdTokens?: number,
 ): Promise<ToolNoiseCompactionResult> {
   const session = await deps.getExistingSession(sessionId);
@@ -1535,7 +1536,7 @@ export async function tryAutomaticToolResponsePruning(
 ): Promise<boolean> {
   const session = deps.getSessionById(sessionId);
   if (!session) return false;
-  const plan = planOverride || await buildToolResponsePrunePlan(sessionId, session, COMPACT_PERCENT);
+  const plan = planOverride || await buildToolResponsePrunePlan(sessionId, session, COMPACT_KEEP_PERCENT);
   if (plan.replacedFunctionResponses === 0) return false;
   const { contextLimit } = resolveModelConfig(session.model);
   const recoveryTarget = Math.max(1, Math.floor(contextLimit * 0.5));
@@ -1590,7 +1591,7 @@ export async function checkAndCompactIfNeeded(deps: SessionHistoryDeps, sessionI
     logger.info({ currentSize, compactThreshold, sessionThresholdOverride: session.compactThresholdTokens }, 'Auto compact');
     if (await tryAutomaticToolResponsePruning(deps, sessionId)) return;
     await runCompactionWithMode(deps, sessionId, {
-      keepPercent: COMPACT_PERCENT,
+      keepPercent: COMPACT_KEEP_PERCENT,
       completionMarker: 'Compaction completed.',
       startLogMessage: 'Auto compaction starting',
     }, 'auto').catch(e => logger.error(e, 'Auto-compact failed'));
@@ -1615,7 +1616,7 @@ export async function processSessionCompactionRequest(
 
   if (executionMode === 'auto') {
     const session = deps.getSessionById(sessionId);
-    const prunePlan = session ? await buildToolResponsePrunePlan(sessionId, session, COMPACT_PERCENT) : undefined;
+    const prunePlan = session ? await buildToolResponsePrunePlan(sessionId, session, COMPACT_KEEP_PERCENT) : undefined;
     if (prunePlan && await tryAutomaticToolResponsePruning(deps, sessionId, prunePlan)) return;
     if (prunePlan && !hasCompatibleHistoryPrefix(session?.history || [], prunePlan.snapshotHistory)) {
       logger.info({ sessionId }, 'Skipping layered compaction because the automatic maintenance snapshot changed incompatibly');

@@ -25,8 +25,8 @@ Session context owns model-context budgeting, layered compaction and direct acti
 
 ## Current defaults
 
-- Automatic compact threshold: 80% of the resolved model context window.
-- Recent rendered history kept by default: 30% (`llm.compactPercent`, default `0.3`).
+- Automatic compact threshold: 85% of the resolved model context window (`llm.compactThresholdPercent`, default `0.85`).
+- Recent rendered history kept by default: 30% (`llm.compactKeepPercent`, default `0.3`).
 - Raw eligibility: more than 2,000 estimated tokens; default required replacement: 20%.
 - Block level eligibility: 3,000 summary tokens; high-backlog force threshold: 5,000.
 - Candidate block window: oldest 40%; default high-backlog required source-block coverage: 20%.

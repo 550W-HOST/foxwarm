@@ -356,7 +356,8 @@ export const APP_CONFIG_SCHEMA = {
       properties: {
         ollamaBaseUrl: { type: 'string', description: 'Legacy vector endpoint root. Prefer top-level vector.baseUrl.' },
         contextLimit: { type: 'integer', minimum: 1 },
-        compactPercent: { type: 'number', exclusiveMinimum: 0, maximum: 1 },
+        compactKeepPercent: { type: 'number', exclusiveMinimum: 0, maximum: 1, default: 0.3 },
+        compactThresholdPercent: { type: 'number', exclusiveMinimum: 0, maximum: 1, default: 0.85 },
         compactBlockLevelMinTokens: { type: 'integer', minimum: 1 },
         compactBlockLevelForceTokens: { type: 'integer', minimum: 1 },
         compactBlockCandidateFraction: { type: 'number', minimum: 0, maximum: 1 },

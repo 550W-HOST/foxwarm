@@ -4,7 +4,7 @@ import { nodesManager } from '../nodes/manager';
 import { listApprovedNodes, listPendingPairings } from '../nodes/registry';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
-import { COMPACT_PERCENT, HTTP_PORT, MODEL_EFFORTS, resolveModelConfig, type ModelEffort } from '../config';
+import { COMPACT_KEEP_PERCENT, HTTP_PORT, MODEL_EFFORTS, resolveModelConfig, type ModelEffort } from '../config';
 import { commandSessionMessageCount, type CommandSession } from './types';
 
 export function formatTimerDate(timestamp?: number | null): string {
@@ -351,7 +351,7 @@ export async function handleCompactCommand(ctx: ChannelContext, args: string[], 
   if (!sessionId || !session) return
 
   if (args[0] === 'tools') {
-    let keepPercent = COMPACT_PERCENT
+    let keepPercent = COMPACT_KEEP_PERCENT
     if (args.length >= 2) {
       const pct = parseFloat(args[1])
       if (!isNaN(pct) && pct > 0 && pct <= 100) {
@@ -372,7 +372,7 @@ export async function handleCompactCommand(ctx: ChannelContext, args: string[], 
     return
   }
 
-  let keepPercent = COMPACT_PERCENT
+  let keepPercent = COMPACT_KEEP_PERCENT
   if (args.length >= 1) {
     const pct = parseFloat(args[0])
     if (!isNaN(pct) && pct > 0 && pct <= 100) {

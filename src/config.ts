@@ -117,6 +117,8 @@ export const DEFAULT_SESSION_WORKER_IDLE_SECONDS = 60;
 export const MIN_SESSION_WORKER_IDLE_SECONDS = 1;
 export const MAX_SESSION_WORKER_IDLE_SECONDS = 86_400;
 export const DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS = 24;
+export const DEFAULT_COMPACT_KEEP_PERCENT = 0.3;
+export const DEFAULT_COMPACT_THRESHOLD_PERCENT = 0.85;
 
 export type SessionWorkersConfig = boolean | {
   enabled?: boolean;
@@ -148,6 +150,44 @@ export type NormalizedVectorConfig = {
   baseUrl?: string;
   source: 'disabled-default' | 'vector' | 'legacy-ollama';
 };
+
+export type CompactionConfig = {
+  compactKeepPercent?: number;
+  compactThresholdPercent?: number;
+  /** Legacy persisted-config reader. Use compactKeepPercent for current configuration. */
+  compactPercent?: number;
+};
+
+export type NormalizedCompactionConfig = {
+  compactKeepPercent: number;
+  compactThresholdPercent: number;
+};
+
+function normalizeCompactionPercent(value: unknown, field: string, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 1) {
+    throw new Error(`app config \`${field}\` must be a finite number greater than 0 and at most 1.`);
+  }
+  return value;
+}
+
+export function normalizeCompactionConfig(value: CompactionConfig | undefined): NormalizedCompactionConfig {
+  const keepValue = value?.compactKeepPercent !== undefined
+    ? value.compactKeepPercent
+    : value?.compactPercent;
+  return {
+    compactKeepPercent: normalizeCompactionPercent(
+      keepValue,
+      value?.compactKeepPercent !== undefined ? 'llm.compactKeepPercent' : 'llm.compactPercent',
+      DEFAULT_COMPACT_KEEP_PERCENT,
+    ),
+    compactThresholdPercent: normalizeCompactionPercent(
+      value?.compactThresholdPercent,
+      'llm.compactThresholdPercent',
+      DEFAULT_COMPACT_THRESHOLD_PERCENT,
+    ),
+  };
+}
 
 function normalizeAbsoluteHttpUrl(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -309,10 +349,9 @@ export type AppConfig = {
     httpPort?: number;
     enableTUI?: boolean;
   };
-  llm?: {
+  llm?: CompactionConfig & {
     ollamaBaseUrl?: string;
     contextLimit?: number;
-    compactPercent?: number;
     compactBlockLevelMinTokens?: number;
     compactBlockLevelForceTokens?: number;
     compactBlockCandidateFraction?: number;
@@ -475,6 +514,7 @@ function resolvePathValue(value: string | undefined, fallback: string): string {
 
 export const APP_CONFIG = loadAppConfig();
 
+export const COMPACTION_CONFIG = normalizeCompactionConfig(APP_CONFIG.llm);
 export const VECTOR_CONFIG = normalizeVectorConfig(APP_CONFIG.vector, APP_CONFIG.llm?.ollamaBaseUrl);
 export const VECTOR_ENABLED = VECTOR_CONFIG.enabled;
 export const VECTOR_BASE_URL = VECTOR_CONFIG.baseUrl;
@@ -559,7 +599,8 @@ export const WEBUI_PORT = HTTP_PORT; // For backward compatibility
 
 // Context and compaction settings
 export const CONTEXT_LIMIT = APP_CONFIG.llm?.contextLimit || 122880; // 120K tokens
-export const COMPACT_PERCENT = APP_CONFIG.llm?.compactPercent || 0.3;
+export const COMPACT_KEEP_PERCENT = COMPACTION_CONFIG.compactKeepPercent;
+export const COMPACT_THRESHOLD_PERCENT = COMPACTION_CONFIG.compactThresholdPercent;
 export const COMPACT_BLOCK_LEVEL_MIN_TOKENS = APP_CONFIG.llm?.compactBlockLevelMinTokens ?? 3000;
 export const COMPACT_BLOCK_LEVEL_FORCE_TOKENS = APP_CONFIG.llm?.compactBlockLevelForceTokens ?? 5000;
 export const COMPACT_BLOCK_CANDIDATE_FRACTION = APP_CONFIG.llm?.compactBlockCandidateFraction ?? 0.4;

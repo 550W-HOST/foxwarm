@@ -134,7 +134,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `./session/messageVisibility` — redacting display-only content for model consumption
 - `./session/compactPlan` — compact plan tool name constant
 - `./contextPreviewRenderer` — shared total-budget renderer for recall/get_session_messages/vector-query previews (tool folding, filters, match-centered snippets)
-- `./config` — agent directory resolution, model config, constants (`AGENTS_DIR`, `COMPACT_PERCENT`)
+- `./config` — agent directory resolution, model config, constants (`AGENTS_DIR`, `COMPACT_KEEP_PERCENT`)
 - `./llm` — LLM interaction layer, normalizeSystemPromptFiles
 - `./skills` — skill listing and document loading
 - `./timers` — timer CRUD and view types

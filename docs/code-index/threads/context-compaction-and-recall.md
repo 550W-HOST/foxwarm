@@ -8,10 +8,10 @@ This thread owns the end-to-end contract that keeps long sessions within model l
 
 ### 1. Trigger and snapshot
 
-- `checkAndCompactIfNeeded()` compares final usage with the effective compact threshold. The default is 80% of the resolved model context window; a positive per-session threshold overrides it.
+- `checkAndCompactIfNeeded()` compares final usage with the effective compact threshold. The default is `llm.compactThresholdPercent` (85%) of the resolved model context window; a positive per-session threshold overrides it.
 - At that automatic trigger, Foxwarm first dry-runs one historical function-response pruning pass against the complete authoritative history. It uses the ordinary oldest/compactable split and atomic tool boundary, keeps recent/current activity untouched, and never prunes function-call arguments.
 - Explicit compact requests enter `processSessionCompactionRequest()`.
-- The default compact request keeps the newest 30% of rendered history (`llm.compactPercent`, default `0.3`).
+- The default compact request keeps the newest 30% of rendered history (`llm.compactKeepPercent`, default `0.3`).
 - Async and awaited modes use the same snapshot/job/result path. Planning mutates a transient session clone; live state changes only during a compatible commit.
 - For async-capable models, an explicit request starts snapshot planning immediately even while the live session is busy; planning is not a session queue item. Only the ready `compact-commit` enters the router queue for safe application. A busy explicit request on a model with `asyncCompact:false` reports background compaction unavailable instead of storing hidden deferred work; idle explicit and normal end-of-turn awaited compaction remain supported.
 
