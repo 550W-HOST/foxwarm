@@ -944,6 +944,24 @@ test('MessageRouter LLM retry notifier appends one display-only message then upd
       reason: 'upstream bad gateway',
     });
     await notify({
+      attempt: 3,
+      nextAttempt: 4,
+      maxRetries: 5,
+      delayMs: 5000,
+      kind: 'http-error',
+      status: '500 Internal Server Error',
+      reason: 'upstream bad gateway',
+    });
+    await notify({
+      attempt: 4,
+      nextAttempt: 5,
+      maxRetries: 5,
+      delayMs: 5000,
+      kind: 'http-error',
+      status: '502 Bad Gateway',
+      reason: 'upstream bad gateway',
+    });
+    await notify({
       attempt: 5,
       maxRetries: 5,
       final: true,
@@ -959,18 +977,123 @@ test('MessageRouter LLM retry notifier appends one display-only message then upd
     const noticeText = session.history[0].parts[0].text || '';
     assert.match(noticeText, /^⚠️ \[LLM retry\]\nAttempt 1\/5 failed:/);
     assert.match(noticeText, /\nAttempt 2\/5 failed: 500 Internal Server Error: upstream bad gateway\. Retry in 5 seconds/);
+    assert.match(noticeText, /\nAttempt 3\/5 failed: \(same error\)\. Retry in 5 seconds/);
+    assert.match(noticeText, /\nAttempt 4\/5 failed: 502 Bad Gateway: upstream bad gateway\. Retry in 5 seconds/);
     assert.match(noticeText, /\nAttempt 5\/5 failed: final upstream timeout\. No more retries\./);
-    assert.equal(broadcasts.length, 3);
+    assert.equal(broadcasts.length, 2);
     assert.deepEqual(broadcasts[0].options.excludePlatforms, ['webui']);
     assert.match(broadcasts[0].text, /^⚠️ \[LLM retry\]\nAttempt 1\/5 failed:/);
     assert.match(broadcasts[0].text, /\nRetry in 2 seconds\.\.\./);
-    assert.match(broadcasts[2].text, /No more retries/);
-    assert.equal(historyUpdates.length, 3);
-    assert.equal(historyUpdates[0].__meta?.seq, historyUpdates[2].__meta?.seq);
+    assert.match(broadcasts[1].text, /No more retries/);
+    assert.equal(session.history[0].__meta?.retry?.reason, 'final upstream timeout');
+    assert.equal(session.history[0].__meta?.retry?.status, undefined);
+    assert.equal(historyUpdates.length, 5);
+    assert.equal(historyUpdates[0].__meta?.seq, historyUpdates[4].__meta?.seq);
   } finally {
     (sessionManager as any).appendSessionMessage = originalAppend;
     (sessionManager as any).saveSession = originalSave;
     (sessionManager as any).notifyHistoryUpdate = originalNotify;
+  }
+});
+
+test('MessageRouter LLM retry notifier sends only the first ordinary-channel snippet when retry later succeeds', async () => {
+  const router = new MessageRouter() as any;
+  const session: Session = {
+    id: 'retry_notice_success_session',
+    history: [],
+    persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false,
+    queue: [],
+    meta: { lastMessageTime: Date.now() },
+  } as Session;
+  const broadcasts: string[] = [];
+  const host = (router.turnRunner as any).host;
+  const originalAppend = host.appendSessionMessage;
+  const originalSave = host.saveSession;
+  const originalNotify = host.notifyHistoryUpdate;
+  host.appendSessionMessage = async (targetSession: Session, message: Message) => {
+    message.__meta = { ...(message.__meta || {}), timestamp: message.__meta?.timestamp || Date.now(), seq: 1 };
+    targetSession.history.push(message);
+  };
+  host.saveSession = async () => {};
+  host.notifyHistoryUpdate = () => {};
+  const notify = router.turnRunner.createLlmRetryNotifier(
+    session,
+    (text: string) => broadcasts.push(text),
+  );
+
+  try {
+    await notify({ attempt: 1, nextAttempt: 2, maxRetries: 3, delayMs: 1000, kind: 'request-error', reason: 'temporary outage' });
+    await notify({ attempt: 2, nextAttempt: 3, maxRetries: 3, delayMs: 2000, kind: 'request-error', reason: 'second outage' });
+
+    assert.equal(broadcasts.length, 1);
+    assert.match(broadcasts[0], /Attempt 1\/3 failed: temporary outage/);
+    assert.equal(session.history[0].__meta?.retry?.reason, 'second outage');
+  } finally {
+    host.appendSessionMessage = originalAppend;
+    host.saveSession = originalSave;
+    host.notifyHistoryUpdate = originalNotify;
+  }
+});
+
+test('MessageRouter LLM retry notifier sends active WeWork intermediates only to the current stream target', async () => {
+  const router = new MessageRouter() as any;
+  const session: Session = {
+    id: 'retry_notice_wework_session',
+    history: [],
+    persistentMemorySnapshot: '',
+    stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
+    busy: false,
+    queue: [],
+    meta: { lastMessageTime: Date.now() },
+  } as Session;
+  const general: Array<{ text: string; options: any }> = [];
+  const all: Array<{ text: string; options: any }> = [];
+  const host = (router.turnRunner as any).host;
+  const originalAppend = host.appendSessionMessage;
+  const originalSave = host.saveSession;
+  const originalNotify = host.notifyHistoryUpdate;
+  host.appendSessionMessage = async (targetSession: Session, message: Message) => {
+    message.__meta = { ...(message.__meta || {}), timestamp: message.__meta?.timestamp || Date.now(), seq: 1 };
+    targetSession.history.push(message);
+  };
+  host.saveSession = async () => {};
+  host.notifyHistoryUpdate = () => {};
+  session.broadcast = (text: string, options?: any) => all.push({ text, options });
+  let turnOptions = {
+    weworkStreamId: 'stream-a',
+    weworkStreamChannelId: 'wework-a',
+    weworkStreamConversationId: 'chat-a',
+  };
+  const notify = router.turnRunner.createLlmRetryNotifier(
+    session,
+    (text: string, options?: any) => general.push({ text, options }),
+    () => turnOptions,
+  );
+
+  try {
+    await notify({ attempt: 1, nextAttempt: 2, maxRetries: 4, delayMs: 1000, kind: 'request-error', reason: 'outage one' });
+    await notify({ attempt: 2, nextAttempt: 3, maxRetries: 4, delayMs: 1000, kind: 'request-error', reason: 'outage two' });
+    turnOptions = {
+      weworkStreamId: 'stream-b',
+      weworkStreamChannelId: 'wework-b',
+      weworkStreamConversationId: 'chat-b',
+    };
+    await notify({ attempt: 3, nextAttempt: 4, maxRetries: 4, delayMs: 1000, kind: 'request-error', reason: 'outage three' });
+    await notify({ attempt: 4, maxRetries: 4, final: true, kind: 'request-error', reason: 'outage final' });
+
+    assert.equal(general.length, 2);
+    assert.equal(all.length, 2);
+    assert.deepEqual(all[0].options.targetChannel, { channelId: 'wework-a', conversationId: 'chat-a' });
+    assert.deepEqual(all[1].options.targetChannel, { channelId: 'wework-b', conversationId: 'chat-b' });
+    assert.equal(all[0].options.weworkStreamId, 'stream-a');
+    assert.equal(all[1].options.weworkStreamId, 'stream-b');
+    assert.deepEqual(all.map(event => event.options.excludePlatforms), [['webui'], ['webui']]);
+  } finally {
+    host.appendSessionMessage = originalAppend;
+    host.saveSession = originalSave;
+    host.notifyHistoryUpdate = originalNotify;
   }
 });
 
@@ -1006,7 +1129,7 @@ test('MessageRouter LLM final failure keeps retry notice display-only without ap
     assert.match(session.history[1].parts[0].text || '', /Attempt 5\/5 failed: upstream exhausted\. No more retries\./);
     assert.equal(session.history.some(message => message.role === 'model' && message.modelVisible !== false && /^Error:/.test(message.parts[0]?.text || '')), false);
     assert.equal(broadcasts.some(event => /API request failed|^Error:/m.test(event.text)), false);
-    assert.equal(broadcasts.some(event => /No more retries/.test(event.text)), true);
+    assert.equal(broadcasts.filter(event => /No more retries/.test(event.text)).length, 1);
   } finally {
     (llm as any).chat = originalChat;
     await sessionManager.deleteSession(session.id).catch(() => {});

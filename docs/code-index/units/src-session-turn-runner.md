@@ -19,6 +19,8 @@ One turn-specific `SessionTurnHost` exposes only effects called by the runner. `
 - `isSessionTurnIncomplete(messages)` — pure derived-history classifier shared semantically with WebUI Continue presentation.
 - `shouldBroadcastChannelText(text)` — shared final-response visibility predicate.
 
+Retry notices are coalesced only for presentation within one `llm.chat` request: the persisted notice still records every attempt, and an immediately repeated bounded status/reason descriptor is displayed as `(same error)` without changing retry metadata or terminal error handling. Ordinary attached channels receive the first retry and any final failure; intermediate retry snippets are sent only to the active WeWork stream-card target, when present, using the current turn channel options.
+
 ## Canonical flow
 
 1. `processSessionQueue` prevents reentry, loads the live session, and awaits the complete busy-owner persistence claim before entering its iterative action loop. A rejected claim cannot start turn work or schedule a finish-window processor.

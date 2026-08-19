@@ -65,6 +65,8 @@ function formatRetryChannelSnippet(event: llm.LlmRetryEvent): string {
   return `⚠️ [LLM retry]\n${failureText}\n${retryText}`;
 }
 
+type RetryErrorDescriptor = Pick<llm.LlmRetryEvent, 'status' | 'reason'>;
+
 function mergeExcludePlatforms(options: any, platforms: string[]): any {
   const excludePlatforms = Array.from(new Set([...(options?.excludePlatforms || []), ...platforms]));
   return { ...(options || {}), excludePlatforms };
@@ -331,11 +333,24 @@ export class SessionTurnRunner {
     };
   }
 
-  private createLlmRetryNotifier(session: Session, broadcast: Session['broadcast'] | undefined): (event: llm.LlmRetryEvent) => Promise<void> {
+  private createLlmRetryNotifier(
+    session: Session,
+    broadcast: Session['broadcast'] | undefined,
+    getCurrentTurnChannelOptions: () => Record<string, any> = () => ({}),
+  ): (event: llm.LlmRetryEvent) => Promise<void> {
     let retryMessage: Message | null = null;
+    let previousError: RetryErrorDescriptor | undefined;
+    let eventCount = 0;
 
     return async (event: llm.LlmRetryEvent) => {
-      const chunk = formatRetryStatus(event, retryMessage === null);
+      const initial = eventCount === 0;
+      const sameError = previousError !== undefined
+        && previousError.status === event.status
+        && previousError.reason === event.reason;
+      const displayEvent = sameError ? { ...event, status: undefined, reason: '(same error)' } : event;
+      previousError = { status: event.status, reason: event.reason };
+      eventCount += 1;
+      const chunk = formatRetryStatus(displayEvent, initial);
       if (!retryMessage) {
         retryMessage = createDisplayOnlyModelMessage(chunk, {
           noticeType: 'llm-retry',
@@ -376,8 +391,26 @@ export class SessionTurnRunner {
         this.host.notifyHistoryUpdate(session.id, retryMessage);
       }
 
-      if (broadcast) {
-        broadcast(formatRetryChannelSnippet(event), mergeExcludePlatforms({ parse_mode: 'Markdown' }, ['webui']));
+      if (!broadcast) return;
+
+      const channelSnippet = formatRetryChannelSnippet(displayEvent);
+      const channelOptions = getCurrentTurnChannelOptions();
+      const targetChannel = this.getTurnTargetChannel(channelOptions);
+      if (initial || event.final === true) {
+        // The ordinary broadcast is intentionally sent only for the first
+        // attempt and terminal failure. Its existing turn binding naturally
+        // includes an active WeWork stream when one is present.
+        broadcast(channelSnippet, mergeExcludePlatforms({ parse_mode: 'Markdown' }, ['webui']));
+      } else if (channelOptions.weworkStreamId && targetChannel) {
+        // Intermediate retry updates are meaningful only for the active
+        // WeWork stream-card target. Avoid sending them to every attached
+        // non-streaming channel.
+        this.host.broadcast(session, channelSnippet, {
+          ...channelOptions,
+          parse_mode: 'Markdown',
+          excludePlatforms: ['webui'],
+          targetChannel,
+        });
       }
     };
   }
@@ -985,7 +1018,7 @@ export class SessionTurnRunner {
         let result;
         try {
           result = await this.host.chat(parts, session, iteration, {
-            onRetry: this.createLlmRetryNotifier(session, broadcast),
+            onRetry: this.createLlmRetryNotifier(session, broadcast, () => turnChannelOptions),
             turnId,
           });
         } catch (e: any) {

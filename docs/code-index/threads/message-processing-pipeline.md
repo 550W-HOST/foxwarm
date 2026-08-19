@@ -84,7 +84,7 @@ Busy-time input queues silently; UI/channel queue state is presented by current 
 
 ### D-pipeline-display-only-retries
 
-Retries are observable but not model-visible. One updatable display-only notice plus channel snippets is the preferred presentation.
+Retries are observable but not model-visible. One updatable display-only notice plus channel snippets is the preferred presentation. Within one physical request, a consecutive retry with the same bounded status-and-reason descriptor renders `(same error)` in the display notice and channel snippet while retaining the actual event metadata. Ordinary channels receive only the first and terminal-failure snippets; an active WeWork stream-card target also receives intermediate-only snippets with its current exact target binding. WebUI remains history/SSE-only for this presentation.
 
 ### D-pipeline-worker-intermediate-model-text
 
