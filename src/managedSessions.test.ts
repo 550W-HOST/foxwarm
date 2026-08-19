@@ -225,7 +225,7 @@ test('managed session step can yield after the first tool batch', async () => {
       const toolCall = {
         id: 'managed_tool_call_1',
         name: 'search_tools',
-        args: { query: 'read file', sources: ['builtin'], limit: 1, includeSchema: false },
+        args: { query: 'read file', sources: ['node'], limit: 1, includeSchema: false },
       };
       await sessionManager.appendSessionMessage(activeSession, {
         role: 'model',

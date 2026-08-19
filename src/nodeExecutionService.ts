@@ -8,7 +8,7 @@ import * as sessionManager from './sessionManager';
 import { nodesManager } from './nodes/manager';
 import type { Session } from './types';
 import { getAgentDir } from './config';
-import { checkToolPermission } from './isolatedCheck';
+import { checkToolPermission, isToolVisibleForSession } from './isolatedCheck';
 import { createHash } from 'node:crypto';
 
 export type NodeExecutionRoutingSnapshot = {
@@ -194,7 +194,7 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
       const filter = input.nodeId === undefined ? undefined : requireBoundedString(input.nodeId, 'nodeId', 128);
       if (input.currentNode !== undefined) requireBoundedString(input.currentNode, 'currentNode', 128);
       const isolated = sessionManager.isSessionEffectivelyIsolated(source);
-      const allowed = isolated ? new Set([sessionManager.getAgentIsolationNode(source.agent || 'main') || source.currentNode || 'master', source.currentNode].filter(Boolean)) : null;
+      const allowed = isolated ? new Set(['master', sessionManager.getAgentIsolationNode(source.agent || 'main') || source.currentNode || 'master', source.currentNode].filter(Boolean)) : null;
       const nodes = nodesManager.listNodesWithTools().filter(node => (!filter || node.id === filter) && (!allowed || allowed.has(node.id))).slice(0, 100);
       const activity = new Map(nodesManager.listNodes().map(node => [node.id, node.lastActivity]));
       const output: NodeTopologyListResponse['nodes'] = []; let totalBytes = Buffer.byteLength('{"nodes":[]}', 'utf8');
@@ -205,6 +205,7 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
           const descriptors = Object.getOwnPropertyDescriptors(tool);
           const name = descriptors.name && 'value' in descriptors.name ? descriptors.name.value : undefined;
           if (typeof name !== 'string' || !name || name.length > 128) continue;
+          if (!isToolVisibleForSession(source, { source: 'node', node: node.id, tool: name }, node.id)) continue;
           const descriptionValue = descriptors.description && 'value' in descriptors.description ? descriptors.description.value : undefined;
           const description = typeof descriptionValue === 'string' ? descriptionValue.slice(0, 2000) : undefined;
           const parametersValue = descriptors.parameters && 'value' in descriptors.parameters ? descriptors.parameters.value : undefined;
@@ -244,7 +245,7 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
       const sourceNode = requireBoundedString(input.sourceNode, 'sourceNode', 128); const sourcePath = requireBoundedPath(input.sourcePath, 'sourcePath');
       const targetNode = requireBoundedString(input.targetNode, 'targetNode', 128); const targetPath = requireBoundedPath(input.targetPath, 'targetPath');
       if (input.overwrite !== undefined && typeof input.overwrite !== 'boolean') throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'overwrite must be a boolean.');
-      await checkToolPermission('copy_between_nodes', sourceSessionId, 'master', { sourceNode, sourcePath, targetNode, targetPath, overwrite: input.overwrite === true });
+      await checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, sourceSessionId, 'master', { sourceNode, sourcePath, targetNode, targetPath, overwrite: input.overwrite === true });
       if (sourceNode !== 'master') await requireNodeExecutionTarget(sourceSessionId, sourceNode);
       if (targetNode !== 'master') await requireNodeExecutionTarget(sourceSessionId, targetNode);
       const file = await nodesManager.readFileFromNode(sourceNode, sourcePath, sourceSessionId);

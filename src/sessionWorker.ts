@@ -19,6 +19,7 @@ import { initializeSessionWorkerPublication, publishCommitted, shutdownSessionWo
 import { deliverCommittedFinal, deliverIntermediateText, initializeSessionTurnDelivery, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
 import { shutdownToolScriptRuntime } from './toolscript';
 import { VECTOR_ENABLED } from './config';
+import * as agentMetadata from './session/agentMetadata';
 
 async function start(): Promise<void> {
   const sessionId = process.env.FOXWARM_SESSION_WORKER_SESSION_ID || '';
@@ -37,7 +38,11 @@ async function start(): Promise<void> {
   let catalogStub: SessionWorkerHostDependencies['catalogStub'];
   try { catalogStub = JSON.parse(process.env.FOXWARM_SESSION_WORKER_CATALOG_STUB || '{}'); }
   catch { throw new Error('Session worker catalog stub is invalid JSON.'); }
+  let metadataSnapshot: agentMetadata.AgentMetadata;
+  try { metadataSnapshot = JSON.parse(process.env.FOXWARM_SESSION_WORKER_AGENT_METADATA || '{}'); }
+  catch { throw new Error('Session worker agent metadata snapshot is invalid JSON.'); }
   const gate = new SessionWorkerActivationGate();
+  agentMetadata.installAgentMetadataSnapshotForWorker(catalogStub?.agent || 'main', metadataSnapshot);
   const host = new SessionWorkerHost(identity, store, {
     catalogStub,
     publishCommitted: projection => publishCommitted(identity, projection),

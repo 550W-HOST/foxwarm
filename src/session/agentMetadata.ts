@@ -4,6 +4,7 @@ import { logger } from '../common';
 import { AGENTS_FILE, getAgentDir } from '../config';
 import { Session } from '../types';
 import { DiskJsonData } from '../utils/diskJsonData';
+import { AgentToolRule, normalizeAgentToolRules } from '../permissions';
 
 function getSessionSystemPromptOptions(session: Session): { agentName: string; sessionId: string; systemPromptFiles?: string[] } {
   return {
@@ -17,6 +18,7 @@ export interface AgentMetadata {
   isolated?: boolean;
   isolatedNode?: string;
   inherit?: string;
+  toolRules?: AgentToolRule[];
   [key: string]: any;
 }
 
@@ -58,12 +60,18 @@ export function resetAgentMetadataForTests(): void {
   agentMetadata.clear();
 }
 
+export function installAgentMetadataSnapshotForWorker(agentName: string, meta: AgentMetadata): void {
+  agentMetadata.set(agentName, normalizeAgentMetadata(meta));
+}
+
 function normalizeAgentMetadata(meta: AgentMetadata): AgentMetadata {
   const nextMeta = { ...meta };
   const isolatedNode = typeof meta.isolatedNode === 'string' && meta.isolatedNode.trim()
     ? meta.isolatedNode.trim()
     : undefined;
   delete nextMeta.skills;
+  if (meta.toolRules !== undefined) nextMeta.toolRules = normalizeAgentToolRules(meta.toolRules);
+  else delete nextMeta.toolRules;
   if (nextMeta.isolated) {
     if (isolatedNode) nextMeta.isolatedNode = isolatedNode;
   } else {
@@ -81,27 +89,36 @@ async function saveAgentMetadata(): Promise<void> {
 }
 
 export async function loadAgentMetadata(): Promise<void> {
-  agentMetadata.clear();
   const loaded = await agentMetadataStore.loadFirstAvailable();
-  if (loaded) {
-    try {
-      const data = loaded.data;
-      for (const [agentName, meta] of Object.entries(data)) {
-        agentMetadata.set(agentName, normalizeAgentMetadata(meta as AgentMetadata));
-      }
-      if (loaded.source !== agentMetadataStore.filePath) {
-        logger.warn({ source: loaded.source }, 'Recovering agent metadata from fallback source');
-        await agentMetadataStore.write(data);
-      }
-      logger.info({ count: agentMetadata.size }, 'Agent metadata loaded');
-    } catch (e) {
-      logger.error({ err: e }, 'Failed to load agent metadata');
-    }
+  if (!loaded) {
+    logger.info({ count: agentMetadata.size }, 'Agent metadata unavailable; preserving current authority snapshot');
+    return;
   }
+  const data = loaded.data;
+  const normalizedEntries = Object.entries(data).map(([agentName, meta]) => [agentName, normalizeAgentMetadata(meta as AgentMetadata)] as const);
+  if (loaded.source !== agentMetadataStore.filePath) {
+    logger.warn({ source: loaded.source }, 'Recovering agent metadata from fallback source');
+    await agentMetadataStore.write(Object.fromEntries(normalizedEntries));
+  }
+  agentMetadata.clear();
+  for (const [agentName, meta] of normalizedEntries) agentMetadata.set(agentName, meta);
+  logger.info({ count: agentMetadata.size }, 'Agent metadata loaded');
+}
+
+export async function refreshAgentMetadata(agentName: string): Promise<void> {
+  const loaded = await agentMetadataStore.loadFirstAvailable();
+  if (!loaded) return;
+  const raw = loaded?.data?.[agentName];
+  if (raw === undefined) return;
+  agentMetadata.set(agentName, normalizeAgentMetadata(raw as AgentMetadata));
 }
 
 export function getAgentMetadata(agentName: string): AgentMetadata {
   return agentMetadata.get(agentName) || {};
+}
+
+export function getAgentToolRules(agentName: string): AgentToolRule[] {
+  return getAgentMetadata(agentName).toolRules || [];
 }
 
 export function getAgentIsolationNode(agentName: string): string | undefined {
@@ -124,6 +141,12 @@ export function isSessionEffectivelyIsolated(session?: Session | null): boolean 
 export async function setAgentMetadata(agentName: string, meta: AgentMetadata): Promise<void> {
   agentMetadata.set(agentName, normalizeAgentMetadata(meta));
   await saveAgentMetadata();
+}
+
+export async function setAgentToolRules(agentName: string, toolRules: unknown): Promise<number> {
+  const normalized = normalizeAgentToolRules(toolRules);
+  await setAgentMetadata(agentName, { ...getAgentMetadata(agentName), toolRules: normalized });
+  return normalized.length;
 }
 
 export async function refreshSessionSnapshot(deps: AgentMetadataDeps, sessionId: string): Promise<{ sessionId: string; agentName: string }> {
@@ -218,7 +241,8 @@ export async function setAgentIsolation(
   deps: AgentMetadataDeps,
   agentName: string,
   isolatedNode?: string,
-): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string }> {
+  toolRules?: unknown,
+): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string; toolRuleCount: number }> {
   deps.validateAgentName(agentName);
 
   const agentDir = getAgentDir(agentName);
@@ -228,6 +252,7 @@ export async function setAgentIsolation(
 
   const currentMeta = getAgentMetadata(agentName);
   const nextMeta = { ...currentMeta };
+  if (toolRules !== undefined) nextMeta.toolRules = normalizeAgentToolRules(toolRules);
   const normalizedNode = isolatedNode && String(isolatedNode).trim()
     ? String(isolatedNode).trim()
     : undefined;
@@ -259,5 +284,5 @@ export async function setAgentIsolation(
     affectedSessions.push(session.id);
   }
 
-  return { affectedSessions, isolated: !!normalizedNode, node: normalizedNode };
+  return { affectedSessions, isolated: !!normalizedNode, node: normalizedNode, toolRuleCount: nextMeta.toolRules?.length || 0 };
 }

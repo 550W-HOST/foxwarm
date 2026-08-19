@@ -1,6 +1,45 @@
 import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from '../../packages/shared/dist/persistentExec';
 import { COMPACT_PLAN_TOOL_DEFINITION } from '../session/compactPlan';
+import { MAX_AGENT_TOOL_RULES, MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES } from '../permissions';
 
+const TOOL_RULES_SCHEMA = {
+    type: 'array',
+    maxItems: MAX_AGENT_TOOL_RULES,
+    description: 'Optional exact replacement rules for this agent only. Use [] to clear. Rules are active only while the agent is isolated.',
+    items: {
+        oneOf: [
+            {
+                type: 'object', additionalProperties: false,
+                properties: {
+                    effect: { type: 'string', enum: ['allow', 'deny'] },
+                    source: { type: 'string', enum: ['builtin'] },
+                    tool: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                },
+                required: ['effect', 'source', 'tool'],
+            },
+            {
+                type: 'object', additionalProperties: false,
+                properties: {
+                    effect: { type: 'string', enum: ['allow', 'deny'] },
+                    source: { type: 'string', enum: ['node'] },
+                    node: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                    tool: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                },
+                required: ['effect', 'source', 'node', 'tool'],
+            },
+            {
+                type: 'object', additionalProperties: false,
+                properties: {
+                    effect: { type: 'string', enum: ['allow', 'deny'] },
+                    source: { type: 'string', enum: ['mcp'] },
+                    server: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                    tool: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                },
+                required: ['effect', 'source', 'server', 'tool'],
+            },
+        ],
+    },
+};
 
 export const definitions = [
         {
@@ -622,7 +661,7 @@ Example:
         {
             name: 'search_tools',
             defaultInject: true,
-            description: 'Search or list callable tools across builtin, MCP, and remote-node sources. Builtin results include file/edit tools, exec, session/channel tools, vector/archive tools, timers, and wrapper tools such as MCP/node discovery helpers. Prefer this unified catalog before calling long-tail tools via call_tool; load the timer-automation skill before using timer tools and the mcp-management skill before changing MCP server configuration. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falls back to `master` when no current node is available, instead of listing every node). Example search_tools calls: `{query:"read file", sources:["builtin"]}` or `{query:"screenshot android", sources:["node"]}`.',
+            description: 'Search or list callable tools across builtin, MCP, and node sources. Builtin results contain Foxwarm control/session/management tools; Node results contain environment capabilities such as read/write/edit/apply_patch/exec/browse and node-advertised tools. Prefer this unified catalog before calling long-tail tools via call_tool; load the timer-automation skill before using timer tools and the mcp-management skill before changing MCP server configuration. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falling back to `master` when the session has no selected node rather than listing every node). Example search_tools calls: `{query:"read file", sources:["node"]}` or `{query:"session status", sources:["builtin"]}`.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -642,16 +681,16 @@ Example:
         {
             name: 'call_tool',
             defaultInject: true,
-            description: 'Unified tool caller for builtin, MCP, and remote-node tools. Prefer toolId returned by search_tools; explicit source/name/server/nodeId fields are also accepted. Put the target tool arguments inside `args` when visible, or use `argsJson` as a JSON object string fallback when the provider hides free-form object fields. Example using toolId: `{toolId:"builtin:read", args:{filePath:"README.md"}}` or `{toolId:"builtin:read", argsJson:"{\\"filePath\\":\\"README.md\\"}"}`. Example using explicit MCP fields: `{source:"mcp", server:"github", name:"search_repos", args:{query:"foxwarm"}}`. Example using explicit node fields: `{source:"node", nodeId:"android-node", name:"android_screenshot", args:{inline:true}}`.',
+            description: 'Unified tool caller for builtin, MCP, and node tools. Builtin identifies Foxwarm control/session/management tools; read/write/edit/apply_patch/exec/browse_* are node capabilities and must use source=node. Prefer toolId returned by search_tools; explicit source/name/server/nodeId fields are also accepted. For source=node, omitting nodeId targets the current node. Put target arguments inside `args`, or use `argsJson` as a JSON object string fallback. Example current-node read: `{source:"node", name:"read", args:{filePath:"README.md"}}`. Example MCP call: `{source:"mcp", server:"github", name:"search_repos", args:{query:"foxwarm"}}`.',
             parameters: {
                 type: 'object',
                 properties: {
-                    toolId: { type: 'string', description: 'Preferred unified tool identifier returned by search_tools (for example builtin:read, mcp:server/tool, node:node-id/tool).' },
+                    toolId: { type: 'string', description: 'Preferred unified tool identifier returned by search_tools (for example builtin:list_timers, mcp:server/tool, node:node-id/tool).' },
                     source: { type: 'string', enum: ['builtin', 'mcp', 'node'], description: 'Explicit source when not using toolId.' },
                     name: { type: 'string', description: 'Tool name when not using toolId.' },
                     server: { type: 'string', description: 'MCP server name; required when source=\"mcp\" and toolId is not provided.' },
-                    nodeId: { type: 'string', description: 'Remote node id for source=node.' },
-                    args: { type: 'object', description: 'Wrapper object containing the target tool arguments. Example: for builtin read, use `args: { filePath: "README.md" }`. Prefer this when visible.', additionalProperties: true },
+                    nodeId: { type: 'string', description: 'Node id for source=node. Omit or use `current` for the session current node.' },
+                    args: { type: 'object', description: 'Wrapper object containing the target tool arguments. Prefer this when visible.', additionalProperties: true },
                     argsJson: { type: 'string', description: 'JSON object string fallback for target tool arguments, for providers that do not expose free-form object fields. Example: `{"filePath":"README.md"}`. Used when `args` is not available.' }
                 }
             }
@@ -738,33 +777,6 @@ Example:
             }
         },
         {
-            name: 'remote_node',
-            description: 'Query and execute tools from dynamically registered remote nodes (browser-extension, android, etc). This is for remote hardware/browser nodes, NOT for MCP servers. Use this to discover what tools are available from connected remote nodes, then call them. Example: First call with action="list" to see available nodes and their tools, then call with action="call" to execute a specific tool on a remote node.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    action: {
-                        type: 'string',
-                        enum: ['list', 'call'],
-                        description: 'Action: "list" to see all connected remote nodes and their tools, "call" to execute a specific tool on a remote node'
-                    },
-                    nodeId: {
-                        type: 'string',
-                        description: 'Node ID (get from list action, required for call action)'
-                    },
-                    tool: {
-                        type: 'string',
-                        description: 'Tool name to call (required when action=call)'
-                    },
-                    args: {
-                        type: 'object',
-                        description: 'Tool arguments as key-value pairs (required when action=call)'
-                    }
-                },
-                required: ['action']
-            }
-        },
-        {
             name: 'mcp_config',
             description: 'Manage MCP server configuration through the authoritative live runtime. Successful changes apply immediately to subsequent MCP listing, discovery, and calls; no Foxwarm restart is required. Do not edit the backing state/config file manually because manual edits do not update the live configuration immediately. Use enable=false to disable an existing server.',
             parameters: {
@@ -784,38 +796,15 @@ Example:
                     transport: { type: 'string', description: 'Transport type: streamable-http, sse, stdio, or auto. Defaults to auto.' },
                     type: { type: 'string', description: 'Alias for transport (same supported values: streamable-http, sse, stdio, auto).' },
                     description: { type: 'string', description: 'Optional description' },
+                    timeoutSeconds: { type: 'number', minimum: 0, maximum: 3600, description: 'Optional timeout for tool calls to this server only, in seconds. Accepts 1-3600. Pass 0 to clear the override and return to the MCP SDK default (currently 60 seconds). Connection setup and tool listing are unchanged.' },
                     enable: { type: 'boolean', description: 'Enable/disable this server' }
                 },
                 required: ['name']
             }
         },
         {
-            name: 'call_mcp',
-            description: 'Call a tool from a configured MCP server. Use search_mcp_tools to list/search available tools first.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    server: { type: 'string', description: 'Server name (default: default)' },
-                    tool: { type: 'string', description: 'Tool name to call' },
-                    args: { type: 'object', description: 'Tool arguments' }
-                },
-                required: ['tool']
-            }
-        },
-        {
-            name: 'search_mcp_tools',
-            description: 'Search or list tools from an MCP server. Prefer using query to reduce output size.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    server: { type: 'string', description: 'Server name (default: default)' },
-                    query: { type: 'string', description: 'Search query (optional)' }
-                }
-            }
-        },
-        {
             name: 'list_mcp_servers',
-            description: 'List configured MCP servers with safe config summaries. Returns disabled servers too.',
+            description: 'List configured MCP servers with safe config summaries. Returns disabled servers too. timeoutSeconds is the per-server tool-call override; null means the MCP SDK default (currently 60 seconds).',
             parameters: {
                 type: 'object',
                 properties: {}
@@ -872,6 +861,7 @@ Example:
                     inheritMemory: { type: 'boolean', description: 'Legacy compatibility: copy memory files from the source agent into the new agent directory.' },
                     inherit: { type: 'string', description: 'Optional shared-memory parent agent name for agent.inherit.' },
                     isolatedNode: { type: 'string', description: 'Optional non-master node id to make the agent isolated and bound to that node.' },
+                    toolRules: TOOL_RULES_SCHEMA,
                     createMainSession: { type: 'boolean', description: 'Whether to also create {agentName}/main (default: true).' },
                     sourceSessionId: { type: 'string', description: 'Optional source session ID to inherit current node/model from (default: current session)' },
                     convertSession: { type: 'boolean', description: 'If true, convert an existing session into the agent main session (requires createMainSession=true).' }
@@ -919,7 +909,8 @@ Example:
                 type: 'object',
                 properties: {
                     agentName: { type: 'string', description: 'Agent whose isolation setting should be updated.' },
-                    nodeId: { type: 'string', description: 'Bound non-master node id. Use empty string to clear isolation.' }
+                    nodeId: { type: 'string', description: 'Bound non-master node id. Use empty string to clear isolation.' },
+                    toolRules: { ...TOOL_RULES_SCHEMA, description: 'Optional exact replacement rules. Use [] to clear. When nodeId is omitted, the current isolation binding is preserved.' },
                 },
                 required: ['agentName']
             }

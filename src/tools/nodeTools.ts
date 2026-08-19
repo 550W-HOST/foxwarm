@@ -9,9 +9,7 @@ import { nodesManager } from '../nodes/manager';
 import { buildNodeBootstrapInfo, ensureNodePairingToken } from '../nodes/bootstrapInfo';
 import { logger } from '../common';
 import { getAgentDir } from '../config';
-import { copyBetweenNodes, executeRemoteNodeTool, listNodeTopology, validateNodeSelection } from '../nodeExecution';
-import { requireNodeExecutionTarget } from '../nodeExecutionService';
-import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
+import { copyBetweenNodes, listNodeTopology, validateNodeSelection } from '../nodeExecution';
 import { executeMainManagementTool } from '../mainManagementTools';
 
 export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
@@ -33,7 +31,7 @@ export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) 
         return lines.join('\n');
     }
 
-    await checkToolPermission('copy_between_nodes', ctx.sessionId, 'master', {
+    await checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, ctx.sessionId, 'master', {
         sourceNode,
         sourcePath,
         targetNode,
@@ -54,73 +52,6 @@ export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) 
         lines.push(`Target absolute path: ${result.absolutePath}`);
     }
     return lines.join('\n');
-}
-
-export async function tool_remote_node(args: ToolArgs, ctx: ToolContext) {
-    const { action, nodeId, tool, args: toolArgs } = args;
-    
-    if (action === 'list' && ctx.sessionPlacement === 'session-worker') {
-        if (!ctx.sessionId || ctx.session?.id !== ctx.sessionId) throw new Error('Remote node listing requires exact session context.');
-        return { nodes: await listNodeTopology(ctx.sessionId, typeof nodeId === 'string' && nodeId.trim() ? nodeId.trim() : undefined, ctx.session.currentNode || 'master') };
-    }
-
-    // Get session for isolated check
-    const session = ctx.sessionPlacement === 'session-worker'
-        ? ctx.session
-        : (ctx.sessionId ? sessionManager.getSessionCatalog(ctx.sessionId) : undefined);
-    
-    // Isolated sessions can only call tools on their bound node
-    const isolatedAllowedRemoteNodes = sessionManager.isSessionEffectivelyIsolated(session)
-        ? Array.from(new Set([
-            sessionManager.getAgentIsolationNode(session?.agent || 'main') || session?.currentNode || 'master',
-            session?.currentNode,
-        ].filter((value): value is string => typeof value === 'string' && value.length > 0)))
-        : [];
-
-    if (action === 'list') {
-        // List visible nodes and their tools, with optional node filter
-        const nodes = nodesManager.listNodesWithTools();
-        const visibleNodes = sessionManager.isSessionEffectivelyIsolated(session)
-            ? nodes.filter((n: any) => isolatedAllowedRemoteNodes.includes(n.id))
-            : nodes;
-        const filteredNodes = typeof nodeId === 'string' && nodeId.trim().length > 0
-            ? visibleNodes.filter((n: any) => n.id === nodeId)
-            : visibleNodes;
-        return {
-            nodes: filteredNodes.map((n: any) => ({
-                id: n.id,
-                type: n.type,
-                tools: n.tools.map((t: any) => ({
-                    name: t.name,
-                    description: t.description,
-                    parameters: t.parameters
-                }))
-            }))
-        };
-    }
-    
-    if (action === 'call') {
-        // Call a specific tool on a node
-        if (!nodeId || !tool) {
-            throw new Error('nodeId and tool are required for call action');
-        }
-        
-        if (!ctx.sessionId) {
-            throw new Error('Remote node calls require an active source session.');
-        }
-        if (nodeId === 'master') {
-            await requireNodeExecutionTarget(ctx.sessionId, nodeId);
-            if (!NODE_ENVIRONMENT_BUILTIN_NAMES.includes(tool as any)) {
-                throw new Error(`Tool \`${tool}\` not available on node \`master\``);
-            }
-            return nodesManager.executeNodeTool(nodeId, tool, toolArgs || {}, ctx.sessionId);
-        }
-        const result = await executeRemoteNodeTool(ctx.sessionId, nodeId, tool, toolArgs || {});
-        
-        return result;
-    }
-    
-    throw new Error(`Unknown action: ${action}`);
 }
 
 async function resolveCurrentNodeForList(ctx?: ToolContext): Promise<string> {

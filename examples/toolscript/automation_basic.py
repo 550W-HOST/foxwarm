@@ -4,14 +4,16 @@ def main(args):
     print("starting automation example")
 
     listing = call_tool({
-        "toolId": "builtin:read",
+        "source": "node",
+        "name": "read",
         "args": {"filePath": base_dir},
     })
     listing_preview = listing[:200].replace("\n", " ")
     print(f"listing: {listing_preview}")
 
     doc = call_tool({
-        "toolId": "builtin:read",
+        "source": "node",
+        "name": "read",
         "args": {"filePath": base_dir + "/README.md"},
     })
     doc_excerpt = doc[:160].replace("\n", " ")

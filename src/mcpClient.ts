@@ -47,6 +47,7 @@ export type McpServerConfig = {
   token?: string;
   headers?: Record<string, string>;
   description?: string;
+  timeoutSeconds?: number;
   enable?: boolean;
   transport?: McpTransport;
   type?: string;
@@ -69,6 +70,7 @@ export type McpServerSummary = {
   envKeys: string[];
   headerKeys: string[];
   hasToken: boolean;
+  timeoutSeconds: number | null;
 };
 
 type StandardTransportKind = 'streamable-http' | 'sse' | 'stdio';
@@ -93,6 +95,8 @@ type PooledStdioConnection = StandardConnection & {
 };
 
 const VALID_TRANSPORTS = new Set<McpTransport>(['streamable-http', 'sse', 'stdio', 'auto']);
+export const MIN_MCP_TOOL_TIMEOUT_SECONDS = 1;
+export const MAX_MCP_TOOL_TIMEOUT_SECONDS = 3600;
 const STDIO_POOL_IDLE_TTL_MS = 60_000;
 const stdioConnectionPool = new Map<string, PooledStdioConnection>();
 
@@ -155,6 +159,16 @@ function sanitizeServerConfig(server: McpServerConfig): McpServerConfig {
   if (next.transport !== undefined) {
     next.transport = normalizeTransport(next);
   }
+  if (next.timeoutSeconds !== undefined) {
+    if (typeof next.timeoutSeconds !== 'number' || !Number.isFinite(next.timeoutSeconds)) {
+      throw new Error('MCP timeoutSeconds must be a finite number.');
+    }
+    if (next.timeoutSeconds === 0) {
+      delete next.timeoutSeconds;
+    } else if (next.timeoutSeconds < MIN_MCP_TOOL_TIMEOUT_SECONDS || next.timeoutSeconds > MAX_MCP_TOOL_TIMEOUT_SECONDS) {
+      throw new Error(`MCP timeoutSeconds must be 0 to clear or between ${MIN_MCP_TOOL_TIMEOUT_SECONDS} and ${MAX_MCP_TOOL_TIMEOUT_SECONDS}.`);
+    }
+  }
   delete next.type;
   return next;
 }
@@ -190,6 +204,7 @@ export function summarizeServerConfig(name: string, server: McpServerConfig): Mc
       ? Object.keys(normalized.headers).sort()
       : [],
     hasToken: Boolean(normalized.token),
+    timeoutSeconds: normalized.timeoutSeconds ?? null,
   };
 }
 
@@ -309,6 +324,17 @@ function getHeaders(config: McpServerConfig): Record<string, string> | undefined
 
 export function buildMcpHttpHeadersForTests(config: McpServerConfig): Record<string, string> | undefined {
   return getHeaders(config);
+}
+
+export function setMcpSdkForTests(sdk: McpSdkModules | null): void {
+  cachedMcpSdk = sdk;
+}
+
+export async function resetMcpConnectionsForTests(): Promise<void> {
+  const entries = Array.from(stdioConnectionPool.values());
+  stdioConnectionPool.clear();
+  await Promise.all(entries.map(entry => closePooledStdioConnection(entry)));
+  cachedMcpSdk = null;
 }
 
 function requireUrl(config: McpServerConfig, transport: McpTransport): string {
@@ -639,7 +665,10 @@ export async function listTools(serverName?: string) {
 export async function callTool(serverName: string | undefined, tool: string, args?: Record<string, any>) {
   const { name, config } = await getServerConfig(serverName);
   return withServerConnection(name, config, async ({ client }) => {
-    const result = await client.callTool({ name: tool, arguments: args || {} });
+    const params = { name: tool, arguments: args || {} };
+    const result = config.timeoutSeconds === undefined
+      ? await client.callTool(params)
+      : await client.callTool(params, undefined, { timeout: config.timeoutSeconds * 1000 });
     return normalizeMcpToolResult(result);
   });
 }

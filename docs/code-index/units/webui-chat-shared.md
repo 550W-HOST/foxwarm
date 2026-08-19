@@ -9,7 +9,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 
 ## Key Exports
 
-- `formatToolLabel` — generates human-readable labels for tool calls based on name and args, including current unified `call_tool` and hidden direct `call_mcp` compatibility history
+- `formatToolLabel` — generates human-readable labels for current tool calls based on name and args, including unified `call_tool` source descriptors
 - `renderMarkdown` — converts markdown text to sanitized HTML, with KaTeX math support for `\(...\)` and `\[...\]` only
 - `renderMarkdownWithSanitizer` — testable markdown renderer variant that accepts an injected sanitizer
 - `renderAssistantMarkdownSegments` / `renderAssistantMarkdownSegmentsWithSanitizer` — render assistant Markdown into sanitized HTML, interactive display-LaTeX, and Mermaid segments without introducing a second parser
@@ -77,7 +77,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - `getSlashCommandCompletions` tokenizes user input by spaces, walks an autocomplete tree, and returns matching suggestions plus contextual hints. Handles trailing-space logic for advancing to next token.
 - `formatToolResponseSummary` has special-case formatting for many tool names (read_file, search, list_directory, bash, etc.), truncating or summarizing output.
 - Tool response body rendering itself lives in `ToolTimelineItems`; its default path uses the shared WebUI response formatter on the full `functionResponse.response` payload, so single-key `{ output }` and `{ error }` both display their value while multi-key objects remain structured.
-- `formatToolLabel` keeps explicit handling for `remote_node`, `call_tool`, `search_tools`, and persisted/runtime `call_mcp` calls. Current model guidance uses `call_tool` (`tool:mcp:...`), but the renderer still labels compatibility history accurately.
+- `formatToolLabel` keeps explicit handling for `call_tool` and `search_tools`; unknown historical tool names remain readable through the generic label fallback without dedicated runtime-alias branches.
 - Patch parsing (`parseApplyPatchPreview`) handles an envelope format (`*** Begin/End Patch`) with update/add/delete file sections, producing typed operation objects for UI rendering.
 - `computeUnifiedDiffLines` wraps the `diff` library to produce line-level change objects with type annotations.
 - `renderSystemTextWithSessionLinks` recognizes `sessionId: \`...\``, `session \`...\``, inter-session tool output like `Child session created: \`...\``, and only the `sourceSessionId` value of canonical inter-agent XML opening tags, so model/system text and tool renderers share link behavior without linking arbitrary attributes.

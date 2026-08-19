@@ -227,6 +227,10 @@ async function start() {
                     displayName: session.displayName,
                 };
             },
+            getAgentMetadataSnapshot: sessionId => {
+                const session = sessionManager.getAllSessions().get(sessionId);
+                return session ? sessionManager.getAgentMetadata(session.agent || 'main') : undefined;
+            },
             idleMs: SESSION_WORKERS_CONFIG.idleSeconds * 1000,
             shouldRestart: () => true,
             resolveExactFinalSourceContext: sourceContexts.resolve,

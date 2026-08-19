@@ -1,85 +1,14 @@
 import { ToolArgs, ToolContext, UnifiedToolSource } from './helpers';
-import { checkToolPermission, checkToolPermissionForSession } from '../isolatedCheck';
 import * as mcpExternal from '../mcpExternalService';
 import { nodesManager } from '../nodes/manager';
-import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
-import { tool_remote_node } from './nodeTools';
-import { NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './placement';
-import { executeRemoteNodeTool } from '../nodeExecution';
-
-// Forward reference - will be set by the main tools module after definitions are created
-let _definitions: any[] = [];
-let _isToolDirectlyExposedToModel: (toolName: string) => boolean = () => false;
-let _getToolPermissionNode: (toolName: string, executionNode: string, targetNode: string) => string = (_t, e) => e;
-let _dispatchBuiltin: (name: string, args: ToolArgs, ctx: ToolContext) => Promise<any> = async () => { throw new Error('Builtin dispatcher not initialized.'); };
-let _guardBuiltin: (name: string, args: ToolArgs, ctx: ToolContext) => void = () => {};
-
-export function setDefinitionsRef(defs: any[], isExposed: (n: string) => boolean, getPermNode: (t: string, e: string, tn: string) => string, dispatchBuiltin?: typeof _dispatchBuiltin, guardBuiltin?: typeof _guardBuiltin) {
-    _definitions = defs;
-    _isToolDirectlyExposedToModel = isExposed;
-    _getToolPermissionNode = getPermNode;
-    if (dispatchBuiltin) _dispatchBuiltin = dispatchBuiltin;
-    if (guardBuiltin) _guardBuiltin = guardBuiltin;
-}
-
-export function buildUnifiedToolId(source: UnifiedToolSource, name: string, options: { server?: string; nodeId?: string } = {}): string {
-    if (source === 'builtin') {
-        return `builtin:${name}`;
-    }
-
-    if (source === 'mcp') {
-        if (!options.server) {
-            throw new Error('MCP tool IDs require server.');
-        }
-        return `mcp:${options.server}/${name}`;
-    }
-
-    if (!options.nodeId) {
-        throw new Error('Node tool IDs require nodeId.');
-    }
-
-    return `node:${options.nodeId}/${name}`;
-}
-
-function parseUnifiedToolId(toolId: string): { source: UnifiedToolSource; name: string; server?: string; nodeId?: string } {
-    if (typeof toolId !== 'string' || toolId.trim().length === 0) {
-        throw new Error('toolId is required');
-    }
-
-    if (toolId.startsWith('builtin:')) {
-        const name = toolId.slice('builtin:'.length).trim();
-        if (!name) throw new Error(`Invalid builtin toolId: ${toolId}`);
-        return { source: 'builtin', name };
-    }
-
-    if (toolId.startsWith('mcp:')) {
-        const remainder = toolId.slice('mcp:'.length);
-        const separator = remainder.indexOf('/');
-        if (separator <= 0 || separator === remainder.length - 1) {
-            throw new Error(`Invalid MCP toolId: ${toolId}`);
-        }
-        return {
-            source: 'mcp',
-            server: remainder.slice(0, separator),
-            name: remainder.slice(separator + 1),
-        };
-    }
-
-    if (toolId.startsWith('node:')) {
-        const remainder = toolId.slice('node:'.length);
-        const separator = remainder.indexOf('/');
-        if (separator <= 0 || separator === remainder.length - 1) {
-            throw new Error(`Invalid node toolId: ${toolId}`);
-        }
-        return {
-            source: 'node',
-            nodeId: remainder.slice(0, separator),
-            name: remainder.slice(separator + 1),
-        };
-    }
-
-    throw new Error(`Unsupported toolId source: ${toolId}`);
-}
+import { listNodeTopology } from '../nodeExecution';
+import { buildUnifiedToolId, executeResolvedTool, resolveUnifiedTool } from './resolvedTools';
+import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
+import { definitions } from './definitions';
+import { isToolVisibleForSession } from '../isolatedCheck';
+import * as sessionManager from '../sessionManager';
+import * as agentMetadata from '../session/agentMetadata';
+import { isPermissionNeutralBuiltinDispatcher } from '../permissions';
 
 function normalizeUnifiedToolSources(rawSources: unknown): UnifiedToolSource[] {
     const allowed: UnifiedToolSource[] = ['builtin', 'mcp', 'node'];
@@ -99,23 +28,6 @@ function normalizeUnifiedToolSources(rawSources: unknown): UnifiedToolSource[] {
     }
 
     return Array.from(new Set(normalized as UnifiedToolSource[]));
-}
-
-function normalizeRequestedNodeForToolCall(nodeParam: unknown, currentNode: string): string {
-    if (nodeParam === undefined || nodeParam === null) {
-        return currentNode;
-    }
-
-    if (typeof nodeParam !== 'string') {
-        return String(nodeParam) || currentNode;
-    }
-
-    const trimmed = nodeParam.trim();
-    if (!trimmed || trimmed.toLowerCase() === 'current') {
-        return currentNode;
-    }
-
-    return trimmed;
 }
 
 function normalizeUnifiedToolQueryTerms(query: string): string[] {
@@ -180,6 +92,7 @@ async function resolveDefaultNodeSearchTarget(ctx?: ToolContext): Promise<string
     if (typeof ctx?.session?.currentNode === 'string' && ctx.session.currentNode.trim().length > 0) {
         return ctx.session.currentNode.trim();
     }
+    if (ctx?.session) return 'master';
 
     if (ctx?.sessionId) {
         const currentNode = await nodesManager.getCurrentNode(ctx.sessionId);
@@ -191,54 +104,17 @@ async function resolveDefaultNodeSearchTarget(ctx?: ToolContext): Promise<string
     return 'master';
 }
 
-async function executeBuiltinToolViaUnifiedCall(toolName: string, rawArgs: ToolArgs, ctx: ToolContext): Promise<any> {
-    const toolDefinition = _definitions.find(def => def.name === toolName);
-    if (!toolDefinition) {
-        throw new Error(`Unknown builtin tool: ${toolName}`);
-    }
-
-    const supportsExplicitNode = Object.prototype.hasOwnProperty.call(toolDefinition.parameters?.properties || {}, 'node');
-    if (toolName !== 'image_write_to_file') _guardBuiltin(toolName, rawArgs || {}, ctx);
-    if (!supportsExplicitNode && rawArgs && Object.prototype.hasOwnProperty.call(rawArgs, 'node')) {
-        throw new Error(`Builtin tool \`${toolName}\` does not support node selection. Use call_tool with source=\`node\` for remote-node execution.`);
-    }
-
-    const sessionId = ctx.sessionId || 'main';
-    const currentNode = typeof ctx.session?.currentNode === 'string' && ctx.session.currentNode.trim()
-        ? ctx.session.currentNode.trim()
-        : (ctx.sessionPlacement === 'session-worker' ? 'master' : (await nodesManager.getCurrentNode(sessionId) || 'master'));
-    const targetNode = supportsExplicitNode
-        ? normalizeRequestedNodeForToolCall(rawArgs?.node, currentNode)
-        : currentNode;
-    const toolArgs = { ...(rawArgs || {}) };
-    delete toolArgs.node;
-
-    const executionNode = resolveBuiltinToolPlacement(toolName, toolArgs, targetNode).executionNode;
-    const permissionNode = _getToolPermissionNode(toolName, executionNode, targetNode);
-
-    const dispatchContext = {
-        ...ctx,
-        ...(toolName === 'send_file' || toolName === 'image_write_to_file' ? { runtimeNodeId: targetNode } : {}),
-    };
-    _guardBuiltin(toolName, toolArgs, dispatchContext);
-    if (ctx.session?.id === sessionId) {
-        await checkToolPermissionForSession(ctx.session, toolName, permissionNode, toolArgs);
-    } else if (ctx.sessionId) {
-        await checkToolPermission(toolName, sessionId, permissionNode, toolArgs);
-    }
-
-    const routingSnapshot = ctx.sessionPlacement === 'session-worker' && executionNode !== 'master'
-        && executionNode === currentNode
-        ? { currentNode, ...(typeof ctx.session?.cwd === 'string' ? { cwd: ctx.session.cwd } : {}) }
-        : undefined;
-    if (executionNode !== 'master') {
-        return await executeRemoteNodeTool(sessionId, executionNode, toolName, toolArgs, routingSnapshot);
-    }
-    return await _dispatchBuiltin(toolName, toolArgs, dispatchContext);
+function discoverySession(ctx?: ToolContext) {
+    if (ctx?.sessionId && ctx.session?.id === ctx.sessionId) return ctx.session;
+    return ctx?.sessionId ? sessionManager.getSessionCatalog(ctx.sessionId) : undefined;
 }
 
-async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: boolean) {
-    return _definitions
+async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: boolean, ctx?: ToolContext) {
+    const session = discoverySession(ctx);
+    return definitions
+        .filter(def => !NODE_ENVIRONMENT_BUILTIN_NAMES.includes(def.name as any))
+        .filter(def => !isPermissionNeutralBuiltinDispatcher(def.name))
+        .filter(def => isToolVisibleForSession(session, { source: 'builtin', tool: def.name }))
         .map(def => ({ def, score: scoreUnifiedToolQuery(query, [def.name, def.description]) }))
         .filter(entry => entry.score >= 0)
         .map(def => ({
@@ -248,17 +124,23 @@ async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: 
             name: def.def.name,
             description: def.def.description,
             ...(includeSchema ? { inputSchema: def.def.parameters } : {}),
-            directExposed: _isToolDirectlyExposedToModel(def.def.name),
-            hidden: !_isToolDirectlyExposedToModel(def.def.name),
+            directExposed: def.def.defaultInject === true,
+            hidden: def.def.defaultInject !== true,
         }));
 }
 
 async function collectMcpUnifiedSearchResults(query: string, includeSchema: boolean, serverFilter: string | undefined, ctx?: ToolContext, warnings?: string[]) {
     if (!ctx?.sessionId) throw new Error('MCP discovery requires session context.');
 
+    const session = discoverySession(ctx);
+    const isolatedServers = session && sessionManager.isSessionEffectivelyIsolated(session)
+        ? Array.from(new Set(sessionManager.getAgentToolRules(session.agent || 'main')
+            .filter((rule): rule is Extract<typeof rule, { source: 'mcp' }> => rule.effect === 'allow' && rule.source === 'mcp')
+            .map(rule => rule.server)))
+        : undefined;
     const servers = serverFilter
         ? [serverFilter]
-        : (await mcpExternal.listMcpServers(ctx.sessionId))
+        : isolatedServers || (await mcpExternal.listMcpServers(ctx.sessionId))
             .filter(server => server.enabled)
             .map(server => server.name);
 
@@ -299,13 +181,16 @@ async function collectMcpUnifiedSearchResults(query: string, includeSchema: bool
 }
 
 async function collectNodeUnifiedSearchResults(query: string, includeSchema: boolean, nodeFilter: string | undefined, ctx?: ToolContext) {
-    const effectiveNodeId = nodeFilter || await resolveDefaultNodeSearchTarget(ctx);
-    const nodeListing = await tool_remote_node({ action: 'list', nodeId: effectiveNodeId }, (ctx || ({} as ToolContext))) as any;
-    const nodes = Array.isArray(nodeListing?.nodes) ? nodeListing.nodes : [];
+    if (!ctx?.sessionId) throw new Error('Node discovery requires session context.');
+    const currentNode = await resolveDefaultNodeSearchTarget(ctx);
+    const effectiveNodeId = nodeFilter || currentNode;
+    const nodes = await listNodeTopology(ctx.sessionId, effectiveNodeId, currentNode);
 
     const results: Array<Record<string, any>> = [];
+    const session = discoverySession(ctx);
     for (const node of nodes) {
         for (const item of Array.isArray(node?.tools) ? node.tools : []) {
+            if (!isToolVisibleForSession(session, { source: 'node', node: String(node?.id || ''), tool: String(item?.name || '') }, String(node?.id || ''))) continue;
             const score = scoreUnifiedToolQuery(query, [item?.name, item?.description, node?.id, node?.type]);
             if (score < 0) {
                 continue;
@@ -328,6 +213,9 @@ async function collectNodeUnifiedSearchResults(query: string, includeSchema: boo
 }
 
 export async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
+    if (ctx?.sessionPlacement === 'session-worker' && ctx.session && sessionManager.isSessionEffectivelyIsolated(ctx.session)) {
+        await agentMetadata.refreshAgentMetadata(ctx.session.agent || 'main');
+    }
     const query = typeof args?.query === 'string' ? args.query : '';
     const sources = normalizeUnifiedToolSources(args?.sources);
     const server = typeof args?.server === 'string' && args.server.trim() ? args.server.trim() : undefined;
@@ -339,7 +227,7 @@ export async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
     const collected: Array<Record<string, any>> = [];
 
     if (sources.includes('builtin')) {
-        collected.push(...await collectBuiltinUnifiedSearchResults(query, includeSchema));
+        collected.push(...await collectBuiltinUnifiedSearchResults(query, includeSchema, ctx));
     }
 
     if (sources.includes('mcp')) {
@@ -388,58 +276,5 @@ export async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
 }
 
 export async function tool_call_tool(args: ToolArgs, ctx: ToolContext) {
-    const explicitSource = typeof args?.source === 'string' ? args.source.trim() : undefined;
-    const ref = args?.toolId
-        ? parseUnifiedToolId(String(args.toolId))
-        : {
-            source: explicitSource as UnifiedToolSource,
-            name: typeof args?.name === 'string' ? args.name : '',
-            server: typeof args?.server === 'string' ? args.server : undefined,
-            nodeId: typeof args?.nodeId === 'string' ? args.nodeId : undefined,
-        };
-
-    if (!ref?.source || !['builtin', 'mcp', 'node'].includes(ref.source)) {
-        throw new Error('call_tool requires either toolId or a valid source (builtin, mcp, node).');
-    }
-    if (!ref.name) {
-        throw new Error('call_tool requires a tool name.');
-    }
-
-    const toolArgs = resolveObjectArgWithJsonFallback(args, 'args', 'argsJson', {
-        required: true,
-        label: 'call_tool args',
-    })!;
-
-    if (ref.source === 'builtin') {
-        return await executeBuiltinToolViaUnifiedCall(ref.name, toolArgs, ctx);
-    }
-
-    if (ref.source === 'mcp') {
-        if (!ref.server) {
-            throw new Error('call_tool for MCP source requires server unless toolId includes it.');
-        }
-        if (!ctx?.sessionId) {
-            throw new Error('call_tool for MCP requires session context.');
-        }
-        return await mcpExternal.callMcpTool(ctx.sessionId, ref.server, ref.name, toolArgs);
-    }
-
-    if (!ref.nodeId) {
-        throw new Error('call_tool for node source requires nodeId.');
-    }
-    if (ctx.sessionPlacement !== 'session-worker') {
-        return await tool_remote_node({ action: 'call', nodeId: ref.nodeId, tool: ref.name, args: toolArgs }, ctx);
-    }
-    if (!ctx?.sessionId || ctx.session?.id !== ctx.sessionId) throw new Error('call_tool for node source requires exact session context.');
-    if (ref.nodeId === 'master') {
-        if (!NODE_ENVIRONMENT_BUILTIN_NAMES.includes(ref.name as any)) {
-            throw new Error(`Tool \`${ref.name}\` not available on node \`master\``);
-        }
-        const dispatchContext = { ...ctx, runtimeNodeId: 'master' };
-        _guardBuiltin(ref.name, toolArgs, dispatchContext);
-        await checkToolPermissionForSession(ctx.session, ref.name, 'master', toolArgs);
-        return await _dispatchBuiltin(ref.name, toolArgs, dispatchContext);
-    }
-    await checkToolPermissionForSession(ctx.session, ref.name, ref.nodeId, toolArgs);
-    return await executeRemoteNodeTool(ctx.sessionId, ref.nodeId, ref.name, toolArgs);
+    return executeResolvedTool(await resolveUnifiedTool(args, ctx), ctx);
 }

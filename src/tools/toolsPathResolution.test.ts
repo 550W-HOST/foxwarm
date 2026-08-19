@@ -26,7 +26,7 @@ test('vector retrieval is exposed through recall rather than a separate search_v
   assert.ok((recallDef.parameters.properties as any).vector_query);
   await assert.rejects(
     () => callTool('search_vector', { query: 'anything' }, { sessionId: 'test-session' }),
-    /Unknown tool: search_vector/,
+    /Unknown (?:builtin )?tool: search_vector/,
   );
 });
 
@@ -441,14 +441,14 @@ test('isolated copy_between_nodes restricts master paths but allows absolute pat
     session.agent = agentName;
     session.currentNode = boundNode;
 
-    await assert.doesNotReject(() => checkToolPermission('copy_between_nodes', sessionId, 'master', {
+    await assert.doesNotReject(() => checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, sessionId, 'master', {
       sourceNode: boundNode,
       sourcePath: '/var/tmp/source.txt',
       targetNode: boundNode,
       targetPath: '/var/tmp/target.txt',
     }));
 
-    await assert.doesNotReject(() => checkToolPermission('copy_between_nodes', sessionId, 'master', {
+    await assert.doesNotReject(() => checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, sessionId, 'master', {
       sourceNode: boundNode,
       sourcePath: '/var/tmp/source.txt',
       targetNode: 'master',
@@ -456,7 +456,7 @@ test('isolated copy_between_nodes restricts master paths but allows absolute pat
     }));
 
     await assert.rejects(
-      () => checkToolPermission('copy_between_nodes', sessionId, 'master', {
+      () => checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, sessionId, 'master', {
         sourceNode: 'master',
         sourcePath: '/tmp/outside-source.txt',
         targetNode: boundNode,
@@ -466,7 +466,7 @@ test('isolated copy_between_nodes restricts master paths but allows absolute pat
     );
 
     await assert.rejects(
-      () => checkToolPermission('copy_between_nodes', sessionId, 'master', {
+      () => checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, sessionId, 'master', {
         sourceNode: boundNode,
         sourcePath: '/var/tmp/source.txt',
         targetNode: 'master',
@@ -506,8 +506,8 @@ test('isolated sessions may load visible skills for their own agent only', async
     const session = await sessionManager.getSession(sessionId);
     session.agent = agentName;
 
-    await assert.doesNotReject(() => checkToolPermission('skill', sessionId, 'master', { action: 'list' }));
-    await assert.doesNotReject(() => checkToolPermission('skill', sessionId, 'master', { action: 'load', skillName: 'code-index' }));
+    await assert.doesNotReject(() => checkToolPermission({ source: 'builtin', tool: 'skill' }, sessionId, 'master', { action: 'list' }));
+    await assert.doesNotReject(() => checkToolPermission({ source: 'builtin', tool: 'skill' }, sessionId, 'master', { action: 'load', skillName: 'code-index' }));
 
     const ownListResult = await callTool('skill', { action: 'list' }, { sessionId, session });
     assert.match(String(ownListResult), /Found \d+ skill/);

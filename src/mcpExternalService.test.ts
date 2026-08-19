@@ -78,6 +78,7 @@ test('MCP external service clones secret-bearing config and returns only redacte
       env: { API_KEY: sensitiveValue },
       headers: { Authorization: sensitiveValue },
       token: sensitiveValue,
+      timeoutSeconds: 240,
     };
     await configureMcpServer({ sourceSessionId: sourceId, name: 'private', action: 'upsert', config });
     config.env.API_KEY = 'caller-mutated';
@@ -85,7 +86,7 @@ test('MCP external service clones secret-bearing config and returns only redacte
     const summaries = await listMcpServers(sourceId);
     assert.deepEqual(summaries, [{
       name: 'private', enabled: true, transport: 'stdio', command: 'node', argsCount: 2,
-      envKeys: ['API_KEY'], headerKeys: ['Authorization'], hasToken: true,
+      envKeys: ['API_KEY'], headerKeys: ['Authorization'], hasToken: true, timeoutSeconds: 240,
     }]);
     assert.equal(JSON.stringify(summaries).includes(sensitiveValue), false);
     assert.equal((await mcpClient.getServers()).private.env?.API_KEY, sensitiveValue);
@@ -126,17 +127,20 @@ test('failed MCP service config persistence leaves the previous live snapshot pu
   await withTempStore(async store => {
     await configureMcpServer({ sourceSessionId: sourceId, name: 'alpha', action: 'upsert', config: { url: 'https://example.invalid/alpha' } });
     await configureMcpServer({ sourceSessionId: sourceId, name: 'alpha', action: 'upsert', config: { description: 'merged update' } });
+    await configureMcpServer({ sourceSessionId: sourceId, name: 'alpha', action: 'upsert', config: { timeoutSeconds: 120 } });
     for (const config of [
       { transport: 'stdio' },
       { transport: 'auto' },
       { transport: 'unsupported' },
+      { timeoutSeconds: -1 },
+      { timeoutSeconds: 3601 },
     ]) {
       await assert.rejects(
         () => configureMcpServer({ sourceSessionId: sourceId, name: 'invalid', action: 'upsert', config: config as any }),
-        /requires command|requires url|unsupported MCP transport/i,
+        /requires command|requires url|unsupported MCP transport|timeoutSeconds/i,
       );
     }
-    assert.deepEqual((await listMcpServers(sourceId)).map(server => [server.name, server.description]), [['alpha', 'merged update']]);
+    assert.deepEqual((await listMcpServers(sourceId)).map(server => [server.name, server.description, server.timeoutSeconds]), [['alpha', 'merged update', 120]]);
     const originalWrite = store.write.bind(store);
     (store as any).write = async () => { throw new Error('simulated MCP persistence failure'); };
     await assert.rejects(
@@ -204,7 +208,9 @@ test('MCP external service rejects stale and isolated source sessions', async ()
       (error: any) => error?.code === 'MCP_EXTERNAL_SOURCE_NOT_FOUND',
     );
     await sessionManager.setAgentMetadata(agentName, { isolated: true, isolatedNode: 'test-node' });
-    await assert.rejects(() => listMcpServers(sourceId), /restricted to agent-level allowed tools/i);
+    await assert.rejects(() => listMcpServers(sourceId), /cannot use builtin capability/i);
+    await assert.rejects(() => listMcpTools(sourceId), /No MCP tools are allowed/i);
+    await assert.rejects(() => callMcpTool(sourceId, 'demo', 'probe', {}), /cannot use mcp capability/i);
   } finally {
     await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
     await cleanup(sourceId);
@@ -243,12 +249,53 @@ test('MCP call authorization receives the complete nested args object', async ()
   try {
     await callMcpTool(sourceId, 'demo', 'probe', { nested: { value: 7 }, items: [1, 2] });
     assert.deepEqual(captured, [[
-      'call_mcp', sourceId, 'master',
-      { server: 'demo', tool: 'probe', args: { nested: { value: 7 }, items: [1, 2] } },
+      { source: 'mcp', server: 'demo', tool: 'probe' }, sourceId, 'master',
+      { nested: { value: 7 }, items: [1, 2] },
     ]]);
   } finally {
     (isolatedCheck as any).checkToolPermission = originalPermission;
     (mcpClient as any).callTool = originalCallTool;
+    await cleanup(sourceId);
+  }
+});
+
+test('isolated MCP rules filter discovery, authorize exact calls, and update live', async () => {
+  const sourceId = makeId('mcp_service_rules');
+  const agentName = makeId('mcp_service_rules_agent');
+  const source = await sessionManager.getSession(sourceId);
+  source.agent = agentName;
+  await sessionManager.saveSession(sourceId);
+  const originalListTools = mcpClient.listTools;
+  const originalCallTool = mcpClient.callTool;
+  let callEffects = 0;
+  (mcpClient as any).listTools = async () => ({ tools: [
+    { name: 'probe', description: 'allowed' },
+    { name: 'other', description: 'hidden' },
+  ] });
+  (mcpClient as any).callTool = async (_server: string, tool: string) => { callEffects += 1; return { tool }; };
+  try {
+    await sessionManager.setAgentMetadata(agentName, {
+      isolated: true,
+      isolatedNode: 'test-node',
+      toolRules: [{ effect: 'allow', source: 'mcp', server: 'demo', tool: 'probe' }],
+    });
+    assert.deepEqual((await listMcpTools(sourceId, 'demo') as any).tools.map((tool: any) => tool.name), ['probe']);
+    assert.deepEqual(await callMcpTool(sourceId, 'demo', 'probe', {}), { tool: 'probe' });
+    await assert.rejects(() => callMcpTool(sourceId, 'demo', 'other', {}), /cannot use mcp capability/i);
+    assert.equal(callEffects, 1);
+
+    await sessionManager.setAgentMetadata(agentName, {
+      isolated: true,
+      isolatedNode: 'test-node',
+      toolRules: [{ effect: 'allow', source: 'mcp', server: 'demo', tool: 'other' }],
+    });
+    assert.deepEqual((await listMcpTools(sourceId, 'demo') as any).tools.map((tool: any) => tool.name), ['other']);
+    await assert.rejects(() => callMcpTool(sourceId, 'demo', 'probe', {}), /cannot use mcp capability/i);
+    assert.equal(callEffects, 1);
+  } finally {
+    (mcpClient as any).listTools = originalListTools;
+    (mcpClient as any).callTool = originalCallTool;
+    await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
     await cleanup(sourceId);
   }
 });

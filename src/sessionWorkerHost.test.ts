@@ -1007,7 +1007,7 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
   (sessionManager as any).sendFileToSession = async () => ({ deliveredChannels: ['telegram:session'], skippedChannels: [] as any[], failedChannels: [] as any[] });
   (sessionManager as any).sendFileToChannelTargetId = async () => {};
   (mcpClient as any).listServers = async () => [{ name: 'reverse-mcp', enabled: true, transport: 'http', argsCount: 0,
-    envKeys: [] as string[], headerKeys: [] as string[], hasToken: false }];
+    envKeys: [] as string[], headerKeys: [] as string[], hasToken: false, timeoutSeconds: null as number | null }];
   (mcpClient as any).callTool = async (...args: any[]) => { externalCalls.push(['mcp', ...args]); return { echoed: args[2] }; };
   (vector as any).search = async (...args: any[]) => { externalCalls.push(['vector', ...args]); return [{ id: 'reverse-hit' }]; };
   const child = fork(path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'), [], {

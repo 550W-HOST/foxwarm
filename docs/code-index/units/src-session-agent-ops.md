@@ -15,19 +15,22 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 - `createAgentWithSession(options, deps)` — creates a new agent directory and its initial session, inheriting source model/effort and future-child defaults when present; this agent-creation contract is distinct from spawned child/fork normalization
 - `moveSessionToTarget(options, deps)` — renames or moves a session across agents
 - `recoverPendingSessionIdentityMove(moveSessionArchiveIndex)` — finishes or reverses the one crash-interrupted identity move before normal session loading
-- `AgentMetadata` (interface) — shape of per-agent config (isolated, isolatedNode, inherit)
+- `AgentMetadata` (interface) — shape of per-agent config (`isolated`, `isolatedNode`, `inherit`, optional exact `toolRules`)
 - `createAgentMetadataStore(filePath)` — factory for the disk-backed metadata store
-- `loadAgentMetadata()` — loads metadata from disk into memory
+- `loadAgentMetadata()` — transactionally loads metadata from disk; malformed present rules reject authority loading while preserving any prior valid in-memory snapshot
+- `refreshAgentMetadata(agentName)` — refreshes one exact isolated-agent entry for a long-lived Session worker, preserving its startup snapshot when metadata cannot be read and rejecting malformed refreshed rules without installing them
 - `getAgentMetadata(agentName)` — returns metadata for an agent
+- `getAgentToolRules(agentName)` — returns only that exact agent's persisted rules; inheritance is not consulted
 - `getAgentIsolationNode(agentName)` — returns the isolation node if set
 - `isAgentIsolated(agentName)` — checks isolation flag
 - `isSessionEffectivelyIsolated(session)` — checks if a session's agent is isolated
 - `setAgentMetadata(agentName, meta)` — persists metadata for an agent
+- `setAgentToolRules(agentName, toolRules)` — exact validated rule-only replacement
 - `refreshSessionSnapshot(deps, sessionId)` — rebuilds a session's system prompt snapshot
 - `refreshSessionSnapshotForSession(session, persistSession)` — rebuilds the same snapshot for an already-established Session owner and persists through its supplied callback
 - `getAgentInheritanceChain(agentName)` — resolves the full inheritance chain
 - `setAgentInherit(deps, agentName, inheritAgentName)` — sets/clears inheritance and refreshes affected sessions
-- `setAgentIsolation(deps, agentName, isolatedNode)` — toggles isolation and updates sessions
+- `setAgentIsolation(deps, agentName, isolatedNode, toolRules?)` — toggles isolation, optionally replaces exact rules, and updates sessions
 - `setAgentMetadataStoreForTests(store)` / `resetAgentMetadataForTests()` — test helpers
 
 ## Function Index
@@ -48,9 +51,9 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 | `createAgentMetadataStore(filePath)` | ~33 (agentMetadata) | Instantiates DiskJsonData for agent metadata |
 | `setAgentMetadataStoreForTests(store)` | ~45 (agentMetadata) | Replaces store instance for testing |
 | `resetAgentMetadataForTests()` | ~50 (agentMetadata) | Clears in-memory metadata map |
-| `normalizeAgentMetadata(meta)` | ~53 (agentMetadata) | Strips skills, normalizes isolatedNode |
+| `normalizeAgentMetadata(meta)` | ~53 (agentMetadata) | Strips skills, normalizes isolatedNode, and validates/canonicalizes optional exact tool rules |
 | `saveAgentMetadata()` | ~63 (agentMetadata) | Serializes in-memory map to disk |
-| `loadAgentMetadata()` | ~85 (agentMetadata) | Reads metadata file, populates in-memory map |
+| `loadAgentMetadata()` / `refreshAgentMetadata(agentName)` | ~(agentMetadata) | Transactionally loads the complete authority map or refreshes one exact isolated agent for Worker authorization |
 | `getAgentMetadata(agentName)` | ~105 (agentMetadata) | Returns metadata or empty object |
 | `getAgentIsolationNode(agentName)` | ~109 (agentMetadata) | Returns isolation node string if isolated |
 | `isAgentIsolated(agentName)` | ~115 (agentMetadata) | Boolean isolation check |
@@ -60,7 +63,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 | `refreshSessionSnapshotForSession(session, persistSession)` | ~138 (agentMetadata) | Rebuilds a passed Session snapshot and persists through the supplied owner callback; the ID-based entry delegates here |
 | `getAgentInheritanceChain(agentName)` | ~139 (agentMetadata) | Walks inherit links with cycle detection |
 | `setAgentInherit(deps, agentName, inheritAgentName)` | ~155 (agentMetadata) | Sets inheritance, validates cycles, refreshes sessions |
-| `setAgentIsolation(deps, agentName, isolatedNode)` | ~195 (agentMetadata) | Toggles isolation, updates currentNode on sessions |
+| `setAgentIsolation(deps, agentName, isolatedNode, toolRules?)` | ~(agentMetadata) | Toggles isolation, optionally replaces rules, updates currentNode on sessions, and reports the live rule count |
 
 ## Dependencies
 
@@ -81,7 +84,8 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 - Identity rename and parent-bearing creation recheck the bounded destructive-lifecycle claim immediately before their in-memory relation/identity commit. Prior identity operations drain before a delete claim is acquired. Canonical boundary: [D-lifecycle-descendant-actions](../threads/session-lifecycle.md#d-lifecycle-descendant-actions).
 - New named sessions and agent-main sessions run under the session-manager identity commit lock and remove a newly initialized agent directory when critical creation fails. A create-agent move completes nonmutating validation, durably records rollback intent and semantically bound target-directory ownership, then creates/copies the directory. Initialization failure and startup rollback remove only that owned directory idempotently; pending rollback keeps it until recovery, while finishing recovery keeps it permanently. Moves reject journal-unsafe, live, alias, or retained-archive targets before mutation, reverse known failed memory/file/archive/index/relation/attachment mutations, and commit the historical alias only after strict persistence succeeds. The validated journal records explicit `rolling-back`/`finishing` intent rather than inferring intent from metadata; display metadata changes do not enter this path.
 - Recreating an agent directory without a main session is allowed because it allocates no session lifetime. Recreating the archived main internal ID is rejected before the new directory is initialized.
-- Agent metadata is held in an in-memory `Map` backed by a single JSON file (no backup rotation). Normalization strips `skills` and cleans `isolatedNode`.
+- Agent metadata is held in an in-memory `Map` backed by a single JSON file (no backup rotation). Normalization strips `skills`, cleans `isolatedNode`, and read-old accepts metadata with no `toolRules`. Present rules are exact source-aware identities; `[]` is preserved canonically as an explicit empty replacement.
+- Rule validation rejects wildcard/extra fields and duplicate or conflicting exact identities before agent creation or metadata mutation effects. Rules remain attached only to the exact agent and are not inherited through `agent.inherit`.
 - Isolation enforcement prevents cross-agent session moves when either source or target agent is isolated.
 - Inheritance chain resolution detects cycles and logs a warning rather than throwing.
 - Setting inheritance or isolation triggers a refresh of system prompt snapshots for all affected sessions (including transitive inheritors).
@@ -93,4 +97,4 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 - Archive store and archive index are coordinated during session renames to keep on-disk state consistent.
 - Internal session-ID reuse and move-target rules are canonical in [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
 - `DiskJsonData` utility provides the lightweight persistence layer with fallback/recovery semantics.
-- Test file validates round-trip persistence and normalization (no backup files created).
+- Test coverage validates old metadata compatibility, exact normalize/write/read, live single-agent refresh, empty replacement, invalid/wildcard/duplicate rejection, isolation mutation replacement semantics, and create-agent pre-effect validation.

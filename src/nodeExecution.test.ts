@@ -174,6 +174,97 @@ test('direct remote builtin and dynamic node calls share the Node execution serv
   }
 });
 
+test('isolated bound-node advertised tools remain usable in Main-local and Worker reverse placement', async () => {
+  const sourceId = makeId('node_execution_isolated_dynamic');
+  const agentName = makeId('node_execution_isolated_agent');
+  const session = await sessionManager.getSession(sourceId);
+  session.agent = agentName;
+  session.currentNode = 'bound-node';
+  await sessionManager.saveSession(sourceId);
+  await sessionManager.setAgentMetadata(agentName, { isolated: true, isolatedNode: 'bound-node' });
+  const originalGetNode = nodesManager.getNode;
+  const originalExecuteTool = nodesManager.executeTool;
+  let reverseTransport: LocalRpcTransport | undefined;
+  const calls: any[] = [];
+
+  try {
+    (nodesManager as any).getNode = (nodeId: string) => fakeNode(nodeId, ['custom_probe']);
+    (nodesManager as any).executeTool = async (...args: any[]) => {
+      calls.push(args);
+      return { ok: true, nodeId: args[0], tool: args[1] };
+    };
+
+    const descriptor = { source: 'node', nodeId: 'bound-node', name: 'custom_probe', args: { value: 1 } };
+    assert.deepEqual(await call_tool(descriptor, { sessionId: sourceId, session }), {
+      ok: true, nodeId: 'bound-node', tool: 'custom_probe',
+    });
+    await assert.rejects(
+      () => call_tool({ ...descriptor, nodeId: 'other-node' }, { sessionId: sourceId, session }),
+      (error: any) => error?.code === 'NODE_EXECUTION_ISOLATED_NODE_DENIED',
+    );
+    await assert.rejects(
+      () => call_tool({ ...descriptor, nodeId: 'master' }, { sessionId: sourceId, session }),
+      /not available on node `master`/,
+    );
+    await sessionManager.setAgentMetadata(agentName, {
+      isolated: true,
+      isolatedNode: 'bound-node',
+      toolRules: [
+        { effect: 'allow', source: 'node', node: 'other-node', tool: 'custom_probe' },
+        { effect: 'allow', source: 'node', node: 'master', tool: 'exec' },
+      ],
+    });
+    await assert.rejects(
+      () => call_tool({ ...descriptor, nodeId: 'other-node' }, { sessionId: sourceId, session }),
+      (error: any) => error?.code === 'NODE_EXECUTION_ISOLATED_NODE_DENIED',
+    );
+    await assert.rejects(
+      () => call_tool({ source: 'node', nodeId: 'master', name: 'exec', args: { command: 'echo forbidden' } }, { sessionId: sourceId, session }),
+      /cannot run exec on master/i,
+    );
+
+    await nodeExecution.shutdownNodeExecution();
+    nodeExecution.resetNodeExecutionForTests();
+    const registry = new RpcServiceRegistry();
+    registry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: sourceId }));
+    reverseTransport = new LocalRpcTransport(registry);
+    await nodeExecution.initializeNodeExecution({ transport: reverseTransport, placement: 'child-reverse' });
+    const workerContext = {
+      sessionId: sourceId,
+      session,
+      sessionPlacement: 'session-worker',
+      persistCurrentSession: async () => {},
+    } as any;
+
+    assert.deepEqual(await call_tool(descriptor, workerContext), {
+      ok: true, nodeId: 'bound-node', tool: 'custom_probe',
+    });
+    await assert.rejects(
+      () => call_tool({ ...descriptor, nodeId: 'other-node' }, workerContext),
+      (error: any) => error?.code === 'NODE_EXECUTION_ISOLATED_NODE_DENIED',
+    );
+    await assert.rejects(
+      () => call_tool({ ...descriptor, nodeId: 'master' }, workerContext),
+      /not available on node `master`/,
+    );
+    assert.deepEqual(calls.map(call => [call[0], call[1], call[3]]), [
+      ['bound-node', 'custom_probe', sourceId],
+      ['bound-node', 'custom_probe', sourceId],
+    ]);
+  } finally {
+    await nodeExecution.shutdownNodeExecution().catch(() => {});
+    nodeExecution.resetNodeExecutionForTests();
+    if (reverseTransport) {
+      await reverseTransport.drain().catch(() => {});
+      reverseTransport.close();
+    }
+    (nodesManager as any).getNode = originalGetNode;
+    (nodesManager as any).executeTool = originalExecuteTool;
+    await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
+    await sessionManager.deleteSession(sourceId).catch(() => false);
+  }
+});
+
 test('master-currentNode node tools bypass Node execution RPC', async () => {
   const sourceId = makeId('node_execution_master');
   const session = await sessionManager.getSession(sourceId);

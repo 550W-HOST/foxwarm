@@ -8,7 +8,6 @@ import * as nodeExecution from '../nodeExecution';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
 import * as tools from '../tools';
 import {
-  call_mcp,
   call_tool,
   definitions,
   mcp_config,
@@ -17,8 +16,9 @@ import {
 } from '../tools';
 
 test('search_tools returns structured builtin results with hidden/direct exposure metadata', async () => {
+  const mainSession = await sessionManager.getSession('main');
   const result: any = await search_tools({
-    query: 'browse',
+    query: 'archived messages',
     sources: ['builtin'],
     includeSchema: true,
     limit: 20,
@@ -27,26 +27,34 @@ test('search_tools returns structured builtin results with hidden/direct exposur
   assert.equal(typeof result.count, 'number');
   assert.ok(Array.isArray(result.tools));
 
-  const browseList = result.tools.find((tool: any) => tool.name === 'browse_list');
-  assert.ok(browseList);
-  assert.equal(browseList.source, 'builtin');
-  assert.equal(browseList.toolId, 'builtin:browse_list');
-  assert.equal(browseList.directExposed, false);
-  assert.equal(browseList.hidden, true);
+  const archivedMessages = result.tools.find((tool: any) => tool.name === 'get_archived_messages');
+  assert.ok(archivedMessages);
+  assert.equal(archivedMessages.source, 'builtin');
+  assert.equal(archivedMessages.toolId, 'builtin:get_archived_messages');
+  assert.equal(archivedMessages.directExposed, false);
+  assert.equal(archivedMessages.hidden, true);
   assert.deepEqual(
-    browseList.inputSchema,
-    definitions.find(def => def.name === 'browse_list')?.parameters,
+    archivedMessages.inputSchema,
+    definitions.find(def => def.name === 'get_archived_messages')?.parameters,
   );
 
-  const readResult: any = await search_tools({
+  const builtinReadResult: any = await search_tools({
     query: 'read',
     sources: ['builtin'],
     includeSchema: false,
     limit: 20,
   });
+  assert.equal(builtinReadResult.tools.some((tool: any) => tool.name === 'read'), false);
+
+  mainSession.currentNode = 'master';
+  const readResult: any = await search_tools({ query: 'read', sources: ['node'], includeSchema: false }, {
+    sessionId: 'main', session: mainSession,
+  });
   const readTool = readResult.tools.find((tool: any) => tool.name === 'read');
   assert.ok(readTool);
-  assert.equal(readTool.directExposed, true);
+  assert.equal(readTool.source, 'node');
+  assert.equal(readTool.nodeId, 'master');
+  assert.equal(readTool.toolId, 'node:master/read');
   assert.equal(Object.prototype.hasOwnProperty.call(readTool, 'inputSchema'), false);
 });
 
@@ -125,8 +133,8 @@ test('search_tools includeSchema=false removes schema from all results', async (
   }
 });
 
-test('call_tool can invoke hidden builtin browse_list', async () => {
-  const result = await call_tool(
+test('call_tool rejects node capabilities as builtin and accepts them through node source', async () => {
+  await assert.rejects(() => call_tool(
     {
       toolId: 'builtin:browse_list',
       args: {},
@@ -135,7 +143,11 @@ test('call_tool can invoke hidden builtin browse_list', async () => {
       sessionId: 'main',
       session: { agent: 'main', currentNode: 'master' },
     } as any,
-  );
+  ), /node capability, not a builtin/i);
+
+  const result = await call_tool({ source: 'node', name: 'browse_list', args: {} }, {
+    sessionId: 'main', session: { agent: 'main', currentNode: 'master' },
+  } as any);
 
   assert.match(String(result), /no tabs open/i);
 });
@@ -190,12 +202,13 @@ test('call_tool schema exposes argsJson fallback', () => {
 });
 
 test('call_tool parses argsJson fallback for target tool arguments', async () => {
+  await sessionManager.getSession('main');
   const result: any = await call_tool(
     {
       toolId: 'builtin:search_tools',
       argsJson: JSON.stringify({ query: 'read', sources: ['builtin'], limit: 1, includeSchema: false }),
     },
-    {} as any,
+    { sessionId: 'main', session: sessionManager.getSessionCatalog('main') } as any,
   );
 
   assert.equal(result.count, 1);
@@ -222,6 +235,27 @@ test('mcp_config schema exposes envJson and headersJson fallbacks', () => {
   assert.equal(def?.parameters?.properties?.envJson?.type, 'string');
   assert.equal(def?.parameters?.properties?.headers?.type, 'object');
   assert.equal(def?.parameters?.properties?.headersJson?.type, 'string');
+  assert.equal(def?.parameters?.properties?.timeoutSeconds?.minimum, 0);
+  assert.equal(def?.parameters?.properties?.timeoutSeconds?.maximum, 3600);
+});
+
+test('agent isolation management schemas expose only exact source-specific tool rules', () => {
+  for (const name of ['create_agent', 'set_agent_isolated']) {
+    const definition: any = definitions.find(item => item.name === name);
+    const ruleSchema = definition?.parameters?.properties?.toolRules;
+    assert.equal(ruleSchema?.type, 'array');
+    assert.equal(ruleSchema?.maxItems, 256);
+    assert.equal(ruleSchema?.items?.oneOf?.length, 3);
+    assert.deepEqual(ruleSchema.items.oneOf.map((item: any) => item.required), [
+      ['effect', 'source', 'tool'],
+      ['effect', 'source', 'node', 'tool'],
+      ['effect', 'source', 'server', 'tool'],
+    ]);
+    assert.equal(ruleSchema.items.oneOf.every((item: any) => item.additionalProperties === false), true);
+    assert.equal(ruleSchema.items.oneOf.every((item: any) => item.properties.tool.maxLength === 128), true);
+    assert.equal(ruleSchema.items.oneOf[1].properties.node.maxLength, 128);
+    assert.equal(ruleSchema.items.oneOf[2].properties.server.maxLength, 128);
+  }
 });
 
 test('mcp_config parses envJson and headersJson string-map fallbacks', async () => {
@@ -239,13 +273,19 @@ test('mcp_config parses envJson and headersJson string-map fallbacks', async () 
       transport: 'stdio',
       envJson: JSON.stringify({ API_KEY: 'secret' }),
       headersJson: JSON.stringify({ 'X-Test': 'ok' }),
+      timeoutSeconds: 240,
     }, { sessionId: 'main' });
 
     assert.match(String(result), /json-fallback-test/);
     assert.equal(captured.length, 1);
     assert.deepEqual(captured[0].config.env, { API_KEY: 'secret' });
     assert.deepEqual(captured[0].config.headers, { 'X-Test': 'ok' });
+    assert.equal(captured[0].config.timeoutSeconds, 240);
+    assert.match(String(result), /240 second/);
     assert.equal(Object.prototype.hasOwnProperty.call(captured[0].config, 'url'), false);
+    const cleared = await mcp_config({ name: 'json-fallback-test', timeoutSeconds: 0 }, { sessionId: 'main' });
+    assert.equal(captured[1].config.timeoutSeconds, 0);
+    assert.match(String(cleared), /reset to the MCP SDK default/i);
   } finally {
     (mcpClient as any).upsertServer = originalUpsertServer;
   }
@@ -295,6 +335,7 @@ test('search_tools and call_tool cover MCP tools with schema-preserving structur
         envKeys: [] as string[],
         headerKeys: [] as string[],
         hasToken: false,
+        timeoutSeconds: null as number | null,
       },
     ]);
     (mcpClient as any).listTools = async (server?: string) => ({
@@ -368,8 +409,8 @@ test('search_tools keeps MCP results from healthy servers when another MCP serve
 
   try {
     (mcpClient as any).listServers = async () => ([
-      { name: 'healthy', enabled: true, transport: 'stdio', argsCount: 0, envKeys: [] as string[], headerKeys: [] as string[], hasToken: false },
-      { name: 'broken', enabled: true, transport: 'stdio', argsCount: 0, envKeys: [] as string[], headerKeys: [] as string[], hasToken: false },
+      { name: 'healthy', enabled: true, transport: 'stdio', argsCount: 0, envKeys: [] as string[], headerKeys: [] as string[], hasToken: false, timeoutSeconds: null as number | null },
+      { name: 'broken', enabled: true, transport: 'stdio', argsCount: 0, envKeys: [] as string[], headerKeys: [] as string[], hasToken: false, timeoutSeconds: null as number | null },
     ]);
     (mcpClient as any).listTools = async (server?: string) => {
       if (server === 'broken') {
@@ -407,7 +448,7 @@ test('call_tool requires an MCP server when not using an MCP toolId', async () =
       sessionId: 'main',
       session: { agent: 'main' },
     } as any),
-    /requires server/i,
+    /require.*server/i,
   );
 });
 
@@ -431,27 +472,6 @@ test('call_tool passes parsed MCP JSON text results through as structured values
       ok: true,
       items: [{ name: 'foxwarm' }],
     });
-  } finally {
-    (mcpClient as any).callTool = originalCallTool;
-  }
-});
-
-test('legacy call_mcp wrapper returns normalized MCP values without re-stringifying', async () => {
-  await sessionManager.getSession('main');
-  const originalCallTool = mcpClient.callTool;
-
-  try {
-    (mcpClient as any).callTool = async () => mcpClient.normalizeMcpToolResult({
-      content: [{ type: 'text', text: '[{"name":"foxwarm"}]' }],
-    });
-
-    const result = await call_mcp({
-      server: 'github',
-      tool: 'search_repos',
-      args: { query: 'foxwarm' },
-    }, { sessionId: 'main' });
-
-    assert.deepEqual(result, [{ name: 'foxwarm' }]);
   } finally {
     (mcpClient as any).callTool = originalCallTool;
   }
@@ -515,7 +535,7 @@ test('search_tools and call_tool cover remote node tools', async () => {
       sources: ['node'],
       nodeId: 'android-node',
       includeSchema: true,
-    });
+    }, { sessionId: 'main', session: sessionManager.getSessionCatalog('main') } as any);
 
     assert.equal(searchResult.count, 1);
     assert.equal(searchResult.tools[0].source, 'node');
@@ -617,8 +637,8 @@ test('master Node discovery and dynamic calls expose only canonical node-environ
 
     await sessionManager.setAgentMetadata(isolatedAgent, { isolated: true, isolatedNode: 'bound-remote' });
     await assert.rejects(
-      () => call_tool({ source: 'node', nodeId: 'master', name: 'read', args: { filePath: 'x' } }, { sessionId: isolatedId, session: isolated }),
-      /Isolated session can only call tools on its bound\/current node/,
+      () => call_tool({ source: 'node', nodeId: 'master', name: 'read', args: { filePath: '/tmp/outside-isolated-agent' } }, { sessionId: isolatedId, session: isolated }),
+      /restricted to agent-level allowed tools|cannot use (?:node capability `)?read|can only access/i,
     );
 
     const forwarded: any[] = [];
@@ -630,7 +650,7 @@ test('master Node discovery and dynamic calls expose only canonical node-environ
     source.currentNode = 'remote-a';
     await sessionManager.saveSession(sourceId);
     assert.deepEqual(
-      await call_tool({ toolId: 'builtin:read', args: { filePath: 'remote.txt' } }, { sessionId: sourceId, session: source }),
+      await call_tool({ source: 'node', name: 'read', args: { filePath: 'remote.txt' } }, { sessionId: sourceId, session: source }),
       { remote: true, toolName: 'read' },
     );
     assert.deepEqual(
@@ -650,20 +670,163 @@ test('master Node discovery and dynamic calls expose only canonical node-environ
   }
 });
 
+test('isolated exact rules align Main-local discovery, direct, unified, ToolScript, Node, and MCP calls', async () => {
+  const sourceId = `rules_main_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const agentName = `rules_agent_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const session = await sessionManager.getSession(sourceId);
+  session.agent = agentName;
+  session.currentNode = 'bound-node';
+  await sessionManager.saveSession(sourceId);
+  await sessionManager.setAgentMetadata(agentName, {
+    isolated: true,
+    isolatedNode: 'bound-node',
+    toolRules: [
+      { effect: 'allow', source: 'builtin', tool: 'run_script' },
+      { effect: 'allow', source: 'builtin', tool: 'list_agents' },
+      { effect: 'deny', source: 'builtin', tool: 'skill' },
+      { effect: 'deny', source: 'node', node: 'bound-node', tool: 'exec' },
+      { effect: 'allow', source: 'node', node: 'master', tool: 'read' },
+      { effect: 'allow', source: 'mcp', server: 'demo', tool: 'probe' },
+    ],
+  });
+  const originals = {
+    listNodesWithTools: nodesManager.listNodesWithTools,
+    getNode: nodesManager.getNode,
+    executeTool: nodesManager.executeTool,
+    listTools: mcpClient.listTools,
+    callTool: mcpClient.callTool,
+  };
+  try {
+    (nodesManager as any).listNodesWithTools = () => [{
+      id: 'bound-node', type: 'test', tools: [
+        { name: 'read', description: 'read', parameters: { type: 'object' } },
+        { name: 'exec', description: 'exec', parameters: { type: 'object' } },
+        { name: 'custom_probe', description: 'custom', parameters: { type: 'object' } },
+      ],
+    }, {
+      id: 'master', type: 'master', tools: [
+        { name: 'read', description: 'master read', parameters: { type: 'object' } },
+        { name: 'exec', description: 'master exec', parameters: { type: 'object' } },
+      ],
+    }];
+    (nodesManager as any).getNode = () => ({ id: 'bound-node', ws: {}, tools: new Set(['read', 'exec', 'custom_probe']) });
+    (nodesManager as any).executeTool = async (_node: string, tool: string) => ({ tool });
+    (mcpClient as any).listTools = async () => ({ tools: [
+      { name: 'probe', description: 'allowed MCP' },
+      { name: 'other', description: 'hidden MCP' },
+    ] });
+    (mcpClient as any).callTool = async (_server: string, tool: string) => ({ tool });
+
+    const found: any = await search_tools({ sources: ['builtin', 'node', 'mcp'], limit: 200 }, { sessionId: sourceId, session });
+    const ids = new Set(found.tools.map((tool: any) => tool.toolId));
+    assert.equal(ids.has('builtin:run_script'), true);
+    assert.equal(ids.has('builtin:skill'), false);
+    assert.equal(ids.has('builtin:list_agents'), false);
+    assert.equal(ids.has('node:bound-node/read'), true);
+    assert.equal(ids.has('node:bound-node/exec'), false);
+    assert.equal(ids.has('node:bound-node/custom_probe'), true);
+    assert.equal(ids.has('mcp:demo/probe'), true);
+    assert.equal(ids.has('mcp:demo/other'), false);
+    const masterFound: any = await search_tools({ sources: ['node'], nodeId: 'master', limit: 20 }, { sessionId: sourceId, session });
+    assert.equal(masterFound.tools.some((tool: any) => tool.toolId === 'node:master/read'), true);
+    assert.equal(masterFound.tools.some((tool: any) => tool.toolId === 'node:master/exec'), false);
+
+    await assert.rejects(() => tools.callTool('exec', { command: 'true' }, { sessionId: sourceId, session }), /tool rule denies/i);
+    await assert.rejects(() => call_tool({ source: 'node', name: 'exec', args: { command: 'true' } }, { sessionId: sourceId, session }), /tool rule denies/i);
+    const nested = await tools.run_script({ code: 'def main(args):\n    return call_tool("exec", {"command": "true"})' }, { sessionId: sourceId, session });
+    assert.equal(nested.status, 'failed');
+    assert.match(String(nested.error), /tool rule denies/i);
+    assert.deepEqual(await call_tool({ source: 'mcp', server: 'demo', name: 'probe', args: {} }, { sessionId: sourceId, session }), { tool: 'probe' });
+    await assert.rejects(() => call_tool({ source: 'mcp', server: 'demo', name: 'other', args: {} }, { sessionId: sourceId, session }), /cannot use mcp capability/i);
+    await assert.rejects(() => call_tool({ source: 'builtin', name: 'list_agents', args: {} }, { sessionId: sourceId, session }), /structurally restricted/i);
+    await assert.rejects(() => call_tool({ source: 'node', nodeId: 'master', name: 'read', args: { filePath: '/tmp/outside-agent.txt' } }, { sessionId: sourceId, session }), /can only access/i);
+  } finally {
+    (nodesManager as any).listNodesWithTools = originals.listNodesWithTools;
+    (nodesManager as any).getNode = originals.getNode;
+    (nodesManager as any).executeTool = originals.executeTool;
+    (mcpClient as any).listTools = originals.listTools;
+    (mcpClient as any).callTool = originals.callTool;
+    await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
+    await sessionManager.deleteSession(sourceId).catch(() => false);
+  }
+});
+
+test('call_tool is a permission-neutral dispatcher and only its concrete target is authorized', async () => {
+  const sourceId = `dispatcher_call_tool_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const agentName = `dispatcher_call_tool_agent_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const session = await sessionManager.getSession(sourceId);
+  session.agent = agentName;
+  session.currentNode = 'remote-a';
+  const ctx: any = { sessionId: sourceId, session };
+  const originalExecute = nodeExecution.executeRemoteNodeTool;
+  let effects = 0;
+  const descriptor = { source: 'node', name: 'custom_probe', args: {} };
+  try {
+    (nodeExecution as any).executeRemoteNodeTool = async () => { effects += 1; return { output: 'allowed' }; };
+
+    const found: any = await search_tools({ query: 'call tool', sources: ['builtin'], limit: 200 }, ctx);
+    assert.equal(found.tools.some((tool: any) => tool.toolId === 'builtin:call_tool'), false);
+    await assert.rejects(() => call_tool({
+      source: 'builtin', name: 'call_tool', args: { source: 'node', name: 'custom_probe', args: {} },
+    }, ctx), /dispatcher\/container.*not a concrete builtin capability/i);
+    await assert.rejects(() => call_tool({
+      toolId: 'builtin:call_tool', args: { source: 'node', name: 'custom_probe', args: {} },
+    }, ctx), /dispatcher\/container.*not a concrete builtin capability/i);
+
+    await sessionManager.setAgentMetadata(agentName, {
+      isolated: true,
+      isolatedNode: 'remote-a',
+      toolRules: [
+        { effect: 'allow', source: 'builtin', tool: 'run_script' },
+        { effect: 'deny', source: 'node', node: 'remote-a', tool: 'custom_probe' },
+      ],
+    });
+
+    await assert.rejects(() => tools.callTool('call_tool', descriptor, ctx), /denies node capability `custom_probe`/i);
+    await assert.rejects(() => call_tool(descriptor, ctx), /denies node capability `custom_probe`/i);
+    const nested = await tools.run_script({
+      code: 'def main(args):\n    return call_tool(source="node", name="custom_probe", args={})',
+    }, ctx);
+    assert.equal(nested.status, 'failed');
+    assert.match(String(nested.error), /denies node capability `custom_probe`/i);
+    assert.equal(effects, 0);
+
+    await sessionManager.setAgentMetadata(agentName, {
+      isolated: true,
+      isolatedNode: 'remote-a',
+      toolRules: [{ effect: 'allow', source: 'builtin', tool: 'run_script' }],
+    });
+    assert.deepEqual(await tools.callTool('call_tool', descriptor, ctx), { output: 'allowed' });
+    assert.deepEqual(await call_tool(descriptor, ctx), { output: 'allowed' });
+    const allowedNested = await tools.run_script({
+      code: 'def main(args):\n    return call_tool(source="node", name="custom_probe", args={})',
+    }, ctx);
+    assert.equal(allowedNested.status, 'completed');
+    assert.deepEqual(allowedNested.result, { output: 'allowed' });
+    assert.equal(effects, 3);
+  } finally {
+    (nodeExecution as any).executeRemoteNodeTool = originalExecute;
+    await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
+    await sessionManager.deleteSession(sourceId).catch(() => false);
+  }
+});
+
 test('search_tools and call_tool descriptions include usage guidance and examples', () => {
   const searchDef = definitions.find((entry) => entry.name === 'search_tools');
   const callDef = definitions.find((entry) => entry.name === 'call_tool');
   assert.ok(searchDef);
   assert.ok(callDef);
 
-  assert.match(String(searchDef?.description), /builtin results include file\/edit tools, exec, session\/channel tools, vector\/archive tools, timers/i);
+  assert.match(String(searchDef?.description), /builtin results contain Foxwarm control\/session\/management tools/i);
+  assert.match(String(searchDef?.description), /Node results contain environment capabilities/i);
   assert.match(String(searchDef?.description), /example search_tools calls/i);
   assert.match(String(searchDef?.description), /mcp-management skill/i);
   assert.match(String((searchDef?.parameters?.properties as any)?.nodeId?.description), /current node/i);
 
   assert.match(String(callDef?.description), /argsJson.*JSON object string fallback/i);
-  assert.match(String(callDef?.description), /builtin:read/i);
+  assert.match(String(callDef?.description), /must use source=node/i);
   assert.match(String(callDef?.description), /source:\"mcp\"/i);
+  assert.match(String((callDef?.parameters?.properties as any)?.nodeId?.description), /omit.*current node/i);
   assert.match(String((callDef?.parameters?.properties as any)?.args?.description), /wrapper object/i);
   assert.match(String((callDef?.parameters?.properties as any)?.argsJson?.description), /providers that do not expose free-form object fields/i);
 
@@ -673,16 +836,13 @@ test('search_tools and call_tool descriptions include usage guidance and example
   assert.match(String(mcpConfigDef?.description), /Do not edit the backing state\/config file manually/i);
 });
 
-test('default model-facing tool definitions exclude hidden browser and legacy wrapper tools', () => {
+test('default model-facing tool definitions exclude hidden browser and advanced tools', () => {
   for (const name of [
     'browse_open',
     'browse_list',
     'browse_get',
     'browse_close',
     'browse_interact',
-    'remote_node',
-    'call_mcp',
-    'search_mcp_tools',
     'get_archived_messages',
     'get_archived_blocks',
     'delete_session',
@@ -845,11 +1005,17 @@ test('default model-facing tool names and serialized schema size stay consolidat
   ]);
 
   const serializedBytes = Buffer.byteLength(JSON.stringify(modelFacingDefinitions), 'utf8');
-  assert.equal(serializedBytes, 34_573);
+  assert.equal(serializedBytes, 34_500);
   assert.ok(serializedBytes < 38_069, 'serialized default schema should stay below the pre-consolidation baseline');
 });
 
-test('obsolete context and resource builtins are removed entirely', () => {
+test('obsolete context and resource builtins are removed entirely', async () => {
+  const session = await sessionManager.getSession('main');
+  for (const name of ['remote_node', 'node_tools', 'call_mcp', 'search_mcp_tools']) {
+    assert.equal(definitions.some(def => def.name === name), false);
+    assert.equal((tools as any)[name], undefined);
+    await assert.rejects(() => tools.callTool(name, {}, { sessionId: session.id, session }), /Unknown builtin tool/);
+  }
   assert.equal(definitions.some(def => def.name === 'get_memory_context'), false);
   assert.equal((tools as any).get_memory_context, undefined);
   assert.equal(definitions.some(def => def.name === 'change_directory'), false);

@@ -2,6 +2,7 @@ const assert = require('assert');
 const path = require('path');
 const { convertToOpenAIResponsesFormat, convertToOpenAIFormat } = require('../lib/llmProviders/openai.js');
 const { fixToolCalls, executeTools } = require('../lib/llm.js');
+const sessionManager = require('../lib/sessionManager.js');
 
 async function run() {
   const history = [
@@ -10,7 +11,7 @@ async function run() {
       parts: [
         { functionCall: { id: 'call_empty', name: 'read', args: { filePath: 'a', startLine: 999, endLine: 1000 } } },
         { functionCall: { id: 'call_text', name: 'exec', args: { command: 'echo ok' } } },
-        { functionCall: { id: 'call_obj', name: 'remote_node', args: { action: 'list' } } },
+        { functionCall: { id: 'call_obj', name: 'call_tool', args: { source: 'node', name: 'read', args: {} } } },
         { functionCall: { id: 'call_output_plus_meta', name: 'search_tools', args: { query: 'read' } } },
         { functionCall: { id: 'call_nested', name: 'search_tools', args: { query: 'schema' } } },
       ],
@@ -20,10 +21,10 @@ async function run() {
       parts: [
         { functionResponse: { tool_use_id: 'call_empty', name: 'read', response: { output: '' } } },
         { functionResponse: { tool_use_id: 'call_text', name: 'exec', response: { output: 'ok' } } },
-        { functionResponse: { tool_use_id: 'call_obj', name: 'remote_node', response: { nodes: [] } } },
+        { functionResponse: { tool_use_id: 'call_obj', name: 'call_tool', response: { nodes: [] } } },
         { functionResponse: { tool_use_id: 'call_output_plus_meta', name: 'search_tools', response: { output: 'ok', count: 2, tools: [{ name: 'read' }] } } },
         { functionResponse: { tool_use_id: 'call_nested', name: 'search_tools', response: { meta: { server: 'github', flags: ['fast'] }, tools: [{ name: 'read', inputSchema: { type: 'object' } }] } } },
-        { functionResponse: { tool_use_id: 'call_result_null_error', name: 'remote_node', response: { result: 'remote ok', error: null, logs: [] } } },
+        { functionResponse: { tool_use_id: 'call_result_null_error', name: 'call_tool', response: { result: 'remote ok', error: null, logs: [] } } },
       ],
     },
     {
@@ -114,6 +115,8 @@ async function run() {
   assert.ok(imageResponseOutput);
   assert.match(JSON.stringify(imageResponseOutput.output), /\[IMAGE: id=call_image#1, size=1x1\]/);
 
+  const executionSession = await sessionManager.getSession('coder/test-node-current-alias');
+  executionSession.agent = 'coder';
   const toolResultMessage = await executeTools(
     [
       {
@@ -127,8 +130,8 @@ async function run() {
         },
       },
     ],
-    { sessionId: 'coder/test-node-current-alias', session: { agent: 'coder' } },
-    { verbose: false }
+    { sessionId: executionSession.id, session: executionSession },
+    executionSession
   );
 
   assert.strictEqual(toolResultMessage.role, 'tool');
@@ -138,6 +141,7 @@ async function run() {
     { output: '' },
     'node:"current" should resolve to current session node instead of causing Node not found'
   );
+  await sessionManager.deleteSession(executionSession.id).catch(() => false);
 
   console.log('llmToolSerializationTest: ok');
 }

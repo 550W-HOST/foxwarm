@@ -143,14 +143,14 @@ Sending node registration...
 ```
 
 Then from a Foxwarm session, use:
-- `remote_node(action="list")`
-- `remote_node(action="call", nodeId="...", tool="android_screenshot", args={"inline": true})`
-- `remote_node(action="call", nodeId="...", tool="android_list_elements", args={"clickableOnly": true})`
-- `remote_node(action="call", nodeId="...", tool="android_unlock", args={"pin": "0000"})`
-- `remote_node(action="call", nodeId="...", tool="android_keyevent", args={"keycode": 3})`
-- `remote_node(action="call", nodeId="...", tool="android_current_app", args={})`
-- `remote_node(action="call", nodeId="...", tool="android_launch_app", args={"packageName": "com.android.settings"})`
-- `remote_node(action="call", nodeId="...", tool="android_stop_app", args={"packageName": "com.android.settings"})`
+- `search_tools({sources: ["node"], nodeId: "..."})`
+- `call_tool({source: "node", nodeId: "...", name: "android_screenshot", args: {"inline": true}})`
+- `call_tool({source: "node", nodeId: "...", name: "android_list_elements", args: {"clickableOnly": true}})`
+- `call_tool({source: "node", nodeId: "...", name: "android_unlock", args: {"pin": "0000"}})`
+- `call_tool({source: "node", nodeId: "...", name: "android_keyevent", args: {"keycode": 3}})`
+- `call_tool({source: "node", nodeId: "...", name: "android_current_app", args: {}})`
+- `call_tool({source: "node", nodeId: "...", name: "android_launch_app", args: {"packageName": "com.android.settings"}})`
+- `call_tool({source: "node", nodeId: "...", name: "android_stop_app", args: {"packageName": "com.android.settings"}})`
 
 ---
 
@@ -163,10 +163,10 @@ This is the flow that has actually been exercised on a real Android device:
 3. `python test.py`
 4. restart `server.py` with `FOXWARM_HOST=http://localhost:3002` and `FOXWARM_NODE_TOKEN=...`
 5. from a Foxwarm test session, call:
-   - `remote_node(list)`
-   - `remote_node(call -> android_screenshot)`
-   - `remote_node(call -> android_unlock)`
-   - `remote_node(call -> android_keyevent)`
+   - `search_tools(source=node)`
+   - `call_tool(source=node, name=android_screenshot)`
+   - `call_tool(source=node, name=android_unlock)`
+   - `call_tool(source=node, name=android_keyevent)`
 
 A real screenshot file was successfully produced through the remote-node path during testing.
 

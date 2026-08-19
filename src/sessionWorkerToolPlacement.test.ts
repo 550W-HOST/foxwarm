@@ -4,13 +4,14 @@ import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 import * as sessionManager from './sessionManager';
-import { SESSIONS_FILE } from './config';
+import { getAgentDir, SESSIONS_FILE } from './config';
 import { callTool } from './tools';
 import { tool_call_tool } from './tools/unifiedSearch';
 import { tool_search_tools } from './tools/unifiedSearch';
 import { tool_run_script } from './toolscript';
 import { executeTools } from './llm';
 import * as nodeExecution from './nodeExecution';
+import * as mcpExternal from './mcpExternalService';
 import * as agentMetadata from './session/agentMetadata';
 import { RpcError } from './rpc';
 import * as fileDelivery from './fileDelivery';
@@ -25,7 +26,7 @@ async function catalogBytes(): Promise<Buffer | null> {
   return await fs.pathExists(SESSIONS_FILE) ? fs.readFile(SESSIONS_FILE) : null;
 }
 
-test('worker direct, unified, and ToolScript builtin dispatch retain exact owner without child globals', async () => {
+test('worker direct, unified, and ToolScript node dispatch retain exact owner without child globals', async () => {
   const session = owner();
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'worker-tool-placement-'));
   const filePath = path.join(dir, 'probe.txt');
@@ -45,8 +46,8 @@ test('worker direct, unified, and ToolScript builtin dispatch retain exact owner
     assert.match(JSON.stringify(await executeTools([{ id: 'direct-read', name: 'read', args: { filePath } }],
       { sessionId: session.id }, session, { currentSessionEffects: effects })), /exact-owner/);
     assert.match(String(await callTool('read', { filePath }, ctx)), /exact-owner/);
-    assert.match(String(await tool_call_tool({ source: 'builtin', name: 'read', args: { filePath } }, ctx)), /exact-owner/);
-    const script = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="read", args={"filePath": args["path"]})', args: { path: filePath } }, ctx);
+    assert.match(String(await tool_call_tool({ source: 'node', name: 'read', args: { filePath } }, ctx)), /exact-owner/);
+    const script = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="node", name="read", args={"filePath": args["path"]})', args: { path: filePath } }, ctx);
     assert.match(JSON.stringify(script.result), /exact-owner/);
     assert.match(String(await callTool('get_archived_messages', { sessionId: session.id }, ctx)), /No archived messages/);
     assert.match(String(await callTool('get_archived_blocks', { sessionId: session.id }, ctx)), /No archived blocks/);
@@ -54,6 +55,115 @@ test('worker direct, unified, and ToolScript builtin dispatch retain exact owner
   } finally {
     Object.assign(sessionManager, originals);
     await fs.remove(dir);
+  }
+});
+
+test('Worker direct, unified, and ToolScript calls share live exact agent rules', async () => {
+  const session = owner();
+  session.agent = `worker_rules_agent_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  session.currentNode = 'remote-a';
+  const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
+  const originalExecute = nodeExecution.executeRemoteNodeTool;
+  let calls = 0;
+  try {
+    await sessionManager.setAgentMetadata(session.agent, {
+      isolated: true,
+      isolatedNode: 'remote-a',
+      toolRules: [
+        { effect: 'allow', source: 'builtin', tool: 'run_script' },
+        { effect: 'deny', source: 'node', node: 'remote-a', tool: 'read' },
+      ],
+    });
+    (nodeExecution as any).executeRemoteNodeTool = async () => { calls += 1; return { output: 'allowed' }; };
+    await assert.rejects(() => callTool('read', { filePath: 'probe.txt' }, ctx), /tool rule denies/i);
+    await assert.rejects(() => tool_call_tool({ source: 'node', name: 'read', args: { filePath: 'probe.txt' } }, ctx), /tool rule denies/i);
+    const nested = await tool_run_script({ code: 'def main(args):\n    return call_tool("read", {"filePath": "probe.txt"})' }, ctx);
+    assert.equal(nested.status, 'failed');
+    assert.match(String(nested.error), /tool rule denies/i);
+    assert.equal(calls, 0);
+
+    await sessionManager.setAgentMetadata(session.agent, { isolated: true, isolatedNode: 'remote-a', toolRules: [] });
+    assert.deepEqual(await callTool('read', { filePath: 'probe.txt' }, ctx), { output: 'allowed' });
+    assert.equal(calls, 1);
+  } finally {
+    (nodeExecution as any).executeRemoteNodeTool = originalExecute;
+    await sessionManager.setAgentMetadata(session.agent, { isolated: false }).catch(() => {});
+  }
+});
+
+test('Worker unified call_tool authorizes the concrete Node target and delegates MCP target authority', async () => {
+  const session = owner();
+  session.agent = `worker_dispatcher_call_tool_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  session.currentNode = 'remote-a';
+  const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
+  const originalNodeExecute = nodeExecution.executeRemoteNodeTool;
+  const originalMcpCall = mcpExternal.callMcpTool;
+  let nodeEffects = 0;
+  let mcpEffects = 0;
+  const nodeDescriptor = { source: 'node', name: 'custom_probe', args: {} };
+  const mcpDescriptor = { source: 'mcp', server: 'demo', name: 'probe', args: {} };
+  try {
+    (nodeExecution as any).executeRemoteNodeTool = async () => { nodeEffects += 1; return { output: 'node-ok' }; };
+    (mcpExternal as any).callMcpTool = async () => { mcpEffects += 1; return { output: 'mcp-ok' }; };
+    await sessionManager.setAgentMetadata(session.agent, {
+      isolated: true,
+      isolatedNode: 'remote-a',
+      toolRules: [
+        { effect: 'allow', source: 'builtin', tool: 'run_script' },
+        { effect: 'allow', source: 'mcp', server: 'demo', tool: 'probe' },
+        { effect: 'deny', source: 'node', node: 'remote-a', tool: 'custom_probe' },
+      ],
+    });
+
+    await assert.rejects(() => callTool('call_tool', nodeDescriptor, ctx), /denies node capability `custom_probe`/i);
+    await assert.rejects(() => tool_call_tool(nodeDescriptor, ctx), /denies node capability `custom_probe`/i);
+    const nested = await tool_run_script({
+      code: 'def main(args):\n    return call_tool(source="node", name="custom_probe", args={})',
+    }, ctx);
+    assert.equal(nested.status, 'failed');
+    assert.match(String(nested.error), /denies node capability `custom_probe`/i);
+    assert.equal(nodeEffects, 0);
+    assert.deepEqual(await tool_call_tool(mcpDescriptor, ctx), { output: 'mcp-ok' });
+    assert.equal(mcpEffects, 1);
+
+    await sessionManager.setAgentMetadata(session.agent, {
+      isolated: true,
+      isolatedNode: 'remote-a',
+      toolRules: [
+        { effect: 'allow', source: 'builtin', tool: 'run_script' },
+        { effect: 'allow', source: 'mcp', server: 'demo', tool: 'probe' },
+      ],
+    });
+    assert.deepEqual(await tool_call_tool(nodeDescriptor, ctx), { output: 'node-ok' });
+    assert.equal(nodeEffects, 1);
+    assert.equal(mcpEffects, 1);
+  } finally {
+    (nodeExecution as any).executeRemoteNodeTool = originalNodeExecute;
+    (mcpExternal as any).callMcpTool = originalMcpCall;
+    await sessionManager.setAgentMetadata(session.agent, { isolated: false }).catch(() => {});
+  }
+});
+
+test('worker placement permits live rule-only replacement but still blocks isolation-node changes', async () => {
+  const agentName = `worker_rule_update_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const agentDir = getAgentDir(agentName);
+  await fs.ensureDir(agentDir);
+  await sessionManager.setAgentMetadata(agentName, {
+    isolated: true,
+    isolatedNode: 'remote-a',
+    toolRules: [{ effect: 'allow', source: 'builtin', tool: 'run_script' }],
+  });
+  sessionManager.setSessionWorkerEnqueueSink(async () => {});
+  try {
+    const updated = await sessionManager.setAgentIsolation(agentName, 'remote-a', []);
+    assert.equal(updated.toolRuleCount, 0);
+    assert.deepEqual(sessionManager.getAgentToolRules(agentName), []);
+    await assert.rejects(() => sessionManager.setAgentIsolation(agentName, 'remote-b', []),
+      (error: any) => error instanceof RpcError && error.code === 'SESSION_WORKER_ADMIN_UNSUPPORTED');
+  } finally {
+    sessionManager.setSessionWorkerEnqueueSink(undefined);
+    await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
+    await fs.remove(agentDir).catch(() => {});
   }
 });
 
@@ -73,7 +183,6 @@ test('worker guards run before unsupported handlers and exact current state tool
   for (const [name, args, extra] of [
     ['create_agent', { agentName: 'unsafe', convertSession: true }],
     ['create_agent', { agentName: 'unsafe', sourceSessionId: 'other/session' }],
-    ['remote_node', { action: ' list ' }], ['node_tools', { action: 'List' }],
     ['stop_session', { sessionId: '' }], ['stop_session', { sessionId: ' ' }],
     ['session', { action: 'update-display-name', sessionId: 'other/session', name: 'x' }],
     ['set_session_child_model', { sessionId: ' ', model: 'x' }],
@@ -85,10 +194,6 @@ test('worker guards run before unsupported handlers and exact current state tool
   }
   assert.match(String(await callTool('compact_session', {}, ctx)), /cannot start background compaction from a busy model tool call/);
   await assert.rejects(() => callTool('compact_session', { sessionId: 'other/session' }, ctx), /exact current session/);
-  await assert.rejects(() => tool_call_tool({ source: 'builtin', name: 'remote_node', args: { action: 'List' } }, ctx),
-    { code: 'SESSION_WORKER_TOOL_UNAVAILABLE', retryable: true });
-  const crafted = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="remote_node", args={"action":" list "})' }, ctx);
-  assert.equal(crafted.status, 'failed'); assert.match(String(crafted.error), /SESSION_WORKER_TOOL_UNAVAILABLE/);
   assert.match(String(await callTool('session', { action: 'status' }, ctx)), new RegExp(session.id));
   assert.match(String(await callTool('set_goal', { goal: 'stay exact' }, ctx)), /ok/);
   assert.match(String(await callTool('wait', { reason: 'pause' }, ctx)), /object Object|stopCurrentTurn/);
@@ -116,7 +221,7 @@ test('worker direct and unified current-node routing carries exact cwd while exp
   const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
   try {
     await executeTools([{ id: 'direct', name: 'read', args: { filePath: 'x' } }], { sessionId: session.id }, session, { currentSessionEffects: effects });
-    await tool_call_tool({ source: 'builtin', name: 'read', args: { filePath: 'x' } }, ctx);
+    await tool_call_tool({ source: 'node', name: 'read', args: { filePath: 'x' } }, ctx);
     await tool_call_tool({ source: 'node', nodeId: 'remote-other', name: 'read', args: { filePath: 'x' } }, ctx);
     assert.deepEqual(calls.map(call => call[4]), [
       { currentNode: 'remote-current', cwd: '/exact/cwd' },
@@ -149,7 +254,7 @@ test('worker guarded errors precede direct notifications, permissions, and recur
   assert.match(String(nested.error), /SESSION_WORKER_TOOL_UNAVAILABLE/);
 });
 
-test('recursive Worker ToolScript guards drop transient progress while Main local progress remains', async () => {
+test('recursive call_tool target rejection drops Worker progress while Main local progress remains', async () => {
   const session = owner();
   let progressEvents = 0;
   const originals = { notify: sessionManager.notifySessionEvent, get: sessionManager.getSession,
@@ -163,14 +268,14 @@ test('recursive Worker ToolScript guards drop transient progress while Main loca
   try {
     const recursive = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="call_tool", args={"source":"builtin", "name":"move_session", "args":{}})' }, workerCtx);
     assert.equal(recursive.status, 'failed');
-    assert.match(String(recursive.error), /SESSION_WORKER_TOOL_UNAVAILABLE/);
+    assert.match(String(recursive.error), /dispatcher\/container.*not a concrete builtin capability/i);
     assert.equal(progressEvents, 0);
 
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'local-toolscript-progress-'));
     const filePath = path.join(dir, 'probe.txt');
     await fs.writeFile(filePath, 'local-progress');
     try {
-      const local = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="read", args={"filePath":args["path"]})', args: { path: filePath } },
+      const local = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="node", name="read", args={"filePath":args["path"]})', args: { path: filePath } },
         { ...workerCtx, sessionPlacement: 'local', toolUseId: 'outer-local' });
       assert.equal(local.status, 'completed');
       assert.ok(progressEvents >= 2);
@@ -197,7 +302,6 @@ test('worker node topology select and compound copy use fixed facade with exact 
   const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => { persists += 1; } };
   try {
     assert.match(String(await callTool('node', { action: 'list' }, ctx)), /master/);
-    assert.equal((await callTool('remote_node', { action: 'list' }, ctx)).nodes[0].id, 'master');
     assert.equal((await tool_search_tools({ sources: ['node'], query: 'read' }, ctx)).tools[0].name, 'read');
     assert.match(String(await callTool('node', { action: 'select', nodeId: 'remote-a' }, ctx)), /remote\/default/);
     assert.equal(session.currentNode, 'remote-a'); assert.equal(session.cwd, undefined); assert.equal(persists, 1);
