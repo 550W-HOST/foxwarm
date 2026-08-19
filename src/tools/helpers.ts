@@ -62,8 +62,6 @@ export type PendingWriteRef = {
     id: string;
     scopeKey: string;
     agentName: string;
-    fullPath: string;
-    displayPath: string;
     content: string;
     createdAt: number;
     expiresAt: number;
@@ -104,7 +102,7 @@ export function prunePendingWriteRefs(now = Date.now()) {
     }
 }
 
-export function registerPendingWriteRef(ctx: ToolContext, agentName: string, fullPath: string, displayPath: string, content: string): PendingWriteRef | null {
+export function registerPendingWriteRef(ctx: ToolContext, agentName: string, content: string): PendingWriteRef | null {
     const sizeBytes = Buffer.byteLength(content, 'utf8');
     if (sizeBytes > PENDING_WRITE_REF_MAX_CONTENT_BYTES) {
         return null;
@@ -117,8 +115,6 @@ export function registerPendingWriteRef(ctx: ToolContext, agentName: string, ful
         id,
         scopeKey: getPendingWriteScopeKey(ctx, agentName),
         agentName,
-        fullPath,
-        displayPath,
         content,
         createdAt: now,
         expiresAt: now + PENDING_WRITE_REF_TTL_MS,
@@ -129,7 +125,7 @@ export function registerPendingWriteRef(ctx: ToolContext, agentName: string, ful
     return ref;
 }
 
-export function consumePendingWriteRef(ctx: ToolContext, agentName: string, refId: string, fullPath: string): string {
+export function peekPendingWriteRefContent(ctx: ToolContext, agentName: string, refId: string): string {
     prunePendingWriteRefs();
     const ref = pendingWriteRefs.get(refId);
     if (!ref) {
@@ -137,26 +133,6 @@ export function consumePendingWriteRef(ctx: ToolContext, agentName: string, refI
     }
     if (ref.scopeKey !== getPendingWriteScopeKey(ctx, agentName) || ref.agentName !== agentName) {
         throw new Error(`Pending write contentRef ${refId} is not available in this session/agent.`);
-    }
-    if (path.resolve(ref.fullPath) !== path.resolve(fullPath)) {
-        throw new Error(`Pending write contentRef ${refId} was created for ${ref.displayPath}; it cannot be used to write a different file.`);
-    }
-
-    pendingWriteRefs.delete(refId);
-    return ref.content;
-}
-
-export function peekPendingWriteRefContent(ctx: ToolContext, agentName: string, refId: string, fullPath: string): string {
-    prunePendingWriteRefs();
-    const ref = pendingWriteRefs.get(refId);
-    if (!ref) {
-        throw new Error(`Pending write contentRef not found or expired: ${refId}. Re-run write with content, or use a fresh contentRef from the previous write error.`);
-    }
-    if (ref.scopeKey !== getPendingWriteScopeKey(ctx, agentName) || ref.agentName !== agentName) {
-        throw new Error(`Pending write contentRef ${refId} is not available in this session/agent.`);
-    }
-    if (path.resolve(ref.fullPath) !== path.resolve(fullPath)) {
-        throw new Error(`Pending write contentRef ${refId} was created for ${ref.displayPath}; it cannot be used to write a different file.`);
     }
 
     return ref.content;

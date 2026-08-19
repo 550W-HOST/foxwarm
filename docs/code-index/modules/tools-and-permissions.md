@@ -38,7 +38,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 - Only `read`, `write`, `edit`, `apply_patch`, `exec`, and `browse_*` are registered node-environment builtins. The removed `delete_file` surface has no compatibility alias; use structured `apply_patch` delete operations or an explicit shell command when appropriate.
 - `write` does not create missing parent directories unless `createDirs=true` is explicit.
 - Exact edit requires exactly one match; ambiguous edits fail.
-- Pending write references are scoped, bounded, and expire.
+- Pending write references are scoped, bounded, expire, and may reuse their cached payload at any independently authorized write target in the same session and agent.
 - Oversized tool results are saved and replaced with a bounded line-aware excerpt before entering model context.
 - Image results receive stable IDs before model serialization.
 - Timer builtins remain discoverable but are not injected into the default model schema.

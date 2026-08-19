@@ -134,19 +134,21 @@ function extractWriteContentRef(error: unknown): string {
   return match[1];
 }
 
-test('write can reuse cached contentRef after existing-file refusal', async () => {
+test('write can reuse cached contentRef at a different existing destination and consumes it on success', async () => {
   const agentDir = getAgentDir('main');
   const baseDir = path.join(agentDir, '.temp', `write-ref-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-  const filePath = path.join(baseDir, 'note.txt');
+  const refusedPath = path.join(baseDir, 'refused.txt');
+  const destinationPath = path.join(baseDir, 'destination.txt');
   const ctx = { sessionId: `main/write_ref_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, session: { agent: 'main' } };
 
   try {
     await fs.ensureDir(baseDir);
-    await fs.writeFile(filePath, 'old');
+    await fs.writeFile(refusedPath, 'refused old');
+    await fs.writeFile(destinationPath, 'destination old');
 
     let contentRef = '';
     await assert.rejects(
-      async () => write({ filePath, content: 'new cached content' }, ctx as any),
+      async () => write({ filePath: refusedPath, content: 'new cached content' }, ctx as any),
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         assert.match(message, /File already exists/);
@@ -156,8 +158,13 @@ test('write can reuse cached contentRef after existing-file refusal', async () =
       },
     );
 
-    await write({ filePath, contentRef, overwrite: true }, ctx as any);
-    assert.equal(await fs.readFile(filePath, 'utf8'), 'new cached content');
+    await write({ filePath: destinationPath, contentRef, overwrite: true }, ctx as any);
+    assert.equal(await fs.readFile(refusedPath, 'utf8'), 'refused old');
+    assert.equal(await fs.readFile(destinationPath, 'utf8'), 'new cached content');
+    await assert.rejects(
+      () => write({ filePath: refusedPath, contentRef, overwrite: true }, ctx as any),
+      /not found or expired/,
+    );
   } finally {
     await fs.remove(baseDir);
   }
@@ -182,7 +189,7 @@ test('write existing-file refusal gives an exact executable contentRef call with
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         const contentRef = extractWriteContentRef(err);
-        assert.equal(message, `File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file. The attempted content is already cached. Do not include or pass the \`content\` argument when using \`contentRef\`; it is unnecessary. To confirm overwriting, call write({ filePath: ${JSON.stringify(filePath)}, contentRef: ${JSON.stringify(contentRef)}, overwrite: true }). If you intentionally want to correct or replace the attempted content instead, omit \`contentRef\` and call \`write\` with the new \`content\` plus the same \`filePath\` and \`overwrite: true\`. Never pass \`content\` and \`contentRef\` together. The contentRef expires in 15 minutes and only works in this session/agent for the same path.`);
+        assert.equal(message, `File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file. The attempted content is already cached. Do not include or pass the \`content\` argument when using \`contentRef\`; it is unnecessary. To confirm overwriting, call write({ filePath: ${JSON.stringify(filePath)}, contentRef: ${JSON.stringify(contentRef)}, overwrite: true }). The cached payload may instead be written to another authorized \`filePath\` in the same session/agent. If you intentionally want to correct or replace the attempted content instead, omit \`contentRef\` and call \`write\` with the new \`content\` plus the desired \`filePath\` and \`overwrite: true\`. Never pass \`content\` and \`contentRef\` together. The contentRef expires in 15 minutes and can be reused with another authorized filePath in this session/agent.`);
         assert.doesNotMatch(message, /secret cached content|resend/i);
         return true;
       },
@@ -192,38 +199,42 @@ test('write existing-file refusal gives an exact executable contentRef call with
   }
 });
 
-test('write requires existing parent directories by default and can retry missing-parent contentRef with createDirs', async () => {
+test('write retains contentRef after a failed new-path retry and can create a different missing-parent destination', async () => {
   const agentDir = getAgentDir('main');
   const baseDir = path.join(agentDir, '.temp', `write-mkdir-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const missingParent = path.join(baseDir, 'missing');
+  const refusedPath = path.join(baseDir, 'refused.txt');
   const filePath = path.join(missingParent, 'child', 'note.txt');
   const ctx = { sessionId: `main/write_mkdir_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, session: { agent: 'main' } };
 
   try {
     await fs.ensureDir(baseDir);
+    await fs.writeFile(refusedPath, 'refused old');
 
     let contentRef = '';
     await assert.rejects(
-      async () => write({ filePath, content: 'cached missing parent content' }, ctx as any),
+      async () => write({ filePath: refusedPath, content: 'cached missing parent content' }, ctx as any),
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
-        assert.match(message, /Parent directory does not exist/);
-        assert.match(message, new RegExp(missingParent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-        assert.match(message, /createDirs=true/);
-        assert.match(message, /contentRef/);
-        assert.doesNotMatch(message, /cached missing parent content/);
         contentRef = extractWriteContentRef(err);
-        assert.ok(message.includes(` The attempted content is already cached. Do not include or pass the \`content\` argument when using \`contentRef\`; it is unnecessary. To retry and create the missing parent directories, call write({ filePath: ${JSON.stringify(filePath)}, contentRef: ${JSON.stringify(contentRef)}, overwrite: true, createDirs: true }). If you intentionally want to correct or replace the attempted content instead, omit \`contentRef\` and call \`write\` with the new \`content\` plus the same \`filePath\` and \`createDirs: true\`. Never pass \`content\` and \`contentRef\` together.`));
-        assert.doesNotMatch(message, /resend/i);
+        assert.doesNotMatch(message, /cached missing parent content/);
         return true;
       },
     );
 
     await assert.rejects(
       () => write({ filePath, contentRef, overwrite: true }, ctx as any),
-      /Parent directory does not exist/,
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        assert.match(message, /Parent directory does not exist/);
+        assert.match(message, new RegExp(missingParent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+        assert.ok(message.includes(` The attempted content is already cached. Do not include or pass the \`content\` argument when using \`contentRef\`; it is unnecessary. To retry and create the missing parent directories, call write({ filePath: ${JSON.stringify(filePath)}, contentRef: ${JSON.stringify(contentRef)}, overwrite: true, createDirs: true }). The cached payload may instead be written to another authorized \`filePath\` in the same session/agent. If you intentionally want to correct or replace the attempted content instead, omit \`contentRef\` and call \`write\` with the new \`content\` plus the desired \`filePath\` and \`createDirs: true\`. Never pass \`content\` and \`contentRef\` together.`));
+        assert.doesNotMatch(message, /resend/i);
+        return true;
+      },
     );
     await write({ filePath, contentRef, overwrite: true, createDirs: true }, ctx as any);
+    assert.equal(await fs.readFile(refusedPath, 'utf8'), 'refused old');
     assert.equal(await fs.readFile(filePath, 'utf8'), 'cached missing parent content');
   } finally {
     await fs.remove(baseDir);
@@ -233,8 +244,11 @@ test('write requires existing parent directories by default and can retry missin
 test('write schema explicitly prohibits content alongside contentRef', () => {
   const definition = definitions.find(entry => entry.name === 'write');
   assert.ok(definition);
+  const toolDescription = String(definition.description);
   const description = String((definition.parameters.properties as any).contentRef.description);
-  assert.equal(description, 'Short-lived reference returned by a previous write attempt that failed because the file already exists or a parent directory was missing. The attempted content is already cached. For a cached retry, use `contentRef` with `overwrite=true` and the same `filePath`, and omit `content`. To intentionally correct or replace the attempted content, omit `contentRef` and call `write` with newly generated `content` plus the required overwrite/createDirs flags instead. Never pass `content` and `contentRef` together.');
+  assert.equal(description, 'Short-lived reference returned by a previous write attempt that failed because the file already exists or a parent directory was missing. The attempted content is already cached. For a cached retry, use `contentRef` with `overwrite=true`, choose this or another authorized `filePath` in the same session/agent, and omit `content`. To intentionally correct or replace the attempted content, omit `contentRef` and call `write` with newly generated `content` plus the desired `filePath` and required overwrite/createDirs flags instead. Never pass `content` and `contentRef` together.');
+  assert.match(toolDescription, /another authorized filePath in the same session\/agent/);
+  assert.match(description, /another authorized `filePath` in the same session\/agent/);
   assert.doesNotMatch(description, /resend/i);
 });
 
@@ -271,18 +285,17 @@ test('write accepts symlinked parent directories without createDirs', async () =
   }
 });
 
-test('write contentRef is scoped to the same session and same path', async () => {
+test('write contentRef remains scoped to the exact session and agent', async () => {
   const agentDir = getAgentDir('main');
   const baseDir = path.join(agentDir, '.temp', `write-ref-scope-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const firstPath = path.join(baseDir, 'first.txt');
-  const secondPath = path.join(baseDir, 'second.txt');
   const ctx = { sessionId: `main/write_ref_scope_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, session: { agent: 'main' } };
   const otherCtx = { sessionId: `${ctx.sessionId}_other`, session: { agent: 'main' } };
+  const otherAgentCtx = { sessionId: ctx.sessionId, session: { agent: 'other-agent' } };
 
   try {
     await fs.ensureDir(baseDir);
     await fs.writeFile(firstPath, 'first old');
-    await fs.writeFile(secondPath, 'second old');
 
     let contentRef = '';
     await assert.rejects(
@@ -302,8 +315,8 @@ test('write contentRef is scoped to the same session and same path', async () =>
       /not available in this session\/agent/,
     );
     await assert.rejects(
-      () => write({ filePath: secondPath, contentRef, overwrite: true }, ctx as any),
-      /cannot be used to write a different file/,
+      () => write({ filePath: firstPath, contentRef, overwrite: true }, otherAgentCtx as any),
+      /not available in this session\/agent/,
     );
     await assert.rejects(
       () => write({ filePath: firstPath, contentRef: 'write_missing_ref', overwrite: true }, ctx as any),
@@ -492,6 +505,50 @@ test('isolated read remains restricted to the current agent directory on master'
     );
   } finally {
     await sessionManager.setAgentMetadata(agentName, { isolated: false } as any);
+    await fs.remove(outsidePath);
+  }
+});
+
+test('isolated write path guard rejects contentRef reuse outside the agent directory before any write', async () => {
+  const agentName = `isolated_write_ref_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const baseDir = path.join(getAgentDir(agentName), '.temp', 'write-ref');
+  const refusedPath = path.join(baseDir, 'refused.txt');
+  const authorizedPath = path.join(baseDir, 'authorized.txt');
+  const outsidePath = path.join('/tmp', `foxwarm-isolated-write-ref-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+  const ctx = {
+    sessionId: `${agentName}/session`,
+    session: { agent: agentName },
+    runtimeNodeId: 'master',
+  };
+
+  try {
+    await sessionManager.setAgentMetadata(agentName, { isolated: true, isolatedNode: 'sandbox-docker' } as any);
+    await fs.ensureDir(baseDir);
+    await fs.writeFile(refusedPath, 'refused old');
+    await fs.writeFile(authorizedPath, 'authorized old');
+    await fs.writeFile(outsidePath, 'outside sentinel');
+
+    let contentRef = '';
+    await assert.rejects(
+      () => write({ filePath: refusedPath, content: 'cached isolated content' }, ctx as any),
+      (err: unknown) => {
+        contentRef = extractWriteContentRef(err);
+        return true;
+      },
+    );
+
+    await assert.rejects(
+      () => write({ filePath: outsidePath, contentRef, overwrite: true }, ctx as any),
+      new RegExp(`Isolated agent session can only access agents/${agentName}/`),
+    );
+    assert.equal(await fs.readFile(outsidePath, 'utf8'), 'outside sentinel');
+
+    await write({ filePath: authorizedPath, contentRef, overwrite: true }, ctx as any);
+    assert.equal(await fs.readFile(refusedPath, 'utf8'), 'refused old');
+    assert.equal(await fs.readFile(authorizedPath, 'utf8'), 'cached isolated content');
+  } finally {
+    await sessionManager.setAgentMetadata(agentName, { isolated: false } as any);
+    await fs.remove(baseDir);
     await fs.remove(outsidePath);
   }
 });

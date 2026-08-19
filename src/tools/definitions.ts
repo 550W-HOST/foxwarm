@@ -59,12 +59,12 @@ export const definitions = [
         {
             name: 'write',
             defaultInject: true,
-            description: 'Write a file. By default, parent directories must already exist; pass createDirs=true to create missing parent directories. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed. Provide either content, or contentRef from a previous write failure with overwrite=true to reuse the cached attempted content for the same path.',
+            description: 'Write a file. By default, parent directories must already exist; pass createDirs=true to create missing parent directories. Relative paths resolve from the current session cwd when set, otherwise from the current agent folder. Absolute paths and ~/... are also accepted when allowed. Provide either content, or contentRef from a previous write failure with overwrite=true to reuse the cached attempted content at this or another authorized filePath in the same session/agent.',
             parameters: {
                 type: 'object',
                 properties: { 
                     content: { type: 'string' },
-                    contentRef: { type: 'string', description: 'Short-lived reference returned by a previous write attempt that failed because the file already exists or a parent directory was missing. The attempted content is already cached. For a cached retry, use `contentRef` with `overwrite=true` and the same `filePath`, and omit `content`. To intentionally correct or replace the attempted content, omit `contentRef` and call `write` with newly generated `content` plus the required overwrite/createDirs flags instead. Never pass `content` and `contentRef` together.' },
+                    contentRef: { type: 'string', description: 'Short-lived reference returned by a previous write attempt that failed because the file already exists or a parent directory was missing. The attempted content is already cached. For a cached retry, use `contentRef` with `overwrite=true`, choose this or another authorized `filePath` in the same session/agent, and omit `content`. To intentionally correct or replace the attempted content, omit `contentRef` and call `write` with newly generated `content` plus the desired `filePath` and required overwrite/createDirs flags instead. Never pass `content` and `contentRef` together.' },
                     filePath: { type: 'string' },
                     overwrite: { type: 'boolean', description: 'Overwrite existing file. Default: false' },
                     createDirs: { type: 'boolean', description: 'Create missing parent directories before writing. Default: false' }
