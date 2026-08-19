@@ -11,6 +11,7 @@ import { tool_search_tools } from './tools/unifiedSearch';
 import { tool_run_script } from './toolscript';
 import { executeTools } from './llm';
 import * as nodeExecution from './nodeExecution';
+import * as mcpExternal from './mcpExternalService';
 import * as agentMetadata from './session/agentMetadata';
 import { RpcError } from './rpc';
 import * as fileDelivery from './fileDelivery';
@@ -86,6 +87,60 @@ test('Worker direct, unified, and ToolScript calls share live exact agent rules'
     assert.equal(calls, 1);
   } finally {
     (nodeExecution as any).executeRemoteNodeTool = originalExecute;
+    await sessionManager.setAgentMetadata(session.agent, { isolated: false }).catch(() => {});
+  }
+});
+
+test('Worker unified outer call_tool deny fences reverse Node and MCP effects', async () => {
+  const session = owner();
+  session.agent = `worker_outer_call_tool_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  session.currentNode = 'remote-a';
+  const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
+  const originalNodeExecute = nodeExecution.executeRemoteNodeTool;
+  const originalMcpCall = mcpExternal.callMcpTool;
+  let nodeEffects = 0;
+  let mcpEffects = 0;
+  const nodeDescriptor = { source: 'node', name: 'custom_probe', args: {} };
+  const mcpDescriptor = { source: 'mcp', server: 'demo', name: 'probe', args: {} };
+  try {
+    (nodeExecution as any).executeRemoteNodeTool = async () => { nodeEffects += 1; return { output: 'node-ok' }; };
+    (mcpExternal as any).callMcpTool = async () => { mcpEffects += 1; return { output: 'mcp-ok' }; };
+    await sessionManager.setAgentMetadata(session.agent, {
+      isolated: true,
+      isolatedNode: 'remote-a',
+      toolRules: [
+        { effect: 'allow', source: 'builtin', tool: 'run_script' },
+        { effect: 'allow', source: 'mcp', server: 'demo', tool: 'probe' },
+        { effect: 'deny', source: 'builtin', tool: 'call_tool' },
+      ],
+    });
+
+    await assert.rejects(() => callTool('call_tool', nodeDescriptor, ctx), /denies builtin capability `call_tool`/i);
+    await assert.rejects(() => tool_call_tool(nodeDescriptor, ctx), /denies builtin capability `call_tool`/i);
+    await assert.rejects(() => tool_call_tool(mcpDescriptor, ctx), /denies builtin capability `call_tool`/i);
+    const nested = await tool_run_script({
+      code: 'def main(args):\n    return call_tool(source="node", name="custom_probe", args={})',
+    }, ctx);
+    assert.equal(nested.status, 'failed');
+    assert.match(String(nested.error), /denies builtin capability `call_tool`/i);
+    assert.equal(nodeEffects, 0);
+    assert.equal(mcpEffects, 0);
+
+    await sessionManager.setAgentMetadata(session.agent, {
+      isolated: true,
+      isolatedNode: 'remote-a',
+      toolRules: [
+        { effect: 'allow', source: 'builtin', tool: 'run_script' },
+        { effect: 'allow', source: 'mcp', server: 'demo', tool: 'probe' },
+      ],
+    });
+    assert.deepEqual(await tool_call_tool(nodeDescriptor, ctx), { output: 'node-ok' });
+    assert.deepEqual(await tool_call_tool(mcpDescriptor, ctx), { output: 'mcp-ok' });
+    assert.equal(nodeEffects, 1);
+    assert.equal(mcpEffects, 1);
+  } finally {
+    (nodeExecution as any).executeRemoteNodeTool = originalNodeExecute;
+    (mcpExternal as any).callMcpTool = originalMcpCall;
     await sessionManager.setAgentMetadata(session.agent, { isolated: false }).catch(() => {});
   }
 });

@@ -751,6 +751,63 @@ test('isolated exact rules align Main-local discovery, direct, unified, ToolScri
   }
 });
 
+test('isolated unified calls authorize outer call_tool before the concrete target', async () => {
+  const sourceId = `outer_call_tool_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const agentName = `outer_call_tool_agent_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const session = await sessionManager.getSession(sourceId);
+  session.agent = agentName;
+  session.currentNode = 'remote-a';
+  const ctx: any = { sessionId: sourceId, session };
+  const originalExecute = nodeExecution.executeRemoteNodeTool;
+  let effects = 0;
+  const descriptor = { source: 'node', name: 'custom_probe', args: {} };
+  try {
+    (nodeExecution as any).executeRemoteNodeTool = async () => { effects += 1; return { output: 'allowed' }; };
+    await sessionManager.setAgentMetadata(agentName, {
+      isolated: true,
+      isolatedNode: 'remote-a',
+      toolRules: [
+        { effect: 'allow', source: 'builtin', tool: 'run_script' },
+        { effect: 'deny', source: 'builtin', tool: 'call_tool' },
+      ],
+    });
+
+    const found: any = await search_tools({ query: 'call tool', sources: ['builtin'], limit: 200 }, ctx);
+    assert.equal(found.tools.some((tool: any) => tool.toolId === 'builtin:call_tool'), false);
+    await assert.rejects(() => tools.callTool('call_tool', descriptor, ctx), /denies builtin capability `call_tool`/i);
+    await assert.rejects(() => call_tool(descriptor, ctx), /denies builtin capability `call_tool`/i);
+    const nested = await tools.run_script({
+      code: 'def main(args):\n    return call_tool(source="node", name="custom_probe", args={})',
+    }, ctx);
+    assert.equal(nested.status, 'failed');
+    assert.match(String(nested.error), /denies builtin capability `call_tool`/i);
+    assert.equal(effects, 0);
+
+    await sessionManager.setAgentMetadata(agentName, {
+      isolated: true,
+      isolatedNode: 'remote-a',
+      toolRules: [{ effect: 'allow', source: 'builtin', tool: 'run_script' }],
+    });
+    assert.deepEqual(await call_tool(descriptor, ctx), { output: 'allowed' });
+    assert.equal(effects, 1);
+
+    await sessionManager.setAgentMetadata(agentName, {
+      isolated: true,
+      isolatedNode: 'remote-a',
+      toolRules: [
+        { effect: 'allow', source: 'builtin', tool: 'call_tool' },
+        { effect: 'deny', source: 'node', node: 'remote-a', tool: 'custom_probe' },
+      ],
+    });
+    await assert.rejects(() => call_tool(descriptor, ctx), /denies node capability `custom_probe`/i);
+    assert.equal(effects, 1);
+  } finally {
+    (nodeExecution as any).executeRemoteNodeTool = originalExecute;
+    await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
+    await sessionManager.deleteSession(sourceId).catch(() => false);
+  }
+});
+
 test('search_tools and call_tool descriptions include usage guidance and examples', () => {
   const searchDef = definitions.find((entry) => entry.name === 'search_tools');
   const callDef = definitions.find((entry) => entry.name === 'call_tool');
