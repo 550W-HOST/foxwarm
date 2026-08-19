@@ -524,7 +524,7 @@ function buildMissingConfigGuidance(provider = 'auto', options = {}) {
   if (wantsGemini) {
     lines.push(
       '',
-      'Fallback/legacy Gemini configuration (preserved from ask-gemini)',
+      'Gemini fallback configuration',
       '  export GEMINI_API_KEY="YOUR_GEMINI_API_KEY"',
       '  # or',
       '  export GOOGLE_API_KEY="YOUR_GEMINI_API_KEY"',

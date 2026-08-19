@@ -122,13 +122,16 @@ test('web-search catalog metadata marks the skill as fallback-only', async () =>
   assert.ok(skill, 'bundled web-search skill should be discoverable');
   assert.match(skill.description, /fallback-only/i);
   assert.match(skill.description, /built-in\/native web search/i);
-  assert.match(skill.description, /isolated session\/environment/i);
+  assert.match(skill.description, /direct CLI in isolated environments/i);
+  assert.match(skill.description, /administrator-allowlisted MCP tool/i);
 
   const loaded = await skillCore.loadSkillDocuments('web-search', { agentName: 'main' });
   const document = loaded.documents.find(entry => entry.filePath.endsWith('/SKILL.md'));
   assert.ok(document, 'bundled web-search entry document should load');
   assert.match(document.content, /Do not load or run this skill when the current model\/provider already exposes built-in\/native web search/i);
-  assert.match(document.content, /Do not use this skill from an isolated session or environment/i);
+  assert.match(document.content, /direct CLI is trusted-host fallback tooling and is \*\*forbidden from isolated sessions or environments\*\*/i);
+  assert.match(document.content, /mcp:betabot-web-search\/web_search/);
+  assert.match(document.content, /do not call `mcp_config`/i);
 });
 
 test('snapshot skill catalog uses compact escaped XML and reports the selected source after precedence', async () => {
