@@ -10,7 +10,9 @@ import {
 } from './rpc';
 import * as mcpClient from './mcpClient';
 import * as sessionManager from './sessionManager';
-import { checkToolPermission } from './isolatedCheck';
+import { checkToolPermission, isToolVisibleForSession } from './isolatedCheck';
+import type { ResolvedToolPermissionIdentity } from './permissions';
+import type { Session } from './types';
 
 export type McpExternalConfigureRequest =
   | { sourceSessionId: string; name: string; action: 'set-enabled'; enabled: boolean }
@@ -161,7 +163,7 @@ async function runWithAllSecretsRedacted<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-async function authorize(sourceSessionId: unknown, toolName: string, args: Record<string, unknown> = {}, expectedSourceSessionId?: string, denyIsolated = false): Promise<string> {
+async function authorize(sourceSessionId: unknown, identity: ResolvedToolPermissionIdentity, args: Record<string, unknown> = {}, expectedSourceSessionId?: string): Promise<Session> {
   const source = requireString(sourceSessionId, 'sourceSessionId');
   if (expectedSourceSessionId && source !== expectedSourceSessionId) {
     throw new RpcError('MCP_EXTERNAL_SOURCE_MISMATCH', `MCP external reverse source must be \`${expectedSourceSessionId}\`.`);
@@ -170,32 +172,49 @@ async function authorize(sourceSessionId: unknown, toolName: string, args: Recor
   if (!sourceSession) {
     throw new RpcError('MCP_EXTERNAL_SOURCE_NOT_FOUND', `Source session \`${source}\` was not found.`);
   }
-  if (denyIsolated && sessionManager.isSessionEffectivelyIsolated(sourceSession)) {
-    throw new Error('MCP services are unavailable to isolated sessions.');
-  }
-  await checkToolPermission(toolName, source, 'master', args);
-  return source;
+  await checkToolPermission(identity, source, 'master', args);
+  return sourceSession;
 }
 
 export function createMcpExternalServiceHandler(options: { expectedSourceSessionId?: string } = {}): RpcServiceHandler<typeof mcpExternalServiceDescriptor> {
   return {
     async listServers(input) {
       const request = requireExactRecord(input, 'listServers request', ['sourceSessionId']);
-      await authorize(request.sourceSessionId, 'list_mcp_servers', {}, options.expectedSourceSessionId);
+      await authorize(request.sourceSessionId, { source: 'builtin', tool: 'list_mcp_servers' }, {}, options.expectedSourceSessionId);
       return { servers: await mcpClient.listServers() };
     },
     async listTools(input) {
       const request = requireExactRecord(input, 'listTools request', ['sourceSessionId', 'server']);
       const server = optionalString(request.server, 'server');
-      await authorize(request.sourceSessionId, 'search_tools', { sources: ['mcp'], ...(server ? { server } : {}) }, options.expectedSourceSessionId, true);
-      return { result: await runWithAllSecretsRedacted(() => mcpClient.listTools(server)) };
+      const source = requireString(request.sourceSessionId, 'sourceSessionId');
+      if (options.expectedSourceSessionId && source !== options.expectedSourceSessionId) {
+        throw new RpcError('MCP_EXTERNAL_SOURCE_MISMATCH', `MCP external reverse source must be \`${options.expectedSourceSessionId}\`.`);
+      }
+      const sourceSession = sessionManager.getSessionCatalog(source);
+      if (!sourceSession) throw new RpcError('MCP_EXTERNAL_SOURCE_NOT_FOUND', `Source session \`${source}\` was not found.`);
+      const normalizedServer = server || 'default';
+      if (sessionManager.isSessionEffectivelyIsolated(sourceSession)) {
+        const hasAllowedTool = sessionManager.getAgentToolRules(sourceSession.agent || 'main')
+          .some(rule => rule.effect === 'allow' && rule.source === 'mcp' && rule.server === normalizedServer);
+        if (!hasAllowedTool) throw new Error('No MCP tools are allowed for this isolated agent on the requested server.');
+      }
+      const listed = await runWithAllSecretsRedacted(() => mcpClient.listTools(server));
+      const visible = (tool: any) => isToolVisibleForSession(sourceSession, {
+        source: 'mcp', server: normalizedServer, tool: String(tool?.name || ''),
+      });
+      const result = Array.isArray(listed)
+        ? listed.filter(visible)
+        : listed && Array.isArray((listed as any).tools)
+          ? { ...(listed as any), tools: (listed as any).tools.filter(visible) }
+          : listed;
+      return { result };
     },
     async callTool(input) {
       const request = requireExactRecord(input, 'callTool request', ['sourceSessionId', 'server', 'name', 'args']);
       const server = optionalString(request.server, 'server');
       const name = requireString(request.name, 'name');
       const args = requireJsonArgs(request.args);
-      await authorize(request.sourceSessionId, 'call_tool', { source: 'mcp', ...(server ? { server } : {}), name, args }, options.expectedSourceSessionId, true);
+      await authorize(request.sourceSessionId, { source: 'mcp', server: server || 'default', tool: name }, args, options.expectedSourceSessionId);
       return { result: await runWithAllSecretsRedacted(() => mcpClient.callTool(server, name, args)) };
     },
     async configure(input) {
@@ -207,7 +226,7 @@ export function createMcpExternalServiceHandler(options: { expectedSourceSession
         if (typeof request.enabled !== 'boolean') {
           throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', 'enabled must be a boolean.');
         }
-        await authorize(request.sourceSessionId, 'mcp_config', { name, action }, options.expectedSourceSessionId);
+        await authorize(request.sourceSessionId, { source: 'builtin', tool: 'mcp_config' }, { name, action }, options.expectedSourceSessionId);
         try {
           await mcpClient.setServerEnabled(name, request.enabled);
         } catch (error) {
@@ -217,7 +236,7 @@ export function createMcpExternalServiceHandler(options: { expectedSourceSession
         requireExactRecord(request, 'configure upsert request', ['sourceSessionId', 'name', 'action', 'config']);
         const name = requireString(request.name, 'name');
         const config = requireServerConfig(request.config);
-        await authorize(request.sourceSessionId, 'mcp_config', { name, action }, options.expectedSourceSessionId);
+        await authorize(request.sourceSessionId, { source: 'builtin', tool: 'mcp_config' }, { name, action }, options.expectedSourceSessionId);
         try {
           await mcpClient.upsertServer(name, config);
         } catch (error) {

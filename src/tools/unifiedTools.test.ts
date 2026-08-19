@@ -237,6 +237,25 @@ test('mcp_config schema exposes envJson and headersJson fallbacks', () => {
   assert.equal(def?.parameters?.properties?.headersJson?.type, 'string');
 });
 
+test('agent isolation management schemas expose only exact source-specific tool rules', () => {
+  for (const name of ['create_agent', 'set_agent_isolated']) {
+    const definition: any = definitions.find(item => item.name === name);
+    const ruleSchema = definition?.parameters?.properties?.toolRules;
+    assert.equal(ruleSchema?.type, 'array');
+    assert.equal(ruleSchema?.maxItems, 256);
+    assert.equal(ruleSchema?.items?.oneOf?.length, 3);
+    assert.deepEqual(ruleSchema.items.oneOf.map((item: any) => item.required), [
+      ['effect', 'source', 'tool'],
+      ['effect', 'source', 'node', 'tool'],
+      ['effect', 'source', 'server', 'tool'],
+    ]);
+    assert.equal(ruleSchema.items.oneOf.every((item: any) => item.additionalProperties === false), true);
+    assert.equal(ruleSchema.items.oneOf.every((item: any) => item.properties.tool.maxLength === 128), true);
+    assert.equal(ruleSchema.items.oneOf[1].properties.node.maxLength, 128);
+    assert.equal(ruleSchema.items.oneOf[2].properties.server.maxLength, 128);
+  }
+});
+
 test('mcp_config parses envJson and headersJson string-map fallbacks', async () => {
   await sessionManager.getSession('main');
   const originalUpsertServer = mcpClient.upsertServer;
@@ -610,7 +629,7 @@ test('master Node discovery and dynamic calls expose only canonical node-environ
     await sessionManager.setAgentMetadata(isolatedAgent, { isolated: true, isolatedNode: 'bound-remote' });
     await assert.rejects(
       () => call_tool({ source: 'node', nodeId: 'master', name: 'read', args: { filePath: '/tmp/outside-isolated-agent' } }, { sessionId: isolatedId, session: isolated }),
-      /restricted to agent-level allowed tools|cannot use read|can only access/i,
+      /restricted to agent-level allowed tools|cannot use (?:node capability `)?read|can only access/i,
     );
 
     const forwarded: any[] = [];
@@ -639,6 +658,87 @@ test('master Node discovery and dynamic calls expose only canonical node-environ
     await sessionManager.setAgentMetadata(isolatedAgent, { isolated: false }).catch(() => {});
     await sessionManager.deleteSession(sourceId).catch(() => false);
     await sessionManager.deleteSession(isolatedId).catch(() => false);
+  }
+});
+
+test('isolated exact rules align Main-local discovery, direct, unified, ToolScript, Node, and MCP calls', async () => {
+  const sourceId = `rules_main_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const agentName = `rules_agent_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const session = await sessionManager.getSession(sourceId);
+  session.agent = agentName;
+  session.currentNode = 'bound-node';
+  await sessionManager.saveSession(sourceId);
+  await sessionManager.setAgentMetadata(agentName, {
+    isolated: true,
+    isolatedNode: 'bound-node',
+    toolRules: [
+      { effect: 'allow', source: 'builtin', tool: 'run_script' },
+      { effect: 'allow', source: 'builtin', tool: 'list_agents' },
+      { effect: 'deny', source: 'builtin', tool: 'skill' },
+      { effect: 'deny', source: 'node', node: 'bound-node', tool: 'exec' },
+      { effect: 'allow', source: 'node', node: 'master', tool: 'read' },
+      { effect: 'allow', source: 'mcp', server: 'demo', tool: 'probe' },
+    ],
+  });
+  const originals = {
+    listNodesWithTools: nodesManager.listNodesWithTools,
+    getNode: nodesManager.getNode,
+    executeTool: nodesManager.executeTool,
+    listTools: mcpClient.listTools,
+    callTool: mcpClient.callTool,
+  };
+  try {
+    (nodesManager as any).listNodesWithTools = () => [{
+      id: 'bound-node', type: 'test', tools: [
+        { name: 'read', description: 'read', parameters: { type: 'object' } },
+        { name: 'exec', description: 'exec', parameters: { type: 'object' } },
+        { name: 'custom_probe', description: 'custom', parameters: { type: 'object' } },
+      ],
+    }, {
+      id: 'master', type: 'master', tools: [
+        { name: 'read', description: 'master read', parameters: { type: 'object' } },
+        { name: 'exec', description: 'master exec', parameters: { type: 'object' } },
+      ],
+    }];
+    (nodesManager as any).getNode = () => ({ id: 'bound-node', ws: {}, tools: new Set(['read', 'exec', 'custom_probe']) });
+    (nodesManager as any).executeTool = async (_node: string, tool: string) => ({ tool });
+    (mcpClient as any).listTools = async () => ({ tools: [
+      { name: 'probe', description: 'allowed MCP' },
+      { name: 'other', description: 'hidden MCP' },
+    ] });
+    (mcpClient as any).callTool = async (_server: string, tool: string) => ({ tool });
+
+    const found: any = await search_tools({ sources: ['builtin', 'node', 'mcp'], limit: 200 }, { sessionId: sourceId, session });
+    const ids = new Set(found.tools.map((tool: any) => tool.toolId));
+    assert.equal(ids.has('builtin:run_script'), true);
+    assert.equal(ids.has('builtin:skill'), false);
+    assert.equal(ids.has('builtin:list_agents'), false);
+    assert.equal(ids.has('node:bound-node/read'), true);
+    assert.equal(ids.has('node:bound-node/exec'), false);
+    assert.equal(ids.has('node:bound-node/custom_probe'), true);
+    assert.equal(ids.has('mcp:demo/probe'), true);
+    assert.equal(ids.has('mcp:demo/other'), false);
+    const masterFound: any = await search_tools({ sources: ['node'], nodeId: 'master', limit: 20 }, { sessionId: sourceId, session });
+    assert.equal(masterFound.tools.some((tool: any) => tool.toolId === 'node:master/read'), true);
+    assert.equal(masterFound.tools.some((tool: any) => tool.toolId === 'node:master/exec'), false);
+
+    await assert.rejects(() => tools.callTool('exec', { command: 'true' }, { sessionId: sourceId, session }), /tool rule denies/i);
+    await assert.rejects(() => call_tool({ source: 'node', name: 'exec', args: { command: 'true' } }, { sessionId: sourceId, session }), /tool rule denies/i);
+    const nested = await tools.run_script({ code: 'def main(args):\n    return call_tool("exec", {"command": "true"})' }, { sessionId: sourceId, session });
+    assert.equal(nested.status, 'failed');
+    assert.match(String(nested.error), /tool rule denies/i);
+    assert.deepEqual(await call_tool({ source: 'mcp', server: 'demo', name: 'probe', args: {} }, { sessionId: sourceId, session }), { tool: 'probe' });
+    await assert.rejects(() => call_tool({ source: 'mcp', server: 'demo', name: 'other', args: {} }, { sessionId: sourceId, session }), /cannot use mcp capability/i);
+    await assert.rejects(() => call_tool({ source: 'builtin', name: 'list_agents', args: {} }, { sessionId: sourceId, session }), /structurally restricted/i);
+    await assert.rejects(() => call_tool({ source: 'node', nodeId: 'master', name: 'read', args: { filePath: '/tmp/outside-agent.txt' } }, { sessionId: sourceId, session }), /can only access/i);
+  } finally {
+    (nodesManager as any).listNodesWithTools = originals.listNodesWithTools;
+    (nodesManager as any).getNode = originals.getNode;
+    (nodesManager as any).executeTool = originals.executeTool;
+    (mcpClient as any).listTools = originals.listTools;
+    (mcpClient as any).callTool = originals.callTool;
+    await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
+    await sessionManager.deleteSession(sourceId).catch(() => false);
   }
 });
 

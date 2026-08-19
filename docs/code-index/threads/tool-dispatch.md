@@ -44,7 +44,7 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 
 ## Invariants
 
-- Isolation is enforced against the resolved execution node and tool arguments.
+- Isolation is enforced against the canonical resolved capability source plus exact Node/server identity; structural path, target, relation, and tool-local guards remain separate and non-bypassable.
 - An isolated session cannot use master file paths outside its own agent directory.
 - Unified wrappers do not bypass the concrete target's existing guards.
 - Tool output is bounded before it enters model context.
@@ -69,6 +69,16 @@ The unified execution flow resolves model tool calls to builtin handlers, MCP se
 ### D-dispatch-resolved-target
 
 [2026-08-18] Direct provider calls, `call_tool`, and ToolScript nested calls resolve one canonical operation before execution. The canonical capability sources are `builtin`, `node`, and `mcp`; source is independent from execution target and process/service owner. Direct `read`, `write`, `edit`, `apply_patch`, `exec`, and `browse_*` calls are Node capabilities targeting the current execution environment, and explicit `source=node` calls use that same current target when `nodeId` is omitted. Unified discovery emits those capabilities as Node results and does not duplicate them under the builtin source. `source=builtin` must reject those Node-capability names with a clear mismatch instead of retaining an alias. Obsolete dedicated Node/MCP discovery and invocation wrappers are absent rather than compatibility-routed. Permissions and tool-local validation apply to the resolved operation, while existing typed Main/Node/MCP/file services continue owning their effects.
+
+### D-dispatch-exact-agent-tool-rules
+
+[2026-08-19] Agent metadata may persist optional exact `toolRules`. Each rule is only `effect=allow|deny`, canonical `source=builtin|node|mcp`, and an exact non-empty tool name; Node rules additionally require one exact node and MCP rules one exact server. Builtin rules accept neither. Wildcards, regex/pattern fields, session/argument/path matchers, extra fields, and duplicate/conflicting exact identities are rejected before mutation effects. The persisted replacement is bounded to 256 rules and each exact node/server/tool string to 128 UTF-8 bytes; input is rejected rather than truncated. Rules belong only to the exact agent and never inherit through `agent.inherit`; absent and empty rules retain the historical isolated defaults, and rules are inert for non-isolated agents.
+
+For an isolated agent, exact deny overrides a historical default allow and exact allow may add the named capability. An allow never bypasses the authenticated target/service boundary, advertised Node tool set, master-exec prohibition, agent-scoped master paths, copy/channel/timer/session relationships, Worker placement guards, or concrete tool-local validation. Node custom-tool missing-rule behavior deliberately reaches the exact bound/current Node service, preserving the established advertised-capability contract. MCP missing-rule behavior remains deny; an isolated agent discovers and invokes only exact allowed server/tool identities through the source-fenced MCP service.
+
+Authorization and visibility use the same identity evaluation. `search_tools`, Node topology, and MCP discovery omit denied or structurally unavailable capabilities before metadata reaches the model. Main-local, reverse Worker, direct, unified, and ToolScript paths converge on the same rules. Session workers receive a normalized exact-agent metadata snapshot from Main at spawn. Only workers whose installed snapshot is isolated refresh that agent before execution/discovery; missing/read-failed refreshes preserve the snapshot, while malformed refreshed rules reject the current operation. Rule-only replacement on an unchanged isolation binding is therefore live under Worker placement without an I/O fail-open or per-call metadata reads for non-isolated workers, while isolation-node changes retain the existing ownership fence.
+
+`create_agent` and `set_agent_isolated` accept optional full `toolRules` replacement, with `[]` as canonical clearing. When `set_agent_isolated` receives rules without `nodeId`, it preserves the current isolation binding; an explicit empty `nodeId` clears isolation. Agent listings and mutation results report a concise rule count. Existing metadata without `toolRules` remains readable unchanged.
 
 ### D-dispatch-shared-file-semantics
 

@@ -156,12 +156,14 @@ export async function resolveDirectTool(name: string, args: ToolArgs, ctx: ToolC
 
 async function checkPermission(resolved: ResolvedTool, ctx: ToolContext): Promise<void> {
   if (resolved.source === 'mcp') return;
-  if (resolved.source === 'node' && resolved.target?.kind === 'remote-node' && !resolved.localBuiltinName) return;
   if (!ctx.sessionId) throw new Error('Tool execution requires an active source session.');
+  const identity = resolved.source === 'node'
+    ? { source: 'node' as const, node: resolved.executionNode, tool: resolved.name }
+    : { source: 'builtin' as const, tool: resolved.name };
   if (ctx.session?.id === ctx.sessionId) {
-    await checkToolPermissionForSession(ctx.session, resolved.name, resolved.permissionNode, resolved.args);
+    await checkToolPermissionForSession(ctx.session, identity, resolved.permissionNode, resolved.args, ctx.sessionPlacement === 'session-worker');
   } else {
-    await checkToolPermission(resolved.name, ctx.sessionId, resolved.permissionNode, resolved.args);
+    await checkToolPermission(identity, ctx.sessionId, resolved.permissionNode, resolved.args);
   }
 }
 

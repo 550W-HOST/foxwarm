@@ -1,274 +1,165 @@
 import path from 'path';
 import { getAgentDir, getAgentMemoryDir } from './config';
+import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './tools/placement';
 
-export type PermissionAction = 'accept' | 'reject';
+export type ToolRuleEffect = 'allow' | 'deny';
+export type ToolCapabilitySource = 'builtin' | 'node' | 'mcp';
 
-export type PermissionArgMatcher =
-  | string
-  | number
-  | boolean
-  | {
-      equals?: unknown;
-      oneOf?: unknown[];
-      pathWithinAgent?: boolean;
-      pathWithinAgentMemory?: boolean;
-    };
+export type AgentToolRule =
+  | { effect: ToolRuleEffect; source: 'builtin'; tool: string }
+  | { effect: ToolRuleEffect; source: 'node'; node: string; tool: string }
+  | { effect: ToolRuleEffect; source: 'mcp'; server: string; tool: string };
 
-export interface PermissionRule {
-  agent?: string;
-  session?: string;
-  target_node?: string;
-  tool_name?: string;
-  tool_args?: Record<string, PermissionArgMatcher>;
-  action: PermissionAction;
-  reason?: string;
+export interface ResolvedToolPermissionIdentity {
+  source: ToolCapabilitySource;
+  tool: string;
+  node?: string;
+  server?: string;
 }
 
-export interface PermissionRequest {
-  agent: string;
-  session: string;
-  target_node: string;
-  tool_name: string;
-  tool_args?: Record<string, any>;
+export const MAX_AGENT_TOOL_RULES = 256;
+export const MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES = 128;
+
+const MASTER_PATH_TOOLS = new Set(['send_file', 'image_write_to_file']);
+const MASTER_MEMORY_PATH_TOOLS = new Set(['read_memory', 'write_memory', 'edit_memory', 'delete_memory']);
+const MASTER_DEFAULT_BUILTINS = new Set([
+  'apply_patch_memory', 'skill', 'image_crop', 'get_archived_messages', 'get_archived_blocks',
+  'recall', 'session', 'send_to_session', 'wait', 'submit_compact_plan', 'search_tools', 'call_tool',
+  'create_timer', 'list_timers', 'update_timer', 'delete_timer',
+]);
+const REMOTE_DEFAULT_BUILTINS = new Set(['send_file', 'image_write_to_file']);
+const MASTER_DEFAULT_NODE_TOOLS = new Set(['read', 'write', 'edit', 'apply_patch']);
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
 }
 
-function matchesScalar(expected: string | undefined, actual: string): boolean {
-  return expected === undefined || expected === '*' || expected === actual;
-}
-
-function resolveRequestedPath(value: unknown, agentName: string, mode: 'agent' | 'memory' = 'agent'): string | null {
+function exactString(value: unknown, field: string, index: number): string {
   if (typeof value !== 'string' || !value.trim()) {
-    return null;
+    throw new Error(`toolRules[${index}].${field} must be a non-empty string.`);
   }
+  const normalized = value.trim();
+  if (Buffer.byteLength(normalized, 'utf8') > MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES) {
+    throw new Error(`toolRules[${index}].${field} must be at most ${MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES} UTF-8 bytes.`);
+  }
+  if (normalized.includes('*')) {
+    throw new Error(`toolRules[${index}].${field} must be exact and cannot contain wildcards.`);
+  }
+  return normalized;
+}
 
-  const agentDir = mode === 'memory' ? getAgentMemoryDir(agentName) : getAgentDir(agentName);
+function assertExactKeys(rule: Record<string, unknown>, keys: string[], index: number): void {
+  const allowed = new Set(keys);
+  for (const key of Object.keys(rule)) {
+    if (!allowed.has(key)) throw new Error(`toolRules[${index}] contains unsupported field \`${key}\`.`);
+  }
+  for (const key of keys) {
+    if (!(key in rule)) throw new Error(`toolRules[${index}].${key} is required.`);
+  }
+}
+
+export function toolRuleIdentity(rule: AgentToolRule | ResolvedToolPermissionIdentity): string {
+  if (rule.source === 'builtin') return JSON.stringify(['builtin', rule.tool]);
+  if (rule.source === 'node') return JSON.stringify(['node', rule.node || '', rule.tool]);
+  return JSON.stringify(['mcp', rule.server || '', rule.tool]);
+}
+
+export function normalizeAgentToolRules(value: unknown): AgentToolRule[] {
+  if (!Array.isArray(value)) throw new Error('toolRules must be an array.');
+  if (value.length > MAX_AGENT_TOOL_RULES) {
+    throw new Error(`toolRules must contain at most ${MAX_AGENT_TOOL_RULES} rules.`);
+  }
+  const seen = new Set<string>();
+  return value.map((raw, index) => {
+    if (!isPlainRecord(raw)) throw new Error(`toolRules[${index}] must be an object.`);
+    const effect = raw.effect;
+    if (effect !== 'allow' && effect !== 'deny') {
+      throw new Error(`toolRules[${index}].effect must be \`allow\` or \`deny\`.`);
+    }
+    const source = raw.source;
+    if (source !== 'builtin' && source !== 'node' && source !== 'mcp') {
+      throw new Error(`toolRules[${index}].source must be \`builtin\`, \`node\`, or \`mcp\`.`);
+    }
+    let normalized: AgentToolRule;
+    if (source === 'builtin') {
+      assertExactKeys(raw, ['effect', 'source', 'tool'], index);
+      normalized = { effect, source, tool: exactString(raw.tool, 'tool', index) };
+    } else if (source === 'node') {
+      assertExactKeys(raw, ['effect', 'source', 'node', 'tool'], index);
+      normalized = {
+        effect, source,
+        node: exactString(raw.node, 'node', index),
+        tool: exactString(raw.tool, 'tool', index),
+      };
+    } else {
+      assertExactKeys(raw, ['effect', 'source', 'server', 'tool'], index);
+      normalized = {
+        effect, source,
+        server: exactString(raw.server, 'server', index),
+        tool: exactString(raw.tool, 'tool', index),
+      };
+    }
+    const identity = toolRuleIdentity(normalized);
+    if (seen.has(identity)) throw new Error(`toolRules contains duplicate or conflicting identity \`${identity}\`.`);
+    seen.add(identity);
+    return normalized;
+  });
+}
+
+export function findExactAgentToolRule(rules: AgentToolRule[], identity: ResolvedToolPermissionIdentity): AgentToolRule | undefined {
+  const requested = toolRuleIdentity(identity);
+  return rules.find(rule => toolRuleIdentity(rule) === requested);
+}
+
+function resolveRequestedPath(value: unknown, agentName: string, memory = false): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const root = memory ? getAgentMemoryDir(agentName) : getAgentDir(agentName);
   let rawPath = value.trim();
-  if (mode === 'memory') {
-    rawPath = rawPath.replace(/^[\\/]+/, '');
-    rawPath = rawPath.replace(/^memory[\\/]+/, '');
-  }
-  return path.normalize(path.isAbsolute(rawPath) ? rawPath : path.resolve(agentDir, rawPath));
+  if (memory) rawPath = rawPath.replace(/^[\\/]+/, '').replace(/^memory[\\/]+/, '');
+  return path.normalize(path.isAbsolute(rawPath) ? rawPath : path.resolve(root, rawPath));
 }
 
-function isWithinAgentDir(resolvedPath: string, agentName: string): boolean {
-  const agentDir = path.normalize(getAgentDir(agentName));
-  return resolvedPath === agentDir || resolvedPath.startsWith(agentDir + path.sep);
+function pathWithin(value: unknown, root: string, agentName: string, memory = false): boolean {
+  const resolved = resolveRequestedPath(value, agentName, memory);
+  const normalizedRoot = path.normalize(root);
+  return !!resolved && (resolved === normalizedRoot || resolved.startsWith(normalizedRoot + path.sep));
 }
 
-function matchesArgMatcher(matcher: PermissionArgMatcher, actual: unknown, agentName: string): boolean {
-  if (typeof matcher === 'string' || typeof matcher === 'number' || typeof matcher === 'boolean') {
-    return actual === matcher;
-  }
+export function isDefaultIsolatedCapabilityAllowed(
+  identity: ResolvedToolPermissionIdentity,
+  agentName: string,
+  boundNode: string,
+  currentNode: string | undefined,
+  executionNode: string,
+  args: Record<string, any> = {},
+  discovery = false,
+): boolean {
+  const runtimeNodes = new Set([boundNode, currentNode].filter((value): value is string => !!value));
+  if (identity.source === 'mcp') return false;
 
-  if (matcher.equals !== undefined && actual !== matcher.equals) {
-    return false;
-  }
-
-  if (matcher.oneOf && !matcher.oneOf.includes(actual)) {
-    return false;
-  }
-
-  if (matcher.pathWithinAgent) {
-    const resolvedPath = resolveRequestedPath(actual, agentName);
-    if (!resolvedPath || !isWithinAgentDir(resolvedPath, agentName)) {
-      return false;
+  if (identity.source === 'node') {
+    const node = identity.node || executionNode;
+    if (node === 'master') {
+      if (identity.tool === 'exec') return false;
+      if (!MASTER_DEFAULT_NODE_TOOLS.has(identity.tool)) return false;
+      return discovery || pathWithin(args.filePath, getAgentDir(agentName), agentName);
     }
+    return runtimeNodes.has(node) || !NODE_ENVIRONMENT_BUILTIN_NAMES.includes(identity.tool as any);
   }
 
-  if (matcher.pathWithinAgentMemory) {
-    const resolvedPath = resolveRequestedPath(actual, agentName, 'memory');
-    const memoryDir = path.normalize(getAgentMemoryDir(agentName));
-    if (!resolvedPath || !(resolvedPath === memoryDir || resolvedPath.startsWith(memoryDir + path.sep))) {
-      return false;
-    }
+  if (identity.tool === 'session') {
+    const action = args.action;
+    return discovery || action === undefined || action === null || action === '' || action === 'status';
   }
-
-  return true;
-}
-
-function buildScopedPathToolRule(agentName: string, sessionId: string, toolName: string, targetNode: string, argName = 'filePath', matcher: PermissionArgMatcher = { pathWithinAgent: true }): PermissionRule {
-  return {
-    agent: agentName,
-    session: sessionId,
-    target_node: targetNode,
-    tool_name: toolName,
-    tool_args: { [argName]: matcher },
-    action: 'accept',
-  };
-}
-
-function buildNodeToolRule(agentName: string, sessionId: string, toolName: string, targetNode: string): PermissionRule {
-  return {
-    agent: agentName,
-    session: sessionId,
-    target_node: targetNode,
-    tool_name: toolName,
-    action: 'accept',
-  };
-}
-
-function matchesToolArgs(rule: PermissionRule, request: PermissionRequest): boolean {
-  if (!rule.tool_args) {
-    return true;
+  if (MASTER_DEFAULT_BUILTINS.has(identity.tool)) return true;
+  if (MASTER_PATH_TOOLS.has(identity.tool)) {
+    if (executionNode !== 'master') return runtimeNodes.has(executionNode) && REMOTE_DEFAULT_BUILTINS.has(identity.tool);
+    return discovery || pathWithin(args.filePath, getAgentDir(agentName), agentName);
   }
-
-  for (const [key, matcher] of Object.entries(rule.tool_args)) {
-    if (!matchesArgMatcher(matcher, request.tool_args?.[key], request.agent)) {
-      return false;
-    }
+  if (MASTER_MEMORY_PATH_TOOLS.has(identity.tool)) {
+    return discovery || pathWithin(args.filePath, getAgentMemoryDir(agentName), agentName, true);
   }
-
-  return true;
-}
-
-export function findMatchingPermissionRule(rules: PermissionRule[], request: PermissionRequest): PermissionRule | undefined {
-  return rules.find(rule => (
-    matchesScalar(rule.agent, request.agent)
-    && matchesScalar(rule.session, request.session)
-    && matchesScalar(rule.target_node, request.target_node)
-    && matchesScalar(rule.tool_name, request.tool_name)
-    && matchesToolArgs(rule, request)
-  ));
-}
-
-export function evaluatePermission(rules: PermissionRule[], request: PermissionRequest, defaultAction: PermissionAction = 'reject'): {
-  action: PermissionAction;
-  rule?: PermissionRule;
-} {
-  const rule = findMatchingPermissionRule(rules, request);
-  return {
-    action: rule?.action || defaultAction,
-    rule,
-  };
-}
-
-export function buildIsolatedToolRules(agentName: string, sessionId: string, boundNode: string, extraRuntimeNodes: string[] = []): PermissionRule[] {
-  const allowedRuntimeNodes = Array.from(new Set([boundNode, ...extraRuntimeNodes].filter((value): value is string => typeof value === 'string' && value.length > 0)));
-  const allowedCopyNodes = Array.from(new Set(['master', ...allowedRuntimeNodes]));
-  return [
-    buildScopedPathToolRule(agentName, sessionId, 'read', 'master'),
-    buildScopedPathToolRule(agentName, sessionId, 'write', 'master'),
-    buildScopedPathToolRule(agentName, sessionId, 'edit', 'master'),
-    buildScopedPathToolRule(agentName, sessionId, 'apply_patch', 'master'),
-    buildScopedPathToolRule(agentName, sessionId, 'send_file', 'master'),
-    buildScopedPathToolRule(agentName, sessionId, 'image_write_to_file', 'master'),
-    buildScopedPathToolRule(agentName, sessionId, 'read_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
-    buildScopedPathToolRule(agentName, sessionId, 'write_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
-    buildScopedPathToolRule(agentName, sessionId, 'edit_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
-    buildScopedPathToolRule(agentName, sessionId, 'delete_memory', 'master', 'filePath', { pathWithinAgentMemory: true }),
-    buildNodeToolRule(agentName, sessionId, 'apply_patch_memory', 'master'),
-    buildNodeToolRule(agentName, sessionId, 'skill', 'master'),
-    ...allowedRuntimeNodes.flatMap(targetNode => [
-      buildNodeToolRule(agentName, sessionId, 'read', targetNode),
-      buildNodeToolRule(agentName, sessionId, 'write', targetNode),
-      buildNodeToolRule(agentName, sessionId, 'edit', targetNode),
-      buildNodeToolRule(agentName, sessionId, 'apply_patch', targetNode),
-      buildNodeToolRule(agentName, sessionId, 'browse_open', targetNode),
-      buildNodeToolRule(agentName, sessionId, 'browse_list', targetNode),
-      buildNodeToolRule(agentName, sessionId, 'browse_get', targetNode),
-      buildNodeToolRule(agentName, sessionId, 'browse_close', targetNode),
-      buildNodeToolRule(agentName, sessionId, 'browse_interact', targetNode),
-      buildNodeToolRule(agentName, sessionId, 'exec', targetNode),
-      buildNodeToolRule(agentName, sessionId, 'send_file', targetNode),
-      buildNodeToolRule(agentName, sessionId, 'image_write_to_file', targetNode),
-    ]),
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: 'master',
-      tool_name: 'copy_between_nodes',
-      tool_args: {
-        sourceNode: { oneOf: allowedCopyNodes },
-        targetNode: { oneOf: allowedCopyNodes },
-      },
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: 'master',
-      tool_name: 'image_crop',
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: 'master',
-      tool_name: 'get_archived_messages',
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: 'master',
-      tool_name: 'get_archived_blocks',
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: 'master',
-      tool_name: 'recall',
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: 'master',
-      tool_name: 'session',
-      tool_args: { action: { oneOf: [undefined, null, '', 'status'] } },
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: 'master',
-      tool_name: 'session',
-      tool_args: { action: 'status' },
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: 'master',
-      tool_name: 'send_to_session',
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: 'master',
-      tool_name: 'wait',
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: 'master',
-      tool_name: 'submit_compact_plan',
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: 'master',
-      tool_name: 'search_tools',
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: 'master',
-      tool_name: 'call_tool',
-      action: 'accept',
-    },
-    {
-      agent: agentName,
-      session: sessionId,
-      target_node: '*',
-      tool_name: '*',
-      action: 'reject',
-      reason: `Isolated agent sessions are restricted to agent-level allowed tools on master or their bound/current node (${allowedRuntimeNodes.join(', ') || boundNode}).`,
-    },
-  ];
+  return false;
 }

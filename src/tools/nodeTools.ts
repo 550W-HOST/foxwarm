@@ -31,7 +31,7 @@ export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) 
         return lines.join('\n');
     }
 
-    await checkToolPermission('copy_between_nodes', ctx.sessionId, 'master', {
+    await checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, ctx.sessionId, 'master', {
         sourceNode,
         sourcePath,
         targetNode,

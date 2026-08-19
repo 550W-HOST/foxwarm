@@ -28,7 +28,7 @@ export async function handleAgentCommand(ctx: ChannelContext, args: string[]) {
       }
       
       const entries = await fs.readdir(agentsDir, { withFileTypes: true })
-      const agents: Array<{name: string, sessionCount: number, inherit?: string, isolated?: boolean, isolatedNode?: string}> = []
+      const agents: Array<{name: string, sessionCount: number, inherit?: string, isolated?: boolean, isolatedNode?: string, toolRuleCount: number}> = []
       
       for (const entry of entries) {
         if (entry.isDirectory()) {
@@ -42,6 +42,7 @@ export async function handleAgentCommand(ctx: ChannelContext, args: string[]) {
             inherit: sessionManager.getAgentMetadata(agentName).inherit,
             isolated: sessionManager.getAgentMetadata(agentName).isolated,
             isolatedNode: sessionManager.getAgentIsolationNode(agentName),
+            toolRuleCount: sessionManager.getAgentToolRules(agentName).length,
           })
         }
       }
@@ -63,6 +64,7 @@ export async function handleAgentCommand(ctx: ChannelContext, args: string[]) {
         if (agent.isolated) {
           resp += ` - isolated${agent.isolatedNode ? ` on \`${agent.isolatedNode}\`` : ''}`
         }
+        resp += ` - ${agent.toolRuleCount} tool rule(s)`
         resp += '\n'
       }
       ctx.reply(resp)

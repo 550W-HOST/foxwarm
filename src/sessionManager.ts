@@ -18,6 +18,7 @@ import { VECTOR_ENABLED } from './config';
 import { CATALOG_DB_PATH, CHANNELS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getLegacySessionFrontierPath, type ModelEffort, type ModelsConfig } from './config';
 import * as sessionAgentOps from './session/agentOps';
 import * as sessionAgentMetadata from './session/agentMetadata';
+import { normalizeAgentToolRules } from './permissions';
 import { appendMessagesToArchive, ensureMessageSeq, getNextSessionMessageSeq, rollbackUncommittedMessages } from './session/archive';
 import { externalizeMessages, externalizeQueueItemImages } from './imageBlobs';
 import { readArchiveBlocksByIdRange } from './session/layeredContext';
@@ -1162,14 +1163,25 @@ export function getAgentInheritanceChain(agentName: string): string[] {
   return sessionAgentMetadata.getAgentInheritanceChain(agentName);
 }
 
+export function getAgentToolRules(agentName: string) {
+  return sessionAgentMetadata.getAgentToolRules(agentName);
+}
+
 export async function setAgentInherit(agentName: string, inheritAgentName?: string): Promise<{ affectedSessions: string[] }> {
   assertAgentMetadataMutationAllowed('Agent inheritance changes');
   return sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(), agentName, inheritAgentName);
 }
 
-export async function setAgentIsolation(agentName: string, isolatedNode?: string): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string }> {
+export async function setAgentIsolation(agentName: string, isolatedNode?: string, toolRules?: unknown): Promise<{ affectedSessions: string[]; isolated: boolean; node?: string; toolRuleCount: number }> {
+  const normalizedNode = isolatedNode && String(isolatedNode).trim() ? String(isolatedNode).trim() : undefined;
+  if (workerEnqueueSink && toolRules !== undefined && normalizedNode === sessionAgentMetadata.getAgentIsolationNode(agentName)) {
+    validateAgentName(agentName);
+    if (!await fs.pathExists(getAgentDir(agentName))) throw new Error(`Agent "${agentName}" does not exist.`);
+    const toolRuleCount = await sessionAgentMetadata.setAgentToolRules(agentName, toolRules);
+    return { affectedSessions: [], isolated: !!normalizedNode, node: normalizedNode, toolRuleCount };
+  }
   assertAgentMetadataMutationAllowed('Agent isolation changes');
-  return sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(), agentName, isolatedNode);
+  return sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(), agentName, normalizedNode, toolRules);
 }
 
 export async function createAgentWithMainSession(options: {
@@ -1186,6 +1198,7 @@ export async function createAgentWithMainSession(options: {
   createMainSession?: boolean;
   inherit?: string;
   isolatedNode?: string;
+  toolRules?: unknown;
 }): Promise<{
   agentDir: string;
   mainSessionId: string;
@@ -1202,9 +1215,10 @@ export async function createAgentWithMainSession(options: {
   if (workerEnqueueSink && (options.convertSessionId || (options.sourceSessionId && !options.sourceSessionOverride))) {
     throw new RpcError('SESSION_WORKER_ADMIN_UNSUPPORTED', 'Creating an agent from or by converting an existing session is unavailable while Session-worker placement is enabled.', true);
   }
-  const { inherit, isolatedNode, ...createOptions } = options;
+  const { inherit, isolatedNode, toolRules, ...createOptions } = options;
   const normalizedInherit = inherit && String(inherit).trim() ? String(inherit).trim() : undefined;
   const normalizedIsolatedNode = isolatedNode && String(isolatedNode).trim() ? String(isolatedNode).trim() : undefined;
+  const normalizedToolRules = toolRules === undefined ? undefined : normalizeAgentToolRules(toolRules);
 
   if (normalizedInherit !== undefined) {
     validateAgentName(normalizedInherit);
@@ -1216,7 +1230,12 @@ export async function createAgentWithMainSession(options: {
   return withSessionIdentityLock(async () => {
     const result = await sessionAgentOps.createAgentWithMainSession(createOptions, getSessionAgentOpsDeps(true));
     if (normalizedIsolatedNode !== undefined) {
-      await sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(true), options.agentName, normalizedIsolatedNode);
+      await sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(true), options.agentName, normalizedIsolatedNode, normalizedToolRules);
+    } else if (normalizedToolRules !== undefined) {
+      await sessionAgentMetadata.setAgentMetadata(options.agentName, {
+        ...sessionAgentMetadata.getAgentMetadata(options.agentName),
+        toolRules: normalizedToolRules,
+      });
     }
     if (normalizedInherit !== undefined) {
       await sessionAgentMetadata.setAgentInherit(getAgentMetadataDeps(true), options.agentName, normalizedInherit);
@@ -1968,9 +1987,11 @@ export async function loadSessions(): Promise<void> {
   await initArchiveStore();
   if (!catalogExisted) catalogMigration = await sessionCatalogStore.initialize();
   logger.info({ ...catalogMigration!, databasePath: CATALOG_DB_PATH }, 'Session catalog initialized');
+  // Agent metadata is authorization authority. Invalid persisted rules must
+  // prevent readiness rather than being swallowed by the broader session-data
+  // recovery boundary below.
+  await sessionAgentMetadata.loadAgentMetadata();
   try {
-    // Load agent metadata first
-    await sessionAgentMetadata.loadAgentMetadata();
     const channelsFileExisted = await fs.pathExists(CHANNELS_FILE);
     await loadChannels();
 

@@ -5,6 +5,9 @@ import { listNodeTopology } from '../nodeExecution';
 import { buildUnifiedToolId, executeResolvedTool, resolveUnifiedTool } from './resolvedTools';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './placement';
 import { definitions } from './definitions';
+import { isToolVisibleForSession } from '../isolatedCheck';
+import * as sessionManager from '../sessionManager';
+import * as agentMetadata from '../session/agentMetadata';
 
 function normalizeUnifiedToolSources(rawSources: unknown): UnifiedToolSource[] {
     const allowed: UnifiedToolSource[] = ['builtin', 'mcp', 'node'];
@@ -100,9 +103,16 @@ async function resolveDefaultNodeSearchTarget(ctx?: ToolContext): Promise<string
     return 'master';
 }
 
-async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: boolean) {
+function discoverySession(ctx?: ToolContext) {
+    if (ctx?.sessionId && ctx.session?.id === ctx.sessionId) return ctx.session;
+    return ctx?.sessionId ? sessionManager.getSessionCatalog(ctx.sessionId) : undefined;
+}
+
+async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: boolean, ctx?: ToolContext) {
+    const session = discoverySession(ctx);
     return definitions
         .filter(def => !NODE_ENVIRONMENT_BUILTIN_NAMES.includes(def.name as any))
+        .filter(def => isToolVisibleForSession(session, { source: 'builtin', tool: def.name }))
         .map(def => ({ def, score: scoreUnifiedToolQuery(query, [def.name, def.description]) }))
         .filter(entry => entry.score >= 0)
         .map(def => ({
@@ -120,9 +130,15 @@ async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: 
 async function collectMcpUnifiedSearchResults(query: string, includeSchema: boolean, serverFilter: string | undefined, ctx?: ToolContext, warnings?: string[]) {
     if (!ctx?.sessionId) throw new Error('MCP discovery requires session context.');
 
+    const session = discoverySession(ctx);
+    const isolatedServers = session && sessionManager.isSessionEffectivelyIsolated(session)
+        ? Array.from(new Set(sessionManager.getAgentToolRules(session.agent || 'main')
+            .filter((rule): rule is Extract<typeof rule, { source: 'mcp' }> => rule.effect === 'allow' && rule.source === 'mcp')
+            .map(rule => rule.server)))
+        : undefined;
     const servers = serverFilter
         ? [serverFilter]
-        : (await mcpExternal.listMcpServers(ctx.sessionId))
+        : isolatedServers || (await mcpExternal.listMcpServers(ctx.sessionId))
             .filter(server => server.enabled)
             .map(server => server.name);
 
@@ -169,8 +185,10 @@ async function collectNodeUnifiedSearchResults(query: string, includeSchema: boo
     const nodes = await listNodeTopology(ctx.sessionId, effectiveNodeId, currentNode);
 
     const results: Array<Record<string, any>> = [];
+    const session = discoverySession(ctx);
     for (const node of nodes) {
         for (const item of Array.isArray(node?.tools) ? node.tools : []) {
+            if (!isToolVisibleForSession(session, { source: 'node', node: String(node?.id || ''), tool: String(item?.name || '') }, String(node?.id || ''))) continue;
             const score = scoreUnifiedToolQuery(query, [item?.name, item?.description, node?.id, node?.type]);
             if (score < 0) {
                 continue;
@@ -193,6 +211,9 @@ async function collectNodeUnifiedSearchResults(query: string, includeSchema: boo
 }
 
 export async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
+    if (ctx?.sessionPlacement === 'session-worker' && ctx.session && sessionManager.isSessionEffectivelyIsolated(ctx.session)) {
+        await agentMetadata.refreshAgentMetadata(ctx.session.agent || 'main');
+    }
     const query = typeof args?.query === 'string' ? args.query : '';
     const sources = normalizeUnifiedToolSources(args?.sources);
     const server = typeof args?.server === 'string' && args.server.trim() ? args.server.trim() : undefined;
@@ -204,7 +225,7 @@ export async function tool_search_tools(args: ToolArgs, ctx?: ToolContext) {
     const collected: Array<Record<string, any>> = [];
 
     if (sources.includes('builtin')) {
-        collected.push(...await collectBuiltinUnifiedSearchResults(query, includeSchema));
+        collected.push(...await collectBuiltinUnifiedSearchResults(query, includeSchema, ctx));
     }
 
     if (sources.includes('mcp')) {

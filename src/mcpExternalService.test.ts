@@ -204,9 +204,9 @@ test('MCP external service rejects stale and isolated source sessions', async ()
       (error: any) => error?.code === 'MCP_EXTERNAL_SOURCE_NOT_FOUND',
     );
     await sessionManager.setAgentMetadata(agentName, { isolated: true, isolatedNode: 'test-node' });
-    await assert.rejects(() => listMcpServers(sourceId), /restricted to agent-level allowed tools/i);
-    await assert.rejects(() => listMcpTools(sourceId), /unavailable to isolated sessions/i);
-    await assert.rejects(() => callMcpTool(sourceId, 'demo', 'probe', {}), /unavailable to isolated sessions/i);
+    await assert.rejects(() => listMcpServers(sourceId), /cannot use builtin capability/i);
+    await assert.rejects(() => listMcpTools(sourceId), /No MCP tools are allowed/i);
+    await assert.rejects(() => callMcpTool(sourceId, 'demo', 'probe', {}), /cannot use mcp capability/i);
   } finally {
     await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
     await cleanup(sourceId);
@@ -245,12 +245,50 @@ test('MCP call authorization receives the complete nested args object', async ()
   try {
     await callMcpTool(sourceId, 'demo', 'probe', { nested: { value: 7 }, items: [1, 2] });
     assert.deepEqual(captured, [[
-      'call_tool', sourceId, 'master',
-      { source: 'mcp', server: 'demo', name: 'probe', args: { nested: { value: 7 }, items: [1, 2] } },
+      { source: 'mcp', server: 'demo', tool: 'probe' }, sourceId, 'master',
+      { nested: { value: 7 }, items: [1, 2] },
     ]]);
   } finally {
     (isolatedCheck as any).checkToolPermission = originalPermission;
     (mcpClient as any).callTool = originalCallTool;
+    await cleanup(sourceId);
+  }
+});
+
+test('isolated MCP rules filter discovery, authorize exact calls, and update live', async () => {
+  const sourceId = makeId('mcp_service_rules');
+  const agentName = makeId('mcp_service_rules_agent');
+  const source = await sessionManager.getSession(sourceId);
+  source.agent = agentName;
+  await sessionManager.saveSession(sourceId);
+  const originalListTools = mcpClient.listTools;
+  const originalCallTool = mcpClient.callTool;
+  (mcpClient as any).listTools = async () => ({ tools: [
+    { name: 'probe', description: 'allowed' },
+    { name: 'other', description: 'hidden' },
+  ] });
+  (mcpClient as any).callTool = async (_server: string, tool: string) => ({ tool });
+  try {
+    await sessionManager.setAgentMetadata(agentName, {
+      isolated: true,
+      isolatedNode: 'test-node',
+      toolRules: [{ effect: 'allow', source: 'mcp', server: 'demo', tool: 'probe' }],
+    });
+    assert.deepEqual((await listMcpTools(sourceId, 'demo') as any).tools.map((tool: any) => tool.name), ['probe']);
+    assert.deepEqual(await callMcpTool(sourceId, 'demo', 'probe', {}), { tool: 'probe' });
+    await assert.rejects(() => callMcpTool(sourceId, 'demo', 'other', {}), /cannot use mcp capability/i);
+
+    await sessionManager.setAgentMetadata(agentName, {
+      isolated: true,
+      isolatedNode: 'test-node',
+      toolRules: [{ effect: 'allow', source: 'mcp', server: 'demo', tool: 'other' }],
+    });
+    assert.deepEqual((await listMcpTools(sourceId, 'demo') as any).tools.map((tool: any) => tool.name), ['other']);
+    await assert.rejects(() => callMcpTool(sourceId, 'demo', 'probe', {}), /cannot use mcp capability/i);
+  } finally {
+    (mcpClient as any).listTools = originalListTools;
+    (mcpClient as any).callTool = originalCallTool;
+    await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
     await cleanup(sourceId);
   }
 });

@@ -206,6 +206,22 @@ test('isolated bound-node advertised tools remain usable in Main-local and Worke
       () => call_tool({ ...descriptor, nodeId: 'master' }, { sessionId: sourceId, session }),
       /not available on node `master`/,
     );
+    await sessionManager.setAgentMetadata(agentName, {
+      isolated: true,
+      isolatedNode: 'bound-node',
+      toolRules: [
+        { effect: 'allow', source: 'node', node: 'other-node', tool: 'custom_probe' },
+        { effect: 'allow', source: 'node', node: 'master', tool: 'exec' },
+      ],
+    });
+    await assert.rejects(
+      () => call_tool({ ...descriptor, nodeId: 'other-node' }, { sessionId: sourceId, session }),
+      (error: any) => error?.code === 'NODE_EXECUTION_ISOLATED_NODE_DENIED',
+    );
+    await assert.rejects(
+      () => call_tool({ source: 'node', nodeId: 'master', name: 'exec', args: { command: 'echo forbidden' } }, { sessionId: sourceId, session }),
+      /cannot run exec on master/i,
+    );
 
     await nodeExecution.shutdownNodeExecution();
     nodeExecution.resetNodeExecutionForTests();

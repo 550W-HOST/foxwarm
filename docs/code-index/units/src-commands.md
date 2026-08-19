@@ -53,7 +53,7 @@ All `*_AUTOCOMPLETE` constants: TIMER, BTW, SESSION, AGENT, SKILL, NODE, MESSAGE
 ### commands/agentCmd.ts — /agent handler
 | Function | Description |
 |----------|-------------|
-| `handleAgentCommand(ctx, args)` | Dispatches /agent subcommands (list, create, isolated, inherit, delete) |
+| `handleAgentCommand(ctx, args)` | Dispatches /agent subcommands (list, create, isolated, inherit, delete); list output includes each exact agent's persisted tool-rule count |
 
 ### commands/timerCmd.ts — /timer handler
 | Function | Description |

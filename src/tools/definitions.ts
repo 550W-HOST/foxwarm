@@ -1,6 +1,45 @@
 import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from '../../packages/shared/dist/persistentExec';
 import { COMPACT_PLAN_TOOL_DEFINITION } from '../session/compactPlan';
+import { MAX_AGENT_TOOL_RULES, MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES } from '../permissions';
 
+const TOOL_RULES_SCHEMA = {
+    type: 'array',
+    maxItems: MAX_AGENT_TOOL_RULES,
+    description: 'Optional exact replacement rules for this agent only. Use [] to clear. Rules are active only while the agent is isolated.',
+    items: {
+        oneOf: [
+            {
+                type: 'object', additionalProperties: false,
+                properties: {
+                    effect: { type: 'string', enum: ['allow', 'deny'] },
+                    source: { type: 'string', enum: ['builtin'] },
+                    tool: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                },
+                required: ['effect', 'source', 'tool'],
+            },
+            {
+                type: 'object', additionalProperties: false,
+                properties: {
+                    effect: { type: 'string', enum: ['allow', 'deny'] },
+                    source: { type: 'string', enum: ['node'] },
+                    node: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                    tool: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                },
+                required: ['effect', 'source', 'node', 'tool'],
+            },
+            {
+                type: 'object', additionalProperties: false,
+                properties: {
+                    effect: { type: 'string', enum: ['allow', 'deny'] },
+                    source: { type: 'string', enum: ['mcp'] },
+                    server: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                    tool: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                },
+                required: ['effect', 'source', 'server', 'tool'],
+            },
+        ],
+    },
+};
 
 export const definitions = [
         {
@@ -821,6 +860,7 @@ Example:
                     inheritMemory: { type: 'boolean', description: 'Legacy compatibility: copy memory files from the source agent into the new agent directory.' },
                     inherit: { type: 'string', description: 'Optional shared-memory parent agent name for agent.inherit.' },
                     isolatedNode: { type: 'string', description: 'Optional non-master node id to make the agent isolated and bound to that node.' },
+                    toolRules: TOOL_RULES_SCHEMA,
                     createMainSession: { type: 'boolean', description: 'Whether to also create {agentName}/main (default: true).' },
                     sourceSessionId: { type: 'string', description: 'Optional source session ID to inherit current node/model from (default: current session)' },
                     convertSession: { type: 'boolean', description: 'If true, convert an existing session into the agent main session (requires createMainSession=true).' }
@@ -868,7 +908,8 @@ Example:
                 type: 'object',
                 properties: {
                     agentName: { type: 'string', description: 'Agent whose isolation setting should be updated.' },
-                    nodeId: { type: 'string', description: 'Bound non-master node id. Use empty string to clear isolation.' }
+                    nodeId: { type: 'string', description: 'Bound non-master node id. Use empty string to clear isolation.' },
+                    toolRules: { ...TOOL_RULES_SCHEMA, description: 'Optional exact replacement rules. Use [] to clear. When nodeId is omitted, the current isolation binding is preserved.' },
                 },
                 required: ['agentName']
             }

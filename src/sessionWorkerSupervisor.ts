@@ -21,12 +21,14 @@ import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationS
 import { createSessionTurnDeliveryServiceHandler, sessionTurnDeliveryServiceDescriptor,
   type ExactFinalSourceContextResolver } from './sessionTurnDelivery';
 import { VECTOR_ENABLED } from './config';
+import type { AgentMetadata } from './session/agentMetadata';
 
 export type SessionWorkerSupervisorOptions = {
   store: SessionWorkerStore;
   workerScriptPath?: string;
   workerEnv?: Record<string, string>;
   getCatalogStub?: (sessionId: string) => Partial<Pick<import('./types').Session, 'agent' | 'aliases' | 'parentSessionId' | 'displayName'>> | undefined;
+  getAgentMetadataSnapshot?: (sessionId: string) => AgentMetadata | undefined;
   idleMs: number;
   restartBaseDelayMs?: number;
   restartMaxDelayMs?: number;
@@ -535,7 +537,8 @@ export class SessionWorkerSupervisor {
           FOXWARM_SESSION_WORKER_GENERATION: String(generation),
           FOXWARM_SESSION_WORKER_INCARNATION_ID: incarnationId,
           FOXWARM_SESSION_WORKER_STORE_PATH: this.options.store.filePath,
-          FOXWARM_SESSION_WORKER_CATALOG_STUB: JSON.stringify(this.options.getCatalogStub?.(sessionId) || {}) },
+          FOXWARM_SESSION_WORKER_CATALOG_STUB: JSON.stringify(this.options.getCatalogStub?.(sessionId) || {}),
+          FOXWARM_SESSION_WORKER_AGENT_METADATA: JSON.stringify(this.options.getAgentMetadataSnapshot?.(sessionId) || {}) },
         serialization: 'advanced',
       });
     } catch (error) {

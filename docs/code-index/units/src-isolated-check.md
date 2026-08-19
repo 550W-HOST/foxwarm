@@ -9,8 +9,9 @@ Enforces the current isolation boundary for tool execution, master-side paths, c
 
 ## Key exports
 
-- `checkToolPermission(toolName, sessionId, executionNode?, toolArgs?)` — evaluate an isolated session's tool call against the current isolated rule set.
-- `checkToolPermissionForSession(session, toolName, executionNode?, toolArgs?)` — evaluate the same rules from an already-authoritative current Session without loading the global session map.
+- `checkToolPermission(identity, sessionId, executionNode?, toolArgs?)` — evaluate an isolated session's canonical resolved capability identity.
+- `checkToolPermissionForSession(session, identity, executionNode?, toolArgs?, refreshMetadata?)` — evaluate the same identity from an authoritative current Session; Worker calls may refresh exact agent metadata from disk first.
+- `isToolVisibleForSession(session, identity, executionNode?)` — apply the same exact-rule/default evaluation to discovery visibility.
 - `checkPathAccess(fullPath, agentName)` — restrict master-side filesystem access to the isolated agent's own directory.
 - `requireNotIsolated(sessionIdOrCtx, operation)` — reject operations that are unavailable to isolated sessions.
 - `requireNotIsolatedForSession(session, operation)` — apply the identical denial to an already-authoritative passed Session without an ID lookup.
@@ -25,7 +26,8 @@ Enforces the current isolation boundary for tool execution, master-side paths, c
 
 | Stable symbol | Responsibility |
 |---|---|
-| `checkToolPermission` / `checkToolPermissionForSession` | Resolve effective isolation node context, handle copy/timer special cases, and evaluate `buildIsolatedToolRules` from either an ID-loaded or already-authoritative Session |
+| `checkToolPermission` / `checkToolPermissionForSession` | Resolve source/node/server identity, apply hard structural denials, exact agent rules, copy/timer guards, and the default isolated fallback |
+| `isToolVisibleForSession` | Filter builtin, Node, and MCP discovery with the same exact identity evaluation |
 | `resolvePermissionPath` | Expands and normalizes a path against the agent directory |
 | `isPathWithinAgentDir` | Tests master-side containment |
 | `checkCopyBetweenNodesPermission` | Restricts source/target nodes and master paths |
@@ -42,13 +44,15 @@ Enforces the current isolation boundary for tool execution, master-side paths, c
 
 - `sessionManager` for ID-based session loading and channel attachment; passed-Session checks read isolation metadata directly from `session/agentMetadata`.
 - `config` for agent directory resolution.
-- `permissions` for `buildIsolatedToolRules` and first-match rule evaluation.
+- `permissions` for persisted exact-rule lookup and default isolated fallback evaluation.
 - `utils/pathResolve` for home-path expansion.
 
 ## Behavior
 
 - Non-isolated sessions return early from isolation-only checks.
-- `checkToolPermission` uses the resolved execution node. `copy_between_nodes` and timer tools have additional domain-specific validation before generic rule evaluation.
+- `checkToolPermission` consumes the canonical resolved source. Exact denies override defaults; exact allows still pass hard master-exec, unavailable-builtin, copy, timer, path, relation, Node-service, and MCP-service boundaries.
+- Rules belong only to `session.agent`; `agent.inherit` is not consulted. Rules are inert when that exact agent is non-isolated.
+- Session workers install a normalized Main-provided exact-agent metadata snapshot at startup. Only an isolated installed snapshot refreshes from disk before tool execution/search; missing/read-failed refreshes preserve it and malformed refreshed rules reject the operation. Rule-only updates remain live without per-call reads for non-isolated workers or an isolation I/O bypass; isolation-node changes remain fenced.
 - The ID-based tool/timer entry points retain existing missing-session behavior and delegate loaded Sessions to the same passed-Session implementation, keeping errors and allow/deny outcomes identical.
 - An isolated session may use master filesystem paths only inside its own agent directory.
 - Cross-node copy is limited to master and the session's bound/current node; any master-side source or target path must remain inside the agent directory.
@@ -58,7 +62,7 @@ Enforces the current isolation boundary for tool execution, master-side paths, c
 
 ## Integration
 
-Tool handlers call these guards before restricted operations. The dispatcher resolves node context; this unit enforces the current source-tree isolation model and does not document unmerged policy layers.
+Tool handlers and the canonical resolved executor call these guards before restricted operations. Unified discovery and the typed Node/MCP services reuse `isToolVisibleForSession` so denied metadata is not disclosed.
 
 ## Design decisions
 

@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 import * as sessionManager from './sessionManager';
-import { SESSIONS_FILE } from './config';
+import { getAgentDir, SESSIONS_FILE } from './config';
 import { callTool } from './tools';
 import { tool_call_tool } from './tools/unifiedSearch';
 import { tool_search_tools } from './tools/unifiedSearch';
@@ -54,6 +54,62 @@ test('worker direct, unified, and ToolScript node dispatch retain exact owner wi
   } finally {
     Object.assign(sessionManager, originals);
     await fs.remove(dir);
+  }
+});
+
+test('Worker direct, unified, and ToolScript calls share live exact agent rules', async () => {
+  const session = owner();
+  session.agent = `worker_rules_agent_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  session.currentNode = 'remote-a';
+  const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
+  const originalExecute = nodeExecution.executeRemoteNodeTool;
+  let calls = 0;
+  try {
+    await sessionManager.setAgentMetadata(session.agent, {
+      isolated: true,
+      isolatedNode: 'remote-a',
+      toolRules: [
+        { effect: 'allow', source: 'builtin', tool: 'run_script' },
+        { effect: 'deny', source: 'node', node: 'remote-a', tool: 'read' },
+      ],
+    });
+    (nodeExecution as any).executeRemoteNodeTool = async () => { calls += 1; return { output: 'allowed' }; };
+    await assert.rejects(() => callTool('read', { filePath: 'probe.txt' }, ctx), /tool rule denies/i);
+    await assert.rejects(() => tool_call_tool({ source: 'node', name: 'read', args: { filePath: 'probe.txt' } }, ctx), /tool rule denies/i);
+    const nested = await tool_run_script({ code: 'def main(args):\n    return call_tool("read", {"filePath": "probe.txt"})' }, ctx);
+    assert.equal(nested.status, 'failed');
+    assert.match(String(nested.error), /tool rule denies/i);
+    assert.equal(calls, 0);
+
+    await sessionManager.setAgentMetadata(session.agent, { isolated: true, isolatedNode: 'remote-a', toolRules: [] });
+    assert.deepEqual(await callTool('read', { filePath: 'probe.txt' }, ctx), { output: 'allowed' });
+    assert.equal(calls, 1);
+  } finally {
+    (nodeExecution as any).executeRemoteNodeTool = originalExecute;
+    await sessionManager.setAgentMetadata(session.agent, { isolated: false }).catch(() => {});
+  }
+});
+
+test('worker placement permits live rule-only replacement but still blocks isolation-node changes', async () => {
+  const agentName = `worker_rule_update_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const agentDir = getAgentDir(agentName);
+  await fs.ensureDir(agentDir);
+  await sessionManager.setAgentMetadata(agentName, {
+    isolated: true,
+    isolatedNode: 'remote-a',
+    toolRules: [{ effect: 'allow', source: 'builtin', tool: 'run_script' }],
+  });
+  sessionManager.setSessionWorkerEnqueueSink(async () => {});
+  try {
+    const updated = await sessionManager.setAgentIsolation(agentName, 'remote-a', []);
+    assert.equal(updated.toolRuleCount, 0);
+    assert.deepEqual(sessionManager.getAgentToolRules(agentName), []);
+    await assert.rejects(() => sessionManager.setAgentIsolation(agentName, 'remote-b', []),
+      (error: any) => error instanceof RpcError && error.code === 'SESSION_WORKER_ADMIN_UNSUPPORTED');
+  } finally {
+    sessionManager.setSessionWorkerEnqueueSink(undefined);
+    await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
+    await fs.remove(agentDir).catch(() => {});
   }
 });
 
