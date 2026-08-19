@@ -751,9 +751,9 @@ test('isolated exact rules align Main-local discovery, direct, unified, ToolScri
   }
 });
 
-test('isolated unified calls authorize outer call_tool before the concrete target', async () => {
-  const sourceId = `outer_call_tool_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  const agentName = `outer_call_tool_agent_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+test('call_tool is a permission-neutral dispatcher and only its concrete target is authorized', async () => {
+  const sourceId = `dispatcher_call_tool_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const agentName = `dispatcher_call_tool_agent_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const session = await sessionManager.getSession(sourceId);
   session.agent = agentName;
   session.currentNode = 'remote-a';
@@ -763,24 +763,32 @@ test('isolated unified calls authorize outer call_tool before the concrete targe
   const descriptor = { source: 'node', name: 'custom_probe', args: {} };
   try {
     (nodeExecution as any).executeRemoteNodeTool = async () => { effects += 1; return { output: 'allowed' }; };
+
+    const found: any = await search_tools({ query: 'call tool', sources: ['builtin'], limit: 200 }, ctx);
+    assert.equal(found.tools.some((tool: any) => tool.toolId === 'builtin:call_tool'), false);
+    await assert.rejects(() => call_tool({
+      source: 'builtin', name: 'call_tool', args: { source: 'node', name: 'custom_probe', args: {} },
+    }, ctx), /dispatcher\/container.*not a concrete builtin capability/i);
+    await assert.rejects(() => call_tool({
+      toolId: 'builtin:call_tool', args: { source: 'node', name: 'custom_probe', args: {} },
+    }, ctx), /dispatcher\/container.*not a concrete builtin capability/i);
+
     await sessionManager.setAgentMetadata(agentName, {
       isolated: true,
       isolatedNode: 'remote-a',
       toolRules: [
         { effect: 'allow', source: 'builtin', tool: 'run_script' },
-        { effect: 'deny', source: 'builtin', tool: 'call_tool' },
+        { effect: 'deny', source: 'node', node: 'remote-a', tool: 'custom_probe' },
       ],
     });
 
-    const found: any = await search_tools({ query: 'call tool', sources: ['builtin'], limit: 200 }, ctx);
-    assert.equal(found.tools.some((tool: any) => tool.toolId === 'builtin:call_tool'), false);
-    await assert.rejects(() => tools.callTool('call_tool', descriptor, ctx), /denies builtin capability `call_tool`/i);
-    await assert.rejects(() => call_tool(descriptor, ctx), /denies builtin capability `call_tool`/i);
+    await assert.rejects(() => tools.callTool('call_tool', descriptor, ctx), /denies node capability `custom_probe`/i);
+    await assert.rejects(() => call_tool(descriptor, ctx), /denies node capability `custom_probe`/i);
     const nested = await tools.run_script({
       code: 'def main(args):\n    return call_tool(source="node", name="custom_probe", args={})',
     }, ctx);
     assert.equal(nested.status, 'failed');
-    assert.match(String(nested.error), /denies builtin capability `call_tool`/i);
+    assert.match(String(nested.error), /denies node capability `custom_probe`/i);
     assert.equal(effects, 0);
 
     await sessionManager.setAgentMetadata(agentName, {
@@ -788,19 +796,14 @@ test('isolated unified calls authorize outer call_tool before the concrete targe
       isolatedNode: 'remote-a',
       toolRules: [{ effect: 'allow', source: 'builtin', tool: 'run_script' }],
     });
+    assert.deepEqual(await tools.callTool('call_tool', descriptor, ctx), { output: 'allowed' });
     assert.deepEqual(await call_tool(descriptor, ctx), { output: 'allowed' });
-    assert.equal(effects, 1);
-
-    await sessionManager.setAgentMetadata(agentName, {
-      isolated: true,
-      isolatedNode: 'remote-a',
-      toolRules: [
-        { effect: 'allow', source: 'builtin', tool: 'call_tool' },
-        { effect: 'deny', source: 'node', node: 'remote-a', tool: 'custom_probe' },
-      ],
-    });
-    await assert.rejects(() => call_tool(descriptor, ctx), /denies node capability `custom_probe`/i);
-    assert.equal(effects, 1);
+    const allowedNested = await tools.run_script({
+      code: 'def main(args):\n    return call_tool(source="node", name="custom_probe", args={})',
+    }, ctx);
+    assert.equal(allowedNested.status, 'completed');
+    assert.deepEqual(allowedNested.result, { output: 'allowed' });
+    assert.equal(effects, 3);
   } finally {
     (nodeExecution as any).executeRemoteNodeTool = originalExecute;
     await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});

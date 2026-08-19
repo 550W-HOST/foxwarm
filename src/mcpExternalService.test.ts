@@ -267,11 +267,12 @@ test('isolated MCP rules filter discovery, authorize exact calls, and update liv
   await sessionManager.saveSession(sourceId);
   const originalListTools = mcpClient.listTools;
   const originalCallTool = mcpClient.callTool;
+  let callEffects = 0;
   (mcpClient as any).listTools = async () => ({ tools: [
     { name: 'probe', description: 'allowed' },
     { name: 'other', description: 'hidden' },
   ] });
-  (mcpClient as any).callTool = async (_server: string, tool: string) => ({ tool });
+  (mcpClient as any).callTool = async (_server: string, tool: string) => { callEffects += 1; return { tool }; };
   try {
     await sessionManager.setAgentMetadata(agentName, {
       isolated: true,
@@ -281,6 +282,7 @@ test('isolated MCP rules filter discovery, authorize exact calls, and update liv
     assert.deepEqual((await listMcpTools(sourceId, 'demo') as any).tools.map((tool: any) => tool.name), ['probe']);
     assert.deepEqual(await callMcpTool(sourceId, 'demo', 'probe', {}), { tool: 'probe' });
     await assert.rejects(() => callMcpTool(sourceId, 'demo', 'other', {}), /cannot use mcp capability/i);
+    assert.equal(callEffects, 1);
 
     await sessionManager.setAgentMetadata(agentName, {
       isolated: true,
@@ -289,6 +291,7 @@ test('isolated MCP rules filter discovery, authorize exact calls, and update liv
     });
     assert.deepEqual((await listMcpTools(sourceId, 'demo') as any).tools.map((tool: any) => tool.name), ['other']);
     await assert.rejects(() => callMcpTool(sourceId, 'demo', 'probe', {}), /cannot use mcp capability/i);
+    assert.equal(callEffects, 1);
   } finally {
     (mcpClient as any).listTools = originalListTools;
     (mcpClient as any).callTool = originalCallTool;

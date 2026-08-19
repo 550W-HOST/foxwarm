@@ -12,7 +12,8 @@ Defines the persisted exact agent tool-rule shape, validates and canonicalizes s
 - `ToolCapabilitySource` — canonical capability source: `builtin | node | mcp`.
 - `AgentToolRule` — exact persisted rule union. Builtins use source+tool; Node rules add exact node; MCP rules add exact server.
 - `ResolvedToolPermissionIdentity` — canonical runtime identity consumed by authorization and visibility.
-- `normalizeAgentToolRules(value)` — validates, trims, canonicalizes, and rejects wildcard, extra-field, duplicate, or conflicting exact identities, more than 256 rules, and node/server/tool strings over 128 UTF-8 bytes.
+- `normalizeAgentToolRules(value)` — validates, trims, canonicalizes, and rejects wildcard, extra-field, duplicate, conflicting, or permission-neutral dispatcher/container identities, more than 256 rules, and node/server/tool strings over 128 UTF-8 bytes.
+- `isPermissionNeutralBuiltinDispatcher(tool)` — identifies the exact non-capability builtin dispatcher `call_tool` without generalizing the rule to other placement labels.
 - `toolRuleIdentity(rule)` — stable exact identity key.
 - `findExactAgentToolRule(rules, identity)` — exact source-aware lookup.
 - `isDefaultIsolatedCapabilityAllowed(...)` — compatibility fallback for the pre-rule isolated allow behavior.
@@ -25,6 +26,7 @@ Defines the persisted exact agent tool-rule shape, validates and canonicalizes s
 - Exact rule lookup is separate from structural guards. An exact allow cannot make master `exec`, another remote Node, an unadvertised Node capability, an out-of-agent master path, or an invalid cross-session operation structurally valid.
 - Missing rules retain the existing isolated defaults: agent-scoped master file/memory operations, safe builtin/session/timer operations, static Node capabilities on the bound/current Node, and custom advertised capabilities delegated to the authenticated Node service boundary. MCP remains unavailable unless an exact MCP allow exists.
 - Non-isolated callers do not consult these rules.
+- `call_tool` is not a concrete capability identity: persisted builtin rules targeting it are rejected, and only its resolved target participates in authorization.
 
 ## Dependencies
 

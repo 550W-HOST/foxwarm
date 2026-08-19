@@ -3,6 +3,7 @@ import * as mcpExternal from '../mcpExternalService';
 import { executeRemoteNodeTool } from '../nodeExecution';
 import { nodesManager } from '../nodes/manager';
 import { checkToolPermission, checkToolPermissionForSession } from '../isolatedCheck';
+import { isPermissionNeutralBuiltinDispatcher } from '../permissions';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './placement';
 import type { ToolArgs, ToolContext, UnifiedToolSource } from './helpers';
 
@@ -110,6 +111,9 @@ function resolveMcp(invocationName: string, server: string | undefined, name: st
 }
 
 function resolveBuiltin(invocationName: string, name: string, rawArgs: ToolArgs, ctx: ToolContext, current: string): ResolvedTool {
+  if (isPermissionNeutralBuiltinDispatcher(name)) {
+    throw new Error(`Tool \`${name}\` is a dispatcher/container, not a concrete builtin capability.`);
+  }
   if (NODE_ENVIRONMENT_BUILTIN_NAMES.includes(name as any)) {
     throw new Error(`Tool \`${name}\` is a node capability, not a builtin. Use the direct \`${name}\` tool or call_tool with source=\`node\`.`);
   }
@@ -154,45 +158,24 @@ export async function resolveDirectTool(name: string, args: ToolArgs, ctx: ToolC
   return resolveBuiltin(name, name, args, ctx, current);
 }
 
-function permissionIdentity(resolved: ResolvedTool) {
-  if (resolved.source === 'node') {
-    return { source: 'node' as const, node: resolved.executionNode, tool: resolved.name };
-  }
-  if (resolved.source === 'mcp') {
-    return { source: 'mcp' as const, server: resolved.server, tool: resolved.name };
-  }
-  return { source: 'builtin' as const, tool: resolved.name };
-}
-
-async function checkPermission(
-  identity: ReturnType<typeof permissionIdentity>,
-  permissionNode: string,
-  args: ToolArgs,
-  ctx: ToolContext,
-  refreshWorkerMetadata: boolean,
-): Promise<void> {
+async function checkPermission(resolved: ResolvedTool, ctx: ToolContext): Promise<void> {
+  if (resolved.source === 'mcp') return;
   if (!ctx.sessionId) throw new Error('Tool execution requires an active source session.');
+  const identity = resolved.source === 'node'
+    ? { source: 'node' as const, node: resolved.executionNode, tool: resolved.name }
+    : { source: 'builtin' as const, tool: resolved.name };
   if (ctx.session?.id === ctx.sessionId) {
-    await checkToolPermissionForSession(ctx.session, identity, permissionNode, args,
-      refreshWorkerMetadata && ctx.sessionPlacement === 'session-worker');
+    await checkToolPermissionForSession(ctx.session, identity, resolved.permissionNode, resolved.args,
+      ctx.sessionPlacement === 'session-worker');
   } else {
-    await checkToolPermission(identity, ctx.sessionId, permissionNode, args);
+    await checkToolPermission(identity, ctx.sessionId, resolved.permissionNode, resolved.args);
   }
 }
 
 export async function executeResolvedTool(resolved: ResolvedTool, ctx: ToolContext): Promise<any> {
   if (!ctx.sessionId) throw new Error('Tool execution requires an active source session.');
-  const concreteIdentity = permissionIdentity(resolved);
-  const unifiedInvocation = resolved.invocationName === 'call_tool';
-  const outerIdentity = { source: 'builtin' as const, tool: 'call_tool' };
-  const outerMatchesConcrete = concreteIdentity.source === 'builtin' && concreteIdentity.tool === 'call_tool';
-  if (unifiedInvocation) {
-    await checkPermission(outerIdentity, 'master', {}, ctx, true);
-  }
   if (resolved.source === 'mcp') return mcpExternal.callMcpTool(ctx.sessionId, resolved.server, resolved.name, resolved.args);
-  if (!outerMatchesConcrete) {
-    await checkPermission(concreteIdentity, resolved.permissionNode, resolved.args, ctx, !unifiedInvocation);
-  }
+  await checkPermission(resolved, ctx);
   if (resolved.source === 'node') {
     if (resolved.target?.kind === 'remote-node') {
       return executeRemoteNodeTool(ctx.sessionId, resolved.target.id, resolved.name, resolved.args, resolved.routingSnapshot);

@@ -185,6 +185,33 @@ test('agent isolation mutation replaces rules only when supplied and reports the
   });
 });
 
+test('agent tool rules reject permission-neutral call_tool dispatcher identities', async () => {
+  await withTempDir(async (dirPath) => {
+    const filePath = path.join(dirPath, 'agents.json');
+    setAgentMetadataStoreForTests(createAgentMetadataStore(filePath));
+    await setAgentMetadata('dispatcher-rules-agent', {
+      isolated: true,
+      isolatedNode: 'sandbox-a',
+      toolRules: [{ effect: 'deny', source: 'builtin', tool: 'skill' }],
+    });
+
+    await assert.rejects(() => setAgentMetadata('dispatcher-rules-agent', {
+      toolRules: [{ effect: 'deny', source: 'builtin', tool: 'call_tool' }],
+    }), /dispatcher\/container.*authorize its resolved concrete capability/i);
+    assert.deepEqual(getAgentToolRules('dispatcher-rules-agent'), [
+      { effect: 'deny', source: 'builtin', tool: 'skill' },
+    ]);
+
+    const persisted = await fs.readJson(filePath);
+    persisted['dispatcher-rules-agent'].toolRules = [{ effect: 'allow', source: 'builtin', tool: 'call_tool' }];
+    await fs.writeJson(filePath, persisted);
+    await assert.rejects(() => loadAgentMetadata(), /dispatcher\/container.*authorize its resolved concrete capability/i);
+    assert.deepEqual(getAgentToolRules('dispatcher-rules-agent'), [
+      { effect: 'deny', source: 'builtin', tool: 'skill' },
+    ]);
+  });
+});
+
 test('agent creation persists optional exact tool rules before returning', async () => {
   await withTempDir(async (dirPath) => {
     const filePath = path.join(dirPath, 'agents.json');

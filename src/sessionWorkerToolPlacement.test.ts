@@ -91,9 +91,9 @@ test('Worker direct, unified, and ToolScript calls share live exact agent rules'
   }
 });
 
-test('Worker unified outer call_tool deny fences reverse Node and MCP effects', async () => {
+test('Worker unified call_tool authorizes the concrete Node target and delegates MCP target authority', async () => {
   const session = owner();
-  session.agent = `worker_outer_call_tool_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  session.agent = `worker_dispatcher_call_tool_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   session.currentNode = 'remote-a';
   const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
   const originalNodeExecute = nodeExecution.executeRemoteNodeTool;
@@ -111,20 +111,20 @@ test('Worker unified outer call_tool deny fences reverse Node and MCP effects', 
       toolRules: [
         { effect: 'allow', source: 'builtin', tool: 'run_script' },
         { effect: 'allow', source: 'mcp', server: 'demo', tool: 'probe' },
-        { effect: 'deny', source: 'builtin', tool: 'call_tool' },
+        { effect: 'deny', source: 'node', node: 'remote-a', tool: 'custom_probe' },
       ],
     });
 
-    await assert.rejects(() => callTool('call_tool', nodeDescriptor, ctx), /denies builtin capability `call_tool`/i);
-    await assert.rejects(() => tool_call_tool(nodeDescriptor, ctx), /denies builtin capability `call_tool`/i);
-    await assert.rejects(() => tool_call_tool(mcpDescriptor, ctx), /denies builtin capability `call_tool`/i);
+    await assert.rejects(() => callTool('call_tool', nodeDescriptor, ctx), /denies node capability `custom_probe`/i);
+    await assert.rejects(() => tool_call_tool(nodeDescriptor, ctx), /denies node capability `custom_probe`/i);
     const nested = await tool_run_script({
       code: 'def main(args):\n    return call_tool(source="node", name="custom_probe", args={})',
     }, ctx);
     assert.equal(nested.status, 'failed');
-    assert.match(String(nested.error), /denies builtin capability `call_tool`/i);
+    assert.match(String(nested.error), /denies node capability `custom_probe`/i);
     assert.equal(nodeEffects, 0);
-    assert.equal(mcpEffects, 0);
+    assert.deepEqual(await tool_call_tool(mcpDescriptor, ctx), { output: 'mcp-ok' });
+    assert.equal(mcpEffects, 1);
 
     await sessionManager.setAgentMetadata(session.agent, {
       isolated: true,
@@ -135,7 +135,6 @@ test('Worker unified outer call_tool deny fences reverse Node and MCP effects', 
       ],
     });
     assert.deepEqual(await tool_call_tool(nodeDescriptor, ctx), { output: 'node-ok' });
-    assert.deepEqual(await tool_call_tool(mcpDescriptor, ctx), { output: 'mcp-ok' });
     assert.equal(nodeEffects, 1);
     assert.equal(mcpEffects, 1);
   } finally {
@@ -255,7 +254,7 @@ test('worker guarded errors precede direct notifications, permissions, and recur
   assert.match(String(nested.error), /SESSION_WORKER_TOOL_UNAVAILABLE/);
 });
 
-test('recursive Worker ToolScript guards drop transient progress while Main local progress remains', async () => {
+test('recursive call_tool target rejection drops Worker progress while Main local progress remains', async () => {
   const session = owner();
   let progressEvents = 0;
   const originals = { notify: sessionManager.notifySessionEvent, get: sessionManager.getSession,
@@ -269,7 +268,7 @@ test('recursive Worker ToolScript guards drop transient progress while Main loca
   try {
     const recursive = await tool_run_script({ code: 'def main(args):\n    return call_tool(source="builtin", name="call_tool", args={"source":"builtin", "name":"move_session", "args":{}})' }, workerCtx);
     assert.equal(recursive.status, 'failed');
-    assert.match(String(recursive.error), /SESSION_WORKER_TOOL_UNAVAILABLE/);
+    assert.match(String(recursive.error), /dispatcher\/container.*not a concrete builtin capability/i);
     assert.equal(progressEvents, 0);
 
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'local-toolscript-progress-'));

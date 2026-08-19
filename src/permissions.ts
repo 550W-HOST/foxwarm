@@ -24,11 +24,15 @@ const MASTER_PATH_TOOLS = new Set(['send_file', 'image_write_to_file']);
 const MASTER_MEMORY_PATH_TOOLS = new Set(['read_memory', 'write_memory', 'edit_memory', 'delete_memory']);
 const MASTER_DEFAULT_BUILTINS = new Set([
   'apply_patch_memory', 'skill', 'image_crop', 'get_archived_messages', 'get_archived_blocks',
-  'recall', 'session', 'send_to_session', 'wait', 'submit_compact_plan', 'search_tools', 'call_tool',
+  'recall', 'session', 'send_to_session', 'wait', 'submit_compact_plan', 'search_tools',
   'create_timer', 'list_timers', 'update_timer', 'delete_timer',
 ]);
 const REMOTE_DEFAULT_BUILTINS = new Set(['send_file', 'image_write_to_file']);
 const MASTER_DEFAULT_NODE_TOOLS = new Set(['read', 'write', 'edit', 'apply_patch']);
+
+export function isPermissionNeutralBuiltinDispatcher(tool: string): boolean {
+  return tool === 'call_tool';
+}
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -85,7 +89,11 @@ export function normalizeAgentToolRules(value: unknown): AgentToolRule[] {
     let normalized: AgentToolRule;
     if (source === 'builtin') {
       assertExactKeys(raw, ['effect', 'source', 'tool'], index);
-      normalized = { effect, source, tool: exactString(raw.tool, 'tool', index) };
+      const tool = exactString(raw.tool, 'tool', index);
+      if (isPermissionNeutralBuiltinDispatcher(tool)) {
+        throw new Error(`toolRules[${index}].tool cannot target dispatcher/container builtin \`${tool}\`; authorize its resolved concrete capability instead.`);
+      }
+      normalized = { effect, source, tool };
     } else if (source === 'node') {
       assertExactKeys(raw, ['effect', 'source', 'node', 'tool'], index);
       normalized = {

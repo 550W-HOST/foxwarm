@@ -8,6 +8,7 @@ import { definitions } from './definitions';
 import { isToolVisibleForSession } from '../isolatedCheck';
 import * as sessionManager from '../sessionManager';
 import * as agentMetadata from '../session/agentMetadata';
+import { isPermissionNeutralBuiltinDispatcher } from '../permissions';
 
 function normalizeUnifiedToolSources(rawSources: unknown): UnifiedToolSource[] {
     const allowed: UnifiedToolSource[] = ['builtin', 'mcp', 'node'];
@@ -112,6 +113,7 @@ async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: 
     const session = discoverySession(ctx);
     return definitions
         .filter(def => !NODE_ENVIRONMENT_BUILTIN_NAMES.includes(def.name as any))
+        .filter(def => !isPermissionNeutralBuiltinDispatcher(def.name))
         .filter(def => isToolVisibleForSession(session, { source: 'builtin', tool: def.name }))
         .map(def => ({ def, score: scoreUnifiedToolQuery(query, [def.name, def.description]) }))
         .filter(entry => entry.score >= 0)
