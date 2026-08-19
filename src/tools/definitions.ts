@@ -796,6 +796,7 @@ Example:
                     transport: { type: 'string', description: 'Transport type: streamable-http, sse, stdio, or auto. Defaults to auto.' },
                     type: { type: 'string', description: 'Alias for transport (same supported values: streamable-http, sse, stdio, auto).' },
                     description: { type: 'string', description: 'Optional description' },
+                    timeoutSeconds: { type: 'number', minimum: 0, maximum: 3600, description: 'Optional timeout for tool calls to this server only, in seconds. Accepts 1-3600. Pass 0 to clear the override and return to the MCP SDK default (currently 60 seconds). Connection setup and tool listing are unchanged.' },
                     enable: { type: 'boolean', description: 'Enable/disable this server' }
                 },
                 required: ['name']
@@ -803,7 +804,7 @@ Example:
         },
         {
             name: 'list_mcp_servers',
-            description: 'List configured MCP servers with safe config summaries. Returns disabled servers too.',
+            description: 'List configured MCP servers with safe config summaries. Returns disabled servers too. timeoutSeconds is the per-server tool-call override; null means the MCP SDK default (currently 60 seconds).',
             parameters: {
                 type: 'object',
                 properties: {}

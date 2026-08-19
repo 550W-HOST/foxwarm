@@ -80,7 +80,7 @@ Implements the core tool registry and execution layer for the agent system. Defi
 ### tools/mcpTools.ts — MCP server integration
 | Function | Description |
 |----------|-------------|
-| `tool_mcp_config` | Configures MCP server connections |
+| `tool_mcp_config` | Configures MCP server connections and an optional bounded per-server tool-call timeout (`0` clears to SDK default) |
 | `tool_list_mcp_servers` | Lists configured MCP servers |
 
 ### tools/nodeTools.ts — Remote node management

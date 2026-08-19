@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 
-import { buildMcpHttpHeadersForTests, createMcpConfigStore, listServers, normalizeMcpToolResult, setMcpConfigStoreForTests, setServerEnabled, summarizeServerConfig, summarizeServers, upsertServer } from './mcpClient';
+import { buildMcpHttpHeadersForTests, callTool, createMcpConfigStore, getServers, listServers, normalizeMcpToolResult, resetMcpConnectionsForTests, setMcpConfigStoreForTests, setMcpSdkForTests, setServerEnabled, summarizeServerConfig, summarizeServers, upsertServer } from './mcpClient';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-mcp-config-'));
@@ -55,6 +55,7 @@ test('summarizeServerConfig redacts sensitive MCP config values', () => {
     envKeys: ['API_KEY', 'MODE'],
     headerKeys: ['Authorization', 'X-Api-Key'],
     hasToken: true,
+    timeoutSeconds: null,
   });
 
   assert.equal(Object.prototype.hasOwnProperty.call(summary, 'token'), false);
@@ -156,6 +157,88 @@ test('managed MCP upsert validates merged transport semantics before publishing'
     await assert.rejects(() => upsertServer('bad-transport', { url: 'https://example.com', transport: 'invalid' as any }), /unsupported MCP transport/i);
 
     assert.deepEqual((await listServers()).map(server => [server.name, server.description]), [['alpha', 'partial update']]);
+  });
+});
+
+test('MCP timeout overrides normalize read-old write-new clear and rejected values without replacing the live snapshot', async () => {
+  await withTempDir(async (dirPath) => {
+    const filePath = path.join(dirPath, 'mcp.json');
+    await fs.writeJson(filePath, { servers: { alpha: { url: 'https://example.com/alpha' } } });
+    setMcpConfigStoreForTests(createMcpConfigStore(filePath));
+
+    assert.equal((await listServers())[0].timeoutSeconds, null);
+    await upsertServer('alpha', { timeoutSeconds: 240 });
+    assert.equal((await listServers())[0].timeoutSeconds, 240);
+    assert.equal((await fs.readJson(filePath)).servers.alpha.timeoutSeconds, 240);
+
+    for (const timeoutSeconds of [-1, Number.NaN, Number.POSITIVE_INFINITY, 3601, '60' as any]) {
+      await assert.rejects(() => upsertServer('alpha', { timeoutSeconds } as any), /timeoutSeconds/i);
+      assert.equal((await listServers())[0].timeoutSeconds, 240);
+    }
+
+    await upsertServer('alpha', { timeoutSeconds: 0 });
+    assert.equal((await listServers())[0].timeoutSeconds, null);
+    assert.equal(Object.prototype.hasOwnProperty.call((await getServers()).alpha, 'timeoutSeconds'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call((await fs.readJson(filePath)).servers.alpha, 'timeoutSeconds'), false);
+  });
+});
+
+test('MCP call timeout uses SDK RequestOptions and preserves pooled stdio reuse across live updates', async () => {
+  await withTempDir(async (dirPath) => {
+    const calls: any[][] = [];
+    const clients: any[] = [];
+    const transports: any[] = [];
+    let failNextCall = false;
+    class FakeTransport {
+      pid = 1234;
+      onclose?: () => void;
+      closeCount = 0;
+      constructor(_options: any) { transports.push(this); }
+      async close() { this.closeCount += 1; }
+    }
+    class FakeClient {
+      constructor(_identity: any) { clients.push(this); }
+      async connect(_transport: any) {}
+      async callTool(...args: any[]) {
+        calls.push(args);
+        if (failNextCall) {
+          failNextCall = false;
+          throw new Error('RequestTimeout');
+        }
+        return { content: [{ type: 'text', text: 'ok' }] };
+      }
+    }
+    setMcpSdkForTests({
+      Client: FakeClient,
+      StdioClientTransport: FakeTransport,
+      StreamableHTTPClientTransport: FakeTransport,
+      SSEClientTransport: FakeTransport,
+    });
+    setMcpConfigStoreForTests(createMcpConfigStore(path.join(dirPath, 'mcp.json')));
+    try {
+      await upsertServer('stdio', { transport: 'stdio', command: 'fake', timeoutSeconds: 2.5 });
+      assert.equal(await callTool('stdio', 'probe'), 'ok');
+      assert.deepEqual(calls[0][2], { timeout: 2500 });
+      assert.equal(calls[0].length, 3);
+      failNextCall = true;
+      await assert.rejects(() => callTool('stdio', 'probe'), /RequestTimeout/);
+      assert.equal(await callTool('stdio', 'probe'), 'ok');
+      assert.deepEqual(calls[2][2], { timeout: 2500 });
+
+      await upsertServer('stdio', { timeoutSeconds: 3 });
+      assert.equal(await callTool('stdio', 'probe'), 'ok');
+      assert.deepEqual(calls[3][2], { timeout: 3000 });
+
+      await upsertServer('stdio', { timeoutSeconds: 0 });
+      assert.equal(await callTool('stdio', 'probe'), 'ok');
+      assert.equal(calls[4].length, 1);
+      assert.equal(clients.length, 1);
+      assert.equal(transports.length, 1);
+      assert.equal(transports[0].closeCount, 0);
+    } finally {
+      await resetMcpConnectionsForTests();
+    }
+    assert.equal(transports[0].closeCount, 1);
   });
 });
 

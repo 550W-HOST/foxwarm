@@ -94,7 +94,7 @@ Phase-one batch concurrency is intentionally narrow: only adjacent direct calls 
 
 ### D-dispatch-mcp-live-configuration
 
-[2026-08-01] The first managed/runtime MCP configuration read establishes one authoritative in-memory snapshot. Subsequent MCP listing, discovery, and calls read that snapshot rather than rereading the backing file. `mcp_config` mutations must persist successfully before replacing the live snapshot, become visible to subsequent MCP operations immediately, and require no Foxwarm restart. Manual backing-file edits do not alter the live snapshot; do not add file watching or an agent-facing manual reload path.
+[2026-08-01, updated 2026-08-19] The first managed/runtime MCP configuration read establishes one authoritative in-memory snapshot. Subsequent MCP listing, discovery, and calls read that snapshot rather than rereading the backing file. `mcp_config` mutations must persist successfully before replacing the live snapshot, become visible to subsequent MCP operations immediately, and require no Foxwarm restart. Manual backing-file edits do not alter the live snapshot; do not add file watching or an agent-facing manual reload path. Optional per-server `timeoutSeconds` is bounded to finite 1-3600 seconds and applies only to tool calls through SDK request options; zero canonically clears the field and omission preserves the SDK default.
 
 ### D-dispatch-node-environment-placement
 

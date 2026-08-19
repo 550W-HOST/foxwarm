@@ -105,7 +105,7 @@ function requireJsonArgs(value: unknown): Record<string, unknown> {
 function requireServerConfig(value: unknown): mcpClient.McpServerConfig {
   const config = requirePlainRecord(value, 'config');
   const stringFields = ['url', 'command', 'cwd', 'token', 'description', 'transport', 'type'] as const;
-  const allowedFields = new Set([...stringFields, 'args', 'env', 'headers', 'stderr', 'enable']);
+  const allowedFields = new Set([...stringFields, 'args', 'env', 'headers', 'stderr', 'enable', 'timeoutSeconds']);
   if (Object.keys(config).some(field => !allowedFields.has(field))) {
     throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', 'config contains an unsupported field.');
   }
@@ -116,6 +116,9 @@ function requireServerConfig(value: unknown): mcpClient.McpServerConfig {
   }
   if (config.enable !== undefined && typeof config.enable !== 'boolean') {
     throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', 'config.enable must be a boolean.');
+  }
+  if (config.timeoutSeconds !== undefined && typeof config.timeoutSeconds !== 'number') {
+    throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', 'config.timeoutSeconds must be a number.');
   }
   if (config.stderr !== undefined && !['inherit', 'pipe', 'ignore'].includes(String(config.stderr))) {
     throw new RpcError('MCP_EXTERNAL_INVALID_REQUEST', 'config.stderr must be inherit, pipe, or ignore.');

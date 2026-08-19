@@ -78,6 +78,7 @@ test('MCP external service clones secret-bearing config and returns only redacte
       env: { API_KEY: sensitiveValue },
       headers: { Authorization: sensitiveValue },
       token: sensitiveValue,
+      timeoutSeconds: 240,
     };
     await configureMcpServer({ sourceSessionId: sourceId, name: 'private', action: 'upsert', config });
     config.env.API_KEY = 'caller-mutated';
@@ -85,7 +86,7 @@ test('MCP external service clones secret-bearing config and returns only redacte
     const summaries = await listMcpServers(sourceId);
     assert.deepEqual(summaries, [{
       name: 'private', enabled: true, transport: 'stdio', command: 'node', argsCount: 2,
-      envKeys: ['API_KEY'], headerKeys: ['Authorization'], hasToken: true,
+      envKeys: ['API_KEY'], headerKeys: ['Authorization'], hasToken: true, timeoutSeconds: 240,
     }]);
     assert.equal(JSON.stringify(summaries).includes(sensitiveValue), false);
     assert.equal((await mcpClient.getServers()).private.env?.API_KEY, sensitiveValue);
@@ -126,17 +127,20 @@ test('failed MCP service config persistence leaves the previous live snapshot pu
   await withTempStore(async store => {
     await configureMcpServer({ sourceSessionId: sourceId, name: 'alpha', action: 'upsert', config: { url: 'https://example.invalid/alpha' } });
     await configureMcpServer({ sourceSessionId: sourceId, name: 'alpha', action: 'upsert', config: { description: 'merged update' } });
+    await configureMcpServer({ sourceSessionId: sourceId, name: 'alpha', action: 'upsert', config: { timeoutSeconds: 120 } });
     for (const config of [
       { transport: 'stdio' },
       { transport: 'auto' },
       { transport: 'unsupported' },
+      { timeoutSeconds: -1 },
+      { timeoutSeconds: 3601 },
     ]) {
       await assert.rejects(
         () => configureMcpServer({ sourceSessionId: sourceId, name: 'invalid', action: 'upsert', config: config as any }),
-        /requires command|requires url|unsupported MCP transport/i,
+        /requires command|requires url|unsupported MCP transport|timeoutSeconds/i,
       );
     }
-    assert.deepEqual((await listMcpServers(sourceId)).map(server => [server.name, server.description]), [['alpha', 'merged update']]);
+    assert.deepEqual((await listMcpServers(sourceId)).map(server => [server.name, server.description, server.timeoutSeconds]), [['alpha', 'merged update', 120]]);
     const originalWrite = store.write.bind(store);
     (store as any).write = async () => { throw new Error('simulated MCP persistence failure'); };
     await assert.rejects(

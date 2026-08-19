@@ -1,7 +1,7 @@
 # Unit: src-skills
 
 Files: src/skills.ts, src/skillCatalogSnapshot.test.ts, src/toolscriptSkills.test.ts
-Secondary files: skills/web-search/web-search.js, skills/web-search/web-search.test.js
+Secondary files: skills/web-search/web-search.js, skills/web-search/web-search.test.js, skills/mcp-management/SKILL.md
 
 ## Purpose
 

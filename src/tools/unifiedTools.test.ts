@@ -235,6 +235,8 @@ test('mcp_config schema exposes envJson and headersJson fallbacks', () => {
   assert.equal(def?.parameters?.properties?.envJson?.type, 'string');
   assert.equal(def?.parameters?.properties?.headers?.type, 'object');
   assert.equal(def?.parameters?.properties?.headersJson?.type, 'string');
+  assert.equal(def?.parameters?.properties?.timeoutSeconds?.minimum, 0);
+  assert.equal(def?.parameters?.properties?.timeoutSeconds?.maximum, 3600);
 });
 
 test('agent isolation management schemas expose only exact source-specific tool rules', () => {
@@ -271,13 +273,19 @@ test('mcp_config parses envJson and headersJson string-map fallbacks', async () 
       transport: 'stdio',
       envJson: JSON.stringify({ API_KEY: 'secret' }),
       headersJson: JSON.stringify({ 'X-Test': 'ok' }),
+      timeoutSeconds: 240,
     }, { sessionId: 'main' });
 
     assert.match(String(result), /json-fallback-test/);
     assert.equal(captured.length, 1);
     assert.deepEqual(captured[0].config.env, { API_KEY: 'secret' });
     assert.deepEqual(captured[0].config.headers, { 'X-Test': 'ok' });
+    assert.equal(captured[0].config.timeoutSeconds, 240);
+    assert.match(String(result), /240 second/);
     assert.equal(Object.prototype.hasOwnProperty.call(captured[0].config, 'url'), false);
+    const cleared = await mcp_config({ name: 'json-fallback-test', timeoutSeconds: 0 }, { sessionId: 'main' });
+    assert.equal(captured[1].config.timeoutSeconds, 0);
+    assert.match(String(cleared), /reset to the MCP SDK default/i);
   } finally {
     (mcpClient as any).upsertServer = originalUpsertServer;
   }
@@ -327,6 +335,7 @@ test('search_tools and call_tool cover MCP tools with schema-preserving structur
         envKeys: [] as string[],
         headerKeys: [] as string[],
         hasToken: false,
+        timeoutSeconds: null as number | null,
       },
     ]);
     (mcpClient as any).listTools = async (server?: string) => ({
@@ -400,8 +409,8 @@ test('search_tools keeps MCP results from healthy servers when another MCP serve
 
   try {
     (mcpClient as any).listServers = async () => ([
-      { name: 'healthy', enabled: true, transport: 'stdio', argsCount: 0, envKeys: [] as string[], headerKeys: [] as string[], hasToken: false },
-      { name: 'broken', enabled: true, transport: 'stdio', argsCount: 0, envKeys: [] as string[], headerKeys: [] as string[], hasToken: false },
+      { name: 'healthy', enabled: true, transport: 'stdio', argsCount: 0, envKeys: [] as string[], headerKeys: [] as string[], hasToken: false, timeoutSeconds: null as number | null },
+      { name: 'broken', enabled: true, transport: 'stdio', argsCount: 0, envKeys: [] as string[], headerKeys: [] as string[], hasToken: false, timeoutSeconds: null as number | null },
     ]);
     (mcpClient as any).listTools = async (server?: string) => {
       if (server === 'broken') {
