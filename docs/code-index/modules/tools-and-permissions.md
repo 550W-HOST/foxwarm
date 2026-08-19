@@ -48,7 +48,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 
 ## Canonical cross-module flow
 
-Tool resolution across builtin, MCP, and remote-node sources is documented in [tool dispatch](../threads/tool-dispatch.md).
+Tool resolution across builtin, MCP, and generic Node sources is documented in [tool dispatch](../threads/tool-dispatch.md).
 
 ## Compatibility
 

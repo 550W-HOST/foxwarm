@@ -4,7 +4,7 @@ See [README.md](./README.md) for governance, canonical ownership, and publicatio
 
 ## Overview
 
-Foxwarm is a multi-channel AI agent system that connects LLM providers to users through messaging adapters, terminal interfaces, and a browser UI. A master process owns sessions, context management, tool dispatch, and channel routing. Optional remote nodes provide distributed file, shell, browser, Git, and terminal capabilities.
+Foxwarm is a multi-channel AI agent system that connects LLM providers to users through messaging adapters, terminal interfaces, and a browser UI. A master process owns sessions, context management, tool dispatch, and channel routing. Generic Nodes provide execution environments; current production providers cover the colocated master and authenticated remote Nodes.
 
 The system uses a queue-driven session loop: inbound events are normalized by channels, routed to a session, processed serially, sent to an LLM, and continued through tool calls until a final response is broadcast. Long sessions remain usable through layered context compaction, archival, and semantic recall.
 
@@ -25,7 +25,7 @@ Session Core (queue, lifecycle, persistence)
 
 Infrastructure (HTTP, config, timers, skills, terminal routing)
         |
-Remote Nodes and CLI Node runtime
+Nodes, providers, and authenticated CLI Node runtime
 ```
 
 ## Project-wide principles
@@ -34,7 +34,7 @@ Remote Nodes and CLI Node runtime
 - **Serialized session work:** each session processes queued work in order and prevents concurrent turn loops.
 - **Layered context:** archived raw messages and hierarchical summaries preserve recall while controlling model context size.
 - **Unified tool resolution:** builtins, MCP tools, and node tools share discovery and dispatch surfaces; isolation checks remain enforced at execution boundaries.
-- **Distributed execution:** authenticated nodes expose tools and versioned backend services without becoming the source of session state.
+- **Distributed execution:** Nodes expose environment capabilities through Main-owned provider resolution without becoming the source of session state; authenticated remote transport is one provider.
 - **Indexed Main catalog:** identity/topology/list projections use the narrow Main-owned catalog boundary defined by [D-main-catalog-indexed-boundary](./threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
 - **Sandboxed automation:** ToolScript runs in a constrained VM and can suspend at safe host-call boundaries.
 - **Source-first documentation:** this index is a public-safe active map; source and tests remain authoritative.
@@ -59,7 +59,7 @@ Remote Nodes and CLI Node runtime
 | [infrastructure](./modules/infrastructure.md) | Bootstrap, HTTP, configuration, utilities, skills, timers, and terminals |
 | [llm](./modules/llm.md) | Provider requests, prompt snapshots, streaming, retries, and MCP client |
 | [message-routing](./modules/message-routing.md) | Inbound routing, commands, queue processing, and turn orchestration |
-| [nodes](./modules/nodes.md) | Pairing, registry, authentication, and remote-node communication |
+| [nodes](./modules/nodes.md) | Generic Node descriptors/providers plus authenticated remote pairing, transport, and services |
 | [scripting](./modules/scripting.md) | ToolScript execution, persistence, suspension, and managed orchestration |
 | [session-context](./modules/session-context.md) | Compaction, layered active history, archive, vector indexing, and recall |
 | [session-core](./modules/session-core.md) | Session lifecycle, persistence, relations, channels, goals, and managed sessions |

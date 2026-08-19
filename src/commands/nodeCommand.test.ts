@@ -7,6 +7,7 @@ import { COMMANDS } from '../commands';
 import { nodesManager } from '../nodes/manager';
 import {
   approvePendingPairing,
+  attachPendingPairingSocket,
   authenticateApprovedNode,
   createNodeRegistryStore,
   createPendingPairing,
@@ -64,6 +65,7 @@ test('/node default list includes pending approval info and flat approve command
       nodeType: 'worker',
       capabilities: capabilities('pending'),
     });
+    attachPendingPairingSocket(pending.id, {} as any);
 
     const replies: string[] = [];
     await COMMANDS['/node'].handler(
@@ -76,10 +78,40 @@ test('/node default list includes pending approval info and flat approve command
     const output = replies.pop() || '';
     assert.match(output, /Pending Approvals/);
     assert.match(output, new RegExp(pending.id));
+    assert.match(output, /requested=`pending node` ✅ online/);
     assert.match(output, /\/node approve <pending-id>/);
     assert.match(output, /\/node remove <node-id>/);
     assert.match(output, /\/node move <old-id> <new-id>/);
     assert.doesNotMatch(output, /\/node pair approve/);
+  });
+});
+
+test('/node list marks online rows and suppresses requested names equal to assigned node ids', async () => {
+  await withTempDir(async (dirPath) => {
+    const filePath = path.join(dirPath, 'nodes.json');
+    setNodeRegistryStoreForTests(createNodeRegistryStore(filePath));
+    resetNodeRegistryForTests();
+
+    const nodeId = 'matching-requested-id';
+    const approved = await approveTestNode(nodeId, nodeId);
+    const runtime = registerRuntimeNode(approved.nodeId);
+    const replies: string[] = [];
+    try {
+      await COMMANDS['/node'].handler(
+        { reply: (text: string) => { replies.push(String(text)); } } as any,
+        [],
+        'test/session',
+        { agent: 'main', currentNode: 'master' } as any,
+      );
+      const output = replies.pop() || '';
+      assert.match(output, new RegExp('`' + nodeId + '` \\[worker\\] ✅ online'));
+      assert.doesNotMatch(output, new RegExp('requested=`' + nodeId + '`'));
+      assert.match(output, /offline approved→/);
+      assert.match(output, new RegExp('approved→`' + nodeId + '`'));
+    } finally {
+      nodesManager.disconnectNode(approved.nodeId, 'test cleanup');
+      assert.equal(runtime.closeEvents.length, 1);
+    }
   });
 });
 

@@ -4,7 +4,7 @@ Files: src/nodes/manager.ts, src/nodes/legacyToolResultCompatibility.ts, src/nod
 
 ## Purpose
 
-Maintains the in-memory view of connected nodes and routes tool/file/session requests between Foxwarm sessions and remote node WebSocket connections. The manager always registers the local `master` node, tracks remote node capabilities, dispatches remote tool calls, and enforces node-scoped session access for node-originated events.
+Maintains the in-memory authenticated remote-node transport/runtime and routes tool/file/session requests between Foxwarm sessions and remote WebSocket connections. The manager still registers the local `master` record for existing local/compound/service behavior, while generic Node discovery and non-master provider resolution live in `src/nodes/providerRegistry.ts`.
 
 ## Key Exports
 
@@ -66,7 +66,8 @@ Maintains the in-memory view of connected nodes and routes tool/file/session req
 
 - `src/nodes/websocket.ts` registers authenticated node sockets with `registerNodeWithTools`, forwards responses/events into this manager, and unregisters sockets on close/error.
 - `src/commands.ts` uses `nodesManager` for `/node` list/switch/remove/move runtime behavior.
-- `src/nodeExecutionService.ts` validates the closed model-tool forwarding request before calling `executeTool`; `src/llm.ts`, dynamic node tools, and ToolScript use that service for remote execution. Main-local node management/listing and channel/file helpers continue to query the singleton directly.
+- `AuthenticatedRemoteNodeProvider` adapts connected runtime descriptors, dynamic capabilities, default cwd, and complete tool forwarding to this manager without changing WebSocket internals.
+- `src/nodeExecutionService.ts` validates the closed model-tool forwarding request before resolving the exact provider; authenticated remote execution then calls `executeTool`. Channel/file/backend-service helpers continue to use the manager's transport-specific operations directly.
 - `src/tools/nodeTools.ts` and `src/tools/unifiedSearch.ts` use the fixed Node facade where Session-worker placement requires Main-owned topology or execution.
 - The WebUI node-summary route combines `listNodeServiceSummaries()` with approved registry records so launch selectors can distinguish online capabilities from offline snapshots.
 

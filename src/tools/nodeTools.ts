@@ -7,8 +7,6 @@ import * as sessionRuntime from '../sessionRuntime';
 import { checkToolPermission } from '../isolatedCheck';
 import { nodesManager } from '../nodes/manager';
 import { buildNodeBootstrapInfo, ensureNodePairingToken } from '../nodes/bootstrapInfo';
-import { logger } from '../common';
-import { getAgentDir } from '../config';
 import { copyBetweenNodes, listNodeTopology, validateNodeSelection } from '../nodeExecution';
 import { executeMainManagementTool } from '../mainManagementTools';
 
@@ -67,62 +65,19 @@ async function resolveCurrentNodeForList(ctx?: ToolContext): Promise<string> {
 }
 
 export const tool_list_nodes = async (_args: ToolArgs = {}, ctx?: ToolContext) => {
-    if (ctx?.sessionPlacement === 'session-worker') {
-        if (!ctx.sessionId || ctx.session?.id !== ctx.sessionId) throw new Error('Node listing requires exact session context.');
-        const nodes = await listNodeTopology(ctx.sessionId, undefined, ctx.session.currentNode || 'master');
-        const currentNode = ctx.session.currentNode || 'master';
-        if (nodes.length === 0) return `No nodes registered. Current node: \`${currentNode}\`.`;
-        const body = nodes.map(node => `- \`${node.id}\`${node.id === 'master' ? ' (local)' : ' (remote)'}${node.id === currentNode ? ' ✅ current' : ''}`
-            + (typeof node.lastActivity === 'number' ? ` - Last activity: ${new Date(node.lastActivity).toISOString()}` : '')).join('\n');
-        return `Found ${nodes.length} node(s). Current node: \`${currentNode}\`.\n\n${body}\n`
-            + (nodes.some(node => node.id === currentNode) ? '' : `\nCurrent node \`${currentNode}\` is not currently registered/connected.\n`);
-    }
-    const nodes = nodesManager.listNodes();
+    if (!ctx?.sessionId) throw new Error('Node listing requires session context.');
+    if (ctx.sessionPlacement === 'session-worker' && ctx.session?.id !== ctx.sessionId) throw new Error('Node listing requires exact session context.');
     const currentNode = await resolveCurrentNodeForList(ctx);
-    
-    if (nodes.length === 0) {
-        return `No nodes registered. Current node: \`${currentNode}\`.`;
-    }
-    
-    let result = `Found ${nodes.length} node(s). Current node: \`${currentNode}\`.\n\n`;
-    let foundCurrentNode = false;
-    for (const node of nodes) {
-        const isMaster = node.id === 'master';
-        const label = isMaster ? ' (local)' : ' (remote)';
-        const currentMarker = node.id === currentNode ? ' ✅ current' : '';
-        if (node.id === currentNode) {
-            foundCurrentNode = true;
-        }
-        result += `- \`${node.id}\`${label}${currentMarker} - Last activity: ${new Date(node.lastActivity).toISOString()}\n`;
-    }
-    if (!foundCurrentNode) {
-        result += `\nCurrent node \`${currentNode}\` is not currently registered/connected.\n`;
-    }
-    
-    return result;
+    const nodes = await listNodeTopology(ctx.sessionId, undefined, currentNode);
+    if (nodes.length === 0) return `No nodes registered. Current node: \`${currentNode}\`.`;
+    const body = nodes.map(node => {
+        const label = node.kind === 'master' ? 'local' : node.kind;
+        return `- \`${node.id}\` (${label})${node.id === currentNode ? ' ✅ current' : ''}`
+            + (typeof node.lastActivity === 'number' ? ` - Last activity: ${new Date(node.lastActivity).toISOString()}` : '');
+    }).join('\n');
+    return `Found ${nodes.length} node(s). Current node: \`${currentNode}\`.\n\n${body}\n`
+        + (nodes.some(node => node.id === currentNode) ? '' : `\nCurrent node \`${currentNode}\` is not currently available.\n`);
 };
-
-async function resolveDefaultCwdForNode(nodeId: string, sessionId: string, agentName: string): Promise<string> {
-    if (nodeId === 'master') {
-        return getAgentDir(agentName);
-    }
-
-    const node = nodesManager.getNode(nodeId);
-    if (node?.tools?.has('get_default_cwd')) {
-        try {
-            const result = await nodesManager.executeTool(nodeId, 'get_default_cwd', {}, sessionId);
-            const text = typeof result === 'string'
-                ? result
-                : (typeof (result as any)?.output === 'string' ? (result as any).output : String(result ?? ''));
-            const cwd = text.trim();
-            if (cwd) return cwd;
-        } catch (e) {
-            logger.warn({ err: e, nodeId, sessionId }, 'Failed to query node default cwd after current node change');
-        }
-    }
-
-    return 'node process cwd (run `pwd` to inspect)';
-}
 
 export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext) => {
     const { nodeId } = args;
@@ -148,12 +103,9 @@ export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext)
         throw new Error('This session is isolated and cannot switch node via tools. Use /node from the user channel.');
     }
     
-    nodesManager.setCurrentNode(ctx.sessionId, nodeId);
-    
+    const validated = await validateNodeSelection(ctx.sessionId, nodeId);
     await sessionRuntime.updateSettings(ctx.sessionId, { currentNode: nodeId, cwd: null });
-    const defaultCwd = await resolveDefaultCwdForNode(nodeId, ctx.sessionId, session.agent || 'main');
-    
-    return `Current node changed to \`${nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${defaultCwd}\`.`;
+    return `Current node changed to \`${validated.nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${validated.defaultCwd}\`.`;
 };
 
 export async function tool_node(args: ToolArgs, ctx: ToolContext) {

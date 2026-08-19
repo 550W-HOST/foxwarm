@@ -6,6 +6,11 @@ import {
 } from './rpc';
 import * as sessionManager from './sessionManager';
 import { nodesManager } from './nodes/manager';
+import {
+  NodeProviderError,
+  NodeProviderRegistry,
+  nodeProviderRegistry,
+} from './nodes/providerRegistry';
 import type { Session } from './types';
 import { getAgentDir } from './config';
 import { checkToolPermission, isToolVisibleForSession } from './isolatedCheck';
@@ -26,7 +31,15 @@ export type NodeExecutionRequest = {
 
 export type NodeExecutionResponse = { result: unknown };
 export type NodeTopologyListRequest = { sourceSessionId: string; nodeId?: string; currentNode?: string };
-export type NodeTopologyListResponse = { nodes: Array<{ id: string; type: string; lastActivity?: number; tools: Array<{ name: string; description?: string; parameters?: unknown }> }> };
+export type NodeTopologyListResponse = { nodes: Array<{
+  id: string;
+  kind: 'master' | 'remote' | 'sandbox';
+  provider: string;
+  type: string;
+  availability: 'ready' | 'unavailable' | 'offline' | 'error';
+  lastActivity?: number;
+  tools: Array<{ name: string; description?: string; parameters?: unknown }>;
+}> };
 export type NodeSelectRequest = { sourceSessionId: string; nodeId: string };
 export type NodeSelectResponse = { nodeId: string; defaultCwd: string };
 export type NodeCopyRequest = { sourceSessionId: string; sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; overwrite?: boolean };
@@ -128,7 +141,7 @@ function normalizeRoutingSnapshot(value: unknown): NodeExecutionRoutingSnapshot 
   return { currentNode, ...(typeof candidate.cwd === 'string' ? { cwd: candidate.cwd } : {}) };
 }
 
-export async function requireNodeExecutionTarget(sourceSessionId: string, nodeId: string): Promise<Session> {
+export async function requireNodeExecutionAccess(sourceSessionId: string, nodeId: string): Promise<Session> {
   const source = sessionManager.getSessionCatalog(sourceSessionId);
   if (!source) {
     throw new RpcError('NODE_EXECUTION_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
@@ -145,7 +158,18 @@ export async function requireNodeExecutionTarget(sourceSessionId: string, nodeId
   return source;
 }
 
-export function createNodeExecutionServiceHandler(options: { expectedSourceSessionId?: string } = {}): RpcServiceHandler<typeof nodeExecutionServiceDescriptor> {
+function rethrowProviderError(error: unknown): never {
+  if (error instanceof NodeProviderError) {
+    throw new RpcError(error.code, error.message, error.retryable);
+  }
+  throw error;
+}
+
+export function createNodeExecutionServiceHandler(options: {
+  expectedSourceSessionId?: string;
+  providerRegistry?: NodeProviderRegistry;
+} = {}): RpcServiceHandler<typeof nodeExecutionServiceDescriptor> {
+  const providers = options.providerRegistry || nodeProviderRegistry;
   const requireSource = async (input: any, allowed: readonly string[], label: string): Promise<{ sourceSessionId: string; source: Session }> => {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', `${label} must be an object.`);
     assertOnlyKeys(input, allowed, label);
@@ -175,19 +199,29 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
         throw new RpcError('NODE_EXECUTION_MASTER_FORBIDDEN', 'The colocated master node must execute directly without Node execution RPC.');
       }
 
-      await requireNodeExecutionTarget(sourceSessionId, nodeId);
-
-      const node = nodesManager.getNode(nodeId);
-      if (!node || !node.ws) {
-        throw new RpcError('NODE_EXECUTION_NODE_UNAVAILABLE', `Remote node \`${nodeId}\` is not connected.`, true);
+      const source = await requireNodeExecutionAccess(sourceSessionId, nodeId);
+      const providerRouting = routingSnapshot || (!options.expectedSourceSessionId && source.currentNode === nodeId
+        ? { currentNode: nodeId, ...(typeof source.cwd === 'string' ? { cwd: source.cwd } : {}) }
+        : undefined);
+      try {
+        return {
+          result: await providers.invokeTool({
+            sourceSessionId,
+            nodeId,
+            toolName,
+            args,
+            context: {
+              agent: source.agent || 'main',
+              ...(providerRouting ? {
+                currentNode: providerRouting.currentNode,
+                ...(providerRouting.cwd !== undefined ? { cwd: providerRouting.cwd } : {}),
+              } : {}),
+            },
+          }),
+        };
+      } catch (error) {
+        rethrowProviderError(error);
       }
-      if (!node.tools.has(toolName)) {
-        throw new RpcError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`${toolName}\` not available on node \`${nodeId}\`.`);
-      }
-
-      return {
-        result: await nodesManager.executeTool(nodeId, toolName, args, sourceSessionId, routingSnapshot),
-      };
     },
     async list(input) {
       const { source } = await requireSource(input, ['sourceSessionId', 'nodeId', 'currentNode'], 'Node list request');
@@ -195,11 +229,17 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
       if (input.currentNode !== undefined) requireBoundedString(input.currentNode, 'currentNode', 128);
       const isolated = sessionManager.isSessionEffectivelyIsolated(source);
       const allowed = isolated ? new Set(['master', sessionManager.getAgentIsolationNode(source.agent || 'main') || source.currentNode || 'master', source.currentNode].filter(Boolean)) : null;
-      const nodes = nodesManager.listNodesWithTools().filter(node => (!filter || node.id === filter) && (!allowed || allowed.has(node.id))).slice(0, 100);
-      const activity = new Map(nodesManager.listNodes().map(node => [node.id, node.lastActivity]));
+      let registered;
+      try { registered = await providers.listNodes(); }
+      catch (error) { rethrowProviderError(error); }
+      const nodes = registered.filter(node => (!filter || node.id === filter) && (!allowed || allowed.has(node.id))).slice(0, 100);
       const output: NodeTopologyListResponse['nodes'] = []; let totalBytes = Buffer.byteLength('{"nodes":[]}', 'utf8');
       for (const node of nodes) {
-        if (typeof node.id !== 'string' || !node.id || node.id.length > 128 || typeof node.type !== 'string' || !node.type || node.type.length > 64) continue;
+        if (typeof node.id !== 'string' || !node.id || node.id.length > 128
+          || typeof node.type !== 'string' || !node.type || node.type.length > 64
+          || !['master', 'remote', 'sandbox'].includes(node.kind)
+          || typeof node.provider !== 'string' || !node.provider || node.provider.length > 64
+          || !['ready', 'unavailable', 'offline', 'error'].includes(node.availability)) continue;
         const tools: NodeTopologyListResponse['nodes'][number]['tools'] = [];
         for (const tool of node.tools.slice(0, 200)) {
           const descriptors = Object.getOwnPropertyDescriptors(tool);
@@ -212,9 +252,8 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
           const parameters = parametersValue === undefined ? undefined : plainJsonWithin(parametersValue, 16 * 1024);
           tools.push({ name, ...(description ? { description } : {}), ...(parameters !== undefined ? { parameters } : {}) });
         }
-        const lastActivity = activity.get(node.id);
-        const candidate = { id: node.id, type: node.type,
-          ...(typeof lastActivity === 'number' && Number.isFinite(lastActivity) && lastActivity >= 0 ? { lastActivity } : {}), tools };
+        const candidate = { id: node.id, kind: node.kind, provider: node.provider, type: node.type, availability: node.availability,
+          ...(typeof node.lastActivity === 'number' && Number.isFinite(node.lastActivity) && node.lastActivity >= 0 ? { lastActivity: node.lastActivity } : {}), tools };
         const size = Buffer.byteLength(JSON.stringify(candidate), 'utf8') + (output.length ? 1 : 0);
         if (totalBytes + size > 256 * 1024) break;
         totalBytes += size; output.push(candidate);
@@ -224,19 +263,12 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
     async select(input) {
       const { sourceSessionId, source } = await requireSource(input, ['sourceSessionId', 'nodeId'], 'Node select request');
       const nodeId = requireBoundedString(input.nodeId, 'nodeId', 128);
-      await requireNodeExecutionTarget(sourceSessionId, nodeId);
-      nodesManager.setCurrentNode(sourceSessionId, nodeId);
+      await requireNodeExecutionAccess(sourceSessionId, nodeId);
       if (nodeId === 'master') return { nodeId, defaultCwd: getAgentDir(source.agent || 'main').slice(0, 4096) };
-      const node = nodesManager.getNode(nodeId);
-      if (node?.ws && node.tools.has('get_default_cwd')) {
-        try {
-          const value = await nodesManager.executeTool(nodeId, 'get_default_cwd', {}, sourceSessionId);
-          const descriptor = value && typeof value === 'object' ? Object.getOwnPropertyDescriptor(value, 'output') : undefined;
-          const raw = descriptor && 'value' in descriptor ? descriptor.value : value;
-          const cwd = typeof raw === 'string' ? raw.trim().slice(0, 4096) : '';
-          if (cwd) return { nodeId, defaultCwd: cwd };
-        } catch { /* preserve the existing bounded fallback */ }
-      }
+      try {
+        const cwd = (await providers.getDefaultCwd({ sourceSessionId, nodeId, context: { agent: source.agent || 'main' } }))?.slice(0, 4096);
+        if (cwd) return { nodeId, defaultCwd: cwd };
+      } catch (error) { rethrowProviderError(error); }
       return { nodeId, defaultCwd: 'node process cwd (run `pwd` to inspect)' };
     },
     async copy(input) {
@@ -246,8 +278,8 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
       const targetNode = requireBoundedString(input.targetNode, 'targetNode', 128); const targetPath = requireBoundedPath(input.targetPath, 'targetPath');
       if (input.overwrite !== undefined && typeof input.overwrite !== 'boolean') throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'overwrite must be a boolean.');
       await checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, sourceSessionId, 'master', { sourceNode, sourcePath, targetNode, targetPath, overwrite: input.overwrite === true });
-      if (sourceNode !== 'master') await requireNodeExecutionTarget(sourceSessionId, sourceNode);
-      if (targetNode !== 'master') await requireNodeExecutionTarget(sourceSessionId, targetNode);
+      if (sourceNode !== 'master') await requireNodeExecutionAccess(sourceSessionId, sourceNode);
+      if (targetNode !== 'master') await requireNodeExecutionAccess(sourceSessionId, targetNode);
       const file = await nodesManager.readFileFromNode(sourceNode, sourcePath, sourceSessionId);
       if (typeof file.dataBase64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(file.dataBase64)) {
         invalidResponse('Node copy source returned invalid base64 data.');

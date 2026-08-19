@@ -70,7 +70,7 @@ async function getClient(): Promise<RpcClient<typeof nodeExecutionServiceDescrip
   return client;
 }
 
-export async function executeRemoteNodeTool(
+export async function executeNodeTool(
   sourceSessionId: string,
   nodeId: string,
   toolName: string,

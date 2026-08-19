@@ -596,11 +596,11 @@ test('master Node discovery and dynamic calls expose only canonical node-environ
   isolated.agent = isolatedAgent;
   isolated.currentNode = 'bound-remote';
   await sessionManager.saveSession(isolatedId);
-  const originalRemoteExecute = (nodeExecution as any).executeRemoteNodeTool;
+  const originalRemoteExecute = (nodeExecution as any).executeNodeTool;
   let remoteCalls = 0;
 
   try {
-    (nodeExecution as any).executeRemoteNodeTool = async () => {
+    (nodeExecution as any).executeNodeTool = async () => {
       remoteCalls += 1;
       throw new Error('master calls must not enter node execution RPC');
     };
@@ -642,7 +642,7 @@ test('master Node discovery and dynamic calls expose only canonical node-environ
     );
 
     const forwarded: any[] = [];
-    (nodeExecution as any).executeRemoteNodeTool = async (...args: any[]) => {
+    (nodeExecution as any).executeNodeTool = async (...args: any[]) => {
       remoteCalls += 1;
       forwarded.push(args);
       return { remote: true, toolName: args[2] };
@@ -663,7 +663,7 @@ test('master Node discovery and dynamic calls expose only canonical node-environ
       [sourceId, 'remote-a', 'dynamic_probe'],
     ]);
   } finally {
-    (nodeExecution as any).executeRemoteNodeTool = originalRemoteExecute;
+    (nodeExecution as any).executeNodeTool = originalRemoteExecute;
     await sessionManager.setAgentMetadata(isolatedAgent, { isolated: false }).catch(() => {});
     await sessionManager.deleteSession(sourceId).catch(() => false);
     await sessionManager.deleteSession(isolatedId).catch(() => false);
@@ -758,11 +758,11 @@ test('call_tool is a permission-neutral dispatcher and only its concrete target 
   session.agent = agentName;
   session.currentNode = 'remote-a';
   const ctx: any = { sessionId: sourceId, session };
-  const originalExecute = nodeExecution.executeRemoteNodeTool;
+  const originalExecute = nodeExecution.executeNodeTool;
   let effects = 0;
   const descriptor = { source: 'node', name: 'custom_probe', args: {} };
   try {
-    (nodeExecution as any).executeRemoteNodeTool = async () => { effects += 1; return { output: 'allowed' }; };
+    (nodeExecution as any).executeNodeTool = async () => { effects += 1; return { output: 'allowed' }; };
 
     const found: any = await search_tools({ query: 'call tool', sources: ['builtin'], limit: 200 }, ctx);
     assert.equal(found.tools.some((tool: any) => tool.toolId === 'builtin:call_tool'), false);
@@ -805,7 +805,7 @@ test('call_tool is a permission-neutral dispatcher and only its concrete target 
     assert.deepEqual(allowedNested.result, { output: 'allowed' });
     assert.equal(effects, 3);
   } finally {
-    (nodeExecution as any).executeRemoteNodeTool = originalExecute;
+    (nodeExecution as any).executeNodeTool = originalExecute;
     await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
     await sessionManager.deleteSession(sourceId).catch(() => false);
   }

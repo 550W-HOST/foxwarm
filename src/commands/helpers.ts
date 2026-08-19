@@ -1,6 +1,7 @@
 import { ChannelContext, getChannelId, getChannelType, getConversationId } from '../channel';
 import { getManagedChannelIds, getChannelRuntimeStatus, listChannelRuntimeStatuses } from '../channelRuntime';
 import { nodesManager } from '../nodes/manager';
+import { nodeProviderRegistry } from '../nodes/providerRegistry';
 import { listApprovedNodes, listPendingPairings } from '../nodes/registry';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
@@ -301,6 +302,7 @@ export function buildNodePairHelp(token: string): string {
 export async function buildNodeListReply(currentNode: string, boundNode?: string): Promise<string> {
   const approved = await listApprovedNodes()
   const pending = await listPendingPairings()
+  const available = await nodeProviderRegistry.listNodes()
 
   let reply = '📋 **Nodes**\n\n'
   reply += `💡 Current node: \`${currentNode}\`\n`
@@ -308,15 +310,21 @@ export async function buildNodeListReply(currentNode: string, boundNode?: string
     reply += `🔒 Runtime is bound by agent isolation to \`${boundNode}\`.\n`
   }
 
-  reply += '\n**Approved Nodes**\n'
-  reply += currentNode === 'master' ? '- ✅ `master` (local)\n' : '- `master` (local)\n'
+  reply += '\n**Available Nodes**\n'
+  for (const node of available) {
+    const currentMarker = currentNode === node.id ? '✅ ' : ''
+    reply += `- ${currentMarker}\`${node.id}\` [${node.kind}; ${node.type}] ${node.availability}\n`
+  }
+  if (available.length === 0) reply += '- (No nodes are currently available)\n'
+
+  reply += '\n**Approved Authenticated Remote Nodes**\n'
 
   if (approved.length === 0) {
     reply += '- (No approved remote nodes yet)\n'
   } else {
     for (const node of approved) {
-      const online = nodesManager.getNode(node.nodeId) ? 'online' : 'offline'
-      const requestedName = node.requestedName ? ` requested=\`${node.requestedName}\`` : ''
+      const online = nodesManager.getNode(node.nodeId) ? '✅ online' : 'offline'
+      const requestedName = node.requestedName && node.requestedName !== node.nodeId ? ` requested=\`${node.requestedName}\`` : ''
       const lastSeen = node.lastSeenAt ? ` lastSeen=${new Date(node.lastSeenAt).toLocaleString()}` : ''
       const currentMarker = currentNode === node.nodeId ? '✅ ' : ''
       reply += `- ${currentMarker}\`${node.nodeId}\` [${node.nodeType}] ${online}${requestedName}${lastSeen}\n`
@@ -328,8 +336,9 @@ export async function buildNodeListReply(currentNode: string, boundNode?: string
     reply += '- (No pending pairing requests)\n'
   } else {
     for (const entry of pending) {
-      const requestedName = entry.requestedName ? ` requested=\`${entry.requestedName}\`` : ''
-      const connected = entry.connected ? ' online' : ' offline'
+      const requestedName = entry.requestedName && (!entry.approvedNodeId || entry.requestedName !== entry.approvedNodeId)
+        ? ` requested=\`${entry.requestedName}\`` : ''
+      const connected = entry.connected ? ' ✅ online' : ' offline'
       const approvedMarker = entry.approvedNodeId ? ` approved→\`${entry.approvedNodeId}\`` : ''
       reply += `- \`${entry.id}\` [${entry.nodeType}] code=\`${entry.pairCode}\`${requestedName}${connected}${approvedMarker}\n`
     }

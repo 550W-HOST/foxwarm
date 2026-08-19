@@ -2,7 +2,7 @@
 
 ## Overview
 
-This thread owns the connection/dispatch contract among the master [nodes module](../modules/nodes.md), full [CLI node](../modules/cli-node.md), and lightweight [browser node](../modules/browser-node.md).
+This thread owns the authenticated remote transport contract among the master [nodes module](../modules/nodes.md), full [CLI node](../modules/cli-node.md), and lightweight [browser node](../modules/browser-node.md). The authenticated WebSocket transport is one implementation behind the generic Node provider boundary; it is not the definition of every Node.
 
 ## Pairing and authentication
 
@@ -15,7 +15,7 @@ This thread owns the connection/dispatch contract among the master [nodes module
 
 ## Model-tool flow
 
-1. A session selects an online node through current-node/isolation permission evaluation.
+1. Main's generic Node registry resolves the exact selected Node to the authenticated remote provider after current-node/isolation permission evaluation.
 2. Master dispatch sends `tool_call` with call/session IDs.
 3. CLI node resolves shared `nodeTools` and optionally asks its TUI interceptor.
 4. Browser node resolves only its advertised `browser_*` handlers and applies extension tab policy.
@@ -61,6 +61,7 @@ The master serves current launch scripts, compose, PowerShell, and a minimal dyn
 ## Units
 
 - [src-nodes-manager](../units/src-nodes-manager.md)
+- [src-node-providers](../units/src-node-providers.md)
 - [src-nodes-misc](../units/src-nodes-misc.md)
 - [src-nodes-registry](../units/src-nodes-registry.md)
 - [CLI node client](../units/cli-node-client.md)
@@ -75,6 +76,8 @@ The master serves current launch scripts, compose, PowerShell, and a minimal dyn
 ### D-node-thread-tool-service-split
 
 Model tools are agent-callable and may pass client approval. Backend services are fixed capability-versioned protocols for trusted master features.
+
+Generic Node/provider ownership is canonical in [D-dispatch-generic-node-providers](./tool-dispatch.md#d-dispatch-generic-node-providers).
 
 ### D-node-thread-authenticated-identity
 

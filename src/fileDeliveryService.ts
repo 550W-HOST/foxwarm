@@ -1,7 +1,7 @@
 import { defineRpcService, rpcMethod, RpcError, type RpcServiceHandler } from './rpc';
 import * as sessionManager from './sessionManager';
 import { executeSendFileMain } from './toolsSessionAgent/interSession';
-import { requireNodeExecutionTarget } from './nodeExecutionService';
+import { requireNodeExecutionAccess } from './nodeExecutionService';
 
 export type FileDeliveryRequest = {
   sourceSessionId: string;
@@ -64,7 +64,7 @@ export function createFileDeliveryServiceHandler(options: { expectedSourceSessio
         ...(input.intent.caption !== undefined ? { caption: bounded(input.intent.caption, 'intent.caption', 4096) } : {}),
         ...(input.intent.text !== undefined ? { text: bounded(input.intent.text, 'intent.text', 4096) } : {}),
       };
-      if (runtimeNodeId !== 'master') await requireNodeExecutionTarget(sourceSessionId, runtimeNodeId);
+      if (runtimeNodeId !== 'master') await requireNodeExecutionAccess(sourceSessionId, runtimeNodeId);
       const exactSource = { ...source, currentNode, ...(cwd !== undefined ? { cwd } : { cwd: undefined }) };
       let result: any;
       try { result = await executeSendFileMain(intent, { sessionId: sourceSessionId, session: exactSource, runtimeNodeId } as any); }

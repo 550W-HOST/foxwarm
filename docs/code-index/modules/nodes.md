@@ -2,12 +2,13 @@
 
 ## Responsibility
 
-Master-side node lifecycle: pairing and approved credentials, the `/node_ws` protocol, connected-node registration/dispatch, node-scoped session-event authorization, backend service transport, and public bootstrap artifacts.
+Main-owned generic Node discovery/provider resolution plus authenticated remote-node lifecycle: pairing and approved credentials, the `/node_ws` protocol, connected-node registration/dispatch, node-scoped session-event authorization, backend service transport, and public bootstrap artifacts.
 
 ## Units
 
+- [src-node-providers](../units/src-node-providers.md) — generic safe descriptors, fixed provider registry, master descriptor provider, and authenticated remote transport adapter.
 - [src-nodes-manager](../units/src-nodes-manager.md) — connected-node map, model-tool dispatch, backend-service request/command/event routing, and session access checks.
-- [src-node-execution](../units/src-node-execution.md) — fixed versioned local RPC boundary for authenticated remote node model-tool execution.
+- [src-node-execution](../units/src-node-execution.md) — fixed versioned Main RPC boundary for generic non-master Node capability execution, topology, selection, and compound copy.
 - [src-nodes-misc](../units/src-nodes-misc.md) — WebSocket handler, heartbeat, bootstrap HTTP routes/info, and local node session events.
 - [src-nodes-registry](../units/src-nodes-registry.md) — pending/approved registry, pairing lifecycle, credential hashes, rename/removal, and durable storage.
 
@@ -21,7 +22,8 @@ Client implementations are separate modules: [CLI node](./cli-node.md) and [brow
 - Pending pairing create/list/approve/reject/claim operations.
 - Approved-node list/authenticate/remove/move operations.
 - `nodesManager` — registration, model-tool dispatch, backend-service dispatch, runtime disconnect, and access checks.
-- `executeRemoteNodeTool()` — current local service caller for direct and dynamic remote node-domain tool execution.
+- `nodeProviderRegistry` — fixed production registry for master and authenticated remote Node providers.
+- `executeNodeTool()` — placement-neutral service caller for direct and dynamic non-master Node capability execution.
 
 ## Bootstrap surface
 
@@ -48,6 +50,7 @@ The operator-facing workflow is documented by the single `skills/node-setup/SKIL
 - Node-to-session `session_event` is allowed only when the target session's `currentNode` equals the authenticated node ID, or the target belongs to an isolated agent bound to that node. The master validates with the authenticated node ID.
 - Agent isolation is an agent-level permission boundary. Selecting a session `currentNode` routes execution but does not create isolation or an exclusive lease.
 - Backend services are versioned fixed protocols and do not pass through model-tool approval.
+- Generic Node capability execution resolves the exact non-master provider in Main; unsupported capabilities never fall back to master.
 
 ## Compatibility
 
@@ -72,6 +75,8 @@ The authenticated node ID is mandatory input to master-side session-event author
 ### D-node-bootstrap-bundle
 
 Bootstrap distributes one minimal dynamic source archive with prebuilt CLI bundles when available, plus an explicit build fallback and separately installed optional PTY runtime.
+
+Generic Node/provider ownership is canonical in [D-dispatch-generic-node-providers](../threads/tool-dispatch.md#d-dispatch-generic-node-providers).
 
 ### D-node-android-adb-host
 

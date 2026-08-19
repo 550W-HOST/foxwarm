@@ -1,16 +1,11 @@
 import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
 import * as mcpExternal from '../mcpExternalService';
-import { executeRemoteNodeTool } from '../nodeExecution';
+import { executeNodeTool } from '../nodeExecution';
 import { nodesManager } from '../nodes/manager';
 import { checkToolPermission, checkToolPermissionForSession } from '../isolatedCheck';
 import { isPermissionNeutralBuiltinDispatcher } from '../permissions';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './placement';
 import type { ToolArgs, ToolContext, UnifiedToolSource } from './helpers';
-
-export type ExecutionTarget =
-  | { kind: 'master'; id: 'master' }
-  | { kind: 'remote-node'; id: string }
-  | { kind: 'sandbox'; id: string };
 
 export type ResolvedTool = {
   invocationName: string;
@@ -19,7 +14,6 @@ export type ResolvedTool = {
   args: ToolArgs;
   executionNode: string;
   permissionNode: string;
-  target?: ExecutionTarget;
   targetNode?: string;
   server?: string;
   localBuiltinName?: string;
@@ -80,12 +74,6 @@ function normalizeNodeId(value: unknown, fallback: string): string {
   return !nodeId || nodeId.toLowerCase() === 'current' ? fallback : nodeId;
 }
 
-function nodeTarget(nodeId: string): ExecutionTarget {
-  if (nodeId === 'master') return { kind: 'master', id: 'master' };
-  if (nodeId.startsWith('sandbox:')) return { kind: 'sandbox', id: nodeId };
-  return { kind: 'remote-node', id: nodeId };
-}
-
 function validatePlacement(resolved: ResolvedTool, ctx: ToolContext): ResolvedTool {
   const builtinName = resolved.source === 'node' ? resolved.localBuiltinName : resolved.name;
   if (builtinName) activeRuntime().guardBuiltin(builtinName, resolved.args,
@@ -94,15 +82,13 @@ function validatePlacement(resolved: ResolvedTool, ctx: ToolContext): ResolvedTo
 }
 
 function resolveNode(invocationName: string, name: string, args: ToolArgs, ctx: ToolContext, nodeId: string, current: string): ResolvedTool {
-  const target = nodeTarget(nodeId);
-  if (target.kind === 'sandbox') throw new Error('Sandbox execution targets are not implemented.');
   const localBuiltinName = NODE_ENVIRONMENT_BUILTIN_NAMES.includes(name as any) ? name : undefined;
-  if (target.kind === 'master' && !localBuiltinName) throw new Error(`Tool \`${name}\` not available on node \`master\``);
+  if (nodeId === 'master' && !localBuiltinName) throw new Error(`Tool \`${name}\` not available on node \`master\``);
   const routingSnapshot = ctx.sessionPlacement === 'session-worker' && nodeId !== 'master' && nodeId === current
     ? { currentNode: current, ...(typeof ctx.session?.cwd === 'string' ? { cwd: ctx.session.cwd } : {}) }
     : undefined;
   return validatePlacement({ invocationName, source: 'node', name, args: { ...args }, executionNode: nodeId,
-    permissionNode: nodeId, target, ...(localBuiltinName ? { localBuiltinName } : {}), ...(routingSnapshot ? { routingSnapshot } : {}) }, ctx);
+    permissionNode: nodeId, ...(localBuiltinName ? { localBuiltinName } : {}), ...(routingSnapshot ? { routingSnapshot } : {}) }, ctx);
 }
 
 function resolveMcp(invocationName: string, server: string | undefined, name: string, args: ToolArgs): ResolvedTool {
@@ -177,8 +163,8 @@ export async function executeResolvedTool(resolved: ResolvedTool, ctx: ToolConte
   if (resolved.source === 'mcp') return mcpExternal.callMcpTool(ctx.sessionId, resolved.server, resolved.name, resolved.args);
   await checkPermission(resolved, ctx);
   if (resolved.source === 'node') {
-    if (resolved.target?.kind === 'remote-node') {
-      return executeRemoteNodeTool(ctx.sessionId, resolved.target.id, resolved.name, resolved.args, resolved.routingSnapshot);
+    if (resolved.executionNode !== 'master') {
+      return executeNodeTool(ctx.sessionId, resolved.executionNode, resolved.name, resolved.args, resolved.routingSnapshot);
     }
     return activeRuntime().dispatchBuiltin(resolved.localBuiltinName!, resolved.args, { ...ctx, runtimeNodeId: 'master' });
   }
