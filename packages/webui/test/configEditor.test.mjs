@@ -73,6 +73,11 @@ test('app config schema suggests all managed channel types and QQ credential key
   const vector = schemas.APP_CONFIG_SCHEMA.properties.vector
   assert.equal(vector.oneOf.some((entry) => entry.const === false), true)
   assert.equal(vector.oneOf.find((entry) => entry.type === 'object').properties.baseUrl.pattern, '^https?://')
+  const executableNodeProvider = schemas.APP_CONFIG_SCHEMA.properties.nodeProviders.additionalProperties
+  assert.equal(executableNodeProvider.additionalProperties, false)
+  assert.deepEqual(executableNodeProvider.required, ['type', 'command'])
+  assert.equal(executableNodeProvider.properties.type.const, 'executable')
+  assert.equal(executableNodeProvider.properties.timeoutSeconds.default, 90)
 
   assert.equal(validateAppConfigSchema({
     channels: {
@@ -98,6 +103,8 @@ test('app config schema suggests all managed channel types and QQ credential key
   assert.equal(validateAppConfigSchema({ vectorMaintenance: { retentionHours: 48 } }), true)
   assert.equal(validateAppConfigSchema({ vector: false }), true)
   assert.equal(validateAppConfigSchema({ vector: { baseUrl: 'https://example.test/openai/v1' } }), true)
+  assert.equal(validateAppConfigSchema({ nodeProviders: { sandbox: { type: 'executable', command: '/opt/provider', args: ['serve'], timeoutSeconds: 30 } } }), true)
+  assert.equal(validateAppConfigSchema({ nodeProviders: { sandbox: { type: 'executable', command: '/opt/provider', secret: true } } }), false)
   assert.equal(validateAppConfigSchema({ llm: { compactKeepPercent: 0.3, compactThresholdPercent: 0.85 } }), true)
   assert.equal(validateAppConfigSchema({ llm: { compactKeepPercent: 0 } }), false)
   assert.equal(validateAppConfigSchema({ llm: { compactThresholdPercent: 1.1 } }), false)

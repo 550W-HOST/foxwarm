@@ -9,6 +9,7 @@ import {
   loadModelsConfigFromObject,
   normalizeDbWorkersEnabled,
   normalizeCompactionConfig,
+  normalizeNodeProvidersConfig,
   normalizeSessionWorkersConfig,
   normalizeVectorConfig,
   normalizeVectorMaintenanceConfig,
@@ -86,6 +87,7 @@ export function validateAppConfigYaml(rawYaml: string): AppConfig {
   if (config.channels !== undefined && !isPlainObject(config.channels)) {
     throw new Error('app config `channels` must be a YAML object.');
   }
+  normalizeNodeProvidersConfig(config.nodeProviders);
   normalizeSessionWorkersConfig(config.sessionWorkers);
   normalizeDbWorkersEnabled(config.dbWorkers);
   normalizeCompactionConfig(config.llm);

@@ -9,8 +9,8 @@ import { nodesManager } from './nodes/manager';
 import {
   NodeProviderError,
   NodeProviderRegistry,
-  nodeProviderRegistry,
 } from './nodes/providerRegistry';
+import { nodeProviderRegistry } from './nodes/providers';
 import type { Session } from './types';
 import { getAgentDir } from './config';
 import { checkToolPermission, isToolVisibleForSession } from './isolatedCheck';
@@ -182,7 +182,7 @@ export function createNodeExecutionServiceHandler(options: {
     return { sourceSessionId, source };
   };
   return {
-    async execute(input) {
+    async execute(input, rpcContext) {
       if (!input || typeof input !== 'object' || Array.isArray(input)) {
         throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'Node execution request must be an object.');
       }
@@ -217,20 +217,20 @@ export function createNodeExecutionServiceHandler(options: {
                 ...(providerRouting.cwd !== undefined ? { cwd: providerRouting.cwd } : {}),
               } : {}),
             },
-          }),
+          }, { signal: rpcContext.signal }),
         };
       } catch (error) {
         rethrowProviderError(error);
       }
     },
-    async list(input) {
+    async list(input, rpcContext) {
       const { source } = await requireSource(input, ['sourceSessionId', 'nodeId', 'currentNode'], 'Node list request');
       const filter = input.nodeId === undefined ? undefined : requireBoundedString(input.nodeId, 'nodeId', 128);
       if (input.currentNode !== undefined) requireBoundedString(input.currentNode, 'currentNode', 128);
       const isolated = sessionManager.isSessionEffectivelyIsolated(source);
       const allowed = isolated ? new Set(['master', sessionManager.getAgentIsolationNode(source.agent || 'main') || source.currentNode || 'master', source.currentNode].filter(Boolean)) : null;
       let registered;
-      try { registered = await providers.listNodes(); }
+      try { registered = await providers.listNodes({ signal: rpcContext.signal }); }
       catch (error) { rethrowProviderError(error); }
       const nodes = registered.filter(node => (!filter || node.id === filter) && (!allowed || allowed.has(node.id))).slice(0, 100);
       const output: NodeTopologyListResponse['nodes'] = []; let totalBytes = Buffer.byteLength('{"nodes":[]}', 'utf8');
@@ -260,13 +260,16 @@ export function createNodeExecutionServiceHandler(options: {
       }
       return { nodes: output };
     },
-    async select(input) {
+    async select(input, rpcContext) {
       const { sourceSessionId, source } = await requireSource(input, ['sourceSessionId', 'nodeId'], 'Node select request');
       const nodeId = requireBoundedString(input.nodeId, 'nodeId', 128);
       await requireNodeExecutionAccess(sourceSessionId, nodeId);
       if (nodeId === 'master') return { nodeId, defaultCwd: getAgentDir(source.agent || 'main').slice(0, 4096) };
       try {
-        const cwd = (await providers.getDefaultCwd({ sourceSessionId, nodeId, context: { agent: source.agent || 'main' } }))?.slice(0, 4096);
+        const cwd = (await providers.getDefaultCwd(
+          { sourceSessionId, nodeId, context: { agent: source.agent || 'main' } },
+          { signal: rpcContext.signal },
+        ))?.slice(0, 4096);
         if (cwd) return { nodeId, defaultCwd: cwd };
       } catch (error) { rethrowProviderError(error); }
       return { nodeId, defaultCwd: 'node process cwd (run `pwd` to inspect)' };

@@ -691,6 +691,27 @@ var APP_CONFIG_SCHEMA = {
   type: "object",
   additionalProperties: true,
   properties: {
+    nodeProviders: {
+      type: "object",
+      propertyNames: { pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
+      additionalProperties: {
+        type: "object",
+        additionalProperties: false,
+        required: ["type", "command"],
+        properties: {
+          type: { const: "executable", description: "Trusted one-shot executable Node provider adapter." },
+          command: { type: "string", minLength: 1, maxLength: 4096, pattern: "^\\S(?:.*\\S)?$", description: "Trusted executable command launched directly without a shell." },
+          args: {
+            type: "array",
+            maxItems: 64,
+            items: { type: "string", maxLength: 4096 },
+            description: "Fixed trusted command arguments. Tool/model values are never interpolated here."
+          },
+          timeoutSeconds: { type: "integer", minimum: 1, maximum: 300, default: 90, description: "Maximum duration of each one-shot provider request." }
+        }
+      },
+      description: "Startup-only trusted executable Node providers using the fixed foxwarm-node-provider@1 JSON stdin/stdout protocol. Requires restart."
+    },
     vector: {
       oneOf: [
         { const: false },

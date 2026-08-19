@@ -39,12 +39,18 @@ export type NodeDefaultCwdRequest = {
   context: { agent: string };
 };
 
+export type NodeProviderCallOptions = {
+  signal?: AbortSignal;
+};
+
 export interface NodeProvider {
   readonly id: string;
-  listNodes(): Promise<NodeDescriptor[]> | NodeDescriptor[];
-  getNode(nodeId: string): Promise<NodeDescriptor | undefined> | NodeDescriptor | undefined;
-  invokeTool(request: NodeToolRequest): Promise<unknown>;
-  getDefaultCwd?(request: NodeDefaultCwdRequest): Promise<string | undefined>;
+  /** Expensive/failure-prone discovery is consulted only when fixed in-process providers do not own the exact Node ID. */
+  readonly deferredLookup?: boolean;
+  listNodes(options?: NodeProviderCallOptions): Promise<NodeDescriptor[]> | NodeDescriptor[];
+  getNode(nodeId: string, options?: NodeProviderCallOptions): Promise<NodeDescriptor | undefined> | NodeDescriptor | undefined;
+  invokeTool(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown>;
+  getDefaultCwd?(request: NodeDefaultCwdRequest, options?: NodeProviderCallOptions): Promise<string | undefined>;
 }
 
 export class NodeProviderError extends Error {
@@ -72,11 +78,11 @@ export class NodeProviderRegistry {
     this.providers = [...providers];
   }
 
-  async listNodes(): Promise<NodeDescriptor[]> {
+  async listNodes(options?: NodeProviderCallOptions): Promise<NodeDescriptor[]> {
     const nodes: NodeDescriptor[] = [];
     const owners = new Map<string, string>();
     for (const provider of this.providers) {
-      for (const node of await provider.listNodes()) {
+      for (const node of await provider.listNodes(options)) {
         if (node.provider !== provider.id) {
           throw new NodeProviderError(
             'NODE_PROVIDER_INVALID_DESCRIPTOR',
@@ -97,10 +103,22 @@ export class NodeProviderRegistry {
     return nodes;
   }
 
-  async resolveNode(nodeId: string): Promise<{ descriptor: NodeDescriptor; provider: NodeProvider } | undefined> {
+  async resolveNode(nodeId: string, options?: NodeProviderCallOptions): Promise<{ descriptor: NodeDescriptor; provider: NodeProvider } | undefined> {
+    const immediate = this.providers.filter(provider => provider.deferredLookup !== true);
+    const deferred = this.providers.filter(provider => provider.deferredLookup === true);
+    const direct = await this.resolveNodeFromProviders(nodeId, immediate, options);
+    if (direct) return direct;
+    return this.resolveNodeFromProviders(nodeId, deferred, options);
+  }
+
+  private async resolveNodeFromProviders(
+    nodeId: string,
+    providers: readonly NodeProvider[],
+    options?: NodeProviderCallOptions,
+  ): Promise<{ descriptor: NodeDescriptor; provider: NodeProvider } | undefined> {
     let resolved: { descriptor: NodeDescriptor; provider: NodeProvider } | undefined;
-    for (const provider of this.providers) {
-      const descriptor = await provider.getNode(nodeId);
+    for (const provider of providers) {
+      const descriptor = await provider.getNode(nodeId, options);
       if (!descriptor) continue;
       if (descriptor.id !== nodeId || descriptor.provider !== provider.id) {
         throw new NodeProviderError(
@@ -119,8 +137,8 @@ export class NodeProviderRegistry {
     return resolved;
   }
 
-  async invokeTool(request: NodeToolRequest): Promise<unknown> {
-    const resolved = await this.resolveNode(request.nodeId);
+  async invokeTool(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown> {
+    const resolved = await this.resolveNode(request.nodeId, options);
     if (!resolved || resolved.descriptor.availability !== 'ready') {
       throw new NodeProviderError(
         'NODE_EXECUTION_NODE_UNAVAILABLE',
@@ -134,11 +152,11 @@ export class NodeProviderRegistry {
         `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`,
       );
     }
-    return resolved.provider.invokeTool(request);
+    return resolved.provider.invokeTool(request, options);
   }
 
-  async getDefaultCwd(request: NodeDefaultCwdRequest): Promise<string | undefined> {
-    const resolved = await this.resolveNode(request.nodeId);
+  async getDefaultCwd(request: NodeDefaultCwdRequest, options?: NodeProviderCallOptions): Promise<string | undefined> {
+    const resolved = await this.resolveNode(request.nodeId, options);
     if (!resolved || resolved.descriptor.availability !== 'ready') {
       throw new NodeProviderError(
         'NODE_EXECUTION_NODE_UNAVAILABLE',
@@ -149,7 +167,7 @@ export class NodeProviderRegistry {
     if (typeof resolved.descriptor.defaultCwd === 'string' && resolved.descriptor.defaultCwd.trim()) {
       return resolved.descriptor.defaultCwd.trim();
     }
-    return resolved.provider.getDefaultCwd?.(request);
+    return resolved.provider.getDefaultCwd?.(request, options);
   }
 }
 
@@ -286,8 +304,3 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
     }
   }
 }
-
-export const nodeProviderRegistry = new NodeProviderRegistry([
-  new MasterNodeProvider(),
-  new AuthenticatedRemoteNodeProvider(),
-]);

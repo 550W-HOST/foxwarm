@@ -1,7 +1,7 @@
 import { ChannelContext, getChannelId, getChannelType, getConversationId } from '../channel';
 import { getManagedChannelIds, getChannelRuntimeStatus, listChannelRuntimeStatuses } from '../channelRuntime';
 import { nodesManager } from '../nodes/manager';
-import { nodeProviderRegistry } from '../nodes/providerRegistry';
+import { nodeProviderRegistry } from '../nodes/providers';
 import { listApprovedNodes, listPendingPairings } from '../nodes/registry';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';

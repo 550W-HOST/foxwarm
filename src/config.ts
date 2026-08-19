@@ -113,6 +113,91 @@ export type AsrServiceConfig = {
   key?: string;
 };
 
+export const DEFAULT_EXECUTABLE_NODE_PROVIDER_TIMEOUT_SECONDS = 90;
+export const MAX_EXECUTABLE_NODE_PROVIDER_TIMEOUT_SECONDS = 300;
+export const MAX_EXECUTABLE_NODE_PROVIDER_ARGS = 64;
+export const MAX_EXECUTABLE_NODE_PROVIDER_VALUE_LENGTH = 4096;
+
+export type ExecutableNodeProviderConfig = {
+  type: 'executable';
+  command: string;
+  args?: string[];
+  timeoutSeconds?: number;
+};
+
+export type NodeProvidersConfig = Record<string, ExecutableNodeProviderConfig>;
+
+export type NormalizedExecutableNodeProviderConfig = {
+  id: string;
+  type: 'executable';
+  command: string;
+  args: string[];
+  timeoutMs: number;
+};
+
+export function normalizeNodeProvidersConfig(value: unknown): NormalizedExecutableNodeProviderConfig[] {
+  if (value === undefined) return [];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('app config `nodeProviders` must be an object.');
+  }
+
+  const normalized: NormalizedExecutableNodeProviderConfig[] = [];
+  for (const [id, candidate] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) {
+      throw new Error(`app config node provider id \`${id}\` must be 1-64 ASCII letters, digits, dot, underscore, or hyphen.`);
+    }
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      throw new Error(`app config \`nodeProviders.${id}\` must be an object.`);
+    }
+    const raw = candidate as Record<string, unknown>;
+    const unknown = Object.keys(raw).filter(key => !['type', 'command', 'args', 'timeoutSeconds'].includes(key));
+    if (unknown.length > 0) {
+      throw new Error(`app config \`nodeProviders.${id}\` has unsupported field \`${unknown[0]}\`.`);
+    }
+    if (raw.type !== 'executable') {
+      throw new Error(`app config \`nodeProviders.${id}.type\` must be \`executable\`.`);
+    }
+    if (typeof raw.command !== 'string'
+      || !raw.command
+      || raw.command.trim() !== raw.command
+      || raw.command.length > MAX_EXECUTABLE_NODE_PROVIDER_VALUE_LENGTH
+      || /[\u0000-\u001f\u007f]/.test(raw.command)) {
+      throw new Error(`app config \`nodeProviders.${id}.command\` must be an exact non-empty string of at most ${MAX_EXECUTABLE_NODE_PROVIDER_VALUE_LENGTH} characters.`);
+    }
+    if (raw.args !== undefined && !Array.isArray(raw.args)) {
+      throw new Error(`app config \`nodeProviders.${id}.args\` must be an array of strings.`);
+    }
+    const args = (raw.args || []) as unknown[];
+    if (args.length > MAX_EXECUTABLE_NODE_PROVIDER_ARGS) {
+      throw new Error(`app config \`nodeProviders.${id}.args\` may contain at most ${MAX_EXECUTABLE_NODE_PROVIDER_ARGS} entries.`);
+    }
+    for (const [index, arg] of args.entries()) {
+      if (typeof arg !== 'string' || arg.length > MAX_EXECUTABLE_NODE_PROVIDER_VALUE_LENGTH || arg.includes('\0')) {
+        throw new Error(`app config \`nodeProviders.${id}.args[${index}]\` must be a string of at most ${MAX_EXECUTABLE_NODE_PROVIDER_VALUE_LENGTH} characters.`);
+      }
+    }
+    const timeoutSeconds = raw.timeoutSeconds === undefined
+      ? DEFAULT_EXECUTABLE_NODE_PROVIDER_TIMEOUT_SECONDS
+      : raw.timeoutSeconds;
+    if (typeof timeoutSeconds !== 'number'
+      || !Number.isInteger(timeoutSeconds)
+      || timeoutSeconds < 1
+      || timeoutSeconds > MAX_EXECUTABLE_NODE_PROVIDER_TIMEOUT_SECONDS) {
+      throw new Error(
+        `app config \`nodeProviders.${id}.timeoutSeconds\` must be an integer between 1 and ${MAX_EXECUTABLE_NODE_PROVIDER_TIMEOUT_SECONDS}.`,
+      );
+    }
+    normalized.push({
+      id,
+      type: 'executable',
+      command: raw.command,
+      args: [...args] as string[],
+      timeoutMs: timeoutSeconds * 1000,
+    });
+  }
+  return normalized;
+}
+
 export const DEFAULT_SESSION_WORKER_IDLE_SECONDS = 60;
 export const MIN_SESSION_WORKER_IDLE_SECONDS = 1;
 export const MAX_SESSION_WORKER_IDLE_SECONDS = 86_400;
@@ -338,6 +423,7 @@ export function normalizeVectorMaintenanceConfig(value: unknown): NormalizedVect
 }
 
 export type AppConfig = {
+  nodeProviders?: NodeProvidersConfig;
   vector?: VectorConfig;
   sessionWorkers?: SessionWorkersConfig;
   dbWorkers?: boolean;
@@ -514,6 +600,7 @@ function resolvePathValue(value: string | undefined, fallback: string): string {
 
 export const APP_CONFIG = loadAppConfig();
 
+export const NODE_PROVIDERS_CONFIG = normalizeNodeProvidersConfig(APP_CONFIG.nodeProviders);
 export const COMPACTION_CONFIG = normalizeCompactionConfig(APP_CONFIG.llm);
 export const VECTOR_CONFIG = normalizeVectorConfig(APP_CONFIG.vector, APP_CONFIG.llm?.ollamaBaseUrl);
 export const VECTOR_ENABLED = VECTOR_CONFIG.enabled;

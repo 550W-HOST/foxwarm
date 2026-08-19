@@ -263,6 +263,14 @@ the defaults, `vectorMaintenance: false` disables maintenance, and an object
 enables it unless `enabled: false` while allowing `retentionHours` tuning.
 Maintenance is a no-op while Vector itself is disabled.
 
+Trusted executable sandbox Node providers can be added under `nodeProviders`.
+Each entry supplies a fixed startup command/argument list; Foxwarm never
+interpolates model or tool values into that command and launches one process
+per provider request without a shell. Providers use the fixed
+`foxwarm-node-provider@1` JSON stdin/stdout contract documented in
+[`docs/executable-node-provider-protocol.md`](docs/executable-node-provider-protocol.md).
+Provider configuration changes require a restart.
+
 ## Models (`state/models.yaml`)
 
 The WebUI OOBE page can create a basic model config. You can also edit `state/models.yaml` manually.

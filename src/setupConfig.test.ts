@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs-extra';
 import { buildModelsConfigFromSetupForm, validateAppConfigYaml, writeAppConfigWithChannels, writeRawAppConfig, writeRawModelsConfig } from './setupConfig';
-import { loadModelsConfigFromObject } from './config';
+import { loadModelsConfigFromObject, normalizeNodeProvidersConfig } from './config';
 
 test('raw models setup save writes the provided YAML text exactly', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-setup-models-'));
@@ -125,6 +125,41 @@ test('raw app config setup rejects invalid compaction percentages', () => {
       () => validateAppConfigYaml(`llm:\n  ${field}: ${value}\n`),
       new RegExp(`llm\\.${field}.*finite number`),
     );
+  }
+});
+
+test('app config validates startup executable Node providers with fixed trusted commands', () => {
+  const parsed = validateAppConfigYaml(`nodeProviders:
+  sandbox-script:
+    type: executable
+    command: /opt/example/provider
+    args: [serve, ""]
+    timeoutSeconds: 45
+`);
+  assert.deepEqual(normalizeNodeProvidersConfig(parsed.nodeProviders), [{
+    id: 'sandbox-script',
+    type: 'executable',
+    command: '/opt/example/provider',
+    args: ['serve', ''],
+    timeoutMs: 45_000,
+  }]);
+  assert.deepEqual(normalizeNodeProvidersConfig(undefined), []);
+  assert.equal(normalizeNodeProvidersConfig({
+    defaulted: { type: 'executable', command: '/opt/example/provider' },
+  })[0].timeoutMs, 90_000);
+});
+
+test('app config rejects malformed executable Node provider definitions', () => {
+  for (const [yaml, pattern] of [
+    ['nodeProviders: []\n', /nodeProviders.*object/],
+    ['nodeProviders:\n  bad id:\n    type: executable\n    command: provider\n', /provider id/],
+    ['nodeProviders:\n  p:\n    type: socket\n    command: provider\n', /type.*executable/],
+    ['nodeProviders:\n  p:\n    type: executable\n    command: ""\n', /command.*non-empty/],
+    ['nodeProviders:\n  p:\n    type: executable\n    command: provider\n    args: value\n', /args.*array/],
+    ['nodeProviders:\n  p:\n    type: executable\n    command: provider\n    timeoutSeconds: 0\n', /timeoutSeconds.*between/],
+    ['nodeProviders:\n  p:\n    type: executable\n    command: provider\n    secret: value\n', /unsupported field.*secret/],
+  ] as const) {
+    assert.throws(() => validateAppConfigYaml(yaml), pattern);
   }
 });
 

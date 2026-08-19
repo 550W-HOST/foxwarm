@@ -6,7 +6,7 @@ Main-owned generic Node discovery/provider resolution plus authenticated remote-
 
 ## Units
 
-- [src-node-providers](../units/src-node-providers.md) — generic safe descriptors, fixed provider registry, master descriptor provider, and authenticated remote transport adapter.
+- [src-node-providers](../units/src-node-providers.md) — generic safe descriptors/registry, master and authenticated-remote adapters, and startup-configured executable sandbox providers.
 - [src-nodes-manager](../units/src-nodes-manager.md) — connected-node map, model-tool dispatch, backend-service request/command/event routing, and session access checks.
 - [src-node-execution](../units/src-node-execution.md) — fixed versioned Main RPC boundary for generic non-master Node capability execution, topology, selection, and compound copy.
 - [src-nodes-misc](../units/src-nodes-misc.md) — WebSocket handler, heartbeat, bootstrap HTTP routes/info, and local node session events.
@@ -22,7 +22,8 @@ Client implementations are separate modules: [CLI node](./cli-node.md) and [brow
 - Pending pairing create/list/approve/reject/claim operations.
 - Approved-node list/authenticate/remove/move operations.
 - `nodesManager` — registration, model-tool dispatch, backend-service dispatch, runtime disconnect, and access checks.
-- `nodeProviderRegistry` — fixed production registry for master and authenticated remote Node providers.
+- `nodeProviderRegistry` — production registry for fixed master/authenticated-remote providers plus normalized startup executable providers.
+- `foxwarm-node-provider@1` — one-shot bounded JSON stdin/stdout contract for trusted executable sandbox providers; see `docs/executable-node-provider-protocol.md`.
 - `executeNodeTool()` — placement-neutral service caller for direct and dynamic non-master Node capability execution.
 
 ## Bootstrap surface
@@ -51,6 +52,7 @@ The operator-facing workflow is documented by the single `skills/node-setup/SKIL
 - Agent isolation is an agent-level permission boundary. Selecting a session `currentNode` routes execution but does not create isolation or an exclusive lease.
 - Backend services are versioned fixed protocols and do not pass through model-tool approval.
 - Generic Node capability execution resolves the exact non-master provider in Main; unsupported capabilities never fall back to master.
+- Executable providers are startup-only trusted configuration, advertise sandbox-kind Nodes, and receive complete capability calls rather than low-level file/process RPC. Their path and restriction semantics remain provider-defined.
 
 ## Compatibility
 
