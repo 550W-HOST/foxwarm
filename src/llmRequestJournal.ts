@@ -8,6 +8,7 @@ import { STATE_DIR } from './config';
 import { logger } from './common';
 import { streamUtf8JsonlLines } from './jsonl';
 import type { ChatResult, Message, ToolDefinition } from './types';
+import { syncDirectoryDurably } from './utils/diskJsonData';
 
 export const LLM_REQUEST_JOURNAL_JSONL_PATH = path.join(STATE_DIR, 'llm-request-journal.jsonl');
 const JOURNAL_PATH = LLM_REQUEST_JOURNAL_JSONL_PATH;
@@ -533,8 +534,7 @@ export async function exportLlmRequestJournalJsonl(outputPath: string): Promise<
     fs.closeSync(fileDescriptor);
     exportDb.close();
     await fs.move(temporaryPath, outputPath, { overwrite: true });
-    const directory = await nodeFs.open(path.dirname(outputPath), 'r');
-    try { await directory.sync(); } finally { await directory.close(); }
+    await syncDirectoryDurably(path.dirname(outputPath));
     return { records };
   } catch (error) {
     try { exportDb.exec('ROLLBACK'); } catch {}

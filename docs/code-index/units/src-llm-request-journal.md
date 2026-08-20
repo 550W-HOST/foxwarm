@@ -17,7 +17,7 @@ Canonical cross-module contract: [canonical LLM request journal](../threads/llm-
 - `listLlmRequestJournal` — bounded discovery by session and purpose with a stable `(createdAt, requestId)` pagination cursor for training/export callers.
 - `canonicalJournalJson`, `hashJournalValue` — deterministic object-key canonicalization and SHA-256 identity.
 - `migrateLegacyLlmRequestJournalToSqlite` — migration-only strict JSONL import and equality verification.
-- `exportLlmRequestJournalJsonl` — bounded, snapshot-consistent SQLite-backed compatibility export with atomic destination replacement.
+- `exportLlmRequestJournalJsonl` — bounded, snapshot-consistent SQLite-backed compatibility export with atomic destination replacement, mandatory file fsync, and parent-directory fsync where supported.
 - Test-only fault/reset hooks.
 
 ## Storage and behavior

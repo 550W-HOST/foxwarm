@@ -27,7 +27,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 - `renameSessionArchiveStore` — bootstrapped transactional ID/parent/checkpoint/import-state rename.
 - `renameSessionArchiveStoreForRecovery` — startup-journal rollback variant that updates existing SQLite rows before normal bootstrap can infer a duplicate branch.
 - `migrateLegacySessionArchivesToSqlite` — migration-only strict import/verification inventory for active legacy message/block JSONLs.
-- `exportSessionArchivesJsonl` — bounded, snapshot-consistent SQLite-backed compatibility export that exactly replaces its destination tree.
+- `exportSessionArchivesJsonl` — bounded, snapshot-consistent SQLite-backed compatibility export that exactly replaces its destination tree, with mandatory file fsync and parent-directory fsync where supported.
 
 ## Internal sections
 

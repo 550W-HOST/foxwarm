@@ -1,7 +1,6 @@
 import fs from 'fs-extra';
 import path from 'path';
 import crypto from 'crypto';
-import { promises as nodeFs } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { ARCHIVE_DB_PATH, SESSION_ID_RESERVATIONS_LOG_PATH, SESSION_LOGS_DIR, STATE_DIR, getSessionArchiveLogPath, getSessionBlockArchiveLogPath } from '../config';
 import { logger } from '../common';
@@ -11,6 +10,7 @@ import type { ArchiveMessageRecord } from './archive';
 import type { ArchiveBlockRecord } from './layeredContext';
 import type { ExtractedMemoryFact } from './compactPlan';
 import { loadSessionsMetadataSnapshot } from './metadataStore';
+import { syncDirectoryDurably } from '../utils/diskJsonData';
 
 export type ArchiveBranchRecord = {
   sessionId: string;
@@ -1908,8 +1908,7 @@ export async function exportSessionArchivesJsonl(outputRoot: string): Promise<{ 
     if (await fs.pathExists(previousRoot)) await fs.move(previousRoot, resolvedOutputRoot);
     throw error;
   }
-  const directory = await nodeFs.open(path.dirname(resolvedOutputRoot), 'r');
-  try { await directory.sync(); } finally { await directory.close(); }
+  await syncDirectoryDurably(path.dirname(resolvedOutputRoot));
   return { files, records };
 }
 
