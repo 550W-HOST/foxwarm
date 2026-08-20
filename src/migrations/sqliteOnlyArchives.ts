@@ -8,6 +8,7 @@ import { logger } from '../common';
 import { hasArchiveStoreSqliteAuthority, markArchiveStoreSqliteAuthority, migrateLegacySessionArchivesToSqlite, type LegacyArchiveMigrationSource } from '../session/archiveStore';
 import { hasLlmJournalSqliteAuthority, markLlmJournalSqliteAuthority, migrateLegacyLlmRequestJournalToSqlite, type LegacyLlmJournalMigrationSource } from '../llmRequestJournal';
 import { createMigrationVersionStore, MIGRATION_BACKUP_DIR, readMigrationVersionState } from './state';
+import { syncDirectoryDurably } from '../utils/diskJsonData';
 
 export const SQLITE_ONLY_ARCHIVES_MIGRATION_ID = 'sqlite-only-large-archives-v1';
 const LOCK_PATH = path.join(STATE_DIR, `${SQLITE_ONLY_ARCHIVES_MIGRATION_ID}.lock`);
@@ -54,12 +55,7 @@ async function writeManifest(filePath: string, manifest: Manifest): Promise<void
     await handle.close();
   }
   await nodeFs.rename(temporary, filePath);
-  await syncDirectory(path.dirname(filePath));
-}
-
-async function syncDirectory(directory: string): Promise<void> {
-  const handle = await nodeFs.open(directory, 'r');
-  try { await handle.sync(); } finally { await handle.close(); }
+  await syncDirectoryDurably(path.dirname(filePath));
 }
 
 function resolveContained(root: string, relativePath: string): string {
@@ -73,8 +69,8 @@ function resolveContained(root: string, relativePath: string): string {
 async function moveDurably(source: string, destination: string): Promise<void> {
   await fs.ensureDir(path.dirname(destination));
   await fs.move(source, destination, { overwrite: false });
-  await syncDirectory(path.dirname(source));
-  if (path.dirname(source) !== path.dirname(destination)) await syncDirectory(path.dirname(destination));
+  await syncDirectoryDurably(path.dirname(source));
+  if (path.dirname(source) !== path.dirname(destination)) await syncDirectoryDurably(path.dirname(destination));
 }
 
 async function restoreInterruptedMoves(manifestPath: string, backupRoot: string): Promise<void> {
@@ -95,7 +91,7 @@ async function restoreInterruptedMoves(manifestPath: string, backupRoot: string)
     } else if (sourceExists && backupExists) {
       if (await hashFile(sourcePath) !== entry.sha256) throw new Error(`Migration source hash mismatch: ${entry.relativeStatePath}`);
       await fs.remove(backupPath);
-      await syncDirectory(path.dirname(backupPath));
+      await syncDirectoryDurably(path.dirname(backupPath));
     }
   }
 }

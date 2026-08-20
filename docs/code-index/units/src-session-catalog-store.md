@@ -103,6 +103,9 @@ inserted into a temporary database, normalized, integrity-checked,
 checkpointed, fsynced, and atomically published. A partial authority-upgrade
 retry is monotonic because the already-written v1 payload becomes the exact
 next preflight input.
+File fsync remains mandatory throughout publication. Parent-directory fsync is
+performed where supported; Windows filesystem errors that specifically report
+unsupported directory sync do not fail an otherwise durable atomic rename.
 One exact
 `state/sessions.json.pre-catalog-sqlite-v1.bak` evidence file remains; legacy
 catalog candidates are removed only after publication.

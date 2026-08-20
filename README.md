@@ -88,7 +88,7 @@ cd foxwarm
 .\install-foxwarm.ps1
 ```
 
-The Windows script checks for Git and Node.js 20+/npm, builds Foxwarm, stores data in `./foxwarm-data` by default, writes a `data_dir` pointer into the program checkout, starts Foxwarm in a new PowerShell window, and opens the WebUI token URL when available.
+The Windows script checks for Git and Node.js 20+/npm, builds Foxwarm, stores data in `./foxwarm-data` by default, writes a `data_dir` pointer into the program checkout, starts Foxwarm in the background, and opens the WebUI token URL when available. Rerunning the installer while that Foxwarm instance is active exits before dependency installation; run `npm run stop:windows` first so `npm ci` never replaces loaded native DLLs.
 
 If local script execution is blocked, run:
 
@@ -110,7 +110,7 @@ Use this path if you are developing Foxwarm itself.
 
 - Git
 - Node.js 20+ and npm
-- tmux for the normal background start mode
+- tmux for the normal background start mode on Linux/macOS
 - (Optional) Ollama for embeddings / vector memory
 - (Optional) Chromium or a browser node for browsing features
 
@@ -161,6 +161,22 @@ tmux attach -t foxwarm
 npm run restart
 npm run stop
 ```
+
+On Windows, use the PowerShell helpers or their equivalent npm commands:
+
+```powershell
+.\scripts\start.ps1
+.\scripts\status.ps1
+.\scripts\restart.ps1
+.\scripts\stop.ps1
+
+npm run start:windows
+npm run status:windows
+npm run restart:windows
+npm run stop:windows
+```
+
+The Windows start and restart commands build first, then run Foxwarm in the background. Start performs a lockfile install while no instance is running; restart rebuilds against the installed dependency tree before gracefully replacing the running process, avoiding Windows locks on loaded native DLLs. Pass `-SkipBuild` to the PowerShell start/restart helper after a successful build. Status and stop use a local named pipe; stop requests the same graceful shutdown path used by `SIGTERM`. Standard output and errors are appended to `state/logs/foxwarm.stdout.log` and `state/logs/foxwarm.stderr.log` under the resolved data directory.
 
 Logs are written under:
 

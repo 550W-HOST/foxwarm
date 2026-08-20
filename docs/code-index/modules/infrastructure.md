@@ -25,6 +25,7 @@ Speech recognition is integrated as an external service boundary: Foxwarm sends 
 - [src-terminal-manager](../units/src-terminal-manager.md) — local PTY lifecycle.
 - [src-terminal-router](../units/src-terminal-router.md) — browser terminal routing across master and capable nodes.
 - [quality-scripts](../units/quality-scripts.md) — baseline TypeScript quality checks.
+- [windows-service-scripts](../units/windows-service-scripts.md) — native Windows build and background lifecycle commands.
 - [model-cli](../units/model-cli.md) — one-shot CLI over the production LLM stack.
 - [multica-bridge-cli](../units/multica-bridge-cli.md) — local Qwen-JSONL bridge from Multica tasks to Foxwarm sessions.
 - [code-index-generators](../units/code-index-generators.md) — first-draft index generators.

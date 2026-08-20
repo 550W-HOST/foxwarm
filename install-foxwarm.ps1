@@ -85,12 +85,22 @@ Set-Location $Dir
 New-Item -ItemType Directory -Force -Path (Join-Path $DataDir 'state'),(Join-Path $DataDir 'agents') | Out-Null
 Set-Content -Path (Join-Path $Dir 'data_dir') -Value $DataDir -NoNewline
 
+node scripts/windowsService.js check-stopped
+if ($LASTEXITCODE -ne 0) {
+  throw 'Foxwarm must be stopped before dependency installation. Run npm run stop:windows, then rerun this installer.'
+}
+
 Write-Step 'Installing dependencies and building Foxwarm. This can take a few minutes.'
 npm run build-all
+if ($LASTEXITCODE -ne 0) {
+  throw 'Foxwarm dependency installation or build failed.'
+}
 
-Write-Step 'Starting Foxwarm in a new PowerShell window.'
-$Command = "cd `"$Dir`"; `$env:FOXWARM_DATA_DIR=`"$DataDir`"; node lib/index.js; Read-Host 'Foxwarm stopped. Press Enter to close this window'"
-Start-Process powershell -ArgumentList @('-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', $Command)
+Write-Step 'Starting Foxwarm in the background.'
+node scripts/windowsService.js start
+if ($LASTEXITCODE -ne 0) {
+  throw 'Foxwarm failed to start. Check the log paths printed above.'
+}
 
 $TokenFile = Join-Path $DataDir 'state\token'
 $Token = $null
@@ -100,7 +110,7 @@ for ($i = 0; $i -lt 240; $i++) {
     if ($Token) { break }
   }
   if (($i -gt 0) -and ($i % 20 -eq 0)) {
-    Write-Warning 'Still waiting for token. Check the Foxwarm PowerShell window for startup progress.'
+    Write-Warning 'Still waiting for token. Check the Foxwarm logs for startup progress.'
   }
   Start-Sleep -Milliseconds 500
 }
