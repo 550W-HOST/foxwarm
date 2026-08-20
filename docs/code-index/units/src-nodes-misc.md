@@ -1,6 +1,6 @@
 # Unit: src-nodes-misc
 
-Files: src/nodes/websocket.ts, src/nodes/httpRoutes.ts, src/nodes/httpRoutes.test.ts, src/nodes/runSh.test.ts, src/nodes/bootstrapInfo.ts, src/nodes/bootstrapInfo.test.ts, src/nodes/cliSessionAccess.test.ts, src/tools/changeCurrentNode.test.ts, src/commands/nodeCommand.test.ts, templates/node/run.sh
+Files: src/nodes/websocket.ts, src/nodes/httpRoutes.ts, src/nodes/httpRoutes.test.ts, src/nodes/runSh.test.ts, src/nodes/runPs1.test.ts, src/nodes/bootstrapInfo.ts, src/nodes/bootstrapInfo.test.ts, src/nodes/cliSessionAccess.test.ts, src/tools/changeCurrentNode.test.ts, src/commands/nodeCommand.test.ts, templates/node/run.sh, templates/node/run.ps1
 
 ## Purpose
 
@@ -63,6 +63,7 @@ Manages node connectivity to the master server via WebSocket (pairing and authen
 - Authenticated message dispatch forwards `node_service_response`, `node_service_error`, and `node_service_event` to the manager with the actual socket's node identity, preventing one node from satisfying another node's pending request/event channel.
 - HTTP routes serve shell scripts, PowerShell scripts, docker-compose YAML, and a gzipped source tarball. The tarball includes the separately locked `packages/cli-node-runtime` package but excludes its platform-installed node_modules. Text routes replace a placeholder with the request-derived base URL.
 - Bare-metal `run.sh` requires an explicit `--dir` and derives its source, env, data, log, PID/mode, launcher, and generated-unit paths beneath that root. `-d` prefers tmux and falls back to nohup; `--install` installs a root system service or non-root user service and runs the foreground launcher directly under systemd supervision.
+- Windows `run.ps1` binds node agent storage to the absolute `<StateDir>\agents` path through `FOXWARM_AGENTS_DIR`, clears the higher-precedence single-agent override, and starts Node from the script directory, so inherited environment or invoking a saved bootstrap script from another project cannot relocate node-owned capture state into the caller cwd.
 - Source-distribution regression coverage builds the same allowlisted tar archive with package node_modules excluded and starts the real prebuilt client bundle through `run.sh` in a clean temporary root, preventing externalized bundle modules from accidentally relying on the master checkout's dependencies.
 - Docker node bootstrap uses pinned Node 24 and installs the runtime package strictly. Shell/PowerShell bootstrap installs only that package after extracting the prebuilt JS bundle and continues without PTY capability if npm/native installation is unavailable.
 - `ensureNodePairingToken` lazily generates a 32-byte hex token on first use and persists it to disk.

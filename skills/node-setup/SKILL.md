@@ -348,6 +348,12 @@ irm http://YOUR_MASTER:3001/node/run.ps1 | iex
 That downloaded script also defaults `HostUrl` from the request URL.
 Override `-HostUrl` only when needed.
 
+For a saved `run.ps1`, node-owned agent and exec-capture state is bound to
+`<StateDir>\agents`, and the Node client starts from the directory containing
+the script rather than inheriting the caller's project cwd. The bootstrap
+overrides inherited agent-directory environment values so `StateDir` remains
+the deployment-state boundary.
+
 ## Where data goes
 
 Bare-metal `run.sh` requires `--dir` and writes deployment state only beneath

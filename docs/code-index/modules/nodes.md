@@ -30,7 +30,7 @@ Unauthenticated bootstrap routes are:
 - `/node/run.sh` — bare-metal launcher; requires an explicit `--dir`.
 - `/node/run-docker.sh` — Docker wrapper.
 - `/node/run-interactive.sh` and compatibility `/node/run-cli-node.sh` — CLI/TUI launcher.
-- `/node/run.ps1` — PowerShell launcher.
+- `/node/run.ps1` — PowerShell launcher; binds node-owned agent storage to its absolute state directory and launches from the script directory rather than the caller's project cwd.
 - `/node/docker-compose.yaml` — compose template.
 - `/node/source.tar.gz` — minimal dynamic archive containing shared, CLI-node, PTY-runtime, and sandbox-start sources/artifacts.
 
