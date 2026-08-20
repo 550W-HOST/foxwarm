@@ -30,6 +30,10 @@ export interface ExecRuntimeOptions {
   nodeId?: string;
   completionDispatcher?: ExecCompletionDispatcher;
   processOperations?: ProcessOperations;
+  processTreeFormatter?: (entries: import('../packages/shared/dist/processOperations').ProcessSnapshotEntry[], rootPid: number) => string;
+  isEntryRunning?: (entry: RunningExecEntry) => boolean | Promise<boolean>;
+  readEntryWorkingDirectory?: (entry: RunningExecEntry) => Promise<string | null>;
+  onRegistryIdle?: () => void;
 }
 
 export interface ExecRuntime {
@@ -43,6 +47,8 @@ export interface ExecRuntime {
   readFinishedExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null>;
   readLiveExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null>;
   listRunningExecs(): RunningExecEntry[];
+  reconcileNow(): Promise<void>;
+  shutdown(): Promise<void>;
 }
 
 export function createExecRuntime(options: ExecRuntimeOptions): ExecRuntime {
@@ -56,6 +62,10 @@ export function createExecRuntime(options: ExecRuntimeOptions): ExecRuntime {
     logger,
     completionDispatcher: async (entry, status, message) => completionDispatcher(entry, status, message),
     processOperations: options.processOperations || nativeProcessOperations,
+    processTreeFormatter: options.processTreeFormatter,
+    isEntryRunning: options.isEntryRunning,
+    readEntryWorkingDirectory: options.readEntryWorkingDirectory,
+    onRegistryIdle: options.onRegistryIdle,
   });
 
   return {
@@ -72,6 +82,8 @@ export function createExecRuntime(options: ExecRuntimeOptions): ExecRuntime {
     readFinishedExecWorkingDirectory: entry => manager.readFinishedExecWorkingDirectory(entry),
     readLiveExecWorkingDirectory: entry => manager.readLiveExecWorkingDirectory(entry),
     listRunningExecs: () => manager.listRunningExecs(),
+    reconcileNow: () => manager.reconcileNow(),
+    shutdown: () => manager.shutdown(),
   };
 }
 

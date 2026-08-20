@@ -21,13 +21,13 @@ Executable providers use the fixed `foxwarm-node-provider@1` JSON stdin/stdout p
 - `NodeDescriptor`, `NodeCapabilityDescriptor`, `NodeKind`, `NodeAvailability` — safe generic Node metadata.
 - `NodeToolRequest` — complete capability request carrying exact source session, exact Node ID, tool name, arguments, and bounded routing context.
 - `NodeLifecycleAction`, lifecycle request/result/summary types — bounded provider-neutral control-plane DTOs with exact source/agent context, optional exact requested Node ID for create/ensure, separate opaque parameters/details, and optional effect/data-retention descriptions.
-- `NodeProvider` — fixed descriptor/list/lookup/invoke boundary with optional default-cwd and create/ensure/inspect/destroy methods.
-- `NodeProviderRegistry` — aggregates a fixed provider set, detects duplicate Node IDs, resolves exact provider authority, invokes only advertised ready capabilities, and routes optional lifecycle operations without fallback.
+- `NodeProvider` — fixed descriptor/list/lookup/invoke boundary with optional startup/shutdown, default-cwd, and create/ensure/inspect/destroy methods.
+- `NodeProviderRegistry` — aggregates a fixed provider set, awaits ordered initialization with reverse rollback, performs idempotent reverse shutdown, detects duplicate Node IDs, resolves exact provider authority, invokes only advertised ready capabilities, and routes optional lifecycle operations without fallback.
 - `MasterNodeProvider` — descriptor-only production provider for the colocated master Node; RPC invocation is rejected so local bypass remains authoritative.
 - `AuthenticatedRemoteNodeProvider` — production adapter over `nodesManager` for authenticated remote Node discovery, dynamic tools, default cwd, and complete WebSocket tool forwarding.
 - `ExecutableNodeProvider` — bounded one-shot process adapter with strict request/response identity, descriptor/schema normalization, stdout/stderr/request/result limits, timeout/cancellation termination, and redacted abnormal-process failures.
 - `EXECUTABLE_NODE_PROVIDER_PROTOCOL` and protocol request/response types — fixed external provider contract.
-- `nodeProviderRegistry` — production registry containing master, authenticated-remote, and normalized configured executable providers.
+- `nodeProviderRegistry` — production registry containing master, authenticated-remote, and normalized configured executable and Docker-worktree providers.
 
 ## Invariants
 
@@ -44,10 +44,11 @@ Executable providers use the fixed `foxwarm-node-provider@1` JSON stdin/stdout p
 - One registry-owned async mutation lane serializes every create/ensure/destroy resolution, preflight, provider effect, result validation, and post-result duplicate check in the Main process. Inspect does not acquire it. Queued calls recheck cancellation before provider effect, every terminal path releases the lane, and no retry or rollback is implied.
 - Lifecycle parameters/details are bounded plain JSON. Safe effect and data-retention fields are provider descriptions only; Core does not infer deletion, erasure, isolation, or security guarantees. Unknown in-process provider exceptions are replaced by a bounded generic lifecycle-provider failure so private launch/configuration data cannot cross the service boundary.
 - The registry is a narrow Node boundary, not a generic plugin or service registry.
+- Core awaits the registry lifecycle only after Session catalog/ingress readiness. Provider initialization is ordered and shared across concurrent callers; any failure shuts down the failing provider plus earlier providers in reverse order and remains observable. Registry shutdown is reverse-order and idempotent.
 
 ## Tests
 
-`src/nodeExecution.test.ts` retains the deterministic in-memory provider seam test. `src/nodeLifecycle.test.ts` proves exact provider/Node lifecycle routing, unsupported/duplicate/mismatched results, confirmation, Main/Worker source fences, and the isolated mutation boundary. `src/nodes/executableProvider.test.ts` uses a deterministic Node-process fixture to prove production startup-config loading, multi-Node discovery, selection, direct/unified/ToolScript invocation, provider-local URI-like cwd, lifecycle persistence/envelopes, exact source/isolation/rules, partial capabilities, no fallback, malformed/oversized/error/exit handling, cancellation/timeout cleanup, and fixed-provider independence. The fixture defines no production sandbox or path semantics.
+`src/nodeExecution.test.ts` retains the deterministic in-memory provider seam test. `src/nodeLifecycle.test.ts` proves exact provider/Node lifecycle routing, unsupported/duplicate/mismatched results, confirmation, Main/Worker source fences, isolated mutation, awaited initialization/rollback, and idempotent shutdown. `src/nodes/executableProvider.test.ts` uses a deterministic Node-process fixture to prove production startup-config loading, multi-Node discovery, selection, direct/unified/ToolScript invocation, provider-local URI-like cwd, lifecycle persistence/envelopes, exact source/isolation/rules, partial capabilities, no fallback, malformed/oversized/error/exit handling, cancellation/timeout cleanup, and fixed-provider independence. The fixture defines no production sandbox or path semantics.
 
 ## Integration
 

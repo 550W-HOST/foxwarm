@@ -30,6 +30,7 @@ export type NodeToolRequest = {
     agent: string;
     currentNode?: string;
     cwd?: string;
+    deferSessionCwdSync?: boolean;
   };
 };
 
@@ -75,6 +76,8 @@ export type NodeLifecycleProviderSummary = {
 
 export interface NodeProvider {
   readonly id: string;
+  initialize?(): Promise<void>;
+  shutdown?(): Promise<void>;
   /** Expensive/failure-prone discovery is consulted only when fixed in-process providers do not own the exact Node ID. */
   readonly deferredLookup?: boolean;
   listNodes(options?: NodeProviderCallOptions): Promise<NodeDescriptor[]> | NodeDescriptor[];
@@ -101,6 +104,10 @@ export class NodeProviderError extends Error {
 export class NodeProviderRegistry {
   private readonly providers: NodeProvider[];
   private mutationTail: Promise<void> = Promise.resolve();
+  private initializationPromise?: Promise<void>;
+  private initialized = false;
+  private shutdownPromise?: Promise<void>;
+  private shutDown = false;
 
   constructor(providers: readonly NodeProvider[]) {
     const ids = new Set<string>();
@@ -111,6 +118,36 @@ export class NodeProviderRegistry {
       ids.add(provider.id);
     }
     this.providers = [...providers];
+  }
+
+  async initialize(): Promise<void> {
+    if (this.shutDown) throw new Error('Node provider registry is shut down.');
+    if (this.initialized) return;
+    if (!this.initializationPromise) {
+      this.initializationPromise = (async () => {
+        const initialized: NodeProvider[] = [];
+        try {
+          for (const provider of this.providers) { initialized.push(provider); await provider.initialize?.(); }
+          this.initialized = true;
+        } catch (error) {
+          await Promise.allSettled(initialized.reverse().map(provider => provider.shutdown?.()));
+          throw error;
+        }
+      })().finally(() => { this.initializationPromise = undefined; });
+    }
+    await this.initializationPromise;
+  }
+
+  async shutdown(): Promise<void> {
+    if (this.shutDown) return;
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.shutdownPromise = (async () => {
+      if (this.initializationPromise) await this.initializationPromise.catch(() => {});
+      const results = await Promise.allSettled([...this.providers].reverse().map(provider => provider.shutdown?.()));
+      this.initialized = false; this.shutDown = true;
+      const failed = results.find(result => result.status === 'rejected'); if (failed?.status === 'rejected') throw failed.reason;
+    })().finally(() => { this.shutdownPromise = undefined; });
+    return this.shutdownPromise;
   }
 
   async listNodes(options?: NodeProviderCallOptions): Promise<NodeDescriptor[]> {

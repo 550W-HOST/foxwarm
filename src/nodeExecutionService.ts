@@ -21,6 +21,7 @@ import { createHash } from 'node:crypto';
 export type NodeExecutionRoutingSnapshot = {
   currentNode: string;
   cwd?: string;
+  deferSessionCwdSync?: boolean;
 };
 
 export type NodeExecutionRequest = {
@@ -58,7 +59,7 @@ export type NodeLifecycleRequest = {
 };
 export type NodeLifecycleResponse = { result: NodeLifecycleResult };
 
-export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 2, {
+export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 3, {
   execute: rpcMethod<NodeExecutionRequest, NodeExecutionResponse>(),
   list: rpcMethod<NodeTopologyListRequest, NodeTopologyListResponse>(),
   select: rpcMethod<NodeSelectRequest, NodeSelectResponse>(),
@@ -180,12 +181,15 @@ function normalizeRoutingSnapshot(value: unknown): NodeExecutionRoutingSnapshot 
     throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'routingSnapshot must be an object.');
   }
   const candidate = value as Record<string, unknown>;
-  assertOnlyKeys(candidate, ['currentNode', 'cwd'], 'routingSnapshot');
+  assertOnlyKeys(candidate, ['currentNode', 'cwd', 'deferSessionCwdSync'], 'routingSnapshot');
   const currentNode = requireString(candidate.currentNode, 'routingSnapshot.currentNode');
   if (candidate.cwd !== undefined && typeof candidate.cwd !== 'string') {
     throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'routingSnapshot.cwd must be a string when provided.');
   }
-  return { currentNode, ...(typeof candidate.cwd === 'string' ? { cwd: candidate.cwd } : {}) };
+  if (candidate.deferSessionCwdSync !== undefined && typeof candidate.deferSessionCwdSync !== 'boolean') {
+    throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'routingSnapshot.deferSessionCwdSync must be a boolean when provided.');
+  }
+  return { currentNode, ...(typeof candidate.cwd === 'string' ? { cwd: candidate.cwd } : {}), ...(candidate.deferSessionCwdSync === true ? { deferSessionCwdSync: true } : {}) };
 }
 
 export async function requireNodeExecutionAccess(sourceSessionId: string, nodeId: string): Promise<Session> {
@@ -262,6 +266,7 @@ export function createNodeExecutionServiceHandler(options: {
               ...(providerRouting ? {
                 currentNode: providerRouting.currentNode,
                 ...(providerRouting.cwd !== undefined ? { cwd: providerRouting.cwd } : {}),
+                ...(providerRouting.deferSessionCwdSync === true ? { deferSessionCwdSync: true } : {}),
               } : {}),
             },
           }, { signal: rpcContext.signal }),

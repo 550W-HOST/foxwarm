@@ -491,6 +491,20 @@ test('failed lifecycle mutation releases the lane for a queued caller', async ()
   assert.equal(successEffects, 1);
 });
 
+test('Node provider registry awaits initialization, rolls back failure, and shuts down idempotently', async () => {
+  const calls: string[] = []; let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  const provider = (id: string, initialize: () => Promise<void>): NodeProvider => ({ id, initialize, shutdown: async () => { calls.push(`shutdown:${id}`); }, listNodes: () => [], getNode: () => undefined, invokeTool: async () => undefined });
+  const first = provider('first', async () => { calls.push('init:first'); await gate; }); const second = provider('second', async () => { calls.push('init:second'); }); const registry = new NodeProviderRegistry([first, second]);
+  const pending = registry.initialize(); await new Promise(resolve => setTimeout(resolve, 20)); assert.deepEqual(calls, ['init:first']); release(); await pending; assert.deepEqual(calls, ['init:first', 'init:second']);
+  await registry.shutdown(); await registry.shutdown(); assert.deepEqual(calls.slice(2), ['shutdown:second', 'shutdown:first']);
+
+  const rollback: string[] = []; const failed = new NodeProviderRegistry([
+    { ...provider('ok', async () => { rollback.push('init:ok'); }), shutdown: async () => { rollback.push('shutdown:ok'); } },
+    { ...provider('bad', async () => { rollback.push('init:bad'); throw new Error('startup failed'); }), shutdown: async () => { rollback.push('shutdown:bad'); } },
+  ]);
+  await assert.rejects(() => failed.initialize(), /startup failed/); assert.deepEqual(rollback, ['init:ok', 'init:bad', 'shutdown:bad', 'shutdown:ok']);
+});
+
 test('Worker lifecycle preserves exact source fence and provider context', async () => {
   const sourceId = id('lifecycle-worker');
   const wrongId = id('lifecycle-wrong');

@@ -164,7 +164,10 @@ export async function executeResolvedTool(resolved: ResolvedTool, ctx: ToolConte
   await checkPermission(resolved, ctx);
   if (resolved.source === 'node') {
     if (resolved.executionNode !== 'master') {
-      return executeNodeTool(ctx.sessionId, resolved.executionNode, resolved.name, resolved.args, resolved.routingSnapshot);
+      return executeNodeTool(ctx.sessionId, resolved.executionNode, resolved.name, resolved.args,
+        resolved.routingSnapshot
+          ? { ...resolved.routingSnapshot, ...(ctx.deferSessionCwdSync ? { deferSessionCwdSync: true } : {}) }
+          : (ctx.deferSessionCwdSync ? { currentNode: resolved.executionNode, deferSessionCwdSync: true } : undefined));
     }
     return activeRuntime().dispatchBuiltin(resolved.localBuiltinName!, resolved.args, { ...ctx, runtimeNodeId: 'master' });
   }

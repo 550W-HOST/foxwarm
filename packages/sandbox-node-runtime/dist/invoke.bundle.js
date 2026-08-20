@@ -3893,6 +3893,7 @@ ${lines.join("\n")}`;
         this.options = options;
         this.runningExecs = /* @__PURE__ */ new Map();
         this.initialized = false;
+        this.shuttingDown = false;
         this.initializationPromise = null;
         this.reconcileTimer = null;
         this.reconcileChain = Promise.resolve();
@@ -3963,6 +3964,7 @@ ${lines.join("\n")}`;
               logPath: raw.logPath,
               statusPath: raw.statusPath,
               cwdPath: typeof raw.cwdPath === "string" && raw.cwdPath.trim().length > 0 ? raw.cwdPath : `${raw.logPath}.cwd.txt`,
+              scriptPath: typeof raw.scriptPath === "string" && raw.scriptPath.trim().length > 0 ? raw.scriptPath : path_1.default.join(path_1.default.dirname(raw.logPath), `${raw.id}.command${this.processOperations.platform === "win32" ? ".ps1" : ".sh"}`),
               startedAt: Number(raw.startedAt),
               notifyOnCompletion: raw.notifyOnCompletion === true,
               recoveredAfterRestart: raw.recoveredAfterRestart === true
@@ -3975,9 +3977,13 @@ ${lines.join("\n")}`;
         }
       }
       async removeRunningExec(id) {
+        let becameIdle = false;
         await this.commitRegistryMutation(() => {
           this.runningExecs.delete(id);
+          becameIdle = this.runningExecs.size === 0;
         });
+        if (becameIdle)
+          this.options.onRegistryIdle?.();
       }
       async updateRunningExec(id, updates) {
         return await this.commitRegistryMutation(() => {
@@ -4010,12 +4016,30 @@ ${lines.join("\n")}`;
       async initialize() {
         if (this.initialized)
           return;
+        this.shuttingDown = false;
         if (!this.initializationPromise) {
           this.initializationPromise = this.initializeOnce().finally(() => {
             this.initializationPromise = null;
           });
         }
         await this.initializationPromise;
+      }
+      async reconcileNow() {
+        await this.initialize();
+        await this.queueReconcile();
+      }
+      async shutdown() {
+        this.shuttingDown = true;
+        if (this.initializationPromise)
+          await this.initializationPromise.catch(() => {
+          });
+        if (this.reconcileTimer) {
+          clearInterval(this.reconcileTimer);
+          this.reconcileTimer = null;
+        }
+        await this.reconcileChain;
+        await this.registryMutationChain;
+        this.initialized = false;
       }
       async initializeOnce() {
         await this.loadRunningExecs();
@@ -4037,11 +4061,14 @@ ${lines.join("\n")}`;
         if (this.reconcileTimer)
           clearInterval(this.reconcileTimer);
         this.reconcileTimer = setInterval(() => {
-          void this.queueReconcile();
+          if (!this.shuttingDown)
+            void this.queueReconcile();
         }, RECONCILE_INTERVAL_MS);
         this.reconcileTimer.unref?.();
       }
       async queueReconcile() {
+        if (this.shuttingDown)
+          return;
         this.reconcileChain = this.reconcileChain.then(async () => {
           await this.reconcileRunningExecs();
         }).catch((err) => {
@@ -4117,6 +4144,7 @@ ${lines.join("\n")}`;
           logPath: resolvedPaths.logPath,
           statusPath: resolvedPaths.statusPath,
           cwdPath: resolvedPaths.cwdPath,
+          scriptPath,
           startedAt: startedAt.getTime(),
           notifyOnCompletion: false
         };
@@ -4279,7 +4307,7 @@ ${lines.join("\n")}`;
       async buildLiveProcessTree(entry) {
         try {
           const entries = await (this.options.processSnapshotProvider || (() => this.processOperations.inspectSnapshot()))();
-          return formatProcessTreeSnapshot(entries, entry.pid);
+          return this.options.processTreeFormatter ? this.options.processTreeFormatter(entries, entry.pid) : formatProcessTreeSnapshot(entries, entry.pid);
         } catch (err) {
           this.options.logger?.warn?.({ err, execId: entry.id, pid: entry.pid }, "Failed to inspect background exec process tree");
           return `Process tree (best-effort live snapshot; managed shell-script root PID ${entry.pid}):
@@ -4304,7 +4332,7 @@ ${lines.join("\n")}`;
         const existing = await this.readExecStatus(entry.statusPath);
         if (existing)
           return existing;
-        if (await this.processOperations.isRunning(entry.pid))
+        if (this.options.isEntryRunning ? await this.options.isEntryRunning(entry) : await this.processOperations.isRunning(entry.pid))
           return null;
         if (Date.now() - entry.startedAt < MISSING_STATUS_GRACE_MS)
           return null;
@@ -4375,7 +4403,7 @@ Command output in ${entry.logPath}`;
         return await this.readExecCwd(entry.cwdPath);
       }
       async readLiveExecWorkingDirectory(entry) {
-        return await this.processOperations.readWorkingDirectory(entry.pid);
+        return this.options.readEntryWorkingDirectory ? await this.options.readEntryWorkingDirectory(entry) : await this.processOperations.readWorkingDirectory(entry.pid);
       }
       listRunningExecs() {
         return Array.from(this.runningExecs.values());

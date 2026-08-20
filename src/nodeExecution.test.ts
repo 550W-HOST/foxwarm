@@ -201,12 +201,16 @@ test('generic Node registry lists, selects, and invokes a complete non-WebSocket
       toolName: 'read',
       args: { filePath: 'notes.txt' },
     }), { result: { output: 'fixture:notes.txt' } });
+    await client.call('execute', { sourceSessionId: sourceId, nodeId: descriptor.id, toolName: 'read', args: { filePath: 'deferred.txt' }, routingSnapshot: { currentNode: descriptor.id, cwd: 'sandbox://captured', deferSessionCwdSync: true } });
     assert.deepEqual(requests, [{
       sourceSessionId: sourceId,
       nodeId: descriptor.id,
       toolName: 'read',
       args: { filePath: 'notes.txt' },
       context: { agent: session.agent || 'main', currentNode: descriptor.id, cwd: 'sandbox://session-cwd' },
+    }, {
+      sourceSessionId: sourceId, nodeId: descriptor.id, toolName: 'read', args: { filePath: 'deferred.txt' },
+      context: { agent: session.agent || 'main', currentNode: descriptor.id, cwd: 'sandbox://captured', deferSessionCwdSync: true },
     }]);
   } finally {
     (nodesManager as any).getNode = originalGetNode;
