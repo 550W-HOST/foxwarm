@@ -92,6 +92,10 @@ export function normalizeWaitAllSessions(value: unknown): string[] | undefined {
     return undefined;
   }
 
+  if (normalized.length < 2) {
+    throw new Error('waitAllSessions must contain at least two distinct session IDs after trimming; omit it or pass [] for an ordinary wait, including single-session follow-ups.');
+  }
+
   return normalized;
 }
 

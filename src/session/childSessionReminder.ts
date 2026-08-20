@@ -20,9 +20,9 @@ export function isModelNoActionSignal(message?: Pick<Message, 'role' | 'parts'> 
 }
 
 export function buildChildCompletionInstruction(parentSessionId: string): string {
-  return `When you finish, explicitly call send_to_session({sessionId: \`${parentSessionId}\`, message: "...", waitAfterHandoff: true}). This successful handoff ends the turn and enters a generic any-event wait; do not add a separate wait call. If no parent reply is needed and you are not sending a handoff message, end your final message with \`${NO_ACTION_MARKER}\`.`;
+  return `When you finish, explicitly call send_to_session({sessionId: \`${parentSessionId}\`, message: "...", waitAfterHandoff: true}). This successful handoff ends the turn and waits for new session activity; do not add a separate wait call. It is not target-filtered and does not wait for task completion. If no parent reply is needed and you are not sending a handoff message, end your final message with \`${NO_ACTION_MARKER}\`.`;
 }
 
 export function buildChildReminder(parentSessionId: string): string {
-  return formatFoxwarmSystem({ kind: 'child-reminder', event: 'missing-handoff', parentSessionId }, `Reminder: message ended without send_to_session call. If you need to report back to the parent session, call send_to_session({sessionId: \`${parentSessionId}\`, message: "...", waitAfterHandoff: true}); a successful handoff ends the turn and enters a generic any-event wait, so do not add a separate wait call. If no action is needed, say \`${NO_ACTION_MARKER}\`. Next time, you can end your final message with \`${NO_ACTION_MARKER}\` to prevent this reminder.`);
+  return formatFoxwarmSystem({ kind: 'child-reminder', event: 'missing-handoff', parentSessionId }, `Reminder: message ended without send_to_session call. If you need to report back to the parent session, call send_to_session({sessionId: \`${parentSessionId}\`, message: "...", waitAfterHandoff: true}); a successful handoff ends the turn and waits for new session activity, so do not add a separate wait call. It is not target-filtered and does not wait for task completion. If no action is needed, say \`${NO_ACTION_MARKER}\`. Next time, you can end your final message with \`${NO_ACTION_MARKER}\` to prevent this reminder.`);
 }

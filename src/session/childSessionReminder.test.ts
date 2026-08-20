@@ -39,6 +39,12 @@ test('child instructions and reminders recommend one flagged handoff and the bra
   assert.match(reminder, /\[NO_ACTION\]/);
   assert.match(completion, /waitAfterHandoff: true/);
   assert.match(reminder, /waitAfterHandoff: true/);
+  assert.match(completion, /waits for new session activity/);
+  assert.match(reminder, /waits for new session activity/);
+  assert.match(completion, /does not wait for task completion/);
+  assert.match(reminder, /does not wait for task completion/);
+  assert.doesNotMatch(completion, /event-driven|any-event/);
+  assert.doesNotMatch(reminder, /event-driven|any-event/);
   assert.doesNotMatch(completion, /wait\(\{\}\)/);
   assert.doesNotMatch(reminder, /wait\(\{\}\)/);
   assert.doesNotMatch(completion, /noFurtherAssistantReply/);

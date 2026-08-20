@@ -99,16 +99,24 @@ test('buildWaitTimeoutMessage uses fixed text and no custom timeout message', ()
   );
 });
 
-test('wait tool schema includes waitAllSessions and waitExecIds', () => {
+test('wait tool schema describes activity waits and a zero-or-two-plus waitAllSessions barrier', () => {
   const waitDefinition = definitions.find(definition => definition.name === 'wait');
   assert.ok(waitDefinition);
+  assert.match(waitDefinition.description, /pause .* until new session activity arrives/i);
+  assert.match(waitDefinition.description, /one-shot fallback/i);
+  assert.doesNotMatch(waitDefinition.description, /event-driven/i);
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.type, 'array');
+  assert.equal(waitDefinition.parameters.properties.waitAllSessions?.uniqueItems, true);
+  assert.deepEqual(waitDefinition.parameters.properties.waitAllSessions?.anyOf, [{ maxItems: 0 }, { minItems: 2 }]);
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.items?.type, 'string');
+  assert.equal(waitDefinition.parameters.properties.waitAllSessions?.items?.pattern, '.*\\S.*');
+  assert.match(waitDefinition.parameters.properties.waitAllSessions?.description || '', /omit or pass \[\] for an ordinary wait/i);
+  assert.match(waitDefinition.parameters.properties.waitAllSessions?.description || '', /strictly requires a new report from every listed session/i);
   assert.equal(waitDefinition.parameters.properties.waitExecIds?.type, 'array');
   assert.equal(waitDefinition.parameters.properties.waitExecIds?.items?.type, 'string');
 });
 
-test('waitAllSessions argument validation rejects invalid values, treats empty array as ordinary wait, and de-dupes duplicates', async () => {
+test('waitAllSessions accepts empty as ordinary, rejects fewer than two distinct IDs, and de-dupes valid barriers', async () => {
   const sessionId = makeSessionId('wait_all_validation');
   try {
     const session = await sessionManager.getSession(sessionId);
@@ -121,6 +129,15 @@ test('waitAllSessions argument validation rejects invalid values, treats empty a
     assert.equal(emptyResult.output, 'ok');
     let reloaded = await sessionManager.getSession(sessionId);
     assert.equal(reloaded.meta.wait?.waitAll, undefined);
+
+    await assert.rejects(
+      () => tool_wait({ waitAllSessions: ['child-a'] }, { sessionId, session }),
+      /at least two distinct session IDs.*omit it or pass \[\] for an ordinary wait.*single-session follow-ups/i,
+    );
+    await assert.rejects(
+      () => tool_wait({ waitAllSessions: [' child-a ', 'child-a'] }, { sessionId, session }),
+      /at least two distinct session IDs/i,
+    );
 
     await assert.rejects(
       () => tool_wait({ waitAllSessions: ['child-a', '   '] }, { sessionId, session }),
@@ -421,7 +438,7 @@ test('wait without timeout works and does not schedule a timeout wake', async ()
   });
 });
 
-test('clearSession removes an armed generic wait', async () => {
+test('clearSession removes an armed activity wait', async () => {
   const sessionId = makeSessionId('wait_clear_session');
   try {
     await sessionManager.getSession(sessionId);
