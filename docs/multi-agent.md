@@ -74,7 +74,7 @@ send_to_session({
 说明：
 - `fork: true` 会继承当前上下文
 - `message` 可用于直接下发第一条任务
-- `waitAfterHandoff: true` 会在初始消息成功交接后结束当前回合，并进入通用的任意事件 wait；需要非空 `message`
+- `waitAfterHandoff: true` 会在初始消息成功交接后结束当前回合，并等待新的 session 活动；需要非空 `message`
 - `node` / `isolated` 可让 child session 绑定到特定 node
 
 ### `send_to_session`
@@ -89,7 +89,7 @@ send_to_session({
 
 用于跨 session 协作、测试交接、结果回报等。
 
-如果成功 handoff 后就应结束当前回合并等待下一个事件，推荐直接设置：
+如果成功 handoff 后就应结束当前回合并等待新的 session 活动，推荐直接设置：
 
 ```ts
 send_to_session({
@@ -99,7 +99,7 @@ send_to_session({
 })
 ```
 
-无论 `waitAfterHandoff` 是 `true` 还是 `false`，后续回复都会正常投递；该选项只决定 handoff 成功后当前回合是否进入通用的任意事件 wait。这个 wait 不按目标 session 过滤，也不是任务完成等待。旧的 handoff + 显式 `wait({})` 方式仍然支持。
+无论 `waitAfterHandoff` 是 `true` 还是 `false`，后续回复都会正常投递；该选项只决定 handoff 成功后当前回合是否等待新的 session 活动。这个 wait 不按目标 session 过滤，也不等待任务完成。旧的 handoff + 显式 `wait({})` 方式仍然支持。
 
 ### `wait`
 

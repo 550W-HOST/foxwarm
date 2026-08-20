@@ -1197,7 +1197,7 @@ export class SessionTurnRunner {
         }
 
         if (waitForReply) {
-          logger.info({ sessionId: session.id, iteration }, 'Successful handoff requested a generic reply wait');
+          logger.info({ sessionId: session.id, iteration }, 'Successful handoff requested an activity wait');
           await this.finishTurnAfterIntermediate(session, turnSource, broadcast, turnChannelOptions);
           break;
         }

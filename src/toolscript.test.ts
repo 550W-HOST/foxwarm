@@ -437,6 +437,23 @@ test('run_script nested builtin calls use unified placement for session-owner to
   }
 });
 
+test('run_script nested wait calls enforce the multi-session barrier', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_wait_barrier');
+  const session = await sessionManager.getSession(sessionId);
+  try {
+    const result = await tool_run_script({
+      code: asMain('return call_tool({"toolId": "builtin:wait", "args": {"waitAllSessions": ["only-child"]}})'),
+    }, { sessionId, session });
+    assert.equal(result.status, 'failed');
+    assert.match(result.error || '', /at least two distinct session IDs.*ordinary wait.*single-session follow-ups/i);
+    assert.equal(session.meta.wait, undefined);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
+});
+
 test('run_script nested builtin calls use the local main-management service', async () => {
   await resetToolScriptRunsForTests();
   const sessionId = makeId('toolscript_management');

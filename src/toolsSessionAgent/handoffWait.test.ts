@@ -39,9 +39,10 @@ test('handoff schemas expose only exact optional waitAfterHandoff booleans', () 
     assert.equal(definition.parameters.required?.includes('waitAfterHandoff'), false);
     assert.equal(definition.parameters.properties.waitForReply, undefined);
     const description = definition.parameters.properties.waitAfterHandoff?.description || '';
-    assert.match(description, /after a successful .*handoff, finish this turn and enter a generic any-event wait/i);
+    assert.match(description, /after a successful .*handoff, finish this turn and wait for new session activity/i);
     assert.match(description, /replies are delivered normally whether this is true or false/i);
-    assert.match(description, /not target-filtered or a completion wait/i);
+    assert.match(description, /not target-filtered and does not wait for task completion/i);
+    assert.doesNotMatch(description, /event-driven|any-event|completion wait/i);
   }
 });
 
@@ -147,7 +148,7 @@ test('create_child_session send failure returns no wait request', async () => {
   }
 });
 
-test('router appends every result, arms flagged generic wait despite a sibling error, and stops without another LLM call', async () => {
+test('router appends every result, arms flagged activity wait despite a sibling error, and stops without another LLM call', async () => {
   const sourceId = makeId('router_wait_source');
   const targetId = makeId('router_wait_target');
   const source = await resetSession(sourceId);

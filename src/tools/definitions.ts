@@ -253,14 +253,14 @@ Example:
         {
             name: 'create_child_session',
             defaultInject: true,
-            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. Set waitAfterHandoff=true to finish this turn and enter the existing generic wait after a successful initial handoff. When the current session is an agent main session such as `agent/main` (or bare `main`), the child id replaces the `main` leaf with the suffix (for example `agent/main` + `task1` => `agent/task1`); other sessions append the suffix as before.',
+            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. Set waitAfterHandoff=true to finish this turn and wait for new session activity after a successful initial handoff. When the current session is an agent main session such as `agent/main` (or bare `main`), the child id replaces the `main` leaf with the suffix (for example `agent/main` + `task1` => `agent/task1`); other sessions append the suffix as before.',
             parameters: {
                 type: 'object',
                 properties: {
                     suffix: { type: 'string', description: 'Suffix/session leaf for identification (e.g., "task1", "research"). For main sessions it replaces the `main` leaf; otherwise it is appended to the session ID.' },
                     fork: { type: 'boolean', description: 'Whether to fork (inherit parent context) or create new session. Default: false', default: false },
                     message: { type: 'string', description: 'Optional initial message to send to the child session immediately after creation' },
-                    waitAfterHandoff: { type: 'boolean', description: 'After a successful initial message handoff, finish this turn and enter a generic any-event wait. Replies are delivered normally whether this is true or false; this option only controls whether the current turn waits. The wait is not target-filtered or a completion wait. Requires a non-empty message.' },
+                    waitAfterHandoff: { type: 'boolean', description: 'After a successful initial message handoff, finish this turn and wait for new session activity. Replies are delivered normally whether this is true or false. This wait is not target-filtered and does not wait for task completion. Requires a non-empty message.' },
                     node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' },
                     model: { type: 'string', description: 'Optional explicit model key for the child session.' },
                     effort: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], description: 'Optional explicit effort for the child session.' }
@@ -271,13 +271,13 @@ Example:
         {
             name: 'send_to_session',
             defaultInject: true,
-            description: 'Send a message to a specific agent/session. Literal sessionId `<main>` resolves to the current agent\'s main session; `<parent>` resolves to the current session\'s parent session and errors clearly if there is no parent. Isolated sessions can only communicate with parent/child sessions. Set waitAfterHandoff=true to finish this turn and enter the existing generic any-event wait after a successful handoff.',
+            description: 'Send a message to a specific agent/session. Literal sessionId `<main>` resolves to the current agent\'s main session; `<parent>` resolves to the current session\'s parent session and errors clearly if there is no parent. Isolated sessions can only communicate with parent/child sessions. Set waitAfterHandoff=true to finish this turn and wait for new session activity after a successful handoff.',
             parameters: {
                 type: 'object',
                 properties: {
                     sessionId: { type: 'string', description: 'Target session ID, or `<main>` for this agent\'s main session, or `<parent>` for this session\'s parent session.' },
                     message: { type: 'string', description: 'Message to send' },
-                    waitAfterHandoff: { type: 'boolean', description: 'After a successful handoff, finish this turn and enter a generic any-event wait. Replies are delivered normally whether this is true or false; this option only controls whether the current turn waits. The wait is not target-filtered or a completion wait.' }
+                    waitAfterHandoff: { type: 'boolean', description: 'After a successful handoff, finish this turn and wait for new session activity. Replies are delivered normally whether this is true or false. This wait is not target-filtered and does not wait for task completion.' }
                 },
                 required: ['sessionId', 'message']
             }
@@ -285,20 +285,22 @@ Example:
         {
             name: 'wait',
             defaultInject: true,
-            description: 'End an otherwise-finished turn and leave this session idle until supported inbound work wakes it. Supported inbound user/inter-agent messages and session/system wake events automatically wake an idle waiting session. If inbound work arrives while this session is generating or executing tools, it is queued and incorporated at the next safe provider/tool-loop point permitted by normal source boundaries. Do not use short timeout waits to retrieve messages: wait is event-driven, not a polling primitive. Use this only when you have no useful user-facing reply or tool work to do right now. Omit timeoutSeconds or pass 0 for no timeout. A positive timeoutSeconds is a one-shot fallback that wakes the session with a system message only if no other message/event woke it first.',
+            description: 'Pause an otherwise-finished turn until new session activity arrives. User/inter-agent messages and supported session/system activity wake the session. Input received while model or tool work is still running queues until the next safe processing point under normal source boundaries. Use wait only when nothing useful remains to do or say. Omit timeoutSeconds or pass 0 to wait without a deadline; a positive timeout is a one-shot fallback wake, not polling.',
             parameters: {
                 type: 'object',
                 properties: {
                     reason: { type: 'string', description: 'Optional short note for logs/debugging.' },
-                    timeoutSeconds: { type: 'number', description: 'Optional one-shot wake deadline/fallback in seconds, not a polling interval. Omit or pass 0 for no deadline. If a positive value is provided and no newer message/event wakes the session first, a system message wakes it after this many seconds.' },
+                    timeoutSeconds: { type: 'number', description: 'Optional one-shot fallback wake in seconds, not a polling interval. Omit or pass 0 for no deadline. If no newer session activity wakes the session first, a positive timeout wakes it with a system message.' },
                     waitAllSessions: {
                         type: 'array',
-                        description: 'Optional list of session IDs. Omit or pass [] for ordinary wait. When provided, wait until every listed session has sent at least one new message to this session after the wait starts; unrelated messages/events and timeout still wake normally with a pending reminder.',
-                        items: { type: 'string', description: 'Session ID that must report before this wait-all condition is satisfied.' }
+                        description: 'Optional all-session report barrier. Omit or pass [] for an ordinary wait. Use two or more distinct session IDs only when the next step strictly requires a new report from every listed session; omit it for one-session follow-ups or independently actionable reports. Other session activity or timeout may still wake this session while the barrier remains pending.',
+                        uniqueItems: true,
+                        anyOf: [{ maxItems: 0 }, { minItems: 2 }],
+                        items: { type: 'string', pattern: '.*\\S.*', description: 'Non-empty session ID that must report before this all-session barrier is satisfied.' }
                     },
                     waitExecIds: {
                         type: 'array',
-                        description: 'Optional list of background exec IDs this session is waiting for. This is advisory/runtime-state metadata for UI/status; omit for ordinary wait. Generic wait({}) remains valid and means waiting for any new message or event.',
+                        description: 'Optional list of background exec IDs this session is waiting for. This is advisory runtime-state metadata for UI/status; omit it for an ordinary activity wait. wait({}) remains valid and pauses until new session activity arrives.',
                         items: { type: 'string', description: 'Background exec ID to label as an expected wake source.' }
                     }
                 }
