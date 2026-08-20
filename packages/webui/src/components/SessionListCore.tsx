@@ -5,7 +5,7 @@ import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUp
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
-import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListChildDisclosure, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
+import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
 import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
 import { dispatchSessionIdleDeleted } from '../sessionIdleAttention'
 
@@ -498,6 +498,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const sessionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const [pendingFocusSessionId, setPendingFocusSessionId] = useState<string | null>(null)
   const previousCurrentSessionIdRef = useRef<string | undefined>(undefined)
+  const autoExpandedCurrentSessionIdRef = useRef<string | undefined>(undefined)
+  const manuallyCollapsedSessionsRef = useRef<Set<string>>(new Set())
   const sessionDragEnabled = shouldEnableSessionListDrag(dragEnabled, primaryPointerCoarse)
 
   useEffect(() => {
@@ -702,15 +704,35 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   useEffect(() => () => { relationGenerationRef.current += 1; descendantSummaryGenerationRef.current.clear(); sessionRefs.current.clear() }, [])
 
   useEffect(() => {
-    if (!resolvedCurrentSessionId) return
+    if (!resolvedCurrentSessionId) {
+      autoExpandedCurrentSessionIdRef.current = undefined
+      return
+    }
 
-    const sessionsToExpand = new Set<string>()
+    const activePath: string[] = []
+    const seen = new Set<string>()
     let currentId: string | null = resolvedCurrentSessionId
 
-    while (currentId) {
-      sessionsToExpand.add(currentId)
+    while (currentId && !seen.has(currentId)) {
+      seen.add(currentId)
+      activePath.push(currentId)
       currentId = normalizedParentMap.get(currentId) || null
     }
+    activePath.reverse()
+
+    const currentSessionChanged = autoExpandedCurrentSessionIdRef.current !== resolvedCurrentSessionId
+    autoExpandedCurrentSessionIdRef.current = resolvedCurrentSessionId
+    if (currentSessionChanged) {
+      // Navigating to another session should reveal its path, but background
+      // list refreshes for the same active session must respect branches the
+      // user explicitly collapsed.
+      activePath.forEach(sessionId => manuallyCollapsedSessionsRef.current.delete(sessionId))
+    }
+    const sessionsToExpand = getSessionListAutoExpandedPath(
+      activePath,
+      manuallyCollapsedSessionsRef.current,
+      currentSessionChanged,
+    )
 
     setExpandedSessions(prev => {
       let changed = false
@@ -776,8 +798,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       ? collapseSessionListExpandedBranch(expandedSessions, childrenMap, sessionId)
       : new Set(expandedSessions).add(sessionId)
     if (wasExpanded) {
+      manuallyCollapsedSessionsRef.current.add(sessionId)
       bounded?.onCollapseBranch(sessionId)
     } else {
+      const remainsActivePathBarrier = sessionId === resolvedCurrentSessionId
+        || isDescendantOf(resolvedCurrentSessionId, sessionId)
+      if (!remainsActivePathBarrier) {
+        manuallyCollapsedSessionsRef.current.delete(sessionId)
+      }
       bounded?.onExpandBranch(sessionId)
     }
     setExpandedSessions(newExpanded)

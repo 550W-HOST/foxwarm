@@ -42,6 +42,21 @@ export function collapseSessionListExpandedBranch(
   return new Set([...expanded].filter(sessionId => !collapsed.has(sessionId)))
 }
 
+export function getSessionListAutoExpandedPath(
+  activePathRootToCurrent: readonly string[],
+  manuallyCollapsed: ReadonlySet<string>,
+  currentSessionChanged: boolean,
+): string[] {
+  if (currentSessionChanged) return [...activePathRootToCurrent]
+
+  const expandedPath: string[] = []
+  for (const sessionId of activePathRootToCurrent) {
+    if (manuallyCollapsed.has(sessionId)) break
+    expandedPath.push(sessionId)
+  }
+  return expandedPath
+}
+
 function getSidebarOrder(session: SessionListSortable): number | undefined {
   return typeof session.sidebarOrder === 'number' && Number.isFinite(session.sidebarOrder)
     ? session.sidebarOrder
