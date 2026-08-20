@@ -88,7 +88,7 @@ cd foxwarm
 .\install-foxwarm.ps1
 ```
 
-The Windows script checks for Git and Node.js 20+/npm, builds Foxwarm, stores data in `./foxwarm-data` by default, writes a `data_dir` pointer into the program checkout, starts Foxwarm in the background, and opens the WebUI token URL when available.
+The Windows script checks for Git and Node.js 20+/npm, builds Foxwarm, stores data in `./foxwarm-data` by default, writes a `data_dir` pointer into the program checkout, starts Foxwarm in the background, and opens the WebUI token URL when available. Rerunning the installer while that Foxwarm instance is active exits before dependency installation; run `npm run stop:windows` first so `npm ci` never replaces loaded native DLLs.
 
 If local script execution is blocked, run:
 

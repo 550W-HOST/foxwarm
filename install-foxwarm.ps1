@@ -85,6 +85,11 @@ Set-Location $Dir
 New-Item -ItemType Directory -Force -Path (Join-Path $DataDir 'state'),(Join-Path $DataDir 'agents') | Out-Null
 Set-Content -Path (Join-Path $Dir 'data_dir') -Value $DataDir -NoNewline
 
+node scripts/windowsService.js check-stopped
+if ($LASTEXITCODE -ne 0) {
+  throw 'Foxwarm must be stopped before dependency installation. Run npm run stop:windows, then rerun this installer.'
+}
+
 Write-Step 'Installing dependencies and building Foxwarm. This can take a few minutes.'
 npm run build-all
 if ($LASTEXITCODE -ne 0) {

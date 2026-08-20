@@ -31,6 +31,19 @@ test('servicePaths keeps lifecycle logs under the data root', () => {
   assert.equal(paths.stderrLog, path.join('C:', 'foxwarm-data', 'state', 'logs', 'foxwarm.stderr.log'));
 });
 
+test('Windows installer uses the guarded start lifecycle before dependency installation', () => {
+  const root = path.resolve(__dirname, '..');
+  const installer = fs.readFileSync(path.join(root, 'install-foxwarm.ps1'), 'utf8');
+  const guardIndex = installer.indexOf('node scripts/windowsService.js check-stopped');
+  const buildIndex = installer.indexOf('npm run build-all');
+  const startIndex = installer.indexOf('node scripts/windowsService.js start');
+
+  assert.ok(guardIndex >= 0, 'installer must check service state');
+  assert.ok(guardIndex < buildIndex, 'service-state check must precede dependency installation');
+  assert.ok(buildIndex < startIndex, 'service start must follow a successful build');
+  assert.match(installer.slice(guardIndex, buildIndex), /if \(\$LASTEXITCODE -ne 0\)/);
+});
+
 test('requestControl keeps the pipe open for the server response', async t => {
   const controlPath = getControlPath(`roundtrip-${process.pid}-${Date.now()}`);
   const server = net.createServer(socket => {
