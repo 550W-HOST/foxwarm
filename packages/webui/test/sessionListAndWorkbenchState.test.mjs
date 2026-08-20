@@ -16,7 +16,7 @@ async function loadTypeScriptModule(relativePath) {
 }
 
 test('bounded tree rows use exact item counts before loading arbitrary-depth branches', async () => {
-  const { collapseSessionListExpandedBranch, getSessionListChildDisclosure } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
+  const { collapseSessionListExpandedBranch, getSessionListAutoExpandedPath, getSessionListChildDisclosure } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
 
   assert.deepEqual(getSessionListChildDisclosure({ bounded: true, loadedCount: 0, itemTotal: 1, allowTree: true }), {
     total: 1,
@@ -50,6 +50,23 @@ test('bounded tree rows use exact item counts before loading arbitrary-depth bra
   assert.equal(collapsed.has('child'), false, 're-expanding the ancestor leaves its child disclosure collapsed')
   collapsed.add('child')
   assert.equal(collapsed.has('child'), true, 'one explicit child expansion can reload the grandchild window')
+
+  const activePath = ['root', 'child', 'grandchild']
+  assert.deepEqual(
+    getSessionListAutoExpandedPath(activePath, new Set(['child']), false),
+    ['root'],
+    'same-active refreshes stop before the first manually collapsed path member and never restore its hidden descendants',
+  )
+  assert.deepEqual(
+    getSessionListAutoExpandedPath(activePath, new Set(['unrelated']), false),
+    activePath,
+    'manual collapses outside the active path do not affect its automatic disclosure',
+  )
+  assert.deepEqual(
+    getSessionListAutoExpandedPath(activePath, new Set(['root', 'child']), true),
+    activePath,
+    'changing the current session reveals its complete new active path',
+  )
 })
 
 test('agent/session creation helpers keep an empty session ID random', async () => {
