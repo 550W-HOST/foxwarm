@@ -15,7 +15,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
   QQ generic-file media limits), guest-agent,
   ASR, and `AppConfig` types.
 - `readAppConfigFile`, `writeAppConfigFile`.
-- `ExecutableNodeProviderConfig`, `NormalizedExecutableNodeProviderConfig`, `normalizeNodeProvidersConfig`, and `NODE_PROVIDERS_CONFIG` — strict startup definitions for zero or more trusted `type: executable` Node providers with fixed command/arguments and bounded per-request timeout.
+- `ExecutableNodeProviderConfig`, `DockerWorktreeNodeProviderConfig`, normalized provider unions, `normalizeNodeProvidersConfig`, and `NODE_PROVIDERS_CONFIG` — strict startup definitions for trusted one-shot executable providers and resident Docker worktree providers.
 - `normalizeCompactionConfig`, `COMPACT_KEEP_PERCENT`, and `COMPACT_THRESHOLD_PERCENT` — finite `(0, 1]` keep/trigger fractions with current defaults and the narrow legacy keep-key fallback.
 - `getNormalizedChannelConfigs`, `getChannelConfigById`, `getChannelConfigsByType`, `getDefaultChannelConfigByType`, `getDefaultChannelIdByType`.
 - Resolved path/server/context constants and agent/session path helpers.
@@ -53,7 +53,7 @@ Worker placement is startup configuration:
 - `dbWorkers` is boolean, defaults to `true`, and currently moves only an enabled LanceDB/vector owner into a child process. It has no effect while Vector is disabled.
 - `vectorMaintenance` accepts `false`, `true`, or an options object; the normalized default is enabled with positive-integer `retentionHours` defaulting to `24`. Its exact-owner execution contract is canonical in [D-vector-owner-maintenance](src-vector.md#d-vector-owner-maintenance).
 - Worker placement changes require a process restart. Managed channel hot reload does not change process topology.
-- `nodeProviders` is a startup-only map keyed by bounded provider ID. Each current entry requires `type: executable` and a non-empty fixed command, accepts at most 64 fixed string arguments and an optional integer `timeoutSeconds` from 1 through 300, and rejects unknown fields. Omission configures no executable providers. Changes require restart.
+- `nodeProviders` is a startup-only map keyed by bounded provider ID. `type: executable` accepts a fixed command/arguments and bounded request timeout. `type: docker-worktree` accepts a fixed Docker launcher/image, canonical allowed roots, allowed network modes, optional state location, and bounded resource defaults. Both variants reject unknown fields and require restart.
 - Disabling/draining Session workers does not erase durable Worker lineage. Current-code `sessionWorkers:false` remains supported; after a nonzero cursor, pre-Session-worker code is unsupported as a writer and no lineage-retirement tooling is required. See [D-process-topology-session-worker-downgrade](../threads/process-topology-and-rpc.md#d-process-topology-session-worker-downgrade).
 
 These are selected runtime overrides, not an environment-to-YAML migration.
@@ -77,7 +77,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 | Session workers / idle release | disabled / `60` seconds |
 | Vector database worker | enabled |
 | Vector maintenance / version retention | enabled / `24` hours |
-| Executable Node providers / request timeout | none / `90` seconds |
+| Node providers / executable request timeout | none / `90` seconds |
 
 ## Model resolution
 
@@ -95,7 +95,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 ## Persistence behavior
 
 - App YAML missing at read time yields an empty config.
-- App config validation normalizes executable Node providers through the same runtime/setup path; provider command/arguments remain trusted host configuration and are never model-facing mutation fields.
+- App config validation normalizes both executable and Docker worktree Node providers through the same runtime/setup path; launcher/image/roots/resources remain trusted host configuration and are never model-facing mutation fields.
 - Setup writes validate by parsing through the same current config readers before replacing files.
 - Structured setup accepts virtual target/failover fields; Models Setup remains a raw-YAML surface for string aliases, and raw virtual/alias YAML remains byte-preserving after validation. When retained structured setup changes a concrete provider into a virtual entry, provider-only fields including `effort` and `webSearch` are removed before the result is reparsed.
 - `writeAppConfigWithChannels` preserves surrounding raw YAML text/comments when possible.

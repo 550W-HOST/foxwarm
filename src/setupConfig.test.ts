@@ -144,9 +144,10 @@ test('app config validates startup executable Node providers with fixed trusted 
     timeoutMs: 45_000,
   }]);
   assert.deepEqual(normalizeNodeProvidersConfig(undefined), []);
-  assert.equal(normalizeNodeProvidersConfig({
+  const defaulted = normalizeNodeProvidersConfig({
     defaulted: { type: 'executable', command: '/opt/example/provider' },
-  })[0].timeoutMs, 90_000);
+  })[0];
+  assert.equal(defaulted.type === 'executable' ? defaulted.timeoutMs : 0, 90_000);
 });
 
 test('app config rejects malformed executable Node provider definitions', () => {
@@ -161,6 +162,37 @@ test('app config rejects malformed executable Node provider definitions', () => 
   ] as const) {
     assert.throws(() => validateAppConfigYaml(yaml), pattern);
   }
+});
+
+test('app config validates strict Docker worktree Node provider settings', () => {
+  const parsed = validateAppConfigYaml(`nodeProviders:
+  worktrees:
+    type: docker-worktree
+    command: sudo
+    args: [-n, docker]
+    image: sandbox:fixed
+    allowedWorktreeRoots: [/srv/worktrees]
+    networkModes: [none, bridge]
+    memory: 4g
+    cpus: 3
+    pidsLimit: 512
+    tmpfsSize: 128m
+`);
+  const normalized = normalizeNodeProvidersConfig(parsed.nodeProviders)[0];
+  assert.equal(normalized.type, 'docker-worktree');
+  if (normalized.type === 'docker-worktree') {
+    assert.deepEqual(normalized.args, ['-n', 'docker']);
+    assert.deepEqual(normalized.networkModes, ['none', 'bridge']);
+    assert.equal(normalized.image, 'sandbox:fixed');
+  }
+});
+
+test('app config rejects model-mutable Docker worktree authority fields', () => {
+  for (const yaml of [
+    `nodeProviders:\n  p:\n    type: docker-worktree\n    command: docker\n    image: fixed\n    allowedWorktreeRoots: [/srv/worktrees]\n    mounts: [/host]\n`,
+    `nodeProviders:\n  p:\n    type: docker-worktree\n    command: docker\n    image: fixed\n    allowedWorktreeRoots: [/srv/worktrees]\n    networkModes: [host]\n`,
+    `nodeProviders:\n  p:\n    type: docker-worktree\n    command: docker\n    image: fixed\n    allowedWorktreeRoots: []\n`,
+  ]) assert.throws(() => validateAppConfigYaml(yaml));
 });
 
 test('models setup form preserves unknown provider and model fields', () => {

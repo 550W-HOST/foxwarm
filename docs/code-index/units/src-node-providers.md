@@ -12,6 +12,7 @@ Production installs the two fixed providers plus zero or more startup-configured
 - the colocated `master` provider, which describes canonical node-environment capabilities but preserves direct local execution;
 - the authenticated remote provider, which adapts the existing connected-node manager and WebSocket tool transport without changing pairing, heartbeat, backend-service, file-transfer, or session-event internals.
 - each configured executable provider launches one trusted command per `list`, `invoke`, or lifecycle request and may advertise or manage one or more sandbox-kind Nodes without a resident Foxwarm Node process.
+- each configured `docker-worktree` provider is a resident first-party provider described by [src-docker-worktree-provider](./src-docker-worktree-provider.md).
 
 Executable providers use the fixed `foxwarm-node-provider@1` JSON stdin/stdout protocol. Lifecycle is provider-neutral; no concrete sandbox implementation, profile, or ownership model is built into Core.
 
