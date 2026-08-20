@@ -5,7 +5,7 @@ import { MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUp
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
-import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListChildDisclosure, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
+import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
 import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
 import { dispatchSessionIdleDeleted } from '../sessionIdleAttention'
 
@@ -709,13 +709,16 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       return
     }
 
-    const sessionsToExpand = new Set<string>()
+    const activePath: string[] = []
+    const seen = new Set<string>()
     let currentId: string | null = resolvedCurrentSessionId
 
-    while (currentId) {
-      sessionsToExpand.add(currentId)
+    while (currentId && !seen.has(currentId)) {
+      seen.add(currentId)
+      activePath.push(currentId)
       currentId = normalizedParentMap.get(currentId) || null
     }
+    activePath.reverse()
 
     const currentSessionChanged = autoExpandedCurrentSessionIdRef.current !== resolvedCurrentSessionId
     autoExpandedCurrentSessionIdRef.current = resolvedCurrentSessionId
@@ -723,15 +726,19 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       // Navigating to another session should reveal its path, but background
       // list refreshes for the same active session must respect branches the
       // user explicitly collapsed.
-      sessionsToExpand.forEach(sessionId => manuallyCollapsedSessionsRef.current.delete(sessionId))
+      activePath.forEach(sessionId => manuallyCollapsedSessionsRef.current.delete(sessionId))
     }
+    const sessionsToExpand = getSessionListAutoExpandedPath(
+      activePath,
+      manuallyCollapsedSessionsRef.current,
+      currentSessionChanged,
+    )
 
     setExpandedSessions(prev => {
       let changed = false
       const next = new Set(prev)
 
       sessionsToExpand.forEach(sessionId => {
-        if (manuallyCollapsedSessionsRef.current.has(sessionId)) return
         if (!next.has(sessionId)) {
           next.add(sessionId)
           changed = true
@@ -794,7 +801,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       manuallyCollapsedSessionsRef.current.add(sessionId)
       bounded?.onCollapseBranch(sessionId)
     } else {
-      manuallyCollapsedSessionsRef.current.delete(sessionId)
+      const remainsActivePathBarrier = sessionId === resolvedCurrentSessionId
+        || isDescendantOf(resolvedCurrentSessionId, sessionId)
+      if (!remainsActivePathBarrier) {
+        manuallyCollapsedSessionsRef.current.delete(sessionId)
+      }
       bounded?.onExpandBranch(sessionId)
     }
     setExpandedSessions(newExpanded)

@@ -135,6 +135,13 @@ test('Sidebar collapse prunes nested expansion state without clearing unrelated 
   const page = await browser.newPage()
   await page.setViewport({ width: 1440, height: 900 })
   const createdIds = []
+  const childReplayRequests = []
+  page.on('request', request => {
+    if (request.method() !== 'POST' || !new URL(request.url()).pathname.endsWith('/api/session-list/children')) return
+    try {
+      childReplayRequests.push(JSON.parse(request.postData() || '{}').parents?.map(parent => parent.parentSessionId) || [])
+    } catch {}
+  })
   await page.evaluateOnNewDocument(() => {
     const nativeFetch = window.fetch.bind(window)
     window.__foxwarmE2eChildTotals = {}
@@ -281,6 +288,20 @@ test('Sidebar collapse prunes nested expansion state without clearing unrelated 
     assert.equal(await disclosureExpanded(root), 'false', 'a refresh for the same active descendant must not reopen a manually collapsed ancestor')
     assert.equal(await rowExists(child), false)
     assert.equal(await rowExists(grandchild), false)
+
+    const replayRequestOffset = childReplayRequests.length
+    replay = waitForBranchReplay([root], [child])
+    await clickDisclosure(root)
+    await replay
+    await waitForRow(child)
+    await new Promise(resolve => setTimeout(resolve, 800))
+    assert.equal(await disclosureExpanded(child), 'false', 're-expanding the collapsed active-path root keeps its pruned child disclosure collapsed')
+    assert.equal(await rowExists(grandchild), false, 'the hidden grandchild remains hidden after re-expanding only its root')
+    assert.equal(
+      childReplayRequests.slice(replayRequestOffset).some(parentIds => parentIds.includes(child)),
+      false,
+      're-expanding the root does not silently replay the hidden child branch',
+    )
   } finally {
     for (const sessionId of createdIds.reverse()) {
       await page.evaluate(async id => { await fetch(`./api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }) }, sessionId).catch(() => {})
