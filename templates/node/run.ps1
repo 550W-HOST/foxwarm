@@ -84,6 +84,7 @@ if (-not $SourceDir) { $SourceDir = Join-Path $ScriptDir "foxwarm-node" }
 $StateDir = [System.IO.Path]::GetFullPath($StateDir)
 $SourceDir = [System.IO.Path]::GetFullPath($SourceDir)
 $CredentialsFile = Join-Path $StateDir "state\node_credentials.json"
+$NodeAgentsDir = Join-Path $StateDir "agents"
 
 # ─── Create directories ───
 foreach ($dir in @(
@@ -194,12 +195,18 @@ if ($Interactive -and $Timeout -gt 0) {
     $nodeArgs += @("--timeout", $Timeout)
 }
 
+# Node-owned agent state belongs to StateDir, never to an inherited caller cwd
+# or a higher-precedence single-agent environment override.
+Remove-Item Env:FOXWARM_AGENT_DIR -ErrorAction SilentlyContinue
+$env:FOXWARM_AGENTS_DIR = $NodeAgentsDir
+
 # ─── Print info ───
 Write-Host ""
 Write-Host "Starting node client ..."
 Write-Host "  Mode:        $(if ($Interactive) { 'Interactive' } else { 'Foreground' })"
 Write-Host "  Source:       $SourceDir"
 Write-Host "  State:        $StateDir"
+Write-Host "  Agents:       $NodeAgentsDir"
 Write-Host "  Credentials:  $CredentialsFile"
 Write-Host ""
 
@@ -214,5 +221,12 @@ if (-not $Pairing -or (Test-Path $CredentialsFile)) {
 Write-Host ""
 
 # ─── Run synchronously ───
-& node @nodeArgs
-exit $LASTEXITCODE
+$nodeExitCode = 1
+Push-Location $ScriptDir
+try {
+    & node @nodeArgs
+    $nodeExitCode = $LASTEXITCODE
+} finally {
+    Pop-Location
+}
+exit $nodeExitCode

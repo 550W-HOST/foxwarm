@@ -62,3 +62,11 @@ test('bare-metal bootstrap route template requires explicit dir and exposes back
   assert.match(template, /--install\s+Install, enable, and start a systemd service/);
   assert.match(template, /if \[ -z "\$INSTALL_DIR" \]/);
 });
+
+test('Windows bootstrap pins node-owned agent state and launch cwd independently of the caller', async () => {
+  const template = await fs.readFile(path.resolve(__dirname, '../../templates/node/run.ps1'), 'utf8');
+  assert.match(template, /Remove-Item Env:FOXWARM_AGENT_DIR -ErrorAction SilentlyContinue/);
+  assert.match(template, /\$env:FOXWARM_AGENTS_DIR = \$NodeAgentsDir/);
+  assert.match(template, /Push-Location \$ScriptDir/);
+  assert.match(template, /finally \{\s*Pop-Location\s*\}/);
+});
