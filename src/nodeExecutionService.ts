@@ -7,6 +7,8 @@ import {
 import * as sessionManager from './sessionManager';
 import { nodesManager } from './nodes/manager';
 import {
+  NodeLifecycleAction,
+  NodeLifecycleResult,
   NodeProviderError,
   NodeProviderRegistry,
 } from './nodes/providerRegistry';
@@ -44,12 +46,25 @@ export type NodeSelectRequest = { sourceSessionId: string; nodeId: string };
 export type NodeSelectResponse = { nodeId: string; defaultCwd: string };
 export type NodeCopyRequest = { sourceSessionId: string; sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; overwrite?: boolean };
 export type NodeCopyResponse = { sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; sizeBytes: number; sha256: string; overwritten: boolean; absolutePath?: string };
+export type NodeLifecycleProvidersRequest = { sourceSessionId: string };
+export type NodeLifecycleProvidersResponse = { providers: Array<{ id: string; actions: NodeLifecycleAction[] }> };
+export type NodeLifecycleRequest = {
+  sourceSessionId: string;
+  action: NodeLifecycleAction;
+  providerId?: string;
+  nodeId?: string;
+  parameters?: Record<string, unknown>;
+  confirmation?: string;
+};
+export type NodeLifecycleResponse = { result: NodeLifecycleResult };
 
-export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 1, {
+export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 2, {
   execute: rpcMethod<NodeExecutionRequest, NodeExecutionResponse>(),
   list: rpcMethod<NodeTopologyListRequest, NodeTopologyListResponse>(),
   select: rpcMethod<NodeSelectRequest, NodeSelectResponse>(),
   copy: rpcMethod<NodeCopyRequest, NodeCopyResponse>(),
+  lifecycleProviders: rpcMethod<NodeLifecycleProvidersRequest, NodeLifecycleProvidersResponse>(),
+  lifecycle: rpcMethod<NodeLifecycleRequest, NodeLifecycleResponse>(),
 });
 
 function assertOnlyKeys(value: object, allowed: readonly string[], label: string): void {
@@ -125,6 +140,38 @@ function normalizeArgs(value: unknown): Record<string, unknown> {
     throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'args must be an object.');
   }
   return value as Record<string, unknown>;
+}
+
+function normalizeLifecycleParameters(value: unknown): Record<string, unknown> {
+  if (value === undefined) return {};
+  const normalized = plainJsonWithin(value, 64 * 1024);
+  if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
+    throw new RpcError('NODE_LIFECYCLE_INVALID_REQUEST', 'parameters must be a plain finite JSON object of at most 65536 bytes.');
+  }
+  return normalized as Record<string, unknown>;
+}
+
+function normalizeRequestedLifecycleNodeId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string'
+    || value.length < 1
+    || value.length > 128
+    || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value)
+    || value.toLowerCase() === 'master') {
+    throw new RpcError(
+      'NODE_LIFECYCLE_INVALID_NODE_ID',
+      'create/ensure nodeId must be 1-128 ASCII characters matching [A-Za-z0-9][A-Za-z0-9._:-]* and cannot be reserved `master`.',
+    );
+  }
+  return value;
+}
+
+function normalizeLifecycleResult(value: NodeLifecycleResult): NodeLifecycleResult {
+  const normalized = plainJsonWithin(value, 128 * 1024);
+  if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
+    throw new RpcError('NODE_LIFECYCLE_INVALID_RESPONSE', 'Node lifecycle result must be a bounded plain JSON object.');
+  }
+  return normalized as NodeLifecycleResult;
 }
 
 function normalizeRoutingSnapshot(value: unknown): NodeExecutionRoutingSnapshot | undefined {
@@ -300,6 +347,78 @@ export function createNodeExecutionServiceHandler(options: {
       if (written.absolutePath !== undefined && (typeof written.absolutePath !== 'string' || written.absolutePath.length > 4096)) invalidResponse('Node copy returned an invalid absolutePath.');
       return { sourceNode, sourcePath, targetNode, targetPath, sizeBytes: file.sizeBytes, sha256: written.sha256,
         overwritten: written.overwritten, ...(written.absolutePath ? { absolutePath: written.absolutePath } : {}) };
+    },
+    async lifecycleProviders(input) {
+      const { source } = await requireSource(input, ['sourceSessionId'], 'Node lifecycle provider list request');
+      const isolated = sessionManager.isSessionEffectivelyIsolated(source);
+      return { providers: providers.listLifecycleProviders().slice(0, 100).map(provider => ({
+        id: requireBoundedString(provider.id, 'provider.id', 64),
+        actions: provider.actions.filter(action => ['create', 'ensure', 'inspect', 'destroy'].includes(action)
+          && (!isolated || action === 'inspect')).slice(0, 4),
+      })).filter(provider => provider.actions.length > 0) };
+    },
+    async lifecycle(input, rpcContext) {
+      const { sourceSessionId, source } = await requireSource(
+        input,
+        ['sourceSessionId', 'action', 'providerId', 'nodeId', 'parameters', 'confirmation'],
+        'Node lifecycle request',
+      );
+      const action = requireBoundedString(input.action, 'action', 16) as NodeLifecycleAction;
+      if (!['create', 'ensure', 'inspect', 'destroy'].includes(action)) {
+        throw new RpcError('NODE_LIFECYCLE_INVALID_REQUEST', 'action must be create, ensure, inspect, or destroy.');
+      }
+      const parameters = normalizeLifecycleParameters(input.parameters);
+      const isolated = sessionManager.isSessionEffectivelyIsolated(source);
+      if (isolated && action !== 'inspect') {
+        throw new RpcError(
+          'NODE_LIFECYCLE_ISOLATED_MUTATION_DENIED',
+          `Effectively isolated sessions cannot use node lifecycle action \`${action}\` without an ownership policy.`,
+        );
+      }
+      const context = { agent: source.agent || 'main' };
+      try {
+        if (action === 'create' || action === 'ensure') {
+          if (input.confirmation !== undefined) {
+            throw new RpcError('NODE_LIFECYCLE_INVALID_REQUEST', `${action} does not accept confirmation.`);
+          }
+          const providerId = requireBoundedString(input.providerId, 'providerId', 64);
+          const nodeId = normalizeRequestedLifecycleNodeId(input.nodeId);
+          const request = { sourceSessionId, ...(nodeId ? { nodeId } : {}), parameters, context };
+          const result = action === 'create'
+            ? await providers.createNode(providerId, request, { signal: rpcContext.signal })
+            : await providers.ensureNode(providerId, request, { signal: rpcContext.signal });
+          return { result: normalizeLifecycleResult(result) };
+        }
+
+        if (input.providerId !== undefined) {
+          throw new RpcError('NODE_LIFECYCLE_INVALID_REQUEST', `${action} resolves the provider from nodeId and does not accept providerId.`);
+        }
+        const nodeId = requireBoundedString(input.nodeId, 'nodeId', 128);
+        await requireNodeExecutionAccess(sourceSessionId, nodeId);
+        if (action === 'inspect') {
+          if (input.confirmation !== undefined) {
+            throw new RpcError('NODE_LIFECYCLE_INVALID_REQUEST', 'inspect does not accept confirmation.');
+          }
+          return { result: normalizeLifecycleResult(await providers.inspectNode(
+            { sourceSessionId, nodeId, parameters, context },
+            { signal: rpcContext.signal },
+          )) };
+        }
+        const expectedConfirmation = `destroy node ${nodeId}`;
+        if (input.confirmation !== expectedConfirmation) {
+          throw new RpcError(
+            'NODE_LIFECYCLE_CONFIRMATION_REQUIRED',
+            `destroy requires exact confirmation \`${expectedConfirmation}\`.`,
+          );
+        }
+        return { result: normalizeLifecycleResult(await providers.destroyNode(
+          { sourceSessionId, nodeId, parameters, context },
+          { signal: rpcContext.signal },
+        )) };
+      } catch (error) {
+        if (error instanceof RpcError) throw error;
+        rethrowProviderError(error);
+      }
     },
   };
 }

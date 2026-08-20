@@ -6,9 +6,9 @@ Main-owned generic Node discovery/provider resolution plus authenticated remote-
 
 ## Units
 
-- [src-node-providers](../units/src-node-providers.md) — generic safe descriptors/registry, master and authenticated-remote adapters, and startup-configured executable sandbox providers.
+- [src-node-providers](../units/src-node-providers.md) — generic safe descriptors/registry, optional provider lifecycle, master and authenticated-remote adapters, and startup-configured executable sandbox providers.
 - [src-nodes-manager](../units/src-nodes-manager.md) — connected-node map, model-tool dispatch, backend-service request/command/event routing, and session access checks.
-- [src-node-execution](../units/src-node-execution.md) — fixed versioned Main RPC boundary for generic non-master Node capability execution, topology, selection, and compound copy.
+- [src-node-execution](../units/src-node-execution.md) — fixed versioned Main RPC boundary for generic non-master Node capability execution, topology, selection, provider lifecycle, and compound copy.
 - [src-nodes-misc](../units/src-nodes-misc.md) — WebSocket handler, heartbeat, bootstrap HTTP routes/info, and local node session events.
 - [src-nodes-registry](../units/src-nodes-registry.md) — pending/approved registry, pairing lifecycle, credential hashes, rename/removal, and durable storage.
 
@@ -23,7 +23,7 @@ Client implementations are separate modules: [CLI node](./cli-node.md) and [brow
 - Approved-node list/authenticate/remove/move operations.
 - `nodesManager` — registration, model-tool dispatch, backend-service dispatch, runtime disconnect, and access checks.
 - `nodeProviderRegistry` — production registry for fixed master/authenticated-remote providers plus normalized startup executable providers.
-- `foxwarm-node-provider@1` — one-shot bounded JSON stdin/stdout contract for trusted executable sandbox providers; see `docs/executable-node-provider-protocol.md`.
+- `foxwarm-node-provider@1` — one-shot bounded JSON stdin/stdout contract for trusted executable sandbox providers, including optional create/ensure/inspect/destroy operations; see `docs/executable-node-provider-protocol.md`.
 - `executeNodeTool()` — placement-neutral service caller for direct and dynamic non-master Node capability execution.
 
 ## Bootstrap surface
@@ -53,6 +53,7 @@ The operator-facing workflow is documented by the single `skills/node-setup/SKIL
 - Backend services are versioned fixed protocols and do not pass through model-tool approval.
 - Generic Node capability execution resolves the exact non-master provider in Main; unsupported capabilities never fall back to master.
 - Executable providers are startup-only trusted configuration, advertise sandbox-kind Nodes, and receive complete capability calls rather than low-level file/process RPC. Their path and restriction semantics remain provider-defined.
+- Node lifecycle is a provider-neutral Main-owned control plane through the existing `node` builtin. Create/ensure route by exact configured provider ID; inspect/destroy resolve the exact existing Node owner. Provider effect and data-retention text remains descriptive rather than a generic deletion or security guarantee.
 
 ## Compatibility
 

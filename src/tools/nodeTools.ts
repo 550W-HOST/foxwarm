@@ -7,8 +7,15 @@ import * as sessionRuntime from '../sessionRuntime';
 import { checkToolPermission } from '../isolatedCheck';
 import { nodesManager } from '../nodes/manager';
 import { buildNodeBootstrapInfo, ensureNodePairingToken } from '../nodes/bootstrapInfo';
-import { copyBetweenNodes, listNodeTopology, validateNodeSelection } from '../nodeExecution';
+import {
+    copyBetweenNodes,
+    executeNodeLifecycle,
+    listNodeLifecycleProviders,
+    listNodeTopology,
+    validateNodeSelection,
+} from '../nodeExecution';
 import { executeMainManagementTool } from '../mainManagementTools';
+import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
 
 export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) {
     const { sourceNode, sourcePath, targetNode, targetPath, overwrite = false } = args;
@@ -69,13 +76,17 @@ export const tool_list_nodes = async (_args: ToolArgs = {}, ctx?: ToolContext) =
     if (ctx.sessionPlacement === 'session-worker' && ctx.session?.id !== ctx.sessionId) throw new Error('Node listing requires exact session context.');
     const currentNode = await resolveCurrentNodeForList(ctx);
     const nodes = await listNodeTopology(ctx.sessionId, undefined, currentNode);
-    if (nodes.length === 0) return `No nodes registered. Current node: \`${currentNode}\`.`;
+    const lifecycleProviders = await listNodeLifecycleProviders(ctx.sessionId);
+    const providerBody = lifecycleProviders.length > 0
+        ? `\nLifecycle providers:\n${lifecycleProviders.map(provider => `- \`${provider.id}\` (${provider.actions.join(', ')})`).join('\n')}\n`
+        : '';
+    if (nodes.length === 0) return `No nodes registered. Current node: \`${currentNode}\`.${providerBody}`;
     const body = nodes.map(node => {
         const label = node.kind === 'master' ? 'local' : node.kind;
         return `- \`${node.id}\` (${label})${node.id === currentNode ? ' ✅ current' : ''}`
             + (typeof node.lastActivity === 'number' ? ` - Last activity: ${new Date(node.lastActivity).toISOString()}` : '');
     }).join('\n');
-    return `Found ${nodes.length} node(s). Current node: \`${currentNode}\`.\n\n${body}\n`
+    return `Found ${nodes.length} node(s). Current node: \`${currentNode}\`.\n\n${body}\n${providerBody}`
         + (nodes.some(node => node.id === currentNode) ? '' : `\nCurrent node \`${currentNode}\` is not currently available.\n`);
 };
 
@@ -108,18 +119,57 @@ export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext)
     return `Current node changed to \`${validated.nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${validated.defaultCwd}\`.`;
 };
 
-export async function tool_node(args: ToolArgs, ctx: ToolContext) {
+function assertNodeActionKeys(args: ToolArgs, action: string, allowed: readonly string[]): void {
+    const accepted = new Set(['action', ...allowed]);
+    const unexpected = Object.keys(args || {}).find(key => !accepted.has(key));
+    if (unexpected) throw new Error(`node action="${action}" does not accept ${unexpected}.`);
+}
+
+export async function tool_node(args: ToolArgs, ctx: ToolContext): Promise<any> {
     const action = typeof args?.action === 'string' ? args.action.trim().toLowerCase() : '';
     if (action === 'list') {
+        assertNodeActionKeys(args, action, []);
         return tool_list_nodes(args, ctx);
     }
     if (action === 'select') {
+        assertNodeActionKeys(args, action, ['nodeId']);
         if (typeof args.nodeId !== 'string' || !args.nodeId.trim()) {
             throw new Error('node.nodeId is required for action="select".');
         }
         return tool_change_current_node({ ...args, nodeId: args.nodeId.trim() }, ctx);
     }
-    throw new Error('node.action must be "list" or "select".');
+    if (['create', 'ensure', 'inspect', 'destroy'].includes(action)) {
+        if (!ctx?.sessionId) throw new Error(`node ${action} requires session context.`);
+        assertNodeActionKeys(args, action, action === 'create' || action === 'ensure'
+            ? ['providerId', 'nodeId', 'parameters', 'parametersJson']
+            : action === 'inspect'
+                ? ['nodeId', 'parameters', 'parametersJson']
+                : ['nodeId', 'parameters', 'parametersJson', 'confirmation']);
+        const parameters = resolveObjectArgWithJsonFallback(args, 'parameters', 'parametersJson', {
+            label: `node ${action} parameters`,
+        }) || {};
+        if (action === 'create' || action === 'ensure') {
+            if (typeof args.providerId !== 'string' || !args.providerId.trim()) {
+                throw new Error(`node.providerId is required for action="${action}".`);
+            }
+            return executeNodeLifecycle(ctx.sessionId, {
+                action,
+                providerId: args.providerId.trim(),
+                ...(args.nodeId === undefined ? {} : { nodeId: args.nodeId }),
+                parameters,
+            });
+        }
+        if (typeof args.nodeId !== 'string' || !args.nodeId.trim()) {
+            throw new Error(`node.nodeId is required for action="${action}".`);
+        }
+        return executeNodeLifecycle(ctx.sessionId, {
+            action: action as 'inspect' | 'destroy',
+            nodeId: args.nodeId.trim(),
+            parameters,
+            ...(action === 'destroy' ? { confirmation: args.confirmation } : {}),
+        });
+    }
+    throw new Error('node.action must be "list", "select", "create", "ensure", "inspect", or "destroy".');
 }
 
 export const tool_node_bootstrap_info = async (args: ToolArgs = {}, ctx?: ToolContext) => {

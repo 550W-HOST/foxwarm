@@ -813,12 +813,16 @@ Example:
         {
             name: 'node',
             defaultInject: true,
-            description: 'List registered nodes or select the current execution node for this session. Selecting a node clears the session cwd so subsequent path resolution uses that node\'s default cwd.',
+            description: 'List/select Nodes or use provider-neutral Node lifecycle operations. Nodes are execution identities; providers are Main-owned drivers. create/ensure require a configured provider ID. inspect/destroy resolve the provider from an existing exact Node ID. destroy requires the exact confirmation phrase `destroy node <nodeId>`. Provider-described effects and data retention are not generic deletion/security guarantees.',
             parameters: {
                 type: 'object',
                 properties: {
-                    action: { type: 'string', enum: ['list', 'select'], description: 'Action to perform: "list" registered nodes or "select" the session\'s current execution node.' },
-                    nodeId: { type: 'string', description: 'For action="select": node ID to use.' }
+                    action: { type: 'string', enum: ['list', 'select', 'create', 'ensure', 'inspect', 'destroy'], description: 'Action to perform.' },
+                    nodeId: { type: 'string', description: 'Optional for create/ensure as the exact requested Node ID; required for select/inspect/destroy.' },
+                    providerId: { type: 'string', description: 'Required for create/ensure: exact configured provider ID.' },
+                    parameters: { type: 'object', description: 'Optional provider-defined opaque JSON object for lifecycle actions.', additionalProperties: true },
+                    parametersJson: { type: 'string', description: 'JSON object string fallback for lifecycle parameters. Used only when parameters is unavailable.' },
+                    confirmation: { type: 'string', description: 'Required for destroy and must equal `destroy node <nodeId>` exactly.' }
                 },
                 required: ['action']
             }

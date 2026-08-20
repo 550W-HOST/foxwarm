@@ -6,6 +6,9 @@ import {
   type NodeAvailability,
   type NodeCapabilityDescriptor,
   type NodeDescriptor,
+  type NodeLifecycleNodeRequest,
+  type NodeLifecycleProviderRequest,
+  type NodeLifecycleResult,
   type NodeProvider,
   type NodeProviderCallOptions,
   type NodeToolRequest,
@@ -14,6 +17,8 @@ import {
 export const EXECUTABLE_NODE_PROVIDER_PROTOCOL = 'foxwarm-node-provider@1';
 export const EXECUTABLE_NODE_PROVIDER_MAX_LIST_BYTES = 256 * 1024;
 export const EXECUTABLE_NODE_PROVIDER_MAX_RESULT_BYTES = 8 * 1024 * 1024;
+export const EXECUTABLE_NODE_PROVIDER_MAX_LIFECYCLE_BYTES = 512 * 1024;
+export const EXECUTABLE_NODE_PROVIDER_MAX_LIFECYCLE_DETAILS_BYTES = 64 * 1024;
 export const EXECUTABLE_NODE_PROVIDER_MAX_REQUEST_BYTES = 4 * 1024 * 1024;
 export const EXECUTABLE_NODE_PROVIDER_MAX_STDERR_BYTES = 64 * 1024;
 export const EXECUTABLE_NODE_PROVIDER_MAX_NODES = 100;
@@ -67,7 +72,7 @@ function boundedString(value: unknown, label: string, maxLength: number): string
   return value;
 }
 
-function validatePlainJson(value: unknown, label: string): unknown {
+function validatePlainJson(value: unknown, label: string, maxBytes = EXECUTABLE_NODE_PROVIDER_MAX_SCHEMA_BYTES): unknown {
   let seen = 0;
   const visit = (candidate: unknown, depth: number): void => {
     if (depth > 32 || ++seen > 10_000) {
@@ -91,8 +96,8 @@ function validatePlainJson(value: unknown, label: string): unknown {
   };
   visit(value, 0);
   const encoded = JSON.stringify(value);
-  if (Buffer.byteLength(encoded, 'utf8') > EXECUTABLE_NODE_PROVIDER_MAX_SCHEMA_BYTES) {
-    throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `${label} exceeds ${EXECUTABLE_NODE_PROVIDER_MAX_SCHEMA_BYTES} bytes.`);
+  if (Buffer.byteLength(encoded, 'utf8') > maxBytes) {
+    throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `${label} exceeds ${maxBytes} bytes.`);
   }
   return value;
 }
@@ -225,7 +230,38 @@ function normalizeListResult(value: unknown, providerId: string): NodeDescriptor
   return nodes;
 }
 
-export type ExecutableNodeProviderOperation = 'list' | 'invoke';
+function normalizeLifecycleResult(
+  value: unknown,
+  providerId: string,
+  operation: 'create' | 'ensure' | 'inspect' | 'destroy',
+): NodeLifecycleResult {
+  if (!isPlainRecord(value)) {
+    throw new NodeProviderError('NODE_LIFECYCLE_INVALID_RESULT', `Executable provider ${operation} result must be an object.`);
+  }
+  assertOnlyKeys(value, ['node', 'nodeId', 'effect', 'dataRetention', 'details'], `Executable provider ${operation} result`);
+  const result: NodeLifecycleResult = {};
+  if (operation === 'create' || operation === 'ensure' || operation === 'inspect') {
+    result.node = normalizeNode(value.node, providerId, 0);
+  } else {
+    result.nodeId = exactString(value.nodeId, 'Executable provider destroy result nodeId', 128, /^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+  }
+  if (value.effect !== undefined) {
+    result.effect = boundedString(value.effect, `Executable provider ${operation} effect`, 4_096);
+  }
+  if (value.dataRetention !== undefined) {
+    result.dataRetention = boundedString(value.dataRetention, `Executable provider ${operation} dataRetention`, 4_096);
+  }
+  if (value.details !== undefined) {
+    result.details = validatePlainJson(
+      value.details,
+      `Executable provider ${operation} details`,
+      EXECUTABLE_NODE_PROVIDER_MAX_LIFECYCLE_DETAILS_BYTES,
+    );
+  }
+  return result;
+}
+
+export type ExecutableNodeProviderOperation = 'list' | 'invoke' | 'create' | 'ensure' | 'inspect' | 'destroy';
 
 export type ExecutableNodeProviderRequest = {
   protocol: typeof EXECUTABLE_NODE_PROVIDER_PROTOCOL;
@@ -271,6 +307,26 @@ export class ExecutableNodeProvider implements NodeProvider {
       args: request.args,
       context: request.context,
     }, EXECUTABLE_NODE_PROVIDER_MAX_RESULT_BYTES, options);
+  }
+
+  async createNode(request: NodeLifecycleProviderRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult> {
+    const result = await this.run('create', request, EXECUTABLE_NODE_PROVIDER_MAX_LIFECYCLE_BYTES, options);
+    return normalizeLifecycleResult(result, this.id, 'create');
+  }
+
+  async ensureNode(request: NodeLifecycleProviderRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult> {
+    const result = await this.run('ensure', request, EXECUTABLE_NODE_PROVIDER_MAX_LIFECYCLE_BYTES, options);
+    return normalizeLifecycleResult(result, this.id, 'ensure');
+  }
+
+  async inspectNode(request: NodeLifecycleNodeRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult> {
+    const result = await this.run('inspect', request, EXECUTABLE_NODE_PROVIDER_MAX_LIFECYCLE_BYTES, options);
+    return normalizeLifecycleResult(result, this.id, 'inspect');
+  }
+
+  async destroyNode(request: NodeLifecycleNodeRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult> {
+    const result = await this.run('destroy', request, EXECUTABLE_NODE_PROVIDER_MAX_LIFECYCLE_BYTES, options);
+    return normalizeLifecycleResult(result, this.id, 'destroy');
   }
 
   private async run(
@@ -517,6 +573,13 @@ export class ExecutableNodeProvider implements NodeProvider {
     }
     if (parsed.error.retryable !== undefined && typeof parsed.error.retryable !== 'boolean') {
       throw new NodeProviderError('NODE_PROVIDER_PROTOCOL_INVALID_RESPONSE', 'Executable Node provider error retryable must be a boolean.');
+    }
+    if (['create', 'ensure', 'inspect', 'destroy'].includes(operation) && parsed.error.code === 'UnsupportedOperation') {
+      throw new NodeProviderError(
+        'NODE_LIFECYCLE_OPERATION_UNSUPPORTED',
+        `Executable Node provider \`${this.id}\` does not support \`${operation}\`: ${parsed.error.message}`,
+        false,
+      );
     }
     throw new NodeProviderError(
       'NODE_PROVIDER_REPORTED_ERROR',

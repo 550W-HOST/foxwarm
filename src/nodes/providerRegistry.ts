@@ -43,6 +43,36 @@ export type NodeProviderCallOptions = {
   signal?: AbortSignal;
 };
 
+export type NodeLifecycleAction = 'create' | 'ensure' | 'inspect' | 'destroy';
+
+export type NodeLifecycleContext = {
+  agent: string;
+};
+
+export type NodeLifecycleProviderRequest = {
+  sourceSessionId: string;
+  nodeId?: string;
+  parameters: Record<string, unknown>;
+  context: NodeLifecycleContext;
+};
+
+export type NodeLifecycleNodeRequest = NodeLifecycleProviderRequest & {
+  nodeId: string;
+};
+
+export type NodeLifecycleResult = {
+  node?: NodeDescriptor;
+  nodeId?: string;
+  effect?: string;
+  dataRetention?: string;
+  details?: unknown;
+};
+
+export type NodeLifecycleProviderSummary = {
+  id: string;
+  actions: NodeLifecycleAction[];
+};
+
 export interface NodeProvider {
   readonly id: string;
   /** Expensive/failure-prone discovery is consulted only when fixed in-process providers do not own the exact Node ID. */
@@ -51,6 +81,10 @@ export interface NodeProvider {
   getNode(nodeId: string, options?: NodeProviderCallOptions): Promise<NodeDescriptor | undefined> | NodeDescriptor | undefined;
   invokeTool(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown>;
   getDefaultCwd?(request: NodeDefaultCwdRequest, options?: NodeProviderCallOptions): Promise<string | undefined>;
+  createNode?(request: NodeLifecycleProviderRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult>;
+  ensureNode?(request: NodeLifecycleProviderRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult>;
+  inspectNode?(request: NodeLifecycleNodeRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult>;
+  destroyNode?(request: NodeLifecycleNodeRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult>;
 }
 
 export class NodeProviderError extends Error {
@@ -66,6 +100,7 @@ export class NodeProviderError extends Error {
 
 export class NodeProviderRegistry {
   private readonly providers: NodeProvider[];
+  private mutationTail: Promise<void> = Promise.resolve();
 
   constructor(providers: readonly NodeProvider[]) {
     const ids = new Set<string>();
@@ -153,6 +188,198 @@ export class NodeProviderRegistry {
       );
     }
     return resolved.provider.invokeTool(request, options);
+  }
+
+  listLifecycleProviders(): NodeLifecycleProviderSummary[] {
+    return this.providers.flatMap(provider => {
+      const actions: NodeLifecycleAction[] = [];
+      if (provider.createNode) actions.push('create');
+      if (provider.ensureNode) actions.push('ensure');
+      if (provider.inspectNode) actions.push('inspect');
+      if (provider.destroyNode) actions.push('destroy');
+      return actions.length > 0 ? [{ id: provider.id, actions }] : [];
+    });
+  }
+
+  async createNode(providerId: string, request: NodeLifecycleProviderRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult> {
+    return this.withMutationLane(options, () => this.invokeProviderLifecycle('create', providerId, request, options));
+  }
+
+  async ensureNode(providerId: string, request: NodeLifecycleProviderRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult> {
+    return this.withMutationLane(options, () => this.invokeProviderLifecycle('ensure', providerId, request, options));
+  }
+
+  async inspectNode(request: NodeLifecycleNodeRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult> {
+    return this.invokeNodeLifecycle('inspect', request, options);
+  }
+
+  async destroyNode(request: NodeLifecycleNodeRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult> {
+    return this.withMutationLane(options, () => this.invokeNodeLifecycle('destroy', request, options));
+  }
+
+  private async withMutationLane<T>(options: NodeProviderCallOptions | undefined, effect: () => Promise<T>): Promise<T> {
+    const previous = this.mutationTail;
+    let release!: () => void;
+    this.mutationTail = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    try {
+      if (options?.signal?.aborted) {
+        throw new NodeProviderError(
+          'NODE_LIFECYCLE_CANCELLED',
+          'Node lifecycle mutation was cancelled before provider execution.',
+          true,
+        );
+      }
+      return await effect();
+    } finally {
+      release();
+    }
+  }
+
+  private async invokeProviderLifecycle(
+    action: 'create' | 'ensure',
+    providerId: string,
+    request: NodeLifecycleProviderRequest,
+    options?: NodeProviderCallOptions,
+  ): Promise<NodeLifecycleResult> {
+    if (request.nodeId !== undefined && (
+      request.nodeId.length < 1
+      || request.nodeId.length > 128
+      || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(request.nodeId)
+      || request.nodeId.toLowerCase() === 'master'
+    )) {
+      throw new NodeProviderError(
+        'NODE_LIFECYCLE_INVALID_NODE_ID',
+        'create/ensure nodeId must use the canonical slash-free grammar and cannot be reserved `master`.',
+      );
+    }
+    const provider = this.providers.find(candidate => candidate.id === providerId);
+    if (!provider) {
+      throw new NodeProviderError('NODE_LIFECYCLE_PROVIDER_NOT_FOUND', `Node provider \`${providerId}\` is not configured.`);
+    }
+    const method = action === 'create' ? provider.createNode : provider.ensureNode;
+    if (!method) {
+      throw new NodeProviderError('NODE_LIFECYCLE_OPERATION_UNSUPPORTED', `Node provider \`${providerId}\` does not support \`${action}\`.`);
+    }
+    if (request.nodeId) {
+      const existing = await this.resolveNodeAcrossAllProviders(request.nodeId, options);
+      if (action === 'create' && existing) {
+        throw new NodeProviderError(
+          'NODE_LIFECYCLE_NODE_EXISTS',
+          `Node \`${request.nodeId}\` is already owned by provider \`${existing.provider.id}\`; create was not invoked.`,
+        );
+      }
+      if (action === 'ensure' && existing && existing.provider.id !== provider.id) {
+        throw new NodeProviderError(
+          'NODE_LIFECYCLE_NODE_OWNED_BY_OTHER_PROVIDER',
+          `Node \`${request.nodeId}\` is owned by provider \`${existing.provider.id}\`, not \`${provider.id}\`; ensure was not invoked.`,
+        );
+      }
+    }
+    let result: NodeLifecycleResult;
+    try {
+      result = await method.call(provider, request, options);
+    } catch (error) {
+      if (error instanceof NodeProviderError) throw error;
+      throw new NodeProviderError(
+        'NODE_LIFECYCLE_PROVIDER_FAILED',
+        `Node provider \`${provider.id}\` failed \`${action}\`.`,
+        true,
+      );
+    }
+    this.validateLifecycleResult(action, result, provider.id, request.nodeId);
+    if (result.node) await this.assertNoOtherProviderOwns(result.node.id, provider.id, options);
+    return result;
+  }
+
+  private async invokeNodeLifecycle(
+    action: 'inspect' | 'destroy',
+    request: NodeLifecycleNodeRequest,
+    options?: NodeProviderCallOptions,
+  ): Promise<NodeLifecycleResult> {
+    const resolved = await this.resolveNodeAcrossAllProviders(request.nodeId, options);
+    if (!resolved) {
+      throw new NodeProviderError('NODE_EXECUTION_NODE_UNAVAILABLE', `Node \`${request.nodeId}\` is not available.`, true);
+    }
+    const method = action === 'inspect' ? resolved.provider.inspectNode : resolved.provider.destroyNode;
+    if (!method) {
+      throw new NodeProviderError(
+        'NODE_LIFECYCLE_OPERATION_UNSUPPORTED',
+        `Node provider \`${resolved.provider.id}\` does not support \`${action}\` for Node \`${request.nodeId}\`.`,
+      );
+    }
+    let result: NodeLifecycleResult;
+    try {
+      result = await method.call(resolved.provider, request, options);
+    } catch (error) {
+      if (error instanceof NodeProviderError) throw error;
+      throw new NodeProviderError(
+        'NODE_LIFECYCLE_PROVIDER_FAILED',
+        `Node provider \`${resolved.provider.id}\` failed \`${action}\` for Node \`${request.nodeId}\`.`,
+        true,
+      );
+    }
+    this.validateLifecycleResult(action, result, resolved.provider.id, request.nodeId);
+    return result;
+  }
+
+  private validateLifecycleResult(
+    action: NodeLifecycleAction,
+    result: NodeLifecycleResult,
+    providerId: string,
+    expectedNodeId?: string,
+  ): void {
+    if (!result || typeof result !== 'object' || Array.isArray(result)) {
+      throw new NodeProviderError('NODE_LIFECYCLE_INVALID_RESULT', `Node provider \`${providerId}\` returned an invalid \`${action}\` result.`);
+    }
+    const unexpected = Object.keys(result).find(key => !['node', 'nodeId', 'effect', 'dataRetention', 'details'].includes(key));
+    if (unexpected) {
+      throw new NodeProviderError(
+        'NODE_LIFECYCLE_INVALID_RESULT',
+        `Node provider \`${providerId}\` returned unsupported lifecycle result field \`${unexpected}\`.`,
+      );
+    }
+    for (const field of ['effect', 'dataRetention'] as const) {
+      const value = result[field];
+      if (value !== undefined && (typeof value !== 'string' || value.length === 0 || value.length > 4_096
+        || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value))) {
+        throw new NodeProviderError(
+          'NODE_LIFECYCLE_INVALID_RESULT',
+          `Node provider \`${providerId}\` returned invalid lifecycle result field \`${field}\`.`,
+        );
+      }
+    }
+    if (action === 'create' || action === 'ensure' || action === 'inspect') {
+      if (!result.node || result.node.provider !== providerId) {
+        throw new NodeProviderError('NODE_LIFECYCLE_INVALID_RESULT', `Node provider \`${providerId}\` must return its exact Node descriptor for \`${action}\`.`);
+      }
+      if (expectedNodeId && result.node.id !== expectedNodeId) {
+        throw new NodeProviderError('NODE_LIFECYCLE_NODE_MISMATCH', `Node provider \`${providerId}\` returned the wrong Node identity for \`${action}\`.`);
+      }
+    }
+    if (action === 'destroy' && result.nodeId !== expectedNodeId) {
+      throw new NodeProviderError('NODE_LIFECYCLE_NODE_MISMATCH', `Node provider \`${providerId}\` returned the wrong Node identity for \`destroy\`.`);
+    }
+  }
+
+  private async resolveNodeAcrossAllProviders(
+    nodeId: string,
+    options?: NodeProviderCallOptions,
+  ): Promise<{ descriptor: NodeDescriptor; provider: NodeProvider } | undefined> {
+    return this.resolveNodeFromProviders(nodeId, this.providers, options);
+  }
+
+  private async assertNoOtherProviderOwns(nodeId: string, providerId: string, options?: NodeProviderCallOptions): Promise<void> {
+    for (const provider of this.providers) {
+      if (provider.id === providerId) continue;
+      const descriptor = await provider.getNode(nodeId, options);
+      if (descriptor) {
+        throw new NodeProviderError(
+          'NODE_PROVIDER_DUPLICATE_NODE',
+          `Node \`${nodeId}\` is advertised by both \`${providerId}\` and \`${provider.id}\`.`,
+        );
+      }
+    }
   }
 
   async getDefaultCwd(request: NodeDefaultCwdRequest, options?: NodeProviderCallOptions): Promise<string | undefined> {

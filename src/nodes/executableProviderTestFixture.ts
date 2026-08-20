@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 const PROTOCOL = 'foxwarm-node-provider@1';
 const mode = process.argv[2] || 'normal';
 const logPath = process.argv[3];
+const statePath = logPath ? `${logPath}.nodes.json` : '';
 
 function descriptor(id = 'fixture-sandbox', availability = 'ready') {
   return {
@@ -26,6 +27,19 @@ function descriptor(id = 'fixture-sandbox', availability = 'ready') {
 
 function write(value: unknown): void {
   process.stdout.write(JSON.stringify(value));
+}
+
+function readDynamicNodes(): ReturnType<typeof descriptor>[] {
+  if (!statePath || !fs.existsSync(statePath)) return [];
+  return JSON.parse(fs.readFileSync(statePath, 'utf8'));
+}
+
+function writeDynamicNodes(nodes: ReturnType<typeof descriptor>[]): void {
+  if (statePath) fs.writeFileSync(statePath, JSON.stringify(nodes));
+}
+
+function currentNodes(primaryId = 'fixture-sandbox'): ReturnType<typeof descriptor>[] {
+  return [descriptor(primaryId), descriptor('fixture-secondary'), ...readDynamicNodes()];
 }
 
 async function main(): Promise<void> {
@@ -91,10 +105,9 @@ async function main(): Promise<void> {
       response.result = { nodes: [{ ...descriptor(), tools: [{ name: 'read', parameters: { value: 'x'.repeat(20 * 1024) } }] }] };
     } else {
       response.result = {
-        nodes: [
-          descriptor(primaryId, mode === 'unavailable' ? 'unavailable' : 'ready'),
-          descriptor('fixture-secondary'),
-        ],
+        nodes: currentNodes(primaryId).map((node, index) => index === 0 && mode === 'unavailable'
+          ? { ...node, availability: 'unavailable' }
+          : node),
       };
     }
     if (mode === 'bad-envelope') response.error = { code: 'Unexpected', message: 'must not coexist with result' };
@@ -104,6 +117,76 @@ async function main(): Promise<void> {
       });
       grandchild.unref();
     }
+    write(response);
+    return;
+  }
+
+  if (['create', 'ensure', 'inspect', 'destroy'].includes(request.operation)) {
+    if (mode === 'unsupported-lifecycle') {
+      response.ok = false;
+      response.error = { code: 'UnsupportedOperation', message: `fixture does not support ${request.operation}`, retryable: false };
+      write(response);
+      return;
+    }
+    if (mode === 'lifecycle-oversized') {
+      response.result = { node: descriptor('oversized-node'), details: { value: 'x'.repeat(600 * 1024) } };
+      write(response);
+      return;
+    }
+    if (mode === 'lifecycle-malformed') {
+      response.result = { unexpected: true };
+      write(response);
+      return;
+    }
+    const lifecycleRequest = request.request || {};
+    if (request.operation === 'create' || request.operation === 'ensure') {
+      const requestedId = typeof lifecycleRequest.nodeId === 'string' ? lifecycleRequest.nodeId : 'fixture-created';
+      const dynamic = readDynamicNodes();
+      let node = currentNodes().find(candidate => candidate.id === requestedId);
+      if (!node) {
+        node = descriptor(requestedId);
+        dynamic.push(node);
+        writeDynamicNodes(dynamic);
+      } else if (request.operation === 'create') {
+        response.ok = false;
+        response.error = { code: 'AlreadyExists', message: `Node ${requestedId} already exists.`, retryable: false };
+        write(response);
+        return;
+      }
+      response.result = {
+        node: mode === 'lifecycle-node-mismatch' ? descriptor('wrong-node') : node,
+        effect: request.operation === 'create' ? 'Fixture created or registered the requested Node.' : 'Fixture ensured the requested Node exists.',
+        dataRetention: 'Fixture state persists only in its test state file.',
+        details: { observed: lifecycleRequest, operation: request.operation },
+      };
+      write(response);
+      return;
+    }
+    const requestedId = lifecycleRequest.nodeId;
+    const node = currentNodes().find(candidate => candidate.id === requestedId);
+    if (!node) {
+      response.ok = false;
+      response.error = { code: 'NotFound', message: `Node ${requestedId} does not exist.`, retryable: false };
+      write(response);
+      return;
+    }
+    if (request.operation === 'inspect') {
+      response.result = {
+        node: mode === 'lifecycle-node-mismatch' ? descriptor('wrong-node') : node,
+        effect: 'Inspection has no generic mutation effect.',
+        dataRetention: 'Fixture reports test-only file-backed state.',
+        details: { observed: lifecycleRequest },
+      };
+      write(response);
+      return;
+    }
+    writeDynamicNodes(readDynamicNodes().filter(candidate => candidate.id !== requestedId));
+    response.result = {
+      nodeId: mode === 'lifecycle-node-mismatch' ? 'wrong-node' : requestedId,
+      effect: 'Fixture removed its test registration for the requested Node.',
+      dataRetention: 'The fixture makes no claim about external data deletion.',
+      details: { observed: lifecycleRequest },
+    };
     write(response);
     return;
   }

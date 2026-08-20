@@ -470,3 +470,103 @@ test('fixed master/remote-style Node authority does not depend on deferred execu
     await fs.remove(dir);
   }
 });
+
+test('executable provider lifecycle persists provider-defined Nodes and safe effect/retention details', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-executable-provider-lifecycle-'));
+  const logPath = path.join(dir, 'requests.jsonl');
+  const provider = executableProvider('normal', logPath, 2_000, 'lifecycle-executable');
+  const base = { sourceSessionId: 'lifecycle-source', nodeId: 'dynamic:one', parameters: { opaque: { value: 1 } }, context: { agent: 'lifecycle-agent' } };
+  try {
+    const created = await provider.createNode(base);
+    assert.equal(created.node?.id, 'dynamic:one');
+    assert.match(created.effect || '', /created|registered/i);
+    assert.match(created.dataRetention || '', /test state file/i);
+    assert.equal((await provider.listNodes()).some(node => node.id === 'dynamic:one'), true);
+
+    const ensured = await provider.ensureNode(base);
+    assert.equal(ensured.node?.id, 'dynamic:one');
+    const inspected = await provider.inspectNode({ ...base, nodeId: 'dynamic:one' });
+    assert.equal(inspected.node?.id, 'dynamic:one');
+    assert.equal((inspected.details as any).observed.sourceSessionId, 'lifecycle-source');
+    assert.deepEqual((inspected.details as any).observed.context, { agent: 'lifecycle-agent' });
+
+    const destroyed = await provider.destroyNode({ ...base, nodeId: 'dynamic:one' });
+    assert.equal(destroyed.nodeId, 'dynamic:one');
+    assert.match(destroyed.dataRetention || '', /no claim/i);
+    const generated = await provider.createNode({
+      sourceSessionId: 'lifecycle-source', parameters: { generated: true }, context: { agent: 'lifecycle-agent' },
+    });
+    assert.equal(generated.node?.id, 'fixture-created');
+    assert.equal((await provider.listNodes()).some(node => node.id === 'dynamic:one'), false);
+
+    const operations = (await readLog(logPath)).map(entry => entry.request.operation);
+    assert.deepEqual(operations, ['create', 'list', 'ensure', 'inspect', 'destroy', 'create', 'list']);
+  } finally {
+    await fs.remove(dir);
+  }
+});
+
+test('executable lifecycle rejects unsupported, malformed, oversized, and mismatched provider results', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-executable-provider-lifecycle-errors-'));
+  const createRequest = { sourceSessionId: 'source', nodeId: 'node-a', parameters: {}, context: { agent: 'agent-a' } };
+  try {
+    const unsupported = executableProvider('unsupported-lifecycle', path.join(dir, 'unsupported.jsonl'), 2_000, 'unsupported-lifecycle');
+    await assert.rejects(() => unsupported.createNode(createRequest), (error: any) => error?.code === 'NODE_LIFECYCLE_OPERATION_UNSUPPORTED');
+
+    const malformed = executableProvider('lifecycle-malformed', path.join(dir, 'malformed.jsonl'), 2_000, 'malformed-lifecycle');
+    await assert.rejects(() => malformed.createNode(createRequest), (error: any) => error?.code === 'NODE_PROVIDER_PROTOCOL_INVALID_RESPONSE');
+
+    const oversized = executableProvider('lifecycle-oversized', path.join(dir, 'oversized.jsonl'), 2_000, 'oversized-lifecycle');
+    await assert.rejects(() => oversized.createNode(createRequest), (error: any) => error?.code === 'NODE_PROVIDER_OUTPUT_LIMIT');
+
+    const mismatch = executableProvider('lifecycle-node-mismatch', path.join(dir, 'mismatch.jsonl'), 2_000, 'mismatch-lifecycle');
+    const registry = new NodeProviderRegistry([new MasterNodeProvider(), mismatch]);
+    await assert.rejects(
+      () => registry.createNode('mismatch-lifecycle', {
+        sourceSessionId: 'source', nodeId: 'create-requested', parameters: {}, context: { agent: 'agent-a' },
+      }),
+      (error: any) => error?.code === 'NODE_LIFECYCLE_NODE_MISMATCH',
+    );
+    await assert.rejects(
+      () => registry.ensureNode('mismatch-lifecycle', {
+        sourceSessionId: 'source', nodeId: 'ensure-requested', parameters: {}, context: { agent: 'agent-a' },
+      }),
+      (error: any) => error?.code === 'NODE_LIFECYCLE_NODE_MISMATCH',
+    );
+    await assert.rejects(
+      () => registry.inspectNode({ sourceSessionId: 'source', nodeId: 'fixture-sandbox', parameters: {}, context: { agent: 'agent-a' } }),
+      (error: any) => error?.code === 'NODE_LIFECYCLE_NODE_MISMATCH',
+    );
+    await assert.rejects(
+      () => registry.destroyNode({ sourceSessionId: 'source', nodeId: 'fixture-sandbox', parameters: {}, context: { agent: 'agent-a' } }),
+      (error: any) => error?.code === 'NODE_LIFECYCLE_NODE_MISMATCH',
+    );
+  } finally {
+    await fs.remove(dir);
+  }
+});
+
+test('executable lifecycle timeout and cancellation reap the direct provider child', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-executable-provider-lifecycle-cleanup-'));
+  const request = { sourceSessionId: 'source', nodeId: 'node-a', parameters: {}, context: { agent: 'agent-a' } };
+  try {
+    const timeoutLog = path.join(dir, 'timeout.jsonl');
+    const timeoutProvider = executableProvider('hang', timeoutLog, 100, 'lifecycle-timeout');
+    await assert.rejects(() => timeoutProvider.createNode(request), (error: any) => error?.code === 'NODE_PROVIDER_TIMEOUT');
+    const timeoutEntries = await readLog(timeoutLog);
+    assert.equal(timeoutEntries.length, 1);
+    assert.equal(pidAlive(timeoutEntries[0].pid), false);
+
+    const cancelLog = path.join(dir, 'cancel.jsonl');
+    const cancelProvider = executableProvider('hang', cancelLog, 10_000, 'lifecycle-cancel');
+    const controller = new AbortController();
+    const pending = cancelProvider.ensureNode(request, { signal: controller.signal });
+    setTimeout(() => controller.abort(), 50);
+    await assert.rejects(() => pending, (error: any) => error?.code === 'NODE_PROVIDER_CANCELLED');
+    const cancelEntries = await readLog(cancelLog);
+    assert.equal(cancelEntries.length, 1);
+    assert.equal(pidAlive(cancelEntries[0].pid), false);
+  } finally {
+    await fs.remove(dir);
+  }
+});

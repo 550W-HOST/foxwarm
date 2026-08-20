@@ -2,7 +2,7 @@
 
 Foxwarm can load trusted executable Node providers from startup application configuration. This adapter is intended for externally implemented sandbox Nodes that do not run the authenticated Foxwarm WebSocket Node runtime.
 
-This phase provides discovery and complete Node capability invocation only. It does not define Node lifecycle, profiles, ownership, Docker, bwrap, VM behavior, workspaces, fixed Node services, or compound file transfer.
+This protocol provides discovery, complete Node capability invocation, and provider-neutral Node lifecycle operations. It does not define profiles, ownership, Docker, bwrap, VM behavior, workspaces, fixed Node services, or compound file transfer. A Node is the selected execution identity; a provider is a Main-owned implementation that may advertise and manage multiple globally unique Nodes.
 
 ## Configuration
 
@@ -117,6 +117,61 @@ Successful response:
 
 The provider receives one complete Node capability call. It owns path interpretation, execution, and environmental restrictions. A provider may advertise a partial tool set; Foxwarm rejects unadvertised capabilities before `invoke` and never falls back to the master Node.
 
+## Lifecycle operations
+
+The lifecycle operations are `create`, `ensure`, `inspect`, and `destroy`. They use the same one-request/one-response transport, identity echoes, timeout, cancellation, stderr, and direct-child cleanup rules as `list` and `invoke`.
+
+`create` and `ensure` route to the exact configured `providerId`; the Node may not exist yet. Their request body is:
+
+```json
+{
+  "sourceSessionId": "exact-source-session",
+  "nodeId": "optional-exact-requested-node-id",
+  "parameters": { "providerDefined": "plain JSON" },
+  "context": { "agent": "exact-source-agent" }
+}
+```
+
+`nodeId` is optional for `create` and `ensure`. When supplied, it is the Node identity rather than provider-opaque data: it must use the slash-free 1-128 ASCII grammar `[A-Za-z0-9][A-Za-z0-9._:-]*`, cannot be `master` in any letter case, is passed unchanged to the provider, and must match the returned descriptor ID. Foxwarm does not trim an invalid requested identity into another ID. Before provider execution, `create` rejects any already-owned requested ID; `ensure` permits no owner or the selected provider as owner and rejects another provider's ownership. Provider-generated IDs remain subject to the post-result global duplicate check.
+
+Within one Foxwarm Main process, all `create`, `ensure`, and `destroy` calls share one registry-owned serial mutation lane. The lane covers authoritative ownership resolution/preflight, provider execution, result identity validation, and the post-result duplicate check, so concurrent lifecycle calls cannot cross those windows. `inspect` remains read-only and does not enter the lane. A queued call rechecks cancellation after acquiring the lane and rejects without provider execution if already cancelled; an active provider call retains the normal provider-level cancellation contract. The lane is local serialization only, not a distributed lock, lease, transaction, retry, or provider rollback guarantee.
+
+`inspect` and `destroy` resolve the owning provider from an existing exact `nodeId` before launching the provider process. Their request body additionally contains that exact identity:
+
+```json
+{
+  "sourceSessionId": "exact-source-session",
+  "nodeId": "provider-defined-node-id",
+  "parameters": { "providerDefined": "plain JSON" },
+  "context": { "agent": "exact-source-agent" }
+}
+```
+
+Foxwarm validates the exact user confirmation phrase `destroy node <nodeId>` before sending a `destroy` operation. The confirmation phrase is not provider authority and is not included in the provider request. Lifecycle requests contain no provider configuration, launch command, credentials, mutable Session, callbacks, or ownership claim.
+
+Successful `create`, `ensure`, and `inspect` results contain the provider's exact safe Node descriptor. A successful `destroy` result echoes the exact `nodeId`. Every lifecycle result may additionally include bounded provider-described effect, data-retention, and opaque details:
+
+```json
+{
+  "node": {
+    "id": "provider-defined-node-id",
+    "kind": "sandbox",
+    "type": "provider-defined-type",
+    "availability": "ready",
+    "tools": []
+  },
+  "effect": "Provider-safe description of what the operation did.",
+  "dataRetention": "Provider-safe description of what data may remain.",
+  "details": { "providerDefined": "plain JSON" }
+}
+```
+
+For `destroy`, replace `node` with `"nodeId": "provider-defined-node-id"`. Foxwarm reports these fields as provider statements; it does not convert successful completion into a generic deletion, erasure, isolation, or security guarantee. Descriptor/provider/Node identity mismatches and duplicate global Node IDs fail closed. A provider that does not implement an operation must return error code `UnsupportedOperation`, which Foxwarm exposes as an unsupported lifecycle operation without retry or master fallback.
+
+Lifecycle `parameters` are provider-opaque plain finite JSON objects; they are not the Node identity field. They are at most 64 KiB after normalization, with depth at most 12, at most 2,048 entries per object/array, and keys at most 256 characters. The complete normalized lifecycle result is at most 128 KiB at the Main service boundary. Executable-provider lifecycle stdout is at most 512 KiB; `effect` and `dataRetention` are each at most 4,096 characters, and `details` is plain finite JSON at most 64 KiB.
+
+Effectively isolated sessions are structurally denied `create`, `ensure`, and `destroy` regardless of an exact builtin `node` allow rule because Phase 3A defines no Node ownership/sharing policy. Read-only `inspect` must pass the existing exact bound/current-Node access check. Non-isolated sessions may use lifecycle operations supported by the selected provider.
+
 ## Error response
 
 ```json
@@ -134,13 +189,14 @@ The provider receives one complete Node capability call. It owns path interpreta
 }
 ```
 
-A failed envelope contains `error` and no `result`; a successful envelope contains `result` and no `error`. Providers must keep the error message safe for the caller. Raw stderr, launch paths, and abnormal-process diagnostics are not forwarded.
+A failed envelope contains `error` and no `result`; a successful envelope contains `result` and no `error`. Providers must keep the error message safe for the caller. Raw stderr, launch paths, and abnormal-process diagnostics are not forwarded. Lifecycle implementations that fail outside the bounded provider-error contract are converted to a generic retryable lifecycle-provider failure rather than exposing the raw exception.
 
 ## Fixed limits and termination
 
 - request JSON: 4 MiB;
 - list stdout: 256 KiB;
 - invoke stdout: 8 MiB;
+- lifecycle stdout: 512 KiB;
 - stderr: 64 KiB;
 - Nodes per provider: 100;
 - tools per Node: 200;

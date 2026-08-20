@@ -4,7 +4,7 @@ See [README.md](./README.md) for governance, canonical ownership, and publicatio
 
 ## Overview
 
-Foxwarm is a multi-channel AI agent system that connects LLM providers to users through messaging adapters, terminal interfaces, and a browser UI. A master process owns sessions, context management, tool dispatch, and channel routing. Generic Nodes provide execution environments; production providers cover the colocated master, authenticated remote Nodes, and optional startup-configured executable sandbox Nodes.
+Foxwarm is a multi-channel AI agent system that connects LLM providers to users through messaging adapters, terminal interfaces, and a browser UI. A master process owns sessions, context management, tool dispatch, and channel routing. Generic Nodes provide execution environments; production providers cover the colocated master, authenticated remote Nodes, and optional startup-configured executable sandbox Nodes with provider-neutral lifecycle support when implemented.
 
 The system uses a queue-driven session loop: inbound events are normalized by channels, routed to a session, processed serially, sent to an LLM, and continued through tool calls until a final response is broadcast. Long sessions remain usable through layered context compaction, archival, and semantic recall.
 

@@ -1005,7 +1005,7 @@ test('default model-facing tool names and serialized schema size stay consolidat
   ]);
 
   const serializedBytes = Buffer.byteLength(JSON.stringify(modelFacingDefinitions), 'utf8');
-  assert.equal(serializedBytes, 34_500);
+  assert.equal(serializedBytes, 35_387);
   assert.ok(serializedBytes < 38_069, 'serialized default schema should stay below the pre-consolidation baseline');
 });
 
@@ -1039,8 +1039,15 @@ test('consolidated resource tool schemas expose their approved actions', () => {
   assert.deepEqual(skillDefinition?.parameters?.required, ['action']);
 
   const nodeDefinition = definitions.find(def => def.name === 'node');
-  assert.deepEqual((nodeDefinition?.parameters?.properties as any)?.action?.enum, ['list', 'select']);
+  assert.deepEqual((nodeDefinition?.parameters?.properties as any)?.action?.enum,
+    ['list', 'select', 'create', 'ensure', 'inspect', 'destroy']);
+  assert.equal((nodeDefinition?.parameters?.properties as any)?.providerId?.type, 'string');
+  assert.equal((nodeDefinition?.parameters?.properties as any)?.nodeId?.type, 'string');
+  assert.equal((nodeDefinition?.parameters?.properties as any)?.parameters?.type, 'object');
+  assert.equal((nodeDefinition?.parameters?.properties as any)?.parametersJson?.type, 'string');
+  assert.equal((nodeDefinition?.parameters?.properties as any)?.confirmation?.type, 'string');
   assert.deepEqual(nodeDefinition?.parameters?.required, ['action']);
+  assert.equal(definitions.some(def => def.name === 'sandbox' || def.name === 'node_resource'), false);
 });
 
 test('builtin file/browser tool schemas no longer expose node selector parameters', () => {

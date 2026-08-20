@@ -84,6 +84,10 @@ export const BUILTIN_TOOL_PLACEMENTS = {
     actionOwners: {
       list: 'main-management',
       select: 'dispatcher/container',
+      create: 'main-management',
+      ensure: 'main-management',
+      inspect: 'main-management',
+      destroy: 'main-management',
     },
   },
   node_bootstrap_info: { owner: 'main-management' },

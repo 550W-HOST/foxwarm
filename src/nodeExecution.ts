@@ -95,6 +95,20 @@ export async function validateNodeSelection(sourceSessionId: string, nodeId: str
   return await (await getClient()).call('select', { sourceSessionId, nodeId });
 }
 
+export async function listNodeLifecycleProviders(sourceSessionId: string) {
+  return (await (await getClient()).call('lifecycleProviders', { sourceSessionId })).providers;
+}
+
+export async function executeNodeLifecycle(sourceSessionId: string, request: {
+  action: 'create' | 'ensure' | 'inspect' | 'destroy';
+  providerId?: string;
+  nodeId?: string;
+  parameters?: Record<string, unknown>;
+  confirmation?: string;
+}) {
+  return (await (await getClient()).call('lifecycle', { sourceSessionId, ...request })).result;
+}
+
 export async function copyBetweenNodes(sourceSessionId: string, request: {
   sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; overwrite?: boolean;
 }) {
