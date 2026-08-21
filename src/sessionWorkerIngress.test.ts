@@ -138,8 +138,8 @@ test('idle Main runtime compacts a real Worker archive through the canonical awa
   const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`); await fs.outputJson(statePath, serializeSessionHistoryPayload(initial));
   const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite')); store.open();
   const sourceContexts = new SessionWorkerSourceContextRegistry();
-  const plan = { createBlocksJson: JSON.stringify([{ level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 8,
-    summary: 'Canonical compacted summary.' }]) };
+  const plan = { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 8,
+    summary: 'Canonical compacted summary.' }] };
   const supervisor = new SessionWorkerSupervisor({
     store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
     workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_SEED_ARCHIVE: '1', FOXWARM_TEST_COMPACT_PLAN: JSON.stringify(plan) },

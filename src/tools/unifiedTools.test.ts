@@ -943,6 +943,21 @@ test('recall model-facing schema separates target/vector retrieval from literal 
   assert.equal(Object.prototype.hasOwnProperty.call(sessionMessagesDef.parameters?.properties || {}, 'query'), false);
 });
 
+test('submit_compact_plan exposes the replaceAsBlocks array-or-JSON-string contract', () => {
+  const compactDef = modelFacingDefinitions.find(def => def.name === 'submit_compact_plan');
+  assert.ok(compactDef);
+  assert.deepEqual(compactDef.parameters.required, ['replaceAsBlocks']);
+  assert.equal(Object.prototype.hasOwnProperty.call(compactDef.parameters.properties, 'createBlocksJson'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(compactDef.parameters.properties, 'createBlocks'), false);
+  const replacementSchema = compactDef.parameters.properties.replaceAsBlocks as any;
+  assert.deepEqual(replacementSchema.oneOf.map((entry: any) => entry.type), ['array', 'string']);
+  assert.deepEqual(replacementSchema.oneOf[0].items.required, ['level', 'sourceKind', 'sourceStart', 'sourceEnd', 'summary']);
+  assert.deepEqual(replacementSchema.oneOf[0].items.properties.memoryFacts.items.required, ['kind', 'text']);
+  assert.deepEqual(replacementSchema.oneOf[0].items.properties.memoryFacts.items.properties.attributedTo.enum, ['user', 'assistant', 'both']);
+  assert.equal(compactDef.parameters.properties.preserveMessages.type, 'array');
+  assert.equal(compactDef.parameters.properties.removePreservedMessages.type, 'array');
+});
+
 test('wait is the model-facing pause tool and end_turn is removed', () => {
   const waitDef = definitions.find(def => def.name === 'wait');
   assert.ok(waitDef);
@@ -1024,7 +1039,7 @@ test('default model-facing tool names and serialized schema size stay consolidat
   ]);
 
   const serializedBytes = Buffer.byteLength(JSON.stringify(modelFacingDefinitions), 'utf8');
-  assert.equal(serializedBytes, 34_356);
+  assert.equal(serializedBytes, 35_592);
   assert.ok(serializedBytes < 38_069, 'serialized default schema should stay below the pre-consolidation baseline');
 });
 

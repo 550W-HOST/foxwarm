@@ -24,7 +24,7 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 |---|---|
 | `calculateBlockCompactionWindow` | Oldest candidate window, newest hard keep, and high-backlog requested coverage |
 | `buildCompactPromptText` | One planning prompt over validated candidate segments and run policies |
-| `normalizeMemoryFacts` | Optional `createBlocksJson[].memoryFacts` parsing that cannot invalidate the block plan |
+| `normalizeMemoryFacts` | Optional `replaceAsBlocks[].memoryFacts` parsing that cannot invalidate the block plan |
 | `validateCompactPlanArgs` | Canonical one-pass tool-argument parser, range resolver, and validator |
 | `buildCompactPlanValidationFeedback` | Converts validation detail into bounded retry guidance |
 
@@ -54,9 +54,9 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 
 ## Integration
 
-- `COMPACT_PLAN_TOOL_DEFINITION` keeps the stable plan-tool shape while facts are nested only in each `createBlocksJson` object; it has no top-level fact argument.
+- `COMPACT_PLAN_TOOL_DEFINITION` requires `replaceAsBlocks` and exposes an explicit direct-array-or-JSON-string union. The direct-array branch describes required block fields and nested optional `memoryFacts`; there is no top-level fact argument.
 - The dedicated compact runtime accepts the plan tool and rejects other calls with feedback.
-- The supported tool input is `createBlocksJson` plus array-valued `preserveMessages` / `removePreservedMessages`; obsolete internal `createBlocks` arrays and JSON-string substitutes for array fields are rejected.
+- The supported block input is `replaceAsBlocks`, preferably a direct array or alternatively a JSON string encoding that array. `preserveMessages` / `removePreservedMessages` remain direct arrays. Obsolete top-level `createBlocksJson` and `createBlocks` are rejected.
 - Validated resolved operations are consumed by [src-session-history](./src-session-history.md).
 - Cross-module behavior and rationale are canonical in [context compaction and recall](../threads/context-compaction-and-recall.md).
 

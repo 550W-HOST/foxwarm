@@ -124,7 +124,7 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
         id: 'compact-plan-after-plain-text',
         name: 'submit_compact_plan',
         args: {
-          createBlocksJson: JSON.stringify([{
+          replaceAsBlocks: JSON.stringify([{
             level: 1,
             sourceKind: 'message',
             sourceStart: 1,
@@ -217,7 +217,7 @@ test('compact planning rejects a block-only plan when raw messages and L1 blocks
       const toolCall = {
         id: `compact-raw-quota-${prompts.length}`,
         name: 'submit_compact_plan',
-        args: { createBlocksJson: JSON.stringify(createBlocks) },
+        args: { replaceAsBlocks: createBlocks },
       };
       await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] }));
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
@@ -231,7 +231,7 @@ test('compact planning rejects a block-only plan when raw messages and L1 blocks
     );
 
     assert.equal(prompts.length, 2);
-    assert.match(prompts[0], /Raw messages: .*message-source createBlocks must actually replace at least/i);
+    assert.match(prompts[0], /Raw messages: .*message-source replaceAsBlocks entries must actually replace at least/i);
     assert.match(prompts[0], /Source L1 blocks: 5 block\(s\).*newest 3 are force-kept.*oldest 2 may be listed/is);
     assert.match(prompts[1], /RAW-MESSAGE HARD QUOTA REQUIRES/i);
     assert.equal(session.history.filter(message => !!message.__meta?.contextBlock).length, 5);
@@ -332,7 +332,7 @@ test('preserved raw removal eligibility depends on active structure rather than 
     const expectedCount = scenario === 'duplicate' ? 0 : 1;
     assert.equal(built.preservedMessageCandidates.length, expectedCount, scenario);
     const validate = () => compactPlan.validateCompactPlanArgs(
-      { createBlocksJson: '[]', removePreservedMessages: [preserved.__meta!.seq] },
+      { replaceAsBlocks: [], removePreservedMessages: [preserved.__meta!.seq] },
       built.candidateEntries.map(entry => entry.item),
       { removablePreservedMessages: built.preservedMessageCandidates },
     );
@@ -478,7 +478,7 @@ test('awaited compaction lifts an active response island to L1 and then compacts
         assert.match(prompt, /pass one active response summary/);
         assert.match(prompt, new RegExp(`B#${blocks[1].id}`));
       }
-      const toolCall = { id: `island-pass-${pass}`, name: 'submit_compact_plan', args: { createBlocksJson: JSON.stringify(createBlocks) } };
+      const toolCall = { id: `island-pass-${pass}`, name: 'submit_compact_plan', args: { replaceAsBlocks: createBlocks } };
       await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };
@@ -530,9 +530,9 @@ test('reordered block raw lineage is an end-to-end compact barrier', async () =>
   assert.notEqual(firstTwo[0]?.item.segmentId, firstTwo[1]?.item.segmentId);
   const originalChat = llm.chat;
   (llm as any).chat = async (_parts: any, _activeSession: Session, _iteration: number, options: any) => {
-    const toolCall = { id: 'bad-reordered-range', name: 'submit_compact_plan', args: { createBlocksJson: JSON.stringify([{
+    const toolCall = { id: 'bad-reordered-range', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
       level: 2, sourceKind: 'block', sourceStart: blocks[1].id, sourceEnd: blocks[0].id, summary: 'must be rejected',
-    }]) } };
+    }] } };
     await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
     return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
   };
@@ -579,9 +579,9 @@ test('layered compact plans from active wording and timestamps even when raw Arc
   try {
     (llm as any).chat = async (parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
       prompt = flattenPrompt(parts);
-      const toolCall = { id: 'active-only-plan', name: 'submit_compact_plan', args: { createBlocksJson: JSON.stringify([{
+      const toolCall = { id: 'active-only-plan', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
         level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'summary based on active edited response',
-      }]) } };
+      }] } };
       await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };
@@ -638,13 +638,13 @@ test('prior compact-completion notices are transparent to planning and replaced 
         id: 'compact-across-prior-completion',
         name: 'submit_compact_plan',
         args: {
-          createBlocksJson: JSON.stringify([{
+          replaceAsBlocks: [{
             level: 1,
             sourceKind: 'message',
             sourceStart: 1,
             sourceEnd: 3,
             summary: 'summary across a prior compact completion marker',
-          }]),
+          }],
         },
       };
       await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] }));
@@ -712,13 +712,13 @@ test('successful compaction removes prior completion notices from the force-kept
         id: 'compact-tail-cleanup',
         name: 'submit_compact_plan',
         args: {
-          createBlocksJson: JSON.stringify([{
+          replaceAsBlocks: [{
             level: 1,
             sourceKind: 'message',
             sourceStart: 1,
             sourceEnd: 2,
             summary: 'summary replacing the older raw pair',
-          }]),
+          }],
         },
       };
       await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] }));
@@ -860,14 +860,14 @@ test('compact commit persists block facts and survives best-effort fact indexing
         id: 'compact-plan-with-block-facts',
         name: 'submit_compact_plan',
         args: {
-          createBlocksJson: JSON.stringify([{
+          replaceAsBlocks: [{
             level: 1,
             sourceKind: 'message',
             sourceStart: 1,
             sourceEnd: 2,
             summary: 'summary whose durable facts are framework-rendered',
             memoryFacts: [{ kind: 'decision', text: 'Keep compact facts attached to their creating block.', attributedTo: 'user' }],
-          }]),
+          }],
         },
       };
       await Promise.resolve(options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] }));
@@ -899,9 +899,9 @@ test('compact authority persistence failure restores active state and removes un
   const originalHistoryVersion = session.historyVersion;
   try {
     (llm as any).chat = async (_parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
-      const toolCall = { id: 'authority-failure', name: 'submit_compact_plan', args: { createBlocksJson: JSON.stringify([{
+      const toolCall = { id: 'authority-failure', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
         level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'must be rolled back',
-      }]) } };
+      }] } };
       await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };
@@ -932,9 +932,9 @@ test('conflicting required Archive block append fails closed before active histo
   const originalChat = llm.chat;
   try {
     (llm as any).chat = async (_parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
-      const toolCall = { id: 'conflicting-block-plan', name: 'submit_compact_plan', args: { createBlocksJson: JSON.stringify([{
+      const toolCall = { id: 'conflicting-block-plan', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
         level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'different block content must conflict',
-      }]) } };
+      }] } };
       await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };
@@ -960,9 +960,9 @@ test('background compact validates exact snapshot content and rejects same-metad
   try {
     (llm as any).chat = async (_parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
       await gate;
-      const toolCall = { id: 'exact-edit', name: 'submit_compact_plan', args: { createBlocksJson: JSON.stringify([{
+      const toolCall = { id: 'exact-edit', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
         level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'must not commit over edited history',
-      }]) } };
+      }] } };
       await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };
@@ -993,9 +993,9 @@ test('background compact retains only an appended compatible active-history suff
   try {
     (llm as any).chat = async (_parts: MessagePart[] | null, _session: Session, _iteration: number, options?: any): Promise<ChatResult> => {
       await gate;
-      const toolCall = { id: 'suffix', name: 'submit_compact_plan', args: { createBlocksJson: JSON.stringify([{
+      const toolCall = { id: 'suffix', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
         level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'compacted before appended suffix',
-      }]) } };
+      }] } };
       await options?.appendMessage?.({ role: 'model', parts: [{ functionCall: toolCall }] });
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     };

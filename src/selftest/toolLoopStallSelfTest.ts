@@ -416,7 +416,7 @@ async function main(): Promise<void> {
             id: 'compact-plan-invalid',
             name: 'submit_compact_plan',
             args: {
-              createBlocksJson: '[]',
+              replaceAsBlocks: '[]',
             },
           };
           appendLocalMessage(activeSession, 'model', [{ functionCall: toolCall }]);
@@ -426,20 +426,20 @@ async function main(): Promise<void> {
         if (llmCallCount === 4) {
           const systemText = parts?.find(part => typeof part.system === 'string')?.system || '';
           assert.match(systemText, /COMPACT PLAN INVALID/);
-          assert.match(systemText, /createBlocks must contain at least one block/);
+          assert.match(systemText, /replaceAsBlocks must contain at least one block/);
           assertCompactKeepsDefaultToolSchema(options);
           assert(compactMessageRange, 'expected compact message range to be captured from initial prompt');
           const toolCall = {
             id: 'compact-plan',
             name: 'submit_compact_plan',
             args: {
-              createBlocksJson: JSON.stringify([{
+              replaceAsBlocks: [{
                 level: 1,
                 sourceKind: 'message',
                 sourceStart: compactMessageRange.sourceStart,
                 sourceEnd: compactMessageRange.sourceEnd,
                 summary: 'layered compact summary',
-              }]),
+              }],
             },
           };
           appendLocalMessage(activeSession, 'model', [{ functionCall: toolCall }]);
@@ -516,13 +516,13 @@ async function main(): Promise<void> {
           id: 'async-compact-plan',
           name: 'submit_compact_plan',
           args: {
-            createBlocksJson: JSON.stringify([{
+            replaceAsBlocks: [{
               level: 1,
               sourceKind: 'message',
               sourceStart: 1,
               sourceEnd: 3,
               summary: 'async compact summary',
-            }]),
+            }],
           },
         };
         if (isCompactJob) {
@@ -658,13 +658,13 @@ async function main(): Promise<void> {
             id: 'auto-compact-plan',
             name: 'submit_compact_plan',
             args: {
-              createBlocksJson: JSON.stringify([{
+              replaceAsBlocks: [{
                 level: 1,
                 sourceKind: 'message',
                 sourceStart: autoCompactMessageRange.sourceStart,
                 sourceEnd: autoCompactMessageRange.sourceEnd,
                 summary: 'auto compact summary',
-              }]),
+              }],
             },
           };
           appendLocalMessage(activeSession, 'model', [{ functionCall: toolCall }]);
