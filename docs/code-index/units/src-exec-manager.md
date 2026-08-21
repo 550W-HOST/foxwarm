@@ -9,7 +9,7 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 ## Key Exports
 
 - `createExecRuntime(options)` — constructs one isolated application exec runtime around exactly one `PersistentExecManager`
-- `ExecRuntime` / `ExecRuntimeOptions` — closed runtime lifecycle and configurable registry/default-cwd/temp-root providers, including an internal `ProcessOperations` seam
+- `ExecRuntime` / `ExecRuntimeOptions` — closed runtime lifecycle and configurable registry/default-cwd/temp-root providers, including process operations, entry-aware liveness/cwd, one-shot reconcile, and shutdown
 - `getDefaultExecRuntime()` — read-only access to the factory-built process-default runtime; callers cannot replace or stop it
 - `initializeExecManager(options?)` — bootstraps the persistent exec manager
 - `startPersistentExec(options)` — launches a new tracked shell execution
@@ -53,7 +53,7 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 ## Behavior
 
 - The process-default runtime is itself created by `createExecRuntime`, configured with the unchanged project paths (agent directories, temp dirs, registry file at `STATE_DIR/running-exec.json`) and `master` node default. Every existing exported wrapper delegates to that real factory-built default.
-- Each factory call owns independent manager, dispatcher closure, registry, temp-root providers, process-operations backend, and initialization/reconcile state for the lifetime of its process. The native process backend is the default. There is intentionally no same-process stop/dispose/handoff API at this checkpoint. The reconcile timer is unref'd; a future one-session worker exits only after active execs reach zero or completion notification is handed back, and OS process teardown owns timer cleanup.
+- Each factory call owns independent manager, dispatcher closure, registry, temp-root providers, process backend, and initialization/reconcile state. The native backend is default. `reconcileNow()` performs an awaited pass and `shutdown()` idempotently clears the timer and drains reconcile/registry work without deleting persisted active entries, allowing resident provider generations to retire without timer growth and Core to close all runtimes orderly.
 - The default completion dispatcher sends a system event to the session associated with the exec entry; this can be overridden at initialization.
 - All public functions are thin async delegates to the underlying manager instance, adding only the default `nodeId: 'master'`.
 - The exec handler uses shared timeout resolution: finite requests above 60 seconds wait for only 60 seconds, while forwarding the requested/effective warning into either foreground or background-switch result formatting. Oversized persistent logs use the shared bounded excerpt contract rather than full reads; see [D-persistent-exec-bounded-log-excerpts](./shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts). Background-switch footer and live-tree behavior is canonical in [D-persistent-exec-background-timeout-footer-tree](./shared-persistent-exec.md#d-persistent-exec-background-timeout-footer-tree).

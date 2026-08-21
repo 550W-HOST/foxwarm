@@ -425,10 +425,12 @@ If a workflow really needs another node, the user should change the agent's isol
 Binding does not reserve a node. Multiple sessions or agents can target the same
 node unless the operator provides distinct nodes and maintains that assignment.
 
-For the repeatable “one temporary isolated agent/session on an existing node”
-workflow, load **`isolated-worker`**. Its bundled ToolScript composes
-`create_agent`, `create_session`, and `send_to_session`; it does not provision
-or tear down the node/container.
+For the repeatable “one temporary isolated agent/session” workflow, load
+**`isolated-worker`**. Its bundled ToolScript can bind an already-online Node or
+compose one configured provider `ensure` plus read-only inspect for an exact
+existing worktree before `create_agent`, `create_session`, and
+`send_to_session`. It does not create Git worktrees, add leases, or automatically
+tear down Nodes/containers.
 
 ## Sandbox/test-environment note
 
@@ -499,4 +501,5 @@ Use **`agent-management`** when the task is mainly about:
 - snapshot refresh after editing another agent's memory
 
 Use **`isolated-worker`** when a coordinator should create a temporary isolated
-agent/session on a user-provided, already connected node.
+agent/session on an already-online Node or through a configured Docker-worktree
+provider for one exact existing worktree.

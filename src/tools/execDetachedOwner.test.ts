@@ -109,6 +109,7 @@ test('detached timeout uses one injected runtime for wait, live cwd, mark, and f
     readFinishedExecWorkingDirectory: async () => { calls.push('finished-cwd'); return root; },
     readLiveExecWorkingDirectory: async () => { calls.push('live-cwd'); return root; },
     listRunningExecs: () => [entry],
+    reconcileNow: async () => {}, shutdown: async () => {},
   };
   let persists = 0;
   try {
@@ -124,6 +125,18 @@ test('detached timeout uses one injected runtime for wait, live cwd, mark, and f
   } finally {
     await fs.remove(root);
   }
+});
+
+test('detached provider exec skips Main full-session save and updates cwd through exact Session runtime authority', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-provider-exec-owner-')); const next = path.join(root, 'next'); await fs.ensureDir(next); const entry = fakeEntry('provider-owner', 'cd next', root);
+  const runtime: ExecRuntime = { initialize: async () => {}, startPersistentExec: async () => entry, waitForExecCompletion: async () => ({ exitCode: 0, finishedAt: new Date().toISOString() }), markExecForBackgroundNotification: async () => null, finalizeForegroundExec: async () => {}, buildForegroundExecResult: async () => 'provider-output', buildBackgroundTimeoutResult: async () => 'background', readFinishedExecWorkingDirectory: async () => next, readLiveExecWorkingDirectory: async () => null, listRunningExecs: () => [], reconcileNow: async () => {}, shutdown: async () => {} };
+  const originals = { save: sessionManager.saveSession, update: sessionRuntime.updateSettings }; const updates: any[] = [];
+  (sessionManager as any).saveSession = async () => { throw new Error('Main full-session save forbidden'); };
+  (sessionRuntime as any).updateSettings = async (sessionId: string, patch: any) => { updates.push({ sessionId, patch }); return { changed: ['cwd'], previous: { cwd: root }, current: { cwd: next } }; };
+  try {
+    const result = String(await tool_exec({ command: 'cd next', timeout: 5 }, { sessionId: 'worker-owned-source', session: createSession('worker-owned-source', root), execRuntime: runtime, detachedReadOnlySession: true, skipExecPreSave: true }));
+    assert.match(result, /provider-output/); assert.match(result, /SESSION CWD CHANGED/); assert.deepEqual(updates, [{ sessionId: 'worker-owned-source', patch: { cwd: next } }]);
+  } finally { (sessionManager as any).saveSession = originals.save; (sessionRuntime as any).updateSettings = originals.update; await fs.remove(root); }
 });
 
 test('parallel detached exec replays cwd in model order through the same owner', async () => {
@@ -149,6 +162,7 @@ test('parallel detached exec replays cwd in model order through the same owner',
     readFinishedExecWorkingDirectory: async entry => cwdById.get(entry.id) || null,
     readLiveExecWorkingDirectory: async () => null,
     listRunningExecs: () => [],
+    reconcileNow: async () => {}, shutdown: async () => {},
   };
   let persistCount = 0;
   const originals = { save: sessionManager.saveSession, update: sessionRuntime.updateSettings };

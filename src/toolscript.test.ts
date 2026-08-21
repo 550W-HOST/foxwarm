@@ -577,11 +577,11 @@ test('run_script nested remote builtin uses the Node execution service', async (
   const session = await sessionManager.getSession(sessionId);
   session.currentNode = 'remote-script';
   await sessionManager.saveSession(sessionId);
-  const originalRemoteExecute = (nodeExecution as any).executeRemoteNodeTool;
+  const originalRemoteExecute = (nodeExecution as any).executeNodeTool;
   let captured: any[] | undefined;
 
   try {
-    (nodeExecution as any).executeRemoteNodeTool = async (...args: any[]) => {
+    (nodeExecution as any).executeNodeTool = async (...args: any[]) => {
       captured = args;
       return { forwarded: true };
     };
@@ -596,7 +596,7 @@ test('run_script nested remote builtin uses the Node execution service', async (
     assert.equal(response?.result?.forwarded, true);
     assert.deepEqual(captured?.slice(0, 3), [sessionId, 'remote-script', 'read']);
   } finally {
-    (nodeExecution as any).executeRemoteNodeTool = originalRemoteExecute;
+    (nodeExecution as any).executeNodeTool = originalRemoteExecute;
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
     await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);

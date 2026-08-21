@@ -113,6 +113,163 @@ export type AsrServiceConfig = {
   key?: string;
 };
 
+export const DEFAULT_EXECUTABLE_NODE_PROVIDER_TIMEOUT_SECONDS = 90;
+export const MAX_EXECUTABLE_NODE_PROVIDER_TIMEOUT_SECONDS = 300;
+export const MAX_EXECUTABLE_NODE_PROVIDER_ARGS = 64;
+export const MAX_EXECUTABLE_NODE_PROVIDER_VALUE_LENGTH = 4096;
+
+export type ExecutableNodeProviderConfig = {
+  type: 'executable';
+  command: string;
+  args?: string[];
+  timeoutSeconds?: number;
+};
+
+export type DockerWorktreeNodeProviderConfig = {
+  type: 'docker-worktree';
+  command: string;
+  args?: string[];
+  image: string;
+  allowedWorktreeRoots: string[];
+  networkModes?: Array<'none' | 'bridge'>;
+  stateDir?: string;
+  memory?: string;
+  cpus?: number;
+  pidsLimit?: number;
+  tmpfsSize?: string;
+};
+
+export type NodeProvidersConfig = Record<string, ExecutableNodeProviderConfig | DockerWorktreeNodeProviderConfig>;
+
+export type NormalizedExecutableNodeProviderConfig = {
+  id: string;
+  type: 'executable';
+  command: string;
+  args: string[];
+  timeoutMs: number;
+};
+
+export type NormalizedDockerWorktreeNodeProviderConfig = {
+  id: string;
+  type: 'docker-worktree';
+  command: string;
+  args: string[];
+  image: string;
+  allowedWorktreeRoots: string[];
+  networkModes: Array<'none' | 'bridge'>;
+  stateDir?: string;
+  memory: string;
+  cpus: number;
+  pidsLimit: number;
+  tmpfsSize: string;
+};
+
+export type NormalizedNodeProviderConfig = NormalizedExecutableNodeProviderConfig | NormalizedDockerWorktreeNodeProviderConfig;
+
+export function normalizeNodeProvidersConfig(value: unknown): NormalizedNodeProviderConfig[] {
+  if (value === undefined) return [];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('app config `nodeProviders` must be an object.');
+  }
+
+  const normalized: NormalizedNodeProviderConfig[] = [];
+  for (const [id, candidate] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) {
+      throw new Error(`app config node provider id \`${id}\` must be 1-64 ASCII letters, digits, dot, underscore, or hyphen.`);
+    }
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      throw new Error(`app config \`nodeProviders.${id}\` must be an object.`);
+    }
+    const raw = candidate as Record<string, unknown>;
+    const executableKeys = ['type', 'command', 'args', 'timeoutSeconds'];
+    const dockerKeys = ['type', 'command', 'args', 'image', 'allowedWorktreeRoots', 'networkModes', 'stateDir', 'memory', 'cpus', 'pidsLimit', 'tmpfsSize'];
+    const allowedKeys = raw.type === 'docker-worktree' ? dockerKeys : executableKeys;
+    const unknown = Object.keys(raw).filter(key => !allowedKeys.includes(key));
+    if (unknown.length > 0) {
+      throw new Error(`app config \`nodeProviders.${id}\` has unsupported field \`${unknown[0]}\`.`);
+    }
+    if (raw.type !== 'executable' && raw.type !== 'docker-worktree') {
+      throw new Error(`app config \`nodeProviders.${id}.type\` must be \`executable\` or \`docker-worktree\`.`);
+    }
+    if (typeof raw.command !== 'string'
+      || !raw.command
+      || raw.command.trim() !== raw.command
+      || raw.command.length > MAX_EXECUTABLE_NODE_PROVIDER_VALUE_LENGTH
+      || /[\u0000-\u001f\u007f]/.test(raw.command)) {
+      throw new Error(`app config \`nodeProviders.${id}.command\` must be an exact non-empty string of at most ${MAX_EXECUTABLE_NODE_PROVIDER_VALUE_LENGTH} characters.`);
+    }
+    if (raw.args !== undefined && !Array.isArray(raw.args)) {
+      throw new Error(`app config \`nodeProviders.${id}.args\` must be an array of strings.`);
+    }
+    const args = (raw.args || []) as unknown[];
+    if (args.length > MAX_EXECUTABLE_NODE_PROVIDER_ARGS) {
+      throw new Error(`app config \`nodeProviders.${id}.args\` may contain at most ${MAX_EXECUTABLE_NODE_PROVIDER_ARGS} entries.`);
+    }
+    for (const [index, arg] of args.entries()) {
+      if (typeof arg !== 'string' || arg.length > MAX_EXECUTABLE_NODE_PROVIDER_VALUE_LENGTH || arg.includes('\0')) {
+        throw new Error(`app config \`nodeProviders.${id}.args[${index}]\` must be a string of at most ${MAX_EXECUTABLE_NODE_PROVIDER_VALUE_LENGTH} characters.`);
+      }
+    }
+    if (raw.type === 'docker-worktree') {
+      if (typeof raw.image !== 'string' || !raw.image || raw.image.trim() !== raw.image || raw.image.length > 4096 || /[\u0000-\u001f\u007f]/.test(raw.image)) {
+        throw new Error(`app config \`nodeProviders.${id}.image\` must be an exact non-empty string of at most 4096 characters.`);
+      }
+      if (!Array.isArray(raw.allowedWorktreeRoots) || raw.allowedWorktreeRoots.length < 1 || raw.allowedWorktreeRoots.length > 64) {
+        throw new Error(`app config \`nodeProviders.${id}.allowedWorktreeRoots\` must be a non-empty array with at most 64 paths.`);
+      }
+      const allowedWorktreeRoots = raw.allowedWorktreeRoots.map((item, index) => {
+        if (typeof item !== 'string' || !item.trim() || item.trim() !== item || item.length > 4096) {
+          throw new Error(`app config \`nodeProviders.${id}.allowedWorktreeRoots[${index}]\` must be an exact non-empty path.`);
+        }
+        return path.resolve(resolvePathValue(item, item));
+      });
+      const networkModes = raw.networkModes === undefined ? ['none'] : raw.networkModes;
+      if (!Array.isArray(networkModes) || networkModes.length < 1 || networkModes.some(mode => mode !== 'none' && mode !== 'bridge')) {
+        throw new Error(`app config \`nodeProviders.${id}.networkModes\` must contain only \`none\` or \`bridge\`.`);
+      }
+      const stateDir = raw.stateDir === undefined ? undefined : raw.stateDir;
+      if (stateDir !== undefined && (typeof stateDir !== 'string' || !stateDir.trim() || stateDir.trim() !== stateDir || stateDir.length > 4096)) {
+        throw new Error(`app config \`nodeProviders.${id}.stateDir\` must be an exact non-empty path.`);
+      }
+      const memory = raw.memory === undefined ? '2g' : raw.memory;
+      const tmpfsSize = raw.tmpfsSize === undefined ? '256m' : raw.tmpfsSize;
+      if (typeof memory !== 'string' || !/^[1-9]\d*[kKmMgG]$/.test(memory)) throw new Error(`app config \`nodeProviders.${id}.memory\` is invalid.`);
+      if (typeof tmpfsSize !== 'string' || !/^[1-9]\d*[kKmMgG]$/.test(tmpfsSize)) throw new Error(`app config \`nodeProviders.${id}.tmpfsSize\` is invalid.`);
+      const cpus = raw.cpus === undefined ? 2 : raw.cpus;
+      const pidsLimit = raw.pidsLimit === undefined ? 256 : raw.pidsLimit;
+      if (typeof cpus !== 'number' || !Number.isFinite(cpus) || cpus <= 0 || cpus > 64) throw new Error(`app config \`nodeProviders.${id}.cpus\` must be between 0 and 64.`);
+      if (!Number.isInteger(pidsLimit) || Number(pidsLimit) < 16 || Number(pidsLimit) > 65536) throw new Error(`app config \`nodeProviders.${id}.pidsLimit\` must be an integer between 16 and 65536.`);
+      normalized.push({
+        id, type: 'docker-worktree', command: raw.command, args: [...args] as string[], image: raw.image,
+        allowedWorktreeRoots: Array.from(new Set(allowedWorktreeRoots)), networkModes: Array.from(new Set(networkModes)) as Array<'none' | 'bridge'>,
+        ...(stateDir === undefined ? {} : { stateDir: path.resolve(resolvePathValue(stateDir as string, stateDir as string)) }),
+        memory, cpus, pidsLimit: Number(pidsLimit), tmpfsSize,
+      });
+      continue;
+    }
+
+    const timeoutSeconds = raw.timeoutSeconds === undefined
+      ? DEFAULT_EXECUTABLE_NODE_PROVIDER_TIMEOUT_SECONDS
+      : raw.timeoutSeconds;
+    if (typeof timeoutSeconds !== 'number'
+      || !Number.isInteger(timeoutSeconds)
+      || timeoutSeconds < 1
+      || timeoutSeconds > MAX_EXECUTABLE_NODE_PROVIDER_TIMEOUT_SECONDS) {
+      throw new Error(
+        `app config \`nodeProviders.${id}.timeoutSeconds\` must be an integer between 1 and ${MAX_EXECUTABLE_NODE_PROVIDER_TIMEOUT_SECONDS}.`,
+      );
+    }
+    normalized.push({
+      id,
+      type: 'executable',
+      command: raw.command,
+      args: [...args] as string[],
+      timeoutMs: timeoutSeconds * 1000,
+    });
+  }
+  return normalized;
+}
+
 export const DEFAULT_SESSION_WORKER_IDLE_SECONDS = 60;
 export const MIN_SESSION_WORKER_IDLE_SECONDS = 1;
 export const MAX_SESSION_WORKER_IDLE_SECONDS = 86_400;
@@ -338,6 +495,7 @@ export function normalizeVectorMaintenanceConfig(value: unknown): NormalizedVect
 }
 
 export type AppConfig = {
+  nodeProviders?: NodeProvidersConfig;
   vector?: VectorConfig;
   sessionWorkers?: SessionWorkersConfig;
   dbWorkers?: boolean;
@@ -514,6 +672,7 @@ function resolvePathValue(value: string | undefined, fallback: string): string {
 
 export const APP_CONFIG = loadAppConfig();
 
+export const NODE_PROVIDERS_CONFIG = normalizeNodeProvidersConfig(APP_CONFIG.nodeProviders);
 export const COMPACTION_CONFIG = normalizeCompactionConfig(APP_CONFIG.llm);
 export const VECTOR_CONFIG = normalizeVectorConfig(APP_CONFIG.vector, APP_CONFIG.llm?.ollamaBaseUrl);
 export const VECTOR_ENABLED = VECTOR_CONFIG.enabled;

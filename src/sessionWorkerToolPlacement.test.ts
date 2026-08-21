@@ -63,7 +63,7 @@ test('Worker direct, unified, and ToolScript calls share live exact agent rules'
   session.agent = `worker_rules_agent_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   session.currentNode = 'remote-a';
   const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
-  const originalExecute = nodeExecution.executeRemoteNodeTool;
+  const originalExecute = nodeExecution.executeNodeTool;
   let calls = 0;
   try {
     await sessionManager.setAgentMetadata(session.agent, {
@@ -74,7 +74,7 @@ test('Worker direct, unified, and ToolScript calls share live exact agent rules'
         { effect: 'deny', source: 'node', node: 'remote-a', tool: 'read' },
       ],
     });
-    (nodeExecution as any).executeRemoteNodeTool = async () => { calls += 1; return { output: 'allowed' }; };
+    (nodeExecution as any).executeNodeTool = async () => { calls += 1; return { output: 'allowed' }; };
     await assert.rejects(() => callTool('read', { filePath: 'probe.txt' }, ctx), /tool rule denies/i);
     await assert.rejects(() => tool_call_tool({ source: 'node', name: 'read', args: { filePath: 'probe.txt' } }, ctx), /tool rule denies/i);
     const nested = await tool_run_script({ code: 'def main(args):\n    return call_tool("read", {"filePath": "probe.txt"})' }, ctx);
@@ -86,7 +86,7 @@ test('Worker direct, unified, and ToolScript calls share live exact agent rules'
     assert.deepEqual(await callTool('read', { filePath: 'probe.txt' }, ctx), { output: 'allowed' });
     assert.equal(calls, 1);
   } finally {
-    (nodeExecution as any).executeRemoteNodeTool = originalExecute;
+    (nodeExecution as any).executeNodeTool = originalExecute;
     await sessionManager.setAgentMetadata(session.agent, { isolated: false }).catch(() => {});
   }
 });
@@ -96,14 +96,14 @@ test('Worker unified call_tool authorizes the concrete Node target and delegates
   session.agent = `worker_dispatcher_call_tool_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   session.currentNode = 'remote-a';
   const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
-  const originalNodeExecute = nodeExecution.executeRemoteNodeTool;
+  const originalNodeExecute = nodeExecution.executeNodeTool;
   const originalMcpCall = mcpExternal.callMcpTool;
   let nodeEffects = 0;
   let mcpEffects = 0;
   const nodeDescriptor = { source: 'node', name: 'custom_probe', args: {} };
   const mcpDescriptor = { source: 'mcp', server: 'demo', name: 'probe', args: {} };
   try {
-    (nodeExecution as any).executeRemoteNodeTool = async () => { nodeEffects += 1; return { output: 'node-ok' }; };
+    (nodeExecution as any).executeNodeTool = async () => { nodeEffects += 1; return { output: 'node-ok' }; };
     (mcpExternal as any).callMcpTool = async () => { mcpEffects += 1; return { output: 'mcp-ok' }; };
     await sessionManager.setAgentMetadata(session.agent, {
       isolated: true,
@@ -138,7 +138,7 @@ test('Worker unified call_tool authorizes the concrete Node target and delegates
     assert.equal(nodeEffects, 1);
     assert.equal(mcpEffects, 1);
   } finally {
-    (nodeExecution as any).executeRemoteNodeTool = originalNodeExecute;
+    (nodeExecution as any).executeNodeTool = originalNodeExecute;
     (mcpExternal as any).callMcpTool = originalMcpCall;
     await sessionManager.setAgentMetadata(session.agent, { isolated: false }).catch(() => {});
   }
@@ -214,8 +214,8 @@ test('worker direct and unified current-node routing carries exact cwd while exp
   const session = owner();
   session.currentNode = 'remote-current'; session.cwd = '/exact/cwd';
   const calls: any[] = [];
-  const original = nodeExecution.executeRemoteNodeTool;
-  (nodeExecution as any).executeRemoteNodeTool = async (...args: any[]) => { calls.push(args); return { output: 'remote-ok' }; };
+  const original = nodeExecution.executeNodeTool;
+  (nodeExecution as any).executeNodeTool = async (...args: any[]) => { calls.push(args); return { output: 'remote-ok' }; };
   const effects: any = { placement: 'session-worker', appendMessage: async () => {}, persistSession: async () => {},
     notifySessionEvent: () => {}, registerAbortController: () => {}, clearAbortController: () => {}, clearWaitById: async () => false };
   const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
@@ -228,7 +228,7 @@ test('worker direct and unified current-node routing carries exact cwd while exp
       { currentNode: 'remote-current', cwd: '/exact/cwd' },
       undefined,
     ]);
-  } finally { (nodeExecution as any).executeRemoteNodeTool = original; }
+  } finally { (nodeExecution as any).executeNodeTool = original; }
 });
 
 test('worker guarded errors precede direct notifications, permissions, and recursive ToolScript effects', async () => {
@@ -292,9 +292,11 @@ test('worker node topology select and compound copy use fixed facade with exact 
   const session = owner();
   let persists = 0; let selectCalls = 0; let copyCalls = 0;
   const originals = { list: nodeExecution.listNodeTopology, select: nodeExecution.validateNodeSelection,
+    lifecycleProviders: nodeExecution.listNodeLifecycleProviders,
     copy: nodeExecution.copyBetweenNodes, get: sessionManager.getSession, save: sessionManager.saveSession,
     isolated: sessionManager.isSessionEffectivelyIsolated };
   (nodeExecution as any).listNodeTopology = async () => [{ id: 'master', type: 'master', tools: [{ name: 'read', description: 'read', parameters: { type: 'object' } }] }];
+  (nodeExecution as any).listNodeLifecycleProviders = async (): Promise<any[]> => [];
   (nodeExecution as any).validateNodeSelection = async () => { selectCalls += 1; return { nodeId: 'remote-a', defaultCwd: '/remote/default' }; };
   (nodeExecution as any).copyBetweenNodes = async () => { copyCalls += 1; return { sizeBytes: 3, sha256: 'copy-hash', overwritten: false }; };
   (sessionManager as any).getSession = async () => { throw new Error('child node getSession'); };
@@ -335,6 +337,7 @@ test('worker node topology select and compound copy use fixed facade with exact 
     assert.equal(copyCalls, 3);
   } finally {
     (nodeExecution as any).listNodeTopology = originals.list; (nodeExecution as any).validateNodeSelection = originals.select;
+    (nodeExecution as any).listNodeLifecycleProviders = originals.lifecycleProviders;
     (nodeExecution as any).copyBetweenNodes = originals.copy; (sessionManager as any).getSession = originals.get;
     (sessionManager as any).saveSession = originals.save; (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
   }

@@ -73,6 +73,53 @@ test('app config schema suggests all managed channel types and QQ credential key
   const vector = schemas.APP_CONFIG_SCHEMA.properties.vector
   assert.equal(vector.oneOf.some((entry) => entry.const === false), true)
   assert.equal(vector.oneOf.find((entry) => entry.type === 'object').properties.baseUrl.pattern, '^https?://')
+  const nodeProvider = schemas.APP_CONFIG_SCHEMA.properties.nodeProviders.additionalProperties
+  assert.equal(nodeProvider.oneOf.length, 2)
+  const executableNodeProvider = nodeProvider.oneOf.find((entry) => entry.properties.type.const === 'executable')
+  const dockerWorktreeNodeProvider = nodeProvider.oneOf.find((entry) => entry.properties.type.const === 'docker-worktree')
+
+  assert.equal(executableNodeProvider.additionalProperties, false)
+  assert.deepEqual(executableNodeProvider.required, ['type', 'command'])
+  assert.deepEqual(executableNodeProvider.properties.command, {
+    type: 'string', minLength: 1, maxLength: 4096, pattern: '^\\S(?:.*\\S)?$',
+  })
+  assert.equal(executableNodeProvider.properties.args.maxItems, 64)
+  assert.equal(executableNodeProvider.properties.args.items.maxLength, 4096)
+  assert.deepEqual(executableNodeProvider.properties.timeoutSeconds, {
+    type: 'integer', minimum: 1, maximum: 300, default: 90,
+  })
+
+  assert.equal(dockerWorktreeNodeProvider.additionalProperties, false)
+  assert.deepEqual(dockerWorktreeNodeProvider.required, ['type', 'command', 'image', 'allowedWorktreeRoots'])
+  assert.equal(dockerWorktreeNodeProvider.properties.command.minLength, 1)
+  assert.equal(dockerWorktreeNodeProvider.properties.command.maxLength, 4096)
+  assert.equal(dockerWorktreeNodeProvider.properties.command.pattern, '^\\S(?:.*\\S)?$')
+  assert.equal(dockerWorktreeNodeProvider.properties.args.maxItems, 64)
+  assert.equal(dockerWorktreeNodeProvider.properties.args.items.maxLength, 4096)
+  assert.equal(dockerWorktreeNodeProvider.properties.image.minLength, 1)
+  assert.equal(dockerWorktreeNodeProvider.properties.image.maxLength, 4096)
+  assert.equal(dockerWorktreeNodeProvider.properties.allowedWorktreeRoots.minItems, 1)
+  assert.equal(dockerWorktreeNodeProvider.properties.allowedWorktreeRoots.maxItems, 64)
+  assert.equal(dockerWorktreeNodeProvider.properties.allowedWorktreeRoots.items.minLength, 1)
+  assert.equal(dockerWorktreeNodeProvider.properties.allowedWorktreeRoots.items.maxLength, 4096)
+  assert.deepEqual(dockerWorktreeNodeProvider.properties.networkModes.default, ['none'])
+  assert.equal(dockerWorktreeNodeProvider.properties.networkModes.minItems, 1)
+  assert.equal(dockerWorktreeNodeProvider.properties.networkModes.uniqueItems, true)
+  assert.deepEqual(dockerWorktreeNodeProvider.properties.networkModes.items.enum, ['none', 'bridge'])
+  assert.equal(dockerWorktreeNodeProvider.properties.stateDir.minLength, 1)
+  assert.equal(dockerWorktreeNodeProvider.properties.stateDir.maxLength, 4096)
+  assert.deepEqual(dockerWorktreeNodeProvider.properties.memory, {
+    type: 'string', pattern: '^[1-9]\\d*[kKmMgG]$', default: '2g',
+  })
+  assert.deepEqual(dockerWorktreeNodeProvider.properties.cpus, {
+    type: 'number', exclusiveMinimum: 0, maximum: 64, default: 2,
+  })
+  assert.deepEqual(dockerWorktreeNodeProvider.properties.pidsLimit, {
+    type: 'integer', minimum: 16, maximum: 65536, default: 256,
+  })
+  assert.deepEqual(dockerWorktreeNodeProvider.properties.tmpfsSize, {
+    type: 'string', pattern: '^[1-9]\\d*[kKmMgG]$', default: '256m',
+  })
 
   assert.equal(validateAppConfigSchema({
     channels: {
@@ -98,6 +145,25 @@ test('app config schema suggests all managed channel types and QQ credential key
   assert.equal(validateAppConfigSchema({ vectorMaintenance: { retentionHours: 48 } }), true)
   assert.equal(validateAppConfigSchema({ vector: false }), true)
   assert.equal(validateAppConfigSchema({ vector: { baseUrl: 'https://example.test/openai/v1' } }), true)
+  const validNodeProviderFixtures = [
+    { nodeProviders: { sandbox: { type: 'executable', command: '/opt/provider', args: ['serve', ''], timeoutSeconds: 300 } } },
+    { nodeProviders: { worktrees: {
+      type: 'docker-worktree', command: 'sudo', args: ['-n', 'docker'], image: 'foxwarm-sandbox:fixed',
+      allowedWorktreeRoots: ['/srv/worktrees'], networkModes: ['none', 'bridge'], stateDir: '/var/lib/foxwarm/provider',
+      memory: '4g', cpus: 3.5, pidsLimit: 512, tmpfsSize: '128m',
+    } } },
+  ]
+  for (const fixture of validNodeProviderFixtures) assert.equal(validateAppConfigSchema(fixture), true)
+
+  const invalidNodeProviderFixtures = [
+    { nodeProviders: { sandbox: { type: 'executable', command: '/opt/provider', secret: true } } },
+    { nodeProviders: { sandbox: { type: 'executable', command: '/opt/provider', timeoutSeconds: 301 } } },
+    { nodeProviders: { worktrees: { type: 'docker-worktree', command: 'docker', image: 'fixed' } } },
+    { nodeProviders: { worktrees: { type: 'docker-worktree', command: 'docker', image: 'fixed', allowedWorktreeRoots: [], networkModes: ['host'] } } },
+    { nodeProviders: { worktrees: { type: 'docker-worktree', command: 'docker', image: 'fixed', allowedWorktreeRoots: ['/srv/worktrees'], cpus: 0 } } },
+    { nodeProviders: { worktrees: { type: 'docker-worktree', command: 'docker', image: 'fixed', allowedWorktreeRoots: ['/srv/worktrees'], mounts: ['/host'] } } },
+  ]
+  for (const fixture of invalidNodeProviderFixtures) assert.equal(validateAppConfigSchema(fixture), false)
   assert.equal(validateAppConfigSchema({ llm: { compactKeepPercent: 0.3, compactThresholdPercent: 0.85 } }), true)
   assert.equal(validateAppConfigSchema({ llm: { compactKeepPercent: 0 } }), false)
   assert.equal(validateAppConfigSchema({ llm: { compactThresholdPercent: 1.1 } }), false)

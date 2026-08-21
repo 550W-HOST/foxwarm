@@ -40,6 +40,8 @@ export interface ToolContext {
     persistCurrentSession?: () => Promise<void>;
     /** Main-local detached read marker; permits read helpers to trust ctx.session without hydration or persistence. */
     detachedReadOnlySession?: true;
+    /** Detached exact-owner exec invocation already persists through Session runtime settings; skip eager full-session save. */
+    skipExecPreSave?: true;
     /** Process-local exec owner; never serialized as a tool/RPC DTO. */
     execRuntime?: ExecRuntime;
     /** Captured owner routing/cwd for one local parallel tool segment. */

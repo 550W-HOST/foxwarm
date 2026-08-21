@@ -102,7 +102,7 @@ SessionRuntime/catalog projection merge and Main-owned lifecycle handoff are now
 
 ### D-process-topology-trusted-session-worker-boundary
 
-[2026-08-06] Session workers, authoritative Session state, and Session-control credentials stay inside Main's trusted host/deployment boundary and use only local process IPC or Unix-domain transport. Generic remote nodes must not host Session workers; they remain bounded tool/execution targets through fixed Node services. Future Docker or bwrap environments are execution placements driven by the trusted local Session worker or trusted host sandbox supervisor, not Session-worker placements. Never expose the Docker socket inside an untrusted sandbox. Remote Session-worker transport is not part of the roadmap.
+[2026-08-06] Session workers, authoritative Session state, and Session-control credentials stay inside Main's trusted host/deployment boundary and use only local process IPC or Unix-domain transport. Generic remote Nodes must not host Session workers; they remain bounded Node capability environments reached through fixed Main services. Future sandbox Nodes are execution environments driven by the trusted local Session worker or trusted host supervisor, not Session-worker placements. Never expose a container-runtime control socket inside an untrusted sandbox. Remote Session-worker transport is not part of the roadmap.
 
 ### D-process-topology-worker-owned-session
 

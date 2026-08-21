@@ -5,28 +5,28 @@ Secondary files: packages/shared/src/index.ts, packages/shared/package.json, pac
 
 ## Purpose
 
-Owns pure, public-safe Draft-07 schema objects for Foxwarm Models and App configuration so build-time browser consumers reuse one definition without exposing runtime configuration data. The application schema includes optional Vector connection/enablement, startup-only session/vector worker placement, the bounded session-worker idle setting, and the vector-maintenance boolean/object toggle.
+Owns pure, public-safe Draft-07 schema objects for Foxwarm Models and App configuration so build-time browser consumers reuse one definition without exposing runtime configuration data. The application schema includes optional Vector connection/enablement, startup-only session/vector worker placement, trusted executable and Docker-worktree Node-provider definitions, the bounded session-worker idle setting, and the vector-maintenance boolean/object toggle.
 
 ## Key exports
 
 - `MODELS_CONFIG_SCHEMA` — advisory models/provider/virtual-routing structure aligned with tolerant backend readers, including non-whitespace provider string aliases and provider/model `{ allowed, default }` effort configuration.
-- `APP_CONFIG_SCHEMA` — advisory worker placement, bot, LLM (including `compactKeepPercent`, `compactThresholdPercent`, and the `32768` `maxOutput` default), paths, channels (the five managed types including `qqbot`, plus QQ credential and bounded inbound-media limit key suggestions), and ASR structure.
+- `APP_CONFIG_SCHEMA` — advisory worker placement, trusted executable and Docker-worktree Node providers, bot, LLM (including `compactKeepPercent`, `compactThresholdPercent`, and the `32768` `maxOutput` default), paths, channels (the five managed types including `qqbot`, plus QQ credential and bounded inbound-media limit key suggestions), and ASR structure.
 - `KNOWN_PROVIDER_TYPES` — known concrete protocol and virtual-routing values while custom provider types remain permitted.
 
 The package exports these through `@foxwarm/shared/configSchemas`; browser bundles may consume the same source directly at build time.
 
 ## Behavior
 
-- Objects contain descriptions, types, current and retained legacy spellings where intentionally exposed, and permissive unknown-property behavior; they contain no configuration values or credentials. Concrete model/provider entries document first-class effort capabilities/default and optional OpenAI Responses `webSearch` boolean/object settings while virtual routing entries reject provider request settings. The app schema exposes the current compaction keep and threshold percentages but not legacy `compactPercent`; it also documents `vector:false` or an object with `enabled`/absolute API-root `baseUrl`, marks `llm.ollamaBaseUrl` legacy, and retains the explicit boolean/object form for `vectorMaintenance`. The removed `llm.thinkingBudget` key is no longer suggested. The general shorthand contract is [D-config-feature-toggle-shorthand](./src-config.md#d-config-feature-toggle-shorthand).
+- Objects contain descriptions, types, current and retained legacy spellings where intentionally exposed, and permissive unknown-property behavior; they contain no configuration values or credentials. Concrete model/provider entries document first-class effort capabilities/default and optional OpenAI Responses `webSearch` boolean/object settings while virtual routing entries reject provider request settings. The app schema exposes the current compaction keep and threshold percentages but not legacy `compactPercent`; it also documents `vector:false` or an object with `enabled`/absolute API-root `baseUrl`, marks `llm.ollamaBaseUrl` legacy, retains the explicit boolean/object form for `vectorMaintenance`, and defines strict executable plus Docker-worktree Node-provider variants with bounded trusted fields. The removed `llm.thinkingBudget` key is no longer suggested. The general shorthand contract is [D-config-feature-toggle-shorthand](./src-config.md#d-config-feature-toggle-shorthand).
 - Models `default` remains optional, each provider value accepts either the normal object form or a non-whitespace single-target alias string, virtual strategy conditions honor current `providerType` precedence and legacy `provider`, and backend-tolerant headers remain permissive.
 - No schema endpoint, remote reference, file association, editor model URI, or dynamic completion logic lives here.
 - WebUI owns its in-memory URI/file-match wrappers and unsaved-document completion provider. Code's filesystem extension owns exact authoritative master-URI association and supplies serialized local content to Red Hat YAML.
 
 ## Tests and integration
 
-- WebUI config-editor tests assert shared-import parity and validate representative current, legacy, custom, and backend-tolerant fixtures with Ajv.
+- WebUI config-editor tests assert shared-import parity and validate representative current, legacy, custom, and backend-tolerant fixtures with Ajv, including exact executable and Docker-worktree Node-provider variant constraints.
 - WebUI config-editor tests keep the managed channel type completion list in
   parity with backend adapters while retaining custom string types and QQ
   credential/inbound-media key suggestions.
-- The Code filesystem extension tests exact positive/negative URI association and bundled schema content, including provider string-alias support; optional official Code E2E proves diagnostics/completion without external schema fetches.
+- The Code filesystem extension tests exact positive/negative URI association and bundled schema content, including provider string-alias support and both Node-provider variants; optional official Code E2E proves diagnostics/completion without external schema fetches.
 - Canonical cross-module behavior: [D-code-config-schema-assistance](../threads/code-integration.md#d-code-config-schema-assistance).

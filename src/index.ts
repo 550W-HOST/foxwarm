@@ -18,6 +18,7 @@ import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import * as mainManagementTools from './mainManagementTools';
 import * as nodeExecution from './nodeExecution';
+import { nodeProviderRegistry } from './nodes/providers';
 import * as mcpExternal from './mcpExternalService';
 import * as vector from './vector';
 import { shutdownToolScriptRuntime } from './toolscript';
@@ -308,6 +309,7 @@ async function start() {
         workerStore: sessionWorkerStore,
         readSessionHistory: sessionWorkerStore ? sessionId => sessionRuntime.getHistory(sessionId) : undefined,
     });
+    await nodeProviderRegistry.initialize();
     await nodeExecution.initializeNodeExecution();
     await mcpExternal.initializeMcpExternalService();
 
@@ -595,12 +597,14 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         if (shutdownStarted) return;
         shutdownStarted = true;
         void Promise.resolve()
-            .then(() => shutdownSessionWorkers?.())
-            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down session workers cleanly'))
             .then(() => shutdownToolScriptRuntime())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down ToolScript runtime cleanly'))
             .then(() => nodeExecution.shutdownNodeExecution())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down node execution cleanly'))
+            .then(() => nodeProviderRegistry.shutdown())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down node providers cleanly'))
+            .then(() => shutdownSessionWorkers?.())
+            .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down session workers cleanly'))
             .then(() => mcpExternal.shutdownMcpExternalService())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down MCP external service cleanly'))
             .then(() => mainManagementTools.shutdownMainManagementTools())

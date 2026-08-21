@@ -86,7 +86,7 @@ export async function tool_exec(args: ToolArgs, ctx: ToolContext) {
     const timeoutSeconds = resolvedTimeout.effectiveSeconds;
 
     // Mark that we're about to exec, then save session
-    if (ctx && ctx.sessionId) {
+    if (ctx && ctx.sessionId && !ctx.skipExecPreSave) {
         if (ctx.persistCurrentSession && ctx.session?.id === ctx.sessionId) await ctx.persistCurrentSession();
         else await sessionManager.saveSession(ctx.sessionId);
     }

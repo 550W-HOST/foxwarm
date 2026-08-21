@@ -6,6 +6,13 @@ import {
 } from './rpc';
 import * as sessionManager from './sessionManager';
 import { nodesManager } from './nodes/manager';
+import {
+  NodeLifecycleAction,
+  NodeLifecycleResult,
+  NodeProviderError,
+  NodeProviderRegistry,
+} from './nodes/providerRegistry';
+import { nodeProviderRegistry } from './nodes/providers';
 import type { Session } from './types';
 import { getAgentDir } from './config';
 import { checkToolPermission, isToolVisibleForSession } from './isolatedCheck';
@@ -14,6 +21,7 @@ import { createHash } from 'node:crypto';
 export type NodeExecutionRoutingSnapshot = {
   currentNode: string;
   cwd?: string;
+  deferSessionCwdSync?: boolean;
 };
 
 export type NodeExecutionRequest = {
@@ -26,17 +34,38 @@ export type NodeExecutionRequest = {
 
 export type NodeExecutionResponse = { result: unknown };
 export type NodeTopologyListRequest = { sourceSessionId: string; nodeId?: string; currentNode?: string };
-export type NodeTopologyListResponse = { nodes: Array<{ id: string; type: string; lastActivity?: number; tools: Array<{ name: string; description?: string; parameters?: unknown }> }> };
+export type NodeTopologyListResponse = { nodes: Array<{
+  id: string;
+  kind: 'master' | 'remote' | 'sandbox';
+  provider: string;
+  type: string;
+  availability: 'ready' | 'unavailable' | 'offline' | 'error';
+  lastActivity?: number;
+  tools: Array<{ name: string; description?: string; parameters?: unknown }>;
+}> };
 export type NodeSelectRequest = { sourceSessionId: string; nodeId: string };
 export type NodeSelectResponse = { nodeId: string; defaultCwd: string };
 export type NodeCopyRequest = { sourceSessionId: string; sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; overwrite?: boolean };
 export type NodeCopyResponse = { sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; sizeBytes: number; sha256: string; overwritten: boolean; absolutePath?: string };
+export type NodeLifecycleProvidersRequest = { sourceSessionId: string };
+export type NodeLifecycleProvidersResponse = { providers: Array<{ id: string; actions: NodeLifecycleAction[] }> };
+export type NodeLifecycleRequest = {
+  sourceSessionId: string;
+  action: NodeLifecycleAction;
+  providerId?: string;
+  nodeId?: string;
+  parameters?: Record<string, unknown>;
+  confirmation?: string;
+};
+export type NodeLifecycleResponse = { result: NodeLifecycleResult };
 
-export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 1, {
+export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 3, {
   execute: rpcMethod<NodeExecutionRequest, NodeExecutionResponse>(),
   list: rpcMethod<NodeTopologyListRequest, NodeTopologyListResponse>(),
   select: rpcMethod<NodeSelectRequest, NodeSelectResponse>(),
   copy: rpcMethod<NodeCopyRequest, NodeCopyResponse>(),
+  lifecycleProviders: rpcMethod<NodeLifecycleProvidersRequest, NodeLifecycleProvidersResponse>(),
+  lifecycle: rpcMethod<NodeLifecycleRequest, NodeLifecycleResponse>(),
 });
 
 function assertOnlyKeys(value: object, allowed: readonly string[], label: string): void {
@@ -114,21 +143,56 @@ function normalizeArgs(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function normalizeLifecycleParameters(value: unknown): Record<string, unknown> {
+  if (value === undefined) return {};
+  const normalized = plainJsonWithin(value, 64 * 1024);
+  if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
+    throw new RpcError('NODE_LIFECYCLE_INVALID_REQUEST', 'parameters must be a plain finite JSON object of at most 65536 bytes.');
+  }
+  return normalized as Record<string, unknown>;
+}
+
+function normalizeRequestedLifecycleNodeId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string'
+    || value.length < 1
+    || value.length > 128
+    || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value)
+    || value.toLowerCase() === 'master') {
+    throw new RpcError(
+      'NODE_LIFECYCLE_INVALID_NODE_ID',
+      'create/ensure nodeId must be 1-128 ASCII characters matching [A-Za-z0-9][A-Za-z0-9._:-]* and cannot be reserved `master`.',
+    );
+  }
+  return value;
+}
+
+function normalizeLifecycleResult(value: NodeLifecycleResult): NodeLifecycleResult {
+  const normalized = plainJsonWithin(value, 128 * 1024);
+  if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
+    throw new RpcError('NODE_LIFECYCLE_INVALID_RESPONSE', 'Node lifecycle result must be a bounded plain JSON object.');
+  }
+  return normalized as NodeLifecycleResult;
+}
+
 function normalizeRoutingSnapshot(value: unknown): NodeExecutionRoutingSnapshot | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'routingSnapshot must be an object.');
   }
   const candidate = value as Record<string, unknown>;
-  assertOnlyKeys(candidate, ['currentNode', 'cwd'], 'routingSnapshot');
+  assertOnlyKeys(candidate, ['currentNode', 'cwd', 'deferSessionCwdSync'], 'routingSnapshot');
   const currentNode = requireString(candidate.currentNode, 'routingSnapshot.currentNode');
   if (candidate.cwd !== undefined && typeof candidate.cwd !== 'string') {
     throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'routingSnapshot.cwd must be a string when provided.');
   }
-  return { currentNode, ...(typeof candidate.cwd === 'string' ? { cwd: candidate.cwd } : {}) };
+  if (candidate.deferSessionCwdSync !== undefined && typeof candidate.deferSessionCwdSync !== 'boolean') {
+    throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'routingSnapshot.deferSessionCwdSync must be a boolean when provided.');
+  }
+  return { currentNode, ...(typeof candidate.cwd === 'string' ? { cwd: candidate.cwd } : {}), ...(candidate.deferSessionCwdSync === true ? { deferSessionCwdSync: true } : {}) };
 }
 
-export async function requireNodeExecutionTarget(sourceSessionId: string, nodeId: string): Promise<Session> {
+export async function requireNodeExecutionAccess(sourceSessionId: string, nodeId: string): Promise<Session> {
   const source = sessionManager.getSessionCatalog(sourceSessionId);
   if (!source) {
     throw new RpcError('NODE_EXECUTION_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
@@ -145,7 +209,18 @@ export async function requireNodeExecutionTarget(sourceSessionId: string, nodeId
   return source;
 }
 
-export function createNodeExecutionServiceHandler(options: { expectedSourceSessionId?: string } = {}): RpcServiceHandler<typeof nodeExecutionServiceDescriptor> {
+function rethrowProviderError(error: unknown): never {
+  if (error instanceof NodeProviderError) {
+    throw new RpcError(error.code, error.message, error.retryable);
+  }
+  throw error;
+}
+
+export function createNodeExecutionServiceHandler(options: {
+  expectedSourceSessionId?: string;
+  providerRegistry?: NodeProviderRegistry;
+} = {}): RpcServiceHandler<typeof nodeExecutionServiceDescriptor> {
+  const providers = options.providerRegistry || nodeProviderRegistry;
   const requireSource = async (input: any, allowed: readonly string[], label: string): Promise<{ sourceSessionId: string; source: Session }> => {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', `${label} must be an object.`);
     assertOnlyKeys(input, allowed, label);
@@ -158,7 +233,7 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
     return { sourceSessionId, source };
   };
   return {
-    async execute(input) {
+    async execute(input, rpcContext) {
       if (!input || typeof input !== 'object' || Array.isArray(input)) {
         throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'Node execution request must be an object.');
       }
@@ -175,31 +250,48 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
         throw new RpcError('NODE_EXECUTION_MASTER_FORBIDDEN', 'The colocated master node must execute directly without Node execution RPC.');
       }
 
-      await requireNodeExecutionTarget(sourceSessionId, nodeId);
-
-      const node = nodesManager.getNode(nodeId);
-      if (!node || !node.ws) {
-        throw new RpcError('NODE_EXECUTION_NODE_UNAVAILABLE', `Remote node \`${nodeId}\` is not connected.`, true);
+      const source = await requireNodeExecutionAccess(sourceSessionId, nodeId);
+      const providerRouting = routingSnapshot || (!options.expectedSourceSessionId && source.currentNode === nodeId
+        ? { currentNode: nodeId, ...(typeof source.cwd === 'string' ? { cwd: source.cwd } : {}) }
+        : undefined);
+      try {
+        return {
+          result: await providers.invokeTool({
+            sourceSessionId,
+            nodeId,
+            toolName,
+            args,
+            context: {
+              agent: source.agent || 'main',
+              ...(providerRouting ? {
+                currentNode: providerRouting.currentNode,
+                ...(providerRouting.cwd !== undefined ? { cwd: providerRouting.cwd } : {}),
+                ...(providerRouting.deferSessionCwdSync === true ? { deferSessionCwdSync: true } : {}),
+              } : {}),
+            },
+          }, { signal: rpcContext.signal }),
+        };
+      } catch (error) {
+        rethrowProviderError(error);
       }
-      if (!node.tools.has(toolName)) {
-        throw new RpcError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`${toolName}\` not available on node \`${nodeId}\`.`);
-      }
-
-      return {
-        result: await nodesManager.executeTool(nodeId, toolName, args, sourceSessionId, routingSnapshot),
-      };
     },
-    async list(input) {
+    async list(input, rpcContext) {
       const { source } = await requireSource(input, ['sourceSessionId', 'nodeId', 'currentNode'], 'Node list request');
       const filter = input.nodeId === undefined ? undefined : requireBoundedString(input.nodeId, 'nodeId', 128);
       if (input.currentNode !== undefined) requireBoundedString(input.currentNode, 'currentNode', 128);
       const isolated = sessionManager.isSessionEffectivelyIsolated(source);
       const allowed = isolated ? new Set(['master', sessionManager.getAgentIsolationNode(source.agent || 'main') || source.currentNode || 'master', source.currentNode].filter(Boolean)) : null;
-      const nodes = nodesManager.listNodesWithTools().filter(node => (!filter || node.id === filter) && (!allowed || allowed.has(node.id))).slice(0, 100);
-      const activity = new Map(nodesManager.listNodes().map(node => [node.id, node.lastActivity]));
+      let registered;
+      try { registered = await providers.listNodes({ signal: rpcContext.signal }); }
+      catch (error) { rethrowProviderError(error); }
+      const nodes = registered.filter(node => (!filter || node.id === filter) && (!allowed || allowed.has(node.id))).slice(0, 100);
       const output: NodeTopologyListResponse['nodes'] = []; let totalBytes = Buffer.byteLength('{"nodes":[]}', 'utf8');
       for (const node of nodes) {
-        if (typeof node.id !== 'string' || !node.id || node.id.length > 128 || typeof node.type !== 'string' || !node.type || node.type.length > 64) continue;
+        if (typeof node.id !== 'string' || !node.id || node.id.length > 128
+          || typeof node.type !== 'string' || !node.type || node.type.length > 64
+          || !['master', 'remote', 'sandbox'].includes(node.kind)
+          || typeof node.provider !== 'string' || !node.provider || node.provider.length > 64
+          || !['ready', 'unavailable', 'offline', 'error'].includes(node.availability)) continue;
         const tools: NodeTopologyListResponse['nodes'][number]['tools'] = [];
         for (const tool of node.tools.slice(0, 200)) {
           const descriptors = Object.getOwnPropertyDescriptors(tool);
@@ -212,31 +304,26 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
           const parameters = parametersValue === undefined ? undefined : plainJsonWithin(parametersValue, 16 * 1024);
           tools.push({ name, ...(description ? { description } : {}), ...(parameters !== undefined ? { parameters } : {}) });
         }
-        const lastActivity = activity.get(node.id);
-        const candidate = { id: node.id, type: node.type,
-          ...(typeof lastActivity === 'number' && Number.isFinite(lastActivity) && lastActivity >= 0 ? { lastActivity } : {}), tools };
+        const candidate = { id: node.id, kind: node.kind, provider: node.provider, type: node.type, availability: node.availability,
+          ...(typeof node.lastActivity === 'number' && Number.isFinite(node.lastActivity) && node.lastActivity >= 0 ? { lastActivity: node.lastActivity } : {}), tools };
         const size = Buffer.byteLength(JSON.stringify(candidate), 'utf8') + (output.length ? 1 : 0);
         if (totalBytes + size > 256 * 1024) break;
         totalBytes += size; output.push(candidate);
       }
       return { nodes: output };
     },
-    async select(input) {
+    async select(input, rpcContext) {
       const { sourceSessionId, source } = await requireSource(input, ['sourceSessionId', 'nodeId'], 'Node select request');
       const nodeId = requireBoundedString(input.nodeId, 'nodeId', 128);
-      await requireNodeExecutionTarget(sourceSessionId, nodeId);
-      nodesManager.setCurrentNode(sourceSessionId, nodeId);
+      await requireNodeExecutionAccess(sourceSessionId, nodeId);
       if (nodeId === 'master') return { nodeId, defaultCwd: getAgentDir(source.agent || 'main').slice(0, 4096) };
-      const node = nodesManager.getNode(nodeId);
-      if (node?.ws && node.tools.has('get_default_cwd')) {
-        try {
-          const value = await nodesManager.executeTool(nodeId, 'get_default_cwd', {}, sourceSessionId);
-          const descriptor = value && typeof value === 'object' ? Object.getOwnPropertyDescriptor(value, 'output') : undefined;
-          const raw = descriptor && 'value' in descriptor ? descriptor.value : value;
-          const cwd = typeof raw === 'string' ? raw.trim().slice(0, 4096) : '';
-          if (cwd) return { nodeId, defaultCwd: cwd };
-        } catch { /* preserve the existing bounded fallback */ }
-      }
+      try {
+        const cwd = (await providers.getDefaultCwd(
+          { sourceSessionId, nodeId, context: { agent: source.agent || 'main' } },
+          { signal: rpcContext.signal },
+        ))?.slice(0, 4096);
+        if (cwd) return { nodeId, defaultCwd: cwd };
+      } catch (error) { rethrowProviderError(error); }
       return { nodeId, defaultCwd: 'node process cwd (run `pwd` to inspect)' };
     },
     async copy(input) {
@@ -246,8 +333,8 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
       const targetNode = requireBoundedString(input.targetNode, 'targetNode', 128); const targetPath = requireBoundedPath(input.targetPath, 'targetPath');
       if (input.overwrite !== undefined && typeof input.overwrite !== 'boolean') throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'overwrite must be a boolean.');
       await checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, sourceSessionId, 'master', { sourceNode, sourcePath, targetNode, targetPath, overwrite: input.overwrite === true });
-      if (sourceNode !== 'master') await requireNodeExecutionTarget(sourceSessionId, sourceNode);
-      if (targetNode !== 'master') await requireNodeExecutionTarget(sourceSessionId, targetNode);
+      if (sourceNode !== 'master') await requireNodeExecutionAccess(sourceSessionId, sourceNode);
+      if (targetNode !== 'master') await requireNodeExecutionAccess(sourceSessionId, targetNode);
       const file = await nodesManager.readFileFromNode(sourceNode, sourcePath, sourceSessionId);
       if (typeof file.dataBase64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(file.dataBase64)) {
         invalidResponse('Node copy source returned invalid base64 data.');
@@ -265,6 +352,78 @@ export function createNodeExecutionServiceHandler(options: { expectedSourceSessi
       if (written.absolutePath !== undefined && (typeof written.absolutePath !== 'string' || written.absolutePath.length > 4096)) invalidResponse('Node copy returned an invalid absolutePath.');
       return { sourceNode, sourcePath, targetNode, targetPath, sizeBytes: file.sizeBytes, sha256: written.sha256,
         overwritten: written.overwritten, ...(written.absolutePath ? { absolutePath: written.absolutePath } : {}) };
+    },
+    async lifecycleProviders(input) {
+      const { source } = await requireSource(input, ['sourceSessionId'], 'Node lifecycle provider list request');
+      const isolated = sessionManager.isSessionEffectivelyIsolated(source);
+      return { providers: providers.listLifecycleProviders().slice(0, 100).map(provider => ({
+        id: requireBoundedString(provider.id, 'provider.id', 64),
+        actions: provider.actions.filter(action => ['create', 'ensure', 'inspect', 'destroy'].includes(action)
+          && (!isolated || action === 'inspect')).slice(0, 4),
+      })).filter(provider => provider.actions.length > 0) };
+    },
+    async lifecycle(input, rpcContext) {
+      const { sourceSessionId, source } = await requireSource(
+        input,
+        ['sourceSessionId', 'action', 'providerId', 'nodeId', 'parameters', 'confirmation'],
+        'Node lifecycle request',
+      );
+      const action = requireBoundedString(input.action, 'action', 16) as NodeLifecycleAction;
+      if (!['create', 'ensure', 'inspect', 'destroy'].includes(action)) {
+        throw new RpcError('NODE_LIFECYCLE_INVALID_REQUEST', 'action must be create, ensure, inspect, or destroy.');
+      }
+      const parameters = normalizeLifecycleParameters(input.parameters);
+      const isolated = sessionManager.isSessionEffectivelyIsolated(source);
+      if (isolated && action !== 'inspect') {
+        throw new RpcError(
+          'NODE_LIFECYCLE_ISOLATED_MUTATION_DENIED',
+          `Effectively isolated sessions cannot use node lifecycle action \`${action}\` without an ownership policy.`,
+        );
+      }
+      const context = { agent: source.agent || 'main' };
+      try {
+        if (action === 'create' || action === 'ensure') {
+          if (input.confirmation !== undefined) {
+            throw new RpcError('NODE_LIFECYCLE_INVALID_REQUEST', `${action} does not accept confirmation.`);
+          }
+          const providerId = requireBoundedString(input.providerId, 'providerId', 64);
+          const nodeId = normalizeRequestedLifecycleNodeId(input.nodeId);
+          const request = { sourceSessionId, ...(nodeId ? { nodeId } : {}), parameters, context };
+          const result = action === 'create'
+            ? await providers.createNode(providerId, request, { signal: rpcContext.signal })
+            : await providers.ensureNode(providerId, request, { signal: rpcContext.signal });
+          return { result: normalizeLifecycleResult(result) };
+        }
+
+        if (input.providerId !== undefined) {
+          throw new RpcError('NODE_LIFECYCLE_INVALID_REQUEST', `${action} resolves the provider from nodeId and does not accept providerId.`);
+        }
+        const nodeId = requireBoundedString(input.nodeId, 'nodeId', 128);
+        await requireNodeExecutionAccess(sourceSessionId, nodeId);
+        if (action === 'inspect') {
+          if (input.confirmation !== undefined) {
+            throw new RpcError('NODE_LIFECYCLE_INVALID_REQUEST', 'inspect does not accept confirmation.');
+          }
+          return { result: normalizeLifecycleResult(await providers.inspectNode(
+            { sourceSessionId, nodeId, parameters, context },
+            { signal: rpcContext.signal },
+          )) };
+        }
+        const expectedConfirmation = `destroy node ${nodeId}`;
+        if (input.confirmation !== expectedConfirmation) {
+          throw new RpcError(
+            'NODE_LIFECYCLE_CONFIRMATION_REQUIRED',
+            `destroy requires exact confirmation \`${expectedConfirmation}\`.`,
+          );
+        }
+        return { result: normalizeLifecycleResult(await providers.destroyNode(
+          { sourceSessionId, nodeId, parameters, context },
+          { signal: rpcContext.signal },
+        )) };
+      } catch (error) {
+        if (error instanceof RpcError) throw error;
+        rethrowProviderError(error);
+      }
     },
   };
 }

@@ -66,6 +66,15 @@ test('schema contributor returns bundled shared schemas without config data or e
   assert.equal(Object.hasOwn(app.properties.llm.properties, 'compactPercent'), false);
   assert.equal(app.properties.vector.oneOf.some(entry => entry.const === false), true);
   assert.equal(app.properties.vector.oneOf.find(entry => entry.type === 'object').properties.baseUrl.pattern, '^https?://');
+  const nodeProviderVariants = app.properties.nodeProviders.additionalProperties.oneOf;
+  assert.deepEqual(nodeProviderVariants.map(entry => entry.properties.type.const), ['executable', 'docker-worktree']);
+  const dockerWorktree = nodeProviderVariants.find(entry => entry.properties.type.const === 'docker-worktree');
+  assert.deepEqual(dockerWorktree.required, ['type', 'command', 'image', 'allowedWorktreeRoots']);
+  assert.deepEqual(dockerWorktree.properties.networkModes.default, ['none']);
+  assert.equal(dockerWorktree.properties.memory.default, '2g');
+  assert.equal(dockerWorktree.properties.cpus.default, 2);
+  assert.equal(dockerWorktree.properties.pidsLimit.default, 256);
+  assert.equal(dockerWorktree.properties.tmpfsSize.default, '256m');
   assert.match(app.properties.llm.properties.ollamaBaseUrl.description, /Legacy vector endpoint root/);
   assert.equal(JSON.stringify({ models, app }).includes('apiKeyValue'), false);
   assert.throws(() => extension.getFoxwarmConfigSchemaContent('https://example.invalid/schema.json'), /Unknown/);

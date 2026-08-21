@@ -88,6 +88,7 @@ export interface RunningExecEntry {
   logPath: string;
   statusPath: string;
   cwdPath: string;
+  scriptPath?: string;
   startedAt: number;
   notifyOnCompletion: boolean;
   recoveredAfterRestart?: boolean;
@@ -129,6 +130,10 @@ export interface PersistentExecManagerOptions {
   completionDispatcher?: ExecCompletionDispatcher;
   processOperations?: ProcessOperations;
   processSnapshotProvider?: () => Promise<ProcessSnapshotEntry[]>;
+  processTreeFormatter?: (entries: ProcessSnapshotEntry[], rootPid: number) => string;
+  isEntryRunning?: (entry: RunningExecEntry) => boolean | Promise<boolean>;
+  readEntryWorkingDirectory?: (entry: RunningExecEntry) => Promise<string | null>;
+  onRegistryIdle?: () => void;
   logger?: {
     info?: (payload?: any, message?: string) => void;
     warn?: (payload?: any, message?: string) => void;
@@ -341,6 +346,7 @@ function formatTime(date = new Date()): string {
 export class PersistentExecManager {
   private runningExecs = new Map<string, RunningExecEntry>();
   private initialized = false;
+  private shuttingDown = false;
   private initializationPromise: Promise<void> | null = null;
   private reconcileTimer: NodeJS.Timeout | null = null;
   private reconcileChain: Promise<void> = Promise.resolve();
@@ -414,6 +420,9 @@ export class PersistentExecManager {
           logPath: raw.logPath,
           statusPath: raw.statusPath,
           cwdPath: typeof raw.cwdPath === 'string' && raw.cwdPath.trim().length > 0 ? raw.cwdPath : `${raw.logPath}.cwd.txt`,
+          scriptPath: typeof raw.scriptPath === 'string' && raw.scriptPath.trim().length > 0
+            ? raw.scriptPath
+            : path.join(path.dirname(raw.logPath), `${raw.id}.command${this.processOperations.platform === 'win32' ? '.ps1' : '.sh'}`),
           startedAt: Number(raw.startedAt),
           notifyOnCompletion: raw.notifyOnCompletion === true,
           recoveredAfterRestart: raw.recoveredAfterRestart === true,
@@ -426,9 +435,12 @@ export class PersistentExecManager {
   }
 
   private async removeRunningExec(id: string): Promise<void> {
+    let becameIdle = false;
     await this.commitRegistryMutation(() => {
       this.runningExecs.delete(id);
+      becameIdle = this.runningExecs.size === 0;
     });
+    if (becameIdle) this.options.onRegistryIdle?.();
   }
 
   private async updateRunningExec(id: string, updates: Partial<RunningExecEntry>): Promise<RunningExecEntry | null> {
@@ -460,12 +472,26 @@ export class PersistentExecManager {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
+    this.shuttingDown = false;
     if (!this.initializationPromise) {
       this.initializationPromise = this.initializeOnce().finally(() => {
         this.initializationPromise = null;
       });
     }
     await this.initializationPromise;
+  }
+
+  async reconcileNow(): Promise<void> {
+    await this.initialize();
+    await this.queueReconcile();
+  }
+
+  async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    if (this.initializationPromise) await this.initializationPromise.catch(() => {});
+    if (this.reconcileTimer) { clearInterval(this.reconcileTimer); this.reconcileTimer = null; }
+    await this.reconcileChain; await this.registryMutationChain;
+    this.initialized = false;
   }
 
   private async initializeOnce(): Promise<void> {
@@ -486,11 +512,12 @@ export class PersistentExecManager {
 
   private scheduleReconcile(): void {
     if (this.reconcileTimer) clearInterval(this.reconcileTimer);
-    this.reconcileTimer = setInterval(() => { void this.queueReconcile(); }, RECONCILE_INTERVAL_MS);
+    this.reconcileTimer = setInterval(() => { if (!this.shuttingDown) void this.queueReconcile(); }, RECONCILE_INTERVAL_MS);
     this.reconcileTimer.unref?.();
   }
 
   private async queueReconcile(): Promise<void> {
+    if (this.shuttingDown) return;
     this.reconcileChain = this.reconcileChain.then(async () => {
       await this.reconcileRunningExecs();
     }).catch(err => {
@@ -580,6 +607,7 @@ export class PersistentExecManager {
       logPath: resolvedPaths.logPath,
       statusPath: resolvedPaths.statusPath,
       cwdPath: resolvedPaths.cwdPath,
+      scriptPath,
       startedAt: startedAt.getTime(),
       notifyOnCompletion: false,
     };
@@ -746,7 +774,7 @@ export class PersistentExecManager {
   private async buildLiveProcessTree(entry: RunningExecEntry): Promise<string> {
     try {
       const entries = await (this.options.processSnapshotProvider || (() => this.processOperations.inspectSnapshot()))();
-      return formatProcessTreeSnapshot(entries, entry.pid);
+      return this.options.processTreeFormatter ? this.options.processTreeFormatter(entries, entry.pid) : formatProcessTreeSnapshot(entries, entry.pid);
     } catch (err) {
       this.options.logger?.warn?.({ err, execId: entry.id, pid: entry.pid }, 'Failed to inspect background exec process tree');
       return `Process tree (best-effort live snapshot; managed shell-script root PID ${entry.pid}):\n(Process tree unavailable: process inspection failed or is unsupported on this platform.)`;
@@ -770,7 +798,7 @@ export class PersistentExecManager {
   private async ensureFallbackStatus(entry: RunningExecEntry): Promise<ExecStatus | null> {
     const existing = await this.readExecStatus(entry.statusPath);
     if (existing) return existing;
-    if (await this.processOperations.isRunning(entry.pid)) return null;
+    if (this.options.isEntryRunning ? await this.options.isEntryRunning(entry) : await this.processOperations.isRunning(entry.pid)) return null;
     if (Date.now() - entry.startedAt < MISSING_STATUS_GRACE_MS) return null;
     const fallback: ExecStatus = { exitCode: null, finishedAt: new Date().toISOString(), error: 'Process exited but no status file was written.' };
     await fs.ensureDir(path.dirname(entry.statusPath));
@@ -837,7 +865,7 @@ export class PersistentExecManager {
   }
 
   async readLiveExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null> {
-    return await this.processOperations.readWorkingDirectory(entry.pid);
+    return this.options.readEntryWorkingDirectory ? await this.options.readEntryWorkingDirectory(entry) : await this.processOperations.readWorkingDirectory(entry.pid);
   }
 
   listRunningExecs(): RunningExecEntry[] {

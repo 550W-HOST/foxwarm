@@ -12,6 +12,7 @@ import { buildSessionStatusInfo, formatSessionStatus } from './sessionStatus';
 import { BTW_USAGE } from './btw';
 import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLogin, waitForWeixinQrLogin } from './weixin/api';
 import { ensureNodePairingToken } from './nodes/bootstrapInfo';
+import { validateNodeSelection } from './nodeExecution';
 import { getChannelRuntimeStatus, restartManagedChannel } from './channelRuntime';
 import { buildSessionModelEffortPresentation } from './session/modelEffortPresentation';
 
@@ -372,14 +373,10 @@ export const COMMANDS: Record<string, CommandDef> = {
         ctx.reply(`🔒 Current session belongs to an isolated agent bound to node \`${boundNode}\`. Changing \`currentNode\` here would not affect runtime execution. Use \`/agent isolated <agent> off\` first if you really want to unbind it.`)
         return
       }
-      if (nodeId !== 'master' && !nodesManager.getNode(nodeId)) {
-        ctx.reply(`❌ Node \`${nodeId}\` not found.\n\nUse \`/node\` to list available nodes.`)
-        return
-      }
       try {
-        nodesManager.setCurrentNode(sessionId, nodeId)
-        await sessionRuntime.updateSettings(sessionId, { currentNode: nodeId })
-        ctx.reply(`✅ Switched to node \`${nodeId}\`\n\nAll file/exec/browser tools will now execute on this node.`)
+        const validated = await validateNodeSelection(sessionId, nodeId)
+        await sessionRuntime.updateSettings(sessionId, { currentNode: validated.nodeId })
+        ctx.reply(`✅ Switched to node \`${validated.nodeId}\`\n\nAll file/exec/browser tools will now execute on this node.`)
       } catch (e: any) { ctx.reply(`❌ Failed to switch node: ${e.message}`) }
     }
   },

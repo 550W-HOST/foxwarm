@@ -33,7 +33,7 @@ None — this file is the application entry point and does not export any symbol
 - `./sessionManager` — session loading, resumption, event queuing
 - `./sessionRuntime` — local high-level session DTO service, update-event bridge, and graceful drain
 - `./mainManagementTools` — closed local Main Management tool service initialization and graceful drain
-- `./nodeExecution` — closed local remote-node execution forwarding service and terminal drain
+- `./nodeExecution` / `./nodes/providers` — closed local Node execution service plus awaited provider initialization/shutdown
 - `./vector` — configured vector owner startup and graceful shutdown
 - `./channel` — `registerChannel`
 - `./config` — all configuration constants and helpers
@@ -52,14 +52,14 @@ None — this file is the application entry point and does not export any symbol
 - Initializes the framework-level `agents/00_SYSTEM.md` from `templates/agents/00_SYSTEM.md` for fresh installs, but if legacy `agents/main/memory/00_SYSTEM.md` already exists it leaves the root file absent so runtime fallback preserves the user's existing framework prompt.
 - Initializes main agent memory from `templates/main/memory/` if the memory directory is absent or empty; that template no longer carries the framework `00_SYSTEM.md`, avoiding duplicate prompt injection on fresh installs.
 - Optionally starts TUI mode and redirects logger output to the TUI screen.
-- Loads sessions and completes startup migrations before entering explicit disabled Vector mode or starting the configured local/child vector owner. Disabled mode does not load the manager/runtime/native LanceDB, start maintenance/backfill, or spawn the `dbWorkers` child. With `sessionWorkers:true`, it opens the durable Worker store, reconciles ownership, creates the supervisor/ingress coordinator with the Main destructive-admission wrapper, initializes Worker-aware SessionRuntime, installs enqueue/delete/fork/fence hooks, and resumes pending mailbox work; Session-semantic reads ensure/load an owner before detached authority reads. The fork-source hook uses the lifecycle-only ensure variant because fork/child creation already holds SessionManager's non-reentrant identity lock. With workers disabled, SessionRuntime remains local. Main Management and Node execution initialize after SessionRuntime, then startup ensures a `main` session exists.
+- Loads sessions and completes startup migrations before entering explicit disabled Vector mode or starting the configured local/child vector owner. Disabled mode does not load the manager/runtime/native LanceDB, start maintenance/backfill, or spawn the `dbWorkers` child. With `sessionWorkers:true`, it opens the durable Worker store, reconciles ownership, creates the supervisor/ingress coordinator with the Main destructive-admission wrapper, initializes Worker-aware SessionRuntime, installs enqueue/delete/fork/fence hooks, and resumes pending mailbox work. With workers disabled, SessionRuntime remains local. After SessionRuntime/Main Management establish catalog and ingress authority, Core awaits every Node provider's initialization before exposing Node execution. Startup failure is observable. Shutdown fences Node execution, then closes providers while Session ingress is still available, before shutting down workers and remaining services.
 - Builds an authorized-users list from all channel configs for the MessageRouter.
 - Starts an HTTP server (Express) with WebSocket upgrade, registers node routes and WebSocket handlers.
 - Starts each configured channel (Telegram, Matrix, WebUI, WeWork, Weixin) with retry logic via `startWithRetry`.
 - Resumes busy sessions after all channels are up.
 - Schedules periodic log rotation.
 - Processes `ONBOOT.md` to send a startup message/event after a 3-second delay.
-- On `SIGINT`/`SIGTERM`, shuts down Session workers with bounded handback, closes the Main process's lazy ToolScript/Monty pool before its host-call services, terminally drains Node execution, MCP, Main Management, and SessionRuntime calls/publication, then gracefully drains the vector owner and exits.
+- On `SIGINT`/`SIGTERM`, closes the Main process's lazy ToolScript/Monty pool, terminally drains Node execution, closes Node providers while Session ingress remains available, then shuts down Session workers with bounded handback before draining MCP, Main Management, SessionRuntime, and the vector owner.
 
 ## Integration
 

@@ -5,7 +5,7 @@ import { logger } from './common';
 import { STATE_DIR } from './config';
 import { executeMainManagementTool, initializeMainManagementTools, shutdownMainManagementTools } from './mainManagementTools';
 import { callMcpTool, initializeMcpExternalService, listMcpServers, shutdownMcpExternalService } from './mcpExternalService';
-import { copyBetweenNodes, executeRemoteNodeTool, initializeNodeExecution, listNodeTopology, shutdownNodeExecution, validateNodeSelection } from './nodeExecution';
+import { copyBetweenNodes, executeNodeTool, initializeNodeExecution, listNodeTopology, shutdownNodeExecution, validateNodeSelection } from './nodeExecution';
 import { deliverFile, initializeFileDelivery, shutdownFileDelivery } from './fileDelivery';
 import { initializeSessionWorkerPresentation, publishPresentationMessage, publishPresentationModelStream } from './sessionWorkerPresentation';
 import { initializeSessionWorkerPublication, publishCommitted, shutdownSessionWorkerPublication } from './sessionWorkerPublication';
@@ -241,7 +241,7 @@ async function start(): Promise<void> {
       );
       if (process.env.FOXWARM_TEST_EXTERNAL_REVERSE === '1') {
         const fenceErrors: string[] = [];
-        try { await executeRemoteNodeTool('wrong-source', 'reverse-node', 'read', {}); }
+        try { await executeNodeTool('wrong-source', 'reverse-node', 'read', {}); }
         catch (error: any) { fenceErrors.push(error?.code); }
         try { await listNodeTopology('wrong-source'); }
         catch (error: any) { fenceErrors.push(error?.code); }

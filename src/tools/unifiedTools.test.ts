@@ -613,11 +613,11 @@ test('master Node discovery and dynamic calls expose only canonical node-environ
   isolated.agent = isolatedAgent;
   isolated.currentNode = 'bound-remote';
   await sessionManager.saveSession(isolatedId);
-  const originalRemoteExecute = (nodeExecution as any).executeRemoteNodeTool;
+  const originalRemoteExecute = (nodeExecution as any).executeNodeTool;
   let remoteCalls = 0;
 
   try {
-    (nodeExecution as any).executeRemoteNodeTool = async () => {
+    (nodeExecution as any).executeNodeTool = async () => {
       remoteCalls += 1;
       throw new Error('master calls must not enter node execution RPC');
     };
@@ -659,7 +659,7 @@ test('master Node discovery and dynamic calls expose only canonical node-environ
     );
 
     const forwarded: any[] = [];
-    (nodeExecution as any).executeRemoteNodeTool = async (...args: any[]) => {
+    (nodeExecution as any).executeNodeTool = async (...args: any[]) => {
       remoteCalls += 1;
       forwarded.push(args);
       return { remote: true, toolName: args[2] };
@@ -680,7 +680,7 @@ test('master Node discovery and dynamic calls expose only canonical node-environ
       [sourceId, 'remote-a', 'dynamic_probe'],
     ]);
   } finally {
-    (nodeExecution as any).executeRemoteNodeTool = originalRemoteExecute;
+    (nodeExecution as any).executeNodeTool = originalRemoteExecute;
     await sessionManager.setAgentMetadata(isolatedAgent, { isolated: false }).catch(() => {});
     await sessionManager.deleteSession(sourceId).catch(() => false);
     await sessionManager.deleteSession(isolatedId).catch(() => false);
@@ -775,11 +775,11 @@ test('call_tool is a permission-neutral dispatcher and only its concrete target 
   session.agent = agentName;
   session.currentNode = 'remote-a';
   const ctx: any = { sessionId: sourceId, session };
-  const originalExecute = nodeExecution.executeRemoteNodeTool;
+  const originalExecute = nodeExecution.executeNodeTool;
   let effects = 0;
   const descriptor = { source: 'node', name: 'custom_probe', args: {} };
   try {
-    (nodeExecution as any).executeRemoteNodeTool = async () => { effects += 1; return { output: 'allowed' }; };
+    (nodeExecution as any).executeNodeTool = async () => { effects += 1; return { output: 'allowed' }; };
 
     const found: any = await search_tools({ query: 'call tool', sources: ['builtin'], limit: 200 }, ctx);
     assert.equal(found.tools.some((tool: any) => tool.toolId === 'builtin:call_tool'), false);
@@ -822,7 +822,7 @@ test('call_tool is a permission-neutral dispatcher and only its concrete target 
     assert.deepEqual(allowedNested.result, { output: 'allowed' });
     assert.equal(effects, 3);
   } finally {
-    (nodeExecution as any).executeRemoteNodeTool = originalExecute;
+    (nodeExecution as any).executeNodeTool = originalExecute;
     await sessionManager.setAgentMetadata(agentName, { isolated: false }).catch(() => {});
     await sessionManager.deleteSession(sourceId).catch(() => false);
   }
@@ -1039,7 +1039,7 @@ test('default model-facing tool names and serialized schema size stay consolidat
   ]);
 
   const serializedBytes = Buffer.byteLength(JSON.stringify(modelFacingDefinitions), 'utf8');
-  assert.equal(serializedBytes, 35_592);
+  assert.equal(serializedBytes, 36_361);
   assert.ok(serializedBytes < 38_069, 'serialized default schema should stay below the pre-consolidation baseline');
 });
 
@@ -1073,8 +1073,15 @@ test('consolidated resource tool schemas expose their approved actions', () => {
   assert.deepEqual(skillDefinition?.parameters?.required, ['action']);
 
   const nodeDefinition = definitions.find(def => def.name === 'node');
-  assert.deepEqual((nodeDefinition?.parameters?.properties as any)?.action?.enum, ['list', 'select']);
+  assert.deepEqual((nodeDefinition?.parameters?.properties as any)?.action?.enum,
+    ['list', 'select', 'create', 'ensure', 'inspect', 'destroy']);
+  assert.equal((nodeDefinition?.parameters?.properties as any)?.providerId?.type, 'string');
+  assert.equal((nodeDefinition?.parameters?.properties as any)?.nodeId?.type, 'string');
+  assert.equal((nodeDefinition?.parameters?.properties as any)?.parameters?.type, 'object');
+  assert.equal((nodeDefinition?.parameters?.properties as any)?.parametersJson?.type, 'string');
+  assert.equal((nodeDefinition?.parameters?.properties as any)?.confirmation?.type, 'string');
   assert.deepEqual(nodeDefinition?.parameters?.required, ['action']);
+  assert.equal(definitions.some(def => def.name === 'sandbox' || def.name === 'node_resource'), false);
 });
 
 test('builtin file/browser tool schemas no longer expose node selector parameters', () => {

@@ -240,6 +240,22 @@ test('PersistentExecManager serializes concurrent registry mutations', async () 
   }
 });
 
+test('persistent exec persists script identity, uses entry-aware restart liveness, and shuts down reconciliation', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-entry-truth-')); const artifact = path.join(root, 'exec'); await fs.ensureDir(artifact);
+  const scriptPath = path.join(artifact, 'exec_entry_truth.command.sh'); const logPath = path.join(artifact, 'managed.log'); const statusPath = `${logPath}.status.json`; const cwdPath = `${logPath}.cwd.txt`; await fs.writeFile(scriptPath, '#!/bin/bash\n'); await fs.writeFile(logPath, 'partial\n');
+  await fs.writeJson(path.join(artifact, 'running.json'), { execs: [{ id: 'exec_entry_truth', pid: process.pid, sessionId: 's', agentName: 'main', nodeId: 'n', command: 'sleep', initialCwd: root, logPath, statusPath, cwdPath, startedAt: Date.now() - 10_000, notifyOnCompletion: true }] });
+  let entryChecks = 0; let processChecks = 0; let idleCallbacks = 0; const delivered: string[] = [];
+  const manager = new PersistentExecManager({ registryPath: path.join(artifact, 'running.json'), nodeId: 'n', getDefaultCwd: () => root, getExecTempDir: () => artifact,
+    processOperations: { ...nativeProcessOperations, isRunning: () => { processChecks += 1; return true; } },
+    isEntryRunning: entry => { entryChecks += 1; assert.equal(entry.scriptPath, scriptPath); return false; },
+    onRegistryIdle: () => { idleCallbacks += 1; },
+    completionDispatcher: async (_entry, _status, message) => { delivered.push(message); } });
+  try {
+    await manager.initialize(); assert.equal(entryChecks, 1); assert.equal(processChecks, 0); assert.match(delivered[0], /no status file was written/i); assert.deepEqual(manager.listRunningExecs(), []); assert.equal(idleCallbacks, 1); assert.deepEqual((await fs.readJson(path.join(artifact, 'running.json'))).execs, []);
+    await manager.shutdown(); assert.equal((manager as any).reconcileTimer, null); await manager.shutdown();
+  } finally { await fs.remove(root); }
+});
+
 test('persistent exec reconciles a dead stale entry after its dated artifact directory was removed', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-stale-status-'));
   const registryPath = path.join(root, 'running-exec.json');

@@ -40,7 +40,7 @@ All `*_AUTOCOMPLETE` constants: TIMER, BTW, SESSION, AGENT, SKILL, NODE, MESSAGE
 | `formatChannelRuntimeStatus(channelId, typeFilter)` | Formats runtime status of managed channels |
 | `getManagedPlatformHelp()` | Returns comma-separated managed channel IDs |
 | `buildNodePairHelp(token)` | Builds node pairing/bootstrap help text |
-| `buildNodeListReply(currentNode, boundNode)` | Builds node list with approved/pending sections and `/node` command help, including remove/move |
+| `buildNodeListReply(currentNode, boundNode)` | Builds generic available-Node plus authenticated approved/pending sections and `/node` command help, including remove/move |
 | `handleCompactCommand(ctx, args, sessionId, session)` | Handles /compact command logic |
 
 ### commands/sessionCmd.ts — /session handler
@@ -86,7 +86,7 @@ Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /continue, /node,
 - `./skills` / `./tools` — Skill and tool listing/toggling
 - `./timers` — Timer CRUD (create, list, delete)
 - `./tokenCount` — `estimateSessionSummary` (used by `sessionStatus` for status token/image estimates)
-- `./nodes/manager` / `./nodes/registry` — Node management, pairing approval, and approved-node remove/move operations
+- `./nodes/providerRegistry` / `./nodes/manager` / `./nodes/registry` — generic available-Node listing plus authenticated remote runtime, pairing approval, and approved-node remove/move operations
 - `./btw` — Side-question execution
 - `./weixin/api` — WeChat QR login flow
 - `./messageRouter` — `MessageRouter` (used by `CommandHandler` for auth)
@@ -108,6 +108,7 @@ Inline handlers: /help, /status, /btw, /fork, /stop, /dequeue, /continue, /node,
 - `/skill list` shows visible skills and entry-document counts; `/skill show <skill>` loads the skill entry document and lists resource paths without eagerly reading those resources.
 - `/node remove <node-id>` refuses reserved ids such as `master`, removes only approved-node credentials (not pending pair approval/rejection flow), and closes/unregisters the online runtime node if present.
 - `/node move <old-id> <new-id>` validates the new id through the registry's sanitized/reserved rules, rejects approved-node and online-runtime conflicts, preserves the server-side auth hash and metadata, closes the old runtime connection if present, and warns that node-side `node_credentials.json` still contains the old id and must be edited/re-paired/restarted.
+- `/node` lists currently available generic Nodes separately from authenticated approved/pending records. Authenticated rows render connected state as `✅ online`; redundant requested names equal to the assigned Node ID are omitted, while unapproved pending requests retain their requested name. `/node <node-id>` validates selection through the same Main-owned provider facade used by model tools and Session workers.
 - `/fork [suffix] [message]` creates a forked child, keeps the original channel attached to the parent, optionally sends the complete raw multiline initial message to the child, then records the canonical parent event defined by [D-lifecycle-manual-fork-event](../threads/session-lifecycle.md#d-lifecycle-manual-fork-event).
 - `/session list` reads raw attachment keys from `sessionManager.getAllAttachments()` for display only, filters keys starting with the exact `webui:` prefix, and leaves all attachment persistence/routing plus non-WebUI channel output unchanged. Sessions with no remaining visible channel attachments omit the channel line.
 

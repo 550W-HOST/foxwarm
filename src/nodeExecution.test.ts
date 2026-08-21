@@ -10,6 +10,13 @@ import { createNodeExecutionServiceHandler, nodeExecutionServiceDescriptor } fro
 import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
 import { getAgentDir } from './config';
 import { createHash } from 'node:crypto';
+import {
+  MasterNodeProvider,
+  NodeProviderRegistry,
+  type NodeDescriptor,
+  type NodeProvider,
+  type NodeToolRequest,
+} from './nodes/providerRegistry';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -113,7 +120,7 @@ test('Node topology bounds schemas without invoking capability accessors', async
   ] }];
   (nodesManager as any).listNodes = () => [{ id: 'bounded', lastActivity: 1 }];
   try {
-    const [node] = await nodeExecution.listNodeTopology(sourceId);
+    const node = (await nodeExecution.listNodeTopology(sourceId)).find(item => item.id === 'bounded')!;
     assert.equal(accessorCalls, 0); assert.equal(node.tools.length, 3);
     assert.equal(node.tools[0].description?.length, 2000);
     const schema: any = node.tools[0].parameters;
@@ -130,6 +137,87 @@ test('Node topology bounds schemas without invoking capability accessors', async
   } finally {
     (nodesManager as any).listNodesWithTools = originals.withTools; (nodesManager as any).listNodes = originals.list;
     await cleanup(sourceId);
+  }
+});
+
+test('generic Node registry lists, selects, and invokes a complete non-WebSocket sandbox capability', async () => {
+  const sourceId = makeId('node_provider_sandbox');
+  const session = await sessionManager.getSession(sourceId);
+  session.currentNode = 'fixture-sandbox';
+  session.cwd = 'sandbox://session-cwd';
+  await sessionManager.saveSession(sourceId);
+  const requests: NodeToolRequest[] = [];
+  const descriptor: NodeDescriptor = {
+    id: 'fixture-sandbox',
+    kind: 'sandbox',
+    provider: 'deterministic-test',
+    type: 'memory-fixture',
+    availability: 'ready',
+    defaultCwd: 'sandbox://project-root',
+    tools: [{ name: 'read', description: 'Read from the deterministic fixture.', parameters: { type: 'object' } }],
+  };
+  const provider: NodeProvider = {
+    id: 'deterministic-test',
+    listNodes: () => [descriptor],
+    getNode: nodeId => nodeId === descriptor.id ? descriptor : undefined,
+    async invokeTool(request) {
+      requests.push(request);
+      return { output: `fixture:${String(request.args.filePath)}` };
+    },
+  };
+  const registry = new RpcServiceRegistry();
+  registry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({
+    providerRegistry: new NodeProviderRegistry([new MasterNodeProvider(), provider]),
+  }));
+  const transport = new LocalRpcTransport(registry);
+  const client = new RpcClient(nodeExecutionServiceDescriptor, transport);
+  const originalGetNode = nodesManager.getNode;
+  const originalExecuteTool = nodesManager.executeTool;
+  try {
+    (nodesManager as any).getNode = () => { throw new Error('sandbox provider must not use WebSocket node lookup'); };
+    (nodesManager as any).executeTool = async () => { throw new Error('sandbox provider must not use WebSocket execution'); };
+    const topology = await client.call('list', { sourceSessionId: sourceId });
+    const sandbox = topology.nodes.find(node => node.id === descriptor.id);
+    assert.deepEqual(sandbox && {
+      id: sandbox.id,
+      kind: sandbox.kind,
+      provider: sandbox.provider,
+      availability: sandbox.availability,
+      tools: sandbox.tools.map(tool => tool.name),
+    }, {
+      id: 'fixture-sandbox',
+      kind: 'sandbox',
+      provider: 'deterministic-test',
+      availability: 'ready',
+      tools: ['read'],
+    });
+    assert.deepEqual(await client.call('select', { sourceSessionId: sourceId, nodeId: descriptor.id }), {
+      nodeId: descriptor.id,
+      defaultCwd: 'sandbox://project-root',
+    });
+    assert.deepEqual(await client.call('execute', {
+      sourceSessionId: sourceId,
+      nodeId: descriptor.id,
+      toolName: 'read',
+      args: { filePath: 'notes.txt' },
+    }), { result: { output: 'fixture:notes.txt' } });
+    await client.call('execute', { sourceSessionId: sourceId, nodeId: descriptor.id, toolName: 'read', args: { filePath: 'deferred.txt' }, routingSnapshot: { currentNode: descriptor.id, cwd: 'sandbox://captured', deferSessionCwdSync: true } });
+    assert.deepEqual(requests, [{
+      sourceSessionId: sourceId,
+      nodeId: descriptor.id,
+      toolName: 'read',
+      args: { filePath: 'notes.txt' },
+      context: { agent: session.agent || 'main', currentNode: descriptor.id, cwd: 'sandbox://session-cwd' },
+    }, {
+      sourceSessionId: sourceId, nodeId: descriptor.id, toolName: 'read', args: { filePath: 'deferred.txt' },
+      context: { agent: session.agent || 'main', currentNode: descriptor.id, cwd: 'sandbox://captured', deferSessionCwdSync: true },
+    }]);
+  } finally {
+    (nodesManager as any).getNode = originalGetNode;
+    (nodesManager as any).executeTool = originalExecuteTool;
+    await transport.drain().catch(() => {});
+    transport.close();
+    await sessionManager.deleteSession(sourceId).catch(() => false);
   }
 });
 
@@ -270,9 +358,9 @@ test('master-currentNode node tools bypass Node execution RPC', async () => {
   const session = await sessionManager.getSession(sourceId);
   session.currentNode = 'master';
   await sessionManager.saveSession(sourceId);
-  const originalRemoteExecute = (nodeExecution as any).executeRemoteNodeTool;
+  const originalRemoteExecute = (nodeExecution as any).executeNodeTool;
   let remoteCalls = 0;
-  (nodeExecution as any).executeRemoteNodeTool = async () => {
+  (nodeExecution as any).executeNodeTool = async () => {
     remoteCalls += 1;
     throw new Error('remote service must not be called');
   };
@@ -286,7 +374,7 @@ test('master-currentNode node tools bypass Node execution RPC', async () => {
     assert.equal(result.parts.find(part => part.functionResponse)?.functionResponse?.response.error, undefined);
     assert.equal(remoteCalls, 0);
   } finally {
-    (nodeExecution as any).executeRemoteNodeTool = originalRemoteExecute;
+    (nodeExecution as any).executeNodeTool = originalRemoteExecute;
     await cleanup(sourceId);
   }
 });
@@ -346,21 +434,21 @@ test('Node execution rejects master, stale, offline, unadvertised, and isolated-
   try {
     (nodesManager as any).executeTool = async () => ({ ok: true });
     await assert.rejects(
-      () => nodeExecution.executeRemoteNodeTool(sourceId, 'master', 'read', {}),
+      () => nodeExecution.executeNodeTool(sourceId, 'master', 'read', {}),
       (error: any) => error?.code === 'NODE_EXECUTION_MASTER_FORBIDDEN',
     );
     await assert.rejects(
-      () => nodeExecution.executeRemoteNodeTool(makeId('missing'), 'remote-a', 'read', {}),
+      () => nodeExecution.executeNodeTool(makeId('missing'), 'remote-a', 'read', {}),
       (error: any) => error?.code === 'NODE_EXECUTION_SOURCE_NOT_FOUND',
     );
     (nodesManager as any).getNode = (): any => undefined;
     await assert.rejects(
-      () => nodeExecution.executeRemoteNodeTool(sourceId, 'remote-a', 'read', {}),
+      () => nodeExecution.executeNodeTool(sourceId, 'remote-a', 'read', {}),
       (error: any) => error?.code === 'NODE_EXECUTION_NODE_UNAVAILABLE',
     );
     (nodesManager as any).getNode = (nodeId: string) => fakeNode(nodeId, ['other_tool']);
     await assert.rejects(
-      () => nodeExecution.executeRemoteNodeTool(sourceId, 'remote-a', 'read', {}),
+      () => nodeExecution.executeNodeTool(sourceId, 'remote-a', 'read', {}),
       (error: any) => error?.code === 'NODE_EXECUTION_TOOL_UNAVAILABLE',
     );
 
@@ -372,14 +460,14 @@ test('Node execution rejects master, stale, offline, unadvertised, and isolated-
     (nodesManager as any).readFileFromNode = async () => ({ dataBase64: 'Ynl0ZXM=', sizeBytes: 5,
       sha256: createHash('sha256').update('bytes').digest('hex') });
     (nodesManager as any).writeFileToNode = async () => ({ sha256: 'b'.repeat(64), overwritten: false });
-    assert.deepEqual(await nodeExecution.executeRemoteNodeTool(sourceId, 'bound-node', 'read', {}), { ok: true });
-    assert.deepEqual((await nodeExecution.listNodeTopology(sourceId)).map(node => node.id), ['bound-node']);
-    assert.deepEqual((await nodeExecution.listNodeTopology(sourceId, undefined, 'other-node')).map(node => node.id), ['bound-node']);
+    assert.deepEqual(await nodeExecution.executeNodeTool(sourceId, 'bound-node', 'read', {}), { ok: true });
+    assert.deepEqual((await nodeExecution.listNodeTopology(sourceId)).map(node => node.id), ['master', 'bound-node']);
+    assert.deepEqual((await nodeExecution.listNodeTopology(sourceId, undefined, 'other-node')).map(node => node.id), ['master', 'bound-node']);
     assert.equal((await nodeExecution.validateNodeSelection(sourceId, 'bound-node')).nodeId, 'bound-node');
     assert.equal((await nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'master', sourcePath: `${getAgentDir(agentName)}/from`, targetNode: 'bound-node', targetPath: '/to' })).sha256, 'b'.repeat(64));
     assert.equal((await nodeExecution.copyBetweenNodes(sourceId, { sourceNode: 'bound-node', sourcePath: '/from', targetNode: 'master', targetPath: `${getAgentDir(agentName)}/to` })).sha256, 'b'.repeat(64));
     await assert.rejects(
-      () => nodeExecution.executeRemoteNodeTool(sourceId, 'other-node', 'read', {}),
+      () => nodeExecution.executeNodeTool(sourceId, 'other-node', 'read', {}),
       (error: any) => error?.code === 'NODE_EXECUTION_ISOLATED_NODE_DENIED',
     );
     await assert.rejects(() => nodeExecution.validateNodeSelection(sourceId, 'other-node'),
@@ -410,7 +498,7 @@ test('Node execution clones results and preserves remote image/error handling', 
   try {
     (nodesManager as any).getNode = (nodeId: string) => fakeNode(nodeId, ['read']);
     (nodesManager as any).executeTool = async () => shared;
-    const cloned = await nodeExecution.executeRemoteNodeTool(sourceId, 'remote-a', 'read', {});
+    const cloned = await nodeExecution.executeNodeTool(sourceId, 'remote-a', 'read', {});
     cloned.nested.value = 9;
     assert.equal(shared.nested.value, 1);
 
@@ -451,14 +539,14 @@ test('terminal shutdown drains accepted Node execution and fences new calls', as
       await release;
       return 'done';
     };
-    const accepted = nodeExecution.executeRemoteNodeTool(sourceId, 'remote-a', 'read', {});
+    const accepted = nodeExecution.executeNodeTool(sourceId, 'remote-a', 'read', {});
     await started;
     let settled = false;
     const shutdown = nodeExecution.shutdownNodeExecution().then(() => { settled = true; });
     await Promise.resolve();
     assert.equal(settled, false);
     await assert.rejects(
-      () => nodeExecution.executeRemoteNodeTool(sourceId, 'remote-a', 'read', {}),
+      () => nodeExecution.executeNodeTool(sourceId, 'remote-a', 'read', {}),
       (error: any) => error?.code === 'NODE_EXECUTION_SHUTDOWN',
     );
     releaseHandler();

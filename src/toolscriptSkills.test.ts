@@ -57,8 +57,8 @@ test('global ToolScript skills are visible and loadable', async () => {
 
   const isolatedWorker = await loadSkillDocuments('isolated-worker', { agentName: 'main' });
   assert.match(isolatedWorker.documents[0].content, /create_isolated_worker\.py/);
-  assert.match(isolatedWorker.documents[0].content, /createMainSession=false/);
-  assert.match(isolatedWorker.documents[0].content, /not a transaction/);
+  assert.match(isolatedWorker.documents[0].content, /createMainSession:\s*false/);
+  assert.match(isolatedWorker.documents[0].content, /not transactional/);
   assert.ok(isolatedWorker.info.resourceFiles.includes('create_isolated_worker.py'));
   assert.ok(isolatedWorker.info.resourceFiles.includes('tests/test_create_isolated_worker.py'));
 
