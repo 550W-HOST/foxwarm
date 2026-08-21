@@ -32,6 +32,7 @@ type DestroyIntent = { node: ProviderNodeState; requestedAt: number };
 type RetiredGeneration = { node: ProviderNodeState; retiredAt: number };
 type ProviderState = { version: 3; nodes: ProviderNodeState[]; destroys: DestroyIntent[]; retired: RetiredGeneration[] };
 type DockerResult = { stdout: string; stderr: string };
+type DockerContainerReadiness = { status: string; availability: NodeDescriptor['availability']; ready: boolean; recovery?: 'start' | 'unpause' };
 
 export interface DockerCommandRunner {
   run(args: string[], options?: { input?: string; timeoutMs?: number; maxOutputBytes?: number; signal?: AbortSignal }): Promise<DockerResult>;
@@ -357,6 +358,34 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
     return inspected;
   }
 
+  private containerReadiness(inspected: any): DockerContainerReadiness {
+    const state = inspected?.State || {}; const rawStatus = typeof state.Status === 'string' && state.Status.trim() ? state.Status.trim().toLowerCase().slice(0, 64) : 'unknown';
+    const status = state.Paused === true ? 'paused' : state.Restarting === true ? 'restarting' : state.Dead === true ? 'dead' : rawStatus;
+    const ready = state.Running === true && state.Paused !== true && state.Restarting !== true && state.Dead !== true && status === 'running';
+    if (ready) return { status, availability: 'ready', ready: true };
+    if (status === 'paused') return { status, availability: 'offline', ready: false, recovery: 'unpause' };
+    if (status === 'created' || status === 'exited' || status === 'stopped') return { status, availability: 'offline', ready: false, recovery: 'start' };
+    return { status, availability: 'error', ready: false };
+  }
+
+  private async inspectReadiness(node: ProviderNodeState, options?: NodeProviderCallOptions): Promise<{ inspected: any; readiness: DockerContainerReadiness }> {
+    const inspected = await this.inspectContainer(node, options); return { inspected, readiness: this.containerReadiness(inspected) };
+  }
+
+  private assertExecutionReady(node: ProviderNodeState, readiness: DockerContainerReadiness): void {
+    if (!readiness.ready) throw new NodeProviderError('DOCKER_WORKTREE_CONTAINER_NOT_READY', `Docker Node \`${node.nodeId}\` is not execution-ready (status: ${readiness.status}).`, readiness.status === 'restarting');
+  }
+
+  private async ensureContainerReady(node: ProviderNodeState, options?: NodeProviderCallOptions): Promise<{ readiness: DockerContainerReadiness; effect: string }> {
+    const current = await this.inspectReadiness(node, options); if (current.readiness.ready) return { readiness: current.readiness, effect: 'Docker container and exact worktree registration already exist and are execution-ready.' };
+    const action = current.readiness.recovery;
+    if (!action) this.assertExecutionReady(node, current.readiness);
+    try { await this.docker.run([action!, node.containerId], { timeoutMs: 30_000, signal: options?.signal }); }
+    catch { throw new NodeProviderError(options?.signal?.aborted ? 'DOCKER_WORKTREE_CANCELLED' : 'DOCKER_WORKTREE_ENSURE_RECOVERY_FAILED', options?.signal?.aborted ? `Docker ensure recovery for Node \`${node.nodeId}\` was cancelled.` : `Docker could not ${action} Node \`${node.nodeId}\` from status ${current.readiness.status}.`, true); }
+    const recovered = await this.inspectReadiness(node, options); this.assertExecutionReady(node, recovered.readiness);
+    return { readiness: recovered.readiness, effect: action === 'unpause' ? 'Unpaused the exact provider-owned Docker container and verified execution readiness.' : 'Restarted the exact provider-owned Docker container and verified execution readiness.' };
+  }
+
   private async exactContainerPresent(node: ProviderNodeState, options?: NodeProviderCallOptions): Promise<boolean> {
     let listed: DockerResult;
     try { listed = await this.docker.run(['ps', '-a', '--filter', `name=^/${node.containerName}$`, '--format', '{{.ID}}'], { maxOutputBytes: 64 * 1024, signal: options?.signal }); }
@@ -445,7 +474,7 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
       await this.cleanupCrashGapOrphans(state, options); const nodes: NodeDescriptor[] = [];
       for (const node of state.nodes) {
         if (node.configHash !== this.configHash) { nodes.push(this.descriptor(node, 'error')); continue; }
-        try { const inspected = await this.inspectContainer(node, options); nodes.push(this.descriptor(node, inspected?.State?.Running === true ? 'ready' : 'offline')); } catch { nodes.push(this.descriptor(node, 'error')); }
+        try { const { readiness } = await this.inspectReadiness(node, options); nodes.push(this.descriptor(node, readiness.availability)); } catch { nodes.push(this.descriptor(node, 'error')); }
       }
       return nodes;
     });
@@ -520,7 +549,7 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
     evidence: Awaited<ReturnType<DockerWorktreeNodeProvider['gitIdentity']>> & Awaited<ReturnType<DockerWorktreeNodeProvider['gitHeadBranch']>>,
     networkMode: 'none' | 'bridge',
     options?: NodeProviderCallOptions,
-  ): Promise<ProviderNodeState> {
+  ): Promise<{ node: ProviderNodeState; readiness: DockerContainerReadiness }> {
     const containerName = this.containerName(nodeId);
     await this.cleanupExactOrphan(nodeId, evidence.worktreePath, networkMode, options);
     const generation = crypto.randomBytes(16).toString('hex');
@@ -548,9 +577,15 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
     const node = { nodeId, worktreePath: evidence.worktreePath, gitMarkerPath: evidence.gitMarkerPath, gitMarkerType: evidence.gitMarkerType,
       gitDir: evidence.gitDir, gitCommonDir: evidence.gitCommonDir, image: this.config.image, networkMode, containerId, containerName,
       configHash: this.configHash, generation, artifactDir, createdAt: Date.now(), uid: this.runtimeUid, gid: this.runtimeGid };
-    try { await this.inspectContainer(node, options); }
-    catch (error) { await this.docker.run(['rm', '--force', containerId], { timeoutMs: 30_000 }).catch(() => {}); throw error; }
-    return node;
+    try {
+      const { readiness } = await this.inspectReadiness(node, options);
+      if (!readiness.ready) throw new NodeProviderError('DOCKER_WORKTREE_START_NOT_READY', `Docker Node \`${nodeId}\` did not become execution-ready after run (status: ${readiness.status}).`, true);
+      return { node, readiness };
+    } catch (error) {
+      try { await this.docker.run(['rm', '--force', containerId], { timeoutMs: 30_000 }); }
+      catch { throw new NodeProviderError('DOCKER_WORKTREE_START_CLEANUP_FAILED', `Docker Node \`${nodeId}\` was not execution-ready and its exact container could not be removed.`, true); }
+      throw error;
+    }
   }
 
   private async createOrEnsure(request: NodeLifecycleProviderRequest, ensure: boolean, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult> {
@@ -564,21 +599,21 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
         if (!ensure) throw new NodeProviderError('DOCKER_WORKTREE_NODE_EXISTS', `Node \`${params.nodeId}\` already exists.`);
         this.assertCurrentConfig(existing); this.assertGitIdentity(existing, identity);
         if (existing.image !== this.config.image || existing.networkMode !== params.networkMode) throw new NodeProviderError('DOCKER_WORKTREE_ENSURE_MISMATCH', 'Existing Docker Node immutable configuration does not match ensure parameters.');
-        await this.inspectContainer(existing, options);
+        const ensured = await this.ensureContainerReady(existing, options);
         const evidence = { ...identity, ...await this.gitHeadBranch(identity) };
-        return this.lifecycleResult(existing, evidence, 'Docker container and exact worktree registration already exist.');
+        return this.lifecycleResult(existing, evidence, ensured.readiness, ensured.effect);
       }
       await this.cleanupCrashGapOrphans(state, options);
       const evidence = { ...identity, ...await this.gitHeadBranch(identity) };
-      const node = await this.startContainer(params.nodeId, evidence, params.networkMode, options); state.nodes.push(node);
-      return this.lifecycleResult(node, evidence, 'Started a provider-owned Docker container for the existing worktree.');
+      const started = await this.startContainer(params.nodeId, evidence, params.networkMode, options); state.nodes.push(started.node);
+      return this.lifecycleResult(started.node, evidence, started.readiness, 'Started a provider-owned Docker container and verified execution readiness for the existing worktree.');
     });
     const persisted = (await this.readState()).nodes.find(node => node.nodeId === params.nodeId); if (persisted) await this.getExecRuntime(persisted);
     return result;
   }
 
-  private lifecycleResult(node: ProviderNodeState, evidence: Awaited<ReturnType<DockerWorktreeNodeProvider['gitIdentity']>> & Awaited<ReturnType<DockerWorktreeNodeProvider['gitHeadBranch']>>, effect: string): NodeLifecycleResult {
-    return { node: this.descriptor(node), effect, dataRetention: 'The existing worktree, Git metadata, and exact generation execution artifacts are retained. Git metadata is mounted read-only; this Node can inspect but cannot commit.', details: { worktreePath: node.worktreePath, artifactDir: node.artifactDir, generation: node.generation, head: evidence.head, branch: evidence.branch, containerId: node.containerId, image: node.image, networkMode: node.networkMode, status: 'running', containment: 'Docker filesystem and process isolation with only the configured worktree, exact generation artifact directory, and read-only Git metadata mounted; not VM-grade isolation.', limitations: ['Process-tree and live-cwd inspection are limited at the Docker launcher boundary.', 'Git refs and objects are read-only.', 'No browser, PTY, Code, copy, or fixed services.'] } };
+  private lifecycleResult(node: ProviderNodeState, evidence: Awaited<ReturnType<DockerWorktreeNodeProvider['gitIdentity']>> & Awaited<ReturnType<DockerWorktreeNodeProvider['gitHeadBranch']>>, readiness: DockerContainerReadiness, effect: string): NodeLifecycleResult {
+    return { node: this.descriptor(node, readiness.availability), effect, dataRetention: 'The existing worktree, Git metadata, and exact generation execution artifacts are retained. Git metadata is mounted read-only; this Node can inspect but cannot commit.', details: { worktreePath: node.worktreePath, artifactDir: node.artifactDir, generation: node.generation, head: evidence.head, branch: evidence.branch, containerId: node.containerId, image: node.image, networkMode: node.networkMode, status: readiness.status, availability: readiness.availability, containment: 'Docker filesystem and process isolation with only the configured worktree, exact generation artifact directory, and read-only Git metadata mounted; not VM-grade isolation.', limitations: ['Process-tree and live-cwd inspection are limited at the Docker launcher boundary.', 'Git refs and objects are read-only.', 'No browser, PTY, Code, copy, or fixed services.'] } };
   }
 
   createNode(request: NodeLifecycleProviderRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult> { return this.createOrEnsure(request, false, options); }
@@ -586,12 +621,17 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
   async inspectNode(request: NodeLifecycleNodeRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult> {
     onlyKeys(request.parameters, []); const node = (await this.readState()).nodes.find(item => item.nodeId === request.nodeId);
     if (!node) throw new NodeProviderError('DOCKER_WORKTREE_NODE_NOT_FOUND', `Node \`${request.nodeId}\` was not found.`);
-    const inspected = await this.inspectContainer(node, options);
-    if (node.configHash !== this.configHash) return { node: this.descriptor(node, 'error'), effect: 'Inspected the exactly corroborated runtime without executing capabilities.', dataRetention: 'Destroy remains available and retains worktree/Git/provider data.', details: { status: 'stale-config', worktreePath: node.worktreePath, containerId: node.containerId, storedConfigHash: node.configHash, currentConfigHash: this.configHash, limitation: 'Provider configuration changed; capabilities and Git evidence are unavailable until the stale runtime is destroyed and recreated.' } };
+    let readiness: DockerContainerReadiness;
+    try { ({ readiness } = await this.inspectReadiness(node, options)); }
+    catch (error) {
+      if (!(error instanceof NodeProviderError) || error.code !== 'DOCKER_WORKTREE_CONTAINER_UNAVAILABLE') throw error;
+      readiness = this.containerReadiness({ State: { Status: 'unavailable' } });
+      return { node: this.descriptor(node, readiness.availability), effect: 'Inspected provider state; the exact Docker container is unavailable.', dataRetention: 'Provider registration, worktree/Git data, and generation artifacts remain.', details: { status: readiness.status, availability: readiness.availability, worktreePath: node.worktreePath, containerId: node.containerId, generation: node.generation, limitation: 'Capabilities remain unavailable; ensure does not recreate a missing container and exact destroy/recovery may require Docker identity reconciliation.' } };
+    }
+    if (node.configHash !== this.configHash) return { node: this.descriptor(node, 'error'), effect: 'Inspected the exactly corroborated runtime without executing capabilities.', dataRetention: 'Destroy remains available and retains worktree/Git/provider data.', details: { status: readiness.status, availability: 'error', configurationStatus: 'stale-config', worktreePath: node.worktreePath, containerId: node.containerId, storedConfigHash: node.configHash, currentConfigHash: this.configHash, limitation: 'Provider configuration changed; capabilities and Git evidence are unavailable until the stale runtime is destroyed and recreated.' } };
     const identity = await this.gitIdentity(node.worktreePath); this.assertStateIsolation(identity); this.assertGitIdentity(node, identity);
     const evidence = { ...identity, ...await this.gitHeadBranch(identity) };
-    const result = this.lifecycleResult(node, evidence, 'Inspected provider state, Docker identity, and the existing worktree without mutation.');
-    (result.details as any).status = inspected?.State?.Running === true ? 'running' : String(inspected?.State?.Status || 'unknown'); return result;
+    return this.lifecycleResult(node, evidence, readiness, 'Inspected provider state, Docker identity, readiness, and the existing worktree without mutation.');
   }
   async destroyNode(request: NodeLifecycleNodeRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult> {
     onlyKeys(request.parameters, []);
@@ -628,7 +668,7 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
     const state = await this.readState(); const node = state.nodes.find(item => item.nodeId === request.nodeId); if (!node) throw new NodeProviderError('DOCKER_WORKTREE_NODE_NOT_FOUND', `Node \`${request.nodeId}\` was not found.`);
     if (state.destroys.some(intent => intent.node.nodeId === node.nodeId)) throw new NodeProviderError('DOCKER_WORKTREE_DESTROY_PENDING', `Docker Node \`${node.nodeId}\` has a committed destroy pending.`);
     this.assertCurrentConfig(node);
-    const inspected = await this.inspectContainer(node, options); if (inspected?.State?.Running !== true) throw new NodeProviderError('DOCKER_WORKTREE_CONTAINER_UNAVAILABLE', `Docker Node \`${request.nodeId}\` is not running.`, true);
+    const { readiness } = await this.inspectReadiness(node, options); this.assertExecutionReady(node, readiness);
     if ((request.toolName === 'write' || request.toolName === 'edit') && typeof request.args.filePath === 'string' && path.isAbsolute(request.args.filePath)
       && !inside(node.worktreePath, path.resolve(request.args.filePath))) throw new NodeProviderError('DOCKER_WORKTREE_PATH_DENIED', 'Docker worktree mutation path is outside the exact worktree.');
     if (request.toolName === 'exec') {

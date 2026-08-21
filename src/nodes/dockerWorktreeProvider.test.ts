@@ -8,6 +8,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import '../llm';
 import { DockerCommandError, DockerWorktreeNodeProvider, NativeDockerCommandRunner, type DockerCommandRunner } from './dockerWorktreeProvider';
+import { NodeProviderRegistry } from './providerRegistry';
 
 const execFileAsync = promisify(execFile);
 
@@ -32,6 +33,7 @@ class FakeDocker implements DockerCommandRunner {
   onRm?: () => void;
   topRows: string[] = [];
   failTopCount = 0;
+  immediateExitOnRun = false;
   closedAfterAbort = false;
   get container(): any { return [...this.containers.values()][0]; }
   async run(args: string[], options: { input?: string; signal?: AbortSignal } = {}) {
@@ -43,7 +45,8 @@ class FakeDocker implements DockerCommandRunner {
       const mounts: any[] = []; for (let index = 0; index < args.length; index++) if (args[index] === '--mount') { const fields = Object.fromEntries(args[++index].split(',').map(item => { const split = item.indexOf('='); return split < 0 ? [item, true] : [item.slice(0, split), item.slice(split + 1)]; })); mounts.push({ Source: fields.src, Destination: fields.dst, RW: fields.readonly !== true }); }
       const image = args[args.length - 4]; const network = args[args.indexOf('--network') + 1]; const user = args[args.indexOf('--user') + 1];
       const name = args[args.indexOf('--name') + 1]; const id = crypto.createHash('sha256').update(`${name}-${this.containers.size}`).digest('hex');
-      const container = { Id: id, Name: `/${name}`, Config: { Labels: labels, Image: image, User: user }, HostConfig: { NetworkMode: network }, Mounts: mounts, State: { Running: true, Status: 'running' } };
+      const container = { Id: id, Name: `/${name}`, Config: { Labels: labels, Image: image, User: user }, HostConfig: { NetworkMode: network }, Mounts: mounts,
+        State: this.immediateExitOnRun ? { Running: false, Paused: false, Restarting: false, Dead: false, Status: 'exited' } : { Running: true, Paused: false, Restarting: false, Dead: false, Status: 'running' } };
       this.containers.set(id, container); this.containers.set(name, container);
       if (this.pauseRunUntilAbort) await new Promise<void>((_resolve, reject) => options.signal?.addEventListener('abort', () => { this.closedAfterAbort = true; reject(new DockerCommandError('cancelled')); }, { once: true }));
       if (this.mismatchRunAfterCreate) { container.Config.Labels['foxwarm.worktree'] = '/mismatched'; throw new DockerCommandError('timeout'); }
@@ -67,6 +70,8 @@ class FakeDocker implements DockerCommandRunner {
       return { stdout: selected.map(item => item.Id).join('\n'), stderr: '' };
     }
     if (args[0] === 'top') { if (this.failTopCount > 0) { this.failTopCount--; throw new DockerCommandError('failure'); } return { stdout: this.topRows.join('\n'), stderr: '' }; }
+    if (args[0] === 'start') { const container = this.containers.get(args[1]); if (!container) throw new DockerCommandError('failure'); container.State = { Running: true, Paused: false, Restarting: false, Dead: false, Status: 'running' }; return { stdout: `${container.Id}\n`, stderr: '' }; }
+    if (args[0] === 'unpause') { const container = this.containers.get(args[1]); if (!container) throw new DockerCommandError('failure'); container.State = { Running: true, Paused: false, Restarting: false, Dead: false, Status: 'running' }; return { stdout: '', stderr: '' }; }
     if (args[0] === 'rm') { if (this.failRmCount > 0) { this.failRmCount--; throw new DockerCommandError('failure'); } this.onRm?.(); const container = this.containers.get(args[args.length - 1]); if (container) for (const [key, value] of this.containers) if (value === container) this.containers.delete(key); return { stdout: '', stderr: '' }; }
     throw new Error(`unsupported fake Docker call ${args[0]}`);
   }
@@ -138,6 +143,34 @@ test('Docker worktree provider rejects roots, networks, contentRef, and mismatch
   } finally { await fs.remove(dir); }
 });
 
+test('Docker lifecycle readiness is consistent and ensure restarts or unpauses the same exact generation', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-docker-readiness-')); const repo = await makeRepo(dir); const docker = new FakeDocker();
+  const provider = new DockerWorktreeNodeProvider({ id: 'docker-readiness', type: 'docker-worktree', command: 'docker', args: [], image: 'fixture', allowedWorktreeRoots: [dir], networkModes: ['none'], stateDir: path.join(dir, 'state'), memory: '1g', cpus: 1, pidsLimit: 32, tmpfsSize: '32m' }, docker);
+  try {
+    const created = await provider.createNode({ sourceSessionId: 's', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } }); const id = (created.details as any).containerId; const generation = (created.details as any).generation;
+    assert.equal(created.node?.availability, 'ready'); assert.equal((created.details as any).status, 'running'); assert.equal((created.details as any).availability, 'ready');
+
+    docker.container.State = { Running: false, Paused: false, Restarting: false, Dead: false, Status: 'exited' };
+    assert.equal((await provider.listNodes())[0].availability, 'offline'); const exited = await provider.inspectNode({ sourceSessionId: 's', nodeId: 'n', parameters: {}, context: { agent: 'main' } }); assert.equal(exited.node?.availability, 'offline'); assert.equal((exited.details as any).status, 'exited'); assert.equal((exited.details as any).availability, 'offline');
+    const registry = new NodeProviderRegistry([provider]); await assert.rejects(() => registry.invokeTool({ sourceSessionId: 's', nodeId: 'n', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }), /not available/);
+    await assert.rejects(() => provider.invokeTool({ sourceSessionId: 's', nodeId: 'n', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }), /not execution-ready.*exited/i);
+    const restarted = await provider.ensureNode({ sourceSessionId: 's', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } }); assert.match(String(restarted.effect), /Restarted/); assert.equal((restarted.details as any).containerId, id); assert.equal((restarted.details as any).generation, generation); assert.equal(restarted.node?.availability, 'ready'); assert.equal((restarted.details as any).status, 'running'); assert.ok(docker.calls.some(call => call.args[0] === 'start' && call.args[1] === id)); assert.equal(docker.calls.filter(call => call.args[0] === 'run').length, 1);
+    assert.equal(await provider.invokeTool({ sourceSessionId: 's', nodeId: 'n', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }), 'fixture-content');
+
+    docker.container.State = { Running: true, Paused: true, Restarting: false, Dead: false, Status: 'running' }; const paused = await provider.inspectNode({ sourceSessionId: 's', nodeId: 'n', parameters: {}, context: { agent: 'main' } }); assert.equal(paused.node?.availability, 'offline'); assert.equal((paused.details as any).status, 'paused');
+    const unpaused = await provider.ensureNode({ sourceSessionId: 's', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } }); assert.match(String(unpaused.effect), /Unpaused/); assert.equal((unpaused.details as any).containerId, id); assert.equal((unpaused.details as any).generation, generation); assert.ok(docker.calls.some(call => call.args[0] === 'unpause' && call.args[1] === id));
+
+    docker.container.State = { Running: true, Paused: false, Restarting: true, Dead: false, Status: 'running' }; assert.equal((await provider.listNodes())[0].availability, 'error'); const restarting = await provider.inspectNode({ sourceSessionId: 's', nodeId: 'n', parameters: {}, context: { agent: 'main' } }); assert.equal(restarting.node?.availability, 'error'); assert.equal((restarting.details as any).status, 'restarting'); assert.equal((restarting.details as any).availability, 'error'); await assert.rejects(() => provider.ensureNode({ sourceSessionId: 's', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } }), /not execution-ready.*restarting/i);
+    docker.containers.clear(); assert.equal((await provider.listNodes())[0].availability, 'error'); const unavailable = await provider.inspectNode({ sourceSessionId: 's', nodeId: 'n', parameters: {}, context: { agent: 'main' } }); assert.equal(unavailable.node?.availability, 'error'); assert.equal((unavailable.details as any).status, 'unavailable'); assert.equal((unavailable.details as any).availability, 'error'); await assert.rejects(() => provider.ensureNode({ sourceSessionId: 's', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } }), /container.*unavailable/i);
+  } finally { docker.container && (docker.container.State = { Running: true, Paused: false, Restarting: false, Dead: false, Status: 'running' }); await provider.destroyNode({ sourceSessionId: 's', nodeId: 'n', parameters: {}, context: { agent: 'main' } }).catch(() => {}); await provider.shutdown(); await fs.remove(dir); }
+});
+
+test('create removes an exact container that exits before execution readiness', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-docker-immediate-exit-')); const repo = await makeRepo(dir); const docker = new FakeDocker(); docker.immediateExitOnRun = true;
+  const provider = new DockerWorktreeNodeProvider({ id: 'docker-immediate-exit', type: 'docker-worktree', command: 'docker', args: [], image: 'fixture', allowedWorktreeRoots: [dir], networkModes: ['none'], stateDir: path.join(dir, 'state'), memory: '1g', cpus: 1, pidsLimit: 32, tmpfsSize: '32m' }, docker);
+  try { await assert.rejects(() => provider.createNode({ sourceSessionId: 's', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } }), /did not become execution-ready.*exited/i); assert.equal(docker.containers.size, 0); assert.equal(docker.calls.filter(call => call.args[0] === 'rm').length, 1); assert.deepEqual(await provider.listNodes(), []); } finally { await provider.shutdown(); await fs.remove(dir); }
+});
+
 test('stale startup configuration fences capabilities and Git status while preserving exact destroy', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-docker-worktree-stale-')); const repo = await makeRepo(dir); const docker = new FakeDocker(); const stateDir = path.join(dir, 'state');
   const base = { id: 'docker-stale', type: 'docker-worktree' as const, command: 'docker', args: [] as string[], image: 'fixture', networkModes: ['none'] as Array<'none'>, stateDir, memory: '1g', cpus: 1, pidsLimit: 32, tmpfsSize: '32m' };
@@ -148,7 +181,7 @@ test('stale startup configuration fences capabilities and Git status while prese
     assert.equal((await current.listNodes())[0].availability, 'error');
     await assert.rejects(() => current.invokeTool({ sourceSessionId: 's', nodeId: 'stale-node', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'stale-node', cwd: repo } }), /stale provider configuration/);
     const inspected = await current.inspectNode({ sourceSessionId: 's', nodeId: 'stale-node', parameters: {}, context: { agent: 'main' } });
-    assert.equal((inspected.details as any).status, 'stale-config'); assert.equal(Object.prototype.hasOwnProperty.call(inspected.details, 'dirty'), false);
+    assert.equal((inspected.details as any).status, 'running'); assert.equal((inspected.details as any).availability, 'error'); assert.equal((inspected.details as any).configurationStatus, 'stale-config'); assert.equal(Object.prototype.hasOwnProperty.call(inspected.details, 'dirty'), false);
     await current.destroyNode({ sourceSessionId: 's', nodeId: 'stale-node', parameters: {}, context: { agent: 'main' } });
     assert.equal(docker.containers.size, 0);
   } finally { await fs.remove(dir); }
