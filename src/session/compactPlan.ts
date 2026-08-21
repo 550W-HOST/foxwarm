@@ -148,6 +148,34 @@ export class CompactPlanValidationError extends Error {
   }
 }
 
+const COMPACT_REPLACEMENT_BLOCK_ITEM_SCHEMA = {
+  type: 'object',
+  properties: {
+    level: { type: 'integer', minimum: 1, description: 'Created block level. Use 1 for message sources, or one level above block sources.' },
+    sourceKind: { type: 'string', enum: ['message', 'block'], description: 'Whether the source range contains raw messages or existing summary blocks.' },
+    sourceStart: { type: 'integer', minimum: 1, description: 'First source message seq or block id shown in the compact prompt.' },
+    sourceEnd: { type: 'integer', minimum: 1, description: 'Last source message seq or block id shown in the compact prompt, following history order.' },
+    summary: { type: 'string', description: 'Non-empty continuation-oriented summary of only this source range.' },
+    memoryFacts: {
+      type: 'array',
+      description: 'Optional durable facts tied only to this source range. Malformed facts are skipped best-effort.',
+      items: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', enum: ['decision', 'preference', 'fact', 'convention', 'environment'] },
+          text: { type: 'string' },
+          context: { type: 'string' },
+          attributedTo: { type: 'string', enum: ['user', 'assistant', 'both'] },
+        },
+        required: ['kind', 'text'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['level', 'sourceKind', 'sourceStart', 'sourceEnd', 'summary'],
+  additionalProperties: false,
+};
+
 export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
   name: COMPACT_PLAN_TOOL_NAME,
   defaultInject: true, // Keep compact/normal tool schemas stable for prompt-cache/KV-cache hits.
@@ -155,9 +183,12 @@ export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
   parameters: {
     type: 'object',
     properties: {
-      createBlocksJson: {
-        type: 'string',
-        description: 'JSON array string for createBlocks. Each item should be an object like {"level":1,"sourceKind":"message","sourceStart":10,"sourceEnd":12,"summary":"...","memoryFacts":[{"kind":"decision","text":"durable fact"}]}. memoryFacts is optional and belongs only to that created block. Use [] when the only operation is removePreservedMessages.',
+      replaceAsBlocks: {
+        description: 'Summary blocks that replace continuous candidate ranges. Prefer the direct array; a JSON-encoded array string is also accepted. Use [] or "[]" when only removePreservedMessages performs work.',
+        oneOf: [
+          { type: 'array', items: COMPACT_REPLACEMENT_BLOCK_ITEM_SCHEMA },
+          { type: 'string', description: 'Fallback JSON string encoding an array whose items follow the same replacement-block schema.' },
+        ],
       },
       preserveMessages: {
         type: 'array',
@@ -170,7 +201,7 @@ export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
         description: 'Optional list of previously preserved raw message seq numbers to remove from active history. This never deletes archive records or summary blocks, and can only target messages listed as preserved in the compact prompt.',
       },
     },
-    required: ['createBlocksJson'],
+    required: ['replaceAsBlocks'],
   },
 };
 
@@ -435,7 +466,7 @@ export function buildCompactPromptText(options: {
   lines.push('Hard compaction limits for this run:');
   if (messagePolicy) {
     if (messagePolicy.effectiveMinTokens > 0) {
-      lines.push(`- Raw messages: ~${messagePolicy.eligibleTokens} eligible estimated tokens; message-source createBlocks must actually replace at least ~${messagePolicy.effectiveMinTokens} estimated tokens. Raw messages listed in preserveMessages stay verbatim and do not count toward this minimum.`);
+      lines.push(`- Raw messages: ~${messagePolicy.eligibleTokens} eligible estimated tokens; message-source replaceAsBlocks entries must actually replace at least ~${messagePolicy.effectiveMinTokens} estimated tokens. Raw messages listed in preserveMessages stay verbatim and do not count toward this minimum.`);
     } else {
       lines.push(`- Raw messages: no mandatory message compaction this run (${messagePolicy.skippedReason || 'no eligible raw message candidates'}).`);
     }
@@ -450,7 +481,7 @@ export function buildCompactPromptText(options: {
       lines.push(`${base}${policy.skippedReason ? ` ${policy.skippedReason}.` : ''}`);
     }
   }
-  lines.push('Hard minima may be satisfied across multiple legal Segments, but every individual createBlocksJson range must remain inside one Segment.', '');
+  lines.push('Hard minima may be satisfied across multiple legal Segments, but every individual replaceAsBlocks range must remain inside one Segment.', '');
 
   // Group candidates by legal compression boundaries instead of only by target level.
   // In particular, block ranges must not cross a different source level/source kind.
@@ -497,20 +528,20 @@ export function buildCompactPromptText(options: {
   lines.push(
     `Review the older candidate items above and finish by calling ${COMPACT_PLAN_TOOL_NAME}. Do not answer with plain text only.`,
     'Rules:',
-    '- Pass summary-block creations via createBlocksJson as a JSON array string. Use createBlocksJson: "[]" if you only need to remove previously preserved raw messages.',
-    '- Each createBlocksJson entry may include memoryFacts: an array of durable facts tied to exactly that source range. Invalid/omitted facts are ignored and never affect block creation; do not repeat them manually in summary prose.',
+    '- Pass summary-block creations via replaceAsBlocks. Prefer a direct array of objects; a JSON string encoding that same array is also accepted as a fallback. Use replaceAsBlocks: [] or replaceAsBlocks: "[]" if you only need to remove previously preserved raw messages.',
+    '- Each replaceAsBlocks entry may include memoryFacts: an array of durable facts tied to exactly that source range. Invalid/omitted facts are ignored and never affect block creation; do not repeat them manually in summary prose.',
     '- Raw messages are summarized by L1 blocks, L1 blocks are summarized by L2 blocks, and so on.',
-    '- Items covered by createBlocksJson will be replaced by the summary. Other items stay verbatim unless listed in removePreservedMessages.',
+    '- Items covered by replaceAsBlocks will be replaced by the summary. Other items stay verbatim unless listed in removePreservedMessages.',
     '- Use preserveMessages for a small number of raw message seqs that must remain verbatim even though they are covered by a newly created message-source block. The system will extract them after the covering block in working history.',
     '- Use removePreservedMessages only for messages listed in the "Previously preserved raw messages" section. This removes the raw message from active history only; it does not delete archive records or existing summary blocks.',
-    '- Block compression is optional after satisfying the hard minima above. Prefer compressing only older/resolved/repetitive block segments; keep recent, detail-rich, decision-heavy, or still-active blocks verbatim by omitting them from createBlocksJson.',
-    '- Subject to the hard minima above, if a block/message still seems useful, you can leave it uncompressed by simply omitting it from createBlocksJson.',
+    '- Block compression is optional after satisfying the hard minima above. Prefer compressing only older/resolved/repetitive block segments; keep recent, detail-rich, decision-heavy, or still-active blocks verbatim by omitting them from replaceAsBlocks.',
+    '- Subject to the hard minima above, if a block/message still seems useful, you can leave it uncompressed by simply omitting it from replaceAsBlocks.',
     '',
     'Block range rules (must be followed to produce a valid plan):',
-    '- Treat each Segment header as a hard boundary: createBlocksJson ranges must stay inside one listed segment and must not cross different block levels or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in history order.',
+    '- Treat each Segment header as a hard boundary: replaceAsBlocks ranges must stay inside one listed segment and must not cross different block levels or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in history order.',
     '- A single block may be summarized only when it is a stranded island immediately surrounded on both sides by higher-level blocks; otherwise block sources must span at least two blocks.',
-    '- Blocks must have same kind and same level of source; do not combine low-level and high-level blocks in one createBlocks entry.',
-    '- Blocks must not overlap source ranges across createBlocks.',
+    '- Blocks must have same kind and same level of source; do not combine low-level and high-level blocks in one replaceAsBlocks entry.',
+    '- Blocks must not overlap source ranges across replaceAsBlocks entries.',
     '- Blocks must not separate seq/id range inside a candidate (can not separate a tool call and its response).',
     '',
     'Summary writing guidance:',
@@ -530,11 +561,11 @@ export function buildCompactPromptText(options: {
     '- Informational range: "User shared X. Key identifiers: Y, Z. No decision yet."',
     '',
     'Memory facts:',
-    '- Put durable facts only in the memoryFacts array of their matching createBlocksJson entry: explicit user decisions, preferences, project conventions, technical discoveries, environment/deploy constraints, or stable identifiers. Do not include trivial chat, tool mechanics, transient progress, or stale TODOs.',
+    '- Put durable facts only in the memoryFacts array of their matching replaceAsBlocks entry: explicit user decisions, preferences, project conventions, technical discoveries, environment/deploy constraints, or stable identifiers. Do not include trivial chat, tool mechanics, transient progress, or stale TODOs.',
     '- Each memory fact must be self-contained and understandable outside this conversation. Keep the original conversation language when practical. Use kind decision/preference/fact/convention/environment and attributedTo user/assistant/both when clear.',
     '',
     `You have at most ${COMPACT_FLOW_MAX_ROUNDS} total rounds in this dedicated compaction phase (including invalid-tool and plan-fix retries), so inspect efficiently and finish with ${COMPACT_PLAN_TOOL_NAME}.`,
-    `Do not read or write agent memory during compaction. If durable project/user/workflow/rule facts should outlive this session, attach them to the matching createBlocksJson entry's memoryFacts and then call ${COMPACT_PLAN_TOOL_NAME}.`,
+    `Do not read or write agent memory during compaction. If durable project/user/workflow/rule facts should outlive this session, attach them to the matching replaceAsBlocks entry's memoryFacts and then call ${COMPACT_PLAN_TOOL_NAME}.`,
     '',
     ...(guidance ? ['Additional guidance from compaction requester:', guidance, ''] : []),
   );
@@ -549,30 +580,43 @@ function buildCompactPlanValidationSummary(details: CompactPlanValidationDetails
   return details.createBlockErrors.join(' ');
 }
 
-function normalizeCreateBlocks(rawArgs: Record<string, any>, details: CompactPlanValidationDetails): LayeredCreateBlockPlan[] {
+function normalizeReplacementBlocks(rawArgs: Record<string, any>, details: CompactPlanValidationDetails): LayeredCreateBlockPlan[] {
   const seenMemoryFactTexts = new Set<string>();
   let remainingMemoryFacts = MAX_MEMORY_FACTS_PER_PLAN;
-  let rawCreateBlocks: unknown;
-
-  if (typeof rawArgs.createBlocksJson !== 'string' || !rawArgs.createBlocksJson.trim()) {
-    details.createBlockErrors.push('createBlocksJson must be a non-empty JSON array string.');
+  if (Object.prototype.hasOwnProperty.call(rawArgs, 'createBlocksJson')) {
+    details.createBlockErrors.push('createBlocksJson is obsolete; use replaceAsBlocks with a direct array or JSON-encoded array string.');
+  }
+  if (Object.prototype.hasOwnProperty.call(rawArgs, 'createBlocks')) {
+    details.createBlockErrors.push('createBlocks is obsolete; use replaceAsBlocks with a direct array or JSON-encoded array string.');
+  }
+  if (!Object.prototype.hasOwnProperty.call(rawArgs, 'replaceAsBlocks')) {
+    details.createBlockErrors.push('replaceAsBlocks is required and must be an array or a non-empty JSON string encoding an array.');
     return [];
   }
-  try {
-    rawCreateBlocks = JSON.parse(rawArgs.createBlocksJson);
-  } catch (e: any) {
-    details.createBlockErrors.push(`createBlocksJson must be valid JSON: ${e.message}`);
+  let rawReplacementBlocks: unknown = rawArgs.replaceAsBlocks;
+  if (typeof rawReplacementBlocks === 'string') {
+    if (!rawReplacementBlocks.trim()) {
+      details.createBlockErrors.push('replaceAsBlocks JSON string must be non-empty and encode an array.');
+      return [];
+    }
+    try {
+      rawReplacementBlocks = JSON.parse(rawReplacementBlocks);
+    } catch (error: any) {
+      details.createBlockErrors.push(`replaceAsBlocks must be valid JSON when passed as a string: ${error.message}`);
+      return [];
+    }
+    if (!Array.isArray(rawReplacementBlocks)) {
+      details.createBlockErrors.push('replaceAsBlocks JSON string must decode to an array.');
+      return [];
+    }
+  } else if (!Array.isArray(rawReplacementBlocks)) {
+    details.createBlockErrors.push('replaceAsBlocks must be a direct array or a JSON string encoding an array.');
     return [];
   }
 
-  if (!Array.isArray(rawCreateBlocks)) {
-    details.createBlockErrors.push('createBlocksJson must decode to an array.');
-    return [];
-  }
-
-  return rawCreateBlocks.flatMap((entry, index) => {
+  return rawReplacementBlocks.flatMap((entry: unknown, index: number) => {
     if (!entry || typeof entry !== 'object') {
-      details.createBlockErrors.push(`createBlocks[${index}] must be an object.`);
+      details.createBlockErrors.push(`replaceAsBlocks[${index}] must be an object.`);
       return [];
     }
 
@@ -583,28 +627,28 @@ function normalizeCreateBlocks(rawArgs: Record<string, any>, details: CompactPla
     const summary = typeof (entry as any).summary === 'string' ? (entry as any).summary.trim() : '';
 
     if (!Number.isInteger(level) || level < 1) {
-      details.createBlockErrors.push(`createBlocks[${index}].level must be an integer >= 1.`);
+      details.createBlockErrors.push(`replaceAsBlocks[${index}].level must be an integer >= 1.`);
     }
     if (sourceKind !== 'message' && sourceKind !== 'block') {
-      details.createBlockErrors.push(`createBlocks[${index}].sourceKind must be \"message\" or \"block\".`);
+      details.createBlockErrors.push(`replaceAsBlocks[${index}].sourceKind must be \"message\" or \"block\".`);
     }
     if (!Number.isInteger(sourceStart) || sourceStart < 1) {
-      details.createBlockErrors.push(`createBlocks[${index}].sourceStart must be a positive integer.`);
+      details.createBlockErrors.push(`replaceAsBlocks[${index}].sourceStart must be a positive integer.`);
     }
     if (!Number.isInteger(sourceEnd) || sourceEnd < 1) {
-      details.createBlockErrors.push(`createBlocks[${index}].sourceEnd must be a positive integer.`);
+      details.createBlockErrors.push(`replaceAsBlocks[${index}].sourceEnd must be a positive integer.`);
     }
     if (sourceKind !== 'block' && Number.isInteger(sourceStart) && Number.isInteger(sourceEnd) && sourceStart > sourceEnd) {
-      details.createBlockErrors.push(`createBlocks[${index}] has sourceStart > sourceEnd.`);
+      details.createBlockErrors.push(`replaceAsBlocks[${index}] has sourceStart > sourceEnd.`);
     }
     if (!summary) {
-      details.createBlockErrors.push(`createBlocks[${index}].summary must be a non-empty string.`);
+      details.createBlockErrors.push(`replaceAsBlocks[${index}].summary must be a non-empty string.`);
     }
     if (sourceKind === 'message' && Number.isInteger(level) && level !== 1) {
-      details.createBlockErrors.push(`createBlocks[${index}] uses sourceKind=message so level must be 1.`);
+      details.createBlockErrors.push(`replaceAsBlocks[${index}] uses sourceKind=message so level must be 1.`);
     }
     if (sourceKind === 'block' && Number.isInteger(level) && level < 2) {
-      details.createBlockErrors.push(`createBlocks[${index}] uses sourceKind=block so level must be >= 2.`);
+      details.createBlockErrors.push(`replaceAsBlocks[${index}] uses sourceKind=block so level must be >= 2.`);
     }
     const memoryFacts = normalizeMemoryFacts((entry as any).memoryFacts, {
       seenTexts: seenMemoryFactTexts,
@@ -690,7 +734,7 @@ function validateNormalizedCompactPlan(
     createBlockErrors: [],
   };
 
-  const createBlocks = normalizeCreateBlocks(rawArgs, details);
+  const createBlocks = normalizeReplacementBlocks(rawArgs, details);
   const preserveMessages = normalizePositiveIntegerArray(rawArgs, 'preserveMessages', details);
   const removePreservedMessages = normalizePositiveIntegerArray(rawArgs, 'removePreservedMessages', details);
   if (details.createBlockErrors.length > 0) {
@@ -698,7 +742,7 @@ function validateNormalizedCompactPlan(
   }
 
   if (createBlocks.length === 0 && removePreservedMessages.length === 0) {
-    details.createBlockErrors.push('createBlocks must contain at least one block unless removePreservedMessages removes previously preserved raw messages.');
+    details.createBlockErrors.push('replaceAsBlocks must contain at least one block unless removePreservedMessages removes previously preserved raw messages.');
     return { details };
   }
 
@@ -744,19 +788,19 @@ function validateNormalizedCompactPlan(
 
     if (!range) {
       if (block.sourceKind === 'block' && block.sourceStart === block.sourceEnd) {
-        details.createBlockErrors.push(`createBlocks[${index}] uses a single block source, which is allowed only for a stranded block immediately surrounded by higher-level blocks.`);
+        details.createBlockErrors.push(`replaceAsBlocks[${index}] uses a single block source, which is allowed only for a stranded block immediately surrounded by higher-level blocks.`);
         return;
       }
 
       const unitLabel = block.sourceKind === 'message' ? 'seq' : 'block id';
       const continuityLabel = block.sourceKind === 'message' ? 'message' : 'active candidate block';
-      details.createBlockErrors.push(`createBlocks[${index}] does not match a continuous ${continuityLabel} range in current older context for ${unitLabel} ${block.sourceStart}-${block.sourceEnd}.`);
+      details.createBlockErrors.push(`replaceAsBlocks[${index}] does not match a continuous ${continuityLabel} range in current older context for ${unitLabel} ${block.sourceStart}-${block.sourceEnd}.`);
       return;
     }
 
     for (let candidateIndex = range[0]; candidateIndex <= range[1]; candidateIndex += 1) {
       if (usedIndices.has(candidateIndex)) {
-        details.createBlockErrors.push(`createBlocks[${index}] overlaps another createBlocks range at candidate ${candidateItems[candidateIndex].key}.`);
+        details.createBlockErrors.push(`replaceAsBlocks[${index}] overlaps another replaceAsBlocks range at candidate ${candidateItems[candidateIndex].key}.`);
         return;
       }
     }
@@ -803,7 +847,7 @@ function validateNormalizedCompactPlan(
     }
     if (coveredTokens < options.messagePolicy.effectiveMinTokens) {
       const deficit = options.messagePolicy.effectiveMinTokens - coveredTokens;
-      details.createBlockErrors.push(`Raw-message hard quota requires message-source createBlocks to actually replace at least ~${options.messagePolicy.effectiveMinTokens} eligible estimated tokens, but this plan replaces only ~${coveredTokens} after excluding preserveMessages (deficit ~${deficit}).`);
+      details.createBlockErrors.push(`Raw-message hard quota requires message-source replaceAsBlocks entries to actually replace at least ~${options.messagePolicy.effectiveMinTokens} eligible estimated tokens, but this plan replaces only ~${coveredTokens} after excluding preserveMessages (deficit ~${deficit}).`);
     }
   }
 
@@ -837,6 +881,6 @@ export function buildCompactPlanValidationFeedback(error: CompactPlanValidationE
     error.message,
     'Use only ranges shown in one Segment header; do not cross segment boundaries, different block levels, or different source kinds. Block ids may be non-consecutive or decreasing; use only listed B# endpoints in history order.',
     'Use preserveMessages only for raw messages covered by a newly created message-source block; use removePreservedMessages only for messages listed as previously preserved in the prompt.',
-    `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. Do not read or write agent memory during compaction; attach durable facts to the matching createBlocksJson entry's memoryFacts instead.`,
+    `Fix only the layered-context plan and call ${COMPACT_PLAN_TOOL_NAME} again. Do not read or write agent memory during compaction; attach durable facts to the matching replaceAsBlocks entry's memoryFacts instead.`,
   ].join(' ');
 }

@@ -228,13 +228,13 @@ test('stop during tool execution does not launch auto compact from stale usage',
           id: 'unexpected-stop-compact-plan',
           name: 'submit_compact_plan',
           args: {
-            createBlocksJson: JSON.stringify([{
+            replaceAsBlocks: [{
               level: 1,
               sourceKind: 'message',
               sourceStart: 1,
               sourceEnd: 2,
               summary: 'unexpected compact after stop',
-            }]),
+            }],
           },
         };
         return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
@@ -302,13 +302,13 @@ test('idle compaction request starts immediately without enqueueing compact init
         id: 'compact-direct-start-plan',
         name: 'submit_compact_plan',
         args: {
-          createBlocksJson: JSON.stringify([{
+          replaceAsBlocks: [{
             level: 1,
             sourceKind: 'message',
             sourceStart: 1,
             sourceEnd: 2,
             summary: 'summary created by immediate compact request test',
-          }]),
+          }],
         },
       };
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
@@ -346,13 +346,13 @@ test('wait survives compact request and compact commit before timeout turn', asy
         id: 'wait-compact-plan',
         name: 'submit_compact_plan',
         args: {
-          createBlocksJson: JSON.stringify([{
+          replaceAsBlocks: [{
             level: 1,
             sourceKind: 'message',
             sourceStart: 1,
             sourceEnd: 2,
             summary: 'summary created while session was waiting',
-          }]),
+          }],
         },
       };
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };

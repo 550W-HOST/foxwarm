@@ -20,7 +20,7 @@ This thread owns the end-to-end contract that keeps long sessions within model l
 - Raw-message candidates require more than 2,000 estimated tokens and, when eligible, must replace at least 20% of eligible raw tokens by default.
 - Each block source level below 3,000 summary tokens is ineligible. At or above 3,000, only the oldest floor(40%) is exposed. At or above 5,000, the plan must cover 20% of source blocks, clamped to feasible legal multi-block segments.
 - Prior compact-completed notices are transparent candidate noise: they neither enter summaries nor split legal ranges. Other protected lifecycle items, preserved raw items, missing/duplicate/nonmonotonic active sequence structure, and non-candidate blocks are hard range barriers. A present immediately consecutive active raw call/tool-response run is atomic; a call with no following tool-response row is an ordinary single-message candidate. Display-only messages are transparent and excluded from quota denominators.
-- The planning request keeps the normal model-facing tool schema for prompt-cache stability, but compact runtime gating accepts only one `submit_compact_plan` call. Plain text, missing calls, invalid calls, and invalid plans receive bounded retry feedback within 15 total planning rounds.
+- The compact tool remains in the normal model-facing tool set, while compact runtime gating accepts only one `submit_compact_plan` call. Its required `replaceAsBlocks` argument intentionally supports either the preferred direct block array or a JSON string encoding the same array; obsolete top-level `createBlocksJson` and `createBlocks` names are rejected. Plain text, missing calls, invalid calls, and invalid plans receive bounded retry feedback within 15 total planning rounds.
 - The plan may create layered summary blocks, preserve a small set of exact raw messages, remove previously preserved active-history entries, and attach optional durable memory facts to each created block.
 
 Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelForceTokens=5000`, `compactBlockCandidateFraction=0.4`, `compactBlockForceCompactFraction=0.2`, and `compactMessageForceCompactFraction=0.2`.
@@ -130,7 +130,7 @@ The synchronous-only limitation applies to layered planning, not `/compact tools
 
 ### D-context-compact-runtime-gate
 
-During the dedicated compact phase, runtime accepts only `submit_compact_plan` and returns bounded feedback for other calls. Shared schema stability is canonical in [D-llm-stable-tool-schema](../modules/llm.md#d-llm-stable-tool-schema).
+[2026-08-21] During the dedicated compact phase, runtime accepts only `submit_compact_plan` and returns bounded feedback for other calls. The tool requires `replaceAsBlocks`; it prefers a direct array with explicit nested block/fact schema but also accepts a nonempty JSON string that decodes to the same array. `replaceAsBlocks: []` and `replaceAsBlocks: "[]"` are valid only when another operation performs work. `preserveMessages` and `removePreservedMessages` remain direct number arrays. Obsolete top-level `createBlocksJson` and `createBlocks` inputs fail rather than receiving compatibility aliases. This intentional contract update supersedes the prior compact-plan argument shape; normal and compact phases still expose the same current tool definition as required by [D-llm-stable-tool-schema](../modules/llm.md#d-llm-stable-tool-schema).
 
 ### D-context-hard-candidate-policy
 
@@ -138,7 +138,7 @@ Raw and block candidate quotas are computed after visibility, atomic grouping, a
 
 ### D-context-block-associated-memory-facts
 
-Durable compact facts belong only in the `memoryFacts` array of their matching `createBlocksJson` entry.
+Durable compact facts belong only in the `memoryFacts` array of their matching `replaceAsBlocks` entry.
 
 - The planner does not submit a top-level fact payload or repeat facts in summary prose.
 - Normalized facts remain optional archive-block data. The framework appends a deterministic Markdown `Memory facts` section to the stored summary, so later layered compaction sees prior facts in source summaries.

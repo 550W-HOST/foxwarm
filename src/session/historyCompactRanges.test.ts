@@ -30,7 +30,7 @@ function messageEntry(startSeq: number, endSeq: number, index: number, segmentId
 
 function validatePlan(createBlocks: Record<string, unknown>[], entries: LayeredCompactCandidateEntry[], extraArgs: Record<string, unknown> = {}) {
   return validateCompactPlanArgs(
-    { createBlocksJson: JSON.stringify(createBlocks), ...extraArgs },
+    { replaceAsBlocks: createBlocks, ...extraArgs },
     entries.map(entry => entry.item),
   );
 }

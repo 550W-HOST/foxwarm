@@ -367,13 +367,13 @@ test('manual compact drops display-only messages outside the force-kept range an
         id: 'compact_plan_1',
         name: 'submit_compact_plan',
         args: {
-          createBlocksJson: JSON.stringify([{
+          replaceAsBlocks: [{
             level: 1,
             sourceKind: 'message',
             sourceStart: 2,
             sourceEnd: 4,
             summary: 'summary of visible before and visible after; display-only notice omitted',
-          }]),
+          }],
         },
       };
       return { text: '', allParts: [{ functionCall: toolCall }], toolCalls: [toolCall] };
