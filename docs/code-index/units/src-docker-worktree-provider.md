@@ -38,4 +38,5 @@ Deterministic fake-Docker/local-launcher tests cover lifecycle identity, artifac
 
 - `src/nodes/providers.ts` selects this resident provider for normalized `type: docker-worktree` config while retaining executable-provider behavior.
 - Generic authorization, topology, selection, lifecycle confirmation, and no-fallback behavior remain in `src/nodeExecutionService.ts` and `NodeProviderRegistry`.
+- `skills/isolated-worker/create_isolated_worker.py` may compose provider-neutral ensure plus read-only inspect, validate the exact ready descriptor/worktree/network evidence, and only then create a bound isolated agent/session. The skill never creates a worktree or treats binding as provider ownership; canonical workflow decision: [D-node-isolated-worker-provider-compose](../modules/nodes.md#d-node-isolated-worker-provider-compose).
 - Canonical contract: [D-dispatch-docker-worktree-provider](../threads/tool-dispatch.md#d-dispatch-docker-worktree-provider).

@@ -232,7 +232,9 @@ shape is:
 3. `send_to_session` to deliver the task
 
 The bundled `isolated-worker` skill packages this sequence in a ToolScript with
-read-only validation mode and partial-failure recovery reporting.
+read-only validation mode and partial-failure recovery reporting. It can also
+optionally compose a configured provider `ensure` plus exact read-only inspect
+for one existing worktree before creating the agent/session.
 
 ### If you are guiding the user
 
@@ -519,5 +521,6 @@ Use **`node-setup`** when the task is primarily about:
 - sandbox node setup
 - isolated-agent binding as part of node deployment
 
-Use **`isolated-worker`** when the node already exists and the task is to create
-one parent-linked temporary isolated worker through the reusable ToolScript.
+Use **`isolated-worker`** when the task is to create one parent-linked temporary
+isolated worker on an already-online Node or through a configured
+Docker-worktree provider for one exact existing worktree.

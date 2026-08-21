@@ -1,29 +1,50 @@
 ---
 name: isolated-worker
-description: "Create and coordinate a temporary Foxwarm isolated worker on an existing approved/online node using an agent-level isolation boundary, a parent-linked worker session, and the bundled create_isolated_worker ToolScript."
+description: "Create and coordinate a temporary Foxwarm isolated worker on either an existing online Node or a provider-backed Docker Node for one existing Git worktree."
 ---
 
 # isolated-worker
 
-Use this skill when a main session should place one worker on a user-provided Foxwarm node with a **real isolated-agent boundary**, rather than merely route a normal child session to another node.
+Use this skill when a non-isolated coordinator should create one temporary worker with a **real isolated-agent boundary**, rather than merely route a normal child session to another Node.
 
-This workflow assumes the operator has already provisioned and started the host/container. It does not create VMs, cloud instances, containers, node leases, or teardown jobs.
+The workflow supports two modes:
+
+1. **Existing-Node mode** — bind the worker to an already-online remote or sandbox Node.
+2. **Provider-backed worktree mode** — ask one configured lifecycle provider to ensure a Docker Node for one exact, already-existing Git worktree, validate it by read-only inspect, then bind the worker.
+
+The skill does not create, clone, move, clean, commit, or delete a Git worktree. It does not add a Node lease, ownership system, automatic rollback, or automatic teardown.
 
 ## Choose the right mechanism
 
 - **Remote execution only:** `create_child_session({"node":"node-id", ...})` sets that session's `currentNode`. It does not make the session isolated.
 - **Risk containment:** create a separate agent with `isolatedNode`, then create a session under that agent with the current coordinator as its explicit parent.
-- **Physical/environment isolation:** comes from the user-provided VM/container. Foxwarm agent isolation narrows tool and master-file permissions; it does not create the sandbox itself.
+- **Docker worktree containment:** provider-backed mode can ensure the configured `docker-worktree` Node around an existing allowlisted worktree. The provider mounts Git metadata read-only and exposes ordinary `read`, `write`, `edit`, `apply_patch`, and `exec` capabilities.
+- **VM-grade security or exclusivity:** not provided by this workflow. Agent binding does not reserve a Node, and Docker worktree containment is explicitly not a VM security boundary.
 
-Isolation is agent-level. All sessions belonging to one isolated agent share its bound node and restrictions. Use one temporary agent per worker when workers need different isolated nodes.
+Isolation is agent-level. All sessions belonging to one isolated agent share its bound Node and restrictions. Use one temporary agent per worker when workers need different isolated Nodes.
 
-## Before running
+## Inputs
 
-1. Load `node-setup` if the node still needs bootstrap or pairing.
-2. Confirm the node is approved and connected with `node({ action: "list" })`. The current agent-facing node list proves a node is online; it does not list approved-but-offline nodes.
-3. Choose a unique ASCII `agentName` and `sessionName` using letters, digits, `_`, or `-`.
-4. Keep the coordinator non-isolated. The underlying `create_agent` and `create_session` tools are unavailable to an isolated caller.
-5. Decide whether the temporary agent should inherit durable memory from an existing agent. Omit `inheritAgent` unless that shared context is actually needed.
+Common inputs:
+
+- `nodeId` — exact non-master lifecycle Node ID. It follows the Node contract: 1-128 ASCII letters, digits, `.`, `_`, `:`, or `-`, beginning with a letter or digit.
+- `agentName` — unique temporary agent name using one or more letters, digits, `_`, or `-`; this preserves the existing workflow's no-length-cap name contract.
+- `sessionName` — worker session leaf using the same narrow safe-name convention; defaults to `worker`.
+- `task` — required task text. The generated handoff includes it verbatim inside an explicit worker brief.
+- `inheritAgent` — optional existing agent whose durable memory should be inherited, using the same no-length-cap safe-name convention. Omit unless needed.
+- `parentSessionId` — optional assertion of the exact current ToolScript owner; normally omit.
+- `dryRun` — defaults to `true`.
+
+Provider-backed mode additionally requires both:
+
+- `providerId` — exact configured lifecycle provider ID;
+- `worktreePath` — exact absolute, lexically canonical path to an existing Git checkout/worktree.
+
+Optional provider-backed input:
+
+- `networkMode` — `none` by default; `bridge` only when explicitly requested and allowed by provider configuration.
+
+`providerId` and `worktreePath` are all-or-nothing. `networkMode` is rejected outside provider-backed mode.
 
 ## Bundled ToolScript
 
@@ -33,20 +54,9 @@ The reusable script is:
 skills/isolated-worker/create_isolated_worker.py
 ```
 
-It calls existing builtins through ToolScript:
+Run it with `run_script(...)`. Use an absolute script path if the current agent directory is not the Foxwarm checkout.
 
-1. `session` — resolve and verify the current parent session;
-2. `node({ action: "list" })` — require the selected non-master node to be connected;
-3. `list_agents` — fail if the requested agent already exists;
-4. `create_agent` — create the isolated agent with `createMainSession=false`;
-5. `create_session` — create one worker session with `parentSessionId` set to the current session;
-6. `send_to_session` — deliver the initial task.
-
-The parent relation is important: it is the narrow relationship used for coordinator/worker messaging in Foxwarm versions that permit explicitly parent-linked cross-agent isolated communication.
-
-### Safe validation first
-
-`dryRun` defaults to `true`. A dry run performs only status/list calls and returns the plan.
+### Existing-Node dry run
 
 ```json
 {
@@ -55,43 +65,104 @@ The parent relation is important: it is the narrow relationship used for coordin
     "nodeId": "worker-node-1",
     "agentName": "tmp-worker-1",
     "sessionName": "task",
-    "task": "Inspect the assigned repository. When finished, send the result to <parent>.",
+    "task": "Inspect the assigned repository and report the findings.",
     "dryRun": true
   }
 }
 ```
 
-Run it with `run_script(...)`. After checking the plan, repeat with `dryRun:false`:
+Existing-Node mode preserves the original workflow: list Nodes, require the exact non-master Node to be present/online, validate the agent/inheritance plan, then begin at agent creation when applied.
+
+### Provider-backed dry run
 
 ```json
 {
   "filePath": "skills/isolated-worker/create_isolated_worker.py",
   "args": {
-    "nodeId": "worker-node-1",
-    "agentName": "tmp-worker-1",
+    "providerId": "local-dev-containers",
+    "nodeId": "sandbox-project-task",
+    "worktreePath": "/srv/foxwarm-worktrees/project-task",
+    "networkMode": "none",
+    "agentName": "tmp-project-task",
     "sessionName": "task",
-    "task": "Inspect the assigned repository. When finished, send the result to <parent>.",
+    "task": "Implement the requested change and report the diff and validation.",
     "inheritAgent": "main",
-    "dryRun": false
+    "dryRun": true
   }
 }
 ```
 
-Use an absolute script path if the current agent directory is not the Foxwarm program checkout.
+Dry run is mutation-free. It:
+
+1. resolves the exact current parent and rejects an isolated coordinator;
+2. lists Nodes and lifecycle providers and requires the selected provider to advertise `ensure`;
+3. if the exact Node exists, calls read-only `node inspect` and validates exact Node ID/provider/kind/type/availability/default cwd plus Docker worktree/network evidence;
+4. if the Node is absent, records a truthful planned ensure without invoking it;
+5. validates unique agent/session/inheritance inputs;
+6. returns a structured plan with Node existence, ensure parameters, worker binding, handoff, and cleanup/recovery notes.
+
+For an absent Node, canonical provider/worktree evidence is necessarily deferred until apply; dry run does not pretend to validate a Node that does not exist.
+
+### Apply provider-backed mode
+
+After reviewing the dry-run plan, repeat with `dryRun:false`. The script performs:
+
+1. `node({action:"ensure", providerId, nodeId, parameters:{worktreePath,networkMode}})`;
+2. read-only `node({action:"inspect", nodeId})`;
+3. fail-closed validation of the ensure and inspect results;
+4. `create_agent({agentName,isolatedNode:nodeId,createMainSession:false})`;
+5. `create_session({agentName,sessionName,parentSessionId:<current>})`;
+6. `send_to_session(...)` with the complete worker brief.
+
+The inspect result must be an exact ready `sandbox` / `docker-worktree` descriptor owned by the requested provider, with exact default cwd, exact worktree path, exact network mode, running status, and the canonical five development tools. Any mismatch stops before agent creation.
+
+## Generated worker handoff
+
+The initial message is intentionally more complete than the raw task. It contains:
+
+- assigned Node;
+- canonical worktree for provider-backed mode;
+- the user's task verbatim;
+- a work-only-in-the-assigned-environment constraint;
+- no Node selection/lifecycle or child-session actions;
+- no commit/push/restart/deploy unless the verbatim task explicitly requires that exact action;
+- the Docker provider's Git-metadata-read-only caveat;
+- an exact report instruction using `send_to_session({sessionId:"<parent>",...,waitAfterHandoff:true})`;
+- required report fields: changed files/diff, validation, blockers, unresolved questions, and remaining working-tree changes, without assuming a commit exists.
+
+Do not add parent-only scheduling, autonomy, phase progression, or “ask the user” instructions to the worker brief.
 
 ## Result and failure handling
 
-A completed result includes `agentName`, `sessionId`, `nodeId`, `parentSessionId`, and the completed stages.
+This is fail-fast and **not transactional**.
 
-This is a fail-fast workflow, **not a transaction**:
+A completed provider-backed result includes exact Node/agent/session/parent
+identities, `nodeAbsentBeforeEnsure`, and
+`nodePresenceAfterEnsure: "present"`; failure results use the same presence
+field with `"present"` or `"unknown"`. Unknown presence is never encoded as
+false: recovery reports `possibleNodeId`, because inspect failure or malformed
+full evidence cannot prove absence after an ensure error. These observations do
+not establish creation or ownership because list and ensure are not one atomic
+lease operation.
 
-- all validation happens before the first mutation where the current tools allow it;
-- if `create_agent` fails, the script re-lists agents to detect an obvious partial creation;
-- if session creation fails, the isolated agent may remain;
-- if initial delivery fails, both agent and session may remain, and the task can be retried after the communication/runtime issue is fixed;
-- there is no agent-facing `delete_agent` tool, so the script cannot truthfully promise rollback.
+On failure, the result identifies:
 
-The returned `recovery` field names the surviving resource and suggests either retrying the failed step or asking the user to run:
+- `failedStage`;
+- exact `completedStages`;
+- surviving or potentially surviving Node/agent/session resources;
+- retry/inspection notes;
+- the existing user-confirmed agent cleanup boundary.
+
+The script never auto-destroys a Node or deletes an agent after a later failure.
+Before agent creation, recovery explicitly states that no agent/session was
+created and emits no agent cleanup command. A `create_agent` failure emits the
+cleanup command only when the post-error agent recheck actually detects the
+agent. Session creation failure reports an existing agent but no session; send
+failure reports the surviving Node, agent, and session.
+
+### Agent cleanup
+
+There is no agent-facing `delete_agent` tool. Preserve the explicit user boundary:
 
 ```text
 /agent delete <agent-name> --confirm
@@ -99,16 +170,28 @@ The returned `recovery` field names the surviving resource and suggests either r
 
 Do not manually delete agent directories or edit state files to simulate rollback.
 
+### Node cleanup
+
+Node lifecycle and agent binding remain separate:
+
+- if the Node was present in preflight, retain it by default and do not recommend destroy merely because a worker was bound;
+- if it was absent in preflight but present after ensure, ownership is still unconfirmed because another coordinator may have created it between those observations;
+- if ensure failed with an unknown outcome, inspect the exact Node first;
+- provider-backed cleanup always retains the Node by default and returns no destroy descriptor solely from preflight absence;
+- a non-isolated coordinator may separately inspect and explicitly destroy only with independent operator/workflow confirmation that the Node is disposable. Destroy retains worktree bytes, Git metadata, and provider execution artifacts.
+
 ## Compatibility boundary
 
-The workflow requires Foxwarm to allow `send_to_session` across agent boundaries **only for the explicitly linked parent/child pair**. Older/current builds with a blanket cross-agent isolated deny will create the parent-linked worker but fail at initial delivery. The script reports this as `partial_failure`; it does not hide the leftover agent/session.
+The workflow requires parent-linked cross-agent isolated communication. The worker session is created with the current coordinator as its exact parent, which is the narrow isolation exception used by `send_to_session` in both directions.
+
+The Session worker, when enabled, remains a trusted local Main-host process. The selected Node is the ordinary tool execution target; this skill does not place Session workers on sandbox Nodes.
 
 ## No exclusivity guarantee
 
-Binding an agent to a node does not reserve that node. If exclusive execution matters, the operator must provide a distinct node/container and avoid assigning other sessions to it. This skill intentionally does not implement leasing or provisioning.
+Binding an agent to a Node does not reserve that Node. If exclusive execution matters, the operator must assign a distinct provider Node/worktree and avoid binding other sessions to it. This skill intentionally implements no lease or ownership abstraction.
 
 ## Related skills
 
-- `node-setup` — bootstrap, pairing, approval, node connectivity, and sandbox troubleshooting.
+- `node-setup` — bootstrap, pairing, approval, provider configuration, and sandbox troubleshooting.
 - `agent-management` — agent/session lifecycle, isolation semantics, memory, and cleanup.
 - `toolscript-automation` — general ToolScript authoring and run inspection.
