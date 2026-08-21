@@ -9,4 +9,6 @@ await build({
   target: 'node22',
   format: 'cjs',
   sourcemap: false,
+  preserveSymlinks: true,
+  minifyWhitespace: true,
 });

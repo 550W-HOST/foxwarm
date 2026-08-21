@@ -3,7 +3,8 @@
   "private": true,
   "main": "./dist/invoke.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/build-bundle.mjs"
+    "build": "tsc -p tsconfig.json && node scripts/build-bundle.mjs",
+    "test": "node --test scripts/build-bundle.test.mjs dist/worktreeFileOperations.test.js"
   },
   "dependencies": {
     "@foxwarm/shared": "file:../shared",
