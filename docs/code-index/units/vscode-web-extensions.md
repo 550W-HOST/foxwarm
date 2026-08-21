@@ -26,7 +26,7 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 - Implements stat/read-directory/read-file/write-file/create-directory/delete/rename through authenticated routes.
 - Contributes Add Folder and fixed hidden add-folder/open-file bridge handling.
 - Contributes command-palette actions for the authoritative master app and data roots. They use the fixed authenticated workspace-roots response, add or relabel only the exact URI without replacing unrelated roots, assign stable labels, and open/reveal the root in Explorer.
-- Activates the optional Red Hat YAML contributor API and supplies bundled shared App/Models schemas only for exact authoritative master config URIs. Missing YAML assets or APIs log and leave filesystem commands active.
+- Activates the optional Red Hat YAML contributor API and supplies bundled shared App/Models schemas, including both executable and Docker-worktree Node-provider variants, only for exact authoritative master config URIs. Missing YAML assets or APIs log and leave filesystem commands active.
 - The supported path is Foxwarm's persistent multi-root workbench. The commands wait for its ordinary folder-change event and keep no global/workspace reload intent; direct bare empty/single-folder launches do not guarantee focus after a workbench reload.
 - File watching is a no-op except immediate local events for provider writes; search providers are absent.
 

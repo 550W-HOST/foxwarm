@@ -24,9 +24,9 @@ The package exports these through `@foxwarm/shared/configSchemas`; browser bundl
 
 ## Tests and integration
 
-- WebUI config-editor tests assert shared-import parity and validate representative current, legacy, custom, and backend-tolerant fixtures with Ajv.
+- WebUI config-editor tests assert shared-import parity and validate representative current, legacy, custom, and backend-tolerant fixtures with Ajv, including exact executable and Docker-worktree Node-provider variant constraints.
 - WebUI config-editor tests keep the managed channel type completion list in
   parity with backend adapters while retaining custom string types and QQ
   credential/inbound-media key suggestions.
-- The Code filesystem extension tests exact positive/negative URI association and bundled schema content, including provider string-alias support; optional official Code E2E proves diagnostics/completion without external schema fetches.
+- The Code filesystem extension tests exact positive/negative URI association and bundled schema content, including provider string-alias support and both Node-provider variants; optional official Code E2E proves diagnostics/completion without external schema fetches.
 - Canonical cross-module behavior: [D-code-config-schema-assistance](../threads/code-integration.md#d-code-config-schema-assistance).

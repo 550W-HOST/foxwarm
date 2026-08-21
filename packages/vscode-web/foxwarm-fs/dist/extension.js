@@ -695,22 +695,39 @@ var APP_CONFIG_SCHEMA = {
       type: "object",
       propertyNames: { pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
       additionalProperties: {
-        type: "object",
-        additionalProperties: false,
-        required: ["type", "command"],
-        properties: {
-          type: { const: "executable", description: "Trusted one-shot executable Node provider adapter." },
-          command: { type: "string", minLength: 1, maxLength: 4096, pattern: "^\\S(?:.*\\S)?$", description: "Trusted executable command launched directly without a shell." },
-          args: {
-            type: "array",
-            maxItems: 64,
-            items: { type: "string", maxLength: 4096 },
-            description: "Fixed trusted command arguments. Tool/model values are never interpolated here."
+        oneOf: [
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["type", "command"],
+            properties: {
+              type: { const: "executable", description: "Trusted one-shot executable Node provider adapter." },
+              command: { type: "string", minLength: 1, maxLength: 4096, pattern: "^\\S(?:.*\\S)?$" },
+              args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4096 } },
+              timeoutSeconds: { type: "integer", minimum: 1, maximum: 300, default: 90 }
+            }
           },
-          timeoutSeconds: { type: "integer", minimum: 1, maximum: 300, default: 90, description: "Maximum duration of each one-shot provider request." }
-        }
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["type", "command", "image", "allowedWorktreeRoots"],
+            properties: {
+              type: { const: "docker-worktree", description: "Trusted resident Linux Docker provider for one existing Git worktree." },
+              command: { type: "string", minLength: 1, maxLength: 4096, pattern: "^\\S(?:.*\\S)?$", description: "Fixed Docker launcher command, for example docker or sudo." },
+              args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4096 }, description: 'Fixed launcher arguments, for example ["-n", "docker"].' },
+              image: { type: "string", minLength: 1, maxLength: 4096 },
+              allowedWorktreeRoots: { type: "array", minItems: 1, maxItems: 64, items: { type: "string", minLength: 1, maxLength: 4096 } },
+              networkModes: { type: "array", minItems: 1, uniqueItems: true, items: { enum: ["none", "bridge"] }, default: ["none"] },
+              stateDir: { type: "string", minLength: 1, maxLength: 4096 },
+              memory: { type: "string", pattern: "^[1-9]\\d*[kKmMgG]$", default: "2g" },
+              cpus: { type: "number", exclusiveMinimum: 0, maximum: 64, default: 2 },
+              pidsLimit: { type: "integer", minimum: 16, maximum: 65536, default: 256 },
+              tmpfsSize: { type: "string", pattern: "^[1-9]\\d*[kKmMgG]$", default: "256m" }
+            }
+          }
+        ]
       },
-      description: "Startup-only trusted executable Node providers using the fixed foxwarm-node-provider@1 JSON stdin/stdout protocol. Requires restart."
+      description: "Startup-only trusted Node providers. Requires restart."
     },
     vector: {
       oneOf: [

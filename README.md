@@ -263,13 +263,14 @@ the defaults, `vectorMaintenance: false` disables maintenance, and an object
 enables it unless `enabled: false` while allowing `retentionHours` tuning.
 Maintenance is a no-op while Vector itself is disabled.
 
-Trusted executable sandbox Node providers can be added under `nodeProviders`.
-Each entry supplies a fixed startup command/argument list; Foxwarm never
-interpolates model or tool values into that command and launches one process
-per provider request without a shell. Providers use the fixed
-`foxwarm-node-provider@1` JSON stdin/stdout contract documented in
+Additional trusted Node providers are configured under `nodeProviders`. Use an
+`executable` provider for a generic external adapter launched from a fixed
+command; its contract is documented in
 [`docs/executable-node-provider-protocol.md`](docs/executable-node-provider-protocol.md).
-Provider configuration changes require a restart.
+Use the first-party `docker-worktree` provider for resident Linux Docker
+sandboxes bound to existing allowed Git worktrees; setup and limits are in
+[`docs/docker-worktree-node-provider.md`](docs/docker-worktree-node-provider.md).
+Provider configuration is startup-only and changes require a restart.
 
 ## Models (`state/models.yaml`)
 
