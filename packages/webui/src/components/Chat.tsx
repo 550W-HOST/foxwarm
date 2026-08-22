@@ -1536,7 +1536,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
         }`}>
           {connectionState === 'connecting' && 'Connecting...'}
-          {connectionState === 'reconnecting' && `Reconnecting in ${reconnectCountdown}s...`}
+          {connectionState === 'reconnecting' && 'Reconnecting...'}
           {connectionState === 'disconnected' && 'Disconnected'}
         </div>
       )}

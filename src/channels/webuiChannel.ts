@@ -3145,7 +3145,7 @@ export class WebUIChannel implements Channel {
 
   // Broadcast session list update to all global SSE clients
   broadcastSessionListUpdate() {
-    if (this.globalSseClients.length > 0 || this.realtimeHub) {
+    if (this.globalSseClients.length > 0 || (this.realtimeHub?.getConnectionCount() || 0) > 0) {
       const payload = { type: 'sessions-updated', catalogInvalidated: true,
         eventId: ++this.globalSseInvalidationEventId, presentationRevision: sessionCatalogStore.getPresentationRevision() };
       const data = JSON.stringify(payload);

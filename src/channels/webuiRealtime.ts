@@ -36,6 +36,7 @@ type WebUiRealtimeClient = {
   listIds: Set<string>;
   sessionIds: Set<string>;
   revision: number;
+  requestedRevision: number;
   initializing: boolean;
   pending: WebUiRealtimeEnvelope[];
   applyTail: Promise<void>;
@@ -125,6 +126,7 @@ export class WebUiRealtimeHub {
       listIds: new Set(),
       sessionIds: new Set(),
       revision: 0,
+      requestedRevision: 0,
       initializing: false,
       pending: [],
       applyTail: Promise.resolve(),
@@ -145,10 +147,9 @@ export class WebUiRealtimeHub {
         this.safeSend(client, { type: 'protocol-error', message: error instanceof Error ? error.message : String(error) });
         return;
       }
-      if (message.revision <= client.revision) return;
-      client.applyTail = client.applyTail.then(() => this.applySubscriptions(client, message)).catch((error) => {
-        this.safeSend(client, { type: 'protocol-error', message: error instanceof Error ? error.message : String(error) });
-      });
+      if (message.revision <= client.requestedRevision) return;
+      client.requestedRevision = message.revision;
+      client.applyTail = client.applyTail.then(() => this.applySubscriptions(client, message)).catch((error) => this.failClientApply(client, error));
     });
 
     this.safeSend(client, { type: 'connected' });
@@ -176,7 +177,7 @@ export class WebUiRealtimeHub {
   }
 
   private async applySubscriptions(client: WebUiRealtimeClient, message: SetSubscriptionsMessage): Promise<void> {
-    if (client.closed || message.revision <= client.revision) return;
+    if (client.closed || message.revision < client.requestedRevision || message.revision <= client.revision) return;
 
     const resolvedList = this.dependencies.resolveIds(message.sessionListIds);
     const resolvedSessions = this.dependencies.resolveIds(message.sessionIds);
@@ -191,6 +192,7 @@ export class WebUiRealtimeHub {
     this.safeSend(client, {
       type: 'subscriptions-accepted',
       revision: message.revision,
+      sessionListResolutions: resolvedList.requestedToCanonical,
       sessionResolutions: resolvedSessions.requestedToCanonical,
     });
 
@@ -201,7 +203,13 @@ export class WebUiRealtimeHub {
         : Promise.resolve<WebUiRealtimeEnvelope | null>(null),
       Promise.all(resolvedSessions.canonicalIds.map(sessionId => this.dependencies.loadSessionState(sessionId))),
     ]);
-    if (client.closed || client.revision !== revision) return;
+    if (client.closed || client.revision !== revision || client.requestedRevision !== revision) {
+      if (!client.closed && client.revision === revision) {
+        client.initializing = false;
+        client.pending = [];
+      }
+      return;
+    }
 
     if (listSnapshot) this.safeSend(client, listSnapshot);
     for (const missingId of resolvedSessions.missingIds) {
@@ -234,8 +242,18 @@ export class WebUiRealtimeHub {
     try {
       client.socket.send(JSON.stringify(payload));
     } catch {
+      try { client.socket.close(1011, 'Realtime send failed'); } catch {}
       this.cleanupClient(client);
     }
+  }
+
+  private failClientApply(client: WebUiRealtimeClient, error: unknown): void {
+    if (client.closed) return;
+    client.initializing = false;
+    client.pending = [];
+    this.safeSend(client, { type: 'protocol-error', message: error instanceof Error ? error.message : String(error) });
+    try { client.socket.close(1011, 'Realtime subscription failed'); } catch {}
+    this.cleanupClient(client);
   }
 
   private startKeepalive(client: WebUiRealtimeClient): () => void {

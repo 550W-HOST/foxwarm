@@ -4,6 +4,7 @@ export type WebUiRealtimeMessage = {
   type: string
   sessionId?: string
   revision?: number
+  sessionListResolutions?: Record<string, string>
   sessionResolutions?: Record<string, string>
   [key: string]: any
 }
@@ -33,8 +34,8 @@ type RealtimeOptions = {
   random?: () => number
 }
 
-type ListSubscription = { ids: Set<string>; handlers: WebUiRealtimeHandlers }
-type SessionSubscription = { sessionId: string; handlers: WebUiRealtimeHandlers }
+type ListSubscription = { ids: Set<string>; handlers: WebUiRealtimeHandlers; registeredGeneration: number }
+type SessionSubscription = { sessionId: string; handlers: WebUiRealtimeHandlers; registeredGeneration: number }
 
 const SOCKET_OPEN = 1
 const INITIAL_RECONNECT_DELAY_MS = 1_000
@@ -57,10 +58,10 @@ export class WebUiRealtimeTransport {
   private nextSubscriptionId = 1
   private subscriptionRevision = 0
   private socketGeneration = 0
-  private notifiedGeneration = 0
   private reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS
   private status: WebUiRealtimeStatus = 'disconnected'
   private suspended = false
+  private sessionListResolutions = new Map<string, string>()
   private sessionResolutions = new Map<string, string>()
 
   constructor(options: RealtimeOptions = {}) {
@@ -72,7 +73,7 @@ export class WebUiRealtimeTransport {
 
   subscribeSessionList(ids: string[], handlers: WebUiRealtimeHandlers): () => void {
     const subscriptionId = this.nextSubscriptionId++
-    this.listSubscriptions.set(subscriptionId, { ids: new Set(ids), handlers })
+    this.listSubscriptions.set(subscriptionId, { ids: new Set(ids), handlers, registeredGeneration: 0 })
     this.subscriptionChanged()
     handlers.onStatus?.(this.status)
     return () => {
@@ -83,7 +84,7 @@ export class WebUiRealtimeTransport {
 
   subscribeSession(sessionId: string, handlers: WebUiRealtimeHandlers): () => void {
     const subscriptionId = this.nextSubscriptionId++
-    this.sessionSubscriptions.set(subscriptionId, { sessionId, handlers })
+    this.sessionSubscriptions.set(subscriptionId, { sessionId, handlers, registeredGeneration: 0 })
     this.subscriptionChanged()
     handlers.onStatus?.(this.status)
     return () => {
@@ -121,6 +122,7 @@ export class WebUiRealtimeTransport {
 
   private subscriptionChanged(): void {
     this.subscriptionRevision += 1
+    this.sessionListResolutions.clear()
     this.sessionResolutions.clear()
     if (!this.hasSubscriptions()) {
       this.cancelReconnect()
@@ -141,6 +143,7 @@ export class WebUiRealtimeTransport {
     const socket = this.createSocket()
     const generation = ++this.socketGeneration
     this.socket = socket
+    this.sessionListResolutions.clear()
     this.sessionResolutions.clear()
     this.setStatus('connecting')
 
@@ -155,7 +158,12 @@ export class WebUiRealtimeTransport {
     }
     socket.onerror = () => {
       if (!this.isCurrentSocket(socket, generation)) return
-      socket.close()
+      try {
+        socket.close()
+      } catch {
+        this.socket = null
+        this.scheduleReconnect()
+      }
     }
     socket.onclose = () => {
       if (!this.isCurrentSocket(socket, generation)) return
@@ -173,19 +181,43 @@ export class WebUiRealtimeTransport {
     }
 
     if (message.type === 'subscriptions-accepted' && message.revision === this.subscriptionRevision) {
+      this.sessionListResolutions = new Map(Object.entries(message.sessionListResolutions || {}))
       this.sessionResolutions = new Map(Object.entries(message.sessionResolutions || {}))
+      this.setStatus('connected')
+      for (const subscription of this.listSubscriptions.values()) {
+        if (subscription.registeredGeneration === generation) continue
+        subscription.registeredGeneration = generation
+        subscription.handlers.onOpen?.()
+      }
+      for (const subscription of this.sessionSubscriptions.values()) {
+        if (subscription.registeredGeneration === generation) continue
+        subscription.registeredGeneration = generation
+        subscription.handlers.onOpen?.()
+      }
       return
     }
     if (message.type === 'subscriptions-applied') {
-      if (message.revision !== this.subscriptionRevision || generation === this.notifiedGeneration) return
-      this.notifiedGeneration = generation
-      this.setStatus('connected')
-      this.forEachHandler(handlers => handlers.onOpen?.())
       return
     }
-    if (message.type === 'connected' || message.type === 'protocol-error') return
+    if (message.type === 'protocol-error') {
+      console.error('WebUI realtime protocol error:', message.message || 'Unknown protocol error')
+      try { this.socket?.close(1008, 'Realtime protocol error') } catch {}
+      return
+    }
+    if (message.type === 'connected') return
 
-    if (message.type === 'session-list-delta' || message.type === 'sessions-updated' || message.type === 'session-list-invalidated') {
+    if (message.type === 'session-list-delta') {
+      for (const subscription of this.listSubscriptions.values()) {
+        const canonicalIds = new Set([...subscription.ids].map(id => this.sessionListResolutions.get(id) || id))
+        const sessions = Array.isArray(message.sessions) ? message.sessions.filter((session: any) => canonicalIds.has(session?.id)) : []
+        const deletedIds = Array.isArray(message.deletedIds) ? message.deletedIds.filter((id: unknown) => typeof id === 'string' && (subscription.ids.has(id) || canonicalIds.has(id))) : []
+        if (sessions.length || deletedIds.length || (!message.sessions?.length && !message.deletedIds?.length)) {
+          subscription.handlers.onMessage({ ...message, sessions, deletedIds })
+        }
+      }
+      return
+    }
+    if (message.type === 'sessions-updated' || message.type === 'session-list-invalidated') {
       for (const subscription of this.listSubscriptions.values()) subscription.handlers.onMessage(message)
       return
     }
