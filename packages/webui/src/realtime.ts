@@ -122,8 +122,6 @@ export class WebUiRealtimeTransport {
 
   private subscriptionChanged(): void {
     this.subscriptionRevision += 1
-    this.sessionListResolutions.clear()
-    this.sessionResolutions.clear()
     if (!this.hasSubscriptions()) {
       this.cancelReconnect()
       this.closeSocket(1000, 'No realtime subscribers')

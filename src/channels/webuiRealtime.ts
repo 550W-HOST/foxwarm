@@ -182,12 +182,13 @@ export class WebUiRealtimeHub {
     const resolvedList = this.dependencies.resolveIds(message.sessionListIds);
     const resolvedSessions = this.dependencies.resolveIds(message.sessionIds);
     const previousSessionIds = client.sessionIds;
+    const carriesSupersededInitialization = client.initializing;
     client.revision = message.revision;
     client.listActive = message.sessionListActive;
     client.listIds = new Set([...message.sessionListIds, ...resolvedList.canonicalIds]);
     client.sessionIds = new Set(resolvedSessions.canonicalIds);
     client.initializing = true;
-    client.pending = [];
+    if (!carriesSupersededInitialization) client.pending = [];
     this.notifyChangedSessionSubscriptions(previousSessionIds, client.sessionIds);
     this.safeSend(client, {
       type: 'subscriptions-accepted',
@@ -204,10 +205,6 @@ export class WebUiRealtimeHub {
       Promise.all(resolvedSessions.canonicalIds.map(sessionId => this.dependencies.loadSessionState(sessionId))),
     ]);
     if (client.closed || client.revision !== revision || client.requestedRevision !== revision) {
-      if (!client.closed && client.revision === revision) {
-        client.initializing = false;
-        client.pending = [];
-      }
       return;
     }
 

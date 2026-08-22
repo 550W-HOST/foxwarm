@@ -90,7 +90,7 @@ test('one realtime transport multiplexes every page subscription onto one socket
   const sessionMessages = []
   const opens = []
   const statuses = []
-  const unsubscribeListA = transport.subscribeSessionList(['agent/main'], { onMessage: message => listA.push(message), onOpen: () => opens.push('list-a') })
+  const unsubscribeListA = transport.subscribeSessionList(['main-list-alias'], { onMessage: message => listA.push(message), onOpen: () => opens.push('list-a') })
   const unsubscribeListB = transport.subscribeSessionList(['child/one'], { onMessage: message => listB.push(message), onOpen: () => opens.push('list-b') })
   const unsubscribeSession = transport.subscribeSession('main-alias', {
     onMessage: message => sessionMessages.push(message),
@@ -105,11 +105,11 @@ test('one realtime transport multiplexes every page subscription onto one socket
     type: 'set-subscriptions',
     revision: 3,
     sessionListActive: true,
-    sessionListIds: ['agent/main', 'child/one'],
+    sessionListIds: ['main-list-alias', 'child/one'],
     sessionIds: ['main-alias'],
   }])
 
-  sockets[0].receive({ type: 'subscriptions-accepted', revision: 3, sessionListResolutions: { 'agent/main': 'agent/main', 'child/one': 'child/one' }, sessionResolutions: { 'main-alias': 'agent/main' } })
+  sockets[0].receive({ type: 'subscriptions-accepted', revision: 3, sessionListResolutions: { 'main-list-alias': 'agent/main', 'child/one': 'child/one' }, sessionResolutions: { 'main-alias': 'agent/main' } })
   sockets[0].receive({ type: 'session-state', sessionId: 'agent/main', session: { id: 'agent/main' } })
   sockets[0].receive({ type: 'session-list-delta', sessions: [{ id: 'agent/main' }], deletedIds: [] })
   sockets[0].receive({ type: 'subscriptions-applied', revision: 3 })
@@ -131,6 +131,8 @@ test('one realtime transport multiplexes every page subscription onto one socket
     sessionListIds: ['child/one'],
     sessionIds: ['main-alias'],
   })
+  sockets[0].receive({ type: 'message', sessionId: 'agent/main', message: { text: 'arrived before revision four was accepted' } })
+  assert.equal(sessionMessages.length, 2, 'unrelated subscription churn preserves the last accepted alias mapping')
 
   const laterOpens = []
   const unsubscribeLaterSession = transport.subscribeSession('child/two', { onMessage() {}, onOpen: () => laterOpens.push('child/two') })

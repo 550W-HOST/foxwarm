@@ -168,6 +168,25 @@ test('WebUiRealtimeHub discards a superseded async subscription snapshot', async
   assert.deepEqual(socket.sent.at(-1), { type: 'subscriptions-applied', revision: 2 });
 });
 
+test('WebUiRealtimeHub carries buffered live events into a superseding revision', async () => {
+  let release!: () => void;
+  const stateGate = new Promise<void>(resolve => { release = resolve; });
+  const { hub } = makeHub({ stateGate });
+  const socket = new FakeSocket();
+  await hub.handleConnection(socket as any, {} as http.IncomingMessage);
+  socket.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['agent/main'] });
+  await flush();
+  hub.broadcastSession('agent/main', { type: 'message', message: { text: 'live during revision one' } });
+  socket.receive({ type: 'set-subscriptions', revision: 2, sessionListActive: true, sessionListIds: ['list/changed'], sessionIds: ['agent/main'] });
+  release();
+  await flush();
+  await flush();
+
+  assert.equal(socket.sent.some(message => message.type === 'subscriptions-applied' && message.revision === 1), false);
+  assert.equal(socket.sent.filter(message => message.type === 'message' && (message.message as any)?.text === 'live during revision one').length, 1);
+  assert.deepEqual(socket.sent.at(-1), { type: 'subscriptions-applied', revision: 2 });
+});
+
 test('WebUiRealtimeHub authenticates through the real HTTP WebSocket upgrade path', async () => {
   const port = await getFreePort();
   const server = new HttpServer(port, 'upgrade-secret');
