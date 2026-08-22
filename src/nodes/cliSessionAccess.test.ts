@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from '../sessionManager';
 import { nodesManager } from './manager';
+import { issueRemoteExecCompletionCapability, setNodeEventCapabilitySecretForTests } from './sessionEventCapability';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -71,4 +72,48 @@ test('cli-node session APIs allow isolated-agent sessions bound to the node', as
   assert.equal(history.session.id, sessionId);
 
   await sessionManager.setAgentIsolation(agent, undefined);
+});
+
+test('authorized remote exec completion survives a different current node and is idempotent', async () => {
+  await sessionManager.loadSessions();
+  const remoteNodeId = makeId('cli_completion_node');
+  const sessionId = makeId('cli_completion_session');
+  const execId = `exec_${Date.now()}_completion`;
+  const session = await seedSession(sessionId, 'master');
+  session.busy = true;
+  await sessionManager.saveSession(sessionId);
+  setNodeEventCapabilitySecretForTests(Buffer.alloc(32, 9));
+  try {
+    const completionCapability = issueRemoteExecCompletionCapability(remoteNodeId, sessionId, execId);
+    const metadata = {
+      eventId: `remote-exec-completion:${execId}`,
+      execId,
+      completionCapability,
+      eventTimestamp: 1_700_000_000_000,
+    };
+    await Promise.all([
+      nodesManager.handleSessionEvent(remoteNodeId, sessionId, 'remote complete', 'background', metadata),
+      nodesManager.handleSessionEvent(remoteNodeId, sessionId, 'remote complete', 'background', metadata),
+    ]);
+
+    const updated = await sessionManager.getSession(sessionId);
+    assert.equal(updated.currentNode, 'master');
+    assert.equal(updated.queue.filter(item => item.externalEventId === metadata.eventId).length, 1);
+
+    await assert.rejects(
+      () => nodesManager.handleSessionEvent(remoteNodeId, sessionId, 'forged', 'background', {
+        ...metadata,
+        execId: `${metadata.execId}_forged`,
+      }),
+      /invalid remote exec completion capability/,
+    );
+    await assert.rejects(
+      () => nodesManager.handleSessionEvent(remoteNodeId, sessionId, 'forged id only', 'background', {
+        eventId: metadata.eventId,
+      }),
+      /invalid remote exec completion capability/,
+    );
+  } finally {
+    setNodeEventCapabilitySecretForTests();
+  }
 });

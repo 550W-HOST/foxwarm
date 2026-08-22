@@ -10,6 +10,7 @@ import {
   PersistentExecManager,
   formatProcessTreeSnapshot,
   truncateProcessCmdline,
+  type PersistentExecManagerOptions,
   type RunningExecEntry,
 } from './persistentExec';
 import { nativeProcessOperations, type ProcessOperations } from './processOperations';
@@ -285,6 +286,52 @@ test('persistent exec reconciles a dead stale entry after its dated artifact dir
     assert.deepEqual(manager.listRunningExecs(), []);
     assert.deepEqual((await fs.readJson(registryPath)).execs, []);
     assert.equal((await fs.readJson(statusPath)).error, 'Process exited but no status file was written.');
+  } finally {
+    await fs.remove(root);
+  }
+});
+
+test('persistent exec retains a finished background entry across restart until completion delivery is acknowledged', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-delivery-ack-'));
+  const registryPath = path.join(root, 'running-exec.json');
+  const logPath = path.join(root, 'exec', 'finished.log');
+  const entry = buildExecEntry(logPath, {
+    id: 'exec_finished_delivery_ack',
+    pid: 99_999_998,
+    notifyOnCompletion: true,
+    completionCapability: 'persisted-capability',
+  });
+  let acceptDelivery = false;
+  let attempts = 0;
+  const managerOptions: PersistentExecManagerOptions = {
+    registryPath,
+    nodeId: 'remote-a',
+    getDefaultCwd: () => root,
+    getExecTempDir: () => path.join(root, 'exec'),
+    completionDispatcher: async deliveredEntry => {
+      attempts += 1;
+      assert.equal(deliveredEntry.completionCapability, 'persisted-capability');
+      if (!acceptDelivery) throw new Error('master did not acknowledge completion');
+    },
+  };
+  const manager = new PersistentExecManager(managerOptions);
+  try {
+    await fs.ensureDir(path.dirname(logPath));
+    await fs.writeFile(logPath, 'done\n');
+    await fs.writeJson(entry.statusPath, { exitCode: 7, finishedAt: new Date().toISOString() });
+    await fs.writeJson(registryPath, { execs: [entry] });
+
+    await manager.initialize();
+    assert.equal(attempts, 1);
+    assert.equal(manager.listRunningExecs().length, 1);
+    assert.equal((await fs.readJson(registryPath)).execs.length, 1);
+
+    acceptDelivery = true;
+    const restartedManager = new PersistentExecManager(managerOptions);
+    await restartedManager.initialize();
+    assert.equal(attempts, 2);
+    assert.equal(restartedManager.listRunningExecs().length, 0);
+    assert.equal((await fs.readJson(registryPath)).execs.length, 0);
   } finally {
     await fs.remove(root);
   }

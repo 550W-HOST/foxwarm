@@ -254,14 +254,29 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
             }));
             break;
           }
-          await nodesManager.handleSessionEvent(
-            nodeId || authenticatedNodeId || 'unknown-node',
-            String(data.sessionId),
-            data.message,
-            data.eventType === 'trigger' || data.eventType === 'onboot' ? data.eventType : 'background'
-          );
-          if (data.requestId) {
-            ws.send(JSON.stringify({ type: 'session_event_accepted', requestId: data.requestId }));
+          try {
+            await nodesManager.handleSessionEvent(
+              nodeId || authenticatedNodeId || 'unknown-node',
+              String(data.sessionId),
+              data.message,
+              data.eventType === 'trigger' || data.eventType === 'onboot' ? data.eventType : 'background',
+              {
+                eventId: typeof data.eventId === 'string' ? data.eventId : undefined,
+                execId: typeof data.execId === 'string' ? data.execId : undefined,
+                completionCapability: typeof data.completionCapability === 'string' ? data.completionCapability : undefined,
+                eventTimestamp: typeof data.eventTimestamp === 'number' ? data.eventTimestamp : undefined,
+              },
+            );
+            if (data.requestId) {
+              ws.send(JSON.stringify({ type: 'session_event_accepted', requestId: data.requestId }));
+            }
+          } catch (error: any) {
+            if (!data.requestId) throw error;
+            ws.send(JSON.stringify({
+              type: 'error',
+              requestId: data.requestId,
+              error: error?.message || String(error),
+            }));
           }
           break;
         case 'session_list_request': {

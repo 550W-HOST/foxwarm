@@ -36,6 +36,8 @@ The browser extension's `browser_*` tools and shared Puppeteer `browse_*` tools 
 
 CLI node's local loopback trigger and other authenticated node senders use `session_event`. Master permits delivery only when the target session currently selects that node or belongs to an isolated agent bound to it. The authenticated connection's node ID, not a payload claim, is the authorization input.
 
+Remote background exec completion is a narrower protocol exception, not a generic session-event grant. Master assigns the exec ID and a signed capability scoped to the authenticated node, source session, and exec before dispatch. The CLI node persists both with the running entry, submits one deterministic completion event through correlated request/ACK transport, and retains the entry for retry until Master durably accepts it. Master derives authorization from the signed start-time grant rather than mutable `currentNode`, and idempotently queues the event by its external event ID.
+
 ## Heartbeat
 
 - Master and CLI node both send WebSocket protocol ping frames every 30 seconds and require liveness within 10 seconds.
@@ -79,6 +81,10 @@ Model tools are agent-callable and may pass client approval. Backend services ar
 ### D-node-thread-authenticated-identity
 
 Master authorization binds to the authenticated WebSocket node identity. Node IDs in event/tool payloads are data, not authority.
+
+### D-node-thread-remote-exec-completion
+
+Remote exec completion uses an acknowledged, retryable, start-authorized protocol. The authenticated socket identity and a Master-signed capability bind one node, source session, and exec ID; changing `currentNode` after start does not revoke that completion route. Master acknowledges only after the deterministic external event is durably accepted, and duplicate retries must not create duplicate session work. Generic node-originated session events retain the ordinary current-node or isolated-agent ownership rule.
 
 ### D-node-thread-rename
 

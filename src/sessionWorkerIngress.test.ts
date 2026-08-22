@@ -238,6 +238,12 @@ test('Main submitAndRun ensures, spawns, and owns exact worker ingress without M
       role: 'user' as const, parts: [{ text: 'payload', systemPayload: true }, { system: 'ordinary system', systemPayload: false }],
     } };
     assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validSystemPayloadItem }), { sessionId, item: validSystemPayloadItem });
+    const validExternalEventItem = {
+      type: 'background' as const,
+      externalEventId: 'remote-exec-completion:exec_12345678',
+      parts: [{ system: 'remote completion' }],
+    };
+    assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validExternalEventItem }), { sessionId, item: validExternalEventItem });
 
     const accessorPart: any = {}; Object.defineProperty(accessorPart, 'text', { enumerable: true, get() { throw new Error('accessor executed'); } });
     const cyclicRef: any = { ...validRef }; cyclicRef.path = cyclicRef;
@@ -255,6 +261,8 @@ test('Main submitAndRun ensures, spawns, and owns exact worker ingress without M
       { type: 'intersession', parts: [{ system: 'x' }], sourceSessionId: 7 },
       { type: 'background', parts: [{ system: 'x' }], waitTimeoutId: 7 },
       { type: 'background', parts: [{ system: 'x' }], waitTimeoutId: 'x'.repeat(257) },
+      { type: 'background', parts: [{ system: 'x' }], externalEventId: 7 },
+      { type: 'background', parts: [{ system: 'x' }], externalEventId: 'x'.repeat(513) },
       { type: 'user', parts: [{ text: 'x', inlineDataRef: { ...validRef, sha256: 'bad' } }] },
       { type: 'user', parts: [{ text: 'x', imageMeta: { ...validMeta, width: Number.POSITIVE_INFINITY } }] },
       { type: 'user', parts: [accessorPart] },
