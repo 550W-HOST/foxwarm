@@ -138,7 +138,7 @@ test('bounded session list retains both idle watches and once-disabled unread ex
   assert.match(source, /getSessionIdleUnreadIds/)
   assert.match(source, /currentAttentionIds/)
   assert.match(source, /SESSION_IDLE_UNREAD_EVENT/)
-  assert.match(source, /chunkBoundedIds\(subscriptionIds, 100\)/)
+  assert.match(source, /webUiRealtime\.subscribeSessionList\(subscriptionIds/)
   assert.match(source, /dispatchSessionIdleDeleted\(deletedIds\)/)
   assert.match(source, /dispatchSessionIdleDeleted\(missing\)/)
   assert.match(source, /\.\.\.unreadIds/)

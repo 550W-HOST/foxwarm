@@ -17,6 +17,7 @@ import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
 import { appendOptimisticAttachmentTag } from '../utils/attachmentPreview'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
 import { createLatestRequestGate, runLatestModelOptionsRequest } from '../modelOptionsLoader'
+import { webUiRealtime } from '../realtime'
 import {
   buildOptimisticUserMessage,
   getClientMessageId,
@@ -235,11 +236,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const messagesContentRef = useRef<HTMLDivElement>(null)
   const committedTimelineRef = useRef<HTMLDivElement>(null)
   const chatRootRef = useRef<HTMLDivElement>(null)
-  const eventSourceRef = useRef<EventSource | null>(null)
   const lastKnownTimestampRef = useRef<number>(0)
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const reconnectDelayRef = useRef<number>(1000)
-  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const shouldAutoScrollRef = useRef<boolean>(true)
   const pendingUserLeaveBottomRef = useRef(false)
   const touchScrollStartYRef = useRef<number | null>(null)
@@ -765,41 +762,24 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     }, delay)
   }, [fetchHistory])
 
-  const connectSSE = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close()
-      eventSourceRef.current = null
-    }
-
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current)
-      reconnectTimeoutRef.current = null
-    }
-
-    if (countdownIntervalRef.current) {
-      clearInterval(countdownIntervalRef.current)
-      countdownIntervalRef.current = null
-    }
-
-    setConnectionState('connecting')
-    const es = new EventSource(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/stream`)
-    let opened = false
-
-    es.onopen = () => {
-      opened = true
-      setConnectionState('connected')
-      reconnectDelayRef.current = 1000
-      void fetchHistory().then((sessionExists) => {
-        if (sessionExists || eventSourceRef.current !== es) return
-        es.close()
-        eventSourceRef.current = null
-        setConnectionState('disconnected')
-      })
-    }
-
-    es.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
+  const subscribeRealtime = useCallback(() => {
+    let unsubscribe = () => {}
+    unsubscribe = webUiRealtime.subscribeSession(sessionId, {
+      onOpen: () => {
+        setConnectionState('connected')
+        setReconnectCountdown(0)
+        void fetchHistory().then((sessionExists) => {
+          if (sessionExists) return
+          unsubscribe()
+          setConnectionState('disconnected')
+        })
+      },
+      onStatus: (status, retryInSeconds) => {
+        setConnectionState(status)
+        setReconnectCountdown(retryInSeconds || 0)
+      },
+      onMessage: data => {
+        try {
         if (data.type === 'session-state') {
           historyStateEventVersionRef.current += 1
           const hadSessionState = sessionStateInitializedRef.current
@@ -847,8 +827,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           sessionMessageCountRef.current = 0
           sessionHistoryVersionRef.current = 0
           queuedMessagesRef.current = []
-          es.close()
-          eventSourceRef.current = null
+          unsubscribe()
           setConnectionState('disconnected')
           return
         }
@@ -940,92 +919,12 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             }
           }
         }
-      } catch (e) {
-        console.error('Failed to parse SSE message:', e)
-      }
-    }
-
-    es.onerror = () => {
-      es.close()
-
-      if (es.readyState === EventSource.CLOSED) {
-        const scheduleReconnect = () => {
-          setConnectionState('reconnecting')
-          const delay = Math.min(reconnectDelayRef.current, 30000)
-          setReconnectCountdown(Math.ceil(delay / 1000))
-
-          countdownIntervalRef.current = setInterval(() => {
-            setReconnectCountdown(prev => {
-              if (prev <= 1) {
-                if (countdownIntervalRef.current) {
-                  clearInterval(countdownIntervalRef.current)
-                  countdownIntervalRef.current = null
-                }
-                return 0
-              }
-              return prev - 1
-            })
-          }, 1000)
-
-          reconnectTimeoutRef.current = setTimeout(() => {
-            connectSSE()
-            reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000)
-          }, delay)
+        } catch (e) {
+          console.error('Failed to process realtime message:', e)
         }
-
-        if (opened) {
-          scheduleReconnect()
-        } else {
-          void (async () => {
-            try {
-              const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/state`)
-              if (eventSourceRef.current !== es) return
-              if (response.status === 404) {
-                historyRequestGateRef.current.invalidate()
-                historyAbortControllerRef.current?.abort()
-                historyAbortControllerRef.current = null
-                historyInFlightRef.current = null
-                historyTrailingRefreshRef.current = false
-                if (historyRefreshTimeoutRef.current !== null) {
-                  window.clearTimeout(historyRefreshTimeoutRef.current)
-                  historyRefreshTimeoutRef.current = null
-                }
-                setSessionMissing(true)
-                setSessionBusy(false)
-                setMessages([])
-                setQueuedMessages([])
-                setSessionQueueLength(0)
-                setPersistentMemorySnapshot('')
-                setStreamingAssistantDraft(null)
-                setHistoryLoaded(true)
-                lastKnownTimestampRef.current = 0
-                sessionBusyRef.current = false
-                sessionQueueLengthRef.current = 0
-                sessionMessageCountRef.current = 0
-                queuedMessagesRef.current = []
-                eventSourceRef.current = null
-                setConnectionState('disconnected')
-                return
-              }
-              if (response.ok) {
-                const data = await response.json()
-                if (eventSourceRef.current !== es) return
-                historyStateEventVersionRef.current += 1
-                setSessionMissing(false)
-                applySessionState(data.session)
-              }
-            } catch (error) {
-              console.error('Failed to probe session state after stream connection failure:', error)
-            }
-            if (eventSourceRef.current === es) scheduleReconnect()
-          })()
-        }
-      } else {
-        setConnectionState('disconnected')
-      }
-    }
-
-    eventSourceRef.current = es
+      },
+    })
+    return unsubscribe
   }, [applySessionState, fetchHistory, scheduleHistoryRefresh, sessionId])
 
   const updateSessionModel = useCallback(async (model: string | null) => {
@@ -1097,21 +996,10 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   }, [sessionId])
 
   useEffect(() => {
-    connectSSE()
+    const unsubscribe = subscribeRealtime()
 
     return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close()
-        eventSourceRef.current = null
-      }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current)
-        reconnectTimeoutRef.current = null
-      }
-      if (countdownIntervalRef.current) {
-        clearInterval(countdownIntervalRef.current)
-        countdownIntervalRef.current = null
-      }
+      unsubscribe()
       if (historyRefreshTimeoutRef.current !== null) {
         window.clearTimeout(historyRefreshTimeoutRef.current)
         historyRefreshTimeoutRef.current = null
@@ -1122,7 +1010,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       historyInFlightRef.current = null
       historyTrailingRefreshRef.current = false
     }
-  }, [connectSSE, fetchHistory])
+  }, [subscribeRealtime])
 
   useEffect(() => {
     if (!pendingViewportRestoreRef.current && shouldAutoScrollRef.current) {
