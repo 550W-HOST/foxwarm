@@ -16,7 +16,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `browse_open`, `browse_list`, `browse_get`, `browse_close`, `browse_interact` — browser automation tools
 - `buildBrowserScreenshotResult` — builds the current structured `inlineData` screenshot result without source-specific base64 fields
 - `CLI_NODE_CAPABILITIES` — tool schema definitions for all node tools (used for LLM tool registration)
-- `resolveNodePath`, `getNodeAgentDir`, `resolveNodeTransferPath` — path resolution utilities
+- `resolveNodePath`, `resolveNodeAgentDir`, `getNodeAgentDir`, `resolveNodeTransferPath` — path resolution utilities
 - `readNodeTransferFile`, `writeNodeTransferFile` — base64 file transfer helpers
 - `detectTransferMimeType` — MIME type detection for file transfers
 - `resolveExecCwd`, `validateResolvedExecCwd`, `resolveValidatedExecCwd` — exec working directory resolution and validation
@@ -65,6 +65,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `browse_close(args)` | ~308 | Tool: closes a browser tab |
 | `browse_interact(args)` | ~309 | Tool: interacts with a browser tab |
 | `expandHomePath(filePath)` (nodeFileTransfer) | ~20 | Expands ~ to home directory |
+| `resolveNodeAgentDir(agentName, env, nodeRuntimeRoot)` | helper | Resolves agent storage against the immutable node-process startup root |
 | `getNodeAgentDir(agentName)` | ~25 | Resolves the agent working directory |
 | `resolveNodePath(filePath, agentName, sessionCwd)` | ~32 | Resolves relative/absolute file paths for an agent |
 | `resolveNodeTransferPath(filePath, agentName, restrictToAgentDir)` | ~38 | Resolves transfer path with optional traversal guard |
@@ -93,7 +94,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 
 ## Behavior
 
-- File operations resolve paths relative to session cwd or agent directory, with home path expansion; node wrappers then delegate read/write behavior to `fileToolCore`. The core composes only the injected `FileOperations` primitives, so stat, ranged bytes, directory metadata, images, edit, and patch remain in one target-local backend. Large non-image reads preserve `startLine`/`endLine` through bounded ranged reads; canonical details: [D-bounded-file-read-excerpts](#d-bounded-file-read-excerpts).
+- File operations resolve paths relative to session cwd or agent directory, with home path expansion; node wrappers then delegate read/write behavior to `fileToolCore`. Node agent storage and exec capture roots are resolved against one immutable absolute node-process startup root, so later session-cwd changes cannot relocate `.temp/exec` or `running-exec.json` into a project checkout. The core composes only the injected `FileOperations` primitives, so stat, ranged bytes, directory metadata, images, edit, and patch remain in one target-local backend. Large non-image reads preserve `startLine`/`endLine` through bounded ranged reads; canonical details: [D-bounded-file-read-excerpts](#d-bounded-file-read-excerpts).
 - `exec` spawns shell commands via `PersistentExecManager`; commands exceeding timeout continue in background and fire a system event pointing to captured command/pipeline output in the log file. Their immediate timeout footer shares the bounded live-tree and outstanding-process reminder contract from [D-persistent-exec-background-timeout-footer-tree](./shared-persistent-exec.md#d-persistent-exec-background-timeout-footer-tree). The node capability guidance tells models not to add `head`/`tail` merely for context control because pipeline filtering changes captured output; canonical capture details: [D-persistent-exec-bounded-log-excerpts](./shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts).
 - Node-side `exec` shares master-side timeout resolution: finite values above 60 seconds clamp to 60 and emit the requested/effective warning in the immediate foreground or background-switch result; invalid and below-minimum values still reject.
 - `edit` enforces single-occurrence matching to prevent ambiguous replacements

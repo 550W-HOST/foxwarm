@@ -26,6 +26,7 @@
     "test:stream-follow-e2e": "node --test test/streamFollow.e2e.mjs",
     "test:session-list-e2e": "node --test test/sessionListLiveRefresh.e2e.mjs",
     "test:bounded-session-list": "node --test test/boundedSessionList.test.mjs test/boundedSessionReplay.test.mjs",
+    "test:realtime": "node --test test/realtimeTransport.test.mjs test/boundedSessionList.test.mjs",
     "test:session-list-drag-e2e": "node --test test/sessionListDrag.e2e.mjs",
     "test:session-header-e2e": "node --test test/sessionHeader.e2e.mjs",
     "test:settings-menu-e2e": "node --test test/settingsMenuPosition.e2e.mjs",

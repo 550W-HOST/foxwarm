@@ -3,9 +3,11 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
+import { fileURLToPath } from 'node:url'
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
-const chatEntry = new URL('../src/components/Chat.tsx', import.meta.url).pathname
+const chatEntry = fileURLToPath(new URL('../src/components/Chat.tsx', import.meta.url))
+const packageDir = fileURLToPath(new URL('..', import.meta.url))
 let browser
 let server
 let fixtureUrl
@@ -74,19 +76,21 @@ async function buildFixtureBundle() {
       return new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } })
     }
 
-    class FixtureEventSource {
-      static CLOSED = 2
+    class FixtureWebSocket {
+      static CLOSED = 3
       static instances = []
       constructor() {
-        this.readyState = 1
-        FixtureEventSource.instances.push(this)
-        queueMicrotask(() => this.onopen?.({}))
+        this.readyState = 0
+        this.sessionId = ''
+        FixtureWebSocket.instances.push(this)
+        queueMicrotask(() => { this.readyState = 1; this.onopen?.({}) })
       }
-      close() { this.readyState = FixtureEventSource.CLOSED }
-      emit(payload) { this.onmessage?.({ data: originalStringify(payload) }) }
+      close() { this.readyState = FixtureWebSocket.CLOSED }
+      send(raw) { const payload = JSON.parse(raw); if (payload.type !== 'set-subscriptions') return; this.sessionId = payload.sessionIds[0] || this.sessionId; queueMicrotask(() => { this.emit({ type: 'subscriptions-accepted', revision: payload.revision, sessionListResolutions: {}, sessionResolutions: Object.fromEntries(payload.sessionIds.map(id => [id, id])) }); this.emit({ type: 'subscriptions-applied', revision: payload.revision }) }) }
+      emit(payload) { const message = ['session-state', 'session-event', 'message', 'session-deleted'].includes(payload.type) && !payload.sessionId ? { ...payload, sessionId: this.sessionId } : payload; this.onmessage?.({ data: originalStringify(message) }) }
     }
-    window.EventSource = FixtureEventSource
-    window.emitFixtureEvent = payload => FixtureEventSource.instances.at(-1)?.emit(payload)
+    window.WebSocket = FixtureWebSocket
+    window.emitFixtureEvent = payload => FixtureWebSocket.instances.at(-1)?.emit(payload)
 
     const root = createRoot(document.getElementById('root'))
     window.renderFixture = sessionId => root.render(React.createElement(Chat, {
@@ -99,7 +103,7 @@ async function buildFixtureBundle() {
   `
 
   const result = await build({
-    stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'debug-snapshot-fixture.tsx' },
+    stdin: { contents: source, resolveDir: packageDir, sourcefile: 'debug-snapshot-fixture.tsx' },
     bundle: true,
     minify: true,
     format: 'iife',

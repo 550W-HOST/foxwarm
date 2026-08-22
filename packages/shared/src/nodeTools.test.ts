@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import { apply_patch, buildBrowserScreenshotResult, edit, exec, read, write } from './nodeTools';
-import { getNodeAgentDir } from './nodeFileTransfer';
+import { getNodeAgentDir, resolveNodeAgentDir } from './nodeFileTransfer';
 import { CLI_NODE_CAPABILITIES } from './nodeCapabilities';
 import { formatWriteContentRefRetryHint } from './fileToolCore';
 import { resolveExecTimeoutSeconds } from './persistentExec';
@@ -83,6 +84,61 @@ test('shared exec timeout resolution clamps only oversized finite values', () =>
   for (const invalid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, '120']) {
     assert.throws(() => resolveExecTimeoutSeconds(invalid));
   }
+});
+
+test('node agent directories resolve relative configuration against an immutable runtime root', () => {
+  const runtimeRoot = path.resolve('node-runtime-root');
+  assert.equal(resolveNodeAgentDir('alpha', {}, runtimeRoot), path.join(runtimeRoot, 'agents', 'alpha'));
+  assert.equal(
+    resolveNodeAgentDir('alpha', { FOXWARM_AGENTS_DIR: 'custom-agents' }, runtimeRoot),
+    path.join(runtimeRoot, 'custom-agents', 'alpha'),
+  );
+  assert.equal(
+    resolveNodeAgentDir('alpha', { FOXWARM_AGENT_DIR: 'single-agent' }, runtimeRoot),
+    path.join(runtimeRoot, 'single-agent'),
+  );
+});
+
+test('node exec capture stays under the startup agent root after cwd changes', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-exec-root-'));
+  const runtimeRoot = path.join(root, 'runtime');
+  const sessionCwd = path.join(root, 'session-project');
+  const agentName = 'capture-agent';
+  await Promise.all([fs.ensureDir(runtimeRoot), fs.ensureDir(sessionCwd)]);
+  t.after(() => fs.remove(root));
+
+  const nodeToolsPath = require.resolve('./nodeTools');
+  const childScript = [
+    `const tools = require(${JSON.stringify(nodeToolsPath)});`,
+    `process.chdir(${JSON.stringify(sessionCwd)});`,
+    `(async () => {`,
+    `  const output = await tools.exec({ command: 'echo anchored', timeout: 15 }, {`,
+    `    sessionId: 'capture-session',`,
+    `    session: { agent: ${JSON.stringify(agentName)}, cwd: ${JSON.stringify(sessionCwd)}, currentNode: 'test-node' },`,
+    `    runtimeNodeId: 'test-node',`,
+    `  });`,
+    `  if (!String(output).includes('anchored')) throw new Error('exec output missing');`,
+    `})().catch(error => { console.error(error); process.exitCode = 1; });`,
+  ].join('\n');
+  const env = { ...process.env };
+  delete env.FOXWARM_AGENT_DIR;
+  delete env.FOXWARM_AGENTS_DIR;
+  const child = spawnSync(process.execPath, ['-e', childScript], {
+    cwd: runtimeRoot,
+    env,
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  assert.equal(child.status, 0, child.stderr || child.stdout);
+
+  const execRoot = path.join(runtimeRoot, 'agents', agentName, '.temp', 'exec');
+  assert.equal(await fs.pathExists(path.join(execRoot, 'running-exec.json')), true);
+  assert.equal(await fs.pathExists(path.join(sessionCwd, 'agents')), false);
+  const dateDirs = (await fs.readdir(execRoot, { withFileTypes: true })).filter(entry => entry.isDirectory());
+  assert.equal(dateDirs.length, 1);
+  const datedEntries = await fs.readdir(path.join(execRoot, dateDirs[0].name));
+  assert.ok(datedEntries.some(name => name.endsWith(process.platform === 'win32' ? '.command.ps1' : '.command.sh')));
+  assert.ok(datedEntries.some(name => name.endsWith('.log.exit.json')));
 });
 
 test('node exec clamps oversized timeout and puts the warning in the foreground footer', async () => {

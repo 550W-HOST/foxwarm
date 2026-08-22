@@ -6,7 +6,7 @@ import { CATALOG_DB_PATH, SESSIONS_DIR, SESSIONS_FILE, STATE_DIR, MODEL_EFFORTS,
 import { CURRENT_SESSION_STATE_VERSION, normalizeAndValidateSessionAuthorityPayload } from './stateValidation';
 import { isQueueItem } from '../types';
 import { getEffectiveSessionQueueLength } from '../sessionRuntimeState';
-import { getLegacyBackupPath, getNumberedBackupPath } from '../utils/diskJsonData';
+import { getLegacyBackupPath, getNumberedBackupPath, shouldIgnoreDirectorySyncError } from '../utils/diskJsonData';
 
 const SCHEMA_VERSION = 2;
 const MIGRATION_EVIDENCE_PATH = `${SESSIONS_FILE}.pre-catalog-sqlite-v1.bak`;
@@ -450,8 +450,16 @@ function presentationKey(row: any, mode: SessionListOrderMode, child = false): S
 }
 
 function fsyncPath(filePath: string): void {
-  const fd = fs.openSync(filePath, 'r');
-  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  const isDirectory = fs.statSync(filePath).isDirectory();
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(filePath, isDirectory ? 'r' : 'r+');
+    fs.fsyncSync(fd);
+  } catch (error) {
+    if (!isDirectory || !shouldIgnoreDirectorySyncError(error)) throw error;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
 }
 
 function candidatePaths(): string[] {

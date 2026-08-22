@@ -3,9 +3,11 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
+import { fileURLToPath } from 'node:url'
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
-const chatEntry = new URL('../src/components/Chat.tsx', import.meta.url).pathname
+const chatEntry = fileURLToPath(new URL('../src/components/Chat.tsx', import.meta.url))
+const packageDir = fileURLToPath(new URL('..', import.meta.url))
 let browser
 let page
 let server
@@ -80,35 +82,49 @@ async function buildFixtureBundle() {
       return new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } })
     }
 
-    class FixtureEventSource {
-      static CLOSED = 2
+    class FixtureWebSocket {
+      static CONNECTING = 0
+      static OPEN = 1
+      static CLOSED = 3
       static instances = []
       constructor() {
-        this.readyState = 0
+        this.readyState = FixtureWebSocket.CONNECTING
         this.opened = false
         this.pending = []
-        FixtureEventSource.instances.push(this)
+        FixtureWebSocket.instances.push(this)
         if (!new URLSearchParams(window.location.search).has('manualSse')) queueMicrotask(() => this.open())
       }
       open() {
-        if (this.readyState === FixtureEventSource.CLOSED || this.opened) return
+        if (this.readyState === FixtureWebSocket.CLOSED || this.opened) return
         this.opened = true
-        this.readyState = 1
+        this.readyState = FixtureWebSocket.OPEN
         this.onopen?.({})
         queueMicrotask(() => this.pending.splice(0).forEach(payload => this.emit(payload)))
       }
-      close() { this.readyState = FixtureEventSource.CLOSED }
+      close() { this.readyState = FixtureWebSocket.CLOSED }
+      send(raw) {
+        const payload = JSON.parse(raw)
+        if (payload.type !== 'set-subscriptions') return
+        queueMicrotask(() => {
+          this.emit({ type: 'subscriptions-accepted', revision: payload.revision,
+            sessionListResolutions: Object.fromEntries(payload.sessionListIds.map(id => [id, id])),
+            sessionResolutions: Object.fromEntries(payload.sessionIds.map(id => [id, id])) })
+          this.emit({ type: 'subscriptions-applied', revision: payload.revision })
+        })
+      }
       emit(payload) {
         if (!this.opened) { this.pending.push(payload); return }
-        this.onmessage?.({ data: JSON.stringify(payload) })
+        const sessionPayloadTypes = new Set(['session-state', 'session-event', 'message', 'session-deleted', 'typing'])
+        const message = sessionPayloadTypes.has(payload.type) && !payload.sessionId ? { ...payload, sessionId: 'fixture/main' } : payload
+        this.onmessage?.({ data: JSON.stringify(message) })
       }
-      fail() { this.onerror?.({}) }
+      fail() { if (this.readyState === FixtureWebSocket.CLOSED) return; this.readyState = FixtureWebSocket.CLOSED; this.onclose?.({}) }
     }
-    window.EventSource = FixtureEventSource
-    window.fixtureEventSourceCount = () => FixtureEventSource.instances.length
-    window.openFixtureEventSource = () => FixtureEventSource.instances.at(-1)?.open()
-    window.failFixtureEventSource = () => FixtureEventSource.instances.at(-1)?.fail()
-    window.emitFixtureEvent = payload => FixtureEventSource.instances.at(-1)?.emit(payload)
+    window.WebSocket = FixtureWebSocket
+    window.fixtureEventSourceCount = () => FixtureWebSocket.instances.length
+    window.openFixtureEventSource = () => FixtureWebSocket.instances.at(-1)?.open()
+    window.failFixtureEventSource = () => FixtureWebSocket.instances.at(-1)?.fail()
+    window.emitFixtureEvent = payload => FixtureWebSocket.instances.at(-1)?.emit(payload)
     window.emitFixtureMessage = message => window.emitFixtureEvent({ type: 'message', message })
 
     createRoot(document.getElementById('root')).render(React.createElement(Chat, {
@@ -116,7 +132,7 @@ async function buildFixtureBundle() {
     }))
   `
   const result = await build({
-    stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'chat-history-loading-fixture.tsx' },
+    stdin: { contents: source, resolveDir: packageDir, sourcefile: 'chat-history-loading-fixture.tsx' },
     bundle: true,
     format: 'iife',
     platform: 'browser',
@@ -523,7 +539,7 @@ test('initial and reconnect streams register before their single history snapsho
   await page.close()
 })
 
-test('a stream that fails before opening uses a lightweight state 404 to stop reconnecting', async () => {
+test('a realtime socket that fails before opening reconnects without starting history', async () => {
   page = await browser.newPage()
   await page.setViewport({ width: 1000, height: 720 })
   await page.goto(`${fixtureUrl}?manualSse=1`, { waitUntil: 'load' })
@@ -531,32 +547,25 @@ test('a stream that fails before opening uses a lightweight state 404 to stop re
   assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 0)
 
   await page.evaluate(() => window.failFixtureEventSource())
-  await page.waitForFunction(() => window.fixtureStateProbeCount === 1)
+  await page.waitForFunction(() => window.fixtureEventSourceCount() === 2, { timeout: 2500 })
   assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 0)
-  await page.evaluate(() => window.resolveFixtureStateProbeNotFound())
-  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('Session not found.'))
-  await new Promise(resolve => setTimeout(resolve, 1100))
-  assert.equal(await page.evaluate(() => window.fixtureEventSourceCount()), 1)
-  assert.equal(await page.evaluate(() => window.fixtureStateProbeCount), 1)
-  assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 0)
+  await page.evaluate(() => window.openFixtureEventSource())
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  await page.evaluate(() => window.resolveFixtureHistory())
   await page.close()
 })
 
-test('repeated pre-open failures use only state probes until a stream opens', async () => {
+test('repeated pre-open failures retain one transport generation and one eventual history bootstrap', async () => {
   page = await browser.newPage()
   await page.setViewport({ width: 1000, height: 720 })
   await page.goto(`${fixtureUrl}?manualSse=1`, { waitUntil: 'load' })
   await page.waitForFunction(() => window.fixtureEventSourceCount() === 1)
 
   await page.evaluate(() => window.failFixtureEventSource())
-  await page.waitForFunction(() => window.fixtureStateProbeCount === 1)
-  await page.evaluate(() => window.resolveFixtureStateProbe())
   await page.waitForFunction(() => window.fixtureEventSourceCount() === 2, { timeout: 2500 })
   assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 0)
 
   await page.evaluate(() => window.failFixtureEventSource())
-  await page.waitForFunction(() => window.fixtureStateProbeCount === 2)
-  await page.evaluate(() => window.resolveFixtureStateProbe())
   await page.waitForFunction(() => window.fixtureEventSourceCount() === 3, { timeout: 3500 })
   assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 0)
 
@@ -569,7 +578,6 @@ test('repeated pre-open failures use only state probes until a stream opens', as
   await page.evaluate(() => window.resolveFixtureHistory())
   await new Promise(resolve => setTimeout(resolve, 150))
 
-  assert.equal(await page.evaluate(() => window.fixtureStateProbeCount), 2)
   assert.equal(await page.evaluate(() => window.fixtureHistoryRequestCount), 1)
   assert.equal(await page.evaluate(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('committed across pre-open failures')), true)
   await page.close()

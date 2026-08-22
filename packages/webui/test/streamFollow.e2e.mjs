@@ -3,9 +3,11 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
+import { fileURLToPath } from 'node:url'
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
-const chatEntry = new URL('../src/components/Chat.tsx', import.meta.url).pathname
+const chatEntry = fileURLToPath(new URL('../src/components/Chat.tsx', import.meta.url))
+const packageDir = fileURLToPath(new URL('..', import.meta.url))
 
 let browser
 let page
@@ -57,23 +59,27 @@ async function buildFixtureBundle() {
       return new Response(JSON.stringify({}), { status: 404, headers: { 'Content-Type': 'application/json' } })
     }
 
-    class FixtureEventSource {
-      static CLOSED = 2
+    class FixtureWebSocket {
+      static CLOSED = 3
       static instances = []
       constructor() {
-        this.readyState = 1
-        FixtureEventSource.instances.push(this)
-        queueMicrotask(() => this.onopen?.({}))
+        this.readyState = 0
+        FixtureWebSocket.instances.push(this)
+        queueMicrotask(() => { this.readyState = 1; this.onopen?.({}) })
       }
-      close() { this.readyState = FixtureEventSource.CLOSED }
-      emit(payload) { this.onmessage?.({ data: JSON.stringify(payload) }) }
+      close() { this.readyState = FixtureWebSocket.CLOSED }
+      send(raw) { const payload = JSON.parse(raw); if (payload.type !== 'set-subscriptions') return; queueMicrotask(() => {
+        this.emit({ type: 'subscriptions-accepted', revision: payload.revision, sessionListResolutions: {}, sessionResolutions: { 'fixture/main': 'fixture/main' } })
+        this.emit({ type: 'subscriptions-applied', revision: payload.revision })
+      }) }
+      emit(payload) { const message = payload.type === 'session-event' ? { ...payload, sessionId: 'fixture/main' } : payload; this.onmessage?.({ data: JSON.stringify(message) }) }
     }
-    window.EventSource = FixtureEventSource
+    window.WebSocket = FixtureWebSocket
 
     let streamLines = []
     window.appendStreamLine = (line) => {
       streamLines.push(line)
-      FixtureEventSource.instances.at(-1)?.emit({
+      FixtureWebSocket.instances.at(-1)?.emit({
         type: 'session-event',
         event: {
           type: 'model-stream-update',
@@ -93,7 +99,7 @@ async function buildFixtureBundle() {
     )
   `
   const result = await build({
-    stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'stream-follow-fixture.tsx' },
+    stdin: { contents: source, resolveDir: packageDir, sourcefile: 'stream-follow-fixture.tsx' },
     bundle: true,
     format: 'iife',
     platform: 'browser',

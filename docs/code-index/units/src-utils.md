@@ -10,6 +10,7 @@ Core utility functions for durable JSON file persistence with write coalescing a
 
 - `DiskJsonData<T>` — class for durable JSON read/write with atomic rename, backup rotation, and write coalescing
 - `getNumberedBackupPath`, `getLegacyBackupPath` — backup path helpers
+- `shouldIgnoreDirectorySyncError`, `syncDirectoryDurably` — strict file-write durability support with platform-aware directory sync
 - `formatMessageText`, `formatMessagePreviewText`, `formatPrefixedMultilineText` — message-to-text formatting
 - `getMessagePreview`, `formatMessagePreviewLine`, `formatSessionMessagesPreview` — message preview utilities
 - `formatLocalTimestamp`, `formatLocalTimeRange` — local time formatting with numeric UTC offset
@@ -26,8 +27,8 @@ Core utility functions for durable JSON file persistence with write coalescing a
 |----------|-------|-------------|
 | `getNumberedBackupPath(filePath, index)` | ~47 | Returns numbered `.N.bak` path |
 | `getLegacyBackupPath(filePath)` | ~51 | Returns `.bak` path |
-| `shouldIgnoreDirectorySyncError(error)` | ~54 | Checks if dir sync error is ignorable |
-| `syncDirectory(dirPath)` | ~61 | Fsyncs a directory handle for durability |
+| `shouldIgnoreDirectorySyncError(error)` | ~54 | Checks if a directory sync error means the filesystem does not support the operation |
+| `syncDirectoryDurably(dirPath)` | ~61 | Fsyncs a directory when the host filesystem supports it |
 | `writeFileDurably(filePath, content)` | ~74 | Opens, writes, and fsyncs a file |
 | `DiskJsonData.constructor(filePath, options)` | ~89 | Initializes paths, backup config, hooks |
 | `DiskJsonData.getBackupPaths()` | ~105 | Lists configured backup file paths |
@@ -106,7 +107,7 @@ system text and split `systemPayload` are read compatibility only.
 ## Behavior
 
 - `DiskJsonData.write()` coalesces rapid writes: only the latest pending data is flushed, earlier intermediate values are skipped but their promises still resolve.
-- Writes use an atomic temp-file + fsync + rename + directory-sync pattern to prevent corruption on crash.
+- Writes use an atomic temp-file + fsync + rename + directory-sync pattern to prevent corruption on crash. File fsync remains mandatory; unsupported directory fsync errors such as Windows `EPERM` are skipped after the atomic rename.
 - Backup rotation shifts numbered backups (N → N+1) before each write; errors are swallowed in `bestEffort` mode.
 - `loadFirstAvailable` iterates primary then backups, returning the first parseable file — provides automatic recovery from corruption.
 - Unicode utilities use `Intl.Segmenter` when available for grapheme-accurate truncation, falling back to code-point iteration.
