@@ -5,7 +5,7 @@ Secondary files: packages/webui/src/components/ProcessingStatus.tsx, packages/we
 
 ## Purpose
 
-Owns one mounted session's committed history, queued preview, runtime/model snapshot, per-session SSE, message upload/send, stop/dequeue/continue commands, ASR, debug view, scroll/viewport state, and the desktop context overview scrollbar.
+Owns one mounted session's committed history, queued preview, runtime/model snapshot, logical realtime subscription, message upload/send, stop/dequeue/continue commands, ASR, debug view, scroll/viewport state, and the desktop context overview scrollbar.
 
 ## Export
 
@@ -31,7 +31,7 @@ Owns one mounted session's committed history, queued preview, runtime/model snap
 ## Per-session state and streaming
 
 - Initial `GET /sessions/:id/history` returns `{ session, messages, persistentMemorySnapshot, queuedMessages, queueLength }`; it is the sole normal bootstrap request for committed history and snapshot data.
-- Chat opens one EventSource at `/sessions/:id/stream` before requesting history and handles model/tool streaming, persisted message updates, canonical `session-state`, queue/history refresh, deletion, and reconnect. Each successful initial/reconnect open starts that session's coalesced history snapshot. A failure before `onopen` calls only `/sessions/:id/state`: 404 marks missing and stops retries, while an existing state schedules another stream-first attempt without downloading history.
+- Chat registers one logical session subscription with the page-scoped realtime transport and handles model/tool streaming, persisted message updates, canonical `session-state`, queue/history refresh, deletion, and connection status. The transport calls Chat's registration callback on `subscriptions-accepted`, after the server installs the subscription but before its asynchronous initial snapshot and buffered live events; Chat starts its coalesced history snapshot at that boundary. Reconnect re-registers every retained logical subscription, while a Chat added to an already-open split pane receives its own first registration without restarting unrelated Chats.
 - Streaming assistant deltas form a temporary synthetic message. A committed model `message` clears it; the Session-worker transport guarantees that the corresponding final cumulative update precedes that message and cannot arrive later. Canonical ordering: [D-streaming-worker-commit-order](../threads/streaming-pipeline.md#d-streaming-worker-commit-order).
 - Persisted user events replace their matching optimistic row in place by `clientMessageId`; all persisted updates prefer stable client/seq/id metadata before legacy timestamp dedupe. A later failed POST removes only an unreconciled optimistic row. An in-flight history request replays newer SSE rows and preserves unmatched pending sends before it can commit. Post-request `session-state` fields and model-stream drafts stay stream-owned; a mismatched queue preview waits for one coalesced trailing refresh. Deletion invalidates/aborts history and clears pending refresh work. Same-session refresh triggers reuse that request and request at most one trailing refresh; deletion, session replacement, and unmount abort it.
 - Temporary command-response rows remain browser-local but are reinserted at their existing mounted-timeline anchors after internal history snapshots. They clear on page refresh/remount and remain excluded from persistence, model context, queue preview, archive/search, and ContextScrollbar committed history.
@@ -53,14 +53,14 @@ Owns one mounted session's committed history, queued preview, runtime/model snap
 
 - Header state and cwd come from the per-session history/stream snapshot, including in Code leaf Chat.
 - Chat itself owns only whether Debug is open and passes current source data to the separately mounted `SessionDebugModal`. Open and Refresh each capture one immutable diagnostic snapshot; ordinary Chat updates do not rebuild it, and close/session replacement/unmount aborts pending work and releases modal-owned payload/text. See [D-webui-history-bootstrap](../modules/webui.md#d-webui-history-bootstrap).
-- History/SSE/Debug/CTX image parts use authenticated deployment-relative blob API paths and contain no base64 or legacy filesystem path. Timeline rendering owns the safe-raster/download distinction; canonical persistence/provider/retention behavior is [image blob lifecycle](../threads/image-blob-lifecycle.md).
+- History/realtime/Debug/CTX image parts use authenticated deployment-relative blob API paths and contain no base64 or legacy filesystem path. Timeline rendering owns the safe-raster/download distinction; canonical persistence/provider/retention behavior is [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - Timeline defaults to a recent subset with explicit full expansion.
 - Horizontal containment remains on the chat/timeline boundaries while tables/output own intentional inner scrolling.
 - Chat fetches model options on mount and again whenever the composer popup opens. A latest-request gate owns options, errors, and loading state, so stale successes/failures/finalizers cannot overwrite a newer refresh. Current and child model/effort callbacks post property-presence patches to the existing model endpoints and replace local state from the canonical response, so backend normalization always wins. The popup's settings action is passed upward; normal Chat delegates to App and embedded Chat emits the fixed Code-host message. Canonical effort semantics: [D-model-routing-effort](../threads/model-routing.md#d-model-routing-effort).
 
 ## Dependencies
 
-ChatComposer, ChatTimeline, ProcessingStatus, chat shared types/renderers, ToolScript progress context, and `API_BASE_PATH`. Model-settings navigation is canonical in [D-webui-model-settings-navigation](../modules/webui.md#d-webui-model-settings-navigation).
+ChatComposer, ChatTimeline, ProcessingStatus, chat shared types/renderers, ToolScript progress context, `API_BASE_PATH`, and [webui-realtime](./webui-realtime.md). Model-settings navigation is canonical in [D-webui-model-settings-navigation](../modules/webui.md#d-webui-model-settings-navigation).
 
 ## Design decisions
 

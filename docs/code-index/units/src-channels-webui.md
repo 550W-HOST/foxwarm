@@ -1,11 +1,11 @@
 # Unit: src-channels-webui
 
 Files: src/channels/webuiChannel.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTerminalStream.test.ts
-Secondary files: src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
+Secondary files: src/channels/webuiRealtime.ts, src/channels/webuiRealtime.test.ts, src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
 
 ## Purpose
 
-Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel, session, and browser-terminal routes. It translates browser actions into the message router and immutable SessionRuntime DTO operations used by other external interfaces. Destructive lifecycle and channel-attachment flows intentionally retain direct session-manager coordination.
+Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibility SSE, upload/download, setup, model, channel, session, and browser-terminal routes. It translates browser actions into the message router and immutable SessionRuntime DTO operations used by other external interfaces. Destructive lifecycle and channel-attachment flows intentionally retain direct session-manager coordination.
 
 `src/webuiSettings.ts` is primarily documented by [webui-settings](./webui-settings.md). `src/vscodeWebRoutes.ts` is documented by [VS Code Web routes](./src-vscode-web-routes.md).
 
@@ -15,7 +15,7 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
 - `buildWebUiSessionState(sessionDto)` — canonical single-session runtime/model/effort/node/cwd payload shared by list, history, and streams.
 - `buildWebUiModelsPayload(currentModel?)` — model selector capability payload including virtual routing metadata and allowed/default effort presentation.
 - `buildQueuedPreviewMessages(queue)` — bounded render-only queue previews.
-- `broadcastMessage`, `broadcastSessionStateUpdate`, and `broadcastSessionListUpdate` — per-session and global SSE delivery.
+- `broadcastMessage`, `broadcastSessionStateUpdate`, and `broadcastSessionListUpdate` — parity delivery to current multiplexed WebSocket and compatibility SSE clients.
 - `getModelsSetupDiagnostics(modelsPath?)` — structured concrete/virtual setup diagnostics.
 
 ## Route groups
@@ -24,7 +24,7 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
 - Session list, history, create, update, fork, move, pin, model, cwd, and message routes.
 - Fixed bounded `/api/session-list/sidebar`, `/children`, `/by-id`,
   `/architecture`, `/descendants/:sessionId`, and `/search` query routes.
-- Per-session SSE plus the independent global session-list stream.
+- One authenticated multiplexed `/api/webui/stream` WebSocket for current clients, plus legacy per-session and global session-list SSE routes.
 - File upload and authenticated download.
 - Authenticated content-addressed image blob delivery.
 - Model/provider and channel configuration, validation, and connectivity tests.
@@ -68,11 +68,13 @@ Implements the WebUI channel's HTTP, SSE, upload/download, setup, model, channel
 - Session list, agent-tree, state, history, model, child-model, cwd, and display-name routes use SessionRuntime DTO calls. The existing model and child-model POST routes accept property-presence model/effort pairs and return canonical raw/effective/capability state from the exact owner; legacy `clear` remains model-only. History canonicalization rejects a concurrent history replacement retryably rather than overwriting newer live messages.
 - `GET /api/sessions/:id/history` returns committed messages, the lightweight `persistentMemorySnapshot`, a separate bounded `queuedMessages` preview, queue length, and a canonical session snapshot. Queue previews never become committed history; normal Chat bootstrap does not need the full debug-file route.
 - History, persisted-message SSE, one-layer CTX-BLOCK expansion, and explicit Debug payloads recursively replace canonical image refs with deployment-relative `/blobs/:blobId` API paths and never expose base64 or legacy image paths, including nested function responses and non-history Debug structures. Unmaterializable legacy images become explicit unavailable metadata without discarding surrounding business fields. `GET /api/blobs/:blobId` is authenticated, immutable-cacheable, traversal-safe, and inline-serves only safe raster formats; other formats are attachment-only with `nosniff`. Canonical contract: [image blob lifecycle](../threads/image-blob-lifecycle.md).
-- `GET /api/sessions/:id/state` returns only `{ session: buildWebUiSessionState(session) }` (or 404). Chat uses this lightweight authenticated probe only when EventSource fails before opening, so reconnect existence checks never download history.
+- `GET /api/sessions/:id/state` returns only `{ session: buildWebUiSessionState(session) }` (or 404). It remains an authenticated lightweight state API and compatibility surface; current WebSocket Chat reconnect receives existence/state through its revisioned subscription snapshot.
 - `POST /api/sessions/:id/message` accepts a bounded optional browser `clientMessageId` and forwards it as routing metadata without adding it to model-visible parts.
 - Each per-session SSE connection sends an immediate SessionRuntime state snapshot, then cloned history/state events plus router-owned transient stream and deletion updates for that session.
 - The global SSE stream sends catalog invalidation without an all-row payload. A client may subscribe with capped repeated `sessionId` parameters; connection sends immediate bounded projections for matching exact/alias rows, and later state/deletion events send `session-list-delta` only for subscribed canonical IDs. This supports loaded/current/open/watch rows without recreating a complete browser mirror.
 - While an exact global-SSE snapshot is being prepared, newer subscribed state/deletion deltas are buffered latest-per-ID; the wire always emits the initial snapshot first, then those newer deltas, then any buffered versioned invalidation. Disconnect cleanup is installed before the awaited snapshot so closed clients cannot be written, scheduled, or retained afterward. A no-ID stream remains a supported invalidation-only subscription.
+- The current WebSocket hub accepts a complete revisioned union of logical list/session subscriptions, installs canonical session ownership before acknowledging registration, loads bounded list and session-state snapshots, then flushes live events buffered during initialization. Superseded async revisions are discarded. Session/list payloads retain their existing DTOs but session-scoped envelopes include canonical `sessionId`; requested/canonical maps let the browser isolate union deltas back to each logical consumer. Canonical transport rationale and history ordering: [D-webui-multiplexed-realtime](../threads/streaming-pipeline.md#d-webui-multiplexed-realtime).
+- Presentation subscription activation is computed across both WebSocket and legacy SSE clients. Closing one transport cannot deactivate Main-to-worker transient presentation while another client remains subscribed.
 - `POST /api/session-list/descendant-activity` accepts at most 100 exact/unique-alias row IDs and returns authoritative busy-descendant counts from one active-ID ancestor projection. Current exact local/Worker busy and idle projections override catalog candidates, stale Worker projections are excluded, and current volatile active-only IDs are then added. Cycles terminate and never count a root as its own descendant. It is the bounded ordinary badge path; exact lifecycle dialogs keep using the recursive descendant preview.
 - Session ordering and pinning update the shared session metadata index rather than rewriting history snapshots.
 - Archive accepts optional `includeDescendants` only for archive-to-true and returns matched/changed IDs and counts. Delete delegates to the shared Main-owned lifecycle orchestrator. It accepts optional `includeDescendants`, recomputes and claims the canonical subtree, preflights every selected session for channel/busy blockers, revalidates graph/channel/activity state, deletes recursively deepest-first, and reports partial progress on unexpected failures. Single-session deletion claims and detaches direct survivors before deleting the root. Canonical semantics: [D-lifecycle-descendant-actions](../threads/session-lifecycle.md#d-lifecycle-descendant-actions).
