@@ -15,6 +15,7 @@ export type WebUiRealtimeEnvelope = {
 type ResolvedRealtimeIds = {
   canonicalIds: string[];
   missingIds: string[];
+  requestedToCanonical: Record<string, string>;
 };
 
 export type WebUiRealtimeSocket = Pick<WebSocket, 'readyState' | 'send' | 'close' | 'ping' | 'on'>;
@@ -187,6 +188,11 @@ export class WebUiRealtimeHub {
     client.initializing = true;
     client.pending = [];
     this.notifyChangedSessionSubscriptions(previousSessionIds, client.sessionIds);
+    this.safeSend(client, {
+      type: 'subscriptions-accepted',
+      revision: message.revision,
+      sessionResolutions: resolvedSessions.requestedToCanonical,
+    });
 
     const revision = message.revision;
     const [listSnapshot, sessionSnapshots] = await Promise.all([

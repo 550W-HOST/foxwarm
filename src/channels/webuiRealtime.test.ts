@@ -40,6 +40,7 @@ function makeHub(options: { authorized?: boolean; stateGate?: Promise<void> } = 
     resolveIds: ids => ({
       canonicalIds: ids.filter(id => id !== 'missing').map(id => id === 'alias' ? 'agent/main' : id),
       missingIds: ids.filter(id => id === 'missing'),
+      requestedToCanonical: Object.fromEntries(ids.filter(id => id !== 'missing').map(id => [id, id === 'alias' ? 'agent/main' : id])),
     }),
     loadSessionState: async sessionId => {
       await options.stateGate;
@@ -83,6 +84,7 @@ test('WebUiRealtimeHub multiplexes list and session subscriptions on one socket'
   assert.equal(hub.hasSessionSubscribers('agent/main'), true);
   assert.deepEqual(subscriptionChanges, ['agent/main']);
   assert.deepEqual(socket.sent.slice(1), [
+    { type: 'subscriptions-accepted', revision: 1, sessionResolutions: { alias: 'agent/main' } },
     { type: 'session-list-delta', sessions: [{ id: 'agent/main' }], deletedIds: ['missing'] },
     { type: 'session-state', sessionId: 'agent/main', session: { id: 'agent/main' } },
     { type: 'subscriptions-applied', revision: 1 },
@@ -101,7 +103,10 @@ test('WebUiRealtimeHub multiplexes list and session subscriptions on one socket'
   await flush();
   assert.equal(hub.hasSessionSubscribers('agent/main'), false);
   assert.deepEqual(subscriptionChanges, ['agent/main', 'agent/main']);
-  assert.deepEqual(socket.sent.at(-1), { type: 'subscriptions-applied', revision: 2 });
+  assert.deepEqual(socket.sent.slice(-2), [
+    { type: 'subscriptions-accepted', revision: 2, sessionResolutions: {} },
+    { type: 'subscriptions-applied', revision: 2 },
+  ]);
 
   socket.emit('close');
   assert.equal(hub.getConnectionCount(), 0);
@@ -117,11 +122,14 @@ test('WebUiRealtimeHub buffers live events behind the subscription snapshot', as
   await flush();
 
   hub.broadcastSession('agent/main', { type: 'message', message: { text: 'live' } });
-  assert.deepEqual(socket.sent, [{ type: 'connected' }]);
+  assert.deepEqual(socket.sent, [
+    { type: 'connected' },
+    { type: 'subscriptions-accepted', revision: 1, sessionResolutions: { 'agent/main': 'agent/main' } },
+  ]);
   release();
   await flush();
 
-  assert.deepEqual(socket.sent.slice(1), [
+  assert.deepEqual(socket.sent.slice(2), [
     { type: 'session-state', sessionId: 'agent/main', session: { id: 'agent/main' } },
     { type: 'message', message: { text: 'live' }, sessionId: 'agent/main' },
     { type: 'subscriptions-applied', revision: 1 },

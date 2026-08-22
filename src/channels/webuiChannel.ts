@@ -943,6 +943,10 @@ export class WebUIChannel implements Channel {
             return resolution?.kind === 'exact' || resolution?.kind === 'alias' ? [resolution.sessionId] : [];
           }))],
           missingIds: ids.filter(id => resolved[id]?.kind !== 'exact' && resolved[id]?.kind !== 'alias'),
+          requestedToCanonical: Object.fromEntries(ids.flatMap(id => {
+            const resolution = resolved[id];
+            return resolution?.kind === 'exact' || resolution?.kind === 'alias' ? [[id, resolution.sessionId]] : [];
+          })),
         };
       },
       loadSessionState: async sessionId => {
