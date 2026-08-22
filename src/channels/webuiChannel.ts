@@ -53,6 +53,7 @@ import {
   repeatedFocusIds,
 } from '../webuiSessionListQueries';
 import { normalizeWebUiMultipartFilename } from './webuiUpload';
+import { WebUiRealtimeHub, WEBUI_REALTIME_PATH } from './webuiRealtime';
 
 const MODEL_PLACEHOLDER_RE = /^(your-|sk-\.\.\.|changeme|replace-me|)$/i;
 const MAX_QUEUED_PREVIEW_ITEMS = 20;
@@ -846,6 +847,8 @@ export class WebUIChannel implements Channel {
   private enableWebUI: boolean;
   private enableTrigger: boolean;
   private sseClients: Map<string, express.Response[]> = new Map(); // sessionId -> clients
+  private realtimeHub?: WebUiRealtimeHub;
+  private presentationSubscriberSessions = new Set<string>();
   private presentationSubscriptionListener?: (sessionId: string, active: boolean) => void;
 
   /** Main→worker transient presentation subscription bridge (Session-worker placement). */
@@ -854,7 +857,7 @@ export class WebUIChannel implements Channel {
   }
 
   hasPresentationSubscribers(sessionId: string): boolean {
-    return (this.sseClients.get(sessionId)?.length || 0) > 0;
+    return (this.sseClients.get(sessionId)?.length || 0) > 0 || !!this.realtimeHub?.hasSessionSubscribers(sessionId);
   }
   private globalSseClients: express.Response[] = []; // Global clients for session list updates
   private globalSseSessionIds = new WeakMap<express.Response, Set<string>>();
@@ -864,6 +867,15 @@ export class WebUIChannel implements Channel {
     initializing: boolean;
   }>();
   private globalSseInvalidationEventId = 0;
+
+  private refreshPresentationSubscription(sessionId: string): void {
+    const active = this.hasPresentationSubscribers(sessionId);
+    const wasActive = this.presentationSubscriberSessions.has(sessionId);
+    if (active === wasActive) return;
+    if (active) this.presentationSubscriberSessions.add(sessionId);
+    else this.presentationSubscriberSessions.delete(sessionId);
+    this.presentationSubscriptionListener?.(sessionId, active);
+  }
 
   private async streamPathDownload(resolvedPath: string, res: express.Response): Promise<void> {
     const stat = await fs.stat(resolvedPath);
@@ -921,6 +933,40 @@ export class WebUIChannel implements Channel {
   private setupRoutes() {
     // Add routes to HTTP server
     const httpServerInstance = httpServer;
+    this.realtimeHub = new WebUiRealtimeHub({
+      checkToken: req => httpServerInstance.checkIncomingToken(req),
+      resolveIds: ids => {
+        const resolved = sessionCatalogStore.resolveMany(ids);
+        return {
+          canonicalIds: [...new Set(ids.flatMap(id => {
+            const resolution = resolved[id];
+            return resolution?.kind === 'exact' || resolution?.kind === 'alias' ? [resolution.sessionId] : [];
+          }))],
+          missingIds: ids.filter(id => resolved[id]?.kind !== 'exact' && resolved[id]?.kind !== 'alias'),
+        };
+      },
+      loadSessionState: async sessionId => {
+        const session = await sessionRuntime.getSession(sessionId);
+        return session
+          ? { type: 'session-state', sessionId, session: buildWebUiSessionState(session) }
+          : { type: 'session-deleted', sessionId };
+      },
+      loadSessionList: async requestedIds => {
+        const sessions: any[] = [];
+        const deletedIds: string[] = [];
+        for (let index = 0; index < requestedIds.length; index += 100) {
+          const exact = await queryExactSessions(requestedIds.slice(index, index + 100), false);
+          const mapped = mapBoundedSessionListQueryPayload(exact);
+          sessions.push(...mapped.results.flatMap((item: any) => item.session ? [item.session] : []));
+          deletedIds.push(...exact.results.filter(item => !item.session).map(item => item.requestedId));
+        }
+        return { type: 'session-list-delta', sessions, deletedIds };
+      },
+      onSessionSubscriptionChanged: sessionId => this.refreshPresentationSubscription(sessionId),
+    });
+    httpServerInstance.addWebSocket(WEBUI_REALTIME_PATH, async (ws, req) => {
+      await this.realtimeHub!.handleConnection(ws, req);
+    });
     
     // External trigger endpoint
     if (this.enableTrigger) {
@@ -2456,12 +2502,11 @@ export class WebUIChannel implements Channel {
           res.flushHeaders(); // Flush headers immediately
           
           // Add client to list
-          const hadClients = this.sseClients.has(sessionId);
-          if (!hadClients) {
+          if (!this.sseClients.has(sessionId)) {
             this.sseClients.set(sessionId, []);
           }
           this.sseClients.get(sessionId)!.push(res);
-          if (!hadClients) this.presentationSubscriptionListener?.(sessionId, true);
+          this.refreshPresentationSubscription(sessionId);
           
           // logger.info({ sessionId, clientCount: this.sseClients.get(sessionId)!.length }, 'SSE client connected');
           
@@ -2493,9 +2538,9 @@ export class WebUIChannel implements Channel {
               }
               if (clients.length === 0) {
                 this.sseClients.delete(sessionId);
-                this.presentationSubscriptionListener?.(sessionId, false);
               }
             }
+            this.refreshPresentationSubscription(sessionId);
             // logger.info({ sessionId }, 'SSE client disconnected');
           });
           
@@ -3009,9 +3054,10 @@ export class WebUIChannel implements Channel {
   // Broadcast new message to SSE clients
   broadcastMessage(sessionId: string, message: any) {
     const clients = this.sseClients.get(sessionId);
+    const payload = { type: 'message', message: buildWebUiMessage(message) };
     logger.debug({ sessionId, clientCount: clients?.length || 0, messageRole: message.role }, 'Broadcasting message to SSE clients');
     if (clients && clients.length > 0) {
-      const data = JSON.stringify({ type: 'message', message: buildWebUiMessage(message) });
+      const data = JSON.stringify(payload);
       clients.forEach(client => {
         try {
           client.write(`data: ${data}\n\n`);
@@ -3021,12 +3067,14 @@ export class WebUIChannel implements Channel {
         }
       });
     }
+    this.realtimeHub?.broadcastSession(sessionId, payload);
   }
 
   broadcastSessionEvent(sessionId: string, event: any) {
     const clients = this.sseClients.get(sessionId);
+    const payload = { type: 'session-event', event };
     if (clients && clients.length > 0) {
-      const data = JSON.stringify({ type: 'session-event', event });
+      const data = JSON.stringify(payload);
       clients.forEach(client => {
         try {
           client.write(`data: ${data}\n\n`);
@@ -3035,6 +3083,7 @@ export class WebUIChannel implements Channel {
         }
       });
     }
+    this.realtimeHub?.broadcastSession(sessionId, payload);
   }
 
   broadcastSessionStateUpdate(sessionId: string, runtimeSession?: SessionRuntimeSessionDto | null) {
@@ -3046,9 +3095,10 @@ export class WebUIChannel implements Channel {
     const session = runtimeSession === undefined
       ? sessionManager.getAllSessions().get(sessionId)
       : runtimeSession;
-    const data = session
-      ? JSON.stringify({ type: 'session-state', session: buildWebUiSessionState(session) })
-      : JSON.stringify({ type: 'session-deleted', sessionId });
+    const payload = session
+      ? { type: 'session-state', session: buildWebUiSessionState(session) }
+      : { type: 'session-deleted', sessionId };
+    const data = JSON.stringify(payload);
 
     (clients || []).forEach(client => {
       try {
@@ -3063,8 +3113,9 @@ export class WebUIChannel implements Channel {
 
     if (!session) {
       this.sseClients.delete(sessionId);
-      this.presentationSubscriptionListener?.(sessionId, false);
     }
+    this.realtimeHub?.broadcastSession(sessionId, payload, !session);
+    if (!session) this.refreshPresentationSubscription(sessionId);
 
     const listDelta = session ? [buildWebUiSessionListProjection(runtimeSession === undefined
       ? buildSessionRuntimeSessionDto(session as Session) : session as SessionRuntimeSessionDto)] : [];
@@ -3081,13 +3132,19 @@ export class WebUIChannel implements Channel {
         deletedIds: session ? [] : [sessionId] })}\n\n`); }
       catch (e) { logger.error({ err: e, sessionId }, 'Failed to send bounded global Session delta'); }
     }
+    this.realtimeHub?.broadcastSessionListDelta(sessionId, {
+      type: 'session-list-delta',
+      sessions: listDelta,
+      deletedIds: session ? [] : [sessionId],
+    });
   }
 
   // Broadcast session list update to all global SSE clients
   broadcastSessionListUpdate() {
-    if (this.globalSseClients.length > 0) {
-      const data = JSON.stringify({ type: 'sessions-updated', catalogInvalidated: true,
-        eventId: ++this.globalSseInvalidationEventId, presentationRevision: sessionCatalogStore.getPresentationRevision() });
+    if (this.globalSseClients.length > 0 || this.realtimeHub) {
+      const payload = { type: 'sessions-updated', catalogInvalidated: true,
+        eventId: ++this.globalSseInvalidationEventId, presentationRevision: sessionCatalogStore.getPresentationRevision() };
+      const data = JSON.stringify(payload);
       this.globalSseClients.forEach(client => {
         const initialization = this.globalSseInitialization.get(client);
         if (initialization?.initializing) { initialization.invalidation = data; return; }
@@ -3097,6 +3154,7 @@ export class WebUIChannel implements Channel {
           logger.error({ err: e }, 'Failed to send session list update');
         }
       });
+      this.realtimeHub?.broadcastSessionListInvalidation(payload);
     }
   }
 
@@ -3148,6 +3206,7 @@ export class WebUIChannel implements Channel {
         }
       });
     }
+    this.realtimeHub?.broadcastSession(channelUserId, { type: 'typing' });
   }
 
   onMessage(_handler: (ctx: ChannelContext, message: ChannelMessage) => Promise<void>): void {
