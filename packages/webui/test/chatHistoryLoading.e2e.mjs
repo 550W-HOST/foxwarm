@@ -234,6 +234,8 @@ test('slash suggestions overlay the composer without changing bottom-follow geom
 
   await page.type('textarea', '/')
   await page.waitForSelector('[data-slash-command-overlay="true"]')
+  // Wait for Chat's resize observer/scroll anchoring pass before sampling geometry.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
   const open = await page.evaluate(() => {
     const root = document.querySelector('.foxwarm-chat-composer-inner')
     const messages = document.querySelector('.foxwarm-chat-messages')
@@ -269,6 +271,14 @@ test('slash suggestions overlay the composer without changing bottom-follow geom
   assert.equal(closed.composerHeight, open.composerHeight)
   assert.equal(closed.scrollHeight, open.scrollHeight)
   assert.ok(Math.abs((closed.scrollTop + closed.clientHeight) - closed.scrollHeight) <= 2)
+  // Closing a page blurs the composer; clear its draft first so this test cannot
+  // seed a leading slash into the next test's same-session fixture.
+  await page.click('textarea')
+  await page.keyboard.down('Control')
+  await page.keyboard.press('A')
+  await page.keyboard.up('Control')
+  await page.keyboard.press('Backspace')
+  await page.evaluate(() => localStorage.removeItem('draft_fixture/main'))
   await page.close()
 })
 
