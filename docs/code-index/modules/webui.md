@@ -9,7 +9,8 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - [webui-app](../units/webui-app.md) — entry, routing, global list state, embedded leaf roots, URL helpers, and Code frame host.
 - [webui-session-list](../units/webui-session-list.md) — hierarchy, search, order, pinning, and drag behavior.
 - [webui-architecture-view](../units/webui-architecture-view.md) — agent/session architecture.
-- [webui-chat](../units/webui-chat.md) — per-session history, SSE, sending/commands, ASR, and viewport state.
+- [webui-chat](../units/webui-chat.md) — per-session history, logical realtime events, sending/commands, ASR, and viewport state.
+- [webui-realtime](../units/webui-realtime.md) — one page-scoped multiplexed WebSocket, revisioned logical subscriptions, and server hub.
 - [webui-chat-composer](../units/webui-chat-composer.md) — draft/input, autocomplete, attachments, and model controls.
 - [webui-chat-shared](../units/webui-chat-shared.md), [timeline](../units/webui-chat-timeline.md), [tool timeline](../units/webui-tool-timeline.md) — sanitized rendering and progress/tool cards.
 - [webui-workbench](../units/webui-workbench.md) — persisted tab/pane layout and compatibility normalization.
@@ -23,7 +24,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 ## URL and transport boundaries
 
 - `API_BASE_PATH` is the current page pathname (without trailing slash) plus `/api`.
-- REST and EventSource paths normally append to `API_BASE_PATH`.
+- REST and compatibility EventSource paths append to `API_BASE_PATH`; current list/Chat realtime uses one `makeWebSocketUrl` connection.
 - `makeApiUrl` returns a URL object; `makeWebSocketUrl` changes its protocol to `ws:`/`wss:`.
 - Code routes remove the `/api` suffix and append deployment-relative `/vscode-web/`.
 - Main WebUI and the persistent Code frame validate exact origin plus window source. Nested Foxwarm leaf iframes post to their parent with `'*'`; the outer Code extension validates exact source plus channel/version/random nonce (not `event.origin`), then sends outer-to-inner messages to the exact leaf `frameOrigin`. These bridges are not API URL transport.
@@ -31,8 +32,8 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 
 ## State ownership
 
-- Mounted Chat owns one session's history and per-session SSE/runtime state.
-- App/Sidebar/Architecture own global list data and the independent global stream. Stream-triggered refreshes use fixed-delay, non-overlapping coalescing, while the session-list request gate remains latest-wins; the canonical contract is [D-webui-app-global-list-gate](../units/webui-app.md#d-webui-app-global-list-gate).
+- Mounted Chat owns one session's history and logical runtime subscription; the page realtime transport owns the physical connection.
+- App/Sidebar/Architecture own their list data and logical subscriptions on the shared transport. Stream-triggered refreshes use fixed-delay, non-overlapping coalescing, while the session-list request gate remains latest-wins; the canonical contract is [D-webui-app-global-list-gate](../units/webui-app.md#d-webui-app-global-list-gate).
 - Workbench store owns tab/pane/split layout. Chat viewport state is ephemeral in-memory state keyed by canonical session ID.
 - Browser-only theme/layout/draft/Code preferences remain local; instance name/icon are server settings.
 
@@ -81,7 +82,7 @@ Chat, terminal, Agents, Setup, and Code use one tab/pane workbench. Agents and S
 
 ### D-webui-session-stream-ownership
 
-Mounted Chat owns per-session state/stream. The global list stream carries catalog invalidation plus bounded deltas for explicitly subscribed loaded/current/open/watch rows; it never sends an all-Session payload and never substitutes for Chat runtime state. Browser cache/query completeness is canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
+Mounted Chat owns per-session state and one logical session subscription. List consumers own logical subscriptions for loaded/current/open/watch rows. One page transport multiplexes them without turning list updates into an all-Session payload or substituting list projections for Chat runtime state. Physical transport and ordering are canonical in [D-webui-multiplexed-realtime](../threads/streaming-pipeline.md#d-webui-multiplexed-realtime); browser cache/query completeness is canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
 
 ### D-webui-history-bootstrap
 

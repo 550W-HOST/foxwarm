@@ -4,9 +4,11 @@ import { createServer } from 'node:http'
 import { readdir, readFile } from 'node:fs/promises'
 import { build } from 'esbuild'
 import puppeteer from 'puppeteer-core'
+import { fileURLToPath } from 'node:url'
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
-const chatEntry = new URL('../src/components/Chat.tsx', import.meta.url).pathname
+const chatEntry = fileURLToPath(new URL('../src/components/Chat.tsx', import.meta.url))
+const packageDir = fileURLToPath(new URL('..', import.meta.url))
 const assetsDirectory = new URL('../dist/assets/', import.meta.url)
 let browser
 let page
@@ -31,12 +33,12 @@ async function buildFixtureBundle() {
       if (url.includes('/asr/status')) return new Response(JSON.stringify({ configured: false, available: false }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       return new Response('{}', { status: 404 })
     }
-    class FixtureEventSource { static CLOSED = 2; static instances = []; constructor() { this.readyState = 1; FixtureEventSource.instances.push(this); queueMicrotask(() => this.onopen?.({})) } close() { this.readyState = FixtureEventSource.CLOSED } emit(payload) { this.onmessage?.({ data: JSON.stringify(payload) }) } }
-    window.EventSource = FixtureEventSource
-    window.appendFixtureStream = () => FixtureEventSource.instances.at(-1)?.emit({ type: 'session-event', event: { type: 'model-stream-update', streamId: 'stream', text: 'streaming '.repeat(100) } })
+    class FixtureWebSocket { static CLOSED = 3; static instances = []; constructor() { this.readyState = 0; this.sessionId = 'fixture/main'; FixtureWebSocket.instances.push(this); queueMicrotask(() => { this.readyState = 1; this.onopen?.({}) }) } close() { this.readyState = FixtureWebSocket.CLOSED } send(raw) { const payload = JSON.parse(raw); if (payload.type !== 'set-subscriptions') return; this.sessionId = payload.sessionIds[0] || this.sessionId; queueMicrotask(() => { this.emit({ type: 'subscriptions-accepted', revision: payload.revision, sessionListResolutions: {}, sessionResolutions: Object.fromEntries(payload.sessionIds.map(id => [id, id])) }); this.emit({ type: 'subscriptions-applied', revision: payload.revision }) }) } emit(payload) { const message = payload.type === 'session-event' ? { ...payload, sessionId: this.sessionId } : payload; this.onmessage?.({ data: JSON.stringify(message) }) } }
+    window.WebSocket = FixtureWebSocket
+    window.appendFixtureStream = () => FixtureWebSocket.instances.at(-1)?.emit({ type: 'session-event', event: { type: 'model-stream-update', streamId: 'stream', text: 'streaming '.repeat(100) } })
     createRoot(document.getElementById('root')).render(React.createElement(Chat, { sessionId: 'fixture/main', canonicalSessionId: 'fixture/main', sessionDisplayName: 'Fixture' }))
   `
-  const result = await build({ stdin: { contents: source, resolveDir: new URL('..', import.meta.url).pathname, sourcefile: 'context-scrollbar-fixture.tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
+  const result = await build({ stdin: { contents: source, resolveDir: packageDir, sourcefile: 'context-scrollbar-fixture.tsx' }, bundle: true, format: 'iife', platform: 'browser', target: 'chrome120', write: false, define: { 'process.env.NODE_ENV': JSON.stringify('test') }, logLevel: 'silent' })
   return result.outputFiles[0].text
 }
 

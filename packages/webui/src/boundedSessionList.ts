@@ -5,6 +5,7 @@ import { createSessionListRefreshScheduler, requestSessionListStreamOpenResync, 
 import type { SessionListOrderMode } from './sessionListPresentation'
 import { applyExactMissTombstone, captureExactAliasKeys, chunkBoundedIds, createEpochRows, mergeDeltaRows, mergeHttpRows, preserveKnownChildTotals, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from './boundedSessionReplay'
 import { dispatchSessionIdleDeleted, getSessionIdleUnreadIds, SESSION_IDLE_UNREAD_EVENT } from './sessionIdleAttention'
+import { webUiRealtime } from './realtime'
 
 export interface BoundedChildPage { parentSessionId: string; ids: string[]; total: number; nextCursor: string | null }
 interface SidebarPayload { version: 1; sessions: Session[]; nextCursor: string | null; reset?: boolean
@@ -145,25 +146,18 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
   const subscriptionIds = useMemo(() => dedupe([...exactIds, ...(state.searchIds || []), ...structuralIds(state)]), [exactIds.join('\0'), (state.searchIds || []).join('\0'), structuralIds(state).join('\0')])
   useEffect(() => {
     if (options.connectStream === false) return
-    let disposed = false; let legacyPending = false; let legacyTimer: number | null = null
-    const controllers = (subscriptionIds.length ? chunkBoundedIds(subscriptionIds, 100) : [[]]).map(batch => ({ batch, source: null as EventSource | null, timer: null as number | null, delay: 1000 }))
+    let legacyPending = false; let legacyTimer: number | null = null
     const handleInvalidation = (data: any) => {
       const identity = data.eventId !== undefined ? `${data.eventId}:${data.presentationRevision ?? ''}` : null
       if (identity) { if (invalidationIdentityRef.current === identity) return; invalidationIdentityRef.current = identity }
       else { if (legacyPending) return; legacyPending = true; legacyTimer = window.setTimeout(() => { legacyPending = false }, 50) }
       invalidate()
     }
-    const connect = (controller: typeof controllers[number]) => {
-      if (disposed) return
-      controller.source?.close(); if (controller.timer !== null) { window.clearTimeout(controller.timer); controller.timer = null }
-      const params = new URLSearchParams(); controller.batch.forEach(id => params.append('sessionId', id)); const queryString = params.toString()
-      const source = new EventSource(`${API_BASE_PATH}/sessions/stream${queryString ? `?${queryString}` : ''}`); controller.source = source
-      source.onopen = () => { controller.delay = 1000; requestSessionListStreamOpenResync(schedulerRef.current) }
-      source.onmessage = event => { try { const data = JSON.parse(event.data); if (data.type === 'session-list-delta') { const deletedIds = Array.isArray(data.deletedIds) ? data.deletedIds.filter((value: unknown): value is string => typeof value === 'string') : []; mergeDeltaRows(rowStoreRef.current, preserveKnownChildTotals(rowStoreRef.current.rows, data.sessions || []), deletedIds); dispatchSessionIdleDeleted(deletedIds); const next = { ...stateRef.current, rows: new Map(rowStoreRef.current.rows) }; stateRef.current = next; setState(next) } if (data.type === 'sessions-updated' || data.type === 'session-list-invalidated') handleInvalidation(data) } catch {} }
-      source.onerror = () => { source.close(); if (disposed) return; controller.timer = window.setTimeout(() => { invalidate(); connect(controller); controller.delay = Math.min(controller.delay * 2, 30000) }, controller.delay) }
-    }
-    controllers.forEach(connect)
-    return () => { disposed = true; controllers.forEach(controller => { controller.source?.close(); if (controller.timer !== null) window.clearTimeout(controller.timer) }); if (legacyTimer !== null) window.clearTimeout(legacyTimer) }
+    const unsubscribe = webUiRealtime.subscribeSessionList(subscriptionIds, {
+      onOpen: () => requestSessionListStreamOpenResync(schedulerRef.current),
+      onMessage: data => { if (data.type === 'session-list-delta') { const deletedIds = Array.isArray(data.deletedIds) ? data.deletedIds.filter((value: unknown): value is string => typeof value === 'string') : []; mergeDeltaRows(rowStoreRef.current, preserveKnownChildTotals(rowStoreRef.current.rows, data.sessions || []), deletedIds); dispatchSessionIdleDeleted(deletedIds); const next = { ...stateRef.current, rows: new Map(rowStoreRef.current.rows) }; stateRef.current = next; setState(next) } if (data.type === 'sessions-updated' || data.type === 'session-list-invalidated') handleInvalidation(data) },
+    })
+    return () => { unsubscribe(); if (legacyTimer !== null) window.clearTimeout(legacyTimer) }
   }, [subscriptionIds.join('\0'), options.connectStream, invalidate])
 
   const visibleIds = dedupe([...(state.searchIds || structuralIds(state)), ...unreadIds])

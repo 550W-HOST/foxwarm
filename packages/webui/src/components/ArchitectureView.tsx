@@ -5,6 +5,7 @@ import { getRuntimeStateSummary, isSessionRuntimeActive } from '../sessionRuntim
 import { API_BASE_PATH } from '../config'
 import { createSessionListRefreshScheduler, requestSessionListStreamOpenResync } from '../sessionListRefresh'
 import { BoundedReplayRevisionMismatch, createEpochRows, filterPresentationPathForAgent, mergeDeltaRows, mergeForcedPresentationPath, mergeHttpRows, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from '../boundedSessionReplay'
+import { webUiRealtime } from '../realtime'
 
 interface ArchitectureViewProps {
   currentSession?: string
@@ -332,14 +333,14 @@ export default function ArchitectureView({
   useEffect(() => {
     const scheduler = createSessionListRefreshScheduler(() => replayArchitecture(rootTargetRef.current, new Map(branchTargetsRef.current)))
     const subscriptionAgent = selectedAgent
-    const sources: EventSource[] = []
-    const batches = architectureSubscriptionIds.length ? Array.from({ length: Math.ceil(architectureSubscriptionIds.length / 100) }, (_, index) => architectureSubscriptionIds.slice(index * 100, index * 100 + 100)) : [[]]
-    for (const batch of batches) { const params = new URLSearchParams(); batch.forEach(id => params.append('sessionId', id)); const queryString = params.toString()
-      const source = new EventSource(`${API_BASE_PATH}/sessions/stream${queryString ? `?${queryString}` : ''}`); sources.push(source); source.onopen = () => requestSessionListStreamOpenResync(scheduler); source.onmessage = event => { try { if (selectedAgentRef.current !== subscriptionAgent) return; const data = JSON.parse(event.data)
+    const unsubscribe = webUiRealtime.subscribeSessionList(architectureSubscriptionIds, {
+      onOpen: () => requestSessionListStreamOpenResync(scheduler),
+      onMessage: data => { if (selectedAgentRef.current !== subscriptionAgent) return
         if (data.type === 'session-list-delta') { mergeDeltaRows(rowStoreRef.current, data.sessions || [], data.deletedIds || []); setSessions([...rowStoreRef.current.rows.values()]) }
         if (data.type === 'session-list-invalidated' || data.type === 'sessions-updated') { const identity = data.eventId !== undefined ? `${data.eventId}:${data.presentationRevision ?? ''}` : null; if (!identity || invalidationIdentityRef.current !== identity) { invalidationIdentityRef.current = identity; scheduler.requestRefresh() } }
-      } catch {} } }
-    return () => { scheduler.dispose(); sources.forEach(source => source.close()) }
+      },
+    })
+    return () => { scheduler.dispose(); unsubscribe() }
   }, [selectedAgent, architectureSubscriptionIds.join('\0')])
 
   useEffect(() => {
