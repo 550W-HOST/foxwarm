@@ -309,3 +309,146 @@ test('Sidebar collapse prunes nested expansion state without clearing unrelated 
     await browser.close()
   }
 })
+
+test('Sidebar auto-expansion acquires child pages and exposes branch loading, failure, and retry', async () => {
+  const token = (await readFile(tokenFile, 'utf8')).trim()
+  const browser = await puppeteer.launch({
+    executablePath: chromiumPath,
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  })
+  const page = await browser.newPage()
+  await page.setViewport({ width: 1440, height: 900 })
+  const createdIds = []
+  await page.evaluateOnNewDocument(() => {
+    const nativeFetch = window.fetch.bind(window)
+    window.__foxwarmIssue45 = { delayParent: '', release: false, failParent: '', requests: [] }
+    window.fetch = async (input, init) => {
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href)
+      const method = (init?.method || (typeof input === 'string' ? 'GET' : input.method) || 'GET').toUpperCase()
+      if (method === 'GET' && url.pathname.endsWith('/api/session-list/sidebar') && window.__foxwarmIssue45.delayParent) {
+        const response = await nativeFetch(input, init)
+        const payload = await response.clone().json()
+        payload.children = (payload.children || []).filter(group => group.parentSessionId !== window.__foxwarmIssue45.delayParent)
+        return new Response(JSON.stringify(payload), { status: response.status, statusText: response.statusText, headers: response.headers })
+      }
+      if (method === 'POST' && url.pathname.endsWith('/api/session-list/children')) {
+        const body = JSON.parse(init?.body || '{}')
+        const parentIds = (body.parents || []).map(parent => parent.parentSessionId)
+        window.__foxwarmIssue45.requests.push(parentIds)
+        if (window.__foxwarmIssue45.failParent && parentIds.includes(window.__foxwarmIssue45.failParent)) {
+          window.__foxwarmIssue45.failParent = ''
+          return new Response(JSON.stringify({ error: 'Injected child-page failure' }), {
+            status: 503,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        const response = await nativeFetch(input, init)
+        if (window.__foxwarmIssue45.delayParent && parentIds.includes(window.__foxwarmIssue45.delayParent)) {
+          const bodyText = await response.clone().text()
+          while (!window.__foxwarmIssue45.release) await new Promise(resolve => setTimeout(resolve, 20))
+          return new Response(bodyText, { status: response.status, statusText: response.statusText, headers: response.headers })
+        }
+        return response
+      }
+      return nativeFetch(input, init)
+    }
+  })
+
+  const createSession = async () => {
+    const sessionId = await page.evaluate(async () => {
+      const response = await fetch('./api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(JSON.stringify(payload))
+      return payload.sessionId
+    })
+    createdIds.push(sessionId)
+    return sessionId
+  }
+  const moveSession = (sessionId, parentSessionId) => page.evaluate(async ({ sessionId, parentSessionId }) => {
+    const response = await fetch(`./api/sessions/${encodeURIComponent(sessionId)}/move`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parentSessionId }),
+    })
+    if (!response.ok) throw new Error(await response.text())
+  }, { sessionId, parentSessionId })
+  const rowExists = sessionId => page.evaluate(id => !!document.querySelector(`[data-session-id="${CSS.escape(id)}"]`), sessionId)
+  const clickDisclosure = sessionId => page.evaluate(id => {
+    const row = document.querySelector(`[data-session-id="${CSS.escape(id)}"]`)
+    const button = row?.querySelector('button[aria-label="Expand child sessions"],button[aria-label="Collapse child sessions"]')
+    if (!(button instanceof HTMLElement)) throw new Error(`Missing disclosure for ${id}`)
+    button.click()
+  }, sessionId)
+
+  try {
+    await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
+
+    const root = await createSession()
+    const coordinator = await createSession()
+    const worker = await createSession()
+    const children = [await createSession(), await createSession(), await createSession()]
+    await moveSession(coordinator, root)
+    await moveSession(worker, coordinator)
+    for (const child of children) await moveSession(child, worker)
+    await page.waitForFunction(async ({ root, coordinator, worker }) => {
+      const response = await fetch('./api/session-list/by-id', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [root, coordinator, worker], includePaths: false }),
+      })
+      if (!response.ok) return false
+      const payload = await response.json()
+      const rows = new Map((payload.results || []).flatMap(item => item.session ? [[item.session.id, item.session]] : []))
+      return rows.get(coordinator)?.parentSessionId === root && rows.get(worker)?.parentSessionId === coordinator
+    }, { timeout: 10_000, polling: 100 }, { root, coordinator, worker })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
+    await page.waitForFunction(id => !!document.querySelector(`[data-session-id="${CSS.escape(id)}"]`), { timeout: 10_000 }, root)
+    await clickDisclosure(root)
+    await page.waitForFunction(id => !!document.querySelector(`[data-session-id="${CSS.escape(id)}"]`), { timeout: 10_000 }, coordinator)
+    await clickDisclosure(coordinator)
+    await page.waitForFunction(id => !!document.querySelector(`[data-session-id="${CSS.escape(id)}"]`), { timeout: 10_000 }, worker)
+
+    await page.evaluate(workerId => {
+      window.__foxwarmIssue45.delayParent = workerId
+      window.__foxwarmIssue45.release = false
+      window.foxwarmTest.switchToSession(workerId)
+    }, worker)
+    await new Promise(resolve => setTimeout(resolve, 500))
+    await page.waitForSelector(`[data-session-branch-loading="${worker}"]`, { timeout: 10_000 })
+    assert.equal(await rowExists(children[0]), false, 'the delayed initial child page has not rendered rows yet')
+    assert.equal(await page.evaluate(workerId => {
+      const row = document.querySelector(`[data-session-id="${CSS.escape(workerId)}"]`)
+      return [...(row?.parentElement?.querySelectorAll('button') || [])].some(button => /Show \d+ more/.test(button.textContent || ''))
+    }, worker), false, 'Show more never substitutes for a missing initial child page')
+    const replayRequests = await page.evaluate(() => window.__foxwarmIssue45.requests)
+    assert.equal(replayRequests.some(ids => ids.includes(worker)), true,
+      `auto-expansion acquires the selected branch; observed ${JSON.stringify(replayRequests)}`)
+    assert.equal(replayRequests.some(ids => ids.includes(worker) && ids.length > 1), true,
+      'the selected branch is unioned with previously desired branches instead of replacing them')
+
+    await page.evaluate(() => { window.__foxwarmIssue45.release = true; window.__foxwarmIssue45.delayParent = '' })
+    for (const child of children) await page.waitForFunction(id => !!document.querySelector(`[data-session-id="${CSS.escape(id)}"]`), { timeout: 10_000 }, child)
+    assert.equal(await page.$(`[data-session-branch-loading="${worker}"]`), null)
+    assert.equal(await page.$(`[data-session-branch-retry="${worker}"]`), null)
+    assert.equal(await page.evaluate(workerId => {
+      const row = document.querySelector(`[data-session-id="${CSS.escape(workerId)}"]`)
+      return [...(row?.parentElement?.querySelectorAll('button') || [])].some(button => /Show \d+ more/.test(button.textContent || ''))
+    }, worker), false, 'a complete initial page does not create a continuation action')
+
+    await clickDisclosure(worker)
+    await page.waitForFunction(id => !document.querySelector(`[data-session-id="${CSS.escape(id)}"]`), { timeout: 10_000 }, children[0])
+    await page.evaluate(workerId => { window.__foxwarmIssue45.failParent = workerId }, worker)
+    await clickDisclosure(worker)
+    await page.waitForSelector(`[data-session-branch-retry="${worker}"]`, { timeout: 10_000 })
+    assert.equal(await page.$(`[data-session-branch-loading="${worker}"]`), null)
+
+    await page.click(`[data-session-branch-retry="${worker}"]`)
+    for (const child of children) await page.waitForFunction(id => !!document.querySelector(`[data-session-id="${CSS.escape(id)}"]`), { timeout: 10_000 }, child)
+    assert.equal(await page.$(`[data-session-branch-retry="${worker}"]`), null)
+  } finally {
+    for (const sessionId of createdIds.reverse()) {
+      await page.evaluate(async id => { await fetch(`./api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }) }, sessionId).catch(() => {})
+    }
+    await browser.close()
+  }
+})

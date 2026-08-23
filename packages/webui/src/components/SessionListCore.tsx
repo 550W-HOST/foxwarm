@@ -45,6 +45,7 @@ export interface BoundedSessionListPresentationProps {
   serverOrdered: true
   hasMoreRoots: boolean
   childPages: Map<string, { ids: string[]; total: number; nextCursor: string | null }>
+  branchLoadStates: Map<string, { status: 'loading' | 'error'; message?: string }>
   descendantBusy: Map<string, number>
   invalidationVersion: number
   onModeChange: (mode: SessionListOrderMode) => void
@@ -52,6 +53,8 @@ export interface BoundedSessionListPresentationProps {
   onLoadMoreRoots: () => void
   onLoadMoreChildren: (parentSessionId: string) => void
   onExpandBranch: (parentSessionId: string) => void
+  onExpandBranches: (parentSessionIds: string[]) => void
+  onRetryBranch: (parentSessionId: string) => void
   onCollapseBranch: (parentSessionId: string) => void
 }
 
@@ -748,7 +751,11 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       return changed ? next : prev
     })
 
-  }, [resolvedCurrentSessionId, normalizedParentMap])
+    if (bounded && !normalizedFilterQuery && viewMode !== 'flat-time' && sessionsToExpand.length) {
+      bounded.onExpandBranches(sessionsToExpand)
+    }
+
+  }, [resolvedCurrentSessionId, normalizedParentMap, normalizedFilterQuery, viewMode])
 
   useEffect(() => {
     if (!resolvedCurrentSessionId) {
@@ -1107,6 +1114,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   const renderSession = (session: Session, level: number = 0, parentSession: Session | null = null) => {
     const children = childrenMap.get(session.id) || []
     const boundedChildPage = bounded?.childPages.get(session.id)
+    const branchLoadState = bounded?.branchLoadStates.get(session.id)
     const childDisclosure = getSessionListChildDisclosure({
       bounded: !!bounded,
       loadedCount: children.length,
@@ -1121,6 +1129,9 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const visibleCount = visibleChildCounts.get(session.id) ?? DEFAULT_VISIBLE_CHILDREN
     const visibleChildren = bounded ? children : children.slice(0, visibleCount)
     const hiddenCount = childTotal === null ? 0 : Math.max(0, childTotal - visibleChildren.length)
+    const showBranchLoading = !!bounded && branchLoadState?.status === 'loading'
+    const showBranchRetry = !!bounded && (branchLoadState?.status === 'error' || (!boundedChildPage && !branchLoadState))
+    const showMoreChildren = hiddenCount > 0 && (!bounded || (!!boundedChildPage && !branchLoadState))
     const contentPaddingLeft = `${12 + level * 16}px`
 
     // Get display ID (with parent prefix removed if applicable)
@@ -1259,7 +1270,32 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         {hasChildren && isExpanded && (
           <div>
             {visibleChildren.map(child => renderSession(child, level + 1, session))}
-            {hiddenCount > 0 && (
+            {showBranchLoading && (
+              <div
+                data-session-branch-loading={session.id}
+                aria-live="polite"
+                className="p-2 text-xs text-gray-500 dark:text-gray-400"
+                style={{ paddingLeft: `${28 + (level + 1) * 16}px` }}
+              >
+                {boundedChildPage ? 'Loading more child sessions…' : 'Loading child sessions…'}
+              </div>
+            )}
+            {showBranchRetry && (
+              <button
+                type="button"
+                data-session-branch-retry={session.id}
+                onClick={(event) => { event.stopPropagation(); bounded?.onRetryBranch(session.id) }}
+                onPointerDown={(event) => event.stopPropagation()}
+                className="w-full p-2 text-left text-xs text-red-600 hover:text-red-700 dark:text-red-300 dark:hover:text-red-200"
+                style={{ paddingLeft: `${28 + (level + 1) * 16}px` }}
+                title={branchLoadState?.message || 'Failed to load child sessions'}
+              >
+                {branchLoadState?.status === 'error'
+                  ? boundedChildPage ? 'Failed to load more child sessions. Retry' : 'Failed to load child sessions. Retry'
+                  : 'Child sessions are not loaded. Retry'}
+              </button>
+            )}
+            {showMoreChildren && (
               <button
                 onClick={() => toggleShowMore(session.id)}
                 className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
