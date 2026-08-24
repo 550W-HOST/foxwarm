@@ -17,6 +17,10 @@ import { tool_run_script } from '../toolscript';
 import { ExecutableNodeProvider } from './executableProvider';
 import { MasterNodeProvider, NodeProviderRegistry, type NodeDescriptor, type NodeProvider, type NodeToolRequest } from './providerRegistry';
 
+async function invokeProviderTool(provider: ExecutableNodeProvider, request: NodeToolRequest): Promise<unknown> {
+  return new NodeProviderRegistry([provider]).invokeTool(request);
+}
+
 const fixturePath = path.join(__dirname, 'executableProviderTestFixture.js');
 const execFileAsync = promisify(execFile);
 
@@ -98,7 +102,7 @@ test('production registry loads zero or more executable providers from startup a
   }
 });
 
-test('configured executable provider lists multiple sandbox Nodes and preserves complete Worker direct/unified/ToolScript context', async () => {
+test('configured executable provider derives canonical tools and preserves exact Worker direct/unified/ToolScript context', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-executable-provider-'));
   const logPath = path.join(dir, 'requests.jsonl');
   const sourceId = id('executable-source');
@@ -144,11 +148,7 @@ test('configured executable provider lists multiple sandbox Nodes and preserves 
       provider: 'configured-fixture',
       type: 'memory-fixture',
       availability: 'ready',
-      tools: [{
-        name: 'read',
-        description: 'Fixture read capability.',
-        parameters: { type: 'object', properties: { filePath: { type: 'string' } }, required: ['filePath'] },
-      }],
+      tools: (await new NodeProviderRegistry([provider]).listNodes()).find(node => node.id === 'fixture-sandbox')!.tools,
     });
     assert.deepEqual(await nodeExecution.validateNodeSelection(sourceId, 'fixture-sandbox'), {
       nodeId: 'fixture-sandbox',
@@ -162,34 +162,24 @@ test('configured executable provider lists multiple sandbox Nodes and preserves 
       { currentSessionEffects: effects },
     );
     assert.match(JSON.stringify(direct), /fixture-read/);
-    assert.deepEqual(await tool_call_tool({
+    assert.equal(await tool_call_tool({
       source: 'node',
       nodeId: 'fixture-sandbox',
       name: 'read',
       args: { filePath: 'memfs://fixture/unified.txt' },
-    }, ctx), {
-      output: 'fixture-read',
-      observed: {
-        sourceSessionId: sourceId,
-        nodeId: 'fixture-sandbox',
-        toolName: 'read',
-        args: { filePath: 'memfs://fixture/unified.txt' },
-        context: { agent, currentNode: 'fixture-sandbox', cwd: 'memfs://fixture/session' },
-      },
-      environmentHasTestSecret: false,
-    });
+    }, ctx), 'fixture-read');
     const scripted = await tool_run_script({
       code: 'def main(args):\n    return call_tool(source="node", nodeId="fixture-sandbox", name="read", args={"filePath": "memfs://fixture/script.txt"})',
     }, ctx);
     assert.equal(scripted.status, 'completed');
     assert.match(JSON.stringify(scripted.result), /fixture-read/);
 
-    const callsBeforeUnsupported = (await readLog(logPath)).filter(entry => entry.request.operation === 'invoke').length;
+    const callsBeforeUnsupported = (await readLog(logPath)).filter(entry => entry.request.operation === 'filesystem').length;
     await assert.rejects(
       () => tool_call_tool({ source: 'node', nodeId: 'fixture-sandbox', name: 'exec', args: { command: 'must-not-run-on-master' } }, ctx),
       (error: any) => error?.code === 'NODE_EXECUTION_TOOL_UNAVAILABLE',
     );
-    assert.equal((await readLog(logPath)).filter(entry => entry.request.operation === 'invoke').length, callsBeforeUnsupported);
+    assert.equal((await readLog(logPath)).filter(entry => entry.request.operation === 'filesystem').length, callsBeforeUnsupported);
 
     await sessionManager.setAgentMetadata(agent, {
       isolated: true,
@@ -199,9 +189,9 @@ test('configured executable provider lists multiple sandbox Nodes and preserves 
         { effect: 'deny', source: 'node', node: 'fixture-sandbox', tool: 'read' },
       ],
     });
-    const callsBeforeDeny = (await readLog(logPath)).filter(entry => entry.request.operation === 'invoke').length;
+    const callsBeforeDeny = (await readLog(logPath)).filter(entry => entry.request.operation === 'filesystem').length;
     await assert.rejects(() => callTool('read', { filePath: 'memfs://fixture/denied.txt' }, ctx), /tool rule denies/i);
-    assert.equal((await readLog(logPath)).filter(entry => entry.request.operation === 'invoke').length, callsBeforeDeny);
+    assert.equal((await readLog(logPath)).filter(entry => entry.request.operation === 'filesystem').length, callsBeforeDeny);
 
     await sessionManager.setAgentMetadata(agent, {
       isolated: true,
@@ -218,16 +208,16 @@ test('configured executable provider lists multiple sandbox Nodes and preserves 
       (error: any) => error?.code === 'NODE_EXECUTION_ISOLATED_NODE_DENIED',
     );
 
-    const invokes = (await readLog(logPath)).filter(entry => entry.request.operation === 'invoke').map(entry => entry.request.request);
-    assert.equal(invokes.length >= 4, true);
-    for (const invoke of invokes) {
-      assert.equal(invoke.sourceSessionId, sourceId);
-      assert.equal(invoke.nodeId, 'fixture-sandbox');
-      assert.equal(invoke.toolName, 'read');
-      assert.deepEqual(invoke.context, { agent, currentNode: 'fixture-sandbox', cwd: 'memfs://fixture/session' });
-      assert.equal(Object.prototype.hasOwnProperty.call(invoke, 'session'), false);
-      assert.equal(Object.prototype.hasOwnProperty.call(invoke, 'callback'), false);
-      assert.equal(Object.prototype.hasOwnProperty.call(invoke, 'command'), false);
+    const primitives = (await readLog(logPath)).filter(entry => entry.request.operation === 'filesystem').map(entry => entry.request.request);
+    assert.equal(primitives.length >= 8, true);
+    for (const primitive of primitives) {
+      assert.equal(primitive.sourceSessionId, sourceId);
+      assert.equal(primitive.nodeId, 'fixture-sandbox');
+      assert.ok(['stat', 'read'].includes(primitive.operation));
+      assert.deepEqual(primitive.context, { agent, currentNode: 'fixture-sandbox', cwd: 'memfs://fixture/session' });
+      assert.equal(Object.prototype.hasOwnProperty.call(primitive, 'toolName'), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(primitive, 'args'), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(primitive, 'command'), false);
     }
   } finally {
     await cleanupExecution(transport);
@@ -269,18 +259,33 @@ test('colon executable Node IDs round-trip through canonical discovery tool IDs'
       nodeId: 'fixture:sandbox',
       includeSchema: false,
     }, ctx);
-    assert.equal(discovered.tools[0].toolId, 'node:fixture:sandbox/read');
+    const readTool = discovered.tools.find((tool: any) => tool.name === 'read');
+    assert.equal(readTool.toolId, 'node:fixture:sandbox/read');
     const result: any = await tool_call_tool({
-      toolId: discovered.tools[0].toolId,
+      toolId: readTool.toolId,
       args: { filePath: 'memfs://fixture:colon/read.txt' },
     }, ctx);
-    assert.equal(result.output, 'fixture-read');
-    assert.equal(result.observed.nodeId, 'fixture:sandbox');
+    assert.equal(result, 'fixture-read');
   } finally {
     await cleanupExecution(transport);
     await sessionManager.deleteSession(sourceId).catch(() => false);
     await fs.remove(dir);
   }
+});
+
+test('executable providers expose exec only from the fixed exec backend', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-executable-provider-exec-'));
+  const logPath = path.join(dir, 'requests.jsonl');
+  try {
+    const registry = new NodeProviderRegistry([executableProvider('with-exec', logPath, 2_000, 'exec-provider')]);
+    const node = (await registry.listNodes()).find(item => item.id === 'fixture-sandbox')!;
+    assert.ok(node.tools.some(tool => tool.name === 'exec'));
+    const result: any = await registry.invokeTool({ ...request(), toolName: 'exec', args: { command: 'pwd' } });
+    assert.equal(result.output, 'fixture-exec');
+    const calls = await readLog(logPath);
+    assert.equal(calls.at(-1).request.operation, 'exec');
+    assert.equal(Object.prototype.hasOwnProperty.call(calls.at(-1).request.request, 'toolName'), false);
+  } finally { await fs.remove(dir); }
 });
 
 test('executable provider rejects malformed, mismatched, oversized, and abnormal protocol/process responses without exposing stderr', async () => {
@@ -314,12 +319,12 @@ test('executable provider rejects malformed, mismatched, oversized, and abnormal
 
     const errorProvider = executableProvider('error', path.join(dir, 'error.jsonl'));
     await assert.rejects(
-      () => errorProvider.invokeTool(request()),
-      (error: any) => error?.code === 'NODE_PROVIDER_REPORTED_ERROR' && /FixtureDenied/.test(error.message),
+      () => invokeProviderTool(errorProvider, request()),
+      (error: any) => error?.code === 'FixtureDenied',
     );
 
     const oversizedInvoke = executableProvider('oversized-invoke', path.join(dir, 'oversized-invoke.jsonl'));
-    await assert.rejects(() => oversizedInvoke.invokeTool(request()), (error: any) => error?.code === 'NODE_PROVIDER_OUTPUT_LIMIT');
+    await assert.rejects(() => invokeProviderTool(oversizedInvoke, request()), (error: any) => error?.code === 'NODE_PROVIDER_OUTPUT_LIMIT');
 
     const privateCommand = path.join(dir, 'private-provider-secret-command');
     const missing = new ExecutableNodeProvider({
@@ -333,11 +338,11 @@ test('executable provider rejects malformed, mismatched, oversized, and abnormal
     const invalidLog = path.join(dir, 'invalid-request.jsonl');
     const invalidRequestProvider = executableProvider('normal', invalidLog, 2_000, 'invalid-request');
     await assert.rejects(
-      () => invalidRequestProvider.invokeTool({ ...request(), args: { callback: (() => {}) as any } }),
+      () => invalidRequestProvider.invokeFilesystem({ sourceSessionId: 'fixture-source', nodeId: 'fixture-sandbox', operation: 'stat', path: 'x', context: { agent: 'fixture-agent' }, callback: (() => {}) } as any),
       (error: any) => error?.code === 'NODE_PROVIDER_INVALID_REQUEST',
     );
     await assert.rejects(
-      () => invalidRequestProvider.invokeTool({ ...request(), args: { content: 'x'.repeat(5 * 1024 * 1024) } }),
+      () => invalidRequestProvider.invokeFilesystem({ sourceSessionId: 'fixture-source', nodeId: 'fixture-sandbox', operation: 'write', path: 'x', contentBase64: 'x'.repeat(5 * 1024 * 1024), flag: 'w', context: { agent: 'fixture-agent' } }),
       (error: any) => error?.code === 'NODE_PROVIDER_REQUEST_LIMIT',
     );
     assert.equal(await fs.pathExists(invalidLog), false);
@@ -427,7 +432,7 @@ test('exited provider with inherited stdio settles within its bound and does not
   }
 });
 
-test('registry filters unavailable and unadvertised executable capabilities without invoke or master fallback', async () => {
+test('registry filters unavailable and absent executable backends without primitive calls or master fallback', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-executable-provider-filter-'));
   try {
     for (const [mode, toolName, expectedCode] of [
@@ -438,7 +443,7 @@ test('registry filters unavailable and unadvertised executable capabilities with
       const registry = new NodeProviderRegistry([new MasterNodeProvider(), executableProvider(mode, logPath, 2_000, `filter-${mode}`)]);
       await assert.rejects(() => registry.invokeTool(request('fixture-sandbox', toolName)), (error: any) => error?.code === expectedCode);
       const entries = await readLog(logPath);
-      assert.equal(entries.filter(entry => entry.request.operation === 'invoke').length, 0);
+      assert.equal(entries.filter(entry => ['filesystem', 'exec'].includes(entry.request.operation)).length, 0);
     }
   } finally {
     await fs.remove(dir);

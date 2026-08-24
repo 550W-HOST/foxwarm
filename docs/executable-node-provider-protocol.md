@@ -1,8 +1,8 @@
 # Executable Node Provider Protocol
 
-Foxwarm can load trusted executable Node providers from startup application configuration. This adapter is intended for externally implemented sandbox Nodes that do not run the authenticated Foxwarm WebSocket Node runtime.
+Foxwarm can load trusted executable Node providers from startup configuration. This adapter is for custom or sandbox Nodes that do not run the authenticated Foxwarm WebSocket Node runtime.
 
-This protocol provides discovery, complete Node capability invocation, and provider-neutral Node lifecycle operations. It does not define profiles, ownership, Docker, bwrap, VM behavior, workspaces, fixed Node services, or compound file transfer. A Node is the selected execution identity; a provider is a Main-owned implementation that may advertise and manage multiple globally unique Nodes.
+A custom provider supplies only provider-neutral filesystem primitives, an optional complete exec backend, and optional lifecycle operations. Foxwarm—not the provider—owns the canonical model-visible `read`, `write`, `edit`, and `apply_patch` schemas, patch grammar, validation, and result formatting. Provider identity is internal routing/lifecycle metadata; it is not a tool source, permission identity, or Session binding.
 
 ## Configuration
 
@@ -15,36 +15,19 @@ nodeProviders:
     timeoutSeconds: 90
 ```
 
-Provider IDs use 1-64 ASCII letters, digits, dots, underscores, or hyphens. Executable-provider Node IDs use 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens, must begin with a letter or digit, and cannot be the reserved `master` ID in any letter case. `/` is excluded so canonical `node:<node-id>/<tool>` IDs remain unambiguous. `command` and every `args` entry are trusted startup configuration. Foxwarm never interpolates model or tool values into the command line and launches the command with `shell:false`.
-
-Each protocol request launches one provider process. The child receives a small allowlisted environment rather than Foxwarm's complete environment. Configuration changes require a Foxwarm restart.
+Provider IDs use 1-64 ASCII letters, digits, dots, underscores, or hyphens. Node IDs use the slash-free grammar `[A-Za-z0-9][A-Za-z0-9._:-]*`, are at most 128 characters, and cannot equal reserved `master` in any letter case. Commands and fixed arguments are trusted startup authority. Foxwarm launches with `shell:false`, does not interpolate model values into the command line, and passes only a small allowlisted environment.
 
 ## Transport
 
-Protocol name:
+The current protocol identifier is:
 
 ```text
 foxwarm-node-provider@1
 ```
 
-Foxwarm writes exactly one JSON request to stdin and closes stdin. The provider writes exactly one JSON response to stdout and exits. Leading or trailing stdout whitespace is accepted; any second/trailing payload is rejected. Diagnostic stderr is never included in a tool-visible error.
+Each request launches one process. Foxwarm writes exactly one JSON request to stdin and closes stdin. The provider writes exactly one JSON response to stdout and exits. Every response echoes the exact `protocol`, `providerId`, `requestId`, and `operation`.
 
-Every response must echo the exact `protocol`, `providerId`, `requestId`, and `operation` values from its request.
-
-## List operation
-
-Request:
-
-```json
-{
-  "protocol": "foxwarm-node-provider@1",
-  "providerId": "provider-id",
-  "requestId": "generated-request-id",
-  "operation": "list"
-}
-```
-
-Successful response:
+Envelope:
 
 ```json
 {
@@ -52,156 +35,133 @@ Successful response:
   "providerId": "provider-id",
   "requestId": "generated-request-id",
   "operation": "list",
-  "ok": true,
-  "result": {
-    "nodes": [
-      {
-        "id": "provider-defined-node-id",
-        "kind": "sandbox",
-        "type": "provider-defined-type",
-        "availability": "ready",
-        "defaultCwd": "provider-defined://root",
-        "tools": [
-          {
-            "name": "read",
-            "description": "Provider-safe capability description.",
-            "parameters": { "type": "object" }
-          }
-        ]
-      }
-    ]
-  }
+  "request": {}
 }
 ```
 
-Executable providers may advertise one or more Nodes. In this protocol version their Node kind is exactly `sandbox`. Supported availability values are `ready`, `unavailable`, `offline`, and `error`. Paths and `defaultCwd` are opaque provider-local strings; Foxwarm does not impose a host path or workspace convention.
+Success adds `"ok": true, "result": ...`; failure adds `"ok": false, "error": { "code": "SafeCode", "message": "Safe message", "retryable": false }`.
 
-## Invoke operation
+## List
 
-Request:
+A `list` response returns sandbox Node descriptors:
 
 ```json
 {
-  "protocol": "foxwarm-node-provider@1",
-  "providerId": "provider-id",
-  "requestId": "generated-request-id",
-  "operation": "invoke",
-  "request": {
-    "sourceSessionId": "exact-source-session",
-    "nodeId": "provider-defined-node-id",
-    "toolName": "read",
-    "args": { "filePath": "provider-defined://file" },
-    "context": {
-      "agent": "exact-source-agent",
-      "currentNode": "provider-defined-node-id",
-      "cwd": "provider-defined://cwd"
+  "nodes": [
+    {
+      "id": "sandbox-a",
+      "kind": "sandbox",
+      "type": "provider-defined-type",
+      "availability": "ready",
+      "defaultCwd": "provider-defined://root",
+      "filesystem": "read-write",
+      "exec": true
     }
-  }
+  ]
 }
 ```
 
-`currentNode` and `cwd` are included only when the canonical Node dispatcher has an authoritative routing snapshot for the selected Node. The request contains no mutable Session, callback, provider command, provider credential, or Foxwarm credential.
+Allowed backend fields:
 
-Successful response:
+- `filesystem: "read"` — Foxwarm derives only canonical `read`.
+- `filesystem: "read-write"` — Foxwarm derives canonical `read`, `write`, `edit`, and `apply_patch`.
+- `exec: true` — Foxwarm exposes canonical `exec` and sends a complete exec request.
 
-```json
-{
-  "protocol": "foxwarm-node-provider@1",
-  "providerId": "provider-id",
-  "requestId": "generated-request-id",
-  "operation": "invoke",
-  "ok": true,
-  "result": { "output": "provider-defined result" }
-}
-```
+At least one backend must be present. Providers do not send model tool names, descriptions, or JSON schemas. A provider cannot customize Foxwarm patch grammar or file-tool formatting.
 
-The provider receives one complete Node capability call. It owns path interpretation, execution, and environmental restrictions. A provider may advertise a partial tool set; Foxwarm rejects unadvertised capabilities before `invoke` and never falls back to the master Node.
+`defaultCwd` is an exact opaque target-namespace value. Foxwarm checks only that it is nonempty and does not trim or otherwise normalize it.
 
-## Lifecycle operations
+## Filesystem
 
-The lifecycle operations are `create`, `ensure`, `inspect`, and `destroy`. They use the same one-request/one-response transport, identity echoes, timeout, cancellation, stderr, and direct-child cleanup rules as `list` and `invoke`.
-
-`create` and `ensure` route to the exact configured `providerId`; the Node may not exist yet. Their request body is:
+A `filesystem` request carries one primitive operation:
 
 ```json
 {
   "sourceSessionId": "exact-source-session",
-  "nodeId": "optional-exact-requested-node-id",
+  "nodeId": "sandbox-a",
+  "operation": "read",
+  "path": "provider-defined://file",
+  "offset": 0,
+  "count": 65536,
+  "context": {
+    "agent": "exact-source-agent",
+    "currentNode": "sandbox-a",
+    "cwd": "provider-defined://cwd"
+  }
+}
+```
+
+The fixed operations are:
+
+| Operation | Request fields | Successful result |
+|---|---|---|
+| `parent` | `path` | `{ "path": "provider-defined parent" }` |
+| `stat` | `path` | `{ "kind": "file|directory|symlink|other", "size": 0, "modifiedAtMs": 0 }` |
+| `read` | `path`, nonnegative safe integer `offset`, `count` | `{ "dataBase64": "..." }` |
+| `readdir` | `path` | array of stat objects plus exact `name` |
+| `write` | `path`, `contentBase64`, `flag: "w"|"wx"` | any JSON result, normally `null` |
+| `mkdir` | `path` | any JSON result, normally `null` |
+| `remove` | `path` | any JSON result, normally `null` |
+
+Paths remain in the target Node namespace. Foxwarm does not apply Main-host `path.resolve`, agent-directory, URI, Windows, POSIX, slash, or backslash authority before calling the provider. The `parent` primitive owns the namespace parent relation used by canonical `write(createDirs)` and patch-add. The provider interprets relative paths using the supplied authoritative Node routing context and enforces its own root, symlink, namespace, and mutation restrictions at this primitive boundary.
+
+`read` data is base64 because the protocol is JSON. `write` is a whole-content operation and must implement native-equivalent `w`/`wx` behavior. `mkdir` supplies recursive parent creation semantics required by canonical file tools. Provider errors should use safe filesystem-style codes such as `ENOENT`, `ENOTDIR`, or `EEXIST` when Foxwarm's canonical composition needs them. Only `ENOENT` is interpreted as a missing path; other stat errors, including malformed primitive results, propagate and fence mutation.
+
+Foxwarm composes bounded reads, directory formatting, image promotion, parent diagnostics, exact edit replacement, patch parsing, add/update/delete sequencing, partial-application reporting, and mutation summaries above these primitives.
+
+## Exec
+
+An `exec` request is complete because process persistence, background delivery, cwd tracking, and cancellation may require a resident provider-specific runtime:
+
+```json
+{
+  "sourceSessionId": "exact-source-session",
+  "nodeId": "sandbox-a",
+  "args": { "command": "pwd", "timeout": 15 },
+  "context": {
+    "agent": "exact-source-agent",
+    "currentNode": "sandbox-a",
+    "cwd": "provider-defined://cwd",
+    "deferSessionCwdSync": true
+  }
+}
+```
+
+The provider returns the canonical exec result expected by Foxwarm. `deferSessionCwdSync` is trusted routing metadata, not a model argument. Providers without an exec backend omit `exec` from descriptors, and Foxwarm never falls back to master.
+
+## Lifecycle
+
+`create`, `ensure`, `inspect`, and `destroy` retain the provider-neutral lifecycle envelope. Create/ensure route by exact configured provider ID and may include an optional exact top-level `nodeId`; inspect/destroy resolve the existing Node's provider first.
+
+```json
+{
+  "sourceSessionId": "exact-source-session",
+  "nodeId": "optional-or-required-by-operation",
   "parameters": { "providerDefined": "plain JSON" },
   "context": { "agent": "exact-source-agent" }
 }
 ```
 
-`nodeId` is optional for `create` and `ensure`. When supplied, it is the Node identity rather than provider-opaque data: it must use the slash-free 1-128 ASCII grammar `[A-Za-z0-9][A-Za-z0-9._:-]*`, cannot be `master` in any letter case, is passed unchanged to the provider, and must match the returned descriptor ID. Foxwarm does not trim an invalid requested identity into another ID. Before provider execution, `create` rejects any already-owned requested ID; `ensure` permits no owner or the selected provider as owner and rejects another provider's ownership. Provider-generated IDs remain subject to the post-result global duplicate check.
+Create/ensure/inspect return `node` using the same primitive descriptor shape as `list`. Destroy returns the exact `nodeId`. Results may also contain bounded `effect`, `dataRetention`, and plain-JSON `details`. Providers that do not implement an action return error code `UnsupportedOperation`.
 
-Within one Foxwarm Main process, all `create`, `ensure`, and `destroy` calls share one registry-owned serial mutation lane. The lane covers authoritative ownership resolution/preflight, provider execution, result identity validation, and the post-result duplicate check, so concurrent lifecycle calls cannot cross those windows. `inspect` remains read-only and does not enter the lane. A queued call rechecks cancellation after acquiring the lane and rejects without provider execution if already cancelled; an active provider call retains the normal provider-level cancellation contract. The lane is local serialization only, not a distributed lock, lease, transaction, retry, or provider rollback guarantee.
+Foxwarm validates global Node identity, serializes create/ensure/destroy ownership/effect windows inside Main, requires exact destroy confirmation before provider execution, and never infers generic deletion, erasure, security, isolation, lease, or ownership guarantees from provider success.
 
-`inspect` and `destroy` resolve the owning provider from an existing exact `nodeId` before launching the provider process. Their request body additionally contains that exact identity:
+## Context and authority
 
-```json
-{
-  "sourceSessionId": "exact-source-session",
-  "nodeId": "provider-defined-node-id",
-  "parameters": { "providerDefined": "plain JSON" },
-  "context": { "agent": "exact-source-agent" }
-}
-```
+Requests contain only bounded cloneable data: exact source Session/agent identity, exact Node identity, primitive or exec data, and authoritative routing context when available. They contain no mutable Session, callback, provider configuration, launch command, credentials, or Main secrets.
 
-Foxwarm validates the exact user confirmation phrase `destroy node <nodeId>` before sending a `destroy` operation. The confirmation phrase is not provider authority and is not included in the provider request. Lifecycle requests contain no provider configuration, launch command, credentials, mutable Session, callbacks, or ownership claim.
+Unsupported backends, unavailable Nodes, invalid primitive responses, malformed envelopes, cancellation, timeout, or provider failure reject without retry or master fallback. Authenticated remote Nodes remain a separate adapter: their resident runtime may continue receiving complete historical model-tool calls internally, but that transport does not define this custom-provider API.
 
-Successful `create`, `ensure`, and `inspect` results contain the provider's exact safe Node descriptor. A successful `destroy` result echoes the exact `nodeId`. Every lifecycle result may additionally include bounded provider-described effect, data-retention, and opaque details:
-
-```json
-{
-  "node": {
-    "id": "provider-defined-node-id",
-    "kind": "sandbox",
-    "type": "provider-defined-type",
-    "availability": "ready",
-    "tools": []
-  },
-  "effect": "Provider-safe description of what the operation did.",
-  "dataRetention": "Provider-safe description of what data may remain.",
-  "details": { "providerDefined": "plain JSON" }
-}
-```
-
-For `destroy`, replace `node` with `"nodeId": "provider-defined-node-id"`. Foxwarm reports these fields as provider statements; it does not convert successful completion into a generic deletion, erasure, isolation, or security guarantee. Descriptor/provider/Node identity mismatches and duplicate global Node IDs fail closed. A provider that does not implement an operation must return error code `UnsupportedOperation`, which Foxwarm exposes as an unsupported lifecycle operation without retry or master fallback.
-
-Lifecycle `parameters` are provider-opaque plain finite JSON objects; they are not the Node identity field. They are at most 64 KiB after normalization, with depth at most 12, at most 2,048 entries per object/array, and keys at most 256 characters. The complete normalized lifecycle result is at most 128 KiB at the Main service boundary. Executable-provider lifecycle stdout is at most 512 KiB; `effect` and `dataRetention` are each at most 4,096 characters, and `details` is plain finite JSON at most 64 KiB.
-
-Effectively isolated sessions are structurally denied `create`, `ensure`, and `destroy` regardless of an exact builtin `node` allow rule because Phase 3A defines no Node ownership/sharing policy. Read-only `inspect` must pass the existing exact bound/current-Node access check. Non-isolated sessions may use lifecycle operations supported by the selected provider.
-
-## Error response
-
-```json
-{
-  "protocol": "foxwarm-node-provider@1",
-  "providerId": "provider-id",
-  "requestId": "generated-request-id",
-  "operation": "invoke",
-  "ok": false,
-  "error": {
-    "code": "ProviderDefinedCode",
-    "message": "Safe bounded error summary.",
-    "retryable": false
-  }
-}
-```
-
-A failed envelope contains `error` and no `result`; a successful envelope contains `result` and no `error`. Providers must keep the error message safe for the caller. Raw stderr, launch paths, and abnormal-process diagnostics are not forwarded. Lifecycle implementations that fail outside the bounded provider-error contract are converted to a generic retryable lifecycle-provider failure rather than exposing the raw exception.
-
-## Fixed limits and termination
+## Limits and termination
 
 - request JSON: 4 MiB;
 - list stdout: 256 KiB;
-- invoke stdout: 8 MiB;
+- filesystem/exec stdout: 8 MiB;
 - lifecycle stdout: 512 KiB;
+- lifecycle details: 64 KiB;
 - stderr: 64 KiB;
 - Nodes per provider: 100;
-- tools per Node: 200;
-- tool schema: 16 KiB;
 - active requests per provider: 8;
-- configured timeout: 1-300 seconds, default 90. The default exceeds the canonical Node `exec` foreground wait plus its outer transport allowance.
+- configured timeout: 1-300 seconds, default 90.
 
-Malformed JSON, multiple payloads, identity mismatches, invalid descriptors, oversized data, unavailable capabilities, nonzero exits, and signal exits fail without retry or master fallback. Timeout, cancellation, and stream-limit termination send a graceful termination signal first, then use a kill fallback and wait for the direct child process to exit. Direct-child exit also starts a bounded close confirmation; if inherited stdout/stderr remains open, Foxwarm destroys its owned pipe ends and rejects deterministically rather than waiting indefinitely. This is direct-child/stdin/stdout lifecycle handling, not a provider process-tree manager.
+Malformed/multiple/oversized responses, identity mismatches, invalid descriptors or primitive results, abnormal exits, signal exits, timeout, cancellation, and stream-limit failures are terminal for that call. Foxwarm uses graceful-first termination followed by kill-and-confirm handling for the direct child and never exposes raw stderr or configured launch paths to the caller.

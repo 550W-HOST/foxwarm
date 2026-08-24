@@ -15,6 +15,7 @@ import {
   NodeProviderRegistry,
   type NodeDescriptor,
   type NodeProvider,
+  type NodeProviderDescriptor,
   type NodeToolRequest,
 } from './nodes/providerRegistry';
 
@@ -153,7 +154,7 @@ test('generic Node registry lists, selects, and invokes a complete non-WebSocket
     provider: 'deterministic-test',
     type: 'memory-fixture',
     availability: 'ready',
-    defaultCwd: 'sandbox://project-root',
+    defaultCwd: '  sandbox://project-root  ',
     tools: [{ name: 'read', description: 'Read from the deterministic fixture.', parameters: { type: 'object' } }],
   };
   const provider: NodeProvider = {
@@ -193,8 +194,9 @@ test('generic Node registry lists, selects, and invokes a complete non-WebSocket
     });
     assert.deepEqual(await client.call('select', { sourceSessionId: sourceId, nodeId: descriptor.id }), {
       nodeId: descriptor.id,
-      defaultCwd: 'sandbox://project-root',
+      defaultCwd: '  sandbox://project-root  ',
     });
+    assert.equal(await new NodeProviderRegistry([provider]).getDefaultCwd({ sourceSessionId: sourceId, nodeId: descriptor.id, context: { agent: session.agent || 'main' } }), '  sandbox://project-root  ');
     assert.deepEqual(await client.call('execute', {
       sourceSessionId: sourceId,
       nodeId: descriptor.id,
@@ -219,6 +221,98 @@ test('generic Node registry lists, selects, and invokes a complete non-WebSocket
     transport.close();
     await sessionManager.deleteSession(sourceId).catch(() => false);
   }
+});
+
+test('primitive Node backends derive canonical file tools and preserve provider-owned opaque parent paths', async () => {
+  const files = new Map<string, Buffer>([['urn:existing', Buffer.from('hello world\n')]]);
+  const observed: any[] = [];
+  const descriptors: NodeProviderDescriptor[] = [
+    { id: 'primitive-rw', kind: 'sandbox', provider: 'primitive-fixture', type: 'memory', availability: 'ready', primitiveBackends: { filesystem: 'read-write' } },
+    { id: 'primitive-ro', kind: 'sandbox', provider: 'primitive-fixture', type: 'memory', availability: 'ready', primitiveBackends: { filesystem: 'read' } },
+  ];
+  const provider: NodeProvider = {
+    id: 'primitive-fixture',
+    listNodes: () => descriptors,
+    getNode: nodeId => descriptors.find(node => node.id === nodeId),
+    async invokeFilesystem(request) {
+      observed.push(request);
+      const value = files.get(request.path);
+      if (request.operation === 'parent') return { path: 'urn:provider-owned-parent' };
+      if (request.operation === 'stat') {
+        if (!value) { const error: any = new Error('missing'); error.code = 'ENOENT'; throw error; }
+        return { kind: 'file', size: value.length, modifiedAtMs: 1 };
+      }
+      if (request.operation === 'read') {
+        if (!value) { const error: any = new Error('missing'); error.code = 'ENOENT'; throw error; }
+        return { dataBase64: value.subarray(request.offset!, request.offset! + request.count!).toString('base64') };
+      }
+      if (request.operation === 'readdir') return [];
+      if (request.operation === 'write') {
+        if (request.flag === 'wx' && value) { const error: any = new Error('exists'); error.code = 'EEXIST'; throw error; }
+        files.set(request.path, Buffer.from(request.contentBase64!, 'base64')); return null;
+      }
+      if (request.operation === 'remove') { files.delete(request.path); return null; }
+      return null;
+    },
+  };
+  const registry = new NodeProviderRegistry([provider]);
+  const tools = Object.fromEntries((await registry.listNodes()).map(node => [node.id, node.tools.map(tool => tool.name)]));
+  assert.deepEqual(tools['primitive-rw'], ['read', 'write', 'edit', 'apply_patch']);
+  assert.deepEqual(tools['primitive-ro'], ['read']);
+  const base = { sourceSessionId: 'source', nodeId: 'primitive-rw', context: { agent: 'agent', currentNode: 'primitive-rw', cwd: 'urn:cwd' } };
+  assert.equal(await registry.invokeTool({ ...base, toolName: 'read', args: { filePath: 'urn:existing' } }), 'hello world\n');
+  await registry.invokeTool({ ...base, toolName: 'edit', args: { filePath: 'urn:existing', oldText: 'world', newText: 'primitive' } });
+  await registry.invokeTool({ ...base, toolName: 'apply_patch', args: { input: '*** Begin Patch\n*** Update File: urn:existing\n@@\n-hello primitive\n+hello canonical\n*** Add File: urn:added\n+added\n*** End Patch' } });
+  await registry.invokeTool({ ...base, toolName: 'write', args: { filePath: 'urn:new', content: 'new', overwrite: true, createDirs: true } });
+  assert.equal(files.get('urn:existing')?.toString(), 'hello canonical\n');
+  assert.equal(files.get('urn:added')?.toString(), 'added');
+  assert.equal(files.get('urn:new')?.toString(), 'new');
+  assert.ok(observed.every(request => request.path.startsWith('urn:')));
+  assert.equal(observed.filter(request => request.operation === 'parent').length, 2);
+  assert.ok(observed.filter(request => request.operation === 'mkdir').every(request => request.path === 'urn:provider-owned-parent'));
+  assert.ok(observed.every(request => !Object.prototype.hasOwnProperty.call(request, 'toolName')));
+  await assert.rejects(() => registry.invokeTool({ ...base, nodeId: 'primitive-ro', toolName: 'edit', args: { filePath: 'x', oldText: 'a', newText: 'b' } }),
+    (error: any) => error?.code === 'NODE_EXECUTION_TOOL_UNAVAILABLE');
+});
+
+test('primitive descriptors reject provider tool schemas and missing advertised backends', async () => {
+  const descriptor = (overrides: Partial<NodeDescriptor> = {}): any => ({
+    id: 'dishonest', kind: 'sandbox', provider: 'dishonest-provider', type: 'memory', availability: 'ready',
+    primitiveBackends: { filesystem: 'read' }, ...overrides,
+  });
+  for (const provider of [
+    { id: 'dishonest-provider', listNodes: () => [descriptor({ tools: [{ name: 'provider_read' }] })], getNode: () => undefined, invokeFilesystem: async () => null },
+    { id: 'dishonest-provider', listNodes: () => [descriptor()], getNode: () => undefined },
+    { id: 'dishonest-provider', listNodes: () => [descriptor({ primitiveBackends: { exec: true } })], getNode: () => undefined },
+  ] as NodeProvider[]) {
+    await assert.rejects(() => new NodeProviderRegistry([provider]).listNodes(),
+      (error: any) => error?.code === 'NODE_PROVIDER_INVALID_DESCRIPTOR');
+  }
+});
+
+test('primitive patch Add propagates invalid stat and performs no mutation', async () => {
+  const bytes = Buffer.from('existing bytes');
+  const calls: string[] = [];
+  const descriptor: NodeProviderDescriptor = {
+    id: 'invalid-stat', kind: 'sandbox', provider: 'invalid-stat-provider', type: 'memory', availability: 'ready',
+    primitiveBackends: { filesystem: 'read-write' },
+  };
+  const provider: NodeProvider = {
+    id: 'invalid-stat-provider', listNodes: () => [descriptor], getNode: nodeId => nodeId === descriptor.id ? descriptor : undefined,
+    async invokeFilesystem(request) {
+      calls.push(request.operation);
+      if (request.operation === 'stat') return null;
+      if (request.operation === 'read') return { dataBase64: bytes.toString('base64') };
+      throw new Error(`unexpected mutation: ${request.operation}`);
+    },
+  };
+  await assert.rejects(() => new NodeProviderRegistry([provider]).invokeTool({
+    sourceSessionId: 'source', nodeId: descriptor.id, toolName: 'apply_patch',
+    args: { input: '*** Begin Patch\n*** Add File: opaque-existing\n+replacement\n*** End Patch' },
+    context: { agent: 'agent', currentNode: descriptor.id, cwd: 'opaque-cwd' },
+  }), /Filesystem stat returned an invalid result/);
+  assert.deepEqual(calls, ['stat']);
+  assert.equal(bytes.toString(), 'existing bytes');
 });
 
 test('direct remote builtin and dynamic node calls share the Node execution service', async () => {

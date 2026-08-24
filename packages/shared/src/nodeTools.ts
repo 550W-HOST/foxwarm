@@ -17,6 +17,10 @@ export interface NodeToolContext {
   session?: { agent?: string; cwd?: string; currentNode?: string };
   runtimeNodeId?: string;
   fileOperations?: FileOperations;
+  /** Resolve a model-visible path in the target Node namespace. */
+  resolveFilePath?: (filePath: string) => string;
+  /** Return the parent in that same namespace without imposing host path semantics. */
+  dirnameFilePath?: (filePath: string) => string | Promise<string>;
   broadcast?: (text: string) => Promise<void>;
   queueSystemEvent?: (message: string, type?: 'background' | 'trigger' | 'onboot') => Promise<void>;
 }
@@ -36,7 +40,11 @@ function applyExactReplacement(content: string, searchText: string, replaceText:
 }
 
 function resolveToolPath(filePath: string, ctx: NodeToolContext): string {
-  return resolveNodePath(filePath, ctx.session?.agent || 'main', ctx.session?.cwd);
+  return ctx.resolveFilePath?.(filePath) ?? resolveNodePath(filePath, ctx.session?.agent || 'main', ctx.session?.cwd);
+}
+
+async function dirnameToolPath(filePath: string, ctx: NodeToolContext): Promise<string> {
+  return ctx.dirnameFilePath?.(filePath) ?? path.dirname(filePath);
 }
 
 export async function read(args: ToolArgs, ctx: NodeToolContext = {}) {
@@ -52,6 +60,7 @@ export async function write(args: ToolArgs, ctx: NodeToolContext = {}) {
     overwrite: overwrite === true,
     existsMessage: `File already exists: ${filePath}. Use overwrite=true to overwrite, or use edit tool to modify existing file.`,
     createDirs: args.createDirs === true,
+    parentPath: ctx.dirnameFilePath ? await dirnameToolPath(fullPath, ctx) : undefined,
   }, ctx.fileOperations);
   return 'File written successfully';
 }
@@ -70,6 +79,7 @@ async function applyPatchOperations(
   input: string,
   resolveOperationPath: (filePath: string) => { fullPath: string; displayPath: string },
   fileOperations: FileOperations,
+  dirname: (filePath: string) => string | Promise<string> = path.dirname,
 ): Promise<string> {
   const operations = parseApplyPatchInput(input);
   const summaries: string[] = [];
@@ -84,7 +94,7 @@ async function applyPatchOperations(
         summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
       } else if (operation.action === 'add') {
         if (await fileOperationPathExists(fileOperations, fullPath)) throw new Error(`Cannot add file that already exists: ${displayPath}`);
-        await fileOperations.mkdir(path.dirname(fullPath));
+        await fileOperations.mkdir(await dirname(fullPath));
         await fileOperations.write(fullPath, buildAddedFileContent(operation.lines), 'w');
         summaries.push(formatApplyPatchOperationSummary(operation, displayPath));
       } else {
@@ -110,6 +120,7 @@ export async function apply_patch(args: ToolArgs, ctx: NodeToolContext = {}) {
     args.input,
     filePath => ({ fullPath: resolveToolPath(filePath, ctx), displayPath: filePath }),
     ctx.fileOperations || nativeFileOperations,
+    filePath => dirnameToolPath(filePath, ctx),
   );
 }
 

@@ -29,6 +29,8 @@ export type WriteFileToolPathOptions = {
   existsMessage: string | (() => string);
   createDirs?: boolean;
   parentIssueRetryHint?: (issue: WriteParentIssue) => string | undefined;
+  /** Exact parent path in a non-native target namespace. */
+  parentPath?: string;
 };
 
 export function formatWriteContentRefRetryHint(filePath: string, contentRef: string, createDirs = false): string {
@@ -328,7 +330,7 @@ export async function writeFileToolPath(
   operations: FileOperations = nativeFileOperations,
 ): Promise<void> {
   if (options.createDirs === true) {
-    await operations.mkdir(path.dirname(fullPath));
+    await operations.mkdir(options.parentPath ?? path.dirname(fullPath));
   }
 
   try {
@@ -339,7 +341,18 @@ export async function writeFileToolPath(
     }
 
     if (options.createDirs !== true && shouldDiagnoseWriteParentError(err)) {
-      const parentIssue = await findWriteParentIssue(fullPath, operations);
+      let parentIssue: WriteParentIssue | null;
+      if (options.parentPath !== undefined) {
+        try {
+          const stats = await operations.stat(options.parentPath);
+          parentIssue = stats.kind === 'directory' ? null : { path: options.parentPath, reason: 'not-directory' };
+        } catch (parentError: any) {
+          if (parentError?.code !== 'ENOENT') throw parentError;
+          parentIssue = { path: options.parentPath, reason: 'missing' };
+        }
+      } else {
+        parentIssue = await findWriteParentIssue(fullPath, operations);
+      }
       if (parentIssue) {
         throw new Error(formatWriteParentIssueMessage(parentIssue, options.parentIssueRetryHint?.(parentIssue)));
       }

@@ -1,5 +1,8 @@
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from '../tools/placement';
 import { nodesManager } from './manager';
+import { CLI_NODE_CAPABILITIES } from '../../packages/shared/dist/nodeCapabilities';
+import { read, write, edit, apply_patch } from '../../packages/shared/dist/nodeTools';
+import type { FileOperations, FileOperationStat, FileOperationDirectoryEntry } from '../../packages/shared/dist/fileOperations';
 
 export type NodeKind = 'master' | 'remote' | 'sandbox';
 export type NodeAvailability = 'ready' | 'unavailable' | 'offline' | 'error';
@@ -10,6 +13,12 @@ export type NodeCapabilityDescriptor = {
   parameters?: unknown;
 };
 
+export type NodeFilesystemAccess = 'read' | 'read-write';
+export type NodePrimitiveBackends = {
+  filesystem?: NodeFilesystemAccess;
+  exec?: true;
+};
+
 export type NodeDescriptor = {
   id: string;
   kind: NodeKind;
@@ -17,9 +26,14 @@ export type NodeDescriptor = {
   type: string;
   availability: NodeAvailability;
   tools: NodeCapabilityDescriptor[];
+  /** Internal provider execution boundary. Omitted by complete-tool authenticated runtimes. */
+  primitiveBackends?: NodePrimitiveBackends;
   lastActivity?: number;
   defaultCwd?: string;
 };
+
+/** Descriptor shape implemented by providers; primitive providers never supply model tool definitions. */
+export type NodeProviderDescriptor = Omit<NodeDescriptor, 'tools'> & { tools?: NodeCapabilityDescriptor[] };
 
 export type NodeToolRequest = {
   sourceSessionId: string;
@@ -44,6 +58,21 @@ export type NodeProviderCallOptions = {
   signal?: AbortSignal;
 };
 
+export type NodeFilesystemOperation = 'parent' | 'stat' | 'read' | 'readdir' | 'write' | 'mkdir' | 'remove';
+export type NodeFilesystemRequest = {
+  sourceSessionId: string;
+  nodeId: string;
+  operation: NodeFilesystemOperation;
+  path: string;
+  offset?: number;
+  count?: number;
+  contentBase64?: string;
+  flag?: 'w' | 'wx';
+  context: NodeToolRequest['context'];
+};
+
+export type NodeExecRequest = Omit<NodeToolRequest, 'toolName'>;
+
 export type NodeLifecycleAction = 'create' | 'ensure' | 'inspect' | 'destroy';
 
 export type NodeLifecycleContext = {
@@ -62,7 +91,7 @@ export type NodeLifecycleNodeRequest = NodeLifecycleProviderRequest & {
 };
 
 export type NodeLifecycleResult = {
-  node?: NodeDescriptor;
+  node?: NodeProviderDescriptor;
   nodeId?: string;
   effect?: string;
   dataRetention?: string;
@@ -80,9 +109,12 @@ export interface NodeProvider {
   shutdown?(): Promise<void>;
   /** Expensive/failure-prone discovery is consulted only when fixed in-process providers do not own the exact Node ID. */
   readonly deferredLookup?: boolean;
-  listNodes(options?: NodeProviderCallOptions): Promise<NodeDescriptor[]> | NodeDescriptor[];
-  getNode(nodeId: string, options?: NodeProviderCallOptions): Promise<NodeDescriptor | undefined> | NodeDescriptor | undefined;
-  invokeTool(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown>;
+  listNodes(options?: NodeProviderCallOptions): Promise<NodeProviderDescriptor[]> | NodeProviderDescriptor[];
+  getNode(nodeId: string, options?: NodeProviderCallOptions): Promise<NodeProviderDescriptor | undefined> | NodeProviderDescriptor | undefined;
+  /** Historical complete-tool adapter used only by authenticated resident Node runtimes. */
+  invokeTool?(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown>;
+  invokeFilesystem?(request: NodeFilesystemRequest, options?: NodeProviderCallOptions): Promise<unknown>;
+  invokeExec?(request: NodeExecRequest, options?: NodeProviderCallOptions): Promise<unknown>;
   getDefaultCwd?(request: NodeDefaultCwdRequest, options?: NodeProviderCallOptions): Promise<string | undefined>;
   createNode?(request: NodeLifecycleProviderRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult>;
   ensureNode?(request: NodeLifecycleProviderRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult>;
@@ -154,7 +186,8 @@ export class NodeProviderRegistry {
     const nodes: NodeDescriptor[] = [];
     const owners = new Map<string, string>();
     for (const provider of this.providers) {
-      for (const node of await provider.listNodes(options)) {
+      for (const rawNode of await provider.listNodes(options)) {
+        const node = this.materializeDescriptor(rawNode, provider);
         if (node.provider !== provider.id) {
           throw new NodeProviderError(
             'NODE_PROVIDER_INVALID_DESCRIPTOR',
@@ -190,8 +223,9 @@ export class NodeProviderRegistry {
   ): Promise<{ descriptor: NodeDescriptor; provider: NodeProvider } | undefined> {
     let resolved: { descriptor: NodeDescriptor; provider: NodeProvider } | undefined;
     for (const provider of providers) {
-      const descriptor = await provider.getNode(nodeId, options);
-      if (!descriptor) continue;
+      const rawDescriptor = await provider.getNode(nodeId, options);
+      if (!rawDescriptor) continue;
+      const descriptor = this.materializeDescriptor(rawDescriptor, provider);
       if (descriptor.id !== nodeId || descriptor.provider !== provider.id) {
         throw new NodeProviderError(
           'NODE_PROVIDER_INVALID_DESCRIPTOR',
@@ -224,7 +258,123 @@ export class NodeProviderRegistry {
         `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`,
       );
     }
+    if (resolved.descriptor.primitiveBackends) {
+      return this.invokePrimitiveTool(resolved.provider, resolved.descriptor, request, options);
+    }
+    if (!resolved.provider.invokeTool) {
+      throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`);
+    }
     return resolved.provider.invokeTool(request, options);
+  }
+
+  private materializeDescriptor(descriptor: NodeProviderDescriptor, provider?: NodeProvider): NodeDescriptor {
+    if (!descriptor.primitiveBackends) return { ...descriptor, tools: descriptor.tools || [] };
+    const backendKeys = Object.keys(descriptor.primitiveBackends);
+    if (backendKeys.some(key => key !== 'filesystem' && key !== 'exec')
+      || (descriptor.primitiveBackends.filesystem !== undefined
+        && descriptor.primitiveBackends.filesystem !== 'read'
+        && descriptor.primitiveBackends.filesystem !== 'read-write')
+      || (descriptor.primitiveBackends.exec !== undefined && descriptor.primitiveBackends.exec !== true)
+      || (descriptor.primitiveBackends.filesystem === undefined && descriptor.primitiveBackends.exec !== true)) {
+      throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Node \`${descriptor.id}\` has invalid primitive backend support.`);
+    }
+    if (descriptor.tools !== undefined) {
+      throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Primitive Node \`${descriptor.id}\` must not advertise model tool definitions.`);
+    }
+    if (provider && descriptor.primitiveBackends.filesystem && !provider.invokeFilesystem) {
+      throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Primitive Node \`${descriptor.id}\` advertises filesystem support without a filesystem backend.`);
+    }
+    if (provider && descriptor.primitiveBackends.exec && !provider.invokeExec) {
+      throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Primitive Node \`${descriptor.id}\` advertises exec support without an exec backend.`);
+    }
+    const names = new Set<string>();
+    if (descriptor.primitiveBackends.filesystem) names.add('read');
+    if (descriptor.primitiveBackends.filesystem === 'read-write') {
+      names.add('write'); names.add('edit'); names.add('apply_patch');
+    }
+    if (descriptor.primitiveBackends.exec) names.add('exec');
+    const tools = CLI_NODE_CAPABILITIES.tools
+      .filter(tool => names.has(tool.name))
+      .map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
+    return { ...descriptor, tools };
+  }
+
+  private async invokePrimitiveTool(
+    provider: NodeProvider,
+    descriptor: NodeDescriptor,
+    request: NodeToolRequest,
+    options?: NodeProviderCallOptions,
+  ): Promise<unknown> {
+    if (request.toolName === 'exec') {
+      if (!descriptor.primitiveBackends?.exec || !provider.invokeExec) {
+        throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`exec\` not available on node \`${request.nodeId}\`.`);
+      }
+      return provider.invokeExec({ sourceSessionId: request.sourceSessionId, nodeId: request.nodeId, args: request.args, context: request.context }, options);
+    }
+    const access = descriptor.primitiveBackends?.filesystem;
+    const mutation = request.toolName === 'write' || request.toolName === 'edit' || request.toolName === 'apply_patch';
+    if (!access || (mutation && access !== 'read-write') || !provider.invokeFilesystem) {
+      throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`);
+    }
+    const call = (operation: NodeFilesystemOperation, fields: Partial<NodeFilesystemRequest>) => provider.invokeFilesystem!({
+      sourceSessionId: request.sourceSessionId,
+      nodeId: request.nodeId,
+      operation,
+      path: fields.path!,
+      ...(fields.offset === undefined ? {} : { offset: fields.offset }),
+      ...(fields.count === undefined ? {} : { count: fields.count }),
+      ...(fields.contentBase64 === undefined ? {} : { contentBase64: fields.contentBase64 }),
+      ...(fields.flag === undefined ? {} : { flag: fields.flag }),
+      context: request.context,
+    }, options);
+    const operations: FileOperations = {
+      stat: async filePath => this.normalizeFileStat(await call('stat', { path: filePath })),
+      read: async (filePath, offset, count) => {
+        const result = await call('read', { path: filePath, offset, count });
+        if (!result || typeof result !== 'object' || typeof (result as any).dataBase64 !== 'string'
+          || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test((result as any).dataBase64)) {
+          throw new NodeProviderError('NODE_PROVIDER_FILESYSTEM_INVALID_RESULT', 'Filesystem read returned an invalid result.');
+        }
+        const data = Buffer.from((result as any).dataBase64, 'base64');
+        if (data.toString('base64') !== (result as any).dataBase64 || data.length > count) {
+          throw new NodeProviderError('NODE_PROVIDER_FILESYSTEM_INVALID_RESULT', 'Filesystem read returned non-canonical or oversized bytes.');
+        }
+        return data;
+      },
+      readdir: async filePath => {
+        const result = await call('readdir', { path: filePath });
+        if (!Array.isArray(result)) throw new NodeProviderError('NODE_PROVIDER_FILESYSTEM_INVALID_RESULT', 'Filesystem readdir returned an invalid result.');
+        return result.map(item => ({ ...this.normalizeFileStat(item), name: typeof item?.name === 'string' ? item.name : (() => { throw new NodeProviderError('NODE_PROVIDER_FILESYSTEM_INVALID_RESULT', 'Filesystem readdir returned an invalid entry.'); })() })) as FileOperationDirectoryEntry[];
+      },
+      write: async (filePath, content, flag) => { await call('write', { path: filePath, contentBase64: Buffer.from(content).toString('base64'), flag }); },
+      mkdir: async filePath => { await call('mkdir', { path: filePath }); },
+      remove: async filePath => { await call('remove', { path: filePath }); },
+    };
+    const providerParent = async (value: string): Promise<string> => {
+      const result = await call('parent', { path: value });
+      if (!result || typeof result !== 'object' || typeof (result as any).path !== 'string' || !(result as any).path) {
+        throw new NodeProviderError('NODE_PROVIDER_FILESYSTEM_INVALID_RESULT', 'Filesystem parent returned an invalid result.');
+      }
+      return (result as any).path;
+    };
+    const context = {
+      sessionId: request.sourceSessionId,
+      session: { agent: request.context.agent, cwd: request.context.cwd, currentNode: request.nodeId },
+      fileOperations: operations,
+      resolveFilePath: (filePath: string) => filePath,
+      dirnameFilePath: providerParent,
+    };
+    const tool = { read, write, edit, apply_patch }[request.toolName as 'read' | 'write' | 'edit' | 'apply_patch'];
+    if (!tool) throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`);
+    return tool(request.args, context);
+  }
+
+  private normalizeFileStat(value: any): FileOperationStat {
+    if (!value || typeof value !== 'object' || !['file', 'directory', 'symlink', 'other'].includes(value.kind)
+      || !Number.isSafeInteger(value.size) || value.size < 0 || typeof value.modifiedAtMs !== 'number' || !Number.isFinite(value.modifiedAtMs)) {
+      throw new NodeProviderError('NODE_PROVIDER_FILESYSTEM_INVALID_RESULT', 'Filesystem stat returned an invalid result.');
+    }
+    return { kind: value.kind, size: value.size, modifiedAtMs: value.modifiedAtMs };
   }
 
   listLifecycleProviders(): NodeLifecycleProviderSummary[] {
@@ -390,6 +540,7 @@ export class NodeProviderRegistry {
       if (!result.node || result.node.provider !== providerId) {
         throw new NodeProviderError('NODE_LIFECYCLE_INVALID_RESULT', `Node provider \`${providerId}\` must return its exact Node descriptor for \`${action}\`.`);
       }
+      result.node = this.materializeDescriptor(result.node, this.providers.find(provider => provider.id === providerId));
       if (expectedNodeId && result.node.id !== expectedNodeId) {
         throw new NodeProviderError('NODE_LIFECYCLE_NODE_MISMATCH', `Node provider \`${providerId}\` returned the wrong Node identity for \`${action}\`.`);
       }
@@ -428,8 +579,8 @@ export class NodeProviderRegistry {
         true,
       );
     }
-    if (typeof resolved.descriptor.defaultCwd === 'string' && resolved.descriptor.defaultCwd.trim()) {
-      return resolved.descriptor.defaultCwd.trim();
+    if (typeof resolved.descriptor.defaultCwd === 'string' && resolved.descriptor.defaultCwd.length > 0) {
+      return resolved.descriptor.defaultCwd;
     }
     return resolved.provider.getDefaultCwd?.(request, options);
   }

@@ -24,7 +24,7 @@ Client implementations are separate modules: [CLI node](./cli-node.md) and [brow
 - Approved-node list/authenticate/remove/move operations.
 - `nodesManager` — registration, model-tool dispatch, backend-service dispatch, runtime disconnect, and access checks.
 - `nodeProviderRegistry` — production registry for fixed master/authenticated-remote providers plus normalized startup executable providers.
-- `foxwarm-node-provider@1` — one-shot bounded JSON stdin/stdout contract for trusted executable sandbox providers, including optional create/ensure/inspect/destroy operations; see `docs/executable-node-provider-protocol.md`.
+- `foxwarm-node-provider@1` — one-shot bounded JSON stdin/stdout contract for trusted executable sandbox providers exposing filesystem primitives, optional complete exec, and optional create/ensure/inspect/destroy operations; see `docs/executable-node-provider-protocol.md`.
 - `executeNodeTool()` — placement-neutral service caller for direct and dynamic non-master Node capability execution.
 
 ## Bootstrap surface
@@ -53,8 +53,8 @@ The operator-facing deployment/configuration workflow is documented by the singl
 - Agent isolation is an agent-level permission boundary. Selecting a session `currentNode` routes execution but does not create isolation or an exclusive lease.
 - Backend services are versioned fixed protocols and do not pass through model-tool approval.
 - Generic Node capability execution resolves the exact non-master provider in Main; unsupported capabilities never fall back to master.
-- Executable providers are startup-only trusted configuration, advertise sandbox-kind Nodes, and receive complete capability calls rather than low-level file/process RPC. Their path and restriction semantics remain provider-defined.
-- Docker worktree providers are startup-configured resident Main providers. They accept only existing allowlisted Git worktrees, mount source writable and Git administration read-only, and advertise only shared file capabilities in the initial phase.
+- Executable providers are startup-only trusted configuration and advertise sandbox-kind Nodes through fixed filesystem (`read` or `read-write`) and optional exec backends. Core derives canonical file tools over parent/stat/ranged-read/readdir/whole-write/mkdir/remove primitives; provider path and restriction semantics remain authoritative. Authenticated remote Nodes retain their resident complete-tool adapter internally.
+- Docker worktree providers are startup-configured resident Main providers. They accept only existing allowlisted Git worktrees, mount source writable and Git administration read-only, and implement only provider-neutral filesystem primitives plus canonical resident exec.
 - Node lifecycle is a provider-neutral Main-owned control plane through the existing `node` builtin. Create/ensure route by exact configured provider ID; inspect/destroy resolve the exact existing Node owner. Provider effect and data-retention text remains descriptive rather than a generic deletion or security guarantee.
 
 ## Compatibility

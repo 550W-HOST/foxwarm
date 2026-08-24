@@ -10,6 +10,10 @@ import '../llm';
 import { DockerCommandError, DockerWorktreeNodeProvider, NativeDockerCommandRunner, type DockerCommandRunner } from './dockerWorktreeProvider';
 import { NodeProviderRegistry } from './providerRegistry';
 
+async function invokeProviderTool(provider: DockerWorktreeNodeProvider, request: any, options?: { signal?: AbortSignal }): Promise<unknown> {
+  return new NodeProviderRegistry([provider]).invokeTool(request, options);
+}
+
 const execFileAsync = promisify(execFile);
 
 const localDockerExecLauncher: typeof spawn = ((_command: any, args: any, options: any) => {
@@ -60,7 +64,11 @@ class FakeDocker implements DockerCommandRunner {
     if (args[0] === 'exec') {
       if (this.pauseExecUntilAbort) await new Promise<void>((_resolve, reject) => options.signal?.addEventListener('abort', () => { this.closedAfterAbort = true; reject(new DockerCommandError('cancelled')); }, { once: true }));
       const request = JSON.parse(options.input || '{}');
-      return { stdout: JSON.stringify({ ok: true, result: request.toolName === 'read' ? 'fixture-content' : 'File written successfully' }), stderr: '' };
+      const result: any = request.operation === 'parent' ? { path: path.dirname(request.path) }
+        : request.operation === 'stat' ? { kind: 'file', size: 15, modifiedAtMs: 1 }
+        : request.operation === 'read' ? { dataBase64: Buffer.from('fixture-content').toString('base64') }
+        : request.operation === 'readdir' ? [] : null;
+      return { stdout: JSON.stringify({ ok: true, result }), stderr: '' };
     }
     if (args[0] === 'ps') {
       const filter = args[args.indexOf('--filter') + 1] || ''; const unique = [...new Set([...this.containers.values()])];
@@ -103,7 +111,7 @@ test('Docker worktree provider owns exact lifecycle, safe mounts, shared file to
   try {
     const created = await provider.createNode({ sourceSessionId: 'source', nodeId: 'sandbox-dev', parameters: { worktreePath: repo }, context: { agent: 'main' } });
     assert.equal(created.node?.id, 'sandbox-dev');
-    assert.deepEqual(created.node?.tools.map(tool => tool.name), ['read', 'write', 'edit', 'apply_patch', 'exec']);
+    assert.deepEqual(created.node?.primitiveBackends, { filesystem: 'read-write', exec: true });
     const run = docker.calls.find(call => call.args[0] === 'run')!.args;
     assert.ok(run.includes('--read-only')); assert.ok(run.includes('ALL')); assert.ok(run.includes('no-new-privileges'));
     assert.ok(run.includes('none')); assert.equal(run.includes('/var/run/docker.sock'), false);
@@ -116,7 +124,7 @@ test('Docker worktree provider owns exact lifecycle, safe mounts, shared file to
     assert.equal(docker.calls.filter(call => call.args[0] === 'run').length, 1);
     await assert.rejects(() => provider.createNode({ sourceSessionId: 'source', nodeId: 'other', parameters: { worktreePath: repo }, context: { agent: 'main' } }), /already assigned/);
     assert.equal(await provider.getDefaultCwd({ sourceSessionId: 'source', nodeId: 'sandbox-dev', context: { agent: 'main' } }), repo);
-    assert.equal(await provider.invokeTool({ sourceSessionId: 'source', nodeId: 'sandbox-dev', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'sandbox-dev', cwd: repo } }), 'fixture-content');
+    assert.equal(await invokeProviderTool(provider, { sourceSessionId: 'source', nodeId: 'sandbox-dev', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'sandbox-dev', cwd: repo } }), 'fixture-content');
     const inspected = await provider.inspectNode({ sourceSessionId: 'source', nodeId: 'sandbox-dev', parameters: {}, context: { agent: 'main' } });
     assert.equal((inspected.details as any).branch, 'test-branch');
     assert.match(String(inspected.dataRetention), /read-only/);
@@ -153,9 +161,9 @@ test('Docker lifecycle readiness is consistent and ensure restarts or unpauses t
     docker.container.State = { Running: false, Paused: false, Restarting: false, Dead: false, Status: 'exited' };
     assert.equal((await provider.listNodes())[0].availability, 'offline'); const exited = await provider.inspectNode({ sourceSessionId: 's', nodeId: 'n', parameters: {}, context: { agent: 'main' } }); assert.equal(exited.node?.availability, 'offline'); assert.equal((exited.details as any).status, 'exited'); assert.equal((exited.details as any).availability, 'offline');
     const registry = new NodeProviderRegistry([provider]); await assert.rejects(() => registry.invokeTool({ sourceSessionId: 's', nodeId: 'n', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }), /not available/);
-    await assert.rejects(() => provider.invokeTool({ sourceSessionId: 's', nodeId: 'n', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }), /not execution-ready.*exited/i);
+    await assert.rejects(() => invokeProviderTool(provider, { sourceSessionId: 's', nodeId: 'n', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }), /not available/i);
     const restarted = await provider.ensureNode({ sourceSessionId: 's', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } }); assert.match(String(restarted.effect), /Restarted/); assert.equal((restarted.details as any).containerId, id); assert.equal((restarted.details as any).generation, generation); assert.equal(restarted.node?.availability, 'ready'); assert.equal((restarted.details as any).status, 'running'); assert.ok(docker.calls.some(call => call.args[0] === 'start' && call.args[1] === id)); assert.equal(docker.calls.filter(call => call.args[0] === 'run').length, 1);
-    assert.equal(await provider.invokeTool({ sourceSessionId: 's', nodeId: 'n', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }), 'fixture-content');
+    assert.equal(await invokeProviderTool(provider, { sourceSessionId: 's', nodeId: 'n', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }), 'fixture-content');
 
     docker.container.State = { Running: true, Paused: true, Restarting: false, Dead: false, Status: 'running' }; const paused = await provider.inspectNode({ sourceSessionId: 's', nodeId: 'n', parameters: {}, context: { agent: 'main' } }); assert.equal(paused.node?.availability, 'offline'); assert.equal((paused.details as any).status, 'paused');
     const unpaused = await provider.ensureNode({ sourceSessionId: 's', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } }); assert.match(String(unpaused.effect), /Unpaused/); assert.equal((unpaused.details as any).containerId, id); assert.equal((unpaused.details as any).generation, generation); assert.ok(docker.calls.some(call => call.args[0] === 'unpause' && call.args[1] === id));
@@ -179,7 +187,7 @@ test('stale startup configuration fences capabilities and Git status while prese
     await original.createNode({ sourceSessionId: 's', nodeId: 'stale-node', parameters: { worktreePath: repo }, context: { agent: 'main' } });
     const current = new DockerWorktreeNodeProvider({ ...base, allowedWorktreeRoots: [repo] }, docker);
     assert.equal((await current.listNodes())[0].availability, 'error');
-    await assert.rejects(() => current.invokeTool({ sourceSessionId: 's', nodeId: 'stale-node', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'stale-node', cwd: repo } }), /stale provider configuration/);
+    await assert.rejects(() => invokeProviderTool(current, { sourceSessionId: 's', nodeId: 'stale-node', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'stale-node', cwd: repo } }), /not available/i);
     const inspected = await current.inspectNode({ sourceSessionId: 's', nodeId: 'stale-node', parameters: {}, context: { agent: 'main' } });
     assert.equal((inspected.details as any).status, 'running'); assert.equal((inspected.details as any).availability, 'error'); assert.equal((inspected.details as any).configurationStatus, 'stale-config'); assert.equal(Object.prototype.hasOwnProperty.call(inspected.details, 'dirty'), false);
     await current.destroyNode({ sourceSessionId: 's', nodeId: 'stale-node', parameters: {}, context: { agent: 'main' } });
@@ -248,7 +256,7 @@ test('cancellation is fenced before effects and active Docker start/helper waits
 
     const activeHelper = new FakeDocker(); const provider = new DockerWorktreeNodeProvider(config, activeHelper);
     await provider.createNode({ sourceSessionId: 's', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } }); activeHelper.pauseExecUntilAbort = true; activeHelper.closedAfterAbort = false;
-    const helperController = new AbortController(); const invoking = provider.invokeTool({ sourceSessionId: 's', nodeId: 'n', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }, { signal: helperController.signal });
+    const helperController = new AbortController(); const invoking = invokeProviderTool(provider, { sourceSessionId: 's', nodeId: 'n', toolName: 'read', args: { filePath: 'file.txt' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }, { signal: helperController.signal });
     while (!activeHelper.calls.some(call => call.args[0] === 'exec')) await new Promise(resolve => setTimeout(resolve, 1)); helperController.abort();
     await assert.rejects(() => invoking, /cancelled/); assert.equal(activeHelper.closedAfterAbort, true);
   } finally { await fs.remove(dir); }
@@ -383,8 +391,9 @@ test('Docker runner handles early stdin close and rejects oversized helper input
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-helper-input-')); const repo = await makeRepo(dir); const docker = new FakeDocker(); const provider = new DockerWorktreeNodeProvider({ id: 'helper-input', type: 'docker-worktree', command: 'docker', args: [], image: 'fixture', allowedWorktreeRoots: [dir], networkModes: ['none'], stateDir: path.join(dir, 'state'), memory: '1g', cpus: 1, pidsLimit: 32, tmpfsSize: '32m' }, docker);
   try {
     await provider.createNode({ sourceSessionId: 's', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } });
-    await assert.rejects(() => provider.invokeTool({ sourceSessionId: 's', nodeId: 'n', toolName: 'write', args: { filePath: 'large', content: 'x'.repeat(8 * 1024 * 1024) }, context: { agent: 'main', currentNode: 'n', cwd: repo } }), /fixed 8 MiB/);
-    assert.equal(docker.calls.filter(call => call.args[0] === 'exec').length, 0);
+    await assert.rejects(() => invokeProviderTool(provider, { sourceSessionId: 's', nodeId: 'n', toolName: 'write', args: { filePath: 'large', content: 'x'.repeat(8 * 1024 * 1024) }, context: { agent: 'main', currentNode: 'n', cwd: repo } }), /fixed 8 MiB/);
+    const helperRequests = docker.calls.filter(call => call.args[0] === 'exec').map(call => JSON.parse(call.input || '{}'));
+    assert.deepEqual(helperRequests.map(request => request.operation), ['parent']);
   } finally { await fs.remove(dir); }
 });
 
@@ -395,15 +404,16 @@ test('resident Docker exec reuses canonical foreground, cwd, failure, artifact-r
   try {
     const created = await provider.createNode({ sourceSessionId: 'session-exec', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } });
     const artifactDir = (created.details as any).artifactDir as string; await fs.ensureDir(path.join(repo, 'sub'));
-    const success = await provider.invokeTool({ sourceSessionId: 'session-exec', nodeId: 'n', toolName: 'exec', args: { command: 'cd sub; printf hello', timeout: 5 }, context: { agent: 'main', currentNode: 'n', cwd: repo, deferSessionCwdSync: true } }) as any;
+    const success = await invokeProviderTool(provider, { sourceSessionId: 'session-exec', nodeId: 'n', toolName: 'exec', args: { command: 'cd sub; printf hello', timeout: 5 }, context: { agent: 'main', currentNode: 'n', cwd: repo, deferSessionCwdSync: true } }) as any;
     assert.match(success.output, /hello/); assert.equal(success.__execBatchCwdSync.nextCwd, path.join(repo, 'sub'));
-    const failure = await provider.invokeTool({ sourceSessionId: 'session-exec', nodeId: 'n', toolName: 'exec', args: { command: 'printf bad; exit 7', timeout: 5 }, context: { agent: 'main', currentNode: 'n', cwd: repo, deferSessionCwdSync: true } }) as any;
+    const failure = await invokeProviderTool(provider, { sourceSessionId: 'session-exec', nodeId: 'n', toolName: 'exec', args: { command: 'printf bad; exit 7', timeout: 5 }, context: { agent: 'main', currentNode: 'n', cwd: repo, deferSessionCwdSync: true } }) as any;
     assert.match(failure.output, /bad/); assert.match(failure.output, /exit code:\s*7/i);
     const envArgs = launches[0].filter((_value, index, all) => index > 0 && all[index - 1] === '-e');
     assert.ok(envArgs.every(value => /^(TERM|FOXWARM_EXEC_[A-Z_]+)=/.test(value))); assert.equal(envArgs.some(value => /HOME|DOCKER|SESSION/.test(value)), false);
     const artifactFiles = (await fs.readdir(artifactDir, { recursive: true }) as string[]).map(item => path.join(artifactDir, item)); const logPath = artifactFiles.find(item => item.endsWith('.log')); assert.ok(logPath);
-    assert.match(String(await provider.invokeTool({ sourceSessionId: 'session-exec', nodeId: 'n', toolName: 'read', args: { filePath: logPath }, context: { agent: 'main', currentNode: 'n', cwd: repo } })), /hello/);
-    await assert.rejects(() => provider.invokeTool({ sourceSessionId: 'session-exec', nodeId: 'n', toolName: 'write', args: { filePath: path.join(artifactDir, 'forbidden'), content: 'x' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }), /outside.*worktree|escapes/i);
+    assert.match(String(await invokeProviderTool(provider, { sourceSessionId: 'session-exec', nodeId: 'n', toolName: 'read', args: { filePath: artifactDir }, context: { agent: 'main', currentNode: 'n', cwd: repo } })), /running-exec\.json/);
+    assert.match(String(await invokeProviderTool(provider, { sourceSessionId: 'session-exec', nodeId: 'n', toolName: 'read', args: { filePath: logPath }, context: { agent: 'main', currentNode: 'n', cwd: repo } })), /hello/);
+    await assert.rejects(() => invokeProviderTool(provider, { sourceSessionId: 'session-exec', nodeId: 'n', toolName: 'write', args: { filePath: path.join(artifactDir, 'forbidden'), content: 'x' }, context: { agent: 'main', currentNode: 'n', cwd: repo } }), /outside.*worktree|escapes/i);
     const operations = (provider as any).createDockerProcessOperations((await (provider as any).readState()).nodes[0]);
     await assert.rejects(() => operations.launch({ command: '/bin/bash', args: ['/tmp/not-managed.sh'], cwd: repo, env: {}, detached: true, windowsHide: true }), /script escaped/);
   } finally { await provider.destroyNode({ sourceSessionId: 'session-exec', nodeId: 'n', parameters: {}, context: { agent: 'main' } }).catch(() => {}); await fs.remove(dir); }
@@ -416,12 +426,12 @@ test('resident Docker exec times out to background, delivers exact event, surviv
   const provider = new DockerWorktreeNodeProvider({ id: 'docker-bg', type: 'docker-worktree', command: 'docker-launcher', args: [], image: 'fixture', allowedWorktreeRoots: [dir], networkModes: ['none'], stateDir: path.join(dir, 'state'), memory: '1g', cpus: 1, pidsLimit: 32, tmpfsSize: '32m' }, docker, undefined, launcher, async (sessionId, message) => { events.push({ sessionId, message }); });
   try {
     const first = await provider.createNode({ sourceSessionId: 'session-bg', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } }); const firstArtifact = (first.details as any).artifactDir;
-    const timeout = String(await provider.invokeTool({ sourceSessionId: 'session-bg', nodeId: 'n', toolName: 'exec', args: { command: 'sleep 2; printf background-done', timeout: 1 }, context: { agent: 'main', currentNode: 'n', cwd: repo } }));
+    const timeout = String(await invokeProviderTool(provider, { sourceSessionId: 'session-bg', nodeId: 'n', toolName: 'exec', args: { command: 'sleep 2; printf background-done', timeout: 1 }, context: { agent: 'main', currentNode: 'n', cwd: repo } }));
     assert.match(timeout, /Switched to background/); assert.match(timeout, /Docker boundary; launcher PID/); assert.doesNotMatch(timeout, /managed shell-script root PID/);
     for (let i = 0; i < 30 && events.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 250));
     assert.equal(events[0]?.sessionId, 'session-bg'); assert.match(events[0]?.message || '', /Background Process Finished/);
-    const log = /Command output in (.+)$/.exec(events[0].message)![1]; assert.match(String(await provider.invokeTool({ sourceSessionId: 'session-bg', nodeId: 'n', toolName: 'read', args: { filePath: log }, context: { agent: 'main', currentNode: 'n', cwd: repo } })), /background-done/);
-    const active = String(await provider.invokeTool({ sourceSessionId: 'session-bg', nodeId: 'n', toolName: 'exec', args: { command: 'sleep 20', timeout: 1 }, context: { agent: 'main', currentNode: 'n', cwd: repo } })); assert.match(active, /Switched to background/);
+    const log = /Command output in (.+)$/.exec(events[0].message)![1]; assert.match(String(await invokeProviderTool(provider, { sourceSessionId: 'session-bg', nodeId: 'n', toolName: 'read', args: { filePath: log }, context: { agent: 'main', currentNode: 'n', cwd: repo } })), /background-done/);
+    const active = String(await invokeProviderTool(provider, { sourceSessionId: 'session-bg', nodeId: 'n', toolName: 'exec', args: { command: 'sleep 20', timeout: 1 }, context: { agent: 'main', currentNode: 'n', cwd: repo } })); assert.match(active, /Switched to background/);
     const destroyed = await provider.destroyNode({ sourceSessionId: 'session-bg', nodeId: 'n', parameters: {}, context: { agent: 'main' } }); assert.equal((destroyed.details as any).artifactDir, firstArtifact); assert.ok(await fs.pathExists(firstArtifact));
     for (let i = 0; i < 30 && events.length < 2; i++) await new Promise(resolve => setTimeout(resolve, 250)); assert.equal(events.length, 2); assert.match(events[1].message, /no status file was written/i);
     const second = await provider.createNode({ sourceSessionId: 'session-bg', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } }); assert.notEqual((second.details as any).artifactDir, firstArtifact);
@@ -467,7 +477,7 @@ test('destroyed generation survives restart until exact completion then retires 
   const first = new DockerWorktreeNodeProvider(config, docker, undefined, launcher, async () => {}); let restarted: DockerWorktreeNodeProvider | undefined;
   try {
     const original = await first.createNode({ sourceSessionId: 'retired-session', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } });
-    await first.invokeTool({ sourceSessionId: 'retired-session', nodeId: 'n', toolName: 'exec', args: { command: 'sleep 20', timeout: 1 }, context: { agent: 'main', currentNode: 'n', cwd: repo } });
+    await invokeProviderTool(first, { sourceSessionId: 'retired-session', nodeId: 'n', toolName: 'exec', args: { command: 'sleep 20', timeout: 1 }, context: { agent: 'main', currentNode: 'n', cwd: repo } });
     await first.destroyNode({ sourceSessionId: 'retired-session', nodeId: 'n', parameters: {}, context: { agent: 'main' } }); const persisted = await fs.readJson(path.join(config.stateDir, 'nodes.json')); assert.equal(persisted.retired.length, 1);
     await first.shutdown(); restarted = new DockerWorktreeNodeProvider(config, docker, undefined, launcher, async (_sessionId, message) => { events.push(message); }); await restarted.initialize();
     const replacement = await restarted.createNode({ sourceSessionId: 'retired-session', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } }); assert.notEqual((replacement.details as any).artifactDir, (original.details as any).artifactDir);
@@ -500,7 +510,7 @@ test('concurrent foreground finalization retires a destroyed generation without 
   try {
     for (let iteration = 0; iteration < 2; iteration++) {
       await provider.createNode({ sourceSessionId: 'foreground-session', nodeId: 'n', parameters: { worktreePath: repo }, context: { agent: 'main' } });
-      const foreground = provider.invokeTool({ sourceSessionId: 'foreground-session', nodeId: 'n', toolName: 'exec', args: { command: 'sleep 20', timeout: 20 }, context: { agent: 'main', currentNode: 'n', cwd: repo } }); await new Promise(resolve => setTimeout(resolve, 150));
+      const foreground = invokeProviderTool(provider, { sourceSessionId: 'foreground-session', nodeId: 'n', toolName: 'exec', args: { command: 'sleep 20', timeout: 20 }, context: { agent: 'main', currentNode: 'n', cwd: repo } }); await new Promise(resolve => setTimeout(resolve, 150));
       await provider.destroyNode({ sourceSessionId: 'destroy-session', nodeId: 'n', parameters: {}, context: { agent: 'main' } }); assert.equal((await fs.readJson(path.join(config.stateDir, 'nodes.json'))).retired.length, 1);
       const foregroundResult: any = await foreground; assert.match(String(foregroundResult?.output ?? foregroundResult), /no status file was written/i);
       for (let i = 0; i < 40; i++) { if ((await fs.readJson(path.join(config.stateDir, 'nodes.json'))).retired.length === 0) break; await new Promise(resolve => setTimeout(resolve, 50)); }

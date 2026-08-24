@@ -91,8 +91,9 @@ export async function fileOperationPathExists(operations: FileOperations, filePa
   try {
     await operations.stat(filePath);
     return true;
-  } catch {
-    return false;
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
   }
 }
 

@@ -5,6 +5,7 @@ const PROTOCOL = 'foxwarm-node-provider@1';
 const mode = process.argv[2] || 'normal';
 const logPath = process.argv[3];
 const statePath = logPath ? `${logPath}.nodes.json` : '';
+const filesPath = logPath ? `${logPath}.files.json` : '';
 
 function descriptor(id = 'fixture-sandbox', availability = 'ready') {
   return {
@@ -13,15 +14,8 @@ function descriptor(id = 'fixture-sandbox', availability = 'ready') {
     type: 'memory-fixture',
     availability,
     defaultCwd: `memfs://${id}/root`,
-    tools: [{
-      name: 'read',
-      description: 'Fixture read capability.',
-      parameters: {
-        type: 'object',
-        properties: { filePath: { type: 'string' } },
-        required: ['filePath'],
-      },
-    }],
+    filesystem: mode === 'read-only' ? 'read' : 'read-write',
+    ...(mode === 'with-exec' ? { exec: true } : {}),
   };
 }
 
@@ -89,7 +83,7 @@ async function main(): Promise<void> {
   if (mode === 'protocol-mismatch') response.protocol = 'foxwarm-node-provider@999';
   if (mode === 'provider-mismatch') response.providerId = 'wrong-provider';
   if (mode === 'request-mismatch') response.requestId = 'wrong-request';
-  if (mode === 'operation-mismatch') response.operation = request.operation === 'list' ? 'invoke' : 'list';
+  if (mode === 'operation-mismatch') response.operation = request.operation === 'list' ? 'filesystem' : 'list';
 
   if (request.operation === 'list') {
     const primaryId = mode === 'slash-id'
@@ -102,7 +96,7 @@ async function main(): Promise<void> {
     if (mode === 'bad-descriptor') {
       response.result = { nodes: [{ ...descriptor(), kind: 'master' }] };
     } else if (mode === 'oversized-schema') {
-      response.result = { nodes: [{ ...descriptor(), tools: [{ name: 'read', parameters: { value: 'x'.repeat(20 * 1024) } }] }] };
+      response.result = { nodes: [{ ...descriptor(), filesystem: 'provider-defined' }] };
     } else {
       response.result = {
         nodes: currentNodes(primaryId).map((node, index) => index === 0 && mode === 'unavailable'
@@ -204,11 +198,38 @@ async function main(): Promise<void> {
     return;
   }
 
-  response.result = {
-    output: 'fixture-read',
-    observed: request.request,
-    environmentHasTestSecret: Object.prototype.hasOwnProperty.call(process.env, 'FOXWARM_PROVIDER_SECRET_TEST'),
-  };
+  if (request.operation === 'filesystem') {
+    const primitive = request.request || {};
+    const files: Record<string, string> = filesPath && fs.existsSync(filesPath) ? JSON.parse(fs.readFileSync(filesPath, 'utf8')) : {};
+    const key = String(primitive.path);
+    const content = Object.prototype.hasOwnProperty.call(files, key) ? files[key] : 'fixture-read';
+    if (primitive.operation === 'parent') {
+      const split = key.lastIndexOf('/');
+      response.result = { path: split > 'memfs://'.length ? key.slice(0, split) : key };
+    } else if (primitive.operation === 'stat') response.result = { kind: 'file', size: Buffer.byteLength(content), modifiedAtMs: 1 };
+    else if (primitive.operation === 'read') response.result = { dataBase64: Buffer.from(content).subarray(primitive.offset, primitive.offset + primitive.count).toString('base64') };
+    else if (primitive.operation === 'readdir') response.result = [];
+    else if (primitive.operation === 'write') {
+      if (primitive.flag === 'wx' && Object.prototype.hasOwnProperty.call(files, key)) {
+        response.ok = false; response.error = { code: 'EEXIST', message: 'File exists.', retryable: false };
+      } else {
+        files[key] = Buffer.from(primitive.contentBase64, 'base64').toString('utf8');
+        if (filesPath) fs.writeFileSync(filesPath, JSON.stringify(files));
+        response.result = null;
+      }
+    } else if (primitive.operation === 'remove') {
+      delete files[key]; if (filesPath) fs.writeFileSync(filesPath, JSON.stringify(files)); response.result = null;
+    } else response.result = null;
+    write(response);
+    return;
+  }
+  if (request.operation === 'exec') {
+    response.result = { output: 'fixture-exec', observed: request.request };
+    write(response);
+    return;
+  }
+  response.ok = false;
+  response.error = { code: 'UnsupportedOperation', message: `Unsupported ${request.operation}`, retryable: false };
   write(response);
 }
 

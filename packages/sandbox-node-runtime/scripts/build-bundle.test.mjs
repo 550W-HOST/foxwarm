@@ -45,6 +45,11 @@ test('sandbox invoke bundle is reproducible across dependency symlink and checko
     assert.doesNotMatch(text, /(?:^|\n)\s*\/\/[^\n]*(?:node_modules|packages\/)/);
     assert.doesNotMatch(text, /(?:\/home\/|\/Users\/|[A-Za-z]:\\Users\\|temp-worktrees|git\/foxwarm)/);
     assert.doesNotMatch(text, /sourceMappingURL/);
+    assert.doesNotMatch(text, /apply_patch|parseApplyPatchInput|oldText|newText/);
+    assert.match(text, /stat/);
+    assert.match(text, /parent/);
+    assert.match(text, /readdir/);
+    assert.match(text, /contentBase64/);
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }

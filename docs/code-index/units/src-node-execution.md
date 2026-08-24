@@ -5,7 +5,7 @@ Secondary files: src/llm.ts, src/tools/nodeTools.ts, src/tools/unifiedTools.test
 
 ## Purpose
 
-Provides the versioned RPC boundary for complete Node capability execution and bounded topology, lifecycle, and file-transfer operations. Main-local callers use a local transport; a Session worker borrows its one reverse transport to reach the same Main-owned handler. Main resolves every non-master Node through the generic provider registry, while the colocated `master` Node preserves direct local named-handler execution.
+Provides the versioned RPC boundary for canonical Node tool execution over provider backends and bounded topology, lifecycle, and file-transfer operations. Main-local callers use a local transport; a Session worker borrows its one reverse transport to reach the same Main-owned handler. Main resolves every non-master Node through the generic provider registry, while the colocated `master` Node preserves direct local named-handler execution.
 
 ## Key exports
 
@@ -29,7 +29,7 @@ Direct adjacent `exec` calls pass the batch's captured Node/cwd snapshot plus a 
 - Static node-environment capabilities retain their source-aware tool permission check before this boundary. Dynamic custom names also receive exact deny/allow evaluation, while missing-rule behavior deliberately reaches this service so exact source existence, isolated bound/current target restrictions, connection state, and the selected node's advertised tool set remain authoritative; Main-local and borrowed reverse callers share that behavior.
 - Direct Node capabilities, `call_tool(source=node)`, and ToolScript Node calls converge on `executeNodeTool()` for non-master targets. An explicit `nodeId=master` call first passes the shared source/target isolation check, then bypasses RPC only when the tool belongs to `NODE_ENVIRONMENT_BUILTIN_NAMES`.
 - Worker node list/search, lifecycle, and selection validation use the operation-specific facade. Lifecycle executes only in the Main-owned service; the Worker mutates/persists its exact hot owner only after selection validation, and Main local selection retains its existing path. Master Node discovery derives definitions from canonical node-environment metadata.
-- `NodeProviderRegistry` is the authoritative non-master provider resolver after service validation. The authenticated remote provider delegates to `NodesManager.executeTool()`, which retains WebSocket request/result/timeout and cwd-forwarding behavior. Configured executable providers receive the same complete request through `foxwarm-node-provider@1`; their process protocol and limits are owned by [src-node-providers](./src-node-providers.md).
+- `NodeProviderRegistry` is the authoritative non-master provider resolver after service validation. The authenticated remote provider delegates to `NodesManager.executeTool()`, which retains WebSocket request/result/timeout and cwd-forwarding behavior. Configured executable providers receive fixed filesystem primitives or complete exec through `foxwarm-node-provider@1`; Core derives canonical file tools, while their process protocol and limits are owned by [src-node-providers](./src-node-providers.md).
 - `src/index.ts` initializes this service locally and terminally drains it before other Main services.
 
 ## Lifecycle

@@ -4,14 +4,15 @@ import type { NormalizedExecutableNodeProviderConfig } from '../config';
 import {
   NodeProviderError,
   type NodeAvailability,
-  type NodeCapabilityDescriptor,
   type NodeDescriptor,
+  type NodeProviderDescriptor,
   type NodeLifecycleNodeRequest,
   type NodeLifecycleProviderRequest,
   type NodeLifecycleResult,
+  type NodeFilesystemRequest,
+  type NodeExecRequest,
   type NodeProvider,
   type NodeProviderCallOptions,
-  type NodeToolRequest,
 } from './providerRegistry';
 
 export const EXECUTABLE_NODE_PROVIDER_PROTOCOL = 'foxwarm-node-provider@1';
@@ -22,8 +23,7 @@ export const EXECUTABLE_NODE_PROVIDER_MAX_LIFECYCLE_DETAILS_BYTES = 64 * 1024;
 export const EXECUTABLE_NODE_PROVIDER_MAX_REQUEST_BYTES = 4 * 1024 * 1024;
 export const EXECUTABLE_NODE_PROVIDER_MAX_STDERR_BYTES = 64 * 1024;
 export const EXECUTABLE_NODE_PROVIDER_MAX_NODES = 100;
-export const EXECUTABLE_NODE_PROVIDER_MAX_TOOLS = 200;
-export const EXECUTABLE_NODE_PROVIDER_MAX_SCHEMA_BYTES = 16 * 1024;
+export const EXECUTABLE_NODE_PROVIDER_MAX_JSON_BYTES = 16 * 1024;
 export const EXECUTABLE_NODE_PROVIDER_MAX_CONCURRENT = 8;
 const TERMINATE_GRACE_MS = 250;
 const KILL_CONFIRM_MS = 2_000;
@@ -72,7 +72,7 @@ function boundedString(value: unknown, label: string, maxLength: number): string
   return value;
 }
 
-function validatePlainJson(value: unknown, label: string, maxBytes = EXECUTABLE_NODE_PROVIDER_MAX_SCHEMA_BYTES): unknown {
+function validatePlainJson(value: unknown, label: string, maxBytes = EXECUTABLE_NODE_PROVIDER_MAX_JSON_BYTES): unknown {
   let seen = 0;
   const visit = (candidate: unknown, depth: number): void => {
     if (depth > 32 || ++seen > 10_000) {
@@ -159,32 +159,11 @@ function cloneProtocolJson(value: unknown, label: string): unknown {
   return clone(value, 0);
 }
 
-function normalizeTool(value: unknown, nodeId: string, index: number): NodeCapabilityDescriptor {
-  if (!isPlainRecord(value)) {
-    throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Node \`${nodeId}\` tool ${index} must be an object.`);
-  }
-  assertOnlyKeys(value, ['name', 'description', 'parameters'], `Node \`${nodeId}\` tool ${index}`);
-  const name = exactString(value.name, `Node \`${nodeId}\` tool name`, 128, /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/);
-  const descriptor: NodeCapabilityDescriptor = { name };
-  if (value.description !== undefined) {
-    if (typeof value.description !== 'string'
-      || value.description.length > 2_000
-      || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value.description)) {
-      throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Node \`${nodeId}\` tool \`${name}\` description is invalid.`);
-    }
-    descriptor.description = value.description;
-  }
-  if (value.parameters !== undefined) {
-    descriptor.parameters = validatePlainJson(value.parameters, `Node \`${nodeId}\` tool \`${name}\` schema`);
-  }
-  return descriptor;
-}
-
-function normalizeNode(value: unknown, providerId: string, index: number): NodeDescriptor {
+function normalizeNode(value: unknown, providerId: string, index: number): NodeProviderDescriptor {
   if (!isPlainRecord(value)) {
     throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Provider \`${providerId}\` node ${index} must be an object.`);
   }
-  assertOnlyKeys(value, ['id', 'kind', 'type', 'availability', 'tools', 'defaultCwd'], `Provider \`${providerId}\` node ${index}`);
+  assertOnlyKeys(value, ['id', 'kind', 'type', 'availability', 'filesystem', 'exec', 'defaultCwd'], `Provider \`${providerId}\` node ${index}`);
   const id = exactString(value.id, `Provider \`${providerId}\` node id`, 128, /^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
   if (id.toLowerCase() === 'master') {
     throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', 'Executable providers cannot advertise the reserved `master` Node ID.');
@@ -197,12 +176,14 @@ function normalizeNode(value: unknown, providerId: string, index: number): NodeD
   if (!availabilityValues.includes(value.availability as NodeAvailability)) {
     throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Node \`${id}\` availability is invalid.`);
   }
-  if (!Array.isArray(value.tools) || value.tools.length > EXECUTABLE_NODE_PROVIDER_MAX_TOOLS) {
-    throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Node \`${id}\` tools must contain at most ${EXECUTABLE_NODE_PROVIDER_MAX_TOOLS} entries.`);
+  if (value.filesystem !== undefined && value.filesystem !== 'read' && value.filesystem !== 'read-write') {
+    throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Node \`${id}\` filesystem must be \`read\` or \`read-write\`.`);
   }
-  const tools = value.tools.map((tool, toolIndex) => normalizeTool(tool, id, toolIndex));
-  if (new Set(tools.map(tool => tool.name)).size !== tools.length) {
-    throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Node \`${id}\` advertises duplicate tool names.`);
+  if (value.exec !== undefined && value.exec !== true) {
+    throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Node \`${id}\` exec must be true when present.`);
+  }
+  if (value.filesystem === undefined && value.exec !== true) {
+    throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Node \`${id}\` must expose a filesystem or exec backend.`);
   }
   return {
     id,
@@ -210,12 +191,15 @@ function normalizeNode(value: unknown, providerId: string, index: number): NodeD
     provider: providerId,
     type,
     availability: value.availability as NodeAvailability,
-    tools,
+    primitiveBackends: {
+      ...(value.filesystem === undefined ? {} : { filesystem: value.filesystem as 'read' | 'read-write' }),
+      ...(value.exec === true ? { exec: true as const } : {}),
+    },
     ...(value.defaultCwd === undefined ? {} : { defaultCwd: boundedString(value.defaultCwd, `Node \`${id}\` defaultCwd`, 4_096) }),
   };
 }
 
-function normalizeListResult(value: unknown, providerId: string): NodeDescriptor[] {
+function normalizeListResult(value: unknown, providerId: string): NodeProviderDescriptor[] {
   if (!isPlainRecord(value)) {
     throw new NodeProviderError('NODE_PROVIDER_PROTOCOL_INVALID_RESPONSE', 'Executable provider list result must be an object.');
   }
@@ -261,7 +245,7 @@ function normalizeLifecycleResult(
   return result;
 }
 
-export type ExecutableNodeProviderOperation = 'list' | 'invoke' | 'create' | 'ensure' | 'inspect' | 'destroy';
+export type ExecutableNodeProviderOperation = 'list' | 'filesystem' | 'exec' | 'create' | 'ensure' | 'inspect' | 'destroy';
 
 export type ExecutableNodeProviderRequest = {
   protocol: typeof EXECUTABLE_NODE_PROVIDER_PROTOCOL;
@@ -290,23 +274,21 @@ export class ExecutableNodeProvider implements NodeProvider {
     this.id = config.id;
   }
 
-  async listNodes(options?: NodeProviderCallOptions): Promise<NodeDescriptor[]> {
+  async listNodes(options?: NodeProviderCallOptions): Promise<NodeProviderDescriptor[]> {
     const result = await this.run('list', undefined, EXECUTABLE_NODE_PROVIDER_MAX_LIST_BYTES, options);
     return normalizeListResult(result, this.id);
   }
 
-  async getNode(nodeId: string, options?: NodeProviderCallOptions): Promise<NodeDescriptor | undefined> {
+  async getNode(nodeId: string, options?: NodeProviderCallOptions): Promise<NodeProviderDescriptor | undefined> {
     return (await this.listNodes(options)).find(node => node.id === nodeId);
   }
 
-  async invokeTool(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown> {
-    return this.run('invoke', {
-      sourceSessionId: request.sourceSessionId,
-      nodeId: request.nodeId,
-      toolName: request.toolName,
-      args: request.args,
-      context: request.context,
-    }, EXECUTABLE_NODE_PROVIDER_MAX_RESULT_BYTES, options);
+  async invokeFilesystem(request: NodeFilesystemRequest, options?: NodeProviderCallOptions): Promise<unknown> {
+    return this.run('filesystem', request, EXECUTABLE_NODE_PROVIDER_MAX_RESULT_BYTES, options);
+  }
+
+  async invokeExec(request: NodeExecRequest, options?: NodeProviderCallOptions): Promise<unknown> {
+    return this.run('exec', request, EXECUTABLE_NODE_PROVIDER_MAX_RESULT_BYTES, options);
   }
 
   async createNode(request: NodeLifecycleProviderRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult> {
@@ -580,6 +562,9 @@ export class ExecutableNodeProvider implements NodeProvider {
         `Executable Node provider \`${this.id}\` does not support \`${operation}\`: ${parsed.error.message}`,
         false,
       );
+    }
+    if (operation === 'filesystem') {
+      throw new NodeProviderError(parsed.error.code, parsed.error.message, parsed.error.retryable === true);
     }
     throw new NodeProviderError(
       'NODE_PROVIDER_REPORTED_ERROR',

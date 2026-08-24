@@ -6,23 +6,20 @@ import fs from 'fs-extra';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { STATE_DIR, type NormalizedDockerWorktreeNodeProviderConfig } from '../config';
-import { CLI_NODE_CAPABILITIES } from '../../packages/shared/dist/nodeCapabilities';
-import { readFileToolPath } from '../../packages/shared/dist/fileToolCore';
+import { createNativeFileOperations } from '../../packages/shared/dist/fileOperations';
 import type { ProcessOperations, ProcessLaunchRequest } from '../../packages/shared/dist/processOperations';
 import { createExecRuntime, type ExecRuntime } from '../execManager';
 import { tool_exec } from '../tools/execTools';
 import * as sessionManager from '../sessionManager';
 import { logger } from '../common';
 import {
-  NodeProviderError, type NodeDefaultCwdRequest, type NodeDescriptor, type NodeLifecycleNodeRequest, type NodeLifecycleProviderRequest,
-  type NodeLifecycleResult, type NodeProvider, type NodeProviderCallOptions, type NodeToolRequest,
+  NodeProviderError, type NodeDefaultCwdRequest, type NodeDescriptor, type NodeProviderDescriptor, type NodeLifecycleNodeRequest, type NodeLifecycleProviderRequest,
+  type NodeLifecycleResult, type NodeProvider, type NodeProviderCallOptions, type NodeFilesystemRequest, type NodeExecRequest,
 } from './providerRegistry';
 
 const execFileAsync = promisify(execFile);
 const MAX_OUTPUT = 8 * 1024 * 1024;
 const HELPER_PATH = '/opt/foxwarm-sandbox-runtime/invoke.bundle.js';
-const TOOLS = new Set(['read', 'write', 'edit', 'apply_patch', 'exec']);
-const TOOL_DESCRIPTORS = CLI_NODE_CAPABILITIES.tools.filter(tool => TOOLS.has(tool.name)).map(tool => ({ ...tool }));
 
 type ProviderNodeState = {
   nodeId: string; worktreePath: string; gitMarkerPath: string; gitMarkerType: 'file' | 'directory'; gitDir: string; gitCommonDir: string; image: string; networkMode: 'none' | 'bridge';
@@ -326,8 +323,8 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
     } finally { release(); }
   }
 
-  private descriptor(node: ProviderNodeState, availability: NodeDescriptor['availability'] = 'ready'): NodeDescriptor {
-    return { id: node.nodeId, kind: 'sandbox', provider: this.id, type: 'docker-worktree', availability, defaultCwd: node.worktreePath, tools: TOOL_DESCRIPTORS as any };
+  private descriptor(node: ProviderNodeState, availability: NodeDescriptor['availability'] = 'ready'): NodeProviderDescriptor {
+    return { id: node.nodeId, kind: 'sandbox', provider: this.id, type: 'docker-worktree', availability, defaultCwd: node.worktreePath, primitiveBackends: { filesystem: 'read-write', exec: true } };
   }
 
   private containerName(nodeId: string, configHash = this.configHash): string {
@@ -469,9 +466,9 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
     }
   }
 
-  async listNodes(options?: NodeProviderCallOptions): Promise<NodeDescriptor[]> {
+  async listNodes(options?: NodeProviderCallOptions): Promise<NodeProviderDescriptor[]> {
     return this.mutate(options, async state => {
-      await this.cleanupCrashGapOrphans(state, options); const nodes: NodeDescriptor[] = [];
+      await this.cleanupCrashGapOrphans(state, options); const nodes: NodeProviderDescriptor[] = [];
       for (const node of state.nodes) {
         if (node.configHash !== this.configHash) { nodes.push(this.descriptor(node, 'error')); continue; }
         try { const { readiness } = await this.inspectReadiness(node, options); nodes.push(this.descriptor(node, readiness.availability)); } catch { nodes.push(this.descriptor(node, 'error')); }
@@ -479,7 +476,7 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
       return nodes;
     });
   }
-  async getNode(nodeId: string, options?: NodeProviderCallOptions): Promise<NodeDescriptor | undefined> { return (await this.listNodes(options)).find(node => node.id === nodeId); }
+  async getNode(nodeId: string, options?: NodeProviderCallOptions): Promise<NodeProviderDescriptor | undefined> { return (await this.listNodes(options)).find(node => node.id === nodeId); }
   async getDefaultCwd(request: NodeDefaultCwdRequest): Promise<string | undefined> { const state = await this.readState(); const node = state.nodes.find(item => item.nodeId === request.nodeId); if (node) { if (state.destroys.some(intent => intent.node.nodeId === node.nodeId)) throw new NodeProviderError('DOCKER_WORKTREE_DESTROY_PENDING', `Docker Node \`${node.nodeId}\` has a committed destroy pending.`); this.assertCurrentConfig(node); } return node?.worktreePath; }
 
   private async gitIdentity(worktreeInput: string): Promise<{ worktreePath: string; gitMarkerPath: string; gitMarkerType: 'file' | 'directory'; gitDir: string; gitCommonDir: string }> {
@@ -662,42 +659,61 @@ export class DockerWorktreeNodeProvider implements NodeProvider {
     return { nodeId: node.nodeId, effect, dataRetention: 'The existing worktree bytes and changes, Git metadata, and exact generation execution artifacts are retained.', details: { worktreePath: node.worktreePath, artifactDir: node.artifactDir, retained: ['worktree bytes', 'Git metadata', 'generation execution registry, scripts, status, cwd, and logs'] } };
   }
 
-  async invokeTool(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown> {
-    if (!TOOLS.has(request.toolName)) throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`);
-    if (options?.signal?.aborted) throw new NodeProviderError('DOCKER_WORKTREE_CANCELLED', 'Docker worktree capability was cancelled before provider effect.', true);
-    const state = await this.readState(); const node = state.nodes.find(item => item.nodeId === request.nodeId); if (!node) throw new NodeProviderError('DOCKER_WORKTREE_NODE_NOT_FOUND', `Node \`${request.nodeId}\` was not found.`);
+  async invokeExec(request: NodeExecRequest, options?: NodeProviderCallOptions): Promise<unknown> {
+    if (options?.signal?.aborted) throw new NodeProviderError('DOCKER_WORKTREE_CANCELLED', 'Docker worktree exec was cancelled before provider effect.', true);
+    const state = await this.readState(); const node = state.nodes.find(item => item.nodeId === request.nodeId); if (!node) throw new NodeProviderError('DOCKER_WORKTREE_NODE_NOT_FOUND', `Docker Node \`${request.nodeId}\` was not found.`);
     if (state.destroys.some(intent => intent.node.nodeId === node.nodeId)) throw new NodeProviderError('DOCKER_WORKTREE_DESTROY_PENDING', `Docker Node \`${node.nodeId}\` has a committed destroy pending.`);
     this.assertCurrentConfig(node);
     const { readiness } = await this.inspectReadiness(node, options); this.assertExecutionReady(node, readiness);
-    if ((request.toolName === 'write' || request.toolName === 'edit') && typeof request.args.filePath === 'string' && path.isAbsolute(request.args.filePath)
-      && !inside(node.worktreePath, path.resolve(request.args.filePath))) throw new NodeProviderError('DOCKER_WORKTREE_PATH_DENIED', 'Docker worktree mutation path is outside the exact worktree.');
-    if (request.toolName === 'exec') {
-      const runtime = await this.getExecRuntime(node);
-      return await tool_exec(request.args as any, {
-        sessionId: request.sourceSessionId,
-        session: { id: request.sourceSessionId, agent: request.context.agent, currentNode: request.nodeId, ...(request.context.cwd ? { cwd: request.context.cwd } : {}) },
-        runtimeNodeId: request.nodeId,
-        execRuntime: runtime,
-        detachedReadOnlySession: true,
-        skipExecPreSave: true,
-        deferSessionCwdSync: request.context.deferSessionCwdSync === true,
-        toolExecutionSnapshot: { currentNode: request.nodeId, ...(request.context.cwd ? { cwd: request.context.cwd } : {}) },
-      });
+    const runtime = await this.getExecRuntime(node);
+    return tool_exec(request.args as any, {
+      sessionId: request.sourceSessionId,
+      session: { id: request.sourceSessionId, agent: request.context.agent, currentNode: request.nodeId, ...(request.context.cwd ? { cwd: request.context.cwd } : {}) },
+      runtimeNodeId: request.nodeId,
+      execRuntime: runtime,
+      detachedReadOnlySession: true,
+      skipExecPreSave: true,
+      deferSessionCwdSync: request.context.deferSessionCwdSync === true,
+      toolExecutionSnapshot: { currentNode: request.nodeId, ...(request.context.cwd ? { cwd: request.context.cwd } : {}) },
+    });
+  }
+
+  async invokeFilesystem(request: NodeFilesystemRequest, options?: NodeProviderCallOptions): Promise<unknown> {
+    if (options?.signal?.aborted) throw new NodeProviderError('DOCKER_WORKTREE_CANCELLED', 'Docker worktree filesystem operation was cancelled before provider effect.', true);
+    const state = await this.readState(); const node = state.nodes.find(item => item.nodeId === request.nodeId); if (!node) throw new NodeProviderError('DOCKER_WORKTREE_NODE_NOT_FOUND', `Docker Node \`${request.nodeId}\` was not found.`);
+    if (state.destroys.some(intent => intent.node.nodeId === node.nodeId)) throw new NodeProviderError('DOCKER_WORKTREE_DESTROY_PENDING', `Docker Node \`${node.nodeId}\` has a committed destroy pending.`);
+    this.assertCurrentConfig(node);
+    const { readiness } = await this.inspectReadiness(node, options); this.assertExecutionReady(node, readiness);
+    if (['write', 'mkdir', 'remove'].includes(request.operation) && path.isAbsolute(request.path)
+      && !inside(node.worktreePath, path.resolve(request.path))) {
+      throw new NodeProviderError('DOCKER_WORKTREE_PATH_DENIED', 'Docker worktree mutation path is outside the exact worktree.');
     }
-    if (request.toolName === 'read' && typeof request.args.filePath === 'string' && path.isAbsolute(request.args.filePath)) {
+    if ((request.operation === 'read' || request.operation === 'stat' || request.operation === 'readdir') && path.isAbsolute(request.path)) {
       let resolved: string | undefined;
-      try { resolved = await fs.realpath(request.args.filePath); } catch {}
+      try { resolved = await fs.realpath(request.path); } catch {}
       if (resolved && inside(node.artifactDir, resolved)) {
-        return await readFileToolPath(resolved, request.args.filePath, request.args.startLine as any, request.args.endLine as any);
+        const native = createNativeFileOperations();
+        if (request.operation === 'stat') return native.stat(resolved);
+        if (request.operation === 'readdir') return native.readdir(resolved);
+        const data = await native.read(resolved, request.offset || 0, request.count || 0);
+        return { dataBase64: data.toString('base64') };
       }
     }
-    const input = JSON.stringify({ toolName: request.toolName, args: request.args, ...(request.context.cwd ? { cwd: request.context.cwd } : {}) });
-    if (Buffer.byteLength(input, 'utf8') > MAX_OUTPUT) throw new NodeProviderError('DOCKER_WORKTREE_HELPER_INPUT_TOO_LARGE', 'Docker worktree capability input exceeds the fixed 8 MiB provider limit.');
+    const input = JSON.stringify({ operation: request.operation, path: request.path,
+      ...(request.offset === undefined ? {} : { offset: request.offset }), ...(request.count === undefined ? {} : { count: request.count }),
+      ...(request.contentBase64 === undefined ? {} : { contentBase64: request.contentBase64 }), ...(request.flag === undefined ? {} : { flag: request.flag }),
+      ...(request.context.cwd ? { cwd: request.context.cwd } : {}) });
+    if (Buffer.byteLength(input, 'utf8') > MAX_OUTPUT) throw new NodeProviderError('DOCKER_WORKTREE_HELPER_INPUT_TOO_LARGE', 'Docker worktree filesystem input exceeds the fixed 8 MiB provider limit.');
     let output: DockerResult;
     try { output = await this.docker.run(['exec', '-i', '-e', `FOXWARM_WORKTREE_ROOT=${node.worktreePath}`, node.containerId, 'node', HELPER_PATH], { input, timeoutMs: 90_000, maxOutputBytes: MAX_OUTPUT, signal: options?.signal }); }
-    catch { throw new NodeProviderError(options?.signal?.aborted ? 'DOCKER_WORKTREE_CANCELLED' : 'DOCKER_WORKTREE_HELPER_FAILED', options?.signal?.aborted ? `Docker worktree capability \`${request.toolName}\` was cancelled.` : `Docker worktree capability \`${request.toolName}\` failed.`, true); }
+    catch { throw new NodeProviderError(options?.signal?.aborted ? 'DOCKER_WORKTREE_CANCELLED' : 'DOCKER_WORKTREE_HELPER_FAILED', options?.signal?.aborted ? `Docker worktree filesystem operation \`${request.operation}\` was cancelled.` : `Docker worktree filesystem operation \`${request.operation}\` failed.`, true); }
     let parsed: any; try { parsed = JSON.parse(output.stdout); } catch { throw new NodeProviderError('DOCKER_WORKTREE_HELPER_INVALID', 'Docker worktree helper returned an invalid response.'); }
-    if (parsed?.ok !== true) throw new NodeProviderError('DOCKER_WORKTREE_TOOL_FAILED', typeof parsed?.error === 'string' ? parsed.error.slice(0, 16_384) : 'Docker worktree capability failed.');
+    if (parsed?.ok !== true) {
+      const code = typeof parsed?.error?.code === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(parsed.error.code)
+        ? parsed.error.code : 'DOCKER_WORKTREE_TOOL_FAILED';
+      const message = typeof parsed?.error?.message === 'string' ? parsed.error.message.slice(0, 16_384) : 'Docker worktree filesystem operation failed.';
+      throw new NodeProviderError(code, message);
+    }
     return parsed.result;
   }
 }
