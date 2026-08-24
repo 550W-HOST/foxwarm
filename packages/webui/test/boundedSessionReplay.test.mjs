@@ -155,6 +155,16 @@ test('root-to-branch mutation restarts the entire atomic operation before publis
   assert.equal(result.roots.revision, 'r2'); assert.equal(result.branches.revision, 'r2')
 })
 
+test('atomic root-to-branch replay rejects after revision retry exhaustion', async () => {
+  let rootLoads = 0
+  await assert.rejects(() => replay.replayAtomicWindows({
+    maxRestarts: 2,
+    loadRoots: async () => ({ revision: `r${++rootLoads}` }),
+    loadBranches: async () => { throw new replay.BoundedReplayRevisionMismatch() },
+  }), replay.BoundedReplayRevisionMismatch)
+  assert.equal(rootLoads, 3, 'the initial attempt plus two bounded restarts run before the error becomes user-visible')
+})
+
 test('off-page Architecture focus path becomes a bounded forced render chain', () => {
   const path = Array.from({ length: 105 }, (_, index) => `focus-${index}`)
   const merged = replay.mergeForcedPresentationPath(['ordinary-root'], new Map([['ordinary-root', ['ordinary-child']]]), path)

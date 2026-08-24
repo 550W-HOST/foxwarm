@@ -42,6 +42,23 @@ test('bounded cache owns exact watches, focus paths, pages, latest generations, 
   assert.doesNotMatch(files.client, /new EventSource/)
 })
 
+test('bounded active-path expansion owns branch intent and presents loading or retry before continuation', () => {
+  assert.match(files.client, /branchTargetsRef/)
+  assert.match(files.client, /expandBranches/)
+  assert.match(files.client, /branchLoadStates/)
+  assert.match(files.client, /retryBranch/)
+  assert.match(files.client, /new Map\(branchTargetsRef\.current\)\)\.then\(loadSummary\)/)
+  assert.doesNotMatch(files.client, /replayOwnedWindows\(stateRef\.current\.rootTarget, new Map\(\)\)\.then\(loadSummary\)/)
+  assert.match(files.client, /if \(generation !== windowGenerationRef\.current\) return false[\s\S]*loadState\.status === 'loading' && branchTargetsRef\.current\.has\(branch\)/)
+  assert.match(files.client, /\+\+windowGenerationRef\.current; \+\+branchLoadGenerationRef\.current/)
+  assert.match(files.list, /bounded\.onExpandBranches\(sessionsToExpand\)/)
+  assert.match(files.list, /data-session-branch-loading/)
+  assert.match(files.list, /data-session-branch-retry/)
+  assert.match(files.list, /!!boundedChildPage && !branchLoadState/)
+  assert.match(files.app, /branchLoadStates: boundedSessions\.branchLoadStates/)
+  assert.match(files.embedded, /branchLoadStates: boundedSessions\.branchLoadStates/)
+})
+
 test('Sidebar and collapsed rail consume server order without client tie sorting', () => {
   assert.match(files.list, /if \(bounded\?\.serverOrdered\) return 0/)
   assert.doesNotMatch(files.collapsed, /compareSessionListSessions|\.sort\(/)
