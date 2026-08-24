@@ -547,11 +547,14 @@ function App() {
   })
   const boundedPresentation = {
     serverOrdered: true as const, hasMoreRoots: boundedSessions.hasMoreRoots, childPages: boundedSessions.childPages,
+    branchLoadStates: boundedSessions.branchLoadStates,
     descendantBusy: boundedSessions.descendantBusy, invalidationVersion: boundedSessions.invalidationVersion,
     onModeChange: boundedSessions.setMode, onFilterChange: boundedSessions.setQuery,
     onLoadMoreRoots: () => { void boundedSessions.loadMoreRoots() },
     onLoadMoreChildren: (sessionId: string) => { void boundedSessions.loadMoreChildren(sessionId) },
     onExpandBranch: (sessionId: string) => { void boundedSessions.expandBranch(sessionId) },
+    onExpandBranches: (sessionIds: string[]) => { void boundedSessions.expandBranches(sessionIds) },
+    onRetryBranch: (sessionId: string) => { void boundedSessions.retryBranch(sessionId) },
     onCollapseBranch: boundedSessions.collapseBranch,
   }
   const currentContextSessionRecord = sessions.find((session) => session.id === currentContextSessionId || session.aliases?.includes(currentContextSessionId))
