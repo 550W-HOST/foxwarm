@@ -238,6 +238,8 @@ export interface TokenUsage {
 export interface SessionMeta {
   lastMessageTime: number;
   messageCount?: number; // Cached message count for quick access
+  /** Newest 32 authoritative receipts for externally acknowledged session events. */
+  acceptedExternalEventIds?: string[];
   lastChannel?: {
     channelId: string; // Configured channel instance id
     channelType?: string; // Adapter/platform type
@@ -269,6 +271,8 @@ export interface QueueItem {
   parts?: MessagePart[];
   message?: Message;
   waitTimeoutId?: string;
+  /** Durable producer identity used to make acknowledged external events idempotent. */
+  externalEventId?: string;
 }
 
 export interface CompactionRequest {

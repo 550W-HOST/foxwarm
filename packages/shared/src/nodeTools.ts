@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import fs from 'fs-extra';
+import type { Dirent } from 'node:fs';
 import path from 'path';
 import { applyUpdatePatch, buildAddedFileContent, formatApplyPatchOperationSummary, parseApplyPatchInput } from './applyPatch';
 import { getNodeAgentDir, resolveNodePath } from './nodeFileTransfer';
@@ -16,14 +18,29 @@ export interface NodeToolContext {
   sessionId?: string;
   session?: { agent?: string; cwd?: string; currentNode?: string };
   runtimeNodeId?: string;
+  backgroundExecId?: string;
+  completionCapability?: string;
   fileOperations?: FileOperations;
   /** Resolve a model-visible path in the target Node namespace. */
   resolveFilePath?: (filePath: string) => string;
   /** Return the parent in that same namespace without imposing host path semantics. */
   dirnameFilePath?: (filePath: string) => string | Promise<string>;
   broadcast?: (text: string) => Promise<void>;
-  queueSystemEvent?: (message: string, type?: 'background' | 'trigger' | 'onboot') => Promise<void>;
+  queueSystemEvent?: (message: string, type?: 'background' | 'trigger' | 'onboot', metadata?: NodeSessionEventMetadata) => Promise<void>;
 }
+
+export type NodeSessionEventMetadata = {
+  eventId?: string;
+  execId?: string;
+  completionCapability?: string;
+  eventTimestamp?: number;
+};
+export type NodeSessionEventDispatcher = (
+  sessionId: string,
+  message: string,
+  type: 'background' | 'trigger' | 'onboot',
+  metadata?: NodeSessionEventMetadata,
+) => Promise<void>;
 
 type ToolArgs = Record<string, any>;
 
@@ -125,7 +142,12 @@ export async function apply_patch(args: ToolArgs, ctx: NodeToolContext = {}) {
 }
 
 const sessionEventDispatchers = new Map<string, NonNullable<NodeToolContext['queueSystemEvent']>>();
+let nodeSessionEventDispatcher: NodeSessionEventDispatcher | undefined;
 const execManagers = new Map<string, PersistentExecManager>();
+
+export function setNodeToolSessionEventDispatcher(dispatcher?: NodeSessionEventDispatcher): void {
+  nodeSessionEventDispatcher = dispatcher;
+}
 
 function getExecManager(agentName: string): PersistentExecManager {
   const existing = execManagers.get(agentName);
@@ -137,13 +159,65 @@ function getExecManager(agentName: string): PersistentExecManager {
     registryPath: path.join(execTempDir, 'running-exec.json'),
     nodeId: process.env.FOXWARM_NODE_ID || 'remote-node',
     processOperations: nativeProcessOperations,
-    completionDispatcher: async (entry: RunningExecEntry, _status: ExecStatus, message: string) => {
-      const dispatcher = entry.sessionId ? sessionEventDispatchers.get(entry.sessionId) : undefined;
-      if (dispatcher) await dispatcher(message, 'background');
+    completionDispatcher: async (entry: RunningExecEntry, status: ExecStatus, message: string) => {
+      if (!entry.sessionId) return;
+      const parsedFinishedAt = Date.parse(status.finishedAt);
+      const metadata: NodeSessionEventMetadata | undefined = entry.completionCapability
+        ? {
+            eventId: `remote-exec-completion:${entry.id}`,
+            execId: entry.id,
+            completionCapability: entry.completionCapability,
+            eventTimestamp: Number.isFinite(parsedFinishedAt) ? parsedFinishedAt : entry.startedAt,
+          }
+        : undefined;
+      if (nodeSessionEventDispatcher) {
+        await nodeSessionEventDispatcher(entry.sessionId, message, 'background', metadata);
+        return;
+      }
+      const dispatcher = sessionEventDispatchers.get(entry.sessionId);
+      if (!dispatcher) throw new Error(`No session event dispatcher is available for recovered exec \`${entry.id}\`.`);
+      await dispatcher(message, 'background', metadata);
     },
   });
   execManagers.set(agentName, manager);
   return manager;
+}
+
+export async function initializeNodeToolExecRecovery(): Promise<void> {
+  const agentDirs: string[] = [];
+  if (process.env.FOXWARM_AGENT_DIR?.trim()) {
+    agentDirs.push(getNodeAgentDir('main'));
+  } else {
+    const agentsRoot = path.dirname(getNodeAgentDir('__foxwarm_recovery_probe__'));
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(agentsRoot, { withFileTypes: true });
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) agentDirs.push(path.join(agentsRoot, entry.name));
+    }
+  }
+
+  for (const agentDir of agentDirs) {
+    const registryPath = path.join(agentDir, '.temp', 'exec', 'running-exec.json');
+    if (!await fs.pathExists(registryPath)) continue;
+    let agentNames = [path.basename(agentDir)];
+    try {
+      const registry = await fs.readJson(registryPath);
+      const persistedNames: string[] = Array.isArray(registry?.execs)
+        ? (registry.execs as any[])
+            .map((entry: any) => entry?.agentName)
+            .filter((value: unknown): value is string => typeof value === 'string' && value.length > 0)
+        : [];
+      if (persistedNames.length > 0) agentNames = [...new Set(persistedNames)];
+    } catch {
+      // PersistentExecManager owns canonical registry validation and diagnostics.
+    }
+    for (const agentName of agentNames) await getExecManager(agentName).initialize();
+  }
 }
 
 export async function get_default_cwd() {
@@ -160,12 +234,14 @@ export async function exec(args: ToolArgs, ctx: NodeToolContext = {}) {
   const manager = getExecManager(agentName);
   await manager.initialize();
   const entry = await manager.startPersistentExec({
+    execId: ctx.backgroundExecId,
     command,
     sessionId: ctx.sessionId,
     agentName,
     nodeId: ctx.runtimeNodeId || ctx.session?.currentNode || process.env.FOXWARM_NODE_ID || 'remote-node',
     cwd: args.cwd,
     sessionCwd: ctx.session?.cwd,
+    completionCapability: ctx.completionCapability,
   });
   const status = await manager.waitForExecCompletion(entry.id, timeoutSeconds * 1000);
   if (status) {

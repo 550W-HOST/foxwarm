@@ -4,7 +4,16 @@ import { spawnSync } from 'node:child_process';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
-import { apply_patch, buildBrowserScreenshotResult, edit, exec, read, write } from './nodeTools';
+import {
+  apply_patch,
+  buildBrowserScreenshotResult,
+  edit,
+  exec,
+  initializeNodeToolExecRecovery,
+  read,
+  setNodeToolSessionEventDispatcher,
+  write,
+} from './nodeTools';
 import { getNodeAgentDir, resolveNodeAgentDir } from './nodeFileTransfer';
 import { CLI_NODE_CAPABILITIES } from './nodeCapabilities';
 import { formatWriteContentRefRetryHint } from './fileToolCore';
@@ -373,5 +382,91 @@ test('node exec background timeout and completion point to a log path, not an op
   } finally {
     delete process.env.FOXWARM_TEST_REMOTE_DONE;
     await cleanupAgent(agentName);
+  }
+});
+
+test('node exec uses the process-wide acknowledged dispatcher with durable completion metadata', async () => {
+  const agentName = uniqueAgent('node_exec_global_dispatch');
+  const execId = `exec_${Date.now()}_globaldispatch`;
+  const completionCapability = 'test-completion-capability';
+  const events: any[] = [];
+  const { setNodeToolSessionEventDispatcher } = await import('./nodeTools');
+  setNodeToolSessionEventDispatcher(async (sessionId, message, type, metadata) => {
+    events.push({ sessionId, message, type, metadata });
+  });
+  try {
+    await exec(
+      { command: 'sleep 2; exit 3', timeout: 1 },
+      {
+        sessionId: 'shared-node-global-dispatch',
+        session: { agent: agentName, currentNode: 'test-node' },
+        runtimeNodeId: 'test-node',
+        backgroundExecId: execId,
+        completionCapability,
+      },
+    );
+
+    const deadline = Date.now() + 9000;
+    while (Date.now() < deadline && events.length === 0) await new Promise(resolve => setTimeout(resolve, 250));
+    assert.equal(events.length, 1);
+    assert.equal(events[0].sessionId, 'shared-node-global-dispatch');
+    assert.equal(events[0].type, 'background');
+    assert.deepEqual(events[0].metadata, {
+      eventId: `remote-exec-completion:${execId}`,
+      execId,
+      completionCapability,
+      eventTimestamp: events[0].metadata.eventTimestamp,
+    });
+    assert.equal(typeof events[0].metadata.eventTimestamp, 'number');
+  } finally {
+    setNodeToolSessionEventDispatcher(undefined);
+    await cleanupAgent(agentName);
+  }
+});
+
+test('node startup recovery delivers a persisted finished exec without waiting for another exec call', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-exec-startup-recovery-'));
+  const previousAgentDir = process.env.FOXWARM_AGENT_DIR;
+  const agentName = uniqueAgent('node_exec_startup_recovery');
+  const execId = `exec_${Date.now()}_startuprecovery`;
+  const execDir = path.join(root, '.temp', 'exec');
+  const logPath = path.join(execDir, `${execId}.log`);
+  const statusPath = `${logPath}.exit.json`;
+  const cwdPath = `${logPath}.cwd.txt`;
+  const events: any[] = [];
+  process.env.FOXWARM_AGENT_DIR = root;
+  setNodeToolSessionEventDispatcher(async (sessionId, message, type, metadata) => {
+    events.push({ sessionId, message, type, metadata });
+  });
+  try {
+    await fs.ensureDir(execDir);
+    await fs.writeFile(logPath, 'finished output\n');
+    await fs.writeJson(statusPath, { exitCode: 0, finishedAt: new Date(1_700_000_000_000).toISOString() });
+    await fs.writeJson(path.join(execDir, 'running-exec.json'), { execs: [{
+      id: execId,
+      pid: 99_999_997,
+      command: 'echo finished output',
+      sessionId: 'startup-recovery-session',
+      agentName,
+      nodeId: 'startup-recovery-node',
+      logPath,
+      statusPath,
+      cwdPath,
+      startedAt: 1_699_999_999_000,
+      notifyOnCompletion: true,
+      completionCapability: 'startup-recovery-capability',
+    }] });
+
+    await initializeNodeToolExecRecovery();
+    assert.equal(events.length, 1);
+    assert.equal(events[0].sessionId, 'startup-recovery-session');
+    assert.equal(events[0].metadata.eventId, `remote-exec-completion:${execId}`);
+    assert.equal(events[0].metadata.eventTimestamp, 1_700_000_000_000);
+    assert.deepEqual((await fs.readJson(path.join(execDir, 'running-exec.json'))).execs, []);
+  } finally {
+    setNodeToolSessionEventDispatcher(undefined);
+    if (previousAgentDir === undefined) delete process.env.FOXWARM_AGENT_DIR;
+    else process.env.FOXWARM_AGENT_DIR = previousAgentDir;
+    await fs.remove(root);
   }
 });

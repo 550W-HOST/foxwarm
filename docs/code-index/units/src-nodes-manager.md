@@ -1,6 +1,6 @@
 # Unit: src-nodes-manager
 
-Files: src/nodes/manager.ts, src/nodes/legacyToolResultCompatibility.ts, src/nodes/legacyToolResultCompatibility.test.ts
+Files: src/nodes/manager.ts, src/nodes/sessionEventCapability.ts, src/nodes/sessionEventCapability.test.ts, src/nodes/legacyToolResultCompatibility.ts, src/nodes/legacyToolResultCompatibility.test.ts
 
 ## Purpose
 
@@ -37,7 +37,7 @@ Maintains the in-memory authenticated remote-node transport/runtime and routes t
 | `onNodeServiceEvent(...)` / `handleNodeServiceEvent(...)` | Subscribes and dispatches authenticated asynchronous service events such as PTY output/exit. |
 | `listNodeIdsWithService(service)` | Lists connected remote nodes advertising the requested backend service. |
 | `listSessionsForNode(...)` / `getSessionHistoryForNode(...)` | Provides node-scoped session list/history for CLI-node/TUI integrations. |
-| `handleSessionEvent(...)` / `handleSessionUserMessage(...)` | Accepts node-originated session events only when the node owns the session context. |
+| `handleSessionEvent(...)` / `handleSessionUserMessage(...)` | Accepts ordinary node-originated session events under current ownership and exec completion under a signed start-time capability. |
 | `updateNodeActivity(nodeId)` | Refreshes last-activity timestamp for connected nodes. |
 | `getToolDefinition(toolName)` | Looks up master-side tool definitions lazily to avoid circular imports. |
 | `executeToolLocally(toolName, args, sessionId)` | Invokes a master-local tool with a runtime-node-aware context. |
@@ -57,7 +57,7 @@ Maintains the in-memory authenticated remote-node transport/runtime and routes t
 - Remote tool calls, file transfers, and backend service requests are tracked by generated ids and time out if no response arrives. Service timers are cleared on reply/disconnect. Fixed commands avoid per-keystroke response state; authenticated service events are dispatched to registered listeners.
 - Node disconnect emits `node-unavailable` to each advertised service before removal, allowing terminal bridges to close clients while leaving detached node-owned PTYs eligible for rediscovery after a same-process reconnect.
 - `disconnectNode` is used by administrative `/node remove` and `/node move` flows so deleting or renaming approved credentials also removes online runtime state and rejects pending work for the old node id.
-- Node-originated session access is allowed only when the target session's projection-aware `currentNode` matches the node id or the session's agent is isolated and bound to that node. Main does not authorize an event from a stale Worker catalog setting.
+- Ordinary node-originated session access is allowed only when the target session's projection-aware `currentNode` matches the node id or the session's agent is isolated and bound to that node. Remote exec dispatch additionally allocates the canonical exec ID and signed completion capability; completion verifies authenticated node/session/exec scope and uses a deterministic external event ID, so later routing changes do not lose the result. Exact retained mailbox rows suppress replay independently, while the Session authority retains only the newest 32 IDs for suppression after mailbox cleanup. Canonical contract: [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
 - Local/master execution passes `__runtimeNodeId` through tool context when needed, then strips it from user-visible tool args.
 - Remote dispatch normally reads current session routing at call time. A direct parallel-exec segment may pass its one captured current-node/cwd snapshot so all calls in that segment route consistently even if live session metadata changes while they run.
 - Remote model-tool responses pass through one isolated compatibility adapter before their pending call resolves. Master-local and MCP results never enter this adapter. The adapter's complete deletion contract is canonical in [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).

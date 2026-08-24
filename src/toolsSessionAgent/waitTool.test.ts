@@ -732,10 +732,12 @@ test('new session event clears active wait and makes later timeout stale', async
     await sessionManager.getSession(sessionId);
     const wait = await sessionManager.startSessionWait(sessionId, { timeoutSeconds: 30 });
 
-    await sessionManager.queueSessionSystemEvent(sessionId, 'external wakeup', 'background');
+    await sessionManager.queueSessionSystemEvent(sessionId, 'external wakeup', 'background', 'remote-exec-completion:exec_wait_test');
+    await sessionManager.queueSessionSystemEvent(sessionId, 'external wakeup', 'background', 'remote-exec-completion:exec_wait_test');
     let session = await sessionManager.getSession(sessionId);
     assert.equal(session.meta.wait, undefined);
     assert.equal(session.queue.length, 1);
+    assert.equal(session.queue[0].externalEventId, 'remote-exec-completion:exec_wait_test');
 
     await sessionManager.queueSessionWaitTimeoutEvent(
       sessionId,

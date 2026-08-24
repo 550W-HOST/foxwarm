@@ -9,7 +9,7 @@ import fs from 'fs-extra';
 import http from 'http';
 import path from 'path';
 import WebSocket from 'ws';
-import { nodeTools } from '../../shared/dist/nodeTools';
+import { initializeNodeToolExecRecovery, nodeTools, setNodeToolSessionEventDispatcher, type NodeSessionEventMetadata } from '../../shared/dist/nodeTools';
 import { nativeFileOperations } from '../../shared/dist/fileOperations';
 import { CLI_NODE_CAPABILITIES } from '../../shared/dist/nodeCapabilities';
 import { readNodeTransferFile, writeNodeTransferFile } from '../../shared/dist/nodeFileTransfer';
@@ -166,6 +166,7 @@ export class NodeClient {
   private onStatus?: (event: string, detail?: Record<string, any>) => void;
   private pendingRequests: Map<string, PendingRequest> = new Map();
   private nodePtyService?: NodePtyService;
+  private execRecoveryStarted = false;
 
   constructor(options: NodeClientOptions) {
     this.host = options.host;
@@ -180,6 +181,9 @@ export class NodeClient {
       : 0;
     this.toolCallInterceptor = options.toolCallInterceptor;
     this.onStatus = options.onStatus;
+    setNodeToolSessionEventDispatcher((sessionId, message, eventType, metadata) => (
+      this.sendSessionEvent(sessionId, message, eventType, metadata)
+    ));
     const ptyLoad = loadNodePtyService({
       stateDir: resolveNodeStateDir(this.credentialsFile),
       emitEvent: (event) => this.sendNodePtyEvent(event),
@@ -466,6 +470,7 @@ export class NodeClient {
     this.ws.on('close', async (code: number, reason: Buffer) => {
       this.stopHeartbeat();
       const reasonText = reason.toString();
+      this.rejectPendingRequests(new Error(`Remote node connection closed before master acknowledged the request (${code}${reasonText ? `: ${reasonText}` : ''})`));
       logger.warn({ code, reason: reasonText }, 'Disconnected from master');
       this.onStatus?.('disconnected', { code, reason: reasonText });
       if (this.pairingRejected) {
@@ -509,6 +514,12 @@ export class NodeClient {
         logger.info({ nodeId: message.nodeId }, 'Node registered');
         this.onStatus?.('registered', { nodeId: message.nodeId });
         this.connectedNodeId = message.nodeId;
+        if (!this.execRecoveryStarted) {
+          this.execRecoveryStarted = true;
+          void initializeNodeToolExecRecovery().catch(error => {
+            logger.error({ err: error }, 'Failed to initialize persistent exec recovery');
+          });
+        }
         if (this.localTriggerRuntime) {
           await this.writeLocalTriggerArtifacts(this.localTriggerRuntime);
         }
@@ -694,6 +705,8 @@ export class NodeClient {
           cwd: typeof message.sessionCwd === 'string' ? message.sessionCwd : undefined,
         },
         runtimeNodeId: this.connectedNodeId || this.requestedName,
+        backgroundExecId: typeof message.backgroundExecId === 'string' ? message.backgroundExecId : undefined,
+        completionCapability: typeof message.completionCapability === 'string' ? message.completionCapability : undefined,
         fileOperations: nativeFileOperations,
         broadcast: async (text: string) => {
           this.send({
@@ -702,8 +715,8 @@ export class NodeClient {
             text
           });
         },
-        queueSystemEvent: async (text: string, eventType: 'background' | 'trigger' | 'onboot' = 'background') => {
-          await this.sendSessionEvent(sessionId, text, eventType);
+        queueSystemEvent: async (text: string, eventType: 'background' | 'trigger' | 'onboot' = 'background', metadata?: NodeSessionEventMetadata) => {
+          await this.sendSessionEvent(sessionId, text, eventType, metadata);
         }
       };
 
@@ -756,7 +769,12 @@ export class NodeClient {
     }
   }
 
-  async sendSessionEvent(sessionId: string, message: string, eventType: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
+  async sendSessionEvent(
+    sessionId: string,
+    message: string,
+    eventType: 'background' | 'trigger' | 'onboot' = 'background',
+    metadata?: NodeSessionEventMetadata,
+  ): Promise<void> {
     if (!sessionId) {
       return;
     }
@@ -765,12 +783,15 @@ export class NodeClient {
       throw new Error('Remote node is not connected to master');
     }
 
-    this.send({
-      type: 'session_event',
+    await this.request('session_event', {
       sessionId,
       eventType,
       message,
-    });
+      ...(metadata?.eventId ? { eventId: metadata.eventId } : {}),
+      ...(metadata?.execId ? { execId: metadata.execId } : {}),
+      ...(metadata?.completionCapability ? { completionCapability: metadata.completionCapability } : {}),
+      ...(Number.isFinite(metadata?.eventTimestamp) ? { eventTimestamp: metadata?.eventTimestamp } : {}),
+    }, 15_000);
   }
 
 
@@ -788,6 +809,14 @@ export class NodeClient {
     } else {
       pending.resolve(message.result);
     }
+  }
+
+  private rejectPendingRequests(error: Error): void {
+    for (const pending of this.pendingRequests.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(error);
+    }
+    this.pendingRequests.clear();
   }
 
   private request(type: string, payload: Record<string, any> = {}, timeoutMs = 10000): Promise<any> {

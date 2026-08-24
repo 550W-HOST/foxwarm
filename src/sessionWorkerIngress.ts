@@ -16,7 +16,7 @@ import type { SessionWorkerHistoryMutationResult, SessionWorkerSettingsPatch, Se
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 
 const MAX_INGRESS_BYTES = 1024 * 1024;
-const ITEM_KEYS = ['type', 'source', 'sourceSessionId', 'clientMessageId', 'parts', 'message', 'waitTimeoutId'];
+const ITEM_KEYS = ['type', 'source', 'sourceSessionId', 'clientMessageId', 'parts', 'message', 'waitTimeoutId', 'externalEventId'];
 const PART_KEYS = ['text', 'system', 'systemPayload', 'inlineDataRef', 'imageMeta'];
 const SOURCE_KEYS = ['platform', 'channelId', 'channelType', 'channelUserId', 'conversationId', 'username', 'senderId', 'weworkStreamId', 'qqbotMessageId', 'preferDirectReply'];
 
@@ -117,7 +117,7 @@ export function normalizeSessionWorkerIngressRequest(value: unknown): { sessionI
   const item: QueueItem = { type: type as QueueItem['type'] };
   if (hasParts) item.parts = normalizeParts(value.item.parts, 'item.parts'); else item.message = normalizeMessage(value.item.message);
   if (Object.prototype.hasOwnProperty.call(value.item, 'source')) item.source = normalizeIngressSource(value.item.source);
-  const stringFields = [['sourceSessionId', 256], ['clientMessageId', 512], ['waitTimeoutId', 256]] as const;
+  const stringFields = [['sourceSessionId', 256], ['clientMessageId', 512], ['waitTimeoutId', 256], ['externalEventId', 512]] as const;
   for (const [key, max] of stringFields) if (Object.prototype.hasOwnProperty.call(value.item, key)) item[key] = stringValue(value.item[key], `item.${key}`, max);
   if (item.source && type !== 'user') invalid('item.source is supported only for user input.');
   if (item.clientMessageId && type !== 'user') invalid('item.clientMessageId is supported only for user input.');
@@ -223,7 +223,7 @@ export class SessionWorkerIngressCoordinator {
       }
       const expected = { generation: ownership.generation, incarnationId: ownership.incarnationId };
       this.supervisor.assertActivatedOwnership(sessionId, expected);
-      const intent = this.store.enqueueIntent(sessionId, crypto.randomUUID(), 'enqueue', payload);
+      const intent = this.store.enqueueIntent(sessionId, this.intentIdentity(payload), 'enqueue', payload);
       return { expected, intentId: intent.id };
     });
     this.notifyDurableIntentAccepted(sessionId, admitted.intentId);
@@ -235,7 +235,7 @@ export class SessionWorkerIngressCoordinator {
     const admitted = await this.withMutationAdmission(sessionId, 'accept queued work', async () => {
       const expected = await this.ensureReadyOwner(sessionId);
       this.supervisor.assertActivatedOwnership(sessionId, expected);
-      const intent = this.store.enqueueIntent(sessionId, crypto.randomUUID(), 'enqueue', payload);
+      const intent = this.store.enqueueIntent(sessionId, this.intentIdentity(payload), 'enqueue', payload);
       return { expected, intentId: intent.id };
     });
     this.notifyDurableIntentAccepted(sessionId, admitted.intentId);
@@ -355,7 +355,7 @@ export class SessionWorkerIngressCoordinator {
     const admitted = await this.withMutationAdmission(sessionId, 'accept queued work', async () => {
       const expected = await this.ensureReadyOwner(sessionId);
       this.supervisor.assertActivatedOwnership(sessionId, expected);
-      const intent = this.store.enqueueIntent(sessionId, crypto.randomUUID(), 'enqueue', payload);
+      const intent = this.store.enqueueIntent(sessionId, this.intentIdentity(payload), 'enqueue', payload);
       return { expected, intentId: intent.id };
     });
     this.notifyDurableIntentAccepted(sessionId, admitted.intentId);
@@ -376,6 +376,10 @@ export class SessionWorkerIngressCoordinator {
       }
     }
     return { generation: ownership.generation, incarnationId: ownership.incarnationId };
+  }
+
+  private intentIdentity(item: QueueItem): string {
+    return item.externalEventId || crypto.randomUUID();
   }
 
   private resolveExact(requestedSessionId: string, item: QueueItem): { sessionId: string; item: QueueItem } {

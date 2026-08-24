@@ -88,6 +88,41 @@ async function withLocalHost(
   } finally { store.close(); await fs.remove(root); }
 }
 
+test('worker external event receipts bridge mailbox replay and applied-row cleanup', async () => {
+  const initial = baseSession('worker-external-event-receipts');
+  initial.meta.acceptedExternalEventIds = [7 as any, '', 'legacy', 'legacy', 'x'.repeat(513)];
+  const externalEventId = 'remote-exec-completion:exec_worker_receipt';
+  const externalItem = {
+    type: 'background' as const,
+    externalEventId,
+    parts: [{ system: 'remote completion' }],
+  };
+  await withLocalHost(initial, async ({ host, store, session, readDurable }) => {
+    const first = store.enqueueIntent(initial.id, externalEventId, 'enqueue', externalItem);
+    const repeatedBeforeApply = store.enqueueIntent(initial.id, externalEventId, 'enqueue', externalItem);
+    assert.equal(repeatedBeforeApply.id, first.id);
+    assert.equal(store.countMailboxIntents(), 1);
+
+    await host.runPending(8);
+    assert.equal(session.queue.filter(item => item.externalEventId === externalEventId).length, 1);
+    assert.deepEqual(readDurable().meta.acceptedExternalEventIds, ['legacy', externalEventId]);
+    assert.ok(readDurable().lastAppliedMailboxId >= first.id);
+
+    assert.equal(store.deleteAppliedMailboxThrough(initial.id, first.id), 1);
+    assert.equal(store.countMailboxIntents(), 0);
+    const repeatedAfterCleanup = store.enqueueIntent(initial.id, externalEventId, 'enqueue', externalItem);
+    assert.ok(repeatedAfterCleanup.id > first.id);
+    await host.runPending(8);
+    assert.equal(session.queue.filter(item => item.externalEventId === externalEventId).length, 1);
+    assert.deepEqual(readDurable().meta.acceptedExternalEventIds, ['legacy', externalEventId]);
+
+    store.enqueueIntent(initial.id, 'ordinary-one', 'enqueue', { type: 'background', parts: [{ system: 'ordinary one' }] });
+    store.enqueueIntent(initial.id, 'ordinary-two', 'enqueue', { type: 'background', parts: [{ system: 'ordinary two' }] });
+    await host.runPending(8);
+    assert.equal(session.queue.filter(item => !item.externalEventId).length, 2);
+  });
+});
+
 function injectWorkerReleasePersistenceFailure(host: SessionWorkerHost, turnHost: any, message: string): () => number {
   const realUpdateBusy = turnHost.updateSessionBusyState.bind(turnHost);
   let releaseAttempts = 0;
