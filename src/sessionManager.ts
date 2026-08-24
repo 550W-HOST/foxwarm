@@ -13,6 +13,7 @@ import * as llm from './llm';
 import { RpcError } from './rpc';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import { cloneQueueItem, getManagedSessionState, isManagedSessionLeaseExpired, ManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
+import { applyAcceptedExternalEventReceiptPlan, planAcceptedExternalEventReceipt, type AcceptedExternalEventReceiptPlan } from './session/externalEventReceipts';
 import * as vector from './vector';
 import { VECTOR_ENABLED } from './config';
 import { CATALOG_DB_PATH, CHANNELS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getLegacySessionFrontierPath, type ModelEffort, type ModelsConfig } from './config';
@@ -2197,64 +2198,103 @@ async function maybeResumeManagedSessionControllerRun(session: Session, managed:
 async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem): Promise<void> {
   const sessionId = session.id;
   item = (await externalizeQueueItemImages(item)).item;
+  let receiptPlan: AcceptedExternalEventReceiptPlan | undefined;
+  if (item.externalEventId) {
+    receiptPlan = planAcceptedExternalEventReceipt(session.meta.acceptedExternalEventIds, item.externalEventId);
+    if (receiptPlan.duplicate && !receiptPlan.changed) return;
+    if (receiptPlan.duplicate) {
+      assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
+      const metaBeforeNormalization = structuredClone(session.meta);
+      applyAcceptedExternalEventReceiptPlan(session.meta, receiptPlan);
+      try { await saveSession(sessionId); }
+      catch (error) { session.meta = metaBeforeNormalization; throw error; }
+      return;
+    }
+  }
   assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
   await reclaimManagedSessionIfStale(session);
   assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
+  if (item.externalEventId) {
+    receiptPlan = planAcceptedExternalEventReceipt(session.meta.acceptedExternalEventIds, item.externalEventId);
+    if (receiptPlan.duplicate && !receiptPlan.changed) return;
+    if (receiptPlan.duplicate) {
+      const metaBeforeNormalization = structuredClone(session.meta);
+      applyAcceptedExternalEventReceiptPlan(session.meta, receiptPlan);
+      try { await saveSession(sessionId); }
+      catch (error) { session.meta = metaBeforeNormalization; throw error; }
+      return;
+    }
+  }
   const managedBeforeEnqueue = !!getManagedSessionState(session);
-
-  const waitTransition = applyQueuedItemToWaitState(session, item);
-  if (waitTransition.action === 'drop') {
-    return;
-  }
-  if (waitTransition.action === 'defer') {
+  const rollbackSnapshot = item.externalEventId
+    ? { meta: structuredClone(session.meta), queue: structuredClone(session.queue) }
+    : undefined;
+  let persistedAfterExternalReceipt = false;
+  const persistSession = async (): Promise<void> => {
     await saveSession(sessionId);
-    return;
-  }
+    if (item.externalEventId) persistedAfterExternalReceipt = true;
+  };
 
-  const itemsToEnqueue = waitTransition.items;
-  if (itemsToEnqueue.length === 0) {
-    await saveSession(sessionId);
-    return;
-  }
-
-  const managedInboxItems: QueueItem[] = [];
-  const directQueueItems: QueueItem[] = [];
-  for (const queuedItem of itemsToEnqueue) {
-    if (shouldRouteQueueItemToManagedInbox(session, queuedItem)) {
-      managedInboxItems.push(queuedItem);
-    } else {
-      directQueueItems.push(queuedItem);
-    }
-  }
-
-  if (managedInboxItems.length > 0) {
-    const managed = getManagedSessionState(session);
-    if (!managed) {
-      throw new Error(`Managed session metadata missing for session \`${sessionId}\`.`);
+  try {
+    if (receiptPlan) applyAcceptedExternalEventReceiptPlan(session.meta, receiptPlan);
+    const waitTransition = applyQueuedItemToWaitState(session, item);
+    if (waitTransition.action === 'drop') { await persistSession(); return; }
+    if (waitTransition.action === 'defer') {
+      await persistSession();
+      return;
     }
 
-    assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
-    managed.pendingInbox.push(...managedInboxItems.map(cloneQueueItem));
-    managed.lastInboxAt = Date.now();
-    managed.leaseTouchedAt = managed.lastInboxAt;
-    managed.revision += 1;
-    setManagedSessionState(session, managed);
-    await saveSession(sessionId);
-    const resumedControllerRun = await maybeResumeManagedSessionControllerRun(session, managed);
-    if (!resumedControllerRun) {
-      await maybeWakeManagedSessionOwner(session, managed);
+    const itemsToEnqueue = waitTransition.items;
+    if (itemsToEnqueue.length === 0) {
+      await persistSession();
+      return;
     }
-  }
 
-  if (directQueueItems.length > 0) {
-    assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
-    session.queue.push(...directQueueItems);
-    await saveSession(sessionId);
-
-    if (!managedBeforeEnqueue && !session.busy) {
-      assertSessionDestructiveMutationAllowed([sessionId], 'start queued work');
-      void onSessionTriggered?.(sessionId);
+    const managedInboxItems: QueueItem[] = [];
+    const directQueueItems: QueueItem[] = [];
+    for (const queuedItem of itemsToEnqueue) {
+      if (shouldRouteQueueItemToManagedInbox(session, queuedItem)) {
+        managedInboxItems.push(queuedItem);
+      } else {
+        directQueueItems.push(queuedItem);
+      }
     }
+
+    if (managedInboxItems.length > 0) {
+      const managed = getManagedSessionState(session);
+      if (!managed) {
+        throw new Error(`Managed session metadata missing for session \`${sessionId}\`.`);
+      }
+
+      assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
+      managed.pendingInbox.push(...managedInboxItems.map(cloneQueueItem));
+      managed.lastInboxAt = Date.now();
+      managed.leaseTouchedAt = managed.lastInboxAt;
+      managed.revision += 1;
+      setManagedSessionState(session, managed);
+      await persistSession();
+      const resumedControllerRun = await maybeResumeManagedSessionControllerRun(session, managed);
+      if (!resumedControllerRun) {
+        await maybeWakeManagedSessionOwner(session, managed);
+      }
+    }
+
+    if (directQueueItems.length > 0) {
+      assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
+      session.queue.push(...directQueueItems);
+      await persistSession();
+
+      if (!managedBeforeEnqueue && !session.busy) {
+        assertSessionDestructiveMutationAllowed([sessionId], 'start queued work');
+        void onSessionTriggered?.(sessionId);
+      }
+    }
+  } catch (error) {
+    if (rollbackSnapshot && !persistedAfterExternalReceipt) {
+      session.meta = rollbackSnapshot.meta;
+      session.queue = rollbackSnapshot.queue;
+    }
+    throw error;
   }
 }
 
@@ -2479,11 +2519,34 @@ export async function queueSessionMessageEvent(sessionId: string, message: Messa
   });
 }
 
-export async function queueSessionSystemEvent(sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
-  await enqueueSessionItem(sessionId, {
-    type,
-    parts: buildTimestampedSystemMessageParts(message),
-  });
+const externalEventAdmissionChains = new Map<string, Promise<void>>();
+
+export async function queueSessionSystemEvent(
+  sessionId: string,
+  message: string,
+  type: 'background' | 'trigger' | 'onboot' = 'background',
+  externalEventId?: string,
+  externalEventTimestamp?: number,
+): Promise<void> {
+  const enqueue = async () => {
+    await enqueueSessionItem(sessionId, {
+      type,
+      parts: buildTimestampedSystemMessageParts(message, externalEventTimestamp),
+      ...(externalEventId ? { externalEventId } : {}),
+    });
+  };
+  if (!externalEventId) {
+    await enqueue();
+    return;
+  }
+  const previous = externalEventAdmissionChains.get(sessionId) || Promise.resolve();
+  const current = previous.catch(() => {}).then(enqueue);
+  externalEventAdmissionChains.set(sessionId, current);
+  try {
+    await current;
+  } finally {
+    if (externalEventAdmissionChains.get(sessionId) === current) externalEventAdmissionChains.delete(sessionId);
+  }
 }
 
 async function queueSessionSystemEventForLoadedSession(session: Session, message: string, type: 'background' | 'trigger' | 'onboot'): Promise<void> {

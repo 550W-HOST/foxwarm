@@ -1,10 +1,12 @@
 # Unit: src-session-manager
 
-Files: src/sessionManager.ts, src/session/modelEffortSettings.ts, src/session/modelEffortSettings.test.ts, src/session/modelEffortPresentation.ts, src/session/modelEffortPresentation.test.ts, src/session/sessionIdAllocation.test.ts
+Files: src/sessionManager.ts, src/session/externalEventReceipts.ts, src/session/externalEventReceipts.test.ts, src/session/modelEffortSettings.ts, src/session/modelEffortSettings.test.ts, src/session/modelEffortPresentation.ts, src/session/modelEffortPresentation.test.ts, src/session/sessionIdAllocation.test.ts
 
 ## Purpose
 
 `src/sessionManager.ts` is the compatibility façade and coordination boundary for session state. It owns the in-memory session map, lazy hydration, persistence orchestration, queue insertion, wait-state transitions, parent/child creation, channel delegation, managed-session wakeups, restart recovery, and callback registration. Domain implementations live under `src/session/*`.
+
+Externally acknowledged queue events use `session/externalEventReceipts.ts` for one shared read-old/write-new receipt rule in local and Worker placement. Invalid legacy values and duplicate stored IDs are normalized, and only the newest 32 distinct IDs remain in Session authority. That bound limits the authoritative Session field and guarantees post-cleanup suppression for IDs still present; it does not define exact retry expiry or promise re-admission after eviction because a durable mailbox row may remain independently authoritative for exact replay.
 
 `src/sessionRuntimeService.ts` wraps the high-level externally consumed subset in immutable DTO commands, queries, and events. The manager remains the local handler's live-object authority and the router's internal integration API; callers migrated to SessionRuntime should not recover a `Session` reference through this façade.
 

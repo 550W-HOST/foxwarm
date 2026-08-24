@@ -16,7 +16,7 @@ Implements the full remote Node.js client: pairing/authenticated WebSocket conne
 
 - `connect()`, `disconnect()`.
 - `startLocalTriggerServer()`.
-- `sendSessionEvent(sessionId, message, eventType?)`.
+- `sendSessionEvent(sessionId, message, eventType?, metadata?)`.
 - `listBoundSessions()`.
 - `getSessionHistory(sessionId, count=30)`.
 - `sendSessionMessage(sessionId, message)`.
@@ -41,6 +41,7 @@ Implements the full remote Node.js client: pairing/authenticated WebSocket conne
 - Authentication failure clears local credentials and returns to pairing behavior.
 - Client heartbeat sends WebSocket ping frames every 30 seconds, expects pong within 10 seconds, and reconnects after a 5-second delay.
 - Model tool calls resolve against shared `nodeTools`, explicitly use the shared native file-operations backend in the CLI process, and may be rejected/timed out by `toolCallInterceptor`.
+- The client installs one process-wide shared-tool completion dispatcher before exec-manager recovery. After the first authenticated registration it discovers and initializes persisted exec registries, so a restart does not require another exec call to resume delivery. Session events use correlated requests and resolve only after Master acceptance; rejection, disconnect, or missing ACK rejects delivery so persistent background exec reconciliation retains and retries the entry.
 - Current shared tool image results use structured inline data; old node result reading exists only at the master ingress under [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
 - File transfer uses shared node file-transfer helpers.
 - `node_service_request`, `node_service_command`, and `node_service_event` are separate from model-tool interception.

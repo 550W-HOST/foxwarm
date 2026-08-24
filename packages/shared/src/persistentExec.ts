@@ -90,16 +90,19 @@ export interface RunningExecEntry {
   cwdPath: string;
   startedAt: number;
   notifyOnCompletion: boolean;
+  completionCapability?: string;
   recoveredAfterRestart?: boolean;
 }
 
 export interface StartPersistentExecOptions {
+  execId?: string;
   command: string;
   sessionId?: string;
   agentName?: string;
   nodeId?: string;
   cwd?: unknown;
   sessionCwd?: unknown;
+  completionCapability?: string;
 }
 
 interface ResolvedExecPaths {
@@ -416,6 +419,7 @@ export class PersistentExecManager {
           cwdPath: typeof raw.cwdPath === 'string' && raw.cwdPath.trim().length > 0 ? raw.cwdPath : `${raw.logPath}.cwd.txt`,
           startedAt: Number(raw.startedAt),
           notifyOnCompletion: raw.notifyOnCompletion === true,
+          completionCapability: typeof raw.completionCapability === 'string' ? raw.completionCapability : undefined,
           recoveredAfterRestart: raw.recoveredAfterRestart === true,
         };
         this.runningExecs.set(entry.id, entry);
@@ -520,7 +524,9 @@ export class PersistentExecManager {
     await fs.ensureDir(tempDir);
     await fs.ensureDir(dateDir);
 
-    const execId = `exec_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    const execId = options.execId || `exec_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    if (!/^exec_[A-Za-z0-9_-]{8,160}$/.test(execId)) throw new Error('Persistent exec ID is invalid.');
+    if (this.runningExecs.has(execId)) throw new Error(`Persistent exec \`${execId}\` already exists.`);
     const processOperations = this.processOperations;
     const platform = processOperations.platform;
     const scriptPath = `${path.join(dateDir, execId)}.command${platform === 'win32' ? '.ps1' : '.sh'}`;
@@ -582,6 +588,7 @@ export class PersistentExecManager {
       cwdPath: resolvedPaths.cwdPath,
       startedAt: startedAt.getTime(),
       notifyOnCompletion: false,
+      completionCapability: options.completionCapability,
     };
 
     await this.commitRegistryMutation(() => {

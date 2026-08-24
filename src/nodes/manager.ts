@@ -13,6 +13,7 @@ import { WebSocket } from 'ws';
 import { isReservedNodeId } from './registry';
 import { adaptLegacyRemoteNodeToolResult } from './legacyToolResultCompatibility';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from '../tools/placement';
+import { issueRemoteExecCompletionCapability, verifyRemoteExecCompletionCapability } from './sessionEventCapability';
 
 interface ToolDefinition {
   name: string;
@@ -467,6 +468,12 @@ export class NodesManager {
       const routedCwd = routingSnapshot ? routingSnapshot.cwd : session.cwd;
       const shouldSendCwd = routedCurrentNode === nodeId && typeof routedCwd === 'string';
       const timeoutMs = 62000;
+      const backgroundExecId = toolName === 'exec'
+        ? `exec_${Date.now()}_${crypto.randomBytes(12).toString('hex')}`
+        : undefined;
+      const completionCapability = backgroundExecId
+        ? issueRemoteExecCompletionCapability(nodeId, sessionId, backgroundExecId)
+        : undefined;
 
       node.ws!.send(JSON.stringify({
         type: 'tool_call',
@@ -476,6 +483,7 @@ export class NodesManager {
         sessionId,
         agentName: session.agent || 'main',
         timeoutMs,
+        ...(backgroundExecId ? { backgroundExecId, completionCapability } : {}),
         ...(shouldSendCwd ? { sessionCwd: routedCwd } : {}),
       }));
       
@@ -742,10 +750,38 @@ export class NodesManager {
     };
   }
 
-  async handleSessionEvent(nodeId: string, sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'background'): Promise<void> {
-    await this.assertNodeOwnsSessionForEvent(nodeId, sessionId);
-    await sessionManager.queueSessionSystemEvent(sessionId, message, type);
-    logger.info({ nodeId, sessionId, type }, 'Session event received from remote node');
+  async handleSessionEvent(
+    nodeId: string,
+    sessionId: string,
+    message: string,
+    type: 'background' | 'trigger' | 'onboot' = 'background',
+    metadata: { eventId?: string; execId?: string; completionCapability?: string; eventTimestamp?: number } = {},
+  ): Promise<void> {
+    const hasCompletionMetadata = !!(
+      metadata.eventId
+      || metadata.execId
+      || metadata.completionCapability
+      || metadata.eventTimestamp !== undefined
+    );
+    if (hasCompletionMetadata) {
+      if (type !== 'background'
+        || !metadata.execId
+        || !metadata.completionCapability
+        || metadata.eventId !== `remote-exec-completion:${metadata.execId}`
+        || !verifyRemoteExecCompletionCapability(metadata.completionCapability, { nodeId, sessionId, execId: metadata.execId })) {
+        throw new Error(`Node "${nodeId}" supplied an invalid remote exec completion capability for session "${sessionId}".`);
+      }
+    } else {
+      await this.assertNodeOwnsSessionForEvent(nodeId, sessionId);
+    }
+    await sessionManager.queueSessionSystemEvent(
+      sessionId,
+      message,
+      type,
+      metadata.eventId,
+      Number.isFinite(metadata.eventTimestamp) ? metadata.eventTimestamp : undefined,
+    );
+    logger.info({ nodeId, sessionId, type, eventId: metadata.eventId, execId: metadata.execId }, 'Session event received from remote node');
   }
 
   async handleSessionUserMessage(nodeId: string, sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'trigger'): Promise<void> {

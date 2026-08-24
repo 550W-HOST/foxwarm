@@ -45,7 +45,7 @@ The operator-facing workflow is documented by the single `skills/node-setup/SKIL
 - Node IDs are slugged, validated against reserved IDs, and deduplicated.
 - Master-side WebSocket heartbeat sends protocol ping frames every 30 seconds and requires liveness within 10 seconds.
 - Pre-authentication messages are queued and replayed after authentication.
-- Node-to-session `session_event` is allowed only when the target session's `currentNode` equals the authenticated node ID, or the target belongs to an isolated agent bound to that node. The master validates with the authenticated node ID.
+- Ordinary node-to-session `session_event` is allowed only when the target session's `currentNode` equals the authenticated node ID, or the target belongs to an isolated agent bound to that node. Remote exec completion instead requires the scoped start-time capability, correlated ACK, deterministic mailbox identity, and newest-32 authoritative Session receipt contract defined by [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
 - Agent isolation is an agent-level permission boundary. Selecting a session `currentNode` routes execution but does not create isolation or an exclusive lease.
 - Backend services are versioned fixed protocols and do not pass through model-tool approval.
 
@@ -63,7 +63,7 @@ Persist approved authentication tokens only as hashes on the master; return plai
 
 ### D-node-session-event-scope
 
-The authenticated node ID is mandatory input to master-side session-event authorization. Client-provided target data cannot bypass current-node or isolated-agent binding checks.
+The authenticated node ID is mandatory input to master-side session-event authorization. Client-provided target data cannot bypass current-node or isolated-agent binding checks; the only remote-exec exception is the signed, exec-scoped grant owned by [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
 
 ### D-node-isolation-boundary
 
