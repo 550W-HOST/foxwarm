@@ -43,6 +43,50 @@ const itemFor = (text: string, source: QueueSource, clientMessageId: string) => 
   parts: [{ text, imageMeta: { imageId: `image-${clientMessageId}`, mimeType: 'image/png', width: 2, height: 3 } }],
 });
 
+test('all Worker ingress variants use external event identity while ordinary ingress remains random', async () => {
+  const sessionId = 'worker-ingress-identity';
+  const identities: string[] = [];
+  const rows = new Map<string, { id: number }>();
+  let nextId = 1;
+  const store = {
+    findOwnership: () => ({ sessionId, generation: 1, incarnationId: 'incarnation', state: 'ready' }),
+    enqueueIntent: (_sessionId: string, identity: string) => {
+      identities.push(identity);
+      const existing = rows.get(identity);
+      if (existing) return existing;
+      const row = { id: nextId++ };
+      rows.set(identity, row);
+      return row;
+    },
+  } as any;
+  const supervisor = {
+    assertActivatedOwnership: () => {},
+    runPendingActivated: async () => ({ lastAppliedMailboxId: 999, messageCount: 0, busy: false }),
+  } as any;
+  const ingress = new SessionWorkerIngressCoordinator(
+    store,
+    supervisor,
+    new SessionWorkerSourceContextRegistry(),
+    id => id,
+    id => id === sessionId,
+  );
+  const externalEventId = 'remote-exec-completion:exec_ingress_identity';
+  const external = { type: 'background' as const, externalEventId, parts: [{ system: 'done' }] };
+  await ingress.submitQueuedInput(sessionId, external);
+  await ingress.submitEnsuringWorker(sessionId, external);
+  await ingress.enqueueEnsuringWorker(sessionId, external);
+  assert.deepEqual(identities.slice(0, 3), [externalEventId, externalEventId, externalEventId]);
+  assert.equal(rows.size, 1);
+
+  const ordinary = { type: 'background' as const, parts: [{ system: 'ordinary' }] };
+  await ingress.submitQueuedInput(sessionId, ordinary);
+  await ingress.submitEnsuringWorker(sessionId, ordinary);
+  await ingress.enqueueEnsuringWorker(sessionId, ordinary);
+  const ordinaryIdentities = identities.slice(3);
+  assert.equal(new Set(ordinaryIdentities).size, 3);
+  assert.equal(ordinaryIdentities.some(identity => identity === externalEventId), false);
+});
+
 test('Worker admission that starts before a delete claim cannot spawn or append after the claim', async () => {
   await sessionManager.loadSessions();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-claim-crossing-'));

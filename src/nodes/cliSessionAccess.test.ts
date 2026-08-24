@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from '../sessionManager';
+import { MAX_ACCEPTED_EXTERNAL_EVENT_IDS } from '../session/externalEventReceipts';
 import { nodesManager } from './manager';
 import { issueRemoteExecCompletionCapability, setNodeEventCapabilitySecretForTests } from './sessionEventCapability';
 
@@ -81,6 +82,7 @@ test('authorized remote exec completion survives a different current node and is
   const execId = `exec_${Date.now()}_completion`;
   const session = await seedSession(sessionId, 'master');
   session.busy = true;
+  session.meta.acceptedExternalEventIds = [7 as any, '', 'legacy', 'legacy', 'x'.repeat(513)];
   await sessionManager.saveSession(sessionId);
   setNodeEventCapabilitySecretForTests(Buffer.alloc(32, 9));
   try {
@@ -99,6 +101,24 @@ test('authorized remote exec completion survives a different current node and is
     const updated = await sessionManager.getSession(sessionId);
     assert.equal(updated.currentNode, 'master');
     assert.equal(updated.queue.filter(item => item.externalEventId === metadata.eventId).length, 1);
+    assert.deepEqual(updated.meta.acceptedExternalEventIds, ['legacy', metadata.eventId]);
+
+    const laterEventIds: string[] = [];
+    for (let index = 0; index < MAX_ACCEPTED_EXTERNAL_EVENT_IDS + 2; index += 1) {
+      const laterExecId = `exec_${Date.now()}_completion_${index}`;
+      const eventId = `remote-exec-completion:${laterExecId}`;
+      laterEventIds.push(eventId);
+      await nodesManager.handleSessionEvent(remoteNodeId, sessionId, `remote complete ${index}`, 'background', {
+        eventId,
+        execId: laterExecId,
+        completionCapability: issueRemoteExecCompletionCapability(remoteNodeId, sessionId, laterExecId),
+        eventTimestamp: 1_700_000_000_001 + index,
+      });
+    }
+    const bounded = await sessionManager.getSession(sessionId);
+    assert.equal(bounded.meta.acceptedExternalEventIds?.length, MAX_ACCEPTED_EXTERNAL_EVENT_IDS);
+    assert.equal(bounded.meta.acceptedExternalEventIds?.includes(metadata.eventId), false);
+    assert.deepEqual(bounded.meta.acceptedExternalEventIds, laterEventIds.slice(-MAX_ACCEPTED_EXTERNAL_EVENT_IDS));
 
     await assert.rejects(
       () => nodesManager.handleSessionEvent(remoteNodeId, sessionId, 'forged', 'background', {

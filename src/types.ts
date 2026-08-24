@@ -238,7 +238,7 @@ export interface TokenUsage {
 export interface SessionMeta {
   lastMessageTime: number;
   messageCount?: number; // Cached message count for quick access
-  /** Durable receipts for idempotent externally acknowledged session events. */
+  /** Newest 32 authoritative receipts for externally acknowledged session events. */
   acceptedExternalEventIds?: string[];
   lastChannel?: {
     channelId: string; // Configured channel instance id

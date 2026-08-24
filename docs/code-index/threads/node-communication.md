@@ -36,7 +36,7 @@ The browser extension's `browser_*` tools and shared Puppeteer `browse_*` tools 
 
 CLI node's local loopback trigger and other authenticated node senders use `session_event`. Master permits delivery only when the target session currently selects that node or belongs to an isolated agent bound to it. The authenticated connection's node ID, not a payload claim, is the authorization input.
 
-Remote background exec completion is a narrower protocol exception, not a generic session-event grant. Master assigns the exec ID and a signed capability scoped to the authenticated node, source session, and exec before dispatch. The CLI node persists both with the running entry, submits one deterministic completion event through correlated request/ACK transport, and retains the entry for retry until Master durably accepts it. Master derives authorization from the signed start-time grant rather than mutable `currentNode`, and idempotently queues the event by its external event ID.
+Remote background exec completion is a narrower protocol exception, not a generic session-event grant. Master assigns the exec ID and a signed capability scoped to the authenticated node, source session, and exec before dispatch. The CLI node persists both with the running entry, submits one deterministic completion event through correlated request/ACK transport, and retains the entry for retry until Master durably accepts it. Master derives authorization from the signed start-time grant rather than mutable `currentNode`. The deterministic mailbox identity suppresses an exact retry while its row remains retained; the exact Session owner separately bounds its authoritative receipt field to the newest 32 accepted IDs.
 
 ## Heartbeat
 
@@ -84,7 +84,7 @@ Master authorization binds to the authenticated WebSocket node identity. Node ID
 
 ### D-node-thread-remote-exec-completion
 
-Remote exec completion uses an acknowledged, retryable, start-authorized protocol. The authenticated socket identity and a Master-signed capability bind one node, source session, and exec ID; changing `currentNode` after start does not revoke that completion route. Master acknowledges only after the deterministic external event is durably accepted, and duplicate retries must not create duplicate session work. Generic node-originated session events retain the ordinary current-node or isolated-agent ownership rule.
+Remote exec completion uses an acknowledged, retryable, start-authorized protocol. The authenticated socket identity and a Master-signed capability bind one node, source session, and exec ID; changing `currentNode` after start does not revoke that completion route. Master acknowledges only after the deterministic external event is durably accepted. The deterministic external event ID is the mailbox intent identity, so an exact retained mailbox row suppresses its retry before or after application. The exact Session owner also retains the newest 32 accepted IDs, guaranteeing suppression after mailbox cleanup while an ID remains in that authoritative field. Eviction from Session receipts does not promise that an older retry will be re-admitted because its exact mailbox row may still exist. Generic node-originated session events retain the ordinary current-node or isolated-agent ownership rule.
 
 ### D-node-thread-rename
 

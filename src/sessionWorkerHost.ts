@@ -29,6 +29,7 @@ import {
 import type { SessionWorkerIdentity } from './sessionWorkerControlService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
 import { isQueueItem, type CompactionRequest, type Message, type QueueItem, type QueueSource, type Session, type SessionStreamEvent } from './types';
+import { applyAcceptedExternalEventReceiptPlan, planAcceptedExternalEventReceipt } from './session/externalEventReceipts';
 import { buildTimestampedSystemMessageParts } from './utils/systemMessageParts';
 import type { SessionWorkerBtwResult, SessionWorkerCatalogFieldsPatch, SessionWorkerDequeueResult, SessionWorkerHistoryMutationResult, SessionWorkerSettings, SessionWorkerSettingsPatch, SessionWorkerSettingsResult, SessionWorkerToolNoiseCompactionResult } from './sessionWorkerRuntimeService';
 
@@ -506,7 +507,13 @@ export class SessionWorkerHost {
             if (intent.kind !== 'enqueue' || !isQueueItem(intent.payload)) {
               throw new RpcError('SESSION_WORKER_INVALID_QUEUE_ITEM', 'Session worker mailbox payload is not a current QueueItem.');
             }
-            const transition = applyQueuedItemToWaitState(owner, structuredClone(intent.payload));
+            const item = structuredClone(intent.payload);
+            if (item.externalEventId) {
+              const receipt = planAcceptedExternalEventReceipt(owner.meta.acceptedExternalEventIds, item.externalEventId);
+              applyAcceptedExternalEventReceiptPlan(owner.meta, receipt);
+              if (receipt.duplicate) continue;
+            }
+            const transition = applyQueuedItemToWaitState(owner, item);
             if (transition.action === 'enqueue') owner.queue.push(...transition.items);
           }
         },

@@ -13,6 +13,7 @@ import * as llm from './llm';
 import { RpcError } from './rpc';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import { cloneQueueItem, getManagedSessionState, isManagedSessionLeaseExpired, ManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
+import { applyAcceptedExternalEventReceiptPlan, planAcceptedExternalEventReceipt, type AcceptedExternalEventReceiptPlan } from './session/externalEventReceipts';
 import * as vector from './vector';
 import { VECTOR_ENABLED } from './config';
 import { CATALOG_DB_PATH, CHANNELS_FILE, SESSIONS_DIR, COMPACT_PERCENT, getAgentDir, getLegacySessionFrontierPath, type ModelEffort, type ModelsConfig } from './config';
@@ -2197,21 +2198,32 @@ async function maybeResumeManagedSessionControllerRun(session: Session, managed:
 async function enqueueSessionItemForLoadedSession(session: Session, item: QueueItem): Promise<void> {
   const sessionId = session.id;
   item = (await externalizeQueueItemImages(item)).item;
-  let acceptedExternalEventIds: string[] | undefined;
+  let receiptPlan: AcceptedExternalEventReceiptPlan | undefined;
   if (item.externalEventId) {
-    acceptedExternalEventIds = Array.isArray(session.meta.acceptedExternalEventIds)
-      ? session.meta.acceptedExternalEventIds.filter((value: unknown): value is string => typeof value === 'string')
-      : [];
-    if (acceptedExternalEventIds.includes(item.externalEventId)) return;
+    receiptPlan = planAcceptedExternalEventReceipt(session.meta.acceptedExternalEventIds, item.externalEventId);
+    if (receiptPlan.duplicate && !receiptPlan.changed) return;
+    if (receiptPlan.duplicate) {
+      assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
+      const metaBeforeNormalization = structuredClone(session.meta);
+      applyAcceptedExternalEventReceiptPlan(session.meta, receiptPlan);
+      try { await saveSession(sessionId); }
+      catch (error) { session.meta = metaBeforeNormalization; throw error; }
+      return;
+    }
   }
   assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
   await reclaimManagedSessionIfStale(session);
   assertSessionDestructiveMutationAllowed([sessionId], 'accept queued work');
   if (item.externalEventId) {
-    acceptedExternalEventIds = Array.isArray(session.meta.acceptedExternalEventIds)
-      ? session.meta.acceptedExternalEventIds.filter((value: unknown): value is string => typeof value === 'string')
-      : [];
-    if (acceptedExternalEventIds.includes(item.externalEventId)) return;
+    receiptPlan = planAcceptedExternalEventReceipt(session.meta.acceptedExternalEventIds, item.externalEventId);
+    if (receiptPlan.duplicate && !receiptPlan.changed) return;
+    if (receiptPlan.duplicate) {
+      const metaBeforeNormalization = structuredClone(session.meta);
+      applyAcceptedExternalEventReceiptPlan(session.meta, receiptPlan);
+      try { await saveSession(sessionId); }
+      catch (error) { session.meta = metaBeforeNormalization; throw error; }
+      return;
+    }
   }
   const managedBeforeEnqueue = !!getManagedSessionState(session);
   const rollbackSnapshot = item.externalEventId
@@ -2224,13 +2236,9 @@ async function enqueueSessionItemForLoadedSession(session: Session, item: QueueI
   };
 
   try {
+    if (receiptPlan) applyAcceptedExternalEventReceiptPlan(session.meta, receiptPlan);
     const waitTransition = applyQueuedItemToWaitState(session, item);
-    if (waitTransition.action === 'drop') {
-      return;
-    }
-    if (item.externalEventId) {
-      session.meta.acceptedExternalEventIds = [...(acceptedExternalEventIds || []), item.externalEventId];
-    }
+    if (waitTransition.action === 'drop') { await persistSession(); return; }
     if (waitTransition.action === 'defer') {
       await persistSession();
       return;

@@ -223,7 +223,7 @@ export class SessionWorkerIngressCoordinator {
       }
       const expected = { generation: ownership.generation, incarnationId: ownership.incarnationId };
       this.supervisor.assertActivatedOwnership(sessionId, expected);
-      const intent = this.store.enqueueIntent(sessionId, payload.externalEventId || crypto.randomUUID(), 'enqueue', payload);
+      const intent = this.store.enqueueIntent(sessionId, this.intentIdentity(payload), 'enqueue', payload);
       return { expected, intentId: intent.id };
     });
     this.notifyDurableIntentAccepted(sessionId, admitted.intentId);
@@ -235,7 +235,7 @@ export class SessionWorkerIngressCoordinator {
     const admitted = await this.withMutationAdmission(sessionId, 'accept queued work', async () => {
       const expected = await this.ensureReadyOwner(sessionId);
       this.supervisor.assertActivatedOwnership(sessionId, expected);
-      const intent = this.store.enqueueIntent(sessionId, crypto.randomUUID(), 'enqueue', payload);
+      const intent = this.store.enqueueIntent(sessionId, this.intentIdentity(payload), 'enqueue', payload);
       return { expected, intentId: intent.id };
     });
     this.notifyDurableIntentAccepted(sessionId, admitted.intentId);
@@ -355,7 +355,7 @@ export class SessionWorkerIngressCoordinator {
     const admitted = await this.withMutationAdmission(sessionId, 'accept queued work', async () => {
       const expected = await this.ensureReadyOwner(sessionId);
       this.supervisor.assertActivatedOwnership(sessionId, expected);
-      const intent = this.store.enqueueIntent(sessionId, crypto.randomUUID(), 'enqueue', payload);
+      const intent = this.store.enqueueIntent(sessionId, this.intentIdentity(payload), 'enqueue', payload);
       return { expected, intentId: intent.id };
     });
     this.notifyDurableIntentAccepted(sessionId, admitted.intentId);
@@ -376,6 +376,10 @@ export class SessionWorkerIngressCoordinator {
       }
     }
     return { generation: ownership.generation, incarnationId: ownership.incarnationId };
+  }
+
+  private intentIdentity(item: QueueItem): string {
+    return item.externalEventId || crypto.randomUUID();
   }
 
   private resolveExact(requestedSessionId: string, item: QueueItem): { sessionId: string; item: QueueItem } {
