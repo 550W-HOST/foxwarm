@@ -13,6 +13,7 @@ export interface Session {
   id: string
   agent?: string
   messageCount: number
+  sequenceMessageCount?: number
   lastMessageTime: number
   parentSessionId: string | null
   childSessions?: string[]
@@ -1218,7 +1219,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                         <span>•</span>
                       </>
                     )}
-                    <span>{session.messageCount || 0} msgs</span>
+                    <span>{session.sequenceMessageCount ?? session.messageCount ?? 0} msgs</span>
                   </div>
                   {hasChildren && (
                     <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">

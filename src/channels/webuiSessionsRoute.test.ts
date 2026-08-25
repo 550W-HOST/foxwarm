@@ -8,7 +8,7 @@ test.before(() => {
 import assert from 'node:assert/strict';
 import { HttpServer, setHttpServer } from '../httpServer';
 import * as sessionManager from '../sessionManager';
-import { getBoundedSessionListChildTotal, setWebUiDeleteLifecycleTestHookForTests, WebUIChannel } from './webuiChannel';
+import { buildWebUiSessionListProjection, getBoundedSessionListChildTotal, setWebUiDeleteLifecycleTestHookForTests, WebUIChannel } from './webuiChannel';
 import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload } from '../session/metadataStore';
 import { markSessionCatalogStub } from '../sessionRuntimeState';
 import type { Session } from '../types';
@@ -18,6 +18,7 @@ import { getAgentDir } from '../config';
 import { getSessionHistoryFilePath } from '../session/metadataStore';
 import sharp from 'sharp';
 import { resolveImageBlobPath } from '../imageBlobs';
+import { writeArchiveMessages } from '../session/archiveStore';
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -192,6 +193,12 @@ test('bounded session-list routes preserve tree modes, focus paths, aliases, sea
   await configure(ids.pinned, { parentSessionId: ids.root, pinned: true, meta: { lastMessageTime: now - 4 } });
   await configure(ids.dangling, { parentSessionId: `${prefix}_missing`, meta: { lastMessageTime: now - 5 } });
   await configure(ids.volatile, { meta: { lastMessageTime: 1 } });
+  const archiveRecord = (sessionId: string, seq: number) => ({
+    v: 1 as const, kind: 'message' as const, sessionId, agent, seq, timestamp: now, role: 'user' as const,
+    message: { role: 'user' as const, parts: [{ text: `${sessionId} archived ${seq}` }], __meta: { seq, timestamp: now } },
+  });
+  await writeArchiveMessages([archiveRecord(ids.root, 9)]);
+  await writeArchiveMessages([archiveRecord(ids.child, 6)]);
   const volatile = sessionManager.getAllSessions().get(ids.volatile)!; volatile.meta.lastMessageTime = now + 1000; volatile.busy = true;
   const deepBusy = sessionManager.getAllSessions().get(ids.deep)!;
 
@@ -210,6 +217,7 @@ test('bounded session-list routes preserve tree modes, focus paths, aliases, sea
       Object.values(entry).forEach(collect);
     };
     collect(value); assert.ok(rows.length > 0); assert.ok(rows.every(row => Number.isInteger(row.childTotal) && row.childTotal >= 0));
+    assert.ok(rows.every(row => Number.isInteger(row.sequenceMessageCount) && row.sequenceMessageCount >= 0));
   };
   try {
     let response = await request(`/api/session-list/sidebar?mode=default&limit=100&childLimit=1&focusSessionId=${encodeURIComponent(ids.deep)}`);
@@ -221,6 +229,9 @@ test('bounded session-list routes preserve tree modes, focus paths, aliases, sea
     assert.equal(sidebar.sessions.find((item: any) => item.id === ids.pinned).parentSessionId, ids.root, 'elevation does not mutate real parent');
     assert.equal(sidebar.sessions.find((item: any) => item.id === ids.dangling).parentSessionId, null);
     assert.equal(sidebar.sessions.find((item: any) => item.id === ids.root).childTotal, 2, 'Sidebar root count excludes the elevated pinned child');
+    assert.equal(sidebar.sessions.find((item: any) => item.id === ids.root).messageCount, 0, 'live active-history count remains unchanged');
+    assert.equal(sidebar.sessions.find((item: any) => item.id === ids.root).sequenceMessageCount, 9,
+      'bounded list uses append-only seq even when live active history is shorter');
     assert.equal(sidebar.sessions.find((item: any) => item.id === ids.pinned).childTotal, 0, 'true leaves are explicit');
     assert.deepEqual(sidebar.presentationPaths[ids.deep], [ids.root, ids.child, ids.deep]);
     assert.deepEqual(sidebar.forcedChildren[ids.root], [ids.child]);
@@ -229,6 +240,8 @@ test('bounded session-list routes preserve tree modes, focus paths, aliases, sea
     assert.equal(rootChildren.sessions.length, 1); assert.equal(rootChildren.total, 2); assert.ok(rootChildren.nextCursor);
     assert.equal(rootChildren.sessions[0].id, ids.child); assert.equal(rootChildren.sessions[0].childTotal, 1,
       'a returned child carries its own direct child count before nested expansion');
+    assert.equal(rootChildren.sessions[0].sequenceMessageCount, 6,
+      'a non-fork Session-tree child does not subtract its parent relation');
 
     response = await request('/api/session-list/sidebar?mode=flat-time&limit=100');
     const flat = await response.json() as any; assert.ok(flat.sessions.some((item: any) => item.id === ids.deep), 'flat mode ignores real parents');
@@ -286,6 +299,8 @@ test('bounded session-list routes preserve tree modes, focus paths, aliases, sea
 
     response = await request(`/api/session-list/architecture?agent=${encodeURIComponent(agent)}&limit=100&childLimit=10`);
     const architecture = await response.json() as any; assert.equal(architecture.version, 1);
+    assert.equal(architecture.roots.sessions.some((item: any) => Object.prototype.hasOwnProperty.call(item, 'sequenceMessageCount')), false,
+      'Architecture continues to use live messageCount only');
     assert.ok(architecture.agentCounts.some((item: any) => item.agent === agent && item.count === 8));
     assert.ok(architecture.roots.sessions.every((item: any) => item.agent === agent));
     assert.ok(architecture.roots.sessions.some((item: any) => item.id === cross.deepA), 'A→B→A descendant becomes an A forest root');
@@ -345,6 +360,21 @@ test('bounded child-count lookup ignores inherited Object.prototype properties',
   assert.equal(getBoundedSessionListChildTotal({}, 'toString'), 0);
   assert.equal(typeof getBoundedSessionListChildTotal({}, 'toString'), 'number');
   assert.equal(getBoundedSessionListChildTotal({ toString: 2 }, 'toString'), 2);
+});
+
+test('bounded Session-list projection keeps sequence count separate from live history count', () => {
+  const runtime = {
+    id: 'projection-count', agent: 'main', aliases: [], busy: false, busyStartedAt: null, queueLength: 0,
+    runtimeState: { state: 'idle', busy: false, queueLength: 0 }, displayName: null, archived: false,
+    currentNode: 'master', cwd: null, model: null, effort: null, childModelDefault: null, childEffortDefault: null,
+    compactThresholdTokens: null, isolated: false, parentSessionId: null, pinned: false, sidebarOrder: null,
+    messageCount: 2, historyVersion: 1, lastMessageTime: 10,
+    tokenUsage: { cachedTokens: 0, inputTokens: 0, outputTokens: 0, lastUsage: null }, verbose: false,
+  } as any;
+  assert.equal(buildWebUiSessionListProjection(runtime).messageCount, 2, 'fresh deltas retain live-count fallback');
+  const bounded = buildWebUiSessionListProjection(runtime, 0, 17);
+  assert.equal(bounded.messageCount, 2);
+  assert.equal(bounded.sequenceMessageCount, 17);
 });
 
 test('sidebar focus query keeps comma IDs, repeatable focus values, and a complete 105-deep render path', async () => {

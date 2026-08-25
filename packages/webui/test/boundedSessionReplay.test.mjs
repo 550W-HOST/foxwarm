@@ -100,6 +100,28 @@ test('state-only SSE deltas preserve an exact bounded child count until topology
   replay.endHttpRowsRequest(state, refreshStart)
 })
 
+test('state-only SSE deltas preserve bounded sequence message counts while fresh rows may fall back', () => {
+  const existing = new Map([['session', { id: 'session', messageCount: 2, sequenceMessageCount: 17 }]])
+  assert.deepEqual(replay.preserveKnownSequenceMessageCounts(existing, [{ id: 'session', messageCount: 3 }]), [
+    { id: 'session', messageCount: 3, sequenceMessageCount: 17 },
+  ])
+  assert.deepEqual(replay.preserveKnownSequenceMessageCounts(existing, [{ id: 'session', messageCount: 3, sequenceMessageCount: 18 }]), [
+    { id: 'session', messageCount: 3, sequenceMessageCount: 18 },
+  ])
+  assert.deepEqual(replay.preserveKnownSequenceMessageCounts(existing, [{ id: 'fresh', messageCount: 4 }]), [
+    { id: 'fresh', messageCount: 4 },
+  ])
+
+  const state = replay.createEpochRows()
+  replay.mergeDeltaRows(state, [{ id: 'session', messageCount: 2, sequenceMessageCount: 17 }])
+  const refreshStart = replay.beginHttpRowsRequest(state)
+  replay.mergeDeltaRows(state, replay.preserveKnownSequenceMessageCounts(state.rows, [{ id: 'session', messageCount: 3 }]))
+  replay.mergeHttpRows(state, [{ id: 'session', messageCount: 2, sequenceMessageCount: 18 }], refreshStart)
+  assert.deepEqual(state.rows.get('session'), { id: 'session', messageCount: 3, sequenceMessageCount: 18 },
+    'bounded HTTP refetch updates only the sequence count when a newer state delta owns the rest of the row')
+  replay.endHttpRowsRequest(state, refreshStart)
+})
+
 test('exact by-id miss tombstone prevents an older root or search response from resurrecting the row', () => {
   const state = replay.createEpochRows(); const rootSearchStart = state.epoch
   replay.mergeDeltaRows(state, [], ['gone'])

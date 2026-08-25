@@ -76,6 +76,41 @@ test('effective and local archive message stats exactly mirror bounded lineage r
     assert.deepEqual(await store.getEffectiveArchiveMessageStats('stats-unknown'), { count: 0 });
     assert.deepEqual(await store.getLocalArchiveMessageStats('stats-unknown'), { count: 0 });
     assert.equal(await store.hasArchivedSessionId('stats-unknown'), false, 'stats reads must not claim an unknown ID');
+
+    await store.ensureSessionBranch('list-ordinary');
+    await store.writeArchiveMessages([1, 2, 9].map(seq => messageRecord('list-ordinary', seq)));
+
+    // A Session-tree child is not an archive fork unless archive_branches says so.
+    await store.ensureSessionBranch('list-nonfork-child');
+    await store.writeArchiveMessages([1, 6].map(seq => messageRecord('list-nonfork-child', seq)));
+
+    await store.ensureSessionBranch('list-fork', {
+      parentSessionId: 'list-ordinary',
+      forkMessageSeq: 4,
+      forkBlockId: 0,
+    });
+    await store.writeArchiveMessages([5, 8].map(seq => messageRecord('list-fork', seq)));
+
+    await store.ensureSessionBranch('list-fork-chain', {
+      parentSessionId: 'list-fork',
+      forkMessageSeq: 8,
+      forkBlockId: 0,
+    });
+    await store.writeArchiveMessages([9, 11].map(seq => messageRecord('list-fork-chain', seq)));
+    await store.ensureSessionBranch('list-empty');
+
+    assert.deepEqual(store.getSessionListSequenceMessageCounts([
+      'list-ordinary', 'list-nonfork-child', 'list-fork', 'list-fork-chain', 'list-empty',
+    ]), [
+      { sessionId: 'list-ordinary', sequenceMessageCount: 9 },
+      { sessionId: 'list-nonfork-child', sequenceMessageCount: 6 },
+      { sessionId: 'list-fork', sequenceMessageCount: 4 },
+      { sessionId: 'list-fork-chain', sequenceMessageCount: 3 },
+      { sessionId: 'list-empty', sequenceMessageCount: 0 },
+    ]);
+    assert.deepEqual(store.getSessionListSequenceMessageCounts(['list-ordinary', 'list-ordinary']), [
+      { sessionId: 'list-ordinary', sequenceMessageCount: 9 },
+    ]);
   } finally {
     await fs.remove(tempRoot);
   }

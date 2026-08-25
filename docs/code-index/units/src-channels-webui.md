@@ -60,6 +60,10 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
   catalog-count batch over the rows in that response. Later state-only SSE
   deltas may omit the unchanged count; the browser preserves it until catalog
   invalidation refetches topology.
+- The same bounded mapping path attaches `sequenceMessageCount` from batched
+  archive-store local-seq/fork-point queries. Runtime `messageCount` remains in
+  the DTO unchanged; Architecture continues mapping only the live count, while
+  initial watched-row hydration receives the list-only sequence count.
 - Sidebar focus is a repeatable capped `focusSessionId` query (commas remain
   literal ID content), with complete chunked ancestor context. New route DTOs
   reject unknown keys, wrong scalar/container types, and out-of-bound values;

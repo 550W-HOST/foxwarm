@@ -30,6 +30,7 @@ import { DEFAULT_WEIXIN_BASE_URL, DEFAULT_WEIXIN_LOGIN_BOT_TYPE, startWeixinQrLo
 import { createAsrServiceWebSocket, getAsrServiceStatus, transcribeWithAsrService } from '../asrClient';
 import { attachTerminalClient, closeTerminal, createTerminal, detachTerminalClient, getTerminalRecord, listTerminalRecords, resizeTerminal, resolveTerminalControlRequest, writeTerminalInput } from '../terminalRouter';
 import { getSessionHistoryFilePath } from '../session/metadataStore';
+import { getSessionListSequenceMessageCounts } from '../session/archiveStore';
 import { normalizeWebUiInstanceName, normalizeWebUiTabIcon, readWebUiSettings, writeWebUiSettings } from '../webuiSettings';
 import { renderContextBlockExpansion } from '../toolsSessionAgent/archiveRecall';
 import type { Message, MessagePart, QueueItem, Session } from '../types';
@@ -599,7 +600,7 @@ function buildWebUiSessionState(session: any) {
   };
 }
 
-function buildWebUiSessionListProjection(session: SessionRuntimeSessionDto, childTotal?: number) {
+export function buildWebUiSessionListProjection(session: SessionRuntimeSessionDto, childTotal?: number, sequenceMessageCount?: number) {
   return {
     ...buildWebUiSessionState(session),
     lastMessageTime: session.lastMessageTime,
@@ -612,6 +613,7 @@ function buildWebUiSessionListProjection(session: SessionRuntimeSessionDto, chil
       outputTokens: session.tokenUsage.outputTokens,
     },
     ...(typeof childTotal === 'number' ? { childTotal } : {}),
+    ...(typeof sequenceMessageCount === 'number' ? { sequenceMessageCount } : {}),
   };
 }
 
@@ -627,20 +629,28 @@ export function getBoundedSessionListChildTotal(childTotals: Record<string, numb
   return Object.prototype.hasOwnProperty.call(childTotals, sessionId) ? childTotals[sessionId] : 0;
 }
 
-function mapSessionListQueryPayload(value: any, childTotals?: Record<string, number>): any {
-  if (Array.isArray(value)) return value.map(entry => mapSessionListQueryPayload(entry, childTotals));
+function mapSessionListQueryPayload(value: any, childTotals?: Record<string, number>, sequenceCounts?: ReadonlyMap<string, number>): any {
+  if (Array.isArray(value)) return value.map(entry => mapSessionListQueryPayload(entry, childTotals, sequenceCounts));
   if (!value || typeof value !== 'object') return value;
   if (typeof value.id === 'string' && value.runtimeState && value.tokenUsage) {
-    return buildWebUiSessionListProjection(value, childTotals ? getBoundedSessionListChildTotal(childTotals, value.id) : undefined);
+    return buildWebUiSessionListProjection(value,
+      childTotals ? getBoundedSessionListChildTotal(childTotals, value.id) : undefined,
+      sequenceCounts?.get(value.id));
   }
   return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'rows')
-    .map(([key, entry]) => [key, mapSessionListQueryPayload(entry, childTotals)]));
+    .map(([key, entry]) => [key, mapSessionListQueryPayload(entry, childTotals, sequenceCounts)]));
 }
 
 function mapBoundedSessionListQueryPayload(value: any, agent?: string): any {
   const ids = [...collectSessionListProjectionIds(value)];
   const childTotals = sessionCatalogStore.getPresentationChildCounts(ids, agent);
-  return mapSessionListQueryPayload(value, childTotals);
+  const sequenceCounts = new Map<string, number>();
+  for (let index = 0; index < ids.length; index += 200) {
+    for (const item of getSessionListSequenceMessageCounts(ids.slice(index, index + 200))) {
+      sequenceCounts.set(item.sessionId, item.sequenceMessageCount);
+    }
+  }
+  return mapSessionListQueryPayload(value, childTotals, sequenceCounts);
 }
 
 function sendSessionListQueryError(res: express.Response, error: any, logMessage: string): void {
@@ -1517,7 +1527,7 @@ export class WebUIChannel implements Channel {
             if (!query) return res.status(400).json({ error: 'q must contain 1 to 256 characters.', code: 'SESSION_LIST_SEARCH_INVALID' });
             const limit = boundedQueryLimit(req.query.limit, 50, 100);
             const normalized = query.toLowerCase();
-            const sessions = (await sessionRuntime.listSessions()).map(buildWebUiSessionListProjection);
+            const sessions = (await sessionRuntime.listSessions()).map(session => buildWebUiSessionListProjection(session));
             const matches = sessions.filter((session: any) => [session.displayName,session.id,...(session.aliases || []),session.agent,
               session.currentNode,session.cwd,session.model,session.modelKey,session.defaultModelKey,session.childModelDefault,
               session.effectiveChildModelKey].filter(value => typeof value === 'string' && value.trim()).some(value => value.toLowerCase().includes(normalized)));

@@ -3,7 +3,7 @@ import { API_BASE_PATH } from './config'
 import type { Session } from './components/SessionListCore'
 import { createSessionListRefreshScheduler, requestSessionListStreamOpenResync, type SessionListRefreshScheduler } from './sessionListRefresh'
 import type { SessionListOrderMode } from './sessionListPresentation'
-import { applyExactMissTombstone, captureExactAliasKeys, chunkBoundedIds, createEpochRows, mergeDeltaRows, mergeHttpRows, preserveKnownChildTotals, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from './boundedSessionReplay'
+import { applyExactMissTombstone, captureExactAliasKeys, chunkBoundedIds, createEpochRows, mergeDeltaRows, mergeHttpRows, preserveKnownChildTotals, preserveKnownSequenceMessageCounts, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from './boundedSessionReplay'
 import { dispatchSessionIdleDeleted, getSessionIdleUnreadIds, SESSION_IDLE_UNREAD_EVENT } from './sessionIdleAttention'
 import { webUiRealtime } from './realtime'
 
@@ -217,7 +217,7 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
     }
     const unsubscribe = webUiRealtime.subscribeSessionList(subscriptionIds, {
       onOpen: () => requestSessionListStreamOpenResync(schedulerRef.current),
-      onMessage: data => { if (data.type === 'session-list-delta') { const deletedIds = Array.isArray(data.deletedIds) ? data.deletedIds.filter((value: unknown): value is string => typeof value === 'string') : []; mergeDeltaRows(rowStoreRef.current, preserveKnownChildTotals(rowStoreRef.current.rows, data.sessions || []), deletedIds); dispatchSessionIdleDeleted(deletedIds); const next = { ...stateRef.current, rows: new Map(rowStoreRef.current.rows) }; stateRef.current = next; setState(next) } if (data.type === 'sessions-updated' || data.type === 'session-list-invalidated') handleInvalidation(data) },
+      onMessage: data => { if (data.type === 'session-list-delta') { const deletedIds = Array.isArray(data.deletedIds) ? data.deletedIds.filter((value: unknown): value is string => typeof value === 'string') : []; const rows = preserveKnownSequenceMessageCounts(rowStoreRef.current.rows, preserveKnownChildTotals(rowStoreRef.current.rows, data.sessions || [])); mergeDeltaRows(rowStoreRef.current, rows, deletedIds); dispatchSessionIdleDeleted(deletedIds); const next = { ...stateRef.current, rows: new Map(rowStoreRef.current.rows) }; stateRef.current = next; setState(next) } if (data.type === 'sessions-updated' || data.type === 'session-list-invalidated') handleInvalidation(data) },
     })
     return () => { unsubscribe(); if (legacyTimer !== null) window.clearTimeout(legacyTimer) }
   }, [subscriptionIds.join('\0'), options.connectStream, invalidate])

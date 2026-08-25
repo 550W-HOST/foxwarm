@@ -53,6 +53,11 @@ export type ArchiveMessageStats = {
   maxSeq?: number;
 };
 
+export type SessionListSequenceMessageCount = {
+  sessionId: string;
+  sequenceMessageCount: number;
+};
+
 type LineageEntry = {
   sessionId: string;
   inherited: boolean;
@@ -1379,6 +1384,51 @@ export async function getLocalArchiveMessageStats(sessionId: string, startSeq?: 
   initArchiveStoreSync();
   sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
   return readLocalArchiveMessageStatsByCanonicalId(sessionId, startSeq, endSeq);
+}
+
+/**
+ * Return the append-only message counter used only by bounded Session-list
+ * presentation. Ordinary Sessions display their local maximum message seq.
+ * An actual archive fork displays the branch-local distance from its recorded
+ * fork point; Session-tree parent metadata is intentionally irrelevant.
+ */
+export function getSessionListSequenceMessageCounts(sessionIds: readonly string[]): SessionListSequenceMessageCount[] {
+  if (sessionIds.length === 0) return [];
+  if (sessionIds.length > 200 || sessionIds.some(sessionId => typeof sessionId !== 'string' || !sessionId || sessionId.length > 512)) {
+    throw new Error('Session-list sequence counts require at most 200 bounded Session IDs.');
+  }
+
+  initArchiveStoreSync();
+  const uniqueIds = [...new Set(sessionIds)];
+  const requestedValues = uniqueIds.map(() => '(?)').join(',');
+  const rows = getDb().prepare(`
+    WITH requested(session_id) AS (VALUES ${requestedValues}),
+    local_max AS (
+      SELECT messages.session_id, MAX(messages.seq) AS max_seq
+      FROM archive_messages AS messages
+      INNER JOIN requested ON requested.session_id = messages.session_id
+      GROUP BY messages.session_id
+    )
+    SELECT requested.session_id, COALESCE(local_max.max_seq, 0) AS max_seq,
+      branches.parent_session_id, branches.fork_message_seq
+    FROM requested
+    LEFT JOIN local_max ON local_max.session_id = requested.session_id
+    LEFT JOIN archive_branches AS branches ON branches.session_id = requested.session_id
+  `).all(...uniqueIds) as Array<{
+    session_id: string;
+    max_seq: number;
+    parent_session_id: string | null;
+    fork_message_seq: number | null;
+  }>;
+
+  const byId = new Map(rows.map(row => {
+    const maxSeq = Math.max(0, Number(row.max_seq) || 0);
+    const forkMessageSeq = Math.max(0, Number(row.fork_message_seq) || 0);
+    return [row.session_id, row.parent_session_id === null
+      ? maxSeq
+      : Math.max(0, maxSeq - forkMessageSeq)] as const;
+  }));
+  return uniqueIds.map(sessionId => ({ sessionId, sequenceMessageCount: byId.get(sessionId) || 0 }));
 }
 
 export async function readEffectiveArchiveMessages(sessionId: string, startSeq?: number, endSeq?: number): Promise<EffectiveArchiveMessageRecord[]> {

@@ -183,6 +183,16 @@ item's own unpinned children still count normally. Loaded child-page totals take
 precedence in the browser. Architecture keeps its separate real-agent-forest
 branch totals and does not reinterpret Sidebar counts.
 
+Bounded Sidebar/search/exact rows also carry a list-only append sequence count
+from one batched archive-store query per bounded ID chunk. An ordinary Session
+uses its local maximum archived message `seq`; an actual archive fork uses
+`max(0, local max seq - archive_branches.fork_message_seq)`. Session-tree parent
+metadata is not fork evidence. This field is separate from runtime
+`messageCount`, which continues to describe live active history for Chat,
+history/state reconciliation, commands, and Architecture. State-only list
+deltas may omit the archive-derived field; the bounded browser cache retains a
+known value until catalog invalidation refetches the affected windows.
+
 ## Design decisions
 
 ### D-main-catalog-indexed-boundary
@@ -234,3 +244,12 @@ windows and exact context, distinguish explicit deletion from off-page absence,
 and refresh invalidated windows without resetting selection or scroll. SSE may
 push bounded deltas for explicitly subscribed rows plus catalog invalidation,
 but must not recreate an all-Session broadcast mirror.
+
+[2026-08-25] The Sidebar Session-row `n msgs` counter is an archive-derived
+append-sequence presentation, not the runtime active-history count. It is
+computed in bounded batches from the archive SQLite authority without adding a
+catalog column, hydrating Sessions, scanning history payloads, or duplicating
+fork metadata. Only `archive_branches.parent_session_id` establishes a fork;
+ordinary parent relations never subtract. Fork counts are branch-local and
+include every post-fork sequence, including system and tool scaffolding.
+Runtime `messageCount` semantics and Architecture rendering remain unchanged.
