@@ -3,6 +3,11 @@ import { createPortal } from 'react-dom'
 import { ArrowUp, Mic, Paperclip, Plus, Settings, Square } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import {
+  clearMessageAttachmentDraft,
+  getMessageAttachmentDraft,
+  updateMessageAttachmentDraft,
+} from '../messageAttachmentDrafts'
+import {
   applySlashCommandSuggestion,
   getSlashCommandCompletion,
   resizeTextarea,
@@ -509,7 +514,7 @@ const ChatComposer = memo(function ChatComposer({
   onDraftEdited,
 }: ChatComposerProps) {
   const [input, setInput] = useState('')
-  const [attachments, setAttachments] = useState<File[]>([])
+  const [attachments, setAttachments] = useState<File[]>(() => getMessageAttachmentDraft(sessionId))
   const [isDragging, setIsDragging] = useState(false)
   const [isRecordingAudio, setIsRecordingAudio] = useState(false)
   const [transcribingAudio, setTranscribingAudio] = useState(false)
@@ -549,6 +554,8 @@ const ChatComposer = memo(function ChatComposer({
   } | null>(null)
   const lastReportedHeightRef = useRef<number | null>(null)
   const submitInFlightRef = useRef(false)
+  const activeSessionIdRef = useRef(sessionId)
+  activeSessionIdRef.current = sessionId
 
   useEffect(() => {
     let cancelled = false
@@ -591,7 +598,7 @@ const ChatComposer = memo(function ChatComposer({
     const draftKey = `draft_${sessionId}`
     const savedDraft = localStorage.getItem(draftKey)
     setInput(savedDraft || '')
-    setAttachments([])
+    setAttachments(getMessageAttachmentDraft(sessionId))
     setIsRecordingAudio(false)
     setTranscribeError(null)
     setLiveTranscriptionPreview('')
@@ -735,10 +742,19 @@ const ChatComposer = memo(function ChatComposer({
     })
   }, [slashCompletion])
 
+  const updateAttachments = useCallback((update: (files: File[]) => readonly File[]) => {
+    const targetSessionId = sessionId
+    const next = updateMessageAttachmentDraft(targetSessionId, update)
+    if (activeSessionIdRef.current === targetSessionId) {
+      setAttachments(next)
+    }
+  }, [sessionId])
+
   const handleSubmit = useCallback(async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
     if (sessionMissing || (!input.trim() && attachments.length === 0) || loading || submitInFlightRef.current) return
 
+    const targetSessionId = sessionId
     submitInFlightRef.current = true
     let accepted = false
     try {
@@ -748,13 +764,17 @@ const ChatComposer = memo(function ChatComposer({
     }
     if (!accepted) return
 
-    setInput('')
-    setAttachments([])
-    setDismissedSlashQuery(null)
+    clearMessageAttachmentDraft(targetSessionId)
+    if (activeSessionIdRef.current === targetSessionId) {
+      setInput('')
+      setAttachments([])
+      setDismissedSlashQuery(null)
+    }
     const draftKey = `draft_${sessionId}`
     localStorage.removeItem(draftKey)
 
     requestAnimationFrame(() => {
+      if (activeSessionIdRef.current !== targetSessionId) return
       resizeTextarea(textareaRef.current)
       textareaRef.current?.focus()
     })
@@ -826,11 +846,11 @@ const ChatComposer = memo(function ChatComposer({
         e.preventDefault()
         const file = item.getAsFile()
         if (file) {
-          setAttachments(prev => [...prev, file])
+          updateAttachments(prev => [...prev, file])
         }
       }
     }
-  }, [])
+  }, [updateAttachments])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -851,9 +871,9 @@ const ChatComposer = memo(function ChatComposer({
 
     const files = Array.from(e.dataTransfer.files)
     if (files.length > 0) {
-      setAttachments(prev => [...prev, ...files])
+      updateAttachments(prev => [...prev, ...files])
     }
-  }, [])
+  }, [updateAttachments])
 
   const appendTranscriptToDraft = useCallback((transcript: string) => {
     const trimmed = transcript.trim()
@@ -1307,7 +1327,8 @@ const ChatComposer = memo(function ChatComposer({
           multiple
           onChange={(e) => {
             if (e.target.files) {
-              setAttachments(prev => [...prev, ...Array.from(e.target.files!)])
+              updateAttachments(prev => [...prev, ...Array.from(e.target.files!)])
+              e.currentTarget.value = ''
             }
           }}
           className="hidden"
@@ -1374,7 +1395,7 @@ const ChatComposer = memo(function ChatComposer({
                     <span className="truncate text-gray-700 dark:text-gray-300">{file.name}</span>
                     <button
                       type="button"
-                      onClick={() => setAttachments(prev => prev.filter((_, i) => i !== idx))}
+                      onClick={() => updateAttachments(prev => prev.filter((_, i) => i !== idx))}
                       className="shrink-0 text-gray-400 transition hover:text-red-500"
                       title="Remove attachment"
                     >

@@ -1,6 +1,6 @@
 # Unit: webui-chat-composer
 
-Files: packages/webui/src/components/ChatComposer.tsx, packages/webui/src/components/modelFilter.ts, packages/webui/test/modelFilter.test.mjs
+Files: packages/webui/src/components/ChatComposer.tsx, packages/webui/src/components/modelFilter.ts, packages/webui/src/messageAttachmentDrafts.ts, packages/webui/test/modelFilter.test.mjs, packages/webui/test/messageAttachmentDrafts.test.mjs, packages/webui/test/messageAttachmentDrafts.e2e.mjs
 Secondary files: packages/webui/src/index.css, packages/webui/test/setupModels.e2e.mjs, packages/webui/test/systemTabs.e2e.mjs
 
 ## Purpose
@@ -12,6 +12,7 @@ A rich chat composer component for the web UI that handles text input with slash
 - `ChatComposer` — memoized React component (default export) providing the full chat input experience
 - `ModelOption` — type describing a selectable model plus allowed/default effort capability metadata
 - `filterModelOptions` / `formatModelLabel` — exact natural-text filtering and visible-label formatting for model candidates
+- `getMessageAttachmentDraft` / `setMessageAttachmentDraft` / `updateMessageAttachmentDraft` / `clearMessageAttachmentDraft` — page-memory attachment draft ownership keyed by exact Session ID
 
 ## Function Index
 
@@ -46,7 +47,9 @@ A rich chat composer component for the web UI that handles text input with slash
 ## Behavior
 
 - Maintains local state for input text, attachments, slash-command suggestions, audio recording, waveform visualization, and drag-over status.
-- Persists draft text to localStorage keyed by session ID; restores on mount or session change.
+- Persists draft text to localStorage keyed by Session ID; restores on mount or Session change.
+- Keeps ordinary message attachment drafts in one module-scoped, page-lifetime Map keyed by exact Session ID. Picker, pasted-image, drop, and removal mutations synchronously update that owner while preserving `File` identity and order; state restoration defensively copies arrays without serializing file content.
+- Switching or unmounting never clears attachment drafts. Accepted sends clear only the submitted Session's attachment draft; rejected or failed sends retain it. Audio-transcription file selection remains separate and is never stored as a message attachment draft.
 - Fetches slash-command completions from `API_BASE_PATH/commands` as the user types a `/` prefix.
 - The ordinary attachment picker intentionally has no `accept` filter so users can choose any file type; audio transcription keeps its separate audio-only picker.
 - Supports two send-key modes (`enter` and `modEnter`) for submitting messages.
@@ -87,3 +90,7 @@ The model popup keeps a plain three-column header. Its effort controls belong in
 ### D-composer-slash-overlay
 
 [2026-08-12] Slash-command suggestions are a viewport-bounded overlay anchored immediately above the composer form. They never participate in composer layout measurement, so opening, closing, or changing suggestion height cannot displace the timeline, change the reserved composer spacer, or detach bottom-follow.
+
+### D-composer-session-draft-lifetimes
+
+[2026-08-25] Composer text and ordinary message attachments intentionally have different browser lifetimes. Text drafts remain localStorage-backed per Session. Selected, pasted, or dropped message attachment `File` objects live only in a module-scoped Map for the current browser page/JavaScript context, keyed by exact Session ID; Session switching restores the same `File` references and order, while reload/page close clears them naturally. Do not serialize, upload early, place in localStorage/IndexedDB, persist through Session state, or add cross-tab/cross-frame synchronization. Only an accepted send or explicit attachment removal clears the affected page-memory draft; rejected/failed sends and unmounts retain it.
