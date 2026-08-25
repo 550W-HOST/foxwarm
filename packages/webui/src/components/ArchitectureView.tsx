@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ExternalLink } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import { getRuntimeStateSummary, isSessionRuntimeActive } from '../sessionRuntimeState'
+import { getArchitectureFocusReveal } from '../architecturePresentation'
+import { collapseSessionListExpandedBranch } from '../sessionListPresentation'
 import { API_BASE_PATH } from '../config'
 import { createSessionListRefreshScheduler, requestSessionListStreamOpenResync } from '../sessionListRefresh'
 import { BoundedReplayRevisionMismatch, createEpochRows, filterPresentationPathForAgent, mergeDeltaRows, mergeForcedPresentationPath, mergeHttpRows, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from '../boundedSessionReplay'
@@ -125,6 +127,8 @@ function SessionNode({
   return (
     <div className="relative">
       <div
+        data-architecture-session-id={session.id}
+        data-architecture-expanded={expanded && canExpand ? 'true' : 'false'}
         className={`rounded-xl border px-4 py-2.5 shadow-sm transition-colors ${
           expanded && canExpand
             ? 'border-blue-300 bg-blue-50/70 dark:border-blue-700 dark:bg-blue-950/20'
@@ -255,7 +259,7 @@ export default function ArchitectureView({
   const [childCursors, setChildCursors] = useState<Map<string, string | null>>(new Map())
   const [childTotals, setChildTotals] = useState<Map<string, number>>(new Map())
   const [childIds, setChildIds] = useState<Map<string, string[]>>(new Map())
-  const [focusPathIds, setFocusPathIds] = useState<Set<string>>(new Set())
+  const [focusPath, setFocusPath] = useState<string[]>([])
   const [agentCounts, setAgentCounts] = useState<Array<{ agent: string; count: number }>>([])
   const [globalSummary, setGlobalSummary] = useState({ total: 0, busy: 0, queued: 0, managed: 0, cachedTokens: 0, inputTokens: 0, outputTokens: 0 })
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
@@ -269,6 +273,7 @@ export default function ArchitectureView({
   const rootTargetRef = useRef(rootTarget); rootTargetRef.current = rootTarget
   const currentSessionRef = useRef(currentSession); currentSessionRef.current = currentSession
   const invalidationIdentityRef = useRef<string | null>(null)
+  const revealedFocusIdentityRef = useRef<string | null>(null)
 
   const collectArchitectureRoots = async (target: number, agent: string | null) => {
     const result = await replayCursorWindow<Session>({ targetCount: target, pageCap: 100, fetchPage: async (cursor, limit) => {
@@ -318,13 +323,14 @@ export default function ArchitectureView({
     pruneEpochRows(rowStoreRef.current, keep)
     setSessions([...rowStoreRef.current.rows.values()]); setRootIds(roots.rootIds); setRootCursor(roots.rootCursor); setRootTarget(target)
     setChildIds(ids); setChildTotals(totals); setChildCursors(cursors); setAgentCounts(roots.agentCounts); setGlobalSummary(roots.summary)
-    setFocusPathIds(new Set(focus.path))
+    setFocusPath(focus.path)
     branchTargetsRef.current = new Map(branchTargets)
   })
 
   useEffect(() => {
     branchTargetsRef.current = new Map(); setExpandedSessions(new Set()); setShowMoreChildren(new Set()); setSessions([]); rowStoreRef.current = createEpochRows<Session>()
-    setChildIds(new Map()); setChildTotals(new Map()); setChildCursors(new Map()); setFocusPathIds(new Set()); setRootIds([]); setRootTarget(50)
+    setChildIds(new Map()); setChildTotals(new Map()); setChildCursors(new Map()); setFocusPath([]); setRootIds([]); setRootTarget(50)
+    revealedFocusIdentityRef.current = null
     void replayArchitecture(50, new Map()).catch(error => console.error('Failed Architecture bootstrap', error))
   }, [selectedAgent])
   useEffect(() => { void replayArchitecture(rootTargetRef.current, new Map(branchTargetsRef.current)).catch(error => console.error('Failed Architecture focus replay', error)) }, [currentSession])
@@ -352,6 +358,7 @@ export default function ArchitectureView({
   }, [sessions])
 
   const sessionMap = useMemo(() => new Map(sessions.map(session => [session.id, session])), [sessions])
+  const focusPathIds = useMemo(() => new Set(focusPath), [focusPath])
 
   const agents = useMemo(() => agentCounts.map(item => ({ name: item.agent, sessionCount: item.count })), [agentCounts])
 
@@ -367,35 +374,6 @@ export default function ArchitectureView({
     return new Set(sessions.filter(s => (s.agent || 'main') === selectedAgent).map(s => s.id))
   }, [sessions, selectedAgent])
 
-  const aliasMap = useMemo(() => {
-    const map = new Map<string, string>()
-
-    for (const session of sessions) {
-      map.set(session.id, session.id)
-      for (const alias of session.aliases || []) {
-        map.set(alias, session.id)
-      }
-    }
-
-    return map
-  }, [sessions])
-
-  const normalizedParentMap = useMemo(() => {
-    const map = new Map<string, string | null>()
-
-    for (const session of sessions) {
-      const resolvedParentId = session.parentSessionId ? aliasMap.get(session.parentSessionId) || null : null
-      map.set(
-        session.id,
-        resolvedParentId && resolvedParentId !== session.id && sessionMap.has(resolvedParentId)
-          ? resolvedParentId
-          : null,
-      )
-    }
-
-    return map
-  }, [sessions, aliasMap, sessionMap])
-
   const childrenMap = useMemo(() => {
     const map = new Map<string, Session[]>()
     for (const [parentId, ids] of childIds) map.set(parentId, ids.map(id => sessionMap.get(id))
@@ -406,21 +384,15 @@ export default function ArchitectureView({
   const roots = useMemo(() => rootIds.map(id => sessionMap.get(id)).filter((row): row is Session => !!row), [rootIds, sessionMap])
 
   useEffect(() => {
-    if (!currentSession) return
-
-    const next = new Set<string>()
-    let cursor: string | null | undefined = currentSession
-    while (cursor) {
-      next.add(cursor)
-      cursor = normalizedParentMap.get(cursor)
-    }
-
+    const reveal = getArchitectureFocusReveal(focusPath, currentSession, revealedFocusIdentityRef.current)
+    if (!reveal) return
+    revealedFocusIdentityRef.current = reveal.identity
     setExpandedSessions(prev => {
       const merged = new Set(prev)
-      for (const id of next) merged.add(id)
+      for (const id of reveal.ancestors) merged.add(id)
       return merged
     })
-  }, [currentSession, normalizedParentMap])
+  }, [currentSession, focusPath])
 
   const summary = {
     agentCount: agentCounts.length, sessionCount: globalSummary.total, busyCount: globalSummary.busy,
@@ -439,7 +411,9 @@ export default function ArchitectureView({
 
   const toggleExpanded = (sessionId: string) => {
     const opening = !expandedSessions.has(sessionId)
-    setExpandedSessions(prev => { const next = new Set(prev); opening ? next.add(sessionId) : next.delete(sessionId); return next })
+    setExpandedSessions(prev => opening
+      ? new Set(prev).add(sessionId)
+      : collapseSessionListExpandedBranch(prev, childrenMap, sessionId))
     if (!opening) { removeArchitectureBranch(sessionId); return }
     const targets = new Map(branchTargetsRef.current); targets.set(sessionId, Math.max(10, childIds.get(sessionId)?.length || 0))
     void replayArchitecture(rootTargetRef.current, targets).catch(error => console.error('Failed Architecture branch replay', error))
