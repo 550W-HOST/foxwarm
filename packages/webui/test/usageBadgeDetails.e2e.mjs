@@ -31,7 +31,7 @@ async function buildFixtureBundle() {
     const longVirtualKey = 'virtual/' + 'route-key-'.repeat(45)
     const cases = {
       concrete: { messages: [{ role: 'model', parts: [{ text: 'Concrete response' }], __meta: { seq: 1, usage: usage(11, 22, 33), modelId: 'provider/real-model', timestamp: 1700000000000, llmRequestTiming: requestTiming(1699999999000, 1700000000000) } }] },
-      virtual: { messages: [{ role: 'model', parts: [{ text: 'Virtual response' }], __meta: { seq: 2, usage: usage(1, 2, 3), modelId: 'provider/real-model', virtualModelKey: 'session-hash/virtual', timestamp: 1700000000000, llmRequestTiming: requestTiming(1699999997500, 1700000000000) } }] },
+      virtual: { messages: [{ role: 'model', parts: [{ text: 'Virtual response' }], __meta: { seq: 2, usage: usage(1, 2, 3), modelId: 'provider/real-model', virtualModelKey: 'session-hash/virtual', timestamp: 1700000000000, llmRequestTiming: requestTiming(1699999965000, 1700000000000) } }] },
       missing: { messages: [{ role: 'model', parts: [{ text: 'Legacy response' }], __meta: { seq: 3, usage: usage(1, 2, 3) } }] },
       invalid: { messages: [{ role: 'model', parts: [{ text: 'Invalid legacy response' }], __meta: { seq: 31, usage: usage(1, 2, 3), modelId: 'provider/invalid', timestamp: 'not-a-persisted-timestamp', llmRequestTiming: { startedAt: 10, completedAt: 5, durationMs: -1 } } }] },
       timed: { messages: [
@@ -40,7 +40,7 @@ async function buildFixtureBundle() {
         { role: 'model', parts: [{ text: 'Timed response' }], __meta: { seq: 'timed-current', usage: usage(4, 5, 6), modelId: 'provider/timed', timestamp: 6500, llmRequestTiming: requestTiming(5000, 6500) } },
       ] },
       groupSame: { groupTools: true, messages: [toolCall('same-one', 'provider/real-model', 'virtual/same', 1700000000000, 1000, 2000), toolResponse('same-one'), toolCall('same-two', 'provider/real-model', 'virtual/same', 1700000000000, 5000, 7000), toolResponse('same-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'same-final' } }] },
-      groupDifferent: { groupTools: true, messages: [toolCall('different-one', 'provider/first-model', 'virtual/first', 1700000000000, 1000, 2000), toolResponse('different-one'), toolCall('different-two', 'provider/second-model', 'virtual/second', 1700000060000, 5000, 7000), toolResponse('different-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'different-final' } }] },
+      groupDifferent: { groupTools: true, messages: [toolCall('different-one', 'provider/first-model', 'virtual/first', 1700000000000, 1000, 41000), toolResponse('different-one'), toolCall('different-two', 'provider/second-model', 'virtual/second', 1700000060000, 45000, 85000), toolResponse('different-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'different-final' } }] },
       longMobile: { messages: [{ role: 'model', parts: [{ text: 'Long route response' }], __meta: { seq: 4, usage: usage(1, 2, 3), modelId: 'provider/real-model', virtualModelKey: longVirtualKey, timestamp: 1700000000000 } }] },
       hidden: { showUsageBadge: false, messages: [{ role: 'model', parts: [{ text: 'Hidden usage' }], __meta: { seq: 5, usage: usage(1, 2, 3), modelId: 'provider/hidden', timestamp: 1700000000000 } }] },
     }
@@ -141,7 +141,8 @@ test('collapsed badge preserves compact labels and mouse, Enter, and Space toggl
     kind: item.getAttribute('data-usage-timing-kind'),
     text: item.textContent.trim(),
     title: item.getAttribute('title'),
-  }))), [{ kind: 'api', text: '1s', title: 'API response: 1s (1000ms)' }])
+    tone: item.getAttribute('data-usage-timing-tone'),
+  }))), [{ kind: 'api', text: '1s', title: 'API response: 1s (1000ms)', tone: 'normal' }])
   const timingSummaryClass = await page.$eval('#concrete [data-usage-timing-summary]', item => item.className)
   assert.ok(timingSummaryClass.includes('border-l'), timingSummaryClass)
   assert.ok(!timingSummaryClass.includes('rounded'), timingSummaryClass)
@@ -163,6 +164,7 @@ test('collapsed badge preserves compact labels and mouse, Enter, and Space toggl
 
 test('details use persisted concrete/virtual metadata and show legacy omissions honestly', async () => {
   await mountFixture()
+  assert.equal(await page.$eval('#virtual [data-usage-timing-kind="api"]', item => item.getAttribute('data-usage-timing-tone')), 'warning')
   await page.click('#virtual [data-usage-badge]')
   assert.ok((await badgeState('virtual')).text.includes('Modelsession-hash/virtual → provider/real-model'))
 
@@ -205,10 +207,12 @@ test('collapsed tool-group details aggregate calls without attributing them to t
   assert.equal(await page.$$eval('#groupSame .foxwarm-tool-card', cards => cards.length), 0, 'badge click must not expand the tool group')
   assert.equal(await page.$$eval('#groupSame [data-usage-badge]', badges => badges.length), 1, 'badge remains the collapsed-group interaction target')
 
+  assert.equal(await page.$eval('#groupDifferent [data-usage-timing-kind="api"]', item => item.getAttribute('data-usage-timing-tone')), 'critical')
   await page.click('#groupDifferent [data-usage-badge]')
   const different = await badgeState('groupDifferent')
   assert.ok(different.text.includes('Modelvirtual/first → provider/first-model • virtual/second → provider/second-model'), different.text)
   assert.ok(different.text.includes(' – '), 'different persisted call times render as an accurate range')
+  assert.ok(different.text.includes('API1m20s (80000ms)'), different.text)
 })
 
 test('desktop expansion preserves the external lower-right gap until timeline-space clamping is necessary', async () => {

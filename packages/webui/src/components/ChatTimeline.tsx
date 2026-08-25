@@ -45,6 +45,7 @@ import {
   deriveRequestTimings,
   formatCompactDuration,
   formatDetailedDuration,
+  getApiDurationTone,
   summarizeDurationSamples,
   type DerivedRequestTiming,
   type DurationSample,
@@ -197,8 +198,8 @@ const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; t
   )
 }
 
-const ModelUsageTextRow = ({ label, value }: { label: string; value: string }) => (
-  <span className="flex min-w-0 items-baseline justify-between gap-2 text-slate-500 dark:text-slate-400">
+const ModelUsageTextRow = ({ label, value, tone = 'normal' }: { label: string; value: string; tone?: 'normal' | 'warning' | 'critical' }) => (
+  <span className={`flex min-w-0 items-baseline justify-between gap-2 ${tone === 'critical' ? 'text-red-600 dark:text-red-400' : tone === 'warning' ? 'text-orange-600 dark:text-orange-400' : 'text-slate-500 dark:text-slate-400'}`}>
     <span className="shrink-0 text-[10px] uppercase tracking-wide opacity-80">{label}</span>
     <span className="min-w-0 break-all text-right text-[10px] font-semibold leading-snug tabular-nums">{value}</span>
   </span>
@@ -215,6 +216,7 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
   const stopUsageBadgeEvent = (event: { stopPropagation: () => void }) => event.stopPropagation()
   const apiDurationMs = summarizeDurationSamples(attribution.apiDurationsMs).totalMs
   const betweenRequestsMs = summarizeDurationSamples(attribution.betweenRequestsMs).totalMs
+  const apiDurationTone = apiDurationMs === null ? 'normal' : getApiDurationTone(apiDurationMs)
 
   return (
     <button
@@ -238,7 +240,7 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
           <ModelUsageRow label="Input" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
           <ModelUsageRow label="Output" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
           <ModelUsageTextRow label="Between" value={formatDurationSummary(attribution.betweenRequestsMs)} />
-          <ModelUsageTextRow label="API" value={formatDurationSummary(attribution.apiDurationsMs)} />
+          <ModelUsageTextRow label="API" value={formatDurationSummary(attribution.apiDurationsMs)} tone={apiDurationTone} />
           <ModelUsageTextRow label="Time" value={formatUsageTimes(attribution.timestamps)} />
           <ModelUsageTextRow label="Model" value={formatUsageModels(attribution.models)} />
         </>
@@ -266,7 +268,8 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
               {apiDurationMs !== null ? (
                 <span
                   data-usage-timing-kind="api"
-                  className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300"
+                  data-usage-timing-tone={apiDurationTone}
+                  className={`inline-flex items-center gap-1 ${apiDurationTone === 'critical' ? 'text-red-600 dark:text-red-400' : apiDurationTone === 'warning' ? 'text-orange-600 dark:text-orange-400' : 'text-slate-600 dark:text-slate-300'}`}
                   title={`API response: ${formatDetailedDuration(apiDurationMs)}`}
                 >
                   <Cloud aria-hidden="true" className="h-2.5 w-2.5 shrink-0" strokeWidth={1.8} />

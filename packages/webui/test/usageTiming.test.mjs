@@ -8,6 +8,7 @@ const {
   deriveRequestTimings,
   formatCompactDuration,
   formatDetailedDuration,
+  getApiDurationTone,
   summarizeDurationSamples,
 } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
 
@@ -83,4 +84,11 @@ test('duration summaries total valid samples while retaining missing and invalid
     unavailableCount: 1,
     invalidCount: 0,
   })
+})
+
+test('API duration tone warns at 30 seconds and becomes critical at 60 seconds', () => {
+  assert.equal(getApiDurationTone(29_999), 'normal')
+  assert.equal(getApiDurationTone(30_000), 'warning')
+  assert.equal(getApiDurationTone(59_999), 'warning')
+  assert.equal(getApiDurationTone(60_000), 'critical')
 })

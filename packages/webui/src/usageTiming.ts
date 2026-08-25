@@ -1,4 +1,14 @@
 export type DurationSample = number | null | 'invalid'
+export type ApiDurationTone = 'normal' | 'warning' | 'critical'
+
+export const API_DURATION_WARNING_MS = 30_000
+export const API_DURATION_CRITICAL_MS = 60_000
+
+export const getApiDurationTone = (durationMs: number): ApiDurationTone => {
+  if (durationMs >= API_DURATION_CRITICAL_MS) return 'critical'
+  if (durationMs >= API_DURATION_WARNING_MS) return 'warning'
+  return 'normal'
+}
 
 export type DerivedRequestTiming = {
   apiDurationMs: DurationSample
