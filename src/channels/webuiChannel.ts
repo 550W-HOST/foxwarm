@@ -20,7 +20,7 @@ import { deleteSessionLifecycle } from '../sessionDeletion';
 import type { SessionRuntimeSessionDto } from '../sessionRuntime';
 import { buildSessionRuntimeSessionDto } from '../sessionRuntimeService';
 import { sessionCatalogStore } from '../session/catalogStore';
-import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, getActiveModelsConfigPath, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort } from '../config';
+import { AGENTS_DIR, APP_CONFIG_PATH, AppConfig, BASE_DIR, MODELS_CONFIG_TEMPLATE_PATH, ProviderConfigEntry, getActiveModelsConfigPath, getAgentDir, readAppConfigFile, resolveModelConfig, MODEL_EFFORTS, type ModelEffort } from '../config';
 import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
 import { httpServer } from '../httpServer';
 import { COMMANDS } from '../commands';
@@ -839,6 +839,53 @@ export function setWebUiDeleteLifecycleTestHookForTests(hook: WebUiDeleteLifecyc
   webUiDeleteLifecycleTestHook = hook;
 }
 
+type AgentMemoryManifestEntry = {
+  path: string;
+  absolutePath: string;
+  size: number;
+  modifiedAt: number;
+};
+
+export async function readAgentMemoryManifest(agentId: string): Promise<{ memoryRoot: string; files: AgentMemoryManifestEntry[] }> {
+  sessionManager.validateAgentName(agentId);
+  const agentDir = getAgentDir(agentId);
+  if (!await fs.pathExists(agentDir)) throw new Error(`Agent "${agentId}" not found.`);
+  const memoryRoot = path.join(agentDir, 'memory');
+  const files: AgentMemoryManifestEntry[] = [];
+  const walk = async (directory: string, relativeDirectory: string, depth: number): Promise<void> => {
+    if (depth > 12 || files.length >= 2000 || !await fs.pathExists(directory)) return;
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      if (files.length >= 2000) break;
+      if (entry.isSymbolicLink()) continue;
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+      const absolutePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await walk(absolutePath, relativePath, depth + 1);
+      } else if (entry.isFile() && entry.name.toLocaleLowerCase().endsWith('.md')) {
+        const stat = await fs.stat(absolutePath);
+        files.push({ path: relativePath, absolutePath, size: stat.size, modifiedAt: stat.mtimeMs });
+      }
+    }
+  };
+  await walk(memoryRoot, '', 0);
+  const topLevelPriority = new Map(['00_SYSTEM.md', 'MEMORY.md', 'SOUL.md', 'USER.md'].map((name, index) => [name, index]));
+  files.sort((left, right) => {
+    const leftArchive = left.path.startsWith('archive/') ? 1 : 0;
+    const rightArchive = right.path.startsWith('archive/') ? 1 : 0;
+    if (leftArchive !== rightArchive) return leftArchive - rightArchive;
+    const leftDepth = left.path.split('/').length;
+    const rightDepth = right.path.split('/').length;
+    if (leftDepth !== rightDepth) return leftDepth - rightDepth;
+    const leftPriority = topLevelPriority.get(left.path) ?? 100;
+    const rightPriority = topLevelPriority.get(right.path) ?? 100;
+    if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+    return left.path.localeCompare(right.path);
+  });
+  return { memoryRoot, files };
+}
+
 export class WebUIChannel implements Channel {
   readonly name = 'webui';
   readonly platform = 'webui';
@@ -1313,13 +1360,40 @@ export class WebUIChannel implements Channel {
             const entries = await fs.pathExists(AGENTS_DIR)
               ? await fs.readdir(AGENTS_DIR, { withFileTypes: true })
               : [];
-            const agents = entries
-              .filter(entry => entry.isDirectory())
-              .map(entry => ({
-                id: entry.name,
-                inherit: sessionManager.getAgentMetadata(entry.name).inherit || null,
-              }))
-              .sort((a, b) => a.id.localeCompare(b.id));
+            const allSessions = [...sessionManager.getAllSessions().values()];
+            const agents = await Promise.all(entries
+              .filter(entry => {
+                if (!entry.isDirectory()) return false;
+                try {
+                  sessionManager.validateAgentName(entry.name);
+                  return true;
+                } catch (error) {
+                  logger.warn({ err: error, entryName: entry.name }, 'Skipping invalid Agent registry directory');
+                  return false;
+                }
+              })
+              .map(async entry => {
+                const metadata = sessionManager.getAgentMetadata(entry.name);
+                const ownedSessions = allSessions.filter(session => (session.agent || 'main') === entry.name);
+                const memory = await readAgentMemoryManifest(entry.name).catch(error => {
+                  logger.warn({ err: error, agentId: entry.name }, 'Failed to summarize Agent memory manifest');
+                  return { memoryRoot: path.join(getAgentDir(entry.name), 'memory'), files: [] as AgentMemoryManifestEntry[] };
+                });
+                return {
+                  id: entry.name,
+                  inherit: metadata.inherit || null,
+                  inheritanceChain: sessionManager.getAgentInheritanceChain(entry.name),
+                  isolated: !!metadata.isolated,
+                  isolatedNode: sessionManager.getAgentIsolationNode(entry.name) || null,
+                  sessionCount: ownedSessions.length,
+                  activeSessionCount: ownedSessions.filter(session => !!session.busy).length,
+                  queuedSessionCount: ownedSessions.filter(session => session.queue.length > 0).length,
+                  memoryRoot: memory.memoryRoot,
+                  memoryFileCount: memory.files.length,
+                  memoryLastModified: memory.files.reduce((latest, file) => Math.max(latest, file.modifiedAt), 0) || null,
+                };
+              }));
+            agents.sort((a, b) => a.id.localeCompare(b.id));
             res.json({ agents });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to get agents');
@@ -1367,6 +1441,84 @@ export class WebUIChannel implements Channel {
             const code = typeof e?.code === 'string' ? e.code : undefined;
             const status = code === sessionManager.ARCHIVED_SESSION_ID_ERROR_CODE || /already exists/i.test(message) ? 409 : 400;
             res.status(status).json({ error: message, ...(code ? { code } : {}) });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/agents/:agentId/memory',
+        method: 'GET',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const agentId = Array.isArray(req.params.agentId) ? req.params.agentId[0] : req.params.agentId;
+            res.json(await readAgentMemoryManifest(agentId));
+          } catch (e: any) {
+            const message = e instanceof Error ? e.message : String(e);
+            res.status(/not found/i.test(message) ? 404 : 400).json({ error: message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/agents/:agentId',
+        method: 'PUT',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const agentId = Array.isArray(req.params.agentId) ? req.params.agentId[0] : req.params.agentId;
+            sessionManager.validateAgentName(agentId);
+            if (!await fs.pathExists(getAgentDir(agentId))) return res.status(404).json({ error: `Agent "${agentId}" not found.` });
+            const hasInherit = Object.prototype.hasOwnProperty.call(req.body || {}, 'inheritAgent');
+            const hasIsolation = Object.prototype.hasOwnProperty.call(req.body || {}, 'isolatedNode');
+            if (!hasInherit && !hasIsolation) return res.status(400).json({ error: 'Provide inheritAgent and/or isolatedNode.' });
+
+            if (hasInherit) {
+              const inheritAgent = typeof req.body?.inheritAgent === 'string' && req.body.inheritAgent.trim()
+                ? req.body.inheritAgent.trim()
+                : undefined;
+              if (inheritAgent === agentId) return res.status(400).json({ error: 'Agent cannot inherit from itself.' });
+              await sessionManager.setAgentInherit(agentId, inheritAgent);
+            }
+            if (hasIsolation) {
+              const isolatedNode = typeof req.body?.isolatedNode === 'string' && req.body.isolatedNode.trim()
+                ? req.body.isolatedNode.trim()
+                : undefined;
+              await sessionManager.setAgentIsolation(agentId, isolatedNode);
+            }
+            this.broadcastSessionListUpdate();
+            const metadata = sessionManager.getAgentMetadata(agentId);
+            res.json({ success: true, agent: {
+              id: agentId,
+              inherit: metadata.inherit || null,
+              inheritanceChain: sessionManager.getAgentInheritanceChain(agentId),
+              isolated: !!metadata.isolated,
+              isolatedNode: sessionManager.getAgentIsolationNode(agentId) || null,
+            } });
+          } catch (e: any) {
+            const message = e instanceof Error ? e.message : String(e);
+            res.status(/session-worker|mutation/i.test(message) ? 409 : 400).json({ error: message });
+          }
+        },
+      });
+
+      httpServerInstance.addRoute({
+        path: '/api/agents/:agentId',
+        method: 'DELETE',
+        handler: async (req: express.Request, res: express.Response) => {
+          try {
+            const agentId = Array.isArray(req.params.agentId) ? req.params.agentId[0] : req.params.agentId;
+            if (req.body?.confirmAgentId !== agentId) return res.status(400).json({ error: 'confirmAgentId must exactly match the Agent ID.' });
+            const result = await sessionManager.deleteAgent(agentId, async sessionId => {
+              const deletion = await deleteSessionLifecycle({ requestedSessionId: sessionId, includeDescendants: false });
+              if (deletion.status === 'not-found') return false;
+              if (deletion.status === 'busy') throw new Error(deletion.message);
+              return deletion.status === 'deleted';
+            });
+            this.broadcastSessionListUpdate();
+            res.json({ success: true, agentId, deletedSessions: result.deletedSessions });
+          } catch (e: any) {
+            const message = e instanceof Error ? e.message : String(e);
+            const status = /not found/i.test(message) ? 404 : /active|busy|queued|attached|inherited by|mutation|deletion stopped/i.test(message) ? 409 : 400;
+            res.status(status).json({ error: message });
           }
         },
       });

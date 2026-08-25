@@ -69,31 +69,6 @@ test('bounded tree rows use exact item counts before loading arbitrary-depth bra
   )
 })
 
-test('Architecture focus disclosure reveals strict ancestors once without forcing open the current row', async () => {
-  const { getArchitectureFocusReveal } = await loadTypeScriptModule('../src/architecturePresentation.ts')
-
-  const rootFocus = getArchitectureFocusReveal(['root'], 'root')
-  assert.deepEqual(rootFocus.ancestors, [], 'an already visible root does not open its own children')
-
-  const nestedFocus = getArchitectureFocusReveal(['root', 'parent', 'current'], 'current')
-  assert.deepEqual(nestedFocus.ancestors, ['root', 'parent'], 'only strict ancestors reveal a nested current row')
-  assert.equal(
-    getArchitectureFocusReveal(['root', 'parent', 'current'], 'current', nestedFocus.identity),
-    null,
-    'replaying the same focus path cannot override a later manual collapse',
-  )
-  assert.equal(
-    getArchitectureFocusReveal(['root', 'parent', 'current'], 'other'),
-    null,
-    'a stale focus response cannot disclose a different current session',
-  )
-  assert.notEqual(
-    nestedFocus.identity,
-    getArchitectureFocusReveal(['new-root', 'current'], 'current').identity,
-    'a canonical reparenting changes the one-shot reveal identity',
-  )
-})
-
 test('agent/session creation helpers keep an empty session ID random', async () => {
   const {
     RANDOM_SESSION_ID_PLACEHOLDER,

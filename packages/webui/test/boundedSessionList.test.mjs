@@ -9,6 +9,7 @@ const files = {
   list: await readFile(new URL('../src/components/SessionListCore.tsx', import.meta.url), 'utf8'),
   collapsed: await readFile(new URL('../src/components/CollapsedSidebar.tsx', import.meta.url), 'utf8'),
   architecture: await readFile(new URL('../src/components/ArchitectureView.tsx', import.meta.url), 'utf8'),
+  webuiChannel: await readFile(new URL('../../../src/channels/webuiChannel.ts', import.meta.url), 'utf8'),
 }
 
 test('normal App and embedded roots use bounded Session APIs rather than legacy global GET', () => {
@@ -80,12 +81,26 @@ test('Architecture owns its bounded summary and forest instead of an all-session
   assert.match(files.architecture, /pruneEpochRows/)
   assert.match(files.architecture, /session-list\/by-id/)
   assert.match(files.architecture, /focusPathIds/)
-  assert.match(files.architecture, /revealedFocusIdentityRef/)
-  assert.match(files.architecture, /getArchitectureFocusReveal/)
-  assert.match(files.architecture, /collapseSessionListExpandedBranch/)
   assert.match(files.architecture, /webUiRealtime\.subscribeSessionList\(architectureSubscriptionIds/)
   assert.match(files.architecture, /onOpen: \(\) => requestSessionListStreamOpenResync\(scheduler\)/)
+  assert.match(files.architecture, /getArchitectureSessionNodeId/)
+  assert.match(files.architecture, /data-architecture-node-session-scroll/)
+  assert.match(files.architecture, /max-h-\[360px\]/)
+  assert.doesNotMatch(files.architecture, /function SessionNode/)
   assert.doesNotMatch(files.architecture, /new EventSource/)
   assert.doesNotMatch(files.architecture, /sessions:\s*Session\[\]/)
   assert.doesNotMatch(files.architecture, /\.sort\(sortSessions\)/)
+})
+
+test('Architecture Agent registry owns CRUD controls and bounded self-memory navigation', () => {
+  assert.match(files.architecture, /AgentCreationMenu/)
+  assert.match(files.architecture, /surface === 'agents'/)
+  assert.match(files.architecture, /\/agents\/\$\{encodeURIComponent\(selectedRegistryAgentId\)\}\/memory/)
+  assert.match(files.architecture, /confirmAgentId: agentId/)
+  assert.match(files.architecture, /onOpenAgentMemory/)
+  assert.doesNotMatch(files.architecture, /renameAgent/)
+  assert.match(files.webuiChannel, /path: '\/api\/agents\/:agentId\/memory'/)
+  assert.match(files.webuiChannel, /method: 'PUT'/)
+  assert.match(files.webuiChannel, /deleteSessionLifecycle\(\{ requestedSessionId: sessionId, includeDescendants: false \}\)/)
+  assert.match(files.webuiChannel, /entry\.isSymbolicLink\(\)/)
 })

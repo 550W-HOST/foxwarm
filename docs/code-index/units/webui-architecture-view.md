@@ -1,58 +1,68 @@
 # Unit: webui-architecture-view
 
-Files: packages/webui/src/components/ArchitectureView.tsx, packages/webui/src/architecturePresentation.ts
-Secondary files: packages/webui/test/sessionListAndWorkbenchState.test.mjs
+Files: packages/webui/src/components/ArchitectureView.tsx, packages/webui/src/architectureOperations.ts, packages/webui/test/architectureOperations.test.mjs
+Secondary files: packages/webui/test/boundedSessionList.test.mjs, packages/webui/test/boundedSessionReplay.test.mjs
 
 ## Purpose
 
-Renders a bounded hierarchical architecture view with global catalog summary statistics, paged real-forest rows, agent filtering, exact watched-row deltas, and real-time busy-duration tracking.
+Renders a bounded system-operations dashboard and persistent Agent registry for Foxwarm. Unlike the Sidebar's session navigation hierarchy, Architecture explains runtime placement and operational state, and owns explicit Agent lifecycle, inheritance, isolation, and memory-workspace controls.
 
 ## Key Exports
 
-- `ArchitectureView` — Main React component (default/named export) that renders the full architecture dashboard
-- `ArchitectureViewProps` — Props interface for the component
-- `getArchitectureFocusReveal(...)` — Produces one canonical focus-path identity plus the strict ancestors required to reveal the current row without opening its descendants
-
-## Function Index
-
-| Function | Lines (approx) | Description |
-|----------|----------------|-------------|
-| `formatRelativeTime(timestamp)` | ~31–42 | Converts timestamp to human-readable relative time string |
-| `formatBusyDuration(busyStartedAt, now)` | ~44–54 | Formats elapsed busy time as h/m/s string |
-| `formatTokenMillions(value)` | ~56–63 | Formats token counts as abbreviated millions (e.g. "1.23m") |
-| `renderMetaBadge(label, tone)` | ~65–78 | Returns a styled badge span element with tone-based coloring |
-| `SessionNode({...})` | ~96–190 | Recursive tree node component rendering a session card with children |
-| `ArchitectureView({...})` | component | Fetches global summary/agent counts and paged forest windows, then renders them in server order |
-| `loadArchitecture(append)` | component closure | Loads or extends the current global/agent-scoped Architecture root and initial-child window |
-| `loadArchitectureChildren(sessionId)` | component closure | Continues one real-parent branch through the fixed child query API |
-
-## Dependencies
-
-- `Session` type from `./SessionListCore` — defines the session data shape used throughout
+- `ArchitectureView` — owns the bounded Architecture catalog, node-status fetch, filters, execution-node lanes, and selected-session inspector.
+- `getArchitectureSessionNodeId(session)` — resolves effective placement, preferring an active tool's exact execution node over the Session's configured current node and then `master`.
+- `filterArchitectureSessions(sessions, filter, query)` — applies canonical runtime-state filters and cross-field operational search.
+- `groupArchitectureSessionsByNode(sessions)` — groups the loaded presentation window into effective execution-node lanes without changing server row order.
+- `getArchitectureNodePreview(sessions, preferredIds, limit)` — produces a bounded lane preview that keeps current/selected and active sessions visible before ordinary server-ordered rows.
 
 ## Behavior
 
-- Owns `/session-list/architecture` and `/session-list/children` calls; no complete Session-array prop or legacy global-list fetch is accepted.
-- Displays global aggregate totals and agent counts from maintained catalog summaries even while one agent forest is selected.
-- Keeps only loaded root/child windows and preserves backend order, including SQLite-BINARY tie order.
-- Reuses the bounded atomic cursor replay and per-row HTTP/SSE epoch mechanism. Root depth can span multiple 100-row pages; every explicitly expanded branch is replayed in 20-parent/20-row batches, and reset or a shared presentation-revision mismatch restarts before publication.
-- Computes active/busy summary stats from canonical runtime state (`requesting-model` / `running-tool`) with legacy `busy` fallback, and displays richer status text such as `tool: exec` or `waiting: sessions 1/2` when available.
-- Maintains local state for: expanded nodes (`expandedSessions`), "show more" children toggles, selected agent filter, and a `now` timestamp that ticks every second for live busy-duration updates
-- Current-session focus disclosure is navigation/path-change driven rather than refresh driven. One canonical focus-path identity expands only strict ancestors once; ordinary bounded replay and realtime row refresh preserve later manual collapse intent, including collapse of the current row itself.
-- Collapsing an Architecture branch removes the row and its currently loaded descendants from local expansion state, so reopening the parent does not silently restore a previously hidden nested subtree.
-- Agent selection asks the backend for the canonical same-agent forest; it does not infer a complete forest from partial browser rows.
-- Architecture branch totals come only from its real-forest root/child queries. Exact focus rows may also carry Sidebar presentation counts for shared DTO compatibility, but Architecture does not use those counts to redefine pinned or cross-agent edges.
-- `SessionNode` recursively renders children with configurable preview counts (10 for root, 8 for nested) and a "show more" toggle
-- Uses `useEffect` with a 1-second interval to keep busy durations updating in real time
-- The 1-second timer runs while any session is active according to runtime state, so active durations update for model requests and tool execution without treating `waiting` as busy.
+### Bounded catalog ownership
+
+- Architecture owns `/session-list/architecture`, `/session-list/children`, and exact `/session-list/by-id` requests; it never accepts an all-session array prop or performs the legacy global Session fetch.
+- It retains atomic root/branch replay, shared presentation-revision fencing, per-row HTTP/SSE epochs, forced bounded focus paths, agent-owned forests, row pruning, and exact loaded-row realtime subscriptions.
+- Global cards use backend-maintained catalog summaries even though the browser holds only a bounded window. The UI states the loaded/global counts explicitly.
+- Loading more roots extends the bounded window by 50. Selecting a session can materialize its child relationship window through the fixed children API; the inspector can continue that relationship window.
+
+### Operational topology
+
+- The primary surface is execution-node lanes, not a second recursive navigation tree.
+- Effective placement is the active tool's `executionNode`, otherwise `currentNode`, otherwise `master`. This makes cross-node tool execution visible while it is occurring.
+- `/nodes` supplies Master/CLI Node identity, online state, type, display name, and service count. Unknown placement IDs remain visible as unavailable node lanes rather than disappearing.
+- Each lane reports loaded, active, and waiting counts. A preview shows at most six rows while prioritizing current/selected and active sessions; expanding a large lane exposes all loaded rows inside a node-owned scroll region capped at 360px so one busy node cannot push every later node far down the page.
+- Empty nodes remain as compact headers, preserving system topology without tall empty placeholder bodies.
+
+### Operations and inspector
+
+- Summary cards expose agents, sessions, active, waiting, queued, online nodes, and managed-session count. Active/waiting/queued summary cards also set the local status filter.
+- One compact topology control bar replaces unbounded Agent/status chip clouds: search and bounded Agent/status selects occupy the primary control area, while total/cached/input/output token traffic forms one read-only trailing group. Agent selection remains backend-owned. Local filters cover all, active, waiting, queued, and isolated rows; search matches session ID/name, agent, effective node, model, active tool, and wait kind.
+- Clicking a session selects it for inspection without navigation. The explicit Open control enters the chat Session.
+- The inspector shows canonical runtime state/phase/model/queue, active tool and arguments, wait condition and pending targets, agent/node/CWD/isolation, messages/activity/tokens, and loaded parent/child relationships.
+- The current Session is exact-loaded and initially inspected, but catalog replay does not force-expand a duplicate session tree. Background refresh therefore cannot override a nonexistent tree-collapse intent.
+- A one-second clock runs only while a loaded Session is actively requesting a model or running a tool, keeping elapsed runtime labels current without treating waiting as busy.
+
+### Agent registry
+
+- The Topology/Agents surface switch separates runtime Session placement from persistent Agent management. The Agents summary counts real workspace directories, including valid zero-session Agents that do not appear in Session-derived catalog summaries.
+- Registry cards show self-owned memory file count/recency plus session, active, queue, inheritance, and isolation summaries. The selected Agent and Agents with active Sessions are presented before ordinary alphabetical rows.
+- The registry reuses `AgentCreationMenu` for Agent and Session creation. Agent update changes only mutable inheritance/isolation metadata; Agent ID is not renamed because it is a durable namespace, permission scope, and archive identity component.
+- The Agent inspector displays the complete inheritance chain, allows an isolation Node selection, and loads a bounded, symlink-free Markdown manifest from self-owned `memory/`. Top-level `00_SYSTEM.md`, `MEMORY.md`, `SOUL.md`, and `USER.md` are prioritized, nested project files follow, and `archive/` is last. Folder/file actions open the exact Master path in Code without copying file content through the registry API.
+- Agent deletion requires exact typed Agent-ID confirmation. `main` is immutable; Agents inherited by another Agent and Agents with active/queued Sessions are rejected. Successful deletion removes current Session lifetimes through canonical Session deletion, then removes the self-owned workspace and Agent metadata; durable Session archives and their reserved identities remain.
 
 ## Integration
 
-- Receives only navigation/focus callbacks from its parent; the view owns its bounded query/cache lifecycle.
-- The Code `foxwarmEmbed=agents` leaf lazily reuses this component inside a stable Agents custom editor and bridges selection to deterministic chat editors without owning another global Session mirror.
-- Global SSE subscribes only to loaded Architecture rows for immediate state/deletion deltas, retaining one invalidation-only stream while the row set is empty. Catalog invalidation refetches the current bounded root window through the fixed refresh scheduler; each new/reconnected batch also submits that scheduler's post-open resync, so replacement gaps close while sibling opens coalesce and stable subscription signatures do not loop.
-- Agent changes clear historical rows, branches, expansion, summaries, refs, and epochs before loading the new forest; collapse and root-window changes prune unreachable descendants.
-- The current Session is independently loaded by exact ID with its presentation path. In unfiltered mode, off-page canonical path rows become a forced bounded ownership/render chain. Under an agent filter, a different-agent focus is not forced; a matching focus keeps only its contiguous same-agent suffix after the nearest cross-agent boundary, preserving the filtered real forest without duplicate roots/edges. Initial path arrival, navigation, or canonical reparenting reveals the strict ancestor path once; replay of the same focus identity cannot reopen a branch the user collapsed afterward.
-- `onSelectSession` navigates to a specific session's detail/chat view
-- `onBack` triggers navigation back to a previous view (rendered as a back button in the header)
-- Depends on the `Session` projection interface from `SessionListCore` and the fixed bounded Session-list APIs.
+- `App` provides Session navigation/creation callbacks, Sidebar refresh, and embedded Code folder/file opening. The embedded Agents editor falls back to authenticated Agent/Session APIs and a new-window Code target.
+- `SessionListCore.Session` remains the shared bounded projection DTO.
+- `sessionRuntimeState.ts` owns canonical active/waiting/idle interpretation.
+- `nodeTargets.ts` owns tolerant `/nodes` response normalization.
+- The Sidebar remains the canonical surface for compact navigation, pinning, drag ordering, and branch disclosure; Architecture intentionally does not duplicate those controls.
+
+## Design Decisions
+
+### D-webui-architecture-operational-topology
+
+[2026-08-25] Architecture answers how Foxwarm is organized and running; Sidebar answers which Session the user wants to enter. Architecture therefore uses effective execution-node lanes plus a diagnostic entity inspector instead of a second recursive session-navigation tree. Keep current/active rows visible, preserve bounded backend ownership, cap expanded node bodies with local scrolling, and make navigation an explicit secondary action. This distinction prevents duplicated branch-order/collapse behavior while exposing placement, queue, wait, tool, model, token, and relationship information that Sidebar does not provide.
+
+### D-webui-architecture-agent-registry
+
+[2026-08-25] Persistent Agent CRUD belongs beside runtime topology because an Agent is a workspace/memory owner, not a Sidebar branch. Create and mutable metadata update are ordinary registry actions; rename is intentionally absent because Agent ID participates in Session namespace, permission scope, and retained archive identity. Memory navigation is manifest-only and path-confined, while destructive deletion uses typed confirmation and backend lifecycle blockers.

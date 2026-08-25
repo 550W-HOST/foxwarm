@@ -16,7 +16,7 @@ async function waitForSystemTab(tabId, heading) {
   await page.waitForSelector(`[data-tab-id=${JSON.stringify(tabId)}]`, { timeout: 15_000 })
   await page.waitForFunction((expected) => {
     if (expected === 'Agents') {
-      return Array.from(document.querySelectorAll('h1')).some((element) => element.textContent?.trim() === expected)
+      return Array.from(document.querySelectorAll('h1')).some((element) => element.textContent?.trim() === 'System Architecture')
     }
     return document.body.textContent?.includes(expected)
   }, { timeout: 15_000 }, heading)
@@ -232,6 +232,8 @@ test('tab context menu survives background scroll and bulk close actions remain 
 
 test('system tabs remain workbench tabs on a mobile viewport', async () => {
   await page.setViewport({ width: 390, height: 844, isMobile: true })
+  await page.reload({ waitUntil: 'networkidle2' })
+  await page.waitForFunction(() => !!window.foxwarmTest, { timeout: 15_000 })
   await page.evaluate(() => { window.location.hash = 'setup' })
   await waitForSystemTab('system:setup', 'Foxwarm Setup')
   assert.ok(await page.$('[data-pane-id]'))
