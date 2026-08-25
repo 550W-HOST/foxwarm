@@ -32,6 +32,7 @@ import { buildPathDownloadUrl, triggerBrowserDownload } from './downloadShared'
 import DiffPreview from './DiffPreview'
 import { ExecCommandText, ExecOutputText } from './ToolExecText'
 import ThreadLineButton from './ThreadLineButton'
+import { getLegacyEditLineCounts } from './legacyEditCounts'
 
 const formatToolResponseText = (resp: { response: unknown }): string => formatCompactObjectPreview(resp.response)
 
@@ -200,12 +201,17 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
 
   if (isLegacyDiffToolName(call.name)) {
     const hasLegacyDiff = hasLegacyDiffPayload(call)
-    const oldLines = hasLegacyDiff ? call.args.oldText.split('\n').length - (call.args.oldText.endsWith('\n') ? 1 : 0) : 0
-    const newLines = hasLegacyDiff ? call.args.newText.split('\n').length - (call.args.newText.endsWith('\n') ? 1 : 0) : 0
+    const lineCounts = hasLegacyDiff ? getLegacyEditLineCounts(call.args.oldText, call.args.newText) : null
     return (
       <span className="flex items-center gap-2 min-w-0">
-        {hasLegacyDiff ? (
-          <span className="shrink-0 text-xs"><span className="foxwarm-diff-removed-count text-orange-600 dark:text-orange-400">-{oldLines}</span><span className="mx-1 text-gray-500">/</span><span className="foxwarm-diff-added-count text-blue-600 dark:text-blue-400">+{newLines}</span></span>
+        {lineCounts ? (
+          (lineCounts.removed > 0 || lineCounts.added > 0) && (
+            <span className="shrink-0 text-xs">
+              {lineCounts.removed > 0 && <span className="foxwarm-diff-removed-count text-orange-600 dark:text-orange-400">-{lineCounts.removed}</span>}
+              {lineCounts.removed > 0 && lineCounts.added > 0 && <span className="foxwarm-diff-count-separator mx-1 text-gray-500">/</span>}
+              {lineCounts.added > 0 && <span className="foxwarm-diff-added-count text-blue-600 dark:text-blue-400">+{lineCounts.added}</span>}
+            </span>
+          )
         ) : (
           <span className="shrink-0 text-xs text-gray-500">legacy payload unavailable</span>
         )}

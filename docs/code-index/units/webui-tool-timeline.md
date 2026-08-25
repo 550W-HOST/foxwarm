@@ -1,6 +1,6 @@
 # Unit: webui-tool-timeline
 
-Files: packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/ToolExecText.tsx, packages/webui/src/components/ToolScriptProgressContext.tsx, packages/webui/test/toolCollapsedOverflow.e2e.mjs, packages/webui/test/toolArgsHeader.e2e.mjs
+Files: packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/ToolExecText.tsx, packages/webui/src/components/ToolScriptProgressContext.tsx, packages/webui/src/components/legacyEditCounts.ts, packages/webui/test/toolCollapsedOverflow.e2e.mjs, packages/webui/test/toolArgsHeader.e2e.mjs, packages/webui/test/legacyEditCounts.test.mjs, packages/webui/test/legacyEditCounts.e2e.mjs
 
 ## Purpose
 
@@ -33,6 +33,8 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 | `isLegacyDiffToolName(name)` | ~1 | Checks if tool name is legacy edit/edit_memory |
 | `isPatchToolName(name)` | ~1 | Checks if tool name is apply_patch/apply_patch_memory |
 | `hasLegacyDiffPayload(call)` | ~2 | Checks if call has oldText/newText args |
+| `countLogicalPayloadLines(text)` | ~5 | Counts legacy edit payload lines without treating empty text or a trailing terminator as an extra line |
+| `getLegacyEditLineCounts(oldText, newText)` | ~4 | Returns removed/added logical-line counts for a legacy edit preview |
 | `isStreamingPartialToolCall(modelMessage)` | ~1 | Detects synthetic streaming assistant tool calls whose args are intentionally incomplete |
 | `renderToolCallPreview(call)` | ~80 | Renders inline preview content for various tool types |
 | `renderToolResponsePreview(call, resp)` | ~40 | Renders inline preview of tool response content |
@@ -80,6 +82,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 - Tool cards and diff previews expose semantic CSS hooks (`foxwarm-tool-card`, `foxwarm-tool-tone-*`, `foxwarm-tool-header`, `foxwarm-tool-tag`, `foxwarm-tool-thread-line`, `foxwarm-tool-action-buttons-*`, `foxwarm-diff-*`) so opt-in UI style layers can map success/error/neutral and diff added/removed states to alternate palettes without changing tool grouping or response rendering logic.
 - Default-view call arguments remain inside the tone-specific `foxwarm-tool-header` region in both collapsed and expanded states. Collapsed arguments use the compact one-line summary; expanded arguments wrap below the tag row inside the same header background. Result previews and expanded results remain on the lighter card surface, without a call/result divider. Separators between multiple result items remain result-local.
 - Finalized direct `read`, `write`, and `edit` cards render `filePath` as ordinary text. When the parent supplies a current-node handler, a compact native Code icon button immediately before that text is the only open-file action. Collapsed tool-call headers remain exactly one no-wrap line clipped inside their shrinkable flex slot with an ellipsis; the icon preserves bridge access without making the path intercept the normal header toggle. A `read` path consumes the shrinkable portion while its fixed `(lines …)` suffix stays visible on the same shared header baseline. Direct `apply_patch` uses the existing parsed operation list: single-file collapsed previews and expanded Update/Add headings use the same icon action, while multi-file summaries and deleted-file headings stay non-actionable. `read` forwards its one-based start/end lines. Memory tools and nested unified tool calls keep their existing plain rendering.
+- Collapsed legacy `edit` and `edit_memory` headers count logical old/new payload lines independently: empty text is zero lines, LF/CRLF/CR terminators are equivalent, and a final terminator does not add a phantom line while terminator-only payloads preserve their blank lines. Zero-count sides and their separator are omitted; the path remains visible when both sides are zero. The separate parsed `apply_patch` summary contract is unchanged.
 
 ## Integration
 
