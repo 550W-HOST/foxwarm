@@ -255,6 +255,11 @@ export interface Message {
   parts: MessagePart[]
   __meta?: {
     timestamp?: number
+    llmRequestTiming?: {
+      startedAt: number
+      completedAt: number
+      durationMs: number
+    }
     contextBlock?: ContextBlockMessageMeta
     preservedFromBlockId?: number
     [key: string]: any

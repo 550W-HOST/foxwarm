@@ -47,6 +47,7 @@ import {
     beginLlmRequestJournal,
     LlmRequestPurpose,
 } from './llmRequestJournal';
+import { toPersistedLlmRequestTiming } from './llmRequestTiming';
 
 type LlmInteractionLogFiles = {
     requestPath: string;
@@ -1781,10 +1782,12 @@ export async function chat(
 
     // Add assistant message to history
     if (result.allParts && result.allParts.length > 0) {
+        const llmRequestTiming = toPersistedLlmRequestTiming(result.previousLlmRequest);
         const assistantMeta = {
             ...(result.modelId ? { modelId: result.modelId } : {}),
             ...(result.virtualModelKey ? { virtualModelKey: result.virtualModelKey } : {}),
             ...(result.usage ? { usage: result.usage } : {}),
+            ...(llmRequestTiming ? { llmRequestTiming } : {}),
             ...(result.llmRequestId ? { llmRequestId: result.llmRequestId, llmAttempt: result.llmAttempt } : {}),
         };
         const assistantMsg: Message = {
@@ -2603,15 +2606,17 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                 // retry path and generate a duplicate successful completion.
                 // Attempt-start remains durable and exposes the incomplete
                 // result; normal session delivery proceeds.
+                const previousLlmRequest = { completedAt, durationMs };
+                const completedResult: ChatResult = virtualRoutingRequest
+                    ? { ...result, virtualModelKey: routeKey, previousLlmRequest, llmRequestId: requestId, llmAttempt: attempt }
+                    : { ...result, previousLlmRequest, llmRequestId: requestId, llmAttempt: attempt };
                 await appendLlmAttemptResult({
                     requestId,
                     attempt,
                     outcome: 'success',
-                    result: { ...result, llmRequestId: requestId, llmAttempt: attempt },
+                    result: completedResult,
                 }).catch(error => logger.error({ err: error, requestId, attempt }, 'Failed to append successful LLM attempt result after provider response'));
-                return virtualRoutingRequest
-                    ? { ...result, virtualModelKey: routeKey, previousLlmRequest: { completedAt, durationMs }, llmRequestId: requestId, llmAttempt: attempt }
-                    : { ...result, previousLlmRequest: { completedAt, durationMs }, llmRequestId: requestId, llmAttempt: attempt };
+                return completedResult;
             } catch (error: any) {
                 if (isAbortError(error)) {
                     responseAttempts.push({

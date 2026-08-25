@@ -1,5 +1,5 @@
 import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Eye, Code, FileJson, Copy, Check } from 'lucide-react'
+import { Eye, Code, FileJson, Copy, Check, Hourglass, Cloud } from 'lucide-react'
 import {
   IconToggleButton,
   copyTextToClipboard,
@@ -41,6 +41,14 @@ import {
 import { getContextScrollbarAnchorKey, getMessageStableKey, getMessageViewportAnchorKey } from '../chatViewportState'
 import ThreadLineButton from './ThreadLineButton'
 import SpecialBlock, { MermaidDiagram } from './SpecialBlock'
+import {
+  deriveRequestTimings,
+  formatCompactDuration,
+  formatDetailedDuration,
+  summarizeDurationSamples,
+  type DerivedRequestTiming,
+  type DurationSample,
+} from '../usageTiming'
 
 interface ChatTimelineProps {
   sessionId: string
@@ -73,6 +81,8 @@ type NormalizedTokenUsage = {
 type UsageAttribution = {
   models: string[]
   timestamps: Array<number | null | 'invalid'>
+  apiDurationsMs: DurationSample[]
+  betweenRequestsMs: DurationSample[]
 }
 
 const toTokenCount = (value: unknown): number | null => {
@@ -108,9 +118,11 @@ const formatTokenCount = (count: number): string => {
   return String(count)
 }
 
-const formatUsageTitle = (usage: NormalizedTokenUsage, callCount?: number) => {
+const formatUsageTitle = (usage: NormalizedTokenUsage, attribution: UsageAttribution, callCount?: number) => {
   const total = getUsageTotalTokens(usage)
-  return `Token usage: ${total} total • input ${usage.inputTokens} • output ${usage.outputTokens} • cached ${usage.cachedTokens}${callCount ? ` • calls ${callCount}` : ''}`
+  const api = summarizeDurationSamples(attribution.apiDurationsMs).totalMs
+  const between = summarizeDurationSamples(attribution.betweenRequestsMs).totalMs
+  return `Token usage: ${total} total • input ${usage.inputTokens} • output ${usage.outputTokens} • cached ${usage.cachedTokens}${callCount ? ` • calls ${callCount}` : ''}${between === null ? '' : ` • between ${formatDetailedDuration(between)}`}${api === null ? '' : ` • API ${formatDetailedDuration(api)}`}`
 }
 
 const formatUsageModel = (msg: Message): string => {
@@ -132,9 +144,11 @@ const getUsageTimestamp = (msg: Message): number | null | 'invalid' => {
   return timestamp
 }
 
-const getMessageUsageAttribution = (msg: Message): UsageAttribution => ({
+const getMessageUsageAttribution = (msg: Message, timing: DerivedRequestTiming): UsageAttribution => ({
   models: [formatUsageModel(msg)],
   timestamps: [getUsageTimestamp(msg)],
+  apiDurationsMs: [timing.apiDurationMs],
+  betweenRequestsMs: [timing.betweenRequestsMs],
 })
 
 const formatUsageTime = (timestamp: number): string => new Intl.DateTimeFormat(undefined, {
@@ -159,6 +173,15 @@ const formatUsageTimes = (timestamps: UsageAttribution['timestamps']): string =>
   return labels.join(' • ') || 'unavailable'
 }
 
+const formatDurationSummary = (samples: DurationSample[]): string => {
+  const summary = summarizeDurationSamples(samples)
+  const labels: string[] = []
+  if (summary.totalMs !== null) labels.push(formatDetailedDuration(summary.totalMs))
+  if (summary.unavailableCount > 0) labels.push('unavailable')
+  if (summary.invalidCount > 0) labels.push('invalid timing')
+  return labels.join(' • ') || 'unavailable'
+}
+
 const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; tone: 'muted' | 'normal' | 'warning' }) => {
   const colorClass = tone === 'warning'
     ? 'text-orange-600 dark:text-orange-400'
@@ -174,6 +197,13 @@ const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; t
   )
 }
 
+const ModelUsageTextRow = ({ label, value }: { label: string; value: string }) => (
+  <span className="flex min-w-0 items-baseline justify-between gap-2 text-slate-500 dark:text-slate-400">
+    <span className="shrink-0 text-[10px] uppercase tracking-wide opacity-80">{label}</span>
+    <span className="min-w-0 break-all text-right text-[10px] font-semibold leading-snug tabular-nums">{value}</span>
+  </span>
+)
+
 const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCount, attribution, expanded, onToggle }: {
   usage: NormalizedTokenUsage
   isMobile: boolean
@@ -183,15 +213,17 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
   onToggle: () => void
 }) {
   const stopUsageBadgeEvent = (event: { stopPropagation: () => void }) => event.stopPropagation()
+  const apiDurationMs = summarizeDurationSamples(attribution.apiDurationsMs).totalMs
+  const betweenRequestsMs = summarizeDurationSamples(attribution.betweenRequestsMs).totalMs
 
   return (
     <button
       type="button"
       aria-expanded={expanded}
-      aria-label={expanded ? 'Hide token usage details' : 'Show token usage details'}
+      aria-label={expanded ? 'Hide request usage and timing details' : 'Show request usage and timing details'}
       data-usage-badge
       className={`${expanded ? 'flex max-w-full flex-col items-stretch gap-1.5 text-left' : `${isMobile ? 'gap-2' : 'gap-1.5'} inline-flex flex-row items-center`} pointer-events-auto rounded-md border border-slate-200 bg-white/85 px-2 py-1 font-mono leading-none shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/85 ${expanded ? 'w-fit' : ''} cursor-pointer appearance-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500`}
-      title={formatUsageTitle(usage, callCount)}
+      title={formatUsageTitle(usage, attribution, callCount)}
       onPointerDown={stopUsageBadgeEvent}
       onClick={(event) => {
         event.preventDefault()
@@ -205,14 +237,10 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
           <ModelUsageRow label="Cached" value={usage.cachedTokens} tone="muted" />
           <ModelUsageRow label="Input" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
           <ModelUsageRow label="Output" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
-          <span className="flex min-w-0 items-baseline justify-between gap-2 text-slate-500 dark:text-slate-400">
-            <span className="shrink-0 text-[10px] uppercase tracking-wide opacity-80">Time</span>
-            <span className="min-w-0 break-all text-right text-[10px] font-semibold leading-snug">{formatUsageTimes(attribution.timestamps)}</span>
-          </span>
-          <span className="flex min-w-0 items-baseline justify-between gap-2 text-slate-500 dark:text-slate-400">
-            <span className="shrink-0 text-[10px] uppercase tracking-wide opacity-80">Model</span>
-            <span className="min-w-0 break-all text-right text-[10px] font-semibold leading-snug">{formatUsageModels(attribution.models)}</span>
-          </span>
+          <ModelUsageTextRow label="Between" value={formatDurationSummary(attribution.betweenRequestsMs)} />
+          <ModelUsageTextRow label="API" value={formatDurationSummary(attribution.apiDurationsMs)} />
+          <ModelUsageTextRow label="Time" value={formatUsageTimes(attribution.timestamps)} />
+          <ModelUsageTextRow label="Model" value={formatUsageModels(attribution.models)} />
         </>
       ) : (
         <>
@@ -220,6 +248,33 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
           <ModelUsageRow label="C" value={usage.cachedTokens} tone="muted" />
           <ModelUsageRow label="I" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
           <ModelUsageRow label="O" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
+          {(betweenRequestsMs !== null || apiDurationMs !== null) ? (
+            <span
+              data-usage-timing-summary
+              className="inline-flex items-center gap-2 border-l border-slate-200 pl-2 dark:border-slate-700"
+            >
+              {betweenRequestsMs !== null ? (
+                <span
+                  data-usage-timing-kind="between"
+                  className="inline-flex items-center gap-1 text-slate-400 dark:text-slate-500"
+                  title={`Between requests: ${formatDetailedDuration(betweenRequestsMs)}`}
+                >
+                  <Hourglass aria-hidden="true" className="h-2.5 w-2.5 shrink-0" strokeWidth={1.8} />
+                  <span className="text-[10px] font-semibold tabular-nums">{formatCompactDuration(betweenRequestsMs)}</span>
+                </span>
+              ) : null}
+              {apiDurationMs !== null ? (
+                <span
+                  data-usage-timing-kind="api"
+                  className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300"
+                  title={`API response: ${formatDetailedDuration(apiDurationMs)}`}
+                >
+                  <Cloud aria-hidden="true" className="h-2.5 w-2.5 shrink-0" strokeWidth={1.8} />
+                  <span className="text-[10px] font-semibold tabular-nums">{formatCompactDuration(apiDurationMs)}</span>
+                </span>
+              ) : null}
+            </span>
+          ) : null}
         </>
       )}
     </button>
@@ -600,6 +655,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
 interface MessageRowProps {
   messageKey: string
   msg: Message
+  requestTiming: DerivedRequestTiming
   prevMsg: Message | null
   nextMsg: Message | null
   isMobile: boolean
@@ -624,6 +680,7 @@ interface MessageRowProps {
 const MessageRow = memo(function MessageRow({
   messageKey,
   msg,
+  requestTiming,
   prevMsg,
   nextMsg,
   isMobile,
@@ -673,7 +730,7 @@ const MessageRow = memo(function MessageRow({
     ? (isCollapsedToolGroup ? (showToolGroupSummary ? groupUsage : null) : usage)
     : null
   const displayUsageCallCount = isCollapsedToolGroup && showToolGroupSummary && groupUsageCallCount > 0 ? groupUsageCallCount : undefined
-  const displayUsageAttribution = isCollapsedToolGroup ? groupUsageAttribution : usage ? getMessageUsageAttribution(msg) : null
+  const displayUsageAttribution = isCollapsedToolGroup ? groupUsageAttribution : usage ? getMessageUsageAttribution(msg, requestTiming) : null
   const contextBlock = useMemo(() => msg.role === 'model' ? getContextBlockMetaFromMessage(msg) : null, [msg])
   const firstTextPartIndex = useMemo(() => msg.parts.findIndex(p => typeof p.text === 'string' && p.text.trim()), [msg.parts])
   const marginClass = nestedDepth > 0 ? 'mt-2' : (shouldSkipMargin ? '' : 'mt-4')
@@ -748,6 +805,7 @@ const MessageRow = memo(function MessageRow({
   )
 }, (prev, next) => (
   prev.msg === next.msg &&
+  prev.requestTiming === next.requestTiming &&
   prev.messageKey === next.messageKey &&
   prev.prevMsg === next.prevMsg &&
   prev.nextMsg === next.nextMsg &&
@@ -771,6 +829,7 @@ const MessageRow = memo(function MessageRow({
 
 const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
+  const requestTimingByIndex = useMemo(() => deriveRequestTimings(messages), [messages])
 
   const renderNestedMessages = useCallback((nestedMessages: Message[], keyPrefix: string, nextNestedDepth: number) => (
     <ChatTimeline
@@ -890,7 +949,8 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
     const getToolGroupUsage = (startIdx: number): { usage: NormalizedTokenUsage | null; callCount: number; attribution: UsageAttribution } => {
       const total: NormalizedTokenUsage = { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
       let callCount = 0
-      const attribution: UsageAttribution = { models: [], timestamps: [] }
+      const attribution: UsageAttribution = { models: [], timestamps: [], apiDurationsMs: [], betweenRequestsMs: [] }
+      let attributedCallCount = 0
 
       for (let i = startIdx; i < messages.length; i++) {
         if (shouldStopAtIdx(startIdx, i)) break
@@ -905,9 +965,17 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
             total.inputTokens += usage.inputTokens
             total.outputTokens += usage.outputTokens
             callCount++
-            const messageAttribution = getMessageUsageAttribution(m)
+            const timing = requestTimingByIndex[i]
+            const messageAttribution = getMessageUsageAttribution(m, timing)
             attribution.models.push(...messageAttribution.models)
             attribution.timestamps.push(...messageAttribution.timestamps)
+            attribution.apiDurationsMs.push(...messageAttribution.apiDurationsMs)
+            // The first request begins the collapsed group; only later gaps
+            // represent tool/orchestration work performed inside that group.
+            if (attributedCallCount > 0) {
+              attribution.betweenRequestsMs.push(...messageAttribution.betweenRequestsMs)
+            }
+            attributedCallCount++
           }
         }
       }
@@ -944,11 +1012,11 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
       summaryTagItemsByIndex: startIdxByIndex.map((startIdx) => summaryTagItemsByStart.get(startIdx) || EMPTY_TOOL_TAG_ITEMS),
       groupUsageByIndex: startIdxByIndex.map((startIdx) => groupUsageByStart.get(startIdx) || null),
       groupUsageCallCountByIndex: startIdxByIndex.map((startIdx) => groupUsageCallCountByStart.get(startIdx) || 0),
-      groupUsageAttributionByIndex: startIdxByIndex.map((startIdx) => groupUsageAttributionByStart.get(startIdx) || { models: [], timestamps: [] }),
+      groupUsageAttributionByIndex: startIdxByIndex.map((startIdx) => groupUsageAttributionByStart.get(startIdx) || { models: [], timestamps: [], apiDurationsMs: [], betweenRequestsMs: [] }),
       keepExpandedByIndex: startIdxByIndex.map((startIdx) => keepExpandedByStart.get(startIdx) || false),
       shouldRenderSummary: startIdxByIndex.map((startIdx, idx) => idx === startIdx && (summaryTagItemsByStart.get(startIdx)?.length || 0) > 0),
     }
-  }, [messages])
+  }, [messages, requestTimingByIndex])
 
   const handleExpandGroup = useCallback((groupKey: string) => {
     setExpandedToolGroups(prev => {
@@ -972,6 +1040,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
             key={messageKey}
             messageKey={messageKey}
             msg={msg}
+            requestTiming={requestTimingByIndex[idx]}
             prevMsg={idx > 0 ? messages[idx - 1] : null}
             nextMsg={idx < messages.length - 1 ? messages[idx + 1] : null}
             isMobile={isMobile}
