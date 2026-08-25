@@ -36,6 +36,8 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 | `detectMimeType` | Returns MIME type based on file extension |
 | `isNonEmptyString` | Type guard for non-empty trimmed strings |
 | `normalizeToolModelKey` | Validates a model key against available models config |
+| `normalizeForceModel` | Strictly parses the nested intentional Session-creation model/effort override |
+| `normalizeCreateChildSessionArgs` / `normalizeCreateSessionArgs` | Apply the closed non-mutating top-level creation key sets shared by local handlers and Main-management |
 | `formatMessageLogRange` | Formats a message sequence range label |
 | `formatBlockIdRange` | Formats a block ID range label |
 | `shouldEnforceIsolatedMasterPathAccess` | Checks if isolated path restrictions apply |
@@ -167,7 +169,7 @@ Implements the session agent tool functions that allow an AI agent to manage ses
 - `delete_session` defaults to one target and shares the Main-owned lifecycle orchestrator with WebUI and `/session delete`. It detaches surviving direct children, preserves channel/busy/claim revalidation, and may tear down another exact Worker target through the fixed reverse operation. The canonical current source or any alias resolving to it is rejected before target preparation; there is no self-destruct protocol. Canonical semantics: [D-lifecycle-descendant-actions](../threads/session-lifecycle.md#d-lifecycle-descendant-actions).
 - `move_session` reports the previous/resulting parent after identity success. If its optional post-move parent write fails, the result explicitly says the identity move committed and the requested parent was not confirmed; canonical semantics: [D-lifecycle-identity-move-relations](../threads/session-lifecycle.md#d-lifecycle-identity-move-relations).
 - Goal setting normalizes text, resolves remind-every defaults, and persists to session state.
-- `create_child_session` and `create_session` accept model-facing canonical effort overrides. `set_session_child_model` uses property presence to inspect or atomically change future-child model/effort defaults. Legacy `clear:true` remains strictly model-only, cannot be combined with a supplied `model`, and may still accompany an independent effort update; effort clears only through `effort:"default"|"unset"`. Canonical semantics: [D-model-routing-effort](../threads/model-routing.md#d-model-routing-effort).
+- `create_child_session` and `create_session` accept intentional model-facing overrides only through optional `forceModel: { modelId?, effort? }`. Omission or `{}` preserves existing inheritance/default behavior; removed top-level `model`/`effort`, every other unknown top-level key, malformed objects, and unknown nested keys are rejected before creation effects. Local raw handlers and Main-management use the same closed non-mutating argument normalizers. Effort-only forcing applies to the otherwise inherited/resolved model through the existing atomic normalizer. `set_session_child_model` remains the separate future-child settings surface. Canonical semantics: [D-model-routing-effort](../threads/model-routing.md#d-model-routing-effort).
 - `tool_compact_session` starts async-capable snapshot planning immediately without a compact-planning queue item; for a busy `asyncCompact:false` target it reports that the target must become idle first. Only ready compact commits use the queue safe point.
 - Timer create/update delegates to the `timers` module and returns formatted summaries; list/delete remain scoped by current or explicit session ID.
 

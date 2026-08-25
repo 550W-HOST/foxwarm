@@ -41,6 +41,16 @@ const TOOL_RULES_SCHEMA = {
     },
 };
 
+const FORCE_MODEL_SCHEMA = {
+    type: 'object',
+    additionalProperties: false,
+    description: 'Optional intentional model/effort override. Omit this object to preserve normal inheritance/default behavior; an empty object is equivalent to no explicit override.',
+    properties: {
+        modelId: { type: 'string', description: 'Optional explicit configured model key.' },
+        effort: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], description: 'Optional explicit effort. It may be supplied without modelId and applies to the otherwise inherited/resolved model.' },
+    },
+};
+
 export const definitions = [
         {
             name: 'read',
@@ -253,7 +263,7 @@ Example:
         {
             name: 'create_child_session',
             defaultInject: true,
-            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. Set waitAfterHandoff=true to finish this turn and wait for new session activity after a successful initial handoff. When the current session is an agent main session such as `agent/main` (or bare `main`), the child id replaces the `main` leaf with the suffix (for example `agent/main` + `task1` => `agent/task1`); other sessions append the suffix as before.',
+            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. Model/effort overrides require the explicit forceModel object; omit it for normal inheritance/default behavior. Set waitAfterHandoff=true to finish this turn and wait for new session activity after a successful initial handoff. When the current session is an agent main session such as `agent/main` (or bare `main`), the child id replaces the `main` leaf with the suffix (for example `agent/main` + `task1` => `agent/task1`); other sessions append the suffix as before.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -262,8 +272,7 @@ Example:
                     message: { type: 'string', description: 'Optional initial message to send to the child session immediately after creation' },
                     waitAfterHandoff: { type: 'boolean', description: 'After a successful initial message handoff, finish this turn and wait for new session activity. Replies are delivered normally whether this is true or false. This wait is not target-filtered and does not wait for task completion. Requires a non-empty message.' },
                     node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' },
-                    model: { type: 'string', description: 'Optional explicit model key for the child session.' },
-                    effort: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], description: 'Optional explicit effort for the child session.' }
+                    forceModel: FORCE_MODEL_SCHEMA
                 },
                 required: ['suffix']
             }
@@ -877,7 +886,7 @@ Example:
         },
         {
             name: 'create_session',
-            description: 'Create a new session under an existing agent. Prefer this when you need a new conversation thread without duplicating the agent or its memory.',
+            description: 'Create a new session under an existing agent. Prefer this when you need a new conversation thread without duplicating the agent or its memory. Model/effort overrides require the explicit forceModel object; omit it for normal inheritance/default behavior.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -885,8 +894,7 @@ Example:
                     sessionName: { type: 'string', description: 'Session name without agent prefix (cannot contain /).' },
                     displayName: { type: 'string', description: 'Optional display name for the new session.' },
                     parentSessionId: { type: 'string', description: 'Optional parent session ID.' },
-                    model: { type: 'string', description: 'Optional explicit model key for the new session. When omitted, the current session child-default model behavior is used.' },
-                    effort: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], description: 'Optional explicit effort for the new session. When omitted, child/default inheritance is used.' },
+                    forceModel: FORCE_MODEL_SCHEMA,
                     systemPromptFiles: {
                         type: 'array',
                         description: 'Optional file list for composing the memory-file portion of the new session snapshot. When set, only these files are used as memory sources, while other system injections remain.',

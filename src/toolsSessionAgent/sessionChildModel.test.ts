@@ -43,7 +43,7 @@ function getTestModels(): { primary: string; secondary: string } {
   return { primary, secondary };
 }
 
-test('create_session tool accepts explicit model override', async () => {
+test('create_session tool accepts intentional model and effort overrides', async () => {
   await sessionManager.loadSessions();
   const { primary, secondary } = getTestModels();
   const parentSessionId = makeId('create_session_model_parent');
@@ -57,8 +57,7 @@ test('create_session tool accepts explicit model override', async () => {
     const result = await tool_create_session({
       agentName: 'main',
       sessionName,
-      model: secondary,
-      effort: 'max',
+      forceModel: { modelId: secondary, effort: 'max' },
     }, { sessionId: parentSessionId, session: parent });
 
     assert.match(String(result), /Model:/);
@@ -69,6 +68,53 @@ test('create_session tool accepts explicit model override', async () => {
   } finally {
     await sessionManager.deleteSession(createdSessionId).catch(() => {});
     await sessionManager.deleteSession(parentSessionId).catch(() => {});
+  }
+});
+
+test('creation forceModel supports empty, model-only, and effort-only overrides and rejects the old contract before effects', async () => {
+  await sessionManager.loadSessions();
+  const { primary, secondary } = getTestModels();
+  const parentSessionId = makeId('force_model_parent');
+  const childIds = ['empty', 'model', 'effort', 'old', 'invalid', 'unknown'].map(suffix => `${parentSessionId}_${suffix}`);
+  const unknownSessionName = makeId('force_model_unknown_session');
+  try {
+    const parent = await ensureSession(parentSessionId, primary);
+    parent.effort = 'low';
+    await sessionManager.saveSession(parent.id);
+
+    await tool_create_child_session({ suffix: 'empty', forceModel: {} }, { sessionId: parent.id, session: parent });
+    assert.equal((await sessionManager.getSession(childIds[0])).model, primary);
+    assert.equal((await sessionManager.getSession(childIds[0])).effort, 'low');
+
+    await tool_create_child_session({ suffix: 'model', forceModel: { modelId: secondary } }, { sessionId: parent.id, session: parent });
+    assert.equal((await sessionManager.getSession(childIds[1])).model, secondary);
+
+    await tool_create_child_session({ suffix: 'effort', forceModel: { effort: 'max' } }, { sessionId: parent.id, session: parent });
+    assert.equal((await sessionManager.getSession(childIds[2])).model, primary);
+    assert.equal((await sessionManager.getSession(childIds[2])).effort, 'max');
+
+    await assert.rejects(
+      () => tool_create_child_session({ suffix: 'old', model: secondary }, { sessionId: parent.id, session: parent }),
+      /no longer accepts top-level model or effort/,
+    );
+    await assert.rejects(
+      () => tool_create_child_session({ suffix: 'invalid', forceModel: { unknown: true } }, { sessionId: parent.id, session: parent }),
+      /accepts only modelId and effort/,
+    );
+    await assert.rejects(
+      () => tool_create_child_session({ suffix: 'unknown', bogus: true }, { sessionId: parent.id, session: parent }),
+      /unknown key: bogus/,
+    );
+    await assert.rejects(
+      () => tool_create_session({ agentName: 'main', sessionName: unknownSessionName, bogus: true }, { sessionId: parent.id, session: parent }),
+      /unknown key: bogus/,
+    );
+    assert.equal(sessionManager.getAllSessions().has(childIds[3]), false);
+    assert.equal(sessionManager.getAllSessions().has(childIds[4]), false);
+    assert.equal(sessionManager.getAllSessions().has(childIds[5]), false);
+    assert.equal(sessionManager.getAllSessions().has(unknownSessionName), false);
+  } finally {
+    for (const id of [...childIds, unknownSessionName, parentSessionId]) await sessionManager.deleteSession(id).catch(() => {});
   }
 });
 

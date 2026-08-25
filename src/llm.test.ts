@@ -560,8 +560,14 @@ test('OpenAI custom function tools explicitly use non-strict mode without changi
     type: 'object',
     properties: {
       suffix: { type: 'string' },
-      model: { type: 'string' },
-      effort: { type: 'string' },
+      forceModel: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          modelId: { type: 'string' },
+          effort: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'xhigh', 'max'] },
+        },
+      },
     },
     required: ['suffix'],
   };

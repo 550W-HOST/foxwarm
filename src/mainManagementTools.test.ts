@@ -15,6 +15,8 @@ import {
 import {
   call_tool,
   create_agent,
+  create_child_session,
+  create_session,
   list_agents,
   recall,
   send_to_session,
@@ -148,6 +150,68 @@ test('direct and unified send_to_session share delivery and waitAfterHandoff con
     assert.match(queuedText, /unified management delivery/);
   } finally {
     await cleanup(sourceId, targetId);
+  }
+});
+
+test('direct, unified, and ToolScript creation calls reject removed and unknown top-level keys', async () => {
+  const sourceId = makeId('management_force_model_source');
+  const source = await sessionManager.getSession(sourceId);
+  const directSessionName = makeId('unknown_direct_create');
+  const unifiedSessionName = makeId('unknown_unified_create');
+  try {
+    await assert.rejects(
+      () => create_child_session({ suffix: 'old-direct', model: 'removed' }, { sessionId: sourceId, session: source }),
+      /no longer accepts top-level model or effort/,
+    );
+    await assert.rejects(
+      () => create_session({ agentName: 'main', sessionName: makeId('old_create'), effort: 'high' }, { sessionId: sourceId, session: source }),
+      /no longer accepts top-level model or effort/,
+    );
+    await assert.rejects(
+      () => call_tool({ source: 'builtin', name: 'create_child_session', args: { suffix: 'old-unified', effort: 'low' } }, { sessionId: sourceId, session: source }),
+      /no longer accepts top-level model or effort/,
+    );
+    await assert.rejects(
+      () => create_child_session({ suffix: 'unknown-direct', bogus: true }, { sessionId: sourceId, session: source }),
+      /unknown key: bogus/,
+    );
+    await assert.rejects(
+      () => create_session({ agentName: 'main', sessionName: directSessionName, bogus: true }, { sessionId: sourceId, session: source }),
+      /unknown key: bogus/,
+    );
+    await assert.rejects(
+      () => call_tool({ source: 'builtin', name: 'create_child_session', args: { suffix: 'unknown-unified', bogus: true } }, { sessionId: sourceId, session: source }),
+      /unknown key: bogus/,
+    );
+    await assert.rejects(
+      () => call_tool({ source: 'builtin', name: 'create_session', args: { agentName: 'main', sessionName: unifiedSessionName, bogus: true } }, { sessionId: sourceId, session: source }),
+      /unknown key: bogus/,
+    );
+    const nested = await tool_run_script({
+      code: 'def main(args):\n    return call_tool(source="builtin", name="create_session", args={"agentName":"main","sessionName":"old-script","model":"removed"})',
+    }, { sessionId: sourceId, session: source });
+    assert.equal(nested.status, 'failed');
+    assert.match(String(nested.error), /no longer accepts top-level model or effort/);
+    const nestedChildUnknown = await tool_run_script({
+      code: 'def main(args):\n    return call_tool(source="builtin", name="create_child_session", args={"suffix":"unknown-script","bogus":True})',
+    }, { sessionId: sourceId, session: source });
+    assert.equal(nestedChildUnknown.status, 'failed');
+    assert.match(String(nestedChildUnknown.error), /unknown key: bogus/);
+    const nestedSessionUnknown = await tool_run_script({
+      code: 'def main(args):\n    return call_tool(source="builtin", name="create_session", args={"agentName":"main","sessionName":"unknown-script-session","bogus":True})',
+    }, { sessionId: sourceId, session: source });
+    assert.equal(nestedSessionUnknown.status, 'failed');
+    assert.match(String(nestedSessionUnknown.error), /unknown key: bogus/);
+    assert.equal(sessionManager.getAllSessions().has(`${sourceId}_old-direct`), false);
+    assert.equal(sessionManager.getAllSessions().has(`${sourceId}_old-unified`), false);
+    assert.equal(sessionManager.getAllSessions().has(`${sourceId}_unknown-direct`), false);
+    assert.equal(sessionManager.getAllSessions().has(`${sourceId}_unknown-unified`), false);
+    assert.equal(sessionManager.getAllSessions().has(`${sourceId}_unknown-script`), false);
+    assert.equal(sessionManager.getAllSessions().has(directSessionName), false);
+    assert.equal(sessionManager.getAllSessions().has(unifiedSessionName), false);
+    assert.equal(sessionManager.getAllSessions().has('unknown-script-session'), false);
+  } finally {
+    await cleanup(sourceId, 'old-script', directSessionName, unifiedSessionName, 'unknown-script-session');
   }
 });
 

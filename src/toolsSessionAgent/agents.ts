@@ -9,7 +9,8 @@ import { RpcError } from '../rpc';
 import {
   ToolArgs,
   ToolContext,
-  normalizeToolModelKey,
+  normalizeCreateSessionArgs,
+  normalizeForceModel,
 } from './helpers';
 
 export async function tool_create_agent(args: ToolArgs, ctx: ToolContext) {
@@ -250,13 +251,14 @@ export async function tool_move_session(args: ToolArgs, ctx: ToolContext) {
 export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
   if (ctx?.sessionPlacement === 'session-worker') return executeMainManagementTool('create_session', args, ctx);
   await requireNotIsolated(ctx, 'create_session');
-  const { agentName, sessionName, displayName, parentSessionId } = args;
-  const requestedModel = normalizeToolModelKey(args.model);
-  const systemPromptFiles = args.systemPromptFiles === undefined
+  const normalizedArgs = normalizeCreateSessionArgs(args);
+  const { agentName, sessionName, displayName, parentSessionId } = normalizedArgs;
+  const forced = normalizeForceModel(normalizedArgs, 'create_session');
+  const systemPromptFiles = normalizedArgs.systemPromptFiles === undefined
     ? undefined
-    : llm.normalizeSystemPromptFiles(args.systemPromptFiles);
+    : llm.normalizeSystemPromptFiles(normalizedArgs.systemPromptFiles);
 
-  if (args.systemPromptFiles !== undefined && !Array.isArray(args.systemPromptFiles)) {
+  if (normalizedArgs.systemPromptFiles !== undefined && !Array.isArray(normalizedArgs.systemPromptFiles)) {
     throw new Error('systemPromptFiles must be an array of strings');
   }
 
@@ -269,8 +271,8 @@ export async function tool_create_session(args: ToolArgs, ctx: ToolContext) {
 
   const spawnedSettings = sessionManager.resolveSpawnedSessionModelEffort(
     ctx.session,
-    requestedModel,
-    args.effort,
+    forced.model,
+    forced.effort,
   );
 
   const result = await sessionManager.createSessionInAgent({

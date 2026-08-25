@@ -13,11 +13,11 @@ import * as sessionCrudTools from './toolsSessionAgent/sessionCrud';
 import * as nodeTools from './tools/nodeTools';
 import * as timers from './timers';
 import type { ToolArgs, ToolContext } from './tools/helpers';
+import { normalizeCreateChildSessionArgs, normalizeCreateSessionArgs } from './toolsSessionAgent/helpers';
 import { readDetachedWorkerSession } from './sessionWorkerSnapshot';
 import { buildSessionListOutput } from './sessionStatus';
 import type { SessionWorkerStore } from './sessionWorkerStore';
 import type { Session } from './types';
-import { MODEL_EFFORTS, type ModelEffort } from './config';
 import type { SessionRuntimeHistoryDto } from './sessionRuntimeService';
 
 export const MAIN_MANAGEMENT_TOOL_OPERATIONS = [
@@ -53,7 +53,7 @@ export type MainManagementToolResponse = { result: unknown };
 export type ScheduleWaitTimeoutRequest = { sourceSessionId: string; waitId: string; timeoutSeconds: number };
 export type ScheduleWaitTimeoutResponse = { scheduled: true; waitId: string };
 
-export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 5, {
+export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 6, {
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),
   scheduleWaitTimeout: rpcMethod<ScheduleWaitTimeoutRequest, ScheduleWaitTimeoutResponse>(),
 });
@@ -111,35 +111,7 @@ async function invokeAllowedOperation(operation: MainManagementToolOperation, ar
   }
 }
 
-const CREATE_CHILD_SESSION_KEYS = new Set(['suffix', 'fork', 'message', 'node', 'model', 'effort', 'noFurtherAssistantReply', 'waitAfterHandoff']);
-
-function normalizeCreateChildSessionArgs(args: ToolArgs): ToolArgs {
-  const keys = Object.keys(args);
-  if (keys.some(key => !CREATE_CHILD_SESSION_KEYS.has(key))) {
-    throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'create_child_session accepts only suffix, fork, message, node, model, effort, noFurtherAssistantReply, and waitAfterHandoff.');
-  }
-  if (typeof args.suffix !== 'string' || !args.suffix.trim()) {
-    throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'create_child_session requires a non-empty suffix.');
-  }
-  for (const key of ['fork', 'noFurtherAssistantReply', 'waitAfterHandoff'] as const) {
-    if (args[key] !== undefined && typeof args[key] !== 'boolean') {
-      throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', `create_child_session ${key} must be a boolean when provided.`);
-    }
-  }
-  if (args.message !== undefined && typeof args.message !== 'string') {
-    throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'create_child_session message must be a string when provided.');
-  }
-  for (const key of ['node', 'model'] as const) {
-    if (args[key] !== undefined && (typeof args[key] !== 'string' || !args[key].trim() || Buffer.byteLength(args[key], 'utf8') > 4096)) {
-      throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', `create_child_session ${key} must be a bounded non-empty string when provided.`);
-    }
-  }
-  if (args.effort !== undefined
-    && (typeof args.effort !== 'string' || !MODEL_EFFORTS.includes(args.effort as ModelEffort))) {
-    throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', `create_child_session effort must be one of: ${MODEL_EFFORTS.join(', ')}.`);
-  }
-  return args;
-}
+const mainManagementArgError = (message: string): RpcError => new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', message);
 
 function normalizeDeleteSessionArgs(args: ToolArgs): ToolArgs {
   if (Object.keys(args).length !== 1 || typeof args.sessionId !== 'string' || !args.sessionId.trim()
@@ -170,7 +142,7 @@ export function createMainManagementToolServiceHandler(options: {
     }
   };
   const invokeCreateChildSession = async (args: ToolArgs, sourceSessionId: string, source: any): Promise<unknown> => {
-    const bounded = normalizeCreateChildSessionArgs(args);
+    const bounded = normalizeCreateChildSessionArgs(args, mainManagementArgError);
     const ownership = options.workerStore?.findOwnership(sourceSessionId);
     if (bounded.fork === true && options.workerStore && !ownership) {
       throw new RpcError('MAIN_MANAGEMENT_FORK_UNFENCED', `Cannot fork session \`${sourceSessionId}\`: it has no durable worker fence to derive from.`, true);
@@ -220,7 +192,7 @@ export function createMainManagementToolServiceHandler(options: {
       if (typeof operation !== 'string' || !allowedOperations.has(operation)) {
         throw new RpcError('MAIN_MANAGEMENT_OPERATION_NOT_ALLOWED', `Main management operation is not allowed: ${String(operation)}`);
       }
-      const args = normalizeArgs(input?.args);
+      let args = normalizeArgs(input?.args);
       const source = sessionManager.getAllSessions().get(sourceSessionId);
       if (!source) {
         throw new RpcError('MAIN_MANAGEMENT_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
@@ -228,6 +200,9 @@ export function createMainManagementToolServiceHandler(options: {
 
       if (operation === 'create_child_session') {
         return { result: await invokeCreateChildSession(args, sourceSessionId, source) };
+      }
+      if (operation === 'create_session') {
+        args = normalizeCreateSessionArgs(args, mainManagementArgError);
       }
       if (operation === 'get_session_messages') {
         return { result: await invokeGetSessionMessages(args, sourceSessionId) };

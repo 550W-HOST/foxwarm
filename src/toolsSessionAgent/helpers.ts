@@ -2,7 +2,7 @@ import path from 'path';
 import * as sessionManager from '../sessionManager';
 import * as timers from '../timers';
 import type { ChannelFile } from '../channel';
-import { getAgentDir, resolveModelConfig } from '../config';
+import { getAgentDir, MODEL_EFFORTS, resolveModelConfig, type ModelEffort } from '../config';
 import { nodesManager } from '../nodes/manager';
 import { checkPathAccess } from '../isolatedCheck';
 import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';
@@ -241,6 +241,114 @@ export function normalizeToolModelKey(value: unknown): string | undefined {
   }
 
   return normalized;
+}
+
+export type ForcedSessionModelEffort = {
+  model?: string;
+  effort?: ModelEffort;
+};
+
+const CREATE_CHILD_SESSION_KEYS = new Set([
+  'suffix', 'fork', 'message', 'node', 'forceModel', 'noFurtherAssistantReply', 'waitAfterHandoff',
+]);
+const CREATE_SESSION_KEYS = new Set([
+  'agentName', 'sessionName', 'displayName', 'parentSessionId', 'forceModel', 'systemPromptFiles',
+]);
+
+function cloneCreationArgs(args: ToolArgs): ToolArgs {
+  return { ...args, ...(args.forceModel && { forceModel: { ...args.forceModel } }) };
+}
+
+export function normalizeForceModel(
+  args: ToolArgs,
+  toolName: 'create_child_session' | 'create_session',
+  makeError: (message: string) => Error = message => new Error(message),
+): ForcedSessionModelEffort {
+  if (Object.prototype.hasOwnProperty.call(args, 'model') || Object.prototype.hasOwnProperty.call(args, 'effort')) {
+    throw makeError(`${toolName} no longer accepts top-level model or effort. Use forceModel: { modelId, effort }.`);
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(args, 'forceModel') || args.forceModel === undefined) {
+    return {};
+  }
+
+  const value = args.forceModel;
+  const prototype = value && typeof value === 'object' ? Object.getPrototypeOf(value) : undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || (prototype !== Object.prototype && prototype !== null)) {
+    throw makeError(`${toolName} forceModel must be an object when provided.`);
+  }
+
+  const keys = Object.keys(value);
+  const unknownKey = keys.find(key => key !== 'modelId' && key !== 'effort');
+  if (unknownKey) {
+    throw makeError(`${toolName} forceModel accepts only modelId and effort; unknown key: ${unknownKey}.`);
+  }
+
+  let model: string | undefined;
+  if (Object.prototype.hasOwnProperty.call(value, 'modelId')) {
+    if (typeof value.modelId !== 'string' || !value.modelId.trim()
+      || Buffer.byteLength(value.modelId, 'utf8') > 4096) {
+      throw makeError(`${toolName} forceModel.modelId must be a bounded non-empty string when provided.`);
+    }
+    try {
+      model = normalizeToolModelKey(value.modelId);
+    } catch (error) {
+      throw makeError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  let effort: ModelEffort | undefined;
+  if (Object.prototype.hasOwnProperty.call(value, 'effort')) {
+    if (typeof value.effort !== 'string' || !MODEL_EFFORTS.includes(value.effort as ModelEffort)) {
+      throw makeError(`${toolName} forceModel.effort must be one of: ${MODEL_EFFORTS.join(', ')}.`);
+    }
+    effort = value.effort as ModelEffort;
+  }
+
+  return {
+    ...(model !== undefined ? { model } : {}),
+    ...(effort !== undefined ? { effort } : {}),
+  };
+}
+
+export function normalizeCreateChildSessionArgs(
+  args: ToolArgs,
+  makeError: (message: string) => Error = message => new Error(message),
+): ToolArgs {
+  normalizeForceModel(args, 'create_child_session', makeError);
+  const unknownKey = Object.keys(args).find(key => !CREATE_CHILD_SESSION_KEYS.has(key));
+  if (unknownKey) {
+    throw makeError(`create_child_session accepts only suffix, fork, message, node, forceModel, noFurtherAssistantReply, and waitAfterHandoff; unknown key: ${unknownKey}.`);
+  }
+  if (typeof args.suffix !== 'string' || !args.suffix.trim()) {
+    throw makeError('create_child_session requires a non-empty suffix.');
+  }
+  for (const key of ['fork', 'noFurtherAssistantReply', 'waitAfterHandoff'] as const) {
+    if (args[key] !== undefined && typeof args[key] !== 'boolean') {
+      throw makeError(`create_child_session ${key} must be a boolean when provided.`);
+    }
+  }
+  if (args.message !== undefined && typeof args.message !== 'string') {
+    throw makeError('create_child_session message must be a string when provided.');
+  }
+  if (args.node !== undefined
+    && (typeof args.node !== 'string' || !args.node.trim() || Buffer.byteLength(args.node, 'utf8') > 4096)) {
+    throw makeError('create_child_session node must be a bounded non-empty string when provided.');
+  }
+  return cloneCreationArgs(args);
+}
+
+export function normalizeCreateSessionArgs(
+  args: ToolArgs,
+  makeError: (message: string) => Error = message => new Error(message),
+): ToolArgs {
+  normalizeForceModel(args, 'create_session', makeError);
+  const unknownKey = Object.keys(args).find(key => !CREATE_SESSION_KEYS.has(key));
+  if (unknownKey) {
+    throw makeError(`create_session accepts only agentName, sessionName, displayName, parentSessionId, forceModel, and systemPromptFiles; unknown key: ${unknownKey}.`);
+  }
+  return cloneCreationArgs(args);
 }
 
 export function formatMessageLogRange(startSeq?: number, endSeq?: number): string {

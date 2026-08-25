@@ -14,7 +14,7 @@ import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
 import { createNodeRegistryStore, createPendingPairing, resetNodeRegistryForTests, setNodeRegistryStoreForTests } from './nodes/registry';
 import * as nodeTools from './tools/nodeTools';
-import { getAgentDir } from './config';
+import { getAgentDir, resolveModelConfig } from './config';
 import { sessionCatalogStore } from './session/catalogStore';
 
 test.before(async () => {
@@ -178,6 +178,22 @@ test('main-management facade forks read-only, rejects stale generations, and val
       (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS',
     );
     await assert.rejects(
+      () => client.call('execute', { sourceSessionId: parentId, operation: 'create_child_session', args: { suffix: 'old-model', model: 'removed' } }),
+      (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS' && /forceModel/.test(error.message),
+    );
+    await assert.rejects(
+      () => client.call('execute', { sourceSessionId: parentId, operation: 'create_child_session', args: { suffix: 'bad-force', forceModel: { unknown: true } } }),
+      (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS' && /unknown key/.test(error.message),
+    );
+    await assert.rejects(
+      () => client.call('execute', { sourceSessionId: parentId, operation: 'create_session', args: { agentName: 'main', sessionName: 'old-effort', effort: 'high' } }),
+      (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS' && /forceModel/.test(error.message),
+    );
+    await assert.rejects(
+      () => client.call('execute', { sourceSessionId: parentId, operation: 'create_session', args: { agentName: 'main', sessionName: 'unknown-key', bogus: true } }),
+      (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS' && /unknown key: bogus/.test(error.message),
+    );
+    await assert.rejects(
       () => client.call('execute', { sourceSessionId: parentId, operation: 'delete_session', args: {} }),
       (error: any) => error?.code === 'MAIN_MANAGEMENT_INVALID_ARGS',
     );
@@ -202,15 +218,16 @@ test('main-management facade forks read-only, rejects stale generations, and val
     assert.equal(inheritedChild.childModelDefault, undefined);
     assert.equal(inheritedChild.childEffortDefault, undefined);
 
+    const forcedModel = resolveModelConfig(undefined).currentKey;
     const dtoResult: any = await client.call('execute', {
       sourceSessionId: parentId,
       operation: 'create_child_session',
-      args: { suffix: 'dto-child', fork: false, node: 'node-from-worker', model: 'model-from-worker', effort: 'none' },
+      args: { suffix: 'dto-child', fork: false, node: 'node-from-worker', forceModel: { modelId: forcedModel, effort: 'none' } },
     });
     assert.ok(String(dtoResult?.result).includes(dtoChildId));
     const dtoChild = await sessionManager.getSession(dtoChildId);
     assert.equal(dtoChild.currentNode, 'node-from-worker');
-    assert.equal(dtoChild.model, 'model-from-worker');
+    assert.equal(dtoChild.model, forcedModel);
     assert.equal(dtoChild.effort, 'none');
     assert.equal(dtoChild.childModelDefault, undefined);
     assert.equal(dtoChild.childEffortDefault, undefined);
@@ -269,7 +286,7 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
     { name: 'get_archived_messages', args: { sessionId: targetId } },
     { name: 'get_archived_blocks', args: { sessionId: targetId } },
     { name: 'create_agent', args: { agentName, createMainSession: false } },
-    { name: 'create_session', args: { agentName, sessionName: 'created' } },
+    { name: 'create_session', args: { agentName, sessionName: 'created', forceModel: { effort: 'none' } } },
     { name: 'node_bootstrap_info', args: {} },
     { name: 'node_pair_list', args: {} },
     { name: 'node_pair_approve', args: { pendingId: pending.id, nodeId: approvedNodeId } },
@@ -301,7 +318,9 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
     assert.match(text, /No archived blocks found/);
     assert.ok(text.includes(agentName) && text.includes('created successfully'));
     assert.ok(text.includes(createdSessionId) && text.includes('created under agent'));
-    assert.equal((await sessionManager.getSession(createdSessionId)).model, source.model, 'new session inherits the detached Worker authority model, not the stale Main stub');
+    const createdSession = await sessionManager.getSession(createdSessionId);
+    assert.equal(createdSession.model, source.model, 'new session inherits the detached Worker authority model, not the stale Main stub');
+    assert.equal(createdSession.effort, 'none', 'effort-only forceModel applies against the detached Worker authority model');
     assert.match(text, /disposable-bootstrap-fixture/);
     assert.match(text, new RegExp(pending.id));
     assert.match(text, new RegExp(`Approved node.*${approvedNodeId}`));

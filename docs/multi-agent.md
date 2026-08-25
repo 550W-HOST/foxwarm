@@ -67,7 +67,10 @@ send_to_session({
   message?: string,
   waitAfterHandoff?: boolean,
   node?: string,
-  isolated?: boolean,
+  forceModel?: {
+    modelId?: string,
+    effort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max',
+  },
 }
 ```
 
@@ -75,7 +78,8 @@ send_to_session({
 - `fork: true` 会继承当前上下文
 - `message` 可用于直接下发第一条任务
 - `waitAfterHandoff: true` 会在初始消息成功交接后结束当前回合，并等待新的 session 活动；需要非空 `message`
-- `node` / `isolated` 可让 child session 绑定到特定 node
+- `node` 可让 child session 绑定到特定 node
+- 只有明确需要覆盖继承/default 行为时才传 `forceModel`；`forceModel: {}` 等同于不覆盖
 
 ### `send_to_session`
 

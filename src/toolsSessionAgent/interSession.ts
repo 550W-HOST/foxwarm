@@ -5,6 +5,8 @@ import {
   normalizeWaitTimeoutSeconds,
   normalizeWaitAllSessions,
   normalizeWaitExecIds,
+  normalizeCreateChildSessionArgs,
+  normalizeForceModel,
   isNonEmptyString,
   prepareChannelFile,
   formatSendFileSessionResult,
@@ -19,7 +21,9 @@ import { COMPACT_PLAN_TOOL_NAME } from '../session/compactPlan';
 
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_child_session');
-  const { suffix, fork = false, message, node, model, effort, noFurtherAssistantReply, waitAfterHandoff } = args;
+  const normalizedArgs = normalizeCreateChildSessionArgs(args);
+  const { suffix, fork = false, message, node, noFurtherAssistantReply, waitAfterHandoff } = normalizedArgs;
+  const forced = normalizeForceModel(normalizedArgs, 'create_child_session');
 
   if (!ctx || !ctx.sessionId) {
     throw new Error('Cannot create child session: missing context');
@@ -33,7 +37,7 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
 
   const currentSessionId = ctx.sessionId;
   const childSessionId = await sessionManager.createChildSession(currentSessionId, suffix, fork,
-    { node, model, effort, sourceOverride: (ctx as any).sourceOverride });
+    { node, model: forced.model, effort: forced.effort, sourceOverride: (ctx as any).sourceOverride });
 
   if (message) {
     if (waitAfterHandoff === true) {
