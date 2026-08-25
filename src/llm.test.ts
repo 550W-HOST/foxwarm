@@ -1880,11 +1880,22 @@ test('chat stores each model request usage and model id on its assistant message
     assert.equal(typeof assistantMessages[1].__meta?.llmRequestId, 'string');
     assert.notEqual(assistantMessages[0].__meta?.llmRequestId, assistantMessages[1].__meta?.llmRequestId);
     assert.equal(assistantMessages[0].__meta?.llmAttempt, 1);
+    for (const assistantMessage of assistantMessages) {
+      const timing = assistantMessage.__meta?.llmRequestTiming;
+      assert.ok(timing, 'successful assistant messages persist request timing');
+      assert.equal(Number.isFinite(timing.startedAt), true);
+      assert.equal(Number.isFinite(timing.completedAt), true);
+      assert.equal(Number.isFinite(timing.durationMs), true);
+      assert.ok(timing.completedAt >= timing.startedAt);
+      assert.ok(timing.durationMs >= 0);
+      assert.ok(Math.abs((timing.completedAt - timing.startedAt) - timing.durationMs) < 0.001);
+    }
     const reconstructed = await reconstructLlmRequest(assistantMessages[1].__meta?.llmRequestId as string);
     assert.equal(reconstructed.completeness, 'complete');
     if (reconstructed.completeness === 'complete') {
       assert.equal(reconstructed.messages.at(-1)?.role, 'tool');
       assert.equal(reconstructed.attempts[0]?.result?.outcome, 'success');
+      assert.equal(typeof reconstructed.attempts[0]?.result?.result?.previousLlmRequest?.durationMs, 'number');
     }
     assert.deepEqual(assistantMessages[0].__meta?.usage, {
       inputTokens: 12,

@@ -21,20 +21,26 @@ async function buildFixtureBundle() {
     import ChatTimeline from ${JSON.stringify(timelineEntry)}
 
     const usage = (cachedTokens, inputTokens, outputTokens) => ({ cachedTokens, inputTokens, outputTokens })
+    const requestTiming = (startedAt, completedAt) => ({ startedAt, completedAt, durationMs: completedAt - startedAt })
     const toolResponse = (id) => ({ role: 'tool', parts: [{ functionResponse: { tool_use_id: id, name: 'read', response: { output: 'ok' } } }], __meta: { seq: id + '-response', timestamp: 1700000001000 } })
-    const toolCall = (id, modelId, virtualModelKey, timestamp) => ({
+    const toolCall = (id, modelId, virtualModelKey, timestamp, startedAt, completedAt) => ({
       role: 'model',
       parts: [{ functionCall: { id, name: 'read', args: { filePath: '/tmp/example.txt' } } }],
-      __meta: { seq: id, usage: usage(10, 20, 30), modelId, virtualModelKey, timestamp },
+      __meta: { seq: id, usage: usage(10, 20, 30), modelId, virtualModelKey, timestamp, llmRequestTiming: requestTiming(startedAt, completedAt) },
     })
     const longVirtualKey = 'virtual/' + 'route-key-'.repeat(45)
     const cases = {
-      concrete: { messages: [{ role: 'model', parts: [{ text: 'Concrete response' }], __meta: { seq: 1, usage: usage(11, 22, 33), modelId: 'provider/real-model', timestamp: 1700000000000 } }] },
-      virtual: { messages: [{ role: 'model', parts: [{ text: 'Virtual response' }], __meta: { seq: 2, usage: usage(1, 2, 3), modelId: 'provider/real-model', virtualModelKey: 'session-hash/virtual', timestamp: 1700000000000 } }] },
+      concrete: { messages: [{ role: 'model', parts: [{ text: 'Concrete response' }], __meta: { seq: 1, usage: usage(11, 22, 33), modelId: 'provider/real-model', timestamp: 1700000000000, llmRequestTiming: requestTiming(1699999999000, 1700000000000) } }] },
+      virtual: { messages: [{ role: 'model', parts: [{ text: 'Virtual response' }], __meta: { seq: 2, usage: usage(1, 2, 3), modelId: 'provider/real-model', virtualModelKey: 'session-hash/virtual', timestamp: 1700000000000, llmRequestTiming: requestTiming(1699999997500, 1700000000000) } }] },
       missing: { messages: [{ role: 'model', parts: [{ text: 'Legacy response' }], __meta: { seq: 3, usage: usage(1, 2, 3) } }] },
-      invalid: { messages: [{ role: 'model', parts: [{ text: 'Invalid legacy response' }], __meta: { seq: 31, usage: usage(1, 2, 3), modelId: 'provider/invalid', timestamp: 'not-a-persisted-timestamp' } }] },
-      groupSame: { groupTools: true, messages: [toolCall('same-one', 'provider/real-model', 'virtual/same', 1700000000000), toolResponse('same-one'), toolCall('same-two', 'provider/real-model', 'virtual/same', 1700000000000), toolResponse('same-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'same-final' } }] },
-      groupDifferent: { groupTools: true, messages: [toolCall('different-one', 'provider/first-model', 'virtual/first', 1700000000000), toolResponse('different-one'), toolCall('different-two', 'provider/second-model', 'virtual/second', 1700000060000), toolResponse('different-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'different-final' } }] },
+      invalid: { messages: [{ role: 'model', parts: [{ text: 'Invalid legacy response' }], __meta: { seq: 31, usage: usage(1, 2, 3), modelId: 'provider/invalid', timestamp: 'not-a-persisted-timestamp', llmRequestTiming: { startedAt: 10, completedAt: 5, durationMs: -1 } } }] },
+      timed: { messages: [
+        { role: 'model', parts: [{ text: 'Previous request' }], __meta: { seq: 'timed-prior', llmRequestTiming: requestTiming(1000, 2000) } },
+        { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'timed-tool', name: 'exec', response: { output: 'ok' } } }], __meta: { seq: 'timed-tool' } },
+        { role: 'model', parts: [{ text: 'Timed response' }], __meta: { seq: 'timed-current', usage: usage(4, 5, 6), modelId: 'provider/timed', timestamp: 6500, llmRequestTiming: requestTiming(5000, 6500) } },
+      ] },
+      groupSame: { groupTools: true, messages: [toolCall('same-one', 'provider/real-model', 'virtual/same', 1700000000000, 1000, 2000), toolResponse('same-one'), toolCall('same-two', 'provider/real-model', 'virtual/same', 1700000000000, 5000, 7000), toolResponse('same-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'same-final' } }] },
+      groupDifferent: { groupTools: true, messages: [toolCall('different-one', 'provider/first-model', 'virtual/first', 1700000000000, 1000, 2000), toolResponse('different-one'), toolCall('different-two', 'provider/second-model', 'virtual/second', 1700000060000, 5000, 7000), toolResponse('different-two'), { role: 'model', parts: [{ text: 'Tools complete.' }], __meta: { seq: 'different-final' } }] },
       longMobile: { messages: [{ role: 'model', parts: [{ text: 'Long route response' }], __meta: { seq: 4, usage: usage(1, 2, 3), modelId: 'provider/real-model', virtualModelKey: longVirtualKey, timestamp: 1700000000000 } }] },
       hidden: { showUsageBadge: false, messages: [{ role: 'model', parts: [{ text: 'Hidden usage' }], __meta: { seq: 5, usage: usage(1, 2, 3), modelId: 'provider/hidden', timestamp: 1700000000000 } }] },
     }
@@ -65,8 +71,8 @@ async function buildFixtureBundle() {
 async function mountFixture(width = 1100) {
   await page.setViewport({ width, height: 900, isMobile: width < 768, hasTouch: width < 768, deviceScaleFactor: 1 })
   await page.goto(fixtureUrl, { waitUntil: 'load' })
-  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 8)
-  assert.equal(await page.$$eval('[data-usage-badge]', badges => badges.length), 7)
+  await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 9)
+  assert.equal(await page.$$eval('[data-usage-badge]', badges => badges.length), 8)
 }
 
 async function badgeState(id) {
@@ -111,7 +117,7 @@ before(async () => {
 
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:1400px;max-width:100%;min-width:0;margin-bottom:24px}</style></head><body><main>${['concrete', 'virtual', 'missing', 'invalid', 'groupSame', 'groupDifferent', 'longMobile', 'hidden'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{padding:16px}.fixture{width:1400px;max-width:100%;min-width:0;margin-bottom:24px}</style></head><body><main>${['concrete', 'virtual', 'missing', 'invalid', 'timed', 'groupSame', 'groupDifferent', 'longMobile', 'hidden'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -130,12 +136,21 @@ test('collapsed badge preserves compact labels and mouse, Enter, and Space toggl
   assert.equal(collapsed.expanded, 'false')
   assert.ok(collapsed.className.includes('inline-flex'))
   assert.ok(collapsed.className.includes('flex-row'))
-  assert.equal(collapsed.text, 'C11I22O33')
+  assert.equal(collapsed.text, 'C11I22O331s')
+  assert.deepEqual(await page.$$eval('#concrete [data-usage-timing-kind]', items => items.map(item => ({
+    kind: item.getAttribute('data-usage-timing-kind'),
+    text: item.textContent.trim(),
+    title: item.getAttribute('title'),
+  }))), [{ kind: 'api', text: '1s', title: 'API response: 1s (1000ms)' }])
+  const timingSummaryClass = await page.$eval('#concrete [data-usage-timing-summary]', item => item.className)
+  assert.ok(timingSummaryClass.includes('border-l'), timingSummaryClass)
+  assert.ok(!timingSummaryClass.includes('rounded'), timingSummaryClass)
+  assert.ok(!timingSummaryClass.includes('bg-'), timingSummaryClass)
 
   await page.click('#concrete [data-usage-badge]')
   const expanded = await badgeState('concrete')
   assert.equal(expanded.expanded, 'true')
-  for (const label of ['Cached11', 'Input22', 'Output33', 'Time', 'Modelprovider/real-model']) {
+  for (const label of ['Cached11', 'Input22', 'Output33', 'Betweenunavailable', 'API1s (1000ms)', 'Time', 'Modelprovider/real-model']) {
     assert.ok(expanded.text.includes(label), `expanded badge should include ${label}`)
   }
 
@@ -157,7 +172,26 @@ test('details use persisted concrete/virtual metadata and show legacy omissions 
   assert.ok(missing.text.includes('Modelunavailable'))
 
   await page.click('#invalid [data-usage-badge]')
-  assert.ok((await badgeState('invalid')).text.includes('Timeinvalid timestamp'))
+  const invalid = await badgeState('invalid')
+  assert.ok(invalid.text.includes('Timeinvalid timestamp'))
+  assert.ok(invalid.text.includes('APIinvalid timing'))
+})
+
+test('request timing shows API latency and the tool-inclusive interval between requests', async () => {
+  await mountFixture()
+  assert.deepEqual(await page.$$eval('#timed [data-usage-timing-kind]', items => items.map(item => ({
+    kind: item.getAttribute('data-usage-timing-kind'),
+    text: item.textContent.trim(),
+    title: item.getAttribute('title'),
+  }))), [
+    { kind: 'between', text: '3s', title: 'Between requests: 3s (3000ms)' },
+    { kind: 'api', text: '1s', title: 'API response: 1s (1500ms)' },
+  ])
+
+  await page.click('#timed [data-usage-badge]')
+  const expanded = await badgeState('timed')
+  assert.ok(expanded.text.includes('Between3s (3000ms)'), expanded.text)
+  assert.ok(expanded.text.includes('API1s (1500ms)'), expanded.text)
 })
 
 test('collapsed tool-group details aggregate calls without attributing them to the first route, and badge click does not expand the group', async () => {
@@ -166,6 +200,8 @@ test('collapsed tool-group details aggregate calls without attributing them to t
   const same = await badgeState('groupSame')
   assert.ok(same.text.includes('Calls2'), same.text)
   assert.ok(same.text.includes('Modelvirtual/same → provider/real-model'), same.text)
+  assert.ok(same.text.includes('Between3s (3000ms)'), same.text)
+  assert.ok(same.text.includes('API3s (3000ms)'), same.text)
   assert.equal(await page.$$eval('#groupSame .foxwarm-tool-card', cards => cards.length), 0, 'badge click must not expand the tool group')
   assert.equal(await page.$$eval('#groupSame [data-usage-badge]', badges => badges.length), 1, 'badge remains the collapsed-group interaction target')
 
