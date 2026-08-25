@@ -110,6 +110,12 @@ export type MaybePromise<T> = T | Promise<T>;
 export type SessionReply = (text: string, options?: any) => MaybePromise<void>;
 export type SessionBroadcast = (text: string, options?: any) => void;
 
+export interface LlmRequestTiming {
+  startedAt: number;
+  completedAt: number;
+  durationMs: number;
+}
+
 export interface Message {
   role: 'user' | 'model' | 'tool';
   /** Message-level provider metadata echoed back on later requests. */
@@ -131,6 +137,8 @@ export interface Message {
     virtualModelKey?: string;
     /** Token usage reported for the model call that produced this model message. */
     usage?: TokenUsage;
+    /** Persisted wall-clock boundaries and monotonic duration for the logical LLM request. */
+    llmRequestTiming?: LlmRequestTiming;
     /** Structured CTX-BLOCK metadata for rendered layered-context block messages. */
     contextBlock?: ContextBlockMessageMeta;
     /** Present when a raw message is intentionally preserved after a covering block. */
@@ -358,7 +366,7 @@ export interface ChatResult {
   allParts?: MessagePart[];
   /** Message-level provider metadata carried to the persisted assistant message. */
   providerMeta?: MessageProviderMeta;
-  /** Timing of the successful provider request which produced this result. */
+  /** Timing of the logical provider request through its usable successful result, including retries. */
   previousLlmRequest?: {
     completedAt: number;
     durationMs: number;
