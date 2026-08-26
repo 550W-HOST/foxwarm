@@ -1323,6 +1323,7 @@ type ExecutedToolCall = PreparedToolCall & {
     stopCurrentTurn: boolean;
     waitForReply: boolean;
     explicitWaitId?: string;
+    successfulSendToSessionTarget?: string;
     deferredExecCwdSync?: { nextCwd: string };
 };
 
@@ -1429,6 +1430,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
     let stopCurrentTurn = false;
     let waitForReply = false;
     let explicitWaitId: string | undefined;
+    let successfulSendToSessionTarget: string | undefined;
     let deferredExecCwdSync: { nextCwd: string } | undefined;
 
     try {
@@ -1455,6 +1457,10 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
                 waitForReply = result.__toolPostAction.waitForReply === true;
                 explicitWaitId = typeof result.__toolPostAction.explicitWaitId === 'string'
                     ? result.__toolPostAction.explicitWaitId
+                    : undefined;
+                successfulSendToSessionTarget = prepared.call.name === 'send_to_session'
+                    && typeof result.__toolPostAction.successfulSendToSessionTarget === 'string'
+                    ? result.__toolPostAction.successfulSendToSessionTarget
                     : undefined;
             }
             if (result.__execBatchCwdSync && typeof result.__execBatchCwdSync.nextCwd === 'string') {
@@ -1484,6 +1490,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
         stopCurrentTurn,
         waitForReply,
         explicitWaitId,
+        successfulSendToSessionTarget,
         deferredExecCwdSync,
     };
 }
@@ -1638,6 +1645,7 @@ export async function executeTools(
     let batchHasError = false;
     let waitForReply = false;
     const explicitWaitIds: string[] = [];
+    const successfulSendToSessionTargets: string[] = [];
 
     for (const execution of executions) {
         let result = execution.result;
@@ -1669,6 +1677,7 @@ export async function executeTools(
         batchHasError = batchHasError || !!(result && typeof result === 'object' && result.error !== undefined && result.error !== null);
         waitForReply = waitForReply || execution.waitForReply;
         if (execution.explicitWaitId) explicitWaitIds.push(execution.explicitWaitId);
+        if (execution.successfulSendToSessionTarget) successfulSendToSessionTargets.push(execution.successfulSendToSessionTarget);
     }
 
     if (stopCurrentTurn && batchHasError) {
@@ -1687,8 +1696,11 @@ export async function executeTools(
     } else if (stopCurrentTurn) {
         logger.debug({ sessionId: toolContext.sessionId || session?.id, toolCount: functionCalls.length }, 'Suppressing stopCurrentTurn because a tool in the batch returned an error');
     }
-    if (waitForReply) {
-        (toolMessage as any).__toolPostAction = { waitForReply: true };
+    if (waitForReply || successfulSendToSessionTargets.length) {
+        (toolMessage as any).__toolPostAction = {
+            ...(waitForReply ? { waitForReply: true } : {}),
+            ...(successfulSendToSessionTargets.length ? { successfulSendToSessionTargets } : {}),
+        };
     }
     return toolMessage;
 }

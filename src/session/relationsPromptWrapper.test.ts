@@ -46,3 +46,22 @@ test('sendToSession timestamps a system-delivered wrapper when there is no sourc
   }, target.id, 'system input');
   assert.match(enqueued?.parts?.[0].system || '', /^<foxwarm-message type="system-delivered" time="\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}" hint=/);
 });
+
+test('sendToSession captures the canonical source relation for the exact target queue item', async () => {
+  const parent = makeSession('parent');
+  const child = { ...makeSession('child'), parentSessionId: parent.id };
+  const unrelated = makeSession('unrelated');
+  const sessions = new Map([parent, child, unrelated].map(session => [session.id, session]));
+  const relations: Array<QueueItem['sourceSessionRelation']> = [];
+  const deps = {
+    getExistingSession: async (sessionId: string) => sessions.get(sessionId) || null,
+    getAgentMetadata: () => ({}),
+    enqueueSessionItem: async (_sessionId: string, item: QueueItem) => { relations.push(item.sourceSessionRelation); },
+  };
+
+  await sendToSession(deps, child.id, 'parent to child', parent.id);
+  await sendToSession(deps, parent.id, 'child to parent', child.id);
+  await sendToSession(deps, unrelated.id, 'other', child.id);
+
+  assert.deepEqual(relations, ['parent', 'direct-child', 'other']);
+});

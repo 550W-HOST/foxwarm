@@ -35,6 +35,7 @@ export const SESSION_HISTORY_STATE_FIELDS = [
   'nextMessageSeq',
   'nextBlockId',
   'goalState',
+  'childHandoffState',
   'compactThresholdTokens',
   'lastAppliedMailboxId',
 ] as const;

@@ -31,6 +31,7 @@ import { createVectorFacadeProxyHandler } from './vectorFacadeProxy';
 import { vectorServiceDescriptor } from './vectorServiceDescriptor';
 import { createSessionWorkerPublicationServiceHandler, sessionWorkerPublicationServiceDescriptor, SessionWorkerProjectionRegistry } from './sessionWorkerPublicationService';
 import { createSessionTurnDeliveryServiceHandler, sessionTurnDeliveryServiceDescriptor } from './sessionTurnDelivery';
+import { normalizeSessionWorkerIngressRequest } from './sessionWorkerIngress';
 
 function baseSession(id: string): Session {
   return {
@@ -121,6 +122,36 @@ test('worker external event receipts bridge mailbox replay and applied-row clean
     await host.runPending(8);
     assert.equal(session.queue.filter(item => !item.externalEventId).length, 2);
   });
+});
+
+test('worker mailbox preserves inter-session source classification to the exact turn owner', async () => {
+  const initial = baseSession(`worker-child-handoff-classification-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  initial.parentSessionId = 'parent-session';
+  const originalChat = llm.chat;
+  let observedPendingBoundary = false;
+  await withLocalHost(initial, async ({ host, store, session, readDurable }) => {
+    (llm as any).chat = async (parts: any, owner: Session, _iteration: number, options: any) => {
+      if (owner.childHandoffState?.boundary === 'report-required' && !owner.childHandoffState.resolved) {
+        observedPendingBoundary = true;
+      }
+      const reminderTurn = JSON.stringify(parts ?? owner.history.at(-1)?.parts).includes('child-reminder');
+      const text = reminderTurn ? '[NO_ACTION]' : 'completed without handoff';
+      await options.appendMessage({ role: 'model', parts: [{ text }] });
+      return { text };
+    };
+    const normalized = normalizeSessionWorkerIngressRequest({
+      sessionId: initial.id,
+      item: {
+        type: 'intersession', sourceSessionId: 'parent-session', sourceSessionRelation: 'parent',
+        parts: [{ system: 'classified parent assignment' }],
+      },
+    }).item;
+    store.enqueueIntent(initial.id, 'classified-parent-input', 'enqueue', normalized);
+    await host.runPending(8);
+    assert.equal(observedPendingBoundary, true);
+    assert.deepEqual(session.childHandoffState, { boundary: 'report-required', resolved: true });
+    assert.deepEqual(readDurable().childHandoffState, { boundary: 'report-required', resolved: true });
+  }, true).finally(() => { (llm as any).chat = originalChat; });
 });
 
 function injectWorkerReleasePersistenceFailure(host: SessionWorkerHost, turnHost: any, message: string): () => number {

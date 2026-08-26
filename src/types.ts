@@ -274,6 +274,8 @@ export interface QueueItem {
   type: 'user' | 'intersession' | 'background' | 'trigger' | 'onboot' | 'compact-commit';
   source?: QueueSource;
   sourceSessionId?: string;
+  /** Canonical source/target topology classification captured at inter-session ingress. */
+  sourceSessionRelation?: 'direct-child' | 'parent' | 'other';
   /** Browser-generated identity propagated to the persisted user message. */
   clientMessageId?: string;
   parts?: MessagePart[];
@@ -339,6 +341,11 @@ export interface Session {
   nextBlockId?: number; // Next per-session layered-context block id
   parentSessionId?: string; // Parent session ID for child sessions
   goalState?: SessionGoalState; // Session-local goal reminder configuration
+  /** Persisted boundary used by child-session missing-handoff reminders. */
+  childHandoffState?: {
+    boundary: 'direct-user' | 'report-required';
+    resolved: boolean;
+  };
   compactThresholdTokens?: number; // Optional per-session auto-compact threshold override in tokens
   /** Last durable session-worker mailbox row incorporated into this authoritative state file. */
   lastAppliedMailboxId?: number;

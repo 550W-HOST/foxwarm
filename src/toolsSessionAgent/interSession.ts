@@ -77,12 +77,22 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
   const output = result.resolvedSessionId !== result.requestedSessionId
     ? `Message sent to session \`${result.resolvedSessionId}\` (requested \`${result.requestedSessionId}\`)`
     : `Message sent to session \`${result.resolvedSessionId}\``;
+  const successfulSendToSessionTarget = result.resolvedSessionId;
+  const includeSuccessfulTarget = !!ctx?.persistCurrentSession
+    || ctx?.sessionPlacement === 'session-worker'
+    || ctx?.captureSuccessfulSendToSessionTarget === true;
   if (waitAfterHandoff === true) {
-    return { output, __toolPostAction: { waitForReply: true } };
+    return { output, __toolPostAction: {
+      waitForReply: true,
+      ...(includeSuccessfulTarget ? { successfulSendToSessionTarget } : {}),
+    } };
+  }
+  if (!includeSuccessfulTarget) {
+    return noFurtherAssistantReply ? { ...buildEndTurnResult(), output } : output;
   }
   return noFurtherAssistantReply
-    ? { ...buildEndTurnResult(), output }
-    : output;
+    ? { ...buildEndTurnResult(), output, __toolPostAction: { successfulSendToSessionTarget } }
+    : { output, __toolPostAction: { successfulSendToSessionTarget } };
 }
 
 export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {

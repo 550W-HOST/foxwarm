@@ -229,7 +229,10 @@ test('successful flagged handoff keeps its post-batch wait request despite a sib
       { id: 'flagged-send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'hello', waitAfterHandoff: true } },
       { id: 'missing-read', name: 'read', args: { filePath: makeMissingFilePath() } },
     ], { sessionId: sourceSessionId, session: source }, source);
-    assert.deepEqual(toolMessage.__toolPostAction, { waitForReply: true });
+    assert.deepEqual(toolMessage.__toolPostAction, {
+      waitForReply: true,
+      successfulSendToSessionTargets: [targetSessionId],
+    });
     assert.equal(hasStopCurrentTurn(toolMessage), false);
     assert.equal(source.meta.wait, undefined);
     assert.equal(toolMessage.parts.length, 2);
@@ -251,7 +254,10 @@ test('multiple successful flagged handoffs coalesce and all failed handoffs requ
       { id: 'send-a', name: 'send_to_session', args: { sessionId: targetA, message: 'a', waitAfterHandoff: true } },
       { id: 'send-b', name: 'send_to_session', args: { sessionId: targetB, message: 'b', waitAfterHandoff: true } },
     ], { sessionId: sourceSessionId, session: source }, source);
-    assert.deepEqual(successful.__toolPostAction, { waitForReply: true });
+    assert.deepEqual(successful.__toolPostAction, {
+      waitForReply: true,
+      successfulSendToSessionTargets: [targetA, targetB],
+    });
 
     const failed: any = await executeTools([
       { id: 'missing-a', name: 'send_to_session', args: { sessionId: makeSessionId('missing_a'), message: 'a', waitAfterHandoff: true } },
@@ -276,7 +282,10 @@ test('flagged handoff plus explicit wait remains deterministic when a sibling fa
       { id: 'wait', name: 'wait', args: {} },
       { id: 'missing', name: 'read', args: { filePath: makeMissingFilePath() } },
     ], { sessionId: sourceSessionId, session: source }, source);
-    assert.deepEqual(toolMessage.__toolPostAction, { waitForReply: true });
+    assert.deepEqual(toolMessage.__toolPostAction, {
+      waitForReply: true,
+      successfulSendToSessionTargets: [targetSessionId],
+    });
     assert.equal(hasStopCurrentTurn(toolMessage), false);
     assert.equal(source.meta.wait, undefined);
   } finally {

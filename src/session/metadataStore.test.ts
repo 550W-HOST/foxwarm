@@ -126,6 +126,12 @@ test('real state-file reader rejects malformed v1 shapes while normalizing only 
     await fs.writeJson(unknownPath, { sessionStateVersion: 99, history: [] });
     await assert.rejects(() => createSessionHistoryStore(unknownPath).readFromPath(), /Unsupported per-session state format version 99/);
 
+    const invalidHandoffPath = path.join(dirPath, 'invalid-handoff.json');
+    await fs.writeJson(invalidHandoffPath, {
+      sessionStateVersion: 1, history: [], childHandoffState: { boundary: 'unknown', resolved: false },
+    });
+    await assert.rejects(() => createSessionHistoryStore(invalidHandoffPath).readFromPath(), /childHandoffState\.boundary is invalid/);
+
     const legacyPath = path.join(dirPath, 'legacy.json');
     await fs.writeJson(legacyPath, { history: 'legacy-not-array', contextFrontier: { tolerated: true } });
     const legacyRaw = await createSessionHistoryStore(legacyPath).readFromPath();
@@ -159,6 +165,7 @@ test('session history payload drops obsolete context frontier and recovery ignor
       lastAppliedMailboxId: 7,
       effort: 'none',
       childEffortDefault: 'max',
+      childHandoffState: { boundary: 'report-required', resolved: false },
     };
     const payload = serializeSessionHistoryPayload(session);
     assert.equal(payload.sessionStateVersion, 1);
@@ -167,6 +174,7 @@ test('session history payload drops obsolete context frontier and recovery ignor
     assert.equal(payload.meta.wait.id, 'wait-1');
     assert.equal(payload.effort, 'none');
     assert.equal(payload.childEffortDefault, 'max');
+    assert.deepEqual(payload.childHandoffState, { boundary: 'report-required', resolved: false });
 
     const target: any = { history: [], persistentMemorySnapshot: '', stats: {}, busy: false, queue: [], meta: { lastMessageTime: 1 } };
     replaceSessionSemanticState(target, prepareSessionSemanticStateForHydration(target, payload).snapshot);
@@ -175,6 +183,7 @@ test('session history payload drops obsolete context frontier and recovery ignor
     assert.equal(target.meta.managedSession.leaseId, 'lease');
     assert.equal(target.effort, 'none');
     assert.equal(target.childEffortDefault, 'max');
+    assert.deepEqual(target.childHandoffState, { boundary: 'report-required', resolved: false });
   });
 });
 

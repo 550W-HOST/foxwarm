@@ -349,6 +349,13 @@ export async function sendToSession(
   await deps.enqueueSessionItem(targetSession.id, {
     type: 'intersession',
     sourceSessionId: fromSession?.id,
+    ...(fromSession ? {
+      sourceSessionRelation: fromSession.parentSessionId === targetSession.id
+        ? 'direct-child' as const
+        : targetSession.parentSessionId === fromSession.id
+          ? 'parent' as const
+          : 'other' as const,
+    } : {}),
     parts,
   });
 

@@ -3,15 +3,17 @@
 import { randomUUID } from 'crypto';
 import { logger } from './common';
 import { ChannelContext, getChannelId, getConversationId } from './channel';
-import { buildChildReminder, isModelNoActionSignal } from './session/childSessionReminder';
+import { buildChildReminder, isModelNoActionSignal, isNoActionSignalText } from './session/childSessionReminder';
 import { getManagedSessionState, setManagedSessionState } from './session/managedState';
 import { createDisplayOnlyModelMessage } from './session/messageVisibility';
 import { maybeRefreshStaleSessionSnapshot } from './session/snapshotRefresh';
 import { maybeBuildGoalReminderMessage } from './session/goal';
 import { isSessionArchiveCommitError } from './session/archive';
+import { isSessionAuthorityPostCommitError } from './session/stateFile';
 import { isSessionTurnIncomplete, SessionContinuationUnavailableError } from './sessionContinuation';
 import { buildSessionRuntimeState } from './sessionRuntimeState';
 import { snapshotQueueSource, type SessionTurnFinalKind } from './sessionTurnDelivery';
+import { applyChildHandoffQueueItem, resolveChildHandoffBoundary, shouldQueueChildHandoffReminder } from './session/childHandoffState';
 import * as sessionManager from './sessionManager';
 import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, QueueItem, QueueSource, Session, TokenUsage } from './types';
@@ -511,7 +513,7 @@ export class SessionTurnRunner {
 
       if (item.message) {
         consumedInput = true;
-        await this.host.appendSessionMessage(session, item.message);
+        await this.appendQueueItemMessage(session, item, () => this.host.appendSessionMessage(session, item.message!));
         continue;
       }
 
@@ -520,7 +522,11 @@ export class SessionTurnRunner {
       }
 
       consumedInput = true;
-      await this.appendUserMessage(session, item.parts, item.clientMessageId);
+      await this.appendQueueItemMessage(
+        session,
+        item,
+        () => this.appendUserMessage(session, item.parts!, item.clientMessageId),
+      );
     }
 
     return {
@@ -552,7 +558,7 @@ export class SessionTurnRunner {
     let firstInputItem = true;
     for (const item of items) {
       if (item.message) {
-        await this.host.appendSessionMessage(session, item.message);
+        await this.appendQueueItemMessage(session, item, () => this.host.appendSessionMessage(session, item.message!));
         firstInputItem = false;
         continue;
       }
@@ -565,7 +571,11 @@ export class SessionTurnRunner {
       const parts = firstInputItem
         ? this.prepareTurnParts(session, sessionId, item.parts)
         : item.parts;
-      await this.appendUserMessage(session, parts, item.clientMessageId);
+      await this.appendQueueItemMessage(
+        session,
+        item,
+        () => this.appendUserMessage(session, parts, item.clientMessageId),
+      );
       firstInputItem = false;
     }
   }
@@ -576,6 +586,7 @@ export class SessionTurnRunner {
 
     while (true) {
       const messages: Message[] = [];
+      const committedItems: QueueItem[] = [];
       let removedQueueItems = 0;
       let applyCompactCommit = false;
 
@@ -591,6 +602,7 @@ export class SessionTurnRunner {
         }
 
         removedQueueItems += 1;
+        committedItems.push(item);
         if (item.message) {
           messages.push(item.message);
           committedAnyInput = true;
@@ -621,12 +633,16 @@ export class SessionTurnRunner {
       }
 
       session.queue = [];
-      if (messages.length > 0) {
-        await this.host.appendSessionMessages(session, messages);
-        committedMessages += messages.length;
-      } else {
-        await this.host.saveSession(session);
-      }
+      await this.commitChildHandoffMutation(
+        session,
+        () => {
+          for (const item of committedItems) applyChildHandoffQueueItem(session, item);
+        },
+        () => messages.length > 0
+          ? this.host.appendSessionMessages(session, messages)
+          : this.host.saveSession(session),
+      );
+      committedMessages += messages.length;
       if (applyCompactCommit) {
         try {
           await this.host.applyCompletedCompactJob(session.id);
@@ -727,6 +743,33 @@ export class SessionTurnRunner {
     });
   }
 
+  private async commitChildHandoffMutation(
+    session: Session,
+    mutate: () => void,
+    commit: () => Promise<void>,
+  ): Promise<void> {
+    const hadState = Object.prototype.hasOwnProperty.call(session, 'childHandoffState');
+    const previousState = hadState ? structuredClone(session.childHandoffState) : undefined;
+    mutate();
+    try {
+      await commit();
+    } catch (error) {
+      if (!isSessionAuthorityPostCommitError(error)) {
+        if (hadState) session.childHandoffState = previousState;
+        else delete session.childHandoffState;
+      }
+      throw error;
+    }
+  }
+
+  private appendQueueItemMessage(session: Session, item: QueueItem, append: () => Promise<void>): Promise<void> {
+    return this.commitChildHandoffMutation(
+      session,
+      () => { applyChildHandoffQueueItem(session, item); },
+      append,
+    );
+  }
+
   private getChildTurnState(session: Session): {
     foundUser: boolean;
     hasSendToSession: boolean;
@@ -797,6 +840,15 @@ export class SessionTurnRunner {
 
     const terminalText = lastMessage.parts.find(p => typeof p.text === 'string')?.text || '';
     if (terminalText.startsWith('Error:')) {
+      return;
+    }
+
+    const stateDecision = shouldQueueChildHandoffReminder(session);
+    if (stateDecision !== undefined) {
+      if (stateDecision && session.queue.length === 0) {
+        const reminder = buildChildReminder(session.parentSessionId);
+        await this.host.queueSessionSystemEvent(session.id, reminder, 'background');
+      }
       return;
     }
 
@@ -1065,6 +1117,9 @@ export class SessionTurnRunner {
         // rows append only after this text and, for tools, after the tool row.
         const hasTools = !!result.toolCalls?.length;
         const willContinue = hasTools || providerTimeQueue.hasInput;
+        if (!willContinue && isNoActionSignalText(result.text) && resolveChildHandoffBoundary(session)) {
+          await this.host.saveSession(session);
+        }
         const iterationTextHandled = await this.deliverProviderResultText(
           session,
           options.sourceCtx,
@@ -1148,6 +1203,13 @@ export class SessionTurnRunner {
           },
         };
         const toolResultMsg = await this.host.executeTools(turnToolCalls, toolContext, session);
+
+        const successfulSendTargets = (toolResultMsg as any).__toolPostAction?.successfulSendToSessionTargets;
+        if (session.parentSessionId && Array.isArray(successfulSendTargets)
+          && successfulSendTargets.includes(session.parentSessionId)
+          && resolveChildHandoffBoundary(session)) {
+          await this.host.saveSession(session);
+        }
 
         await this.appendToolMessage(session, toolResultMsg.parts);
         this.emitTurnProgress(broadcast, turnChannelOptions, {

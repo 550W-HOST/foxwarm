@@ -46,6 +46,16 @@ function validateMeta(value: unknown, label: string): void {
   }
 }
 
+function validateChildHandoffState(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} childHandoffState must be an object.`);
+  if (value.boundary !== 'direct-user' && value.boundary !== 'report-required') {
+    throw new Error(`${label} childHandoffState.boundary is invalid.`);
+  }
+  if (typeof value.resolved !== 'boolean') {
+    throw new Error(`${label} childHandoffState.resolved must be boolean.`);
+  }
+}
+
 function validateCurrentHistory(history: unknown[], label: string): void {
   for (let index = 0; index < history.length; index += 1) {
     const message = history[index];
@@ -99,6 +109,7 @@ export function normalizeAndValidateSessionAuthorityPayload(raw: unknown, label 
   if (current && value.queue?.some((item: unknown) => !isQueueItem(item))) throw new Error(`${label} queue contains an invalid current QueueItem.`);
   if (value.stats !== undefined) validateStats(value.stats, label);
   if (value.meta !== undefined) validateMeta(value.meta, label);
+  if (value.childHandoffState !== undefined) validateChildHandoffState(value.childHandoffState, label);
   readSessionAuthorityMailboxCursor(value, label);
   for (const field of ['effort', 'childEffortDefault'] as const) {
     if (value[field] !== undefined

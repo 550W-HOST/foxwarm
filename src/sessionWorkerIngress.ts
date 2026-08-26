@@ -16,7 +16,7 @@ import type { SessionWorkerHistoryMutationResult, SessionWorkerSettingsPatch, Se
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 
 const MAX_INGRESS_BYTES = 1024 * 1024;
-const ITEM_KEYS = ['type', 'source', 'sourceSessionId', 'clientMessageId', 'parts', 'message', 'waitTimeoutId', 'externalEventId'];
+const ITEM_KEYS = ['type', 'source', 'sourceSessionId', 'sourceSessionRelation', 'clientMessageId', 'parts', 'message', 'waitTimeoutId', 'externalEventId'];
 const PART_KEYS = ['text', 'system', 'systemPayload', 'inlineDataRef', 'imageMeta'];
 const SOURCE_KEYS = ['platform', 'channelId', 'channelType', 'channelUserId', 'conversationId', 'username', 'senderId', 'weworkStreamId', 'qqbotMessageId', 'preferDirectReply'];
 
@@ -122,6 +122,13 @@ export function normalizeSessionWorkerIngressRequest(value: unknown): { sessionI
   if (item.source && type !== 'user') invalid('item.source is supported only for user input.');
   if (item.clientMessageId && type !== 'user') invalid('item.clientMessageId is supported only for user input.');
   if (item.sourceSessionId && type !== 'intersession') invalid('item.sourceSessionId is supported only for intersession input.');
+  if (Object.prototype.hasOwnProperty.call(value.item, 'sourceSessionRelation')) {
+    if (!['direct-child', 'parent', 'other'].includes(value.item.sourceSessionRelation as string)) {
+      invalid('item.sourceSessionRelation is invalid.');
+    }
+    item.sourceSessionRelation = value.item.sourceSessionRelation as NonNullable<QueueItem['sourceSessionRelation']>;
+  }
+  if (item.sourceSessionRelation && type !== 'intersession') invalid('item.sourceSessionRelation is supported only for intersession input.');
   if (item.waitTimeoutId && type !== 'background') invalid('item.waitTimeoutId is supported only for background input.');
   const bytes = Buffer.byteLength(stableSessionWorkerJson(item), 'utf8');
   if (bytes > MAX_INGRESS_BYTES) throw new RpcError('SESSION_WORKER_INGRESS_TOO_LARGE', `QueueItem exceeds the ${MAX_INGRESS_BYTES}-byte ingress bound.`);

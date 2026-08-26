@@ -237,7 +237,12 @@ export function createMainManagementToolServiceHandler(options: {
       return { result: await invokeAllowedOperation(
         operation as MainManagementToolOperation,
         args,
-        needsExactSource ? await exactSourceContext(sourceSessionId, source) : { sessionId: sourceSessionId },
+        needsExactSource
+          ? await exactSourceContext(sourceSessionId, source)
+          : {
+            sessionId: sourceSessionId,
+            ...(operation === 'send_to_session' ? { captureSuccessfulSendToSessionTarget: true } : {}),
+          },
       ) };
     },
     async scheduleWaitTimeout(input) {

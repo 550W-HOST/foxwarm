@@ -274,7 +274,7 @@ test('Main submitAndRun ensures, spawns, and owns exact worker ingress without M
     }, 'valid-client');
     (validPartsItem.parts[0] as any).inlineDataRef = validRef; validPartsItem.parts[0].imageMeta = validMeta;
     assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validPartsItem }), { sessionId, item: validPartsItem });
-    const validMessageItem = { type: 'intersession' as const, sourceSessionId: 'origin', message: {
+    const validMessageItem = { type: 'intersession' as const, sourceSessionId: 'origin', sourceSessionRelation: 'parent' as const, message: {
       role: 'user' as const, parts: [{ system: 'canonical message' }], modelVisible: true, __meta: { timestamp: 1, seq: 2 },
     } };
     assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validMessageItem }), { sessionId, item: validMessageItem });
@@ -303,6 +303,8 @@ test('Main submitAndRun ensures, spawns, and owns exact worker ingress without M
       { type: 'user', parts: [{ text: 'x' }], source: { platform: 'test', channelUserId: 7 } },
       { type: 'user', parts: [{ text: 'x' }], source: { platform: 'test', channelUserId: 'x'.repeat(513) } },
       { type: 'intersession', parts: [{ system: 'x' }], sourceSessionId: 7 },
+      { type: 'intersession', parts: [{ system: 'x' }], sourceSessionRelation: 'unknown' },
+      { type: 'background', parts: [{ system: 'x' }], sourceSessionRelation: 'parent' },
       { type: 'background', parts: [{ system: 'x' }], waitTimeoutId: 7 },
       { type: 'background', parts: [{ system: 'x' }], waitTimeoutId: 'x'.repeat(257) },
       { type: 'background', parts: [{ system: 'x' }], externalEventId: 7 },

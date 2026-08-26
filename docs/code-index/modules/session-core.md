@@ -45,7 +45,7 @@ Active history transformation, compaction, archive-store, and vector retrieval a
 ## Data ownership
 
 - `state/catalog.sqlite` is the Main-owned identity/topology/list projection. Its cross-module admission rule is canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
-- `state/sessions/<id>.json` owns versioned authoritative full semantic session state: durable history, queue, wait/managed metadata, prompt snapshot/cache key, message provenance, settings, and worker mailbox cursor. Unversioned legacy files receive a one-time tolerant upgrade; current-version hydration replaces semantic fields rather than merging stale catalog values. Per-session files use durable serialized replacement without numbered rotation.
+- `state/sessions/<id>.json` owns versioned authoritative full semantic session state: durable history, queue, wait/managed metadata, the optional child-handoff reminder boundary, prompt snapshot/cache key, message provenance, settings, and worker mailbox cursor. Unversioned legacy files receive a one-time tolerant upgrade; current-version hydration replaces semantic fields rather than merging stale catalog values. Per-session files use durable serialized replacement without numbered rotation.
 - `state/channels.json` owns channel attachments.
 - `state/session-runtime.sqlite` owns Session-worker generations, incarnations, mailbox intents, and acknowledged mailbox cursors when process placement is enabled; it never owns semantic Session state.
 - `state/sessions/<id>.json` additionally persists `lastAppliedMailboxId`; worker placement must durably replace this authoritative file before SQLite acknowledges the corresponding ordered session-local mailbox prefix.

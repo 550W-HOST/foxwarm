@@ -1,6 +1,6 @@
 # Unit: src-session-misc
 
-Files: src/session/archive.ts, src/session/relations.ts, src/session/managedState.ts, src/session/messageVisibility.ts, src/session/snapshotRefresh.ts, src/session/childSessionReminder.ts, src/session/childSessionReminder.test.ts, src/session/sessionResumeDedup.test.ts, src/session/sessionSnapshotAutoRefresh.test.ts
+Files: src/session/archive.ts, src/session/relations.ts, src/session/managedState.ts, src/session/messageVisibility.ts, src/session/snapshotRefresh.ts, src/session/childSessionReminder.ts, src/session/childHandoffState.ts, src/session/childSessionReminder.test.ts, src/session/childHandoffState.test.ts, src/session/childHandoffFork.test.ts, src/session/sessionResumeDedup.test.ts, src/session/sessionSnapshotAutoRefresh.test.ts
 
 ## Purpose
 
@@ -17,6 +17,7 @@ Provides session archiving (persisting messages with canonical image references)
 - `isModelVisibleMessage`, `createDisplayOnlyModelMessage`, `redactDisplayOnlyMessageForModel`, `formatModelVisibilitySuffix` — message visibility helpers
 - `maybeRefreshStaleSessionSnapshot`, `shouldAutoRefreshSessionSnapshot`, `getSessionIdleMs`, `AUTO_REFRESH_STALE_SESSION_SNAPSHOT_MS` — snapshot refresh logic
 - `isNoActionSignalText`, `isModelNoActionSignal`, `buildChildCompletionInstruction`, `buildChildReminder`, `NO_ACTION_MARKER` — child session reminder/completion signaling
+- `getChildHandoffBoundaryForQueueItem`, `applyChildHandoffQueueItem`, `resolveChildHandoffBoundary`, `shouldQueueChildHandoffReminder` — pure persisted child-handoff boundary transitions and reminder decision
 
 ## Function Index
 
@@ -87,6 +88,7 @@ Parent-cycle traversal canonicalizes every ancestor alias before seen/self check
 - **Message visibility**: Supports display-only messages that are hidden from the model (replaced with placeholder text during inference).
 - **Snapshot refresh**: Auto-refreshes session prompt snapshots after 1 hour of inactivity, with graceful error handling that doesn't block processing.
 - **Child reminder**: Detects `[NO_ACTION]` signals from child sessions to suppress completion reminders, builds instruction/reminder text for inter-session handoff protocol, and recommends one flagged `send_to_session(..., waitAfterHandoff:true)` call rather than a separate explicit wait. Reminder system events use one `<foxwarm-system kind="child-reminder" event="missing-handoff" parentSessionId="...">reminder</foxwarm-system>` part instead of a generic `hint` wrapper or split `systemPayload`.
+- **Persisted handoff boundary**: Current Sessions use an optional semantic `childHandoffState`. Direct-user input establishes a resolved direct-user boundary; parent/other inter-session input establishes an unresolved report-required boundary; direct-child and maintenance input are transparent. Resolution is explicit and idempotent. Absence remains the legacy-scanner compatibility signal and is never seeded from a scan.
 
 ## Integration
 
@@ -102,3 +104,4 @@ Parent-cycle traversal canonicalizes every ancestor alias before seen/self check
 - [2026-07-13] Inter-session isolation uses the persisted session relation as a narrow exception to the cross-agent boundary: an explicit direct `parentSessionId` link permits parent↔child communication when one or both agents are isolated. Siblings and unrelated cross-agent sessions remain denied; this does not broaden agent, node, file, or tool permissions.
 - [2026-07-06/2026-07-07] Inter-session source headers use a single `<foxwarm-message type="inter-agent" ...>raw body</foxwarm-message>` system part instead of literal `[SYSTEM:]` text or split body parts. Attribute values are escaped, but the message body is intentionally left raw per user decision; existing `[SYSTEM:]` histories remain compatible.
 - [2026-07-07] Child-session missing-handoff reminders should be structured as `kind="child-reminder" event="missing-handoff"` metadata with the human reminder in the same foxwarm-system body, not as `<foxwarm-system hint="Reminder: ..." />` or a split `systemPayload` part.
+- The persisted reminder-boundary contract is canonical in [D-pipeline-persisted-child-handoff-boundary](../threads/message-processing-pipeline.md#d-pipeline-persisted-child-handoff-boundary).

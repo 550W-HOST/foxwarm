@@ -4,10 +4,10 @@ import * as llm from './llm';
 import * as sessionManager from './sessionManager';
 import { initArchiveStore } from './session/archiveStore';
 import { readArchiveMessages } from './session/archive';
-import { writeAuthoritativeSessionState } from './session/stateFile';
+import { SessionAuthorityPostCommitError, writeAuthoritativeSessionState } from './session/stateFile';
 import { readSessionHistorySnapshot } from './session/metadataStore';
 import { LocalSessionTurnHost, SessionTurnRunner } from './sessionTurnRunner';
-import type { Message, Session } from './types';
+import type { Message, QueueItem, Session } from './types';
 import { logger } from './common';
 
 function createSession(id: string, text: string): Session {
@@ -322,6 +322,221 @@ test('local post-final child-reminder failure keeps one provider final and relea
   } finally {
     (llm as any).chat = originalChat;
   }
+});
+
+test('persisted child-handoff state drives reminder boundaries, resolution, transparency, and legacy fallback', async () => {
+  await initArchiveStore();
+  const originalChat = llm.chat;
+  const originalExecuteTools = llm.executeTools;
+
+  async function runCase(options: {
+    name: string;
+    queue: QueueItem[];
+    initialState?: Session['childHandoffState'];
+    response?: string;
+    successfulSendTargets?: string[];
+    failedSend?: boolean;
+    addIncompatibleQueuedItem?: boolean;
+  }): Promise<{ session: Session; reminders: string[] }> {
+    const session = createSession(`child_handoff_${options.name}_${Date.now()}_${Math.random()}`, 'unused');
+    session.parentSessionId = 'parent-session';
+    session.queue = structuredClone(options.queue);
+    if (options.initialState) session.childHandoffState = structuredClone(options.initialState);
+    const reminders: string[] = [];
+    const effects = createEffects(session, []);
+    const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session, {
+      queueSessionSystemEvent: async (_id, reminder) => { reminders.push(reminder); },
+      checkAndCompactIfNeeded: async () => {},
+      applyCompletedCompactJob: async () => true,
+    }));
+    let providerIteration = 0;
+    (llm as any).chat = async (_parts: any, _owner: Session, _iteration: number, chatOptions: any) => {
+      if (options.successfulSendTargets || options.failedSend) {
+        if (providerIteration++ === 0) {
+          await chatOptions.appendMessage({ role: 'model', parts: [{ functionCall: {
+            id: 'send', name: 'send_to_session', args: { sessionId: options.failedSend ? 'missing' : options.successfulSendTargets![0] },
+          } }] });
+          return { text: '', toolCalls: [{
+            id: 'send', name: 'send_to_session', args: { sessionId: options.failedSend ? 'missing' : options.successfulSendTargets![0] },
+          }] };
+        }
+      }
+      if (options.addIncompatibleQueuedItem) {
+        session.queue.push({ type: 'compact-commit' });
+      }
+      const text = options.response ?? 'done';
+      await chatOptions.appendMessage({ role: 'model', parts: [{ text }] });
+      return { text };
+    };
+    (llm as any).executeTools = async () => ({
+      role: 'tool',
+      parts: [{ functionResponse: {
+        tool_use_id: 'send', name: 'send_to_session',
+        response: options.failedSend ? { error: 'failed send' } : { output: 'sent' },
+      } }],
+      ...(!options.failedSend && options.successfulSendTargets
+        ? { __toolPostAction: { successfulSendToSessionTargets: options.successfulSendTargets } }
+        : {}),
+    });
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+    return { session, reminders };
+  }
+
+  try {
+    for (const relation of ['parent', 'other'] as const) {
+      const result = await runCase({
+        name: relation,
+        queue: [{ type: 'intersession', sourceSessionId: `${relation}-source`, sourceSessionRelation: relation, parts: [{ text: 'assignment' }] }],
+      });
+      assert.deepEqual(result.session.childHandoffState, { boundary: 'report-required', resolved: false });
+      assert.equal(result.reminders.length, 1);
+    }
+
+    const transparentChild = await runCase({
+      name: 'child-transparent',
+      initialState: { boundary: 'report-required', resolved: false },
+      queue: [{ type: 'intersession', sourceSessionId: 'direct-child', sourceSessionRelation: 'direct-child', parts: [{ text: 'child report' }] }],
+    });
+    assert.deepEqual(transparentChild.session.childHandoffState, { boundary: 'report-required', resolved: false });
+    assert.equal(transparentChild.reminders.length, 1);
+
+    for (const type of ['background', 'trigger', 'onboot'] as const) {
+      const transparentMaintenance = await runCase({
+        name: `maintenance-${type}`,
+        initialState: { boundary: 'report-required', resolved: false },
+        queue: [{ type, parts: [{ system: `<foxwarm-system kind="${type}">maintenance</foxwarm-system>` }] }],
+      });
+      assert.deepEqual(transparentMaintenance.session.childHandoffState, { boundary: 'report-required', resolved: false });
+      assert.equal(transparentMaintenance.reminders.length, 1);
+    }
+
+    const directUser = await runCase({
+      name: 'direct-user',
+      initialState: { boundary: 'report-required', resolved: false },
+      queue: [{ type: 'user', parts: [{ text: 'new direct user request' }] }],
+    });
+    assert.deepEqual(directUser.session.childHandoffState, { boundary: 'direct-user', resolved: true });
+    assert.equal(directUser.reminders.length, 0);
+
+    const parentSend = await runCase({
+      name: 'parent-send',
+      queue: [{ type: 'intersession', sourceSessionRelation: 'parent', parts: [{ text: 'assignment' }] }],
+      successfulSendTargets: ['parent-session'],
+    });
+    assert.deepEqual(parentSend.session.childHandoffState, { boundary: 'report-required', resolved: true });
+    assert.equal(parentSend.reminders.length, 0);
+
+    const wrongTarget = await runCase({
+      name: 'wrong-target-send',
+      queue: [{ type: 'intersession', sourceSessionRelation: 'parent', parts: [{ text: 'assignment' }] }],
+      successfulSendTargets: ['unrelated-session'],
+    });
+    assert.deepEqual(wrongTarget.session.childHandoffState, { boundary: 'report-required', resolved: false });
+    assert.equal(wrongTarget.reminders.length, 1);
+
+    const failedSend = await runCase({
+      name: 'failed-send',
+      queue: [{ type: 'intersession', sourceSessionRelation: 'parent', parts: [{ text: 'assignment' }] }],
+      failedSend: true,
+    });
+    assert.deepEqual(failedSend.session.childHandoffState, { boundary: 'report-required', resolved: false });
+    assert.equal(failedSend.reminders.length, 1);
+
+    const noAction = await runCase({
+      name: 'no-action',
+      queue: [{ type: 'intersession', sourceSessionRelation: 'parent', parts: [{ text: 'assignment' }] }],
+      response: 'Nothing further is needed. [NO_ACTION]',
+    });
+    assert.deepEqual(noAction.session.childHandoffState, { boundary: 'report-required', resolved: true });
+    assert.equal(noAction.reminders.length, 0);
+
+    const queueGuard = await runCase({
+      name: 'queue-guard',
+      queue: [{ type: 'intersession', sourceSessionRelation: 'parent', parts: [{ text: 'assignment' }] }],
+      addIncompatibleQueuedItem: true,
+    });
+    assert.deepEqual(queueGuard.session.childHandoffState, { boundary: 'report-required', resolved: false });
+    assert.equal(queueGuard.reminders.length, 0);
+    assert.equal(queueGuard.session.queue.length, 0);
+
+    const legacy = await runCase({
+      name: 'legacy-fallback',
+      queue: [{ type: 'background', parts: [{ text: 'legacy meaningful input' }] }],
+    });
+    assert.equal(legacy.session.childHandoffState, undefined);
+    assert.equal(legacy.reminders.length, 1, 'no-state Sessions keep the existing backward scanner');
+  } finally {
+    (llm as any).chat = originalChat;
+    (llm as any).executeTools = originalExecuteTools;
+  }
+});
+
+test('Stop bulk commit applies child-handoff boundaries in queue order and preserves persistence failure semantics', async () => {
+  await initArchiveStore();
+
+  async function finalize(
+    name: string,
+    queue: QueueItem[],
+    initialState?: Session['childHandoffState'],
+    appendError?: Error,
+  ): Promise<Session> {
+    const session = createSession(`child_handoff_stop_${name}_${Date.now()}_${Math.random()}`, 'unused');
+    session.parentSessionId = 'parent-session';
+    session.queue = structuredClone(queue);
+    session.busy = true;
+    session.stopping = true;
+    if (initialState) session.childHandoffState = structuredClone(initialState);
+    const effects = createEffects(session, []);
+    if (appendError) effects.appendMessages = async () => { throw appendError; };
+    const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
+    if (appendError) {
+      await assert.rejects(() => (runner as any).finalizeStoppedSession(session), error => error === appendError);
+    } else {
+      await (runner as any).finalizeStoppedSession(session);
+    }
+    return session;
+  }
+
+  for (const relation of ['parent', 'other'] as const) {
+    const session = await finalize(relation, [{
+      type: 'intersession', sourceSessionRelation: relation, parts: [{ text: `${relation} assignment` }],
+    }]);
+    assert.deepEqual(session.childHandoffState, { boundary: 'report-required', resolved: false });
+  }
+
+  const directUser = await finalize(
+    'direct-user',
+    [{ type: 'user', parts: [{ text: 'new direct user request' }] }],
+    { boundary: 'report-required', resolved: false },
+  );
+  assert.deepEqual(directUser.childHandoffState, { boundary: 'direct-user', resolved: true });
+
+  const ordered = await finalize('ordered', [
+    { type: 'user', parts: [{ text: 'direct first' }] },
+    { type: 'intersession', sourceSessionRelation: 'direct-child', parts: [{ text: 'transparent child' }] },
+    { type: 'background', parts: [{ system: 'transparent maintenance' }] },
+    { type: 'intersession', sourceSessionRelation: 'other', parts: [{ text: 'other assignment last' }] },
+  ]);
+  assert.deepEqual(ordered.childHandoffState, { boundary: 'report-required', resolved: false });
+
+  const prior: Session['childHandoffState'] = { boundary: 'direct-user', resolved: true };
+  const precommitError = new Error('injected precommit failure');
+  const rolledBack = await finalize(
+    'precommit-rollback',
+    [{ type: 'intersession', sourceSessionRelation: 'parent', parts: [{ text: 'assignment' }] }],
+    prior,
+    precommitError,
+  );
+  assert.deepEqual(rolledBack.childHandoffState, prior);
+
+  const postcommitError = new SessionAuthorityPostCommitError('injected postcommit failure');
+  const retained = await finalize(
+    'postcommit-retention',
+    [{ type: 'intersession', sourceSessionRelation: 'parent', parts: [{ text: 'assignment' }] }],
+    prior,
+    postcommitError,
+  );
+  assert.deepEqual(retained.childHandoffState, { boundary: 'report-required', resolved: false });
 });
 
 test('detached exact owner completes one real local-tool iteration', async () => {
