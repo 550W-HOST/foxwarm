@@ -1519,6 +1519,14 @@ function App() {
             currentSession={currentContextSessionId}
             onSelectSession={openChatTab}
             onBack={onBack}
+            onCreateAgent={handleCreateAgent}
+            onCreateSession={handleCreateSession}
+            onAgentsChanged={() => { void Promise.all([fetchAgents(), fetchSessions()]) }}
+            onOpenAgentMemory={(memoryRoot, filePath) => {
+              const workspace = { nodeId: 'master', path: memoryRoot }
+              if (filePath) openCodeFile({ kind: 'openFile', nodeId: 'master', path: filePath }, workspace)
+              else openCode(workspace)
+            }}
           />
         </Suspense>
       )

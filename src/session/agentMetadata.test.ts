@@ -5,7 +5,9 @@ import os from 'os';
 import path from 'path';
 import {
   createAgentMetadataStore,
+  deleteAgentMetadata,
   getAgentMetadata,
+  listAgentMetadataEntries,
   loadAgentMetadata,
   resetAgentMetadataForTests,
   setAgentMetadata,
@@ -53,5 +55,25 @@ test('agent metadata persistence uses lightweight no-backup writes', async () =>
     assert.deepEqual(Object.keys(rewritten).sort(), ['alpha-agent', 'beta-agent']);
     assert.deepEqual(createAgentMetadataStore(filePath).listCandidatePaths(), [filePath]);
     assert.deepEqual(await listBackupMatches(filePath), []);
+  });
+});
+
+test('agent metadata deletion removes the durable entry without mutating returned snapshots', async () => {
+  await withTempDir(async (dirPath) => {
+    const filePath = path.join(dirPath, 'agents.json');
+    setAgentMetadataStoreForTests(createAgentMetadataStore(filePath));
+    resetAgentMetadataForTests();
+    await setAgentMetadata('alpha-agent', { inherit: 'main' });
+    await setAgentMetadata('beta-agent', { isolated: true, isolatedNode: 'node-a' });
+
+    const entries = listAgentMetadataEntries();
+    entries[0][1].inherit = 'tampered';
+    assert.equal(getAgentMetadata('alpha-agent').inherit, 'main');
+
+    await deleteAgentMetadata('alpha-agent');
+    assert.deepEqual(getAgentMetadata('alpha-agent'), {});
+    assert.deepEqual(await fs.readJson(filePath), {
+      'beta-agent': { isolated: true, isolatedNode: 'node-a' },
+    });
   });
 });

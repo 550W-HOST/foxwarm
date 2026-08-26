@@ -19,6 +19,8 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 - `createAgentMetadataStore(filePath)` — factory for the disk-backed metadata store
 - `loadAgentMetadata()` — loads metadata from disk into memory
 - `getAgentMetadata(agentName)` — returns metadata for an agent
+- `listAgentMetadataEntries()` — returns defensive snapshots for cross-Agent dependency checks
+- `deleteAgentMetadata(agentName)` — removes and durably rewrites one Agent metadata entry
 - `getAgentIsolationNode(agentName)` — returns the isolation node if set
 - `isAgentIsolated(agentName)` — checks isolation flag
 - `isSessionEffectivelyIsolated(session)` — checks if a session's agent is isolated
@@ -52,6 +54,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 | `saveAgentMetadata()` | ~63 (agentMetadata) | Serializes in-memory map to disk |
 | `loadAgentMetadata()` | ~85 (agentMetadata) | Reads metadata file, populates in-memory map |
 | `getAgentMetadata(agentName)` | ~105 (agentMetadata) | Returns metadata or empty object |
+| `listAgentMetadataEntries()` / `deleteAgentMetadata()` | ~110 (agentMetadata) | Snapshot dependency inspection and durable metadata removal |
 | `getAgentIsolationNode(agentName)` | ~109 (agentMetadata) | Returns isolation node string if isolated |
 | `isAgentIsolated(agentName)` | ~115 (agentMetadata) | Boolean isolation check |
 | `isSessionEffectivelyIsolated(session)` | ~119 (agentMetadata) | Delegates to isAgentIsolated via session's agent |
@@ -81,7 +84,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 - Identity rename and parent-bearing creation recheck the bounded destructive-lifecycle claim immediately before their in-memory relation/identity commit. Prior identity operations drain before a delete claim is acquired. Canonical boundary: [D-lifecycle-descendant-actions](../threads/session-lifecycle.md#d-lifecycle-descendant-actions).
 - New named sessions and agent-main sessions run under the session-manager identity commit lock and remove a newly initialized agent directory when critical creation fails. A create-agent move completes nonmutating validation, durably records rollback intent and semantically bound target-directory ownership, then creates/copies the directory. Initialization failure and startup rollback remove only that owned directory idempotently; pending rollback keeps it until recovery, while finishing recovery keeps it permanently. Moves reject journal-unsafe, live, alias, or retained-archive targets before mutation, reverse known failed memory/file/archive/index/relation/attachment mutations, and commit the historical alias only after strict persistence succeeds. The validated journal records explicit `rolling-back`/`finishing` intent rather than inferring intent from metadata; display metadata changes do not enter this path.
 - Recreating an agent directory without a main session is allowed because it allocates no session lifetime. Recreating the archived main internal ID is rejected before the new directory is initialized.
-- Agent metadata is held in an in-memory `Map` backed by a single JSON file (no backup rotation). Normalization strips `skills` and cleans `isolatedNode`.
+- Agent metadata is held in an in-memory `Map` backed by a single JSON file (no backup rotation). Normalization strips `skills` and cleans `isolatedNode`; listing returns defensive copies and deletion rewrites the durable map.
 - Isolation enforcement prevents cross-agent session moves when either source or target agent is isolated.
 - Inheritance chain resolution detects cycles and logs a warning rather than throwing.
 - Setting inheritance or isolation triggers a refresh of system prompt snapshots for all affected sessions (including transitive inheritors).
