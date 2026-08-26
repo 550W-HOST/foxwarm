@@ -9,7 +9,7 @@ import type { CurrentSessionTurnEffects } from './llm';
 import { RpcError } from './rpc';
 import { initArchiveStore } from './session/archiveStore';
 import { refreshSessionSnapshotForSession } from './session/agentMetadata';
-import { clearSession, compactToolMessages as compactSessionToolMessages, deleteMessages, forceIndexSession, getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSessionCompactionRequest, tryAutomaticToolResponsePruning, type SessionHistoryDeps } from './session/history';
+import { cancelSessionCompaction, clearSession, compactToolMessages as compactSessionToolMessages, deleteMessages, forceIndexSession, getEffectiveCompactThresholdTokens, getUsageTotalTokens, processSessionCompactionRequest, tryAutomaticToolResponsePruning, type CompactCancellationResult, type SessionHistoryDeps } from './session/history';
 import { getManagedSessionState } from './session/managedState';
 import { captureSessionSemanticState, restoreSessionSemanticState } from './session/metadataStore';
 import {
@@ -138,6 +138,11 @@ export class SessionWorkerHost {
       const compacted = await this.runExactCompaction(request, 'explicit');
       return { compacted, projection: buildSessionWorkerProjection(owner) };
     });
+  }
+
+  async cancelCompaction(): Promise<CompactCancellationResult> {
+    await this.ensureLoaded();
+    return cancelSessionCompaction(this.historyDeps(), this.identity.sessionId);
   }
 
   async compactToolMessages(keepPercent?: number): Promise<SessionWorkerToolNoiseCompactionResult> {
@@ -834,7 +839,7 @@ export class SessionWorkerHost {
       if (failurePolicy !== 'explicit' && await tryAutomaticToolResponsePruning(this.historyDeps(), this.identity.sessionId)) {
         return (this.session!.historyVersion || 0) !== beforeVersion;
       }
-      await processSessionCompactionRequest(this.historyDeps(), this.identity.sessionId, request, 'await');
+      await processSessionCompactionRequest(this.historyDeps(), this.identity.sessionId, request, 'await', 'worker');
       return (this.session!.historyVersion || 0) !== beforeVersion;
     } catch (error) {
       try { await this.resyncAfterFailure(error); }

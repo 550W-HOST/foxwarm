@@ -933,7 +933,7 @@ test('bound worker host closes reminders, awaits automatic compaction, and rejec
   };
   try {
     await withLocalHost(initial, async ({ host, store, session }) => {
-      store.enqueueIntent(initial.id, 'ordinary', 'enqueue', { type: 'user', parts: [{ text: 'work' }] });
+      store.enqueueIntent(initial.id, 'ordinary', 'enqueue', { type: 'intersession', sourceSessionId: 'parent-session', parts: [{ text: 'work' }] });
       await host.runPending(8);
       for (let index = 0; index < 40 && calls < 2; index += 1) await new Promise(resolve => setTimeout(resolve, 5));
       const reminders = session.history.filter(message => JSON.stringify(message.parts).includes('kind=\\"child-reminder\\"'));
@@ -946,6 +946,42 @@ test('bound worker host closes reminders, awaits automatic compaction, and rejec
   } finally { (llm as any).chat = originalChat; }
   const sessionsFileAfter = await fs.pathExists(SESSIONS_FILE) ? await fs.readFile(SESSIONS_FILE) : null;
   assert.deepEqual(sessionsFileAfter, sessionsFileBefore);
+});
+
+test('worker compact cancellation bypasses the serialized compact lane and leaves the owner usable', async () => {
+  const initial = baseSession('worker-cancel-compact');
+  initial.history = [
+    { role: 'user', parts: [{ text: `older ${'alpha '.repeat(3000)}` }], __meta: { seq: 1, timestamp: 1 } },
+    { role: 'model', parts: [{ text: `older ${'bravo '.repeat(3000)}` }], __meta: { seq: 2, timestamp: 2 } },
+    { role: 'user', parts: [{ text: 'recent' }], __meta: { seq: 3, timestamp: 3 } },
+    { role: 'model', parts: [{ text: 'recent answer' }], __meta: { seq: 4, timestamp: 4 } },
+  ];
+  initial.nextMessageSeq = 5;
+  const originalChat = llm.chat;
+  let started!: () => void;
+  const providerStarted = new Promise<void>(resolve => { started = resolve; });
+  try {
+    (llm as any).chat = async (_parts: any, _session: Session, _iteration: number, options: any) => {
+      assert.equal(options.registerAbortController, false);
+      assert(options.abortSignal instanceof AbortSignal);
+      started();
+      await new Promise<void>((_resolve, reject) => options.abortSignal.addEventListener('abort', () => {
+        const error = new Error('cancelled'); error.name = 'AbortError'; reject(error);
+      }, { once: true }));
+      throw new Error('unreachable');
+    };
+    await withLocalHost(initial, async ({ host, readDurable }) => {
+      const before = structuredClone(readDurable().history);
+      const compact = host.compactAwaited({ keepPercent: 0.5 });
+      await providerStarted;
+      const cancelled = await host.cancelCompaction();
+      assert.deepEqual(cancelled, { outcome: 'cancelled', phase: 'planning' });
+      assert.equal((await compact).compacted, false);
+      assert.deepEqual(readDurable().history, before);
+      assert.equal((await host.cancelCompaction()).outcome, 'none');
+      assert.equal((await host.loadProjection()).busy, false);
+    });
+  } finally { (llm as any).chat = originalChat; }
 });
 
 test('Worker post-final child-reminder persistence failure resyncs authority without a second final', async () => {
@@ -972,7 +1008,8 @@ test('Worker post-final child-reminder persistence failure resyncs authority wit
         return persistActivated(session, ...args);
       };
       store.enqueueIntent(initial.id, 'post-final-reminder', 'enqueue', {
-        type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'work' }],
+        type: 'intersession', sourceSessionId: 'parent-session',
+        source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'work' }],
       });
       await host.runPending(8);
       assert.equal(reminderPersistFailed, true);

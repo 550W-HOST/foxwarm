@@ -109,6 +109,13 @@ export function hasPendingCompactWork(sessionId: string): boolean {
 
 export function discardPendingCompactWork(sessionId: string): void {
   compactJobStates.delete(sessionId);
+  const operation = compactOperations.get(sessionId);
+  if (operation) {
+    operation.cancelled = true;
+    operation.controller.abort();
+    finishCompactOperation(sessionId, operation);
+  }
+  compactPreviewLastTimestamp.delete(sessionId);
 }
 
 export type SessionHistoryDeps = {
@@ -129,6 +136,12 @@ type CompactionRunOptions = {
 };
 
 type CompactExecutionMode = 'auto' | 'await' | 'background';
+export type CompactOperationOwner = 'background' | 'standalone' | 'turn' | 'worker';
+
+export type CompactCancellationResult = {
+  outcome: 'cancelled' | 'completed' | 'none';
+  phase?: 'planning' | 'enqueueing' | 'ready' | 'committing';
+};
 
 type CompactJobRequest = CompactionRequest;
 
@@ -199,12 +212,85 @@ type CompactJobState = {
   snapshotHistoryVersion: number;
   result?: CompactJobResult;
   error?: Error;
+  operationId: number;
+};
+
+type CompactOperation = {
+  id: number;
+  owner: CompactOperationOwner;
+  phase: 'planning' | 'enqueueing' | 'ready' | 'committing';
+  controller: AbortController;
+  cancelled: boolean;
+  committed: boolean;
+  completion: Promise<void>;
+  resolveCompletion: () => void;
 };
 
 const compactJobStates = new Map<string, CompactJobState>();
+const compactOperations = new Map<string, CompactOperation>();
+let nextCompactOperationId = 1;
 const compactPreviewLastTimestamp = new Map<string, number>();
 
 const ASYNC_COMPACT_DONE_NOTICE = '🗜️ Background compaction finished';
+
+function beginCompactOperation(sessionId: string, owner: CompactOperationOwner): CompactOperation | null {
+  if (compactOperations.has(sessionId)) return null;
+  let resolveCompletion!: () => void;
+  const operation: CompactOperation = {
+    id: nextCompactOperationId++, owner, phase: 'planning', controller: new AbortController(),
+    cancelled: false, committed: false,
+    completion: new Promise<void>(resolve => { resolveCompletion = resolve; }), resolveCompletion,
+  };
+  compactOperations.set(sessionId, operation);
+  return operation;
+}
+
+function finishCompactOperation(sessionId: string, operation: CompactOperation): void {
+  if (compactOperations.get(sessionId) === operation) compactOperations.delete(sessionId);
+  operation.resolveCompletion();
+}
+
+function isCompactCancelled(operation: CompactOperation): boolean {
+  return operation.cancelled || operation.controller.signal.aborted;
+}
+
+class CompactCancelledError extends Error {
+  constructor() { super('Compaction cancelled.'); this.name = 'CompactCancelledError'; }
+}
+
+export function getCompactOperationOwner(sessionId: string): CompactOperationOwner | undefined {
+  return compactOperations.get(sessionId)?.owner;
+}
+
+export function getCompactOperationPhase(sessionId: string): CompactCancellationResult['phase'] | undefined {
+  return compactOperations.get(sessionId)?.phase;
+}
+
+export async function cancelSessionCompaction(deps: SessionHistoryDeps, sessionId: string): Promise<CompactCancellationResult> {
+  const operation = compactOperations.get(sessionId);
+  if (!operation) return { outcome: 'none' };
+  const phase = operation.phase;
+  operation.cancelled = true;
+  operation.controller.abort();
+
+  const state = compactJobStates.get(sessionId);
+  if (state?.operationId === operation.id) compactJobStates.delete(sessionId);
+  compactPreviewLastTimestamp.delete(sessionId);
+
+  const session = deps.getSessionById(sessionId);
+  if (session) {
+    const nextQueue = session.queue.filter(item => item.type !== 'compact-commit');
+    if (nextQueue.length !== session.queue.length) {
+      session.queue = nextQueue;
+      await deps.saveSession(sessionId);
+    }
+  }
+
+  if (phase === 'ready') finishCompactOperation(sessionId, operation);
+
+  await operation.completion;
+  return operation.committed ? { outcome: 'completed', phase } : { outcome: 'cancelled', phase };
+}
 
 function nextCompactPreviewTimestamp(sessionId: string): number {
   const now = Date.now();
@@ -922,12 +1008,15 @@ async function finalizeCompaction(
   replacedItemCount: number,
   compactedSkillNames: string[] = [],
   insertedCompletionMessages: Awaited<ReturnType<typeof appendMessagesToArchive>> = [],
+  operation: CompactOperation,
 ): Promise<void> {
-  session.persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
+  const persistentMemorySnapshot = await llm.buildSessionSystemPromptSnapshot({
     agentName: session.agent || 'main',
     sessionId,
     systemPromptFiles: session.systemPromptFiles,
   });
+  if (isCompactCancelled(operation)) throw new CompactCancelledError();
+  session.persistentMemorySnapshot = persistentMemorySnapshot;
   session.history = newHistory;
 
   const completionText = formatCompactionCompletionMarker(sessionId, completionMarker, session.parentSessionId, compactedSkillNames, Date.now());
@@ -946,6 +1035,7 @@ async function finalizeCompaction(
     },
   };
   insertedCompletionMessages.push(...await appendMessagesToArchive(session, [completionMessage]));
+  if (isCompactCancelled(operation)) throw new CompactCancelledError();
   session.history.push(completionMessage);
   const completionSeq = completionMessage.__meta!.seq!;
   if (hasCompletionGoalReminder && session.goalState) {
@@ -956,6 +1046,7 @@ async function finalizeCompaction(
   session.vectorIndexPosition = 0;
   session.historyVersion = (session.historyVersion || 0) + 1;
   session.indexingState = undefined;
+  if (isCompactCancelled(operation)) throw new CompactCancelledError();
   await deps.saveSession(sessionId);
   logger.info({ createdBlockCount, replacedItemCount, renderedCount: session.history.length }, 'Layered context compaction completed successfully');
   compactPreviewLastTimestamp.delete(sessionId);
@@ -991,7 +1082,7 @@ export function formatCompactionCompletionMarker(sessionId: string, completionMa
   });
 }
 
-async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnapshot): Promise<CompactJobResult> {
+async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnapshot, operation: CompactOperation): Promise<CompactJobResult> {
   const { sessionId, transientSession, historySnapshot, keepPercent, compactGuidance, completionMarker, completionBroadcastMessage } = snapshot;
   const splitIndex = resolveCompactionSplitIndex(historySnapshot, keepPercent);
   if (splitIndex <= 0) {
@@ -1060,6 +1151,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
   let invalidCompactPlanAttempts = 0;
 
   while (compactRoundsUsed < COMPACT_FLOW_MAX_ROUNDS) {
+    if (isCompactCancelled(operation)) throw new CompactCancelledError();
     compactRoundsUsed += 1;
     const result = await llm.chat(nextPromptParts, transientSession, invalidCompactPlanAttempts, {
       appendMessage: async (message) => {
@@ -1068,6 +1160,7 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
       },
       notifySessionEvents: false,
       registerAbortController: false,
+      abortSignal: operation.controller.signal,
       purpose: 'compact-plan',
     });
 
@@ -1166,7 +1259,8 @@ async function runCompactJob(deps: SessionHistoryDeps, snapshot: CompactJobSnaps
   };
 }
 
-async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string, result: CompactJobResult): Promise<boolean> {
+async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string, result: CompactJobResult, operation: CompactOperation): Promise<boolean> {
+  if (isCompactCancelled(operation)) throw new CompactCancelledError();
   if (result.status === 'noop') {
     return false;
   }
@@ -1191,6 +1285,7 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     const createdRecords = appendedBlocks.records;
     insertedBlocks = appendedBlocks.insertedRecords;
     const removePreservedSeqs = new Set(result.removePreservedMessages || []);
+    if (isCompactCancelled(operation)) throw new CompactCancelledError();
 
     const rewrittenOlderHistory: Message[] = [];
     let cursor = 0;
@@ -1224,7 +1319,9 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
       deps, sessionId, session, newHistory, result.completionMarker,
       result.completionBroadcastMessage, createdRecords.length,
       result.replacedItemCount, compactedSkillNames, insertedCompletionMessages,
+      operation,
     );
+    operation.committed = true;
 
     for (const record of createdRecords) {
       if (!record.memoryFacts?.length) continue;
@@ -1238,7 +1335,10 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
     }
     return true;
   } catch (error) {
-    if (isSessionAuthorityPostCommitError(error)) throw error;
+    if (isSessionAuthorityPostCommitError(error)) {
+      operation.committed = true;
+      throw error;
+    }
     restoreSessionSemanticState(session, beforeCommit);
     try {
       await rollbackUncommittedMessages(insertedCompletionMessages);
@@ -1252,9 +1352,11 @@ async function applyCompactJobResult(deps: SessionHistoryDeps, sessionId: string
   }
 }
 
-async function runCompaction(deps: SessionHistoryDeps, sessionId: string, options: CompactionRunOptions = {}): Promise<boolean> {
+async function runCompaction(deps: SessionHistoryDeps, sessionId: string, options: CompactionRunOptions = {}, owner: CompactOperationOwner = 'turn'): Promise<boolean> {
   const session = deps.getSessionById(sessionId);
   if (!session) return false;
+  const operation = beginCompactOperation(sessionId, owner);
+  if (!operation) return false;
 
   logger.info({ sessionId, hasBroadcast: !!session.broadcast }, options.startLogMessage || 'Compaction starting');
   if (session.broadcast && options.startBroadcastMessage) {
@@ -1266,15 +1368,24 @@ async function runCompaction(deps: SessionHistoryDeps, sessionId: string, option
   const snapshot = buildCompactJobSnapshot(session, options);
   if (!snapshot) {
     logger.info({ sessionId }, 'Compaction skipped because there is no compactable snapshot');
+    finishCompactOperation(sessionId, operation);
     return false;
   }
 
   try {
-    const result = await runCompactJob(deps, snapshot);
-    return await applyCompactJobResult(deps, sessionId, result);
+    const result = await runCompactJob(deps, snapshot, operation);
+    operation.phase = 'committing';
+    return await applyCompactJobResult(deps, sessionId, result, operation);
   } catch (e) {
+    if (e instanceof CompactCancelledError || (isCompactCancelled(operation) && llm.isAbortError(e))) {
+      logger.info({ sessionId, owner }, 'Compaction cancelled');
+      return false;
+    }
     logger.error(e, 'Compaction failed');
     throw e;
+  } finally {
+    compactPreviewLastTimestamp.delete(sessionId);
+    finishCompactOperation(sessionId, operation);
   }
 }
 
@@ -1303,8 +1414,11 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
   }
   if (!deps.enqueueSessionItem) {
     logger.warn({ sessionId }, 'Background compact requested without enqueueSessionItem dependency; falling back to synchronous compaction');
-    return runCompaction(deps, sessionId, options);
+    return runCompaction(deps, sessionId, options, 'background');
   }
+
+  const operation = beginCompactOperation(sessionId, 'background');
+  if (!operation) return false;
 
   compactJobStates.set(sessionId, {
     status: 'running',
@@ -1315,11 +1429,14 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
       completionMarker: options.completionMarker,
     },
     snapshotHistoryVersion: snapshot.baseHistoryVersion,
+    operationId: operation.id,
   });
 
   void (async () => {
     try {
-      const result = await runCompactJob(deps, snapshot);
+      const result = await runCompactJob(deps, snapshot, operation);
+      if (isCompactCancelled(operation) || compactOperations.get(sessionId) !== operation) throw new CompactCancelledError();
+      operation.phase = 'enqueueing';
       compactJobStates.set(sessionId, {
         status: 'ready',
         startedAt: Date.now(),
@@ -1330,10 +1447,13 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
         },
         snapshotHistoryVersion: snapshot.baseHistoryVersion,
         result,
+        operationId: operation.id,
       });
     } catch (error: any) {
       compactPreviewLastTimestamp.delete(sessionId);
-      compactJobStates.set(sessionId, {
+      if (error instanceof CompactCancelledError || (isCompactCancelled(operation) && llm.isAbortError(error))) {
+        compactJobStates.delete(sessionId);
+      } else compactJobStates.set(sessionId, {
         status: 'failed',
         startedAt: Date.now(),
         request: {
@@ -1343,18 +1463,38 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
         },
         snapshotHistoryVersion: snapshot.baseHistoryVersion,
         error: error instanceof Error ? error : new Error(String(error)),
+        operationId: operation.id,
       });
     }
 
     const liveSession = deps.getSessionById(sessionId);
-    if (!liveSession) {
+    if (!liveSession || isCompactCancelled(operation) || compactOperations.get(sessionId) !== operation) {
       compactJobStates.delete(sessionId);
       compactPreviewLastTimestamp.delete(sessionId);
+      finishCompactOperation(sessionId, operation);
       return;
     }
     if (!liveSession.queue.some(item => item.type === 'compact-commit')) {
-      await deps.enqueueSessionItem!(sessionId, { type: 'compact-commit' });
+      try { await deps.enqueueSessionItem!(sessionId, { type: 'compact-commit' }); }
+      catch (error) {
+        compactJobStates.delete(sessionId);
+        finishCompactOperation(sessionId, operation);
+        throw error;
+      }
+      if (isCompactCancelled(operation) || compactOperations.get(sessionId) !== operation) {
+        const queuedSession = deps.getSessionById(sessionId);
+        if (queuedSession) {
+          const nextQueue = queuedSession.queue.filter(item => item.type !== 'compact-commit');
+          if (nextQueue.length !== queuedSession.queue.length) {
+            queuedSession.queue = nextQueue;
+            await deps.saveSession(sessionId);
+          }
+        }
+        finishCompactOperation(sessionId, operation);
+        return;
+      }
     }
+    operation.phase = 'ready';
   })().catch(error => {
     logger.error({ err: error, sessionId }, 'Background compact job wrapper failed unexpectedly');
   });
@@ -1362,7 +1502,7 @@ async function startBackgroundCompaction(deps: SessionHistoryDeps, sessionId: st
   return true;
 }
 
-async function runCompactionWithMode(deps: SessionHistoryDeps, sessionId: string, options: CompactionRunOptions = {}, executionMode: CompactExecutionMode = 'auto'): Promise<boolean> {
+async function runCompactionWithMode(deps: SessionHistoryDeps, sessionId: string, options: CompactionRunOptions = {}, executionMode: CompactExecutionMode = 'auto', owner: CompactOperationOwner = 'turn'): Promise<boolean> {
   const session = deps.getSessionById(sessionId);
   if (!session) {
     return false;
@@ -1383,7 +1523,7 @@ async function runCompactionWithMode(deps: SessionHistoryDeps, sessionId: string
     });
   }
 
-  return runCompaction(deps, sessionId, options);
+  return runCompaction(deps, sessionId, options, owner);
 }
 
 export async function applyCompletedCompactJob(deps: SessionHistoryDeps, sessionId: string): Promise<boolean> {
@@ -1393,17 +1533,25 @@ export async function applyCompletedCompactJob(deps: SessionHistoryDeps, session
   }
 
   compactJobStates.delete(sessionId);
+  const operation = compactOperations.get(sessionId);
+  if (!operation || operation.id !== state.operationId) return false;
 
   if (state.status === 'failed') {
     compactPreviewLastTimestamp.delete(sessionId);
+    finishCompactOperation(sessionId, operation);
     throw state.error || new Error('Background compact job failed.');
   }
 
-  const applied = await applyCompactJobResult(deps, sessionId, state.result!);
-  if (!applied) {
+  operation.phase = 'committing';
+  try {
+    return await applyCompactJobResult(deps, sessionId, state.result!, operation);
+  } catch (error) {
+    if (error instanceof CompactCancelledError) return false;
+    throw error;
+  } finally {
     compactPreviewLastTimestamp.delete(sessionId);
+    finishCompactOperation(sessionId, operation);
   }
-  return applied;
 }
 
 export async function compactHistory(deps: SessionHistoryDeps, sessionId: string, keepPercent: number = COMPACT_KEEP_PERCENT, completionMarker: string = 'Compaction completed.'): Promise<void> {
@@ -1603,6 +1751,7 @@ export async function processSessionCompactionRequest(
   sessionId: string,
   item: CompactionRequest,
   executionMode: CompactExecutionMode = 'auto',
+  owner: CompactOperationOwner = 'turn',
 ): Promise<void> {
   if (item.compactGuidance?.trim()) {
     await runCompactionWithMode(deps, sessionId, {
@@ -1610,7 +1759,7 @@ export async function processSessionCompactionRequest(
       completionMarker: item.completionMarker || 'Compaction completed.',
       compactGuidance: `Manual compaction hint from requester: ${item.compactGuidance.trim()}`,
       startLogMessage: 'Manual compaction starting',
-    }, executionMode);
+    }, executionMode, owner);
     return;
   }
 
@@ -1628,5 +1777,5 @@ export async function processSessionCompactionRequest(
     keepPercent: item.keepPercent,
     completionMarker: item.completionMarker || 'Compaction completed.',
     startLogMessage: 'Compaction starting',
-  }, executionMode);
+  }, executionMode, owner);
 }

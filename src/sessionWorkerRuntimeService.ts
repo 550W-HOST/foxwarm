@@ -3,7 +3,7 @@ import type { SessionWorkerProjection } from './sessionWorkerPersistence';
 import type { SessionWorkerActivationGate } from './sessionWorkerControlService';
 import type { SessionWorkerHost } from './sessionWorkerHost';
 import type { CompactionRequest, QueueSource } from './types';
-import type { ToolNoiseCompactionResult } from './session/history';
+import type { CompactCancellationResult, ToolNoiseCompactionResult } from './session/history';
 import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
 import { MODEL_EFFORTS, type ModelEffort } from './config';
 
@@ -61,13 +61,14 @@ export type SessionWorkerBtwResult = {
   projection: SessionWorkerProjection;
 };
 
-export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 12, {
+export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 13, {
   loadProjection: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
   retry: rpcMethod<{ source?: QueueSource }, SessionWorkerProjection>(),
   dequeue: rpcMethod<Record<string, never>, SessionWorkerDequeueResult>(),
   runBtw: rpcMethod<{ message: string }, SessionWorkerBtwResult>(),
   compactAwaited: rpcMethod<{ request: CompactionRequest }, { compacted: boolean; projection: SessionWorkerProjection }>(),
+  cancelCompaction: rpcMethod<Record<string, never>, CompactCancellationResult>(),
   compactToolMessages: rpcMethod<{ keepPercent?: number }, SessionWorkerToolNoiseCompactionResult>(),
   updateSettings: rpcMethod<{ patch: SessionWorkerSettingsPatch }, SessionWorkerSettingsResult>(),
   updateCatalogFields: rpcMethod<{ patch: SessionWorkerCatalogFieldsPatch }, { projection: SessionWorkerProjection }>(),
@@ -266,6 +267,13 @@ export function createSessionWorkerRuntimeServiceHandler(
         const value = request[key]; if (value !== undefined && (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 16_384)) throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', `${key} must be a bounded string.`);
       }
       return host.compactAwaited(structuredClone(request));
+    },
+    async cancelCompaction(input) {
+      gate.assertActive();
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 0) {
+        throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', 'cancelCompaction takes an empty request object.');
+      }
+      return host.cancelCompaction();
     },
     async compactToolMessages(input) {
       gate.assertActive();

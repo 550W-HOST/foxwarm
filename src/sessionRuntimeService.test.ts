@@ -193,7 +193,7 @@ test('local SessionRuntime DTO seam clones projections and preserves event order
     const controller = new AbortController();
     sessionManager.registerSessionAbortController(sessionId, controller);
     const stopped = await client.call('control', { sessionId, action: 'stop' });
-    assert.deepEqual(stopped, { action: 'stop', abortedInFlight: true });
+    assert.deepEqual(stopped, { action: 'stop', abortedInFlight: true, stoppedCurrent: true });
     assert.equal(controller.signal.aborted, true);
 
     await assert.rejects(
@@ -249,6 +249,38 @@ test('loaded alias resolution rejects stale, forged, and duplicate cache identit
   } finally {
     first.aliases = []; second.aliases = [];
     await sessionManager.deleteSession(firstId).catch(() => {}); await sessionManager.deleteSession(secondId).catch(() => {});
+    (vector as any).scheduleSessionArchiveIndex = originalScheduleIndex;
+  }
+});
+
+test('Worker-placement compact cancellation with no active owner is a catalog-only no-op', async () => {
+  const originalScheduleIndex = vector.scheduleSessionArchiveIndex;
+  (vector as any).scheduleSessionArchiveIndex = async (): Promise<void> => {};
+  await sessionManager.loadSessions();
+  const sessionId = makeSessionId('session_runtime_inactive_compact_cancel');
+  await sessionManager.createEmptySession(sessionId);
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-runtime-inactive-cancel-'));
+  const store = new SessionWorkerStore(path.join(root, 'runtime.sqlite')); store.open();
+  const registry = new SessionWorkerProjectionRegistry();
+  let workerCalls = 0;
+  const ingress = { cancelCompaction: async () => { workerCalls += 1; return { outcome: 'cancelled' }; } } as any;
+  const services = new RpcServiceRegistry();
+  services.register(sessionRuntimeServiceDescriptor, createSessionRuntimeServiceHandler({ worker: { store, registry, ingress } }));
+  const transport = new LocalRpcTransport(services); const client = new RpcClient(sessionRuntimeServiceDescriptor, transport);
+  const originalGetExistingSession = sessionManager.getExistingSession;
+  let semanticLoads = 0;
+  (sessionManager as any).getExistingSession = async (...args: any[]) => {
+    semanticLoads += 1; return originalGetExistingSession(...args as [string]);
+  };
+  try {
+    assert.deepEqual(await client.call('cancelCompaction', { sessionId }), { outcome: 'none' });
+    assert.equal(store.findOwnership(sessionId), undefined);
+    assert.equal(semanticLoads, 0);
+    assert.equal(workerCalls, 0);
+  } finally {
+    (sessionManager as any).getExistingSession = originalGetExistingSession;
+    transport.close(); store.close();
+    await sessionManager.deleteSession(sessionId).catch(() => {});
     (vector as any).scheduleSessionArchiveIndex = originalScheduleIndex;
   }
 });

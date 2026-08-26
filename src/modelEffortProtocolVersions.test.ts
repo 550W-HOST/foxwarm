@@ -7,9 +7,9 @@ import { mainManagementToolServiceDescriptor } from './mainManagementToolService
 import { nodeExecutionServiceDescriptor } from './nodeExecutionService';
 
 test('versioned runtime DTO additions advance every affected RPC contract', () => {
-  assert.equal(sessionRuntimeServiceDescriptor.version, 9);
-  assert.equal(sessionWorkerRuntimeServiceDescriptor.version, 12);
+  assert.equal(sessionRuntimeServiceDescriptor.version, 10);
+  assert.equal(sessionWorkerRuntimeServiceDescriptor.version, 13);
   assert.equal(sessionWorkerPublicationServiceDescriptor.version, 3);
-  assert.equal(mainManagementToolServiceDescriptor.version, 5);
+  assert.equal(mainManagementToolServiceDescriptor.version, 6);
   assert.equal(nodeExecutionServiceDescriptor.version, 3);
 });

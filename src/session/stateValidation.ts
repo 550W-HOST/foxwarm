@@ -1,5 +1,17 @@
 import { isQueueItem, type Message } from '../types';
 import { MODEL_EFFORTS, type ModelEffort } from '../config';
+const CURRENT_QUEUE_TYPES = new Set(['user', 'intersession', 'background', 'trigger', 'onboot', 'compact-commit']);
+const MAX_UNKNOWN_QUEUE_RECORD_BYTES = 1024 * 1024;
+
+function isBoundedUnknownQueueRecord(value: unknown): boolean {
+  if (!isRecord(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  if (typeof value.type !== 'string' || !value.type.trim() || CURRENT_QUEUE_TYPES.has(value.type)) return false;
+  try {
+    return Buffer.byteLength(JSON.stringify(value), 'utf8') <= MAX_UNKNOWN_QUEUE_RECORD_BYTES;
+  } catch {
+    return false;
+  }
+}
 
 export const CURRENT_SESSION_STATE_VERSION = 1;
 
@@ -106,7 +118,9 @@ export function normalizeAndValidateSessionAuthorityPayload(raw: unknown, label 
     throw new Error(`${label} persistentMemorySnapshot must be a string.`);
   }
   if (value.queue !== undefined && !Array.isArray(value.queue)) throw new Error(`${label} queue must be an array.`);
-  if (current && value.queue?.some((item: unknown) => !isQueueItem(item))) throw new Error(`${label} queue contains an invalid current QueueItem.`);
+  if (current && value.queue?.some((item: unknown) => !isQueueItem(item) && !isBoundedUnknownQueueRecord(item))) {
+    throw new Error(`${label} queue contains an invalid current QueueItem.`);
+  }
   if (value.stats !== undefined) validateStats(value.stats, label);
   if (value.meta !== undefined) validateMeta(value.meta, label);
   if (value.childHandoffState !== undefined) validateChildHandoffState(value.childHandoffState, label);

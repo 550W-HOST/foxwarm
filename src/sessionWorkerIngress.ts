@@ -457,4 +457,17 @@ export class SessionWorkerIngressCoordinator {
     const result = await admitted.completion;
     return { completed: true, compacted: result.compacted, generation: admitted.generation, messageCount: result.projection.messageCount };
   }
+
+  async cancelCompaction(requestedSessionId: string) {
+    const sessionId = this.requireLoadedCatalogSession(requestedSessionId);
+    if (sessionId !== requestedSessionId) throw new RpcError('SESSION_WORKER_COMPACTION_INVALID', 'Compaction cancellation requires an exact canonical session ID.');
+    return this.withMutationAdmission(sessionId, 'cancel compaction work', async () => {
+      const ownership = this.store.findOwnership(sessionId);
+      if (!ownership || ownership.state === 'inactive') return { outcome: 'none' as const };
+      if (ownership.state !== 'ready' || !ownership.incarnationId) {
+        throw new RpcError('SESSION_WORKER_COMPACTION_UNAVAILABLE', 'The exact Session worker is not ready for compaction cancellation.', true);
+      }
+      return this.supervisor.cancelCompactionActivated(sessionId, ownership);
+    });
+  }
 }

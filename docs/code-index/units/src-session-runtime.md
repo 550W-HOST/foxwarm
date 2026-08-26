@@ -12,7 +12,7 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 
 ## Key exports
 
-- `sessionRuntimeServiceDescriptor` — version-9 request/event descriptor.
+- `sessionRuntimeServiceDescriptor` — version-10 request/event descriptor, including placement-neutral compact cancellation.
 - `createSessionRuntimeServiceHandler()` — local authoritative handler over current session-manager operations.
 - `initializeSessionRuntime()` / `shutdownSessionRuntime()` — local service lifecycle and bounded drain.
 - `listSessions()`, `getSession()`, `getHistory()` — immutable local or exact current-Worker projections/snapshots; list requests carry SQL-backed `limit`/`offset` and return a maintained total.
@@ -24,6 +24,7 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 - `enqueue()`, `queueEvent()`, `updateSettings()`, `control()` — high-level mutation commands.
 - `submitAndRun()` — closed ensure-or-spawn Worker ingress; registers one ephemeral full-source context, ensures or spawns the exact Worker owner, submits one durable mailbox item, and returns bounded committed completion.
 - `requestCompaction()` — placement-aware compaction request; local placement keeps SessionManager behavior, while an exact idle Worker uses one awaited fixed forward operation and never a mailbox item.
+- `cancelCompaction()` — placement-aware immediate compact control. Local placement cancels the transient registry and durably removes a ready commit. Under configured Worker placement, inactive/no-owner is a catalog-only `none`; an exact existing owner receives the control without spawn or Main authority hydration.
 - `runBtw()` — placement-neutral side request; local placement uses the BTW adapter and Worker placement ensures the exact owner and invokes its fixed runtime operation.
 - `deleteMessages()`, `clearHistory()`, `forceIndex()`, `refreshSnapshot()`, `notifyManualForkCreated()` — typed exact-owner operations used by normal command/WebUI/lifecycle paths without Main authority hydration.
 - `normalizeSessionWorkerIngressRequest()` — fixed exact-key/plain-data request and QueueItem normalizer with a 1 MiB serialized bound; only its rebuilt clone may reach coordination/storage.

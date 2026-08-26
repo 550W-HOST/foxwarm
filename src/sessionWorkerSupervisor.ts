@@ -77,6 +77,19 @@ export class SessionWorkerLifecycleError extends Error {
   }
 }
 
+export function normalizeSessionWorkerCompactCancelTransportError(error: any): never {
+  const transportCode = typeof error?.code === 'string' ? error.code : '';
+  if (['RPC_DEADLINE_EXCEEDED', 'RPC_UNAVAILABLE', 'RPC_SEND_FAILED', 'RPC_CLOSED'].includes(transportCode)) {
+    throw new RpcError(
+      'SESSION_WORKER_COMPACTION_CANCEL_OUTCOME_UNKNOWN',
+      'Compaction cancellation outcome is unknown because the Worker response was lost; cancellation may already have taken effect. Inspect Session state and history before retrying.',
+      true,
+      { transportCode },
+    );
+  }
+  throw error;
+}
+
 export class SessionWorkerSupervisor {
   private readonly entries = new Map<string, WorkerEntry>();
   private readonly starts = new Map<string, Promise<SessionWorkerSupervisorStatus>>();
@@ -241,6 +254,26 @@ export class SessionWorkerSupervisor {
     try {
       const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
       return await runtime.call('compactAwaited', { request });
+    } finally {
+      entry.activeCalls -= 1;
+      if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);
+    }
+  }
+
+  async cancelCompactionActivated(
+    sessionId: string,
+    expected: Pick<SessionWorkerOwnershipRecord, 'generation' | 'incarnationId'>,
+  ) {
+    this.assertActivatedOwnership(sessionId, expected);
+    const entry = this.entries.get(sessionId)!;
+    entry.activeCalls += 1; this.clearIdleTimer(entry);
+    try {
+      const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+      try {
+        return await runtime.call('cancelCompaction', {}, { timeoutMs: this.stopCompletionTimeoutMs });
+      } catch (error: any) {
+        normalizeSessionWorkerCompactCancelTransportError(error);
+      }
     } finally {
       entry.activeCalls -= 1;
       if (this.entries.get(sessionId) === entry && entry.ready) this.touchEntry(entry);

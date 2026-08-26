@@ -22,6 +22,7 @@ import {
   SessionRuntimeSnapshotResultDto,
   SessionRuntimeForkNotificationResultDto,
   SessionRuntimeBtwResultDto,
+  SessionRuntimeCompactCancellationResultDto,
   SessionListProjectionBatchDto,
   SessionRuntimeWorkerProjectionOptions,
   sessionRuntimeServiceDescriptor,
@@ -111,6 +112,10 @@ export async function queueEvent(
 
 export async function requestCompaction(sessionId: string, keepPercent?: number, toolNoise = false): Promise<SessionRuntimeCompactionResultDto> {
   return (await getClient()).call('requestCompaction', { sessionId, keepPercent, toolNoise: toolNoise || undefined });
+}
+
+export async function cancelCompaction(sessionId: string): Promise<SessionRuntimeCompactCancellationResultDto> {
+  return (await getClient()).call('cancelCompaction', { sessionId });
 }
 
 export async function runBtw(sessionId: string, message: string): Promise<SessionRuntimeBtwResultDto> {
@@ -223,6 +228,7 @@ export type {
   SessionRuntimeControlAction,
   SessionRuntimeControlResultDto,
   SessionRuntimeCompactionResultDto,
+  SessionRuntimeCompactCancellationResultDto,
   SessionRuntimeEventPayloads,
   SessionRuntimeHistoryDto,
   SessionRuntimeSessionDto,

@@ -7,7 +7,7 @@ import test from 'node:test';
 import { RpcError } from './rpc';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { SessionWorkerStore, SessionWorkerStoreOperation } from './sessionWorkerStore';
-import { SessionWorkerLifecycleError, SessionWorkerSupervisor } from './sessionWorkerSupervisor';
+import { normalizeSessionWorkerCompactCancelTransportError, SessionWorkerLifecycleError, SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { buildSessionWorkerProjection } from './sessionWorkerPersistence';
 
 async function waitFor(check: () => boolean, timeoutMs = 5_000): Promise<void> {
@@ -15,6 +15,21 @@ async function waitFor(check: () => boolean, timeoutMs = 5_000): Promise<void> {
   while (Date.now() < deadline) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 20)); }
   assert.fail('Timed out waiting for condition.');
 }
+
+test('compact cancellation transport loss is a stable retryable unknown outcome', () => {
+  for (const code of ['RPC_DEADLINE_EXCEEDED', 'RPC_CLOSED', 'RPC_SEND_FAILED']) {
+    assert.throws(
+      () => normalizeSessionWorkerCompactCancelTransportError(new RpcError(code, 'lost', true)),
+      (error: any) => error?.code === 'SESSION_WORKER_COMPACTION_CANCEL_OUTCOME_UNKNOWN'
+        && error?.retryable === true
+        && error?.details?.transportCode === code
+        && /may already have taken effect/i.test(error.message)
+        && /state and history/i.test(error.message),
+    );
+  }
+  const definite = new RpcError('SESSION_WORKER_COMPACTION_INVALID', 'definite');
+  assert.throws(() => normalizeSessionWorkerCompactCancelTransportError(definite), error => error === definite);
+});
 
 async function createFixture(idleMs: number, options: {
   shouldRestart?: (sessionId: string) => boolean;

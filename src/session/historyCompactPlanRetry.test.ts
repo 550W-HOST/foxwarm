@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 
 import type { ChatResult, Message, MessagePart, Session } from '../types';
+import { SessionAuthorityPostCommitError } from './stateFile';
 
 process.env.FOXWARM_SYNC_FILE_LOG = '1';
 
@@ -86,7 +87,7 @@ function makeDepsForSession(session: Session, saveCounter: { count: number }) {
     getSessionById: (sessionId: string) => sessionId === session.id ? session : undefined,
     getExistingSession: async (sessionId: string) => sessionId === session.id ? session : null,
     saveSession: async (_sessionId: string) => { saveCounter.count += 1; },
-    enqueueSessionItem: async (_sessionId: string) => {},
+    enqueueSessionItem: async (_sessionId: string, _item: any) => {},
     notifyHistoryUpdate: (_sessionId: string, _message: Message) => {},
   };
 }
@@ -160,6 +161,248 @@ test('compact planning retries plain-text/no-tool response and succeeds on a lat
       await fs.remove(path.join((await loadDeps()).tempRoot, 'logs', 'sessions', `${session.id}.blocks.jsonl`)).catch(() => {});
     }
   }
+});
+
+test('awaited compact cancellation aborts its provider signal without changing history', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_cancel_awaited'));
+  const before = structuredClone(session.history);
+  const saveCounter = { count: 0 };
+  const originalChat = llm.chat;
+  let providerStarted!: () => void;
+  const started = new Promise<void>(resolve => { providerStarted = resolve; });
+  try {
+    (llm as any).chat = async (_parts: MessagePart[] | null, _active: Session, _iteration: number, options: any) => {
+      assert(options?.abortSignal instanceof AbortSignal);
+      providerStarted();
+      await new Promise<void>((_resolve, reject) => options.abortSignal.addEventListener('abort', () => {
+        const error = new Error('aborted'); error.name = 'AbortError'; reject(error);
+      }, { once: true }));
+      throw new Error('unreachable');
+    };
+    const running = sessionHistory.processSessionCompactionRequest(
+      makeDepsForSession(session, saveCounter), session.id, { keepPercent: 0.5 }, 'await', 'standalone',
+    );
+    await started;
+    const cancelled = await sessionHistory.cancelSessionCompaction(makeDepsForSession(session, saveCounter), session.id);
+    await running;
+    assert.deepEqual(cancelled, { outcome: 'cancelled', phase: 'planning' });
+    assert.deepEqual(session.history, before);
+    assert.equal(sessionHistory.getCompactOperationOwner(session.id), undefined);
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('ready background compact cancellation durably removes only compact commits and is idempotent', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_cancel_ready'));
+  const before = structuredClone(session.history);
+  const saves = { count: 0 };
+  const originalChat = llm.chat;
+  const ordinary = { type: 'background', parts: [{ text: 'ordinary queued work' }] } as any;
+  session.queue.push(ordinary);
+  try {
+    (llm as any).chat = async (_parts: MessagePart[] | null, _active: Session, _iteration: number, options: any) => {
+      const toolCall = { id: 'cancel-ready', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'ready but cancelled',
+      }] } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    const deps = makeDepsForSession(session, saves);
+    deps.enqueueSessionItem = async (_id: string, item: any) => { session.queue.push(item); };
+    await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'background', 'background');
+    for (let index = 0; index < 100 && !session.queue.some(item => item.type === 'compact-commit'); index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert(session.queue.some(item => item.type === 'compact-commit'));
+    const cancelled = await sessionHistory.cancelSessionCompaction(deps, session.id);
+    assert.deepEqual(cancelled, { outcome: 'cancelled', phase: 'ready' });
+    assert.deepEqual(session.queue, [ordinary]);
+    assert.deepEqual(session.history, before);
+    assert.equal((await sessionHistory.cancelSessionCompaction(deps, session.id)).outcome, 'none');
+    assert(saves.count > 0);
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('background enqueue/cancel race waits for producer cleanup and preserves ordinary queue order', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_cancel_enqueue_race'));
+  const originalChat = llm.chat;
+  const first = { type: 'background', parts: [{ text: 'first' }] } as any;
+  const second = { type: 'background', parts: [{ text: 'second' }] } as any;
+  session.queue.push(first, second);
+  let enqueueEntered!: () => void; let releaseEnqueue!: () => void;
+  const entered = new Promise<void>(resolve => { enqueueEntered = resolve; });
+  const release = new Promise<void>(resolve => { releaseEnqueue = resolve; });
+  try {
+    (llm as any).chat = async (_parts: any, _active: Session, _iteration: number, options: any) => {
+      const toolCall = { id: 'enqueue-race', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'ready enqueue race',
+      }] } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    const deps = makeDepsForSession(session, { count: 0 });
+    deps.enqueueSessionItem = async (_id: string, item: any) => {
+      session.queue.push(item); enqueueEntered(); await release;
+    };
+    await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'background', 'background');
+    await entered;
+    let resolved = false;
+    const cancellation = sessionHistory.cancelSessionCompaction(deps, session.id).then(result => { resolved = true; return result; });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(resolved, false, 'cancellation must await the in-flight enqueue producer');
+    releaseEnqueue();
+    assert.deepEqual(await cancellation, { outcome: 'cancelled', phase: 'enqueueing' });
+    assert.deepEqual(session.queue, [first, second]);
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('pre-existing compact commit still reaches ready cancellation completion without stranding the producer', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_cancel_existing_commit'));
+  const originalChat = llm.chat;
+  const ordinary = { type: 'background', parts: [{ text: 'ordinary before existing compact' }] } as any;
+  session.queue.push(ordinary, { type: 'compact-commit' } as any);
+  try {
+    (llm as any).chat = async (_parts: any, _active: Session, _iteration: number, options: any) => {
+      const toolCall = { id: 'existing-commit', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'new result behind existing commit',
+      }] } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    const deps = makeDepsForSession(session, { count: 0 });
+    await sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'background', 'background');
+    for (let index = 0; index < 100 && sessionHistory.getCompactOperationPhase(session.id) !== 'ready'; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(sessionHistory.getCompactOperationPhase(session.id), 'ready');
+    assert.deepEqual(await sessionHistory.cancelSessionCompaction(deps, session.id), { outcome: 'cancelled', phase: 'ready' });
+    assert.deepEqual(session.queue, [ordinary]);
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('compact cancellation reports completed when the authoritative commit race is already in progress', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_cancel_commit_race'));
+  const originalChat = llm.chat;
+  let saveEntered!: () => void;
+  let releaseSave!: () => void;
+  const entered = new Promise<void>(resolve => { saveEntered = resolve; });
+  const release = new Promise<void>(resolve => { releaseSave = resolve; });
+  try {
+    (llm as any).chat = async (_parts: MessagePart[] | null, _active: Session, _iteration: number, options: any) => {
+      const toolCall = { id: 'commit-race', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'committing result',
+      }] } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    const deps = makeDepsForSession(session, { count: 0 });
+    deps.saveSession = async () => { saveEntered(); await release; };
+    const running = sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'await', 'standalone');
+    await entered;
+    const cancellation = sessionHistory.cancelSessionCompaction(deps, session.id);
+    releaseSave();
+    assert.deepEqual(await cancellation, { outcome: 'completed', phase: 'committing' });
+    await running;
+    assert(session.history.some(message => !!message.__meta?.contextBlock));
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('post-authority save failure marks concurrent cancellation completed and never rolls back', async () => {
+  const { sessionHistory, archive, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_cancel_postcommit_error'));
+  const originalChat = llm.chat;
+  let saveEntered!: () => void; let releaseSave!: () => void;
+  const entered = new Promise<void>(resolve => { saveEntered = resolve; });
+  const release = new Promise<void>(resolve => { releaseSave = resolve; });
+  try {
+    (llm as any).chat = async (_parts: any, _active: Session, _iteration: number, options: any) => {
+      const toolCall = { id: 'postcommit-error', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'authority committed before projection error',
+      }] } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    const deps = makeDepsForSession(session, { count: 0 });
+    deps.saveSession = async () => {
+      saveEntered(); await release;
+      throw new SessionAuthorityPostCommitError('authority committed; projection failed');
+    };
+    const running = sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'await', 'standalone');
+    await entered;
+    const cancellation = sessionHistory.cancelSessionCompaction(deps, session.id);
+    releaseSave();
+    await assert.rejects(running, (error: any) => error?.code === 'SESSION_AUTHORITY_POSTCOMMIT_FAILED');
+    assert.deepEqual(await cancellation, { outcome: 'completed', phase: 'committing' });
+    assert(session.history.some(message => !!message.__meta?.contextBlock));
+    assert(session.history.some(message => message.parts.some(part => (part.system || '').includes('event="compact-completed"'))));
+  } finally { (llm as any).chat = originalChat; }
+});
+
+test('cancellation during final system-prompt snapshot build rolls back before authority replacement', async () => {
+  const { sessionHistory, archive, layeredContext, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_cancel_snapshot_boundary'));
+  const before = structuredClone(session.history);
+  const originalChat = llm.chat;
+  const originalBuild = llm.buildSessionSystemPromptSnapshot;
+  let boundaryEntered!: () => void; let releaseBoundary!: () => void;
+  const entered = new Promise<void>(resolve => { boundaryEntered = resolve; });
+  const release = new Promise<void>(resolve => { releaseBoundary = resolve; });
+  try {
+    (llm as any).chat = async (_parts: any, _active: Session, _iteration: number, options: any) => {
+      const toolCall = { id: 'snapshot-boundary', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'must roll back',
+      }] } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    (llm as any).buildSessionSystemPromptSnapshot = async () => { boundaryEntered(); await release; return 'new snapshot'; };
+    const deps = makeDepsForSession(session, { count: 0 });
+    const running = sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'await', 'standalone');
+    await entered;
+    const cancellation = sessionHistory.cancelSessionCompaction(deps, session.id);
+    releaseBoundary();
+    assert.deepEqual(await cancellation, { outcome: 'cancelled', phase: 'committing' });
+    await running;
+    assert.deepEqual(session.history, before);
+    assert.equal((await layeredContext.readArchiveBlocksByIdRange(session.id)).length, 0);
+  } finally { (llm as any).chat = originalChat; (llm as any).buildSessionSystemPromptSnapshot = originalBuild; }
+});
+
+test('cancellation during completion-message Archive append rolls back blocks and completion rows', async () => {
+  const { sessionHistory, archive, layeredContext, llm } = await loadDeps();
+  const session = await makeCompactableSession(archive, makeSessionId('compact_cancel_completion_archive'));
+  const before = structuredClone(session.history);
+  const originalChat = llm.chat;
+  const originalAppend = archive.appendMessagesToArchive;
+  let boundaryEntered!: () => void; let releaseBoundary!: () => void;
+  const entered = new Promise<void>(resolve => { boundaryEntered = resolve; });
+  const release = new Promise<void>(resolve => { releaseBoundary = resolve; });
+  try {
+    (llm as any).chat = async (_parts: any, _active: Session, _iteration: number, options: any) => {
+      const toolCall = { id: 'completion-archive-boundary', name: 'submit_compact_plan', args: { replaceAsBlocks: [{
+        level: 1, sourceKind: 'message', sourceStart: 1, sourceEnd: 2, summary: 'must roll back archive rows',
+      }] } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+      return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+    };
+    (archive as any).appendMessagesToArchive = async (...args: any[]) => {
+      boundaryEntered(); await release; return originalAppend(...args as Parameters<typeof originalAppend>);
+    };
+    const deps = makeDepsForSession(session, { count: 0 });
+    const running = sessionHistory.processSessionCompactionRequest(deps, session.id, { keepPercent: 0.5 }, 'await', 'standalone');
+    await entered;
+    const cancellation = sessionHistory.cancelSessionCompaction(deps, session.id);
+    releaseBoundary();
+    assert.deepEqual(await cancellation, { outcome: 'cancelled', phase: 'committing' });
+    await running;
+    assert.deepEqual(session.history, before);
+    assert.equal((await layeredContext.readArchiveBlocksByIdRange(session.id)).length, 0);
+    assert.equal((await archive.readArchiveMessagesBySeqRange(session.id, 5, 10)).length, 0);
+  } finally { (llm as any).chat = originalChat; (archive as any).appendMessagesToArchive = originalAppend; }
 });
 
 test('compact planning rejects a block-only plan when raw messages and L1 blocks are both eligible, then repairs it', async () => {

@@ -3,6 +3,7 @@
 Files: src/session/archive.ts, src/session/relations.ts, src/session/managedState.ts, src/session/messageVisibility.ts, src/session/snapshotRefresh.ts, src/session/childSessionReminder.ts, src/session/childHandoffState.ts, src/session/childSessionReminder.test.ts, src/session/childHandoffState.test.ts, src/session/childHandoffFork.test.ts, src/session/sessionResumeDedup.test.ts, src/session/sessionSnapshotAutoRefresh.test.ts
 
 ## Purpose
+Current-v1 authority validation remains strict for every recognized QueueItem type. For read-old compatibility only, one bounded plain record whose nonempty `type` is unrecognized may hydrate into the queue so the canonical runner/Stop finalizer can discard it generically without execution or migration; malformed recognized records remain fatal.
 
 Provides session archiving (persisting messages with canonical image references), parent/child session relationship management, managed session state tracking (leases, inboxes), message visibility control for display-only messages, stale session snapshot auto-refresh logic, and child session completion/reminder signaling.
 

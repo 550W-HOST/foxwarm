@@ -679,6 +679,7 @@ export function setSessionPersistenceFaultInjectorForTests(injector: ((phase: 'h
 
 // Track active in-flight LLM requests so /stop can abort the underlying HTTP call.
 const sessionAbortControllers = new Map<string, AbortController>();
+const standaloneCompactSessions = new Set<string>();
 
 export function setOnHistoryUpdated(callback: (sessionId: string, message: Message) => void) {
   onHistoryUpdated = callback;
@@ -718,10 +719,14 @@ export function abortSessionInFlight(sessionId: string): boolean {
   return true;
 }
 
-export async function requestSessionStop(sessionId: string): Promise<{ abortedInFlight: boolean }> {
+export async function requestSessionStop(sessionId: string): Promise<{ abortedInFlight: boolean; stoppedCurrent: boolean }> {
   const session = await getExistingSession(sessionId);
   if (!session) {
     throw new Error(`Session \`${sessionId}\` not found.`);
+  }
+
+  if (standaloneCompactSessions.has(sessionId)) {
+    return { abortedInFlight: false, stoppedCurrent: false };
   }
 
   session.stopping = true;
@@ -730,7 +735,13 @@ export async function requestSessionStop(sessionId: string): Promise<{ abortedIn
   }
   const abortedInFlight = abortSessionInFlight(sessionId);
   await saveSession(sessionId);
-  return { abortedInFlight };
+  return { abortedInFlight, stoppedCurrent: true };
+}
+
+export async function cancelSessionCompaction(sessionId: string): Promise<sessionHistory.CompactCancellationResult> {
+  const session = await getExistingSession(sessionId);
+  if (!session) throw new Error(`Session \`${sessionId}\` not found.`);
+  return sessionHistory.cancelSessionCompaction(getSessionHistoryDeps(), sessionId);
 }
 
 export async function requestSessionDequeue(sessionId: string): Promise<{
@@ -2515,6 +2526,7 @@ export async function requestSessionCompaction(
   const canRunAwaitedNow = !getManagedSessionState(session) && !session.busy && session.queue.length === 0;
   if (canRunAwaitedNow) {
     await updateSessionBusyState(session, true);
+    standaloneCompactSessions.add(sessionId);
 
     void (async () => {
       try {
@@ -2522,14 +2534,15 @@ export async function requestSessionCompaction(
           keepPercent: options.keepPercent,
           compactGuidance: options.compactGuidance,
           completionMarker: options.completionMarker,
-        }, 'await');
+        }, 'await', 'standalone');
       } catch (error: any) {
         logger.error({ err: error, sessionId }, 'Immediate session compaction failed');
         if (session.broadcast) {
           session.broadcast(`Error: ${error?.message || 'Compaction failed'}`);
         }
       } finally {
-        await updateSessionBusyState(session, false);
+        try { await updateSessionBusyState(session, false); }
+        finally { standaloneCompactSessions.delete(sessionId); }
         if (session.queue.length > 0) {
           void onSessionTriggered?.(sessionId);
         }
@@ -2555,9 +2568,10 @@ export async function requestSessionCompaction(
 export async function processSessionCompactionRequest(
   sessionId: string,
   item: CompactionRequest,
-  executionMode: 'auto' | 'await' | 'background' = 'auto'
+  executionMode: 'auto' | 'await' | 'background' = 'auto',
+  owner: sessionHistory.CompactOperationOwner = 'turn',
 ): Promise<void> {
-  await sessionHistory.processSessionCompactionRequest(getSessionHistoryDeps(), sessionId, item, executionMode);
+  await sessionHistory.processSessionCompactionRequest(getSessionHistoryDeps(), sessionId, item, executionMode, owner);
 }
 
 export async function applyCompletedCompactJob(sessionId: string): Promise<boolean> {

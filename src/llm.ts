@@ -179,6 +179,7 @@ type RequestLlmOnceOptions = {
     toolDefinitions?: ToolDefinition[];
     notifySessionEvents?: boolean;
     registerAbortController?: boolean;
+    abortSignal?: AbortSignal;
     maxRetries?: number;
     timeoutMs?: number;
     onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
@@ -1721,6 +1722,7 @@ export async function chat(
         appendMessage?: (message: Message) => Promise<void>;
         notifySessionEvents?: boolean;
         registerAbortController?: boolean;
+        abortSignal?: AbortSignal;
         onRetry?: (event: LlmRetryEvent) => void | Promise<void>;
         purpose?: LlmRequestPurpose;
         turnId?: string;
@@ -1778,6 +1780,7 @@ export async function chat(
         toolDefinitions: availableToolDefinitions,
         notifySessionEvents: options?.notifySessionEvents,
         registerAbortController: options?.registerAbortController,
+        abortSignal: options?.abortSignal,
         onRetry: options?.onRetry,
         purpose: options?.purpose || 'normal-turn',
         currentSessionEffects: options?.currentSessionEffects,
@@ -2451,6 +2454,9 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     const iteration = options.iteration || 0;
     const responseAttempts: any[] = [];
     const abortController = new AbortController();
+    const abortFromCaller = () => abortController.abort();
+    if (options.abortSignal?.aborted) abortController.abort();
+    else options.abortSignal?.addEventListener('abort', abortFromCaller, { once: true });
     const shouldRegisterAbortController = options.registerAbortController !== false && !!options.sessionId;
     const shouldNotifySessionEvents = options.notifySessionEvents !== false && !!options.sessionId;
     const modelStreamEmitter = createModelStreamEventEmitter({
@@ -2733,6 +2739,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             }
         }
     } finally {
+        options.abortSignal?.removeEventListener('abort', abortFromCaller);
         modelStreamEmitter.flush();
         if (shouldRegisterAbortController) {
             if (options.currentSessionEffects) options.currentSessionEffects.clearAbortController(options.sessionId!, abortController);

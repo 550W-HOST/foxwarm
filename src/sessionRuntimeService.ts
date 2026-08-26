@@ -26,6 +26,7 @@ import {
   applyNormalizedSessionModelEffortSettings,
   normalizeProspectiveSessionModelEffortSettings,
 } from './session/modelEffortSettings';
+import type { CompactCancellationResult } from './session/history';
 
 export type SessionRuntimeTokenTotalsDto = {
   cachedTokens: number;
@@ -114,6 +115,7 @@ export type SessionRuntimeForkNotificationResultDto = {
   result: 'appended' | 'queued';
 };
 export type SessionRuntimeBtwResultDto = { text: string; toolDenied: boolean };
+export type SessionRuntimeCompactCancellationResultDto = CompactCancellationResult;
 
 export type SessionRuntimeControlAction = 'stop' | 'dequeue' | 'retry';
 export type SessionRuntimeControlResultDto = {
@@ -141,7 +143,7 @@ export type SessionListProjectionBatchDto = {
   revision: string;
 };
 
-export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 9, {
+export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 10, {
   getSession: rpcMethod<{ sessionId: string }, { session: SessionRuntimeSessionDto | null }>(),
   listSessions: rpcMethod<{ limit?: number; offset?: number }, { sessions: SessionRuntimeSessionDto[]; total: number }>(),
   getSessionListProjections: rpcMethod<{ sessionIds: string[]; includeVolatile?: boolean; currentOwnersOnly?: boolean }, SessionListProjectionBatchDto>(),
@@ -149,6 +151,7 @@ export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime
   enqueue: rpcMethod<{ sessionId: string; item: QueueItem }, { accepted: true }>(),
   submitAndRun: rpcMethod<{ sessionId: string; item: QueueItem }, SessionWorkerIngressResult>(),
   requestCompaction: rpcMethod<{ sessionId: string; keepPercent?: number; toolNoise?: boolean }, SessionRuntimeCompactionResultDto>(),
+  cancelCompaction: rpcMethod<{ sessionId: string }, SessionRuntimeCompactCancellationResultDto>(),
   runBtw: rpcMethod<{ sessionId: string; message: string }, SessionRuntimeBtwResultDto>(),
   queueEvent: rpcMethod<{
     sessionId: string;
@@ -649,6 +652,17 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         return { kind: 'tool-noise', result: await sessionManager.compactSessionToolMessages(selection.canonicalId, input.keepPercent) };
       }
       return { kind: 'local', ...await sessionManager.requestSessionCompaction(selection.canonicalId, { keepPercent: input.keepPercent }) };
+    },
+    async cancelCompaction(input) {
+      const requestedId = normalizeSessionId(input.sessionId);
+      const selection = workerSelection(requestedId);
+      if (options?.worker && selection.kind === 'local') return { outcome: 'none' };
+      if (selection.kind === 'unavailable') throw new RpcError('SESSION_WORKER_COMPACTION_UNAVAILABLE', 'Committed Worker state is unavailable.', true);
+      if (selection.kind === 'worker') {
+        if (!options?.worker?.ingress) throw new RpcError('SESSION_WORKER_COMPACTION_UNAVAILABLE', 'Session-worker compaction cancellation is unavailable.', true);
+        return options.worker.ingress.cancelCompaction(selection.canonicalId);
+      }
+      return sessionManager.cancelSessionCompaction(selection.canonicalId);
     },
     async runBtw(input) {
       const requestedId = normalizeSessionId(input.sessionId);

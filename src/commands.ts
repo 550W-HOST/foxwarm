@@ -228,17 +228,36 @@ export const COMMANDS: Record<string, CommandDef> = {
     }
   },
   '/stop': {
-    description: 'Stop current run and commit queued inputs to history without running them',
+    description: 'Stop current run, or use `/stop compact` to cancel compaction only',
+    usage: '[compact]',
     requiresSession: true,
-    handler: async (ctx, _args, sessionId, session) => {
+    autocomplete: { children: [{ value: 'compact', kind: 'literal', description: 'Cancel active or pending compaction without stopping the current run', usage: '/stop compact' }] },
+    handler: async (ctx, args, sessionId, session) => {
       if (!sessionId || !session) return
+      if (args.length > 0) {
+        if (args.length !== 1 || args[0] !== 'compact') {
+          ctx.reply('Usage: `/stop` or `/stop compact`')
+          return
+        }
+        try {
+          const result = await sessionRuntime.cancelCompaction(sessionId)
+          if (result.outcome === 'none') ctx.reply('⚠️ No active compaction to cancel.')
+          else if (result.outcome === 'completed') ctx.reply('⚠️ Compaction had already committed; cancellation was too late.')
+          else ctx.reply('🛑 Compaction cancelled. The current Session run was not stopped.')
+        } catch (e: any) { ctx.reply(`❌ Compaction cancellation failed: ${e.message}`) }
+        return
+      }
       // Use the placement-neutral runtime view: under Session-worker placement
       // the raw catalog stub's busy flag is only refreshed at handback, so it
       // would falsely report "not running" mid-turn.
       const runtime = await sessionRuntime.getSession(sessionId)
       if (!runtime?.busy) { ctx.reply('⚠️ Session is not currently running.'); return }
       try {
-        const { abortedInFlight } = await sessionRuntime.control(sessionId, 'stop')
+        const { abortedInFlight, stoppedCurrent } = await sessionRuntime.control(sessionId, 'stop')
+        if (stoppedCurrent === false) {
+          ctx.reply('⚠️ No main Session run was stopped. Compaction continues; use `/stop compact` to cancel it.')
+          return
+        }
         const queuedNote = (runtime.queueLength ?? 0) > 0
           ? ' Queued inputs will be added to history without being run.'
           : ''
