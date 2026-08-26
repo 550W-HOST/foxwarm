@@ -49,6 +49,19 @@ test('agent deletion rejects immutable and inherited workspaces and removes an i
         await fs.ensureDir(config.getAgentDir('owned-agent'));
         const created = await sm.createSessionInAgent({ agentName: 'owned-agent', sessionName: 'main' });
         const delegatedSessionIds = [];
+        const ownedSession = await sm.getExistingSession(created.sessionId);
+        ownedSession.busy = true;
+        await sm.saveSession(ownedSession);
+        await assert.rejects(
+          () => sm.deleteAgent('owned-agent', async sessionId => {
+            delegatedSessionIds.push(sessionId);
+            return sm.deleteSession(sessionId);
+          }),
+          /active sessions: owned-agent\/main/,
+        );
+        assert.deepEqual(delegatedSessionIds, []);
+        ownedSession.busy = false;
+        await sm.saveSession(ownedSession);
         const ownedResult = await sm.deleteAgent('owned-agent', async sessionId => {
           delegatedSessionIds.push(sessionId);
           return sm.deleteSession(sessionId);
@@ -65,7 +78,7 @@ test('agent deletion rejects immutable and inherited workspaces and removes an i
   }
 });
 
-test('agent deletion rejects an authoritative queued Session after restart without partial deletion', async () => {
+test('agent deletion discards queued Session work and stays deleted after restart', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-agent-deletion-restart-'));
   try {
     runIsolatedScript(tempRoot, String.raw`
@@ -79,7 +92,7 @@ test('agent deletion rejects an authoritative queued Session after restart witho
         await metadata.setAgentMetadata('queued-agent', { isolated: true, isolatedNode: 'node-a' });
         const queued = await sm.createSessionInAgent({ agentName: 'queued-agent', sessionName: 'queued' });
         const idle = await sm.createSessionInAgent({ agentName: 'queued-agent', sessionName: 'idle' });
-        await sm.enqueueSessionItem(queued.sessionId, { type: 'user', parts: [{ text: 'must survive rejection' }] });
+        await sm.enqueueSessionItem(queued.sessionId, { type: 'user', parts: [{ text: 'discard with confirmed Agent deletion' }] });
         assert.equal((await sm.getExistingSession(queued.sessionId)).queue.length, 1);
         assert.ok(sm.getSessionCatalog(idle.sessionId));
         process.exit(0);
@@ -91,6 +104,7 @@ test('agent deletion rejects an authoritative queued Session after restart witho
       const fs = require('fs-extra');
       const path = require('node:path');
       const sm = require('./lib/sessionManager.js');
+      const { deleteSessionLifecycle } = require('./lib/sessionDeletion.js');
       const metadata = require('./lib/session/agentMetadata.js');
       const config = require('./lib/config.js');
       (async () => {
@@ -102,22 +116,41 @@ test('agent deletion rejects an authoritative queued Session after restart witho
         assert.equal(sm.getSessionCatalog(idleId).queue.length, 0);
 
         const delegatedSessionIds = [];
+        const result = await sm.deleteAgent('queued-agent', async sessionId => {
+          delegatedSessionIds.push(sessionId);
+          const deletion = await deleteSessionLifecycle({ requestedSessionId: sessionId, includeDescendants: false });
+          assert.notEqual(deletion.status, 'busy');
+          return deletion.status === 'deleted';
+        });
+        assert.deepEqual(new Set(delegatedSessionIds), new Set([queuedId, idleId]));
+        assert.deepEqual(new Set(result.deletedSessions), new Set([queuedId, idleId]));
+        assert.equal(await fs.pathExists(config.getAgentDir('queued-agent')), false);
+        assert.deepEqual(metadata.getAgentMetadata('queued-agent'), {});
+        assert.equal(await fs.pathExists(path.join(config.SESSIONS_DIR, queuedId + '.json')), false);
+        assert.equal(await fs.pathExists(path.join(config.SESSIONS_DIR, idleId + '.json')), false);
+        assert.equal(sm.getSessionCatalog(queuedId), undefined);
+        assert.equal(sm.getSessionCatalog(idleId), undefined);
+        process.exit(0);
+      })().catch(error => { console.error(error.stack || error); process.exit(1); });
+    `);
+
+    runIsolatedScript(tempRoot, String.raw`
+      const assert = require('node:assert/strict');
+      const fs = require('fs-extra');
+      const sm = require('./lib/sessionManager.js');
+      const config = require('./lib/config.js');
+      (async () => {
+        await sm.loadSessions();
+        assert.equal(sm.getSessionCatalog('queued-agent/queued'), undefined);
+        assert.equal(sm.getSessionCatalog('queued-agent/idle'), undefined);
+        assert.equal(await sm.getExistingSession('queued-agent/queued'), null);
+        assert.equal(await fs.pathExists(config.getAgentDir('queued-agent')), false);
+
+        await sm.createAgentWithMainSession({ agentName: 'queued-agent', createMainSession: false });
         await assert.rejects(
-          () => sm.deleteAgent('queued-agent', async sessionId => {
-            delegatedSessionIds.push(sessionId);
-            return sm.deleteSession(sessionId);
-          }),
-          /active or queued sessions: queued-agent\/queued/,
+          () => sm.createSessionInAgent({ agentName: 'queued-agent', sessionName: 'queued' }),
+          error => error && error.code === sm.ARCHIVED_SESSION_ID_ERROR_CODE,
         );
-        assert.deepEqual(delegatedSessionIds, [], 'preflight rejects before the first Session deletion');
-        assert.equal(await fs.pathExists(config.getAgentDir('queued-agent')), true);
-        assert.deepEqual(metadata.getAgentMetadata('queued-agent'), { isolated: true, isolatedNode: 'node-a' });
-        assert.equal(await fs.pathExists(path.join(config.SESSIONS_DIR, queuedId + '.json')), true);
-        assert.equal(await fs.pathExists(path.join(config.SESSIONS_DIR, idleId + '.json')), true);
-        const queued = await sm.getExistingSession(queuedId);
-        assert.equal(queued.queue.length, 1);
-        assert.equal(queued.queue[0].parts[0].text, 'must survive rejection');
-        assert.ok(await sm.getExistingSession(idleId));
         process.exit(0);
       })().catch(error => { console.error(error.stack || error); process.exit(1); });
     `);

@@ -1516,7 +1516,7 @@ export class WebUIChannel implements Channel {
             res.json({ success: true, agentId, deletedSessions: result.deletedSessions });
           } catch (e: any) {
             const message = e instanceof Error ? e.message : String(e);
-            const status = /not found/i.test(message) ? 404 : /active|busy|queued|attached|inherited by|mutation|deletion stopped/i.test(message) ? 409 : 400;
+            const status = /not found/i.test(message) ? 404 : /active|busy|attached|inherited by|mutation|deletion stopped/i.test(message) ? 409 : 400;
             res.status(status).json({ error: message });
           }
         },
