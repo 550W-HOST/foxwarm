@@ -137,11 +137,87 @@ export interface PersistentExecManagerOptions {
   isEntryRunning?: (entry: RunningExecEntry) => boolean | Promise<boolean>;
   readEntryWorkingDirectory?: (entry: RunningExecEntry) => Promise<string | null>;
   onRegistryIdle?: () => void;
+  /** Test seam for petname selection. Production uses crypto.randomInt. */
+  randomInt?: (maxExclusive: number) => number;
   logger?: {
     info?: (payload?: any, message?: string) => void;
     warn?: (payload?: any, message?: string) => void;
     error?: (payload?: any, message?: string) => void;
   };
+}
+
+const EXEC_ID_ADJECTIVES = [
+  'amber', 'brisk', 'calm', 'clear', 'cool', 'coral', 'crisp', 'deft',
+  'eager', 'fair', 'gentle', 'green', 'happy', 'ivory', 'jolly', 'keen',
+  'lively', 'lucid', 'mellow', 'misty', 'navy', 'neat', 'quiet', 'rapid',
+  'silver', 'solar', 'steady', 'swift', 'tidy', 'vivid', 'warm', 'wise',
+  'airy', 'bold', 'bright', 'cozy', 'dry', 'even', 'fresh', 'golden',
+  'grand', 'light', 'lucky', 'marine', 'merry', 'mild', 'nimble', 'noble',
+  'plain', 'prime', 'ready', 'rosy', 'round', 'safe', 'sharp', 'soft',
+  'sound', 'sunny', 'true', 'urban', 'velvet', 'wild', 'young', 'zesty',
+  'agile', 'alert', 'alpine', 'able', 'azure', 'balmy', 'breezy', 'candid',
+  'cheery', 'clever', 'cosmic', 'dapper', 'earnest', 'earthy', 'fluent', 'glowing',
+  'graceful', 'hardy', 'hazy', 'humble', 'ideal', 'jaunty', 'kind', 'lovely',
+  'loyal', 'magic', 'modern', 'modest', 'natural', 'patient', 'playful', 'open',
+  'peachy', 'peaceful', 'polished', 'proud', 'pure', 'radiant', 'robust', 'royal',
+  'precise', 'rural', 'sandy', 'serene', 'simple', 'sleek', 'smart', 'smooth',
+  'snowy', 'stable', 'sturdy', 'subtle', 'tender', 'tranquil', 'trusty', 'upbeat',
+  'verdant', 'vital', 'welcome', 'windy', 'winsome', 'woody', 'worthy', 'yellow',
+] as const;
+const EXEC_ID_NOUNS = [
+  'badger', 'beacon', 'cedar', 'comet', 'coral', 'crane', 'dolphin', 'ember',
+  'falcon', 'fern', 'finch', 'fox', 'harbor', 'heron', 'island', 'lantern',
+  'lynx', 'maple', 'meadow', 'otter', 'owl', 'panda', 'pebble', 'pine',
+  'quartz', 'raven', 'river', 'sparrow', 'spruce', 'tiger', 'willow', 'wren',
+  'acorn', 'birch', 'brook', 'canyon', 'clover', 'cloud', 'cove', 'dune',
+  'elm', 'field', 'grove', 'hill', 'lake', 'lark', 'lotus', 'marsh',
+  'moon', 'moss', 'oasis', 'orchid', 'peak', 'petal', 'plume', 'pond',
+  'reef', 'ridge', 'star', 'stone', 'summit', 'trail', 'vale', 'wave',
+  'agate', 'alder', 'alpaca', 'anchor', 'antler', 'apple', 'aspen', 'atlas',
+  'aurora', 'bamboo', 'barley', 'basil', 'bay', 'bayou', 'beach', 'bear',
+  'bee', 'bell', 'berry', 'bison', 'blossom', 'bluebird', 'boat', 'boulder',
+  'branch', 'breeze', 'bridge', 'buffalo', 'butterfly', 'cabin', 'cactus', 'camel',
+  'canary', 'cape', 'cardinal', 'caribou', 'carp', 'castle', 'cave', 'cherry',
+  'chestnut', 'cicada', 'cliff', 'coast', 'copper', 'creek', 'cricket', 'crow',
+  'cypress', 'dahlia', 'daisy', 'deer', 'delta', 'desert', 'dew', 'dogwood',
+  'dove', 'dragon', 'drift', 'eagle', 'earth', 'egret', 'fawn', 'feather',
+  'firefly', 'fjord', 'flame', 'flint', 'flora', 'flower', 'forest', 'fountain',
+  'garden', 'gazelle', 'gecko', 'glacier', 'glade', 'granite', 'grass', 'gull',
+  'hawk', 'hazel', 'heather', 'honey', 'horizon', 'horse', 'ibis', 'iris',
+  'jade', 'jasmine', 'jay', 'juniper', 'kelp', 'kingfisher', 'kiwi', 'lagoon',
+  'lavender', 'leaf', 'lemon', 'leopard', 'lighthouse', 'lilac', 'lily', 'lion',
+  'mango', 'marina', 'marten', 'merlin', 'mesa', 'meteor', 'mint', 'monarch',
+  'morning', 'mountain', 'nectar', 'nightingale', 'oak', 'ocean', 'olive', 'opal',
+  'orange', 'oriole', 'palm', 'panther', 'papaya', 'parrot', 'pasture', 'peach',
+  'pear', 'pearl', 'pelican', 'perch', 'phoenix', 'pigeon', 'pinecone', 'planet',
+  'plateau', 'poplar', 'prairie', 'puffin', 'puma', 'quail', 'rabbit', 'rain',
+  'rainbow', 'redwood', 'robin', 'rose', 'rosewood', 'sage', 'salmon', 'sand',
+  'savanna', 'seabird', 'seal', 'sequoia', 'shadow', 'shark', 'shell', 'shore',
+  'sky', 'slope', 'snail', 'snow', 'songbird', 'sonnet', 'spring', 'stream',
+  'sun', 'sunset', 'swan', 'tern', 'thistle', 'thunder', 'topaz', 'toucan',
+  'trout', 'tulip', 'turtle', 'valley', 'vine', 'violet', 'walnut', 'water',
+  'waterfall', 'weasel', 'whale', 'wheat', 'wolf', 'wood', 'yarrow', 'zebra',
+  'zephyr', 'harvest', 'hemlock', 'hickory', 'holly', 'magnolia', 'mulberry', 'nectarine',
+] as const;
+export const PERSISTENT_EXEC_ID_PATTERN = /^[a-z]+-[a-z]+$/;
+export const PERSISTENT_EXEC_ID_NAMESPACE_SIZE = EXEC_ID_ADJECTIVES.length * EXEC_ID_NOUNS.length;
+export const PERSISTENT_EXEC_ID_MAX_ATTEMPTS = 128;
+export const PERSISTENT_EXEC_RECENT_ID_LIMIT = 1024;
+export const PERSISTENT_EXEC_ID_COLLISION_CODE = 'PERSISTENT_EXEC_ID_COLLISION';
+
+export class PersistentExecIdCollisionError extends Error {
+  readonly code = PERSISTENT_EXEC_ID_COLLISION_CODE;
+  constructor(id: string) { super(`Persistent exec \`${id}\` already exists or is retained as a recent completion identity.`); }
+}
+
+export function generatePersistentExecPetname(randomInt: (maxExclusive: number) => number = max => crypto.randomInt(max)): string {
+  const adjectiveIndex = randomInt(EXEC_ID_ADJECTIVES.length);
+  const nounIndex = randomInt(EXEC_ID_NOUNS.length);
+  if (!Number.isInteger(adjectiveIndex) || adjectiveIndex < 0 || adjectiveIndex >= EXEC_ID_ADJECTIVES.length
+    || !Number.isInteger(nounIndex) || nounIndex < 0 || nounIndex >= EXEC_ID_NOUNS.length) {
+    throw new Error('Persistent exec petname random source returned an out-of-range value.');
+  }
+  return `${EXEC_ID_ADJECTIVES[adjectiveIndex]}-${EXEC_ID_NOUNS[nounIndex]}`;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -354,6 +430,9 @@ export class PersistentExecManager {
   private reconcileTimer: NodeJS.Timeout | null = null;
   private reconcileChain: Promise<void> = Promise.resolve();
   private registryMutationChain: Promise<void> = Promise.resolve();
+  private execIdAllocationChain: Promise<void> = Promise.resolve();
+  private readonly reservedExecIds = new Set<string>();
+  private recentExecIds: string[] = [];
   private readonly completionDispatcher: ExecCompletionDispatcher;
 
   constructor(private readonly options: PersistentExecManagerOptions) {
@@ -378,11 +457,35 @@ export class PersistentExecManager {
     await fs.ensureDir(path.dirname(registryPath));
     const tempPath = `${registryPath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
     try {
-      await fs.writeJson(tempPath, { execs: Array.from(this.runningExecs.values()) }, { spaces: 2 });
+      await fs.writeJson(tempPath, { execs: Array.from(this.runningExecs.values()), recentExecIds: this.recentExecIds }, { spaces: 2 });
       await fs.rename(tempPath, registryPath);
     } catch (err) {
       await fs.remove(tempPath).catch(() => {});
       throw err;
+    }
+  }
+
+  private async reserveExecId(requested?: string): Promise<string> {
+    let release!: () => void;
+    const previous = this.execIdAllocationChain;
+    this.execIdAllocationChain = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    try {
+      if (requested !== undefined) {
+        if (!PERSISTENT_EXEC_ID_PATTERN.test(requested)) throw new Error('Persistent exec ID must be a lowercase adjective+noun petname such as `quiet-otter`.');
+        if (this.runningExecs.has(requested) || this.reservedExecIds.has(requested) || this.recentExecIds.includes(requested)) throw new PersistentExecIdCollisionError(requested);
+        this.reservedExecIds.add(requested);
+        return requested;
+      }
+      for (let attempt = 0; attempt < PERSISTENT_EXEC_ID_MAX_ATTEMPTS; attempt++) {
+        const candidate = generatePersistentExecPetname(this.options.randomInt);
+        if (this.runningExecs.has(candidate) || this.reservedExecIds.has(candidate) || this.recentExecIds.includes(candidate)) continue;
+        this.reservedExecIds.add(candidate);
+        return candidate;
+      }
+      throw new Error(`Persistent exec petname space did not yield a unique ID after ${PERSISTENT_EXEC_ID_MAX_ATTEMPTS} attempts.`);
+    } finally {
+      release();
     }
   }
 
@@ -404,6 +507,9 @@ export class PersistentExecManager {
 
     try {
       const data = await fs.readJson(registryPath);
+      this.recentExecIds = Array.isArray(data?.recentExecIds)
+        ? [...new Set<string>((data.recentExecIds as unknown[]).filter((id: unknown): id is string => typeof id === 'string' && PERSISTENT_EXEC_ID_PATTERN.test(id)))].slice(-PERSISTENT_EXEC_RECENT_ID_LIMIT)
+        : [];
       const rawExecs = Array.isArray(data?.execs) ? data.execs : [];
       for (const raw of rawExecs) {
         if (!raw || typeof raw !== 'object') continue;
@@ -442,6 +548,7 @@ export class PersistentExecManager {
     let becameIdle = false;
     await this.commitRegistryMutation(() => {
       this.runningExecs.delete(id);
+      if (!this.recentExecIds.includes(id)) this.recentExecIds = [...this.recentExecIds, id].slice(-PERSISTENT_EXEC_RECENT_ID_LIMIT);
       becameIdle = this.runningExecs.size === 0;
     });
     if (becameIdle) this.options.onRegistryIdle?.();
@@ -551,15 +658,14 @@ export class PersistentExecManager {
     await fs.ensureDir(tempDir);
     await fs.ensureDir(dateDir);
 
-    const execId = options.execId || `exec_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-    if (!/^exec_[A-Za-z0-9_-]{8,160}$/.test(execId)) throw new Error('Persistent exec ID is invalid.');
-    if (this.runningExecs.has(execId)) throw new Error(`Persistent exec \`${execId}\` already exists.`);
+    const execId = await this.reserveExecId(options.execId);
     const processOperations = this.processOperations;
     const platform = processOperations.platform;
     const scriptPath = `${path.join(dateDir, execId)}.command${platform === 'win32' ? '.ps1' : '.sh'}`;
     const commandScriptPath = platform === 'win32' ? `${path.join(dateDir, execId)}.user.ps1` : undefined;
     const pathsPath = path.join(dateDir, `${execId}.paths.json`);
 
+    try {
     if (commandScriptPath) {
       await fs.writeFile(commandScriptPath, `${command}${command.endsWith('\n') ? '' : '\n'}`);
     }
@@ -624,6 +730,9 @@ export class PersistentExecManager {
     });
     this.options.logger?.info?.({ execId: entry.id, pid: entry.pid, sessionId, nodeId }, 'Persistent exec started');
     return entry;
+    } finally {
+      this.reservedExecIds.delete(execId);
+    }
   }
 
   private async readExecCwd(cwdPath: string): Promise<string | null> {
@@ -857,14 +966,14 @@ export class PersistentExecManager {
     const trailingNewlineLine = !partialOutput.capturedOutputWasEmpty && !partialOutput.capturedOutputEndedWithLf
       ? 'Partial output captured so far had no trailing newline.\n'
       : '';
-    return `Partial Output:\n${partialOutput.text}${footerSeparator}---\n${fullNotice}\n${trailingNewlineLine}${warningLine}${nodeLine}PID: ${entry.pid}\n${processTree}\nLog file: ${entry.logPath}${sizeLine}${conversionNote}`;
+    return `Partial Output:\n${partialOutput.text}${footerSeparator}---\n${fullNotice}\n${trailingNewlineLine}${warningLine}execId: ${entry.id}\n${nodeLine}PID: ${entry.pid}\n${processTree}\nLog file: ${entry.logPath}${sizeLine}${conversionNote}`;
   }
 
   buildCompletionMessage(entry: RunningExecEntry, status: ExecStatus): string {
     const exitText = status.exitCode === null ? 'unknown' : String(status.exitCode);
     const nodeLine = entry.nodeId && entry.nodeId !== 'master' ? `\nNode: \`${entry.nodeId}\`` : '';
     const errorLine = status.error ? `\nError: ${status.error}` : '';
-    return `Background Process Finished\ncommand: \`${escapeInlineCode(summarizeCommandForNotification(entry.command))}\`${nodeLine}\nExit code: ${exitText}${errorLine}\nCommand output in ${entry.logPath}`;
+    return `Background Process Finished\nexecId: ${entry.id}\ncommand: \`${escapeInlineCode(summarizeCommandForNotification(entry.command))}\`${nodeLine}\nExit code: ${exitText}${errorLine}\nCommand output in ${entry.logPath}`;
   }
 
   async readFinishedExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null> {

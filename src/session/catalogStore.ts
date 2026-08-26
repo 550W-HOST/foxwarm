@@ -102,6 +102,10 @@ function buildWaitPresentationProjection(value: unknown): Record<string, any> | 
   }
   const waitExecIds = boundedStringArray(wait.waitExecIds, MAX_WAIT_TARGETS, MAX_WAIT_EXEC_ID_LENGTH);
   if (waitExecIds) projection.waitExecIds = waitExecIds;
+  const waitAnySessions = boundedStringArray(wait.waitAnySessions, MAX_WAIT_TARGETS, MAX_WAIT_SESSION_ID_LENGTH);
+  if (waitAnySessions) projection.waitAnySessions = waitAnySessions;
+  if (wait.waitForInput === true) projection.waitForInput = true;
+  if (wait.declarationVersion === 1) projection.declarationVersion = 1;
   if (wait.waitAll && typeof wait.waitAll === 'object' && !Array.isArray(wait.waitAll)) {
     const sessions = boundedStringArray(wait.waitAll.sessions, MAX_WAIT_TARGETS, MAX_WAIT_SESSION_ID_LENGTH);
     const satisfiedSessions = boundedStringArray(wait.waitAll.satisfiedSessions, MAX_WAIT_TARGETS, MAX_WAIT_SESSION_ID_LENGTH);
@@ -165,6 +169,8 @@ export function buildSessionCatalogProjection(value: unknown): Record<string, an
   for (const field of ['lastMessageTime', 'messageCount', 'lastChannel'] as const) {
     if (metadata.meta?.[field] !== undefined) meta[field] = structuredClone(metadata.meta[field]);
   }
+  const waitLivenessFingerprints = boundedStringArray(metadata.meta?.waitLivenessFingerprints, 16, 128);
+  if (waitLivenessFingerprints) meta.waitLivenessFingerprints = waitLivenessFingerprints;
   const waitPresentation = buildWaitPresentationProjection(metadata.meta?.wait);
   if (waitPresentation) meta.wait = waitPresentation;
   if (meta.lastChannel !== undefined) {

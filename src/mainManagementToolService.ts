@@ -19,6 +19,7 @@ import { buildSessionListOutput } from './sessionStatus';
 import type { SessionWorkerStore } from './sessionWorkerStore';
 import type { Session } from './types';
 import type { SessionRuntimeHistoryDto } from './sessionRuntimeService';
+import { armWaitLivenessDiagnostic, initializeWaitLivenessDiagnostics } from './waitLiveness';
 
 export const MAIN_MANAGEMENT_TOOL_OPERATIONS = [
   'send_to_session',
@@ -52,10 +53,16 @@ export type MainManagementToolRequest = {
 export type MainManagementToolResponse = { result: unknown };
 export type ScheduleWaitTimeoutRequest = { sourceSessionId: string; waitId: string; timeoutSeconds: number };
 export type ScheduleWaitTimeoutResponse = { scheduled: true; waitId: string };
+export type ValidateWaitSessionsRequest = { sourceSessionId: string; sessionIds: string[] };
+export type ValidateWaitSessionsResponse = { sessionIds: string[] };
+export type ArmWaitLivenessRequest = { sourceSessionId: string; waitId: string };
+export type ArmWaitLivenessResponse = { armed: true };
 
-export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 6, {
+export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 7, {
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),
   scheduleWaitTimeout: rpcMethod<ScheduleWaitTimeoutRequest, ScheduleWaitTimeoutResponse>(),
+  validateWaitSessions: rpcMethod<ValidateWaitSessionsRequest, ValidateWaitSessionsResponse>(),
+  armWaitLiveness: rpcMethod<ArmWaitLivenessRequest, ArmWaitLivenessResponse>(),
 });
 
 const allowedOperations = new Set<string>(MAIN_MANAGEMENT_TOOL_OPERATIONS);
@@ -128,6 +135,7 @@ export function createMainManagementToolServiceHandler(options: {
   workerStore?: SessionWorkerStore;
   readSessionHistory?: (sessionId: string) => Promise<SessionRuntimeHistoryDto | null>;
 } = {}): RpcServiceHandler<typeof mainManagementToolServiceDescriptor> {
+  initializeWaitLivenessDiagnostics();
   const assertExpectedSource = (sourceSessionId: string): void => {
     if (options.expectedSourceSessionId && sourceSessionId !== options.expectedSourceSessionId) {
       throw new RpcError('MAIN_MANAGEMENT_SOURCE_MISMATCH', `Main management reverse source must be \`${options.expectedSourceSessionId}\`.`);
@@ -266,6 +274,30 @@ export function createMainManagementToolServiceHandler(options: {
       }
       await timers.createWaitTimeoutTimer({ sessionId: sourceSessionId, waitId, timeoutSeconds: input.timeoutSeconds });
       return { scheduled: true, waitId };
+    },
+    async validateWaitSessions(input) {
+      if (!input || typeof input !== 'object' || Array.isArray(input)
+        || Object.keys(input).length !== 2
+        || typeof input.sourceSessionId !== 'string'
+        || !Array.isArray(input.sessionIds)
+        || input.sessionIds.length < 1 || input.sessionIds.length > 64
+        || input.sessionIds.some(id => typeof id !== 'string' || !id.trim() || id.length > 512)) {
+        throw new RpcError('MAIN_MANAGEMENT_INVALID_WAIT_SESSIONS', 'validateWaitSessions requires sourceSessionId and 1-64 non-empty sessionIds.');
+      }
+      const sourceSessionId = normalizeSourceSessionId(input.sourceSessionId);
+      assertExpectedSource(sourceSessionId);
+      return { sessionIds: await sessionManager.validateSessionWaitTargets(sourceSessionId, input.sessionIds) };
+    },
+    async armWaitLiveness(input) {
+      if (!input || typeof input !== 'object' || Array.isArray(input)
+        || Object.keys(input).length !== 2
+        || typeof input.sourceSessionId !== 'string' || typeof input.waitId !== 'string' || !input.waitId.trim()) {
+        throw new RpcError('MAIN_MANAGEMENT_INVALID_WAIT_LIVENESS', 'armWaitLiveness requires sourceSessionId and waitId.');
+      }
+      const sourceSessionId = normalizeSourceSessionId(input.sourceSessionId);
+      assertExpectedSource(sourceSessionId);
+      armWaitLivenessDiagnostic(sourceSessionId, input.waitId);
+      return { armed: true };
     },
   };
 }

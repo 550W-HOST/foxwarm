@@ -1,5 +1,5 @@
 export type SessionRuntimeStateName = 'requesting-model' | 'running-tool' | 'waiting' | 'idle'
-export type SessionRuntimeWaitingFor = 'sessions' | 'exec' | 'timer'
+export type SessionRuntimeWaitingFor = 'all-sessions' | 'any-session' | 'exec' | 'input' | 'fallback'
 
 export interface SessionRuntimeState {
   state: SessionRuntimeStateName
@@ -27,11 +27,13 @@ export interface SessionRuntimeState {
     waitingFor: SessionRuntimeWaitingFor
     reason?: string
     waitAllSessions?: string[]
+    waitAnySessions?: string[]
     satisfiedSessions?: string[]
     pendingSessions?: string[]
     timeoutSeconds?: number
     timeoutAt?: number
     waitExecIds?: string[]
+    waitForInput?: true
   }
 }
 
@@ -80,17 +82,19 @@ export function getRuntimeStateSummary(runtimeState?: SessionRuntimeState | null
   if (runtimeState.state === 'waiting') {
     const waiting = runtimeState.waiting
     if (!waiting) return 'waiting'
-    if (waiting.waitingFor === 'sessions') {
+    if (waiting.waitingFor === 'all-sessions') {
       const total = waiting.waitAllSessions?.length || 0
       const satisfied = waiting.satisfiedSessions?.length || 0
       return total > 0 ? `waiting: sessions ${satisfied}/${total}` : 'waiting: sessions'
     }
+    if (waiting.waitingFor === 'any-session') return `waiting: any session ${waiting.waitAnySessions?.length || 0}`
     if (waiting.waitingFor === 'exec') {
       const count = waiting.waitExecIds?.length || 0
       return count > 0 ? `waiting: exec ${count}` : 'waiting: exec'
     }
-    if (waiting.waitingFor === 'timer') {
-      return waiting.timeoutSeconds ? `waiting: timer ${waiting.timeoutSeconds}s` : 'waiting: timer'
+    if (waiting.waitingFor === 'input') return 'waiting: input'
+    if (waiting.waitingFor === 'fallback') {
+      return waiting.timeoutSeconds ? `waiting: fallback ${waiting.timeoutSeconds}s` : 'waiting: fallback'
     }
     return `waiting: ${waiting.waitingFor}`
   }

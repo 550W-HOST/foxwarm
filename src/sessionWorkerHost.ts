@@ -773,18 +773,18 @@ export class SessionWorkerHost {
       getExecTempDir: agent => path.join(getAgentDir(agent), '.temp', 'exec'),
       registryPath: path.join(workerDir, 'running-exec.json'),
       nodeId: 'master',
-      completionDispatcher: async (_entry, _status, message) => this.commitExecCompletion(message),
+      completionDispatcher: async (entry, _status, message) => this.commitExecCompletion(entry.id, message),
     });
   }
 
-  private async commitExecCompletion(message: string): Promise<void> {
+  private async commitExecCompletion(execId: string, message: string): Promise<void> {
     if (!this.runner) {
       throw new RpcError('SESSION_WORKER_EXEC_RECOVERY_UNSUPPORTED', 'Recovered background exec completion cannot run before the Session worker host is initialized.', true);
     }
     await this.serialize(async () => {
       await this.ensureLoaded();
       await this.ensureHealthy();
-      await this.applyAndPersistQueueItem({ type: 'background', parts: buildTimestampedSystemMessageParts(message) });
+      await this.applyAndPersistQueueItem({ type: 'background', parts: buildTimestampedSystemMessageParts(message), execId, externalEventId: `exec-completion:${execId}` });
     });
     void this.runPending(256).catch(error => {
       logger.error({ err: error, sessionId: this.identity.sessionId }, 'Durable exec completion queue processing failed');

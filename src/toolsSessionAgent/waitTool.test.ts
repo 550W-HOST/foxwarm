@@ -60,6 +60,17 @@ function flattenPartsText(parts: MessagePart[] | null | undefined): string {
     .join('\n');
 }
 
+function flattenTurnText(parts: MessagePart[] | null | undefined, session: Session): string {
+  if (parts?.length) return flattenPartsText(parts);
+  const trailing: MessagePart[] = [];
+  for (let index = session.history.length - 1; index >= 0; index--) {
+    const message = session.history[index];
+    if (message.role === 'model') break;
+    if (message.role === 'user') trailing.unshift(...message.parts);
+  }
+  return flattenPartsText(trailing);
+}
+
 async function appendStubTurn(activeSession: Session, parts: MessagePart[] | null, responseText: string): Promise<void> {
   if (parts?.length) {
     await sessionManager.appendSessionMessage(activeSession, {
@@ -99,40 +110,43 @@ test('buildWaitTimeoutMessage uses fixed text and no custom timeout message', ()
   );
 });
 
-test('wait tool schema describes activity waits and a zero-or-two-plus waitAllSessions barrier', () => {
+test('wait tool schema requires declared progress and distinguishes all/any/exec/input/fallback sources', () => {
   const waitDefinition = definitions.find(definition => definition.name === 'wait');
   assert.ok(waitDefinition);
-  assert.match(waitDefinition.description, /pause .* until new session activity arrives/i);
-  assert.match(waitDefinition.description, /one-shot fallback/i);
+  assert.match(waitDefinition.description, /pause .* until new activity arrives/i);
+  assert.match(waitDefinition.description, /declare at least one progress source or fallback/i);
+  assert.match(waitDefinition.description, /one-shot liveness wake/i);
   assert.doesNotMatch(waitDefinition.description, /event-driven/i);
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.type, 'array');
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.uniqueItems, true);
-  assert.deepEqual(waitDefinition.parameters.properties.waitAllSessions?.anyOf, [{ maxItems: 0 }, { minItems: 2 }]);
+  assert.equal(waitDefinition.parameters.properties.waitAllSessions?.minItems, 2);
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.items?.type, 'string');
   assert.equal(waitDefinition.parameters.properties.waitAllSessions?.items?.pattern, '.*\\S.*');
-  assert.match(waitDefinition.parameters.properties.waitAllSessions?.description || '', /omit or pass \[\] for an ordinary wait/i);
-  assert.match(waitDefinition.parameters.properties.waitAllSessions?.description || '', /strictly requires a new report from every listed session/i);
+  assert.match(waitDefinition.parameters.properties.waitAllSessions?.description || '', /every listed Session must report/i);
+  assert.equal(waitDefinition.parameters.properties.waitAnySessions?.minItems, 1);
   assert.equal(waitDefinition.parameters.properties.waitExecIds?.type, 'array');
   assert.equal(waitDefinition.parameters.properties.waitExecIds?.items?.type, 'string');
 });
 
-test('waitAllSessions accepts empty as ordinary, rejects fewer than two distinct IDs, and de-dupes valid barriers', async () => {
+test('waitAllSessions rejects explicit empty/fewer-than-two values and de-dupes valid barriers', async () => {
   const sessionId = makeSessionId('wait_all_validation');
+  const childA = makeSessionId('wait_all_child_a');
+  const childB = makeSessionId('wait_all_child_b');
   try {
     const session = await sessionManager.getSession(sessionId);
+    await sessionManager.getSession(childA);
+    await sessionManager.getSession(childB);
 
     await assert.rejects(
       () => tool_wait({ waitAllSessions: 'child-a' }, { sessionId, session }),
       /waitAllSessions must be an array/,
     );
-    const emptyResult = await tool_wait({ waitAllSessions: [] }, { sessionId, session });
-    assert.equal(emptyResult.output, 'ok');
+    await assert.rejects(() => tool_wait({ waitForInput: true, waitAllSessions: [] }, { sessionId, session }), /at least two Session IDs/);
     let reloaded = await sessionManager.getSession(sessionId);
-    assert.equal(reloaded.meta.wait?.waitAll, undefined);
 
     await assert.rejects(
       () => tool_wait({ waitAllSessions: ['child-a'] }, { sessionId, session }),
-      /at least two distinct session IDs.*omit it or pass \[\] for an ordinary wait.*single-session follow-ups/i,
+      /at least two distinct session IDs/i,
     );
     await assert.rejects(
       () => tool_wait({ waitAllSessions: [' child-a ', 'child-a'] }, { sessionId, session }),
@@ -148,12 +162,35 @@ test('waitAllSessions accepts empty as ordinary, rejects fewer than two distinct
       /entries must be non-empty strings/,
     );
 
-    const result = await tool_wait({ waitAllSessions: [' child-a ', 'child-a', 'child-b'] }, { sessionId, session });
+    const result = await tool_wait({ waitAllSessions: [` ${childA} `, childA, childB] }, { sessionId, session });
     assert.equal(result.output, 'ok');
     reloaded = await sessionManager.getSession(sessionId);
-    assert.deepEqual(reloaded.meta.wait?.waitAll?.sessions, ['child-a', 'child-b']);
+    assert.deepEqual(reloaded.meta.wait?.waitAll?.sessions, [childA, childB]);
   } finally {
     await cleanupSession(sessionId);
+    await cleanupSession(childA);
+    await cleanupSession(childB);
+  }
+});
+
+test('wait Session target validation is catalog-only and never hydrates lazy targets', async () => {
+  const sourceId = makeSessionId('wait_catalog_source');
+  const lazyTargetId = makeSessionId('wait_catalog_lazy');
+  const workerTargetId = makeSessionId('wait_catalog_worker');
+  const source = await sessionManager.getSession(sourceId);
+  sessionManager.getAllSessions().set(lazyTargetId, { ...source, id: lazyTargetId, aliases: [], history: [], queue: [], meta: { ...source.meta } });
+  sessionManager.getAllSessions().set(workerTargetId, { ...source, id: workerTargetId, aliases: [], history: [], queue: [], meta: { ...source.meta } });
+  sessionManager.setSessionWorkerFenceChecker(id => id === workerTargetId);
+  const original = sessionManager.getExistingSession;
+  let hydrationCalls = 0;
+  (sessionManager as any).getExistingSession = async () => { hydrationCalls += 1; throw new Error('hydration forbidden'); };
+  try {
+    assert.deepEqual(await sessionManager.validateSessionWaitTargets(sourceId, [lazyTargetId, workerTargetId]), [lazyTargetId, workerTargetId]);
+    assert.equal(hydrationCalls, 0);
+  } finally {
+    (sessionManager as any).getExistingSession = original;
+    sessionManager.setSessionWorkerFenceChecker(undefined);
+    await cleanupSession(sourceId); await cleanupSession(lazyTargetId); await cleanupSession(workerTargetId);
   }
 });
 
@@ -358,9 +395,7 @@ test('wait survives compact request and compact commit before timeout turn', asy
       return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
     }
 
-    const text = (parts || [])
-      .map(part => part.system || part.text || '')
-      .join('\n');
+    const text = flattenTurnText(parts, activeSession);
     observedTurns.push(text);
     await sessionManager.appendSessionMessage(activeSession, {
       role: 'user',
@@ -423,7 +458,7 @@ test('wait without timeout works and does not schedule a timeout wake', async ()
     const sessionId = makeSessionId('wait_no_timeout');
     try {
       const session = await sessionManager.getSession(sessionId);
-      const result = await tool_wait({}, { sessionId, session });
+      const result = await tool_wait({ waitForInput: true }, { sessionId, session });
       assert.equal(result.output, 'ok');
 
       await sleep(80);
@@ -431,7 +466,8 @@ test('wait without timeout works and does not schedule a timeout wake', async ()
       assert.equal(reloaded.queue.length, 0);
       assert.equal(typeof reloaded.meta.wait?.id, 'string');
       assert.equal(reloaded.meta.wait?.timeoutSeconds, undefined);
-      assert.equal(sessionManager.buildSessionRuntimeState(reloaded).state, 'idle');
+      assert.equal(sessionManager.buildSessionRuntimeState(reloaded).state, 'waiting');
+      assert.equal(sessionManager.buildSessionRuntimeState(reloaded).waiting?.waitingFor, 'input');
     } finally {
       await cleanupSession(sessionId);
     }
@@ -451,30 +487,24 @@ test('clearSession removes an armed activity wait', async () => {
   }
 });
 
-test('wait with timeoutSeconds 0 works as no timeout', async () => {
+test('wait rejects a zero fallback', async () => {
   await withTempTimerStore(async () => {
     const sessionId = makeSessionId('wait_zero_timeout');
     try {
       const session = await sessionManager.getSession(sessionId);
-      const result = await tool_wait({ timeoutSeconds: 0 }, { sessionId, session });
-      assert.equal(result.output, 'ok');
-
-      await sleep(80);
-      const reloaded = await sessionManager.getSession(sessionId);
-      assert.equal(reloaded.queue.length, 0);
-      assert.equal(typeof reloaded.meta.wait?.id, 'string');
-      assert.equal(reloaded.meta.wait?.timeoutSeconds, undefined);
+      await assert.rejects(() => tool_wait({ wakeIfNoActivityAfterSeconds: 0 }, { sessionId, session }), /greater than zero/);
     } finally {
       await cleanupSession(sessionId);
     }
   });
 });
 
-test('waitExecIds are stored as advisory runtime-state metadata', async () => {
+test('waitExecIds require exact owned active exec IDs and are stored in runtime state', async () => {
   const sessionId = makeSessionId('wait_exec_ids');
   try {
     const session = await sessionManager.getSession(sessionId);
-    const result = await tool_wait({ waitExecIds: [' exec-a ', 'exec-a', 'exec-b'] }, { sessionId, session });
+    const entries = ['exec-a', 'exec-b'].map(id => ({ id, sessionId, agentName: session.agent || 'main' }));
+    const result = await tool_wait({ waitExecIds: [' exec-a ', 'exec-a', 'exec-b'] }, { sessionId, session, execRuntime: { listRunningExecs: () => entries } as any });
     assert.equal(result.output, 'ok');
 
     const reloaded = await sessionManager.getSession(sessionId);
@@ -488,12 +518,38 @@ test('waitExecIds are stored as advisory runtime-state metadata', async () => {
   }
 });
 
+test('exec completion before or after wait persistence always remains actionable', async () => {
+  const beforeId = makeSessionId('wait_exec_before');
+  const afterId = makeSessionId('wait_exec_after');
+  try {
+    const before = await sessionManager.getSession(beforeId);
+    before.queue.push({ type: 'background', execId: 'quiet-otter', externalEventId: 'exec-completion:quiet-otter', parts: [{ system: 'done before wait' }] });
+    await sessionManager.saveSession(before);
+    await tool_wait({ waitExecIds: ['quiet-otter'] }, { sessionId: beforeId, session: before, execRuntime: { listRunningExecs: (): any[] => [] } as any });
+    assert.equal(before.queue.length, 1, 'pre-existing completion remains queued across wait persistence');
+    const beforeTransition = sessionManager.applyQueuedItemToWaitState(before, before.queue.shift()!);
+    assert.equal(beforeTransition.action, 'enqueue');
+    assert.equal(before.meta.wait, undefined);
+
+    const after = await sessionManager.getSession(afterId);
+    const active = { id: 'calm-heron', sessionId: afterId, agentName: after.agent || 'main' };
+    await tool_wait({ waitExecIds: [active.id] }, { sessionId: afterId, session: after, execRuntime: { listRunningExecs: () => [active] } as any });
+    const afterTransition = sessionManager.applyQueuedItemToWaitState(after, {
+      type: 'background', execId: active.id, externalEventId: `exec-completion:${active.id}`, parts: [{ system: 'done after wait' }],
+    });
+    assert.equal(afterTransition.action, 'enqueue');
+    assert.equal(after.meta.wait, undefined);
+  } finally {
+    await cleanupSession(beforeId); await cleanupSession(afterId);
+  }
+});
+
 test('wait with positive timeout schedules an internal timer that wakes the session', async () => {
   await withTempTimerStore(async () => {
     const sessionId = makeSessionId('wait_scheduled_timeout');
     try {
       const session = await sessionManager.getSession(sessionId);
-      const result = await tool_wait({ timeoutSeconds: 0.1 }, { sessionId, session });
+      const result = await tool_wait({ wakeIfNoActivityAfterSeconds: 0.1 }, { sessionId, session });
       assert.equal(result.output, 'ok');
 
       await sleep(350);
@@ -516,7 +572,7 @@ test('direct idle user messages enter the session queue gate and preserve source
   const observedTurns: Array<{ text: string; parts: MessagePart[] | null }> = [];
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
-    const text = flattenPartsText(parts);
+    const text = flattenTurnText(parts, activeSession);
     const responseText = `direct queued response ${observedTurns.length + 1}`;
     await appendStubTurn(activeSession, parts, responseText);
     observedTurns.push({ text, parts });
@@ -546,7 +602,7 @@ test('direct idle user messages enter the session queue gate and preserve source
     }, {
       parts: [
         { text: 'hello from direct queue' },
-        { inlineData: { mimeType: 'image/png', data: Buffer.from('png').toString('base64') } },
+        { inlineData: { mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlqVZsAAAAASUVORK5CYII=' } },
       ],
       channelUserId: conversationId,
       conversationId,
@@ -563,7 +619,8 @@ test('direct idle user messages enter the session queue gate and preserve source
     assert.doesNotMatch(observedTurns[0].text, /channelTargetId=/);
     assert.doesNotMatch(observedTurns[0].text, /sender="webui-user"/);
     assert.match(observedTurns[0].text, /hello from direct queue/);
-    assert(observedTurns[0].parts?.some(part => part.inlineData?.mimeType === 'image/png'));
+    const persisted = await sessionManager.getSession(sessionId);
+    assert(persisted.history.some(message => message.parts.some(part => part.inlineDataRef?.mimeType === 'image/png')));
   } finally {
     (llm as any).chat = originalChat;
     sessionManager.setSessionTriggerCallback(() => {});
@@ -662,9 +719,7 @@ test('wait timeout wakes via router before a later ordinary timer', async () => 
 
     (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
       assert.equal(activeSession.id, sessionId);
-      const text = (parts || [])
-        .map(part => part.system || part.text || '')
-        .join('\n');
+      const text = flattenTurnText(parts, activeSession);
       observedTurns.push(text);
       await sessionManager.appendSessionMessage(activeSession, {
         role: 'user',
@@ -691,7 +746,7 @@ test('wait timeout wakes via router before a later ordinary timer', async () => 
         afterSeconds: 0.2,
         message: 'ordinary timer fired for wait test',
       });
-      await tool_wait({ timeoutSeconds: 0.02 }, { sessionId, session });
+      await tool_wait({ wakeIfNoActivityAfterSeconds: 0.02 }, { sessionId, session });
 
       await sleep(120);
       assert.equal(observedTurns.length, 1);
@@ -709,18 +764,19 @@ test('wait timeout wakes via router before a later ordinary timer', async () => 
   });
 });
 
-test('wait rejects negative and NaN timeoutSeconds', async () => {
+test('wait rejects negative and NaN fallback values and removed timeoutSeconds', async () => {
   const sessionId = makeSessionId('wait_bad_timeout');
   try {
     const session = await sessionManager.getSession(sessionId);
     await assert.rejects(
-      () => tool_wait({ timeoutSeconds: -1 }, { sessionId, session }),
-      /timeoutSeconds must be a non-negative number/,
+      () => tool_wait({ wakeIfNoActivityAfterSeconds: -1 }, { sessionId, session }),
+      /wakeIfNoActivityAfterSeconds must be a positive finite number/,
     );
     await assert.rejects(
-      () => tool_wait({ timeoutSeconds: Number.NaN }, { sessionId, session }),
-      /timeoutSeconds must be a non-negative number/,
+      () => tool_wait({ wakeIfNoActivityAfterSeconds: Number.NaN }, { sessionId, session }),
+      /wakeIfNoActivityAfterSeconds must be a positive finite number/,
     );
+    await assert.rejects(() => tool_wait({ timeoutSeconds: 1 }, { sessionId, session }), /unsupported argument: timeoutSeconds/);
   } finally {
     await cleanupSession(sessionId);
   }
@@ -761,6 +817,7 @@ test('direct session turn wake clears active wait token', async () => {
 
     assert.equal(sessionManager.clearSessionWaitForDirectTurn(session, 'test-direct'), true);
     assert.equal(session.meta.wait, undefined);
+    await sessionManager.saveSession(session);
 
     await sessionManager.queueSessionWaitTimeoutEvent(
       sessionId,
@@ -806,7 +863,7 @@ test('waitAllSessions waits for every listed session before triggering one turn'
   let triggerCount = 0;
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
-    const text = flattenPartsText(parts);
+    const text = flattenTurnText(parts, activeSession);
     const responseText = `wait all response ${observedTurns.length + 1}`;
     await appendStubTurn(activeSession, parts, responseText);
     observedTurns.push(text);
@@ -864,7 +921,7 @@ test('waitAllSessions duplicate reports from one listed session do not complete 
   const observedTurns: string[] = [];
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
-    const text = flattenPartsText(parts);
+    const text = flattenTurnText(parts, activeSession);
     const responseText = `wait all duplicate response ${observedTurns.length + 1}`;
     await appendStubTurn(activeSession, parts, responseText);
     observedTurns.push(text);
@@ -920,7 +977,7 @@ test('waitAllSessions unrelated intersession wake flushes deferred reports with 
   const observedTurns: string[] = [];
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
-    const text = flattenPartsText(parts);
+    const text = flattenTurnText(parts, activeSession);
     const responseText = `wait all unrelated response ${observedTurns.length + 1}`;
     await appendStubTurn(activeSession, parts, responseText);
     observedTurns.push(text);
@@ -974,7 +1031,7 @@ test('waitAllSessions direct user wake shares the queue gate and gets a pending 
   const observedTurns: string[] = [];
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
-    const text = flattenPartsText(parts);
+    const text = flattenTurnText(parts, activeSession);
     const responseText = `wait all direct response ${observedTurns.length + 1}`;
     await appendStubTurn(activeSession, parts, responseText);
     observedTurns.push(text);
@@ -1042,7 +1099,7 @@ test('waitAllSessions timeout wake flushes deferred reports with pending reminde
   const observedTurns: string[] = [];
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
-    const text = flattenPartsText(parts);
+    const text = flattenTurnText(parts, activeSession);
     const responseText = `wait all timeout response ${observedTurns.length + 1}`;
     await appendStubTurn(activeSession, parts, responseText);
     observedTurns.push(text);
@@ -1112,7 +1169,7 @@ test('waitAllSessions leaves compact maintenance wait-neutral without flushing p
   const observedTurns: string[] = [];
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
-    const text = flattenPartsText(parts);
+    const text = flattenTurnText(parts, activeSession);
     const responseText = `wait all compact response ${observedTurns.length + 1}`;
     await appendStubTurn(activeSession, parts, responseText);
     observedTurns.push(text);

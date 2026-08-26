@@ -2,9 +2,11 @@ import {
   ToolArgs,
   ToolContext,
   buildEndTurnResult,
-  normalizeWaitTimeoutSeconds,
+  normalizeWaitFallbackSeconds,
   normalizeWaitAllSessions,
+  normalizeWaitAnySessions,
   normalizeWaitExecIds,
+  normalizeWaitForInput,
   normalizeCreateChildSessionArgs,
   normalizeForceModel,
   isNonEmptyString,
@@ -14,7 +16,7 @@ import {
   buildSendFileResult,
 } from './helpers';
 import * as sessionManager from '../sessionManager';
-import { scheduleMainWaitTimeout } from '../mainManagementTools';
+import { armMainWaitLiveness, scheduleMainWaitTimeout, validateMainWaitSessions } from '../mainManagementTools';
 import { logger } from '../common';
 import { requireNotIsolated, checkChannelPermission, checkSendFilePermission } from '../isolatedCheck';
 import { COMPACT_PLAN_TOOL_NAME } from '../session/compactPlan';
@@ -49,7 +51,7 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
     }
     const output = `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}). Initial message sent.`;
     if (waitAfterHandoff === true) {
-      return { output, __toolPostAction: { waitForReply: true } };
+      return { output, __toolPostAction: { waitForReply: true, successfulSendToSessionTarget: childSessionId } };
     }
     return noFurtherAssistantReply
       ? { ...buildEndTurnResult(), output }
@@ -63,6 +65,8 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
 }
 
 export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
+  const unknownKeys = Object.keys(args || {}).filter(key => !['sessionId', 'message', 'noFurtherAssistantReply', 'waitAfterHandoff'].includes(key));
+  if (unknownKeys.length) throw new Error(`send_to_session received unsupported argument${unknownKeys.length === 1 ? '' : 's'}: ${unknownKeys.join(', ')}.`);
   const { sessionId, message, noFurtherAssistantReply, waitAfterHandoff } = args;
   const fromSessionId = ctx?.sessionId;
 
@@ -80,7 +84,8 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
   const successfulSendToSessionTarget = result.resolvedSessionId;
   const includeSuccessfulTarget = !!ctx?.persistCurrentSession
     || ctx?.sessionPlacement === 'session-worker'
-    || ctx?.captureSuccessfulSendToSessionTarget === true;
+    || ctx?.captureSuccessfulSendToSessionTarget === true
+    || waitAfterHandoff === true;
   if (waitAfterHandoff === true) {
     return { output, __toolPostAction: {
       waitForReply: true,
@@ -96,18 +101,50 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
 }
 
 export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
+  const allowedKeys = new Set(['reason', 'waitAllSessions', 'waitAnySessions', 'waitExecIds', 'waitForInput', 'wakeIfNoActivityAfterSeconds']);
+  if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('wait arguments must be an object.');
+  const unknownKeys = Object.keys(args).filter(key => !allowedKeys.has(key));
+  if (unknownKeys.length) throw new Error(`wait received unsupported argument${unknownKeys.length === 1 ? '' : 's'}: ${unknownKeys.join(', ')}.`);
   const { reason } = args || {};
-  const timeoutSeconds = normalizeWaitTimeoutSeconds(args?.timeoutSeconds);
-  const waitAllSessions = normalizeWaitAllSessions(args?.waitAllSessions);
+  const timeoutSeconds = normalizeWaitFallbackSeconds(args?.wakeIfNoActivityAfterSeconds);
+  let waitAllSessions = normalizeWaitAllSessions(args?.waitAllSessions);
+  let waitAnySessions = normalizeWaitAnySessions(args?.waitAnySessions);
   const waitExecIds = normalizeWaitExecIds(args?.waitExecIds);
+  const waitForInput = normalizeWaitForInput(args?.waitForInput);
+  if (waitAllSessions && waitAnySessions) throw new Error('waitAllSessions and waitAnySessions are mutually exclusive.');
+  if (!waitAllSessions && !waitAnySessions && !waitExecIds && !waitForInput && timeoutSeconds === undefined) {
+    throw new Error('wait requires at least one progress source: waitAllSessions, waitAnySessions, waitExecIds, waitForInput:true, or wakeIfNoActivityAfterSeconds. reason alone is not sufficient.');
+  }
   let explicitWaitId: string | undefined;
 
   if (ctx?.sessionId) {
+    if (waitAllSessions) {
+      waitAllSessions = (await validateMainWaitSessions({ sourceSessionId: ctx.sessionId, sessionIds: waitAllSessions })).sessionIds;
+      if (waitAllSessions.length < 2) throw new Error('waitAllSessions must resolve to at least two distinct Sessions.');
+    }
+    if (waitAnySessions) {
+      waitAnySessions = (await validateMainWaitSessions({ sourceSessionId: ctx.sessionId, sessionIds: waitAnySessions })).sessionIds;
+      if (waitAnySessions.length < 1) throw new Error('waitAnySessions must resolve to at least one distinct Session.');
+    }
+    if (waitExecIds) {
+      const active = ctx.execRuntime?.listRunningExecs() || [];
+      const queued = new Set((ctx.session?.queue || []).map((item: any) => item?.execId).filter((id: unknown): id is string => typeof id === 'string'));
+      for (const execId of waitExecIds) {
+        const entry = active.find(candidate => candidate.id === execId);
+        const owned = entry && entry.sessionId === ctx.sessionId && entry.agentName === (ctx.session?.agent || 'main');
+        if (!owned && !queued.has(execId)) {
+          throw new Error(`waitExecIds entry \`${execId}\` is not an accessible active exec owned by this Session/Agent and has no queued completion. Use the exact execId, never a PID, log path, or command text.`);
+        }
+      }
+    }
     const waitOptions = {
       reason: typeof reason === 'string' ? reason : undefined,
       timeoutSeconds,
       waitAllSessions,
+      waitAnySessions,
       waitExecIds,
+      waitForInput,
+      declarationVersion: 1 as const,
     };
     const waitState = ctx.persistCurrentSession && ctx.session?.id === ctx.sessionId
       ? await sessionManager.startSessionWaitForSession(ctx.session, waitOptions, ctx.persistCurrentSession)
@@ -121,8 +158,11 @@ export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
         timeoutSeconds,
       });
     }
-  } else if (timeoutSeconds !== undefined) {
-    throw new Error('Cannot use wait timeout without session context.');
+    if ((waitAllSessions || waitAnySessions) && timeoutSeconds === undefined && !waitForInput && !waitExecIds) {
+      await armMainWaitLiveness({ sourceSessionId: ctx.sessionId, waitId: waitState.id });
+    }
+  } else {
+    throw new Error('Cannot use wait without session context.');
   }
 
   return {

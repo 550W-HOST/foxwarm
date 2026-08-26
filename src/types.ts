@@ -248,6 +248,8 @@ export interface SessionMeta {
   messageCount?: number; // Cached message count for quick access
   /** Newest 32 authoritative receipts for externally acknowledged session events. */
   acceptedExternalEventIds?: string[];
+  /** Bounded exact-owner receipts for wait-liveness graph nudges. */
+  waitLivenessFingerprints?: string[];
   lastChannel?: {
     channelId: string; // Configured channel instance id
     channelType?: string; // Adapter/platform type
@@ -281,6 +283,11 @@ export interface QueueItem {
   parts?: MessagePart[];
   message?: Message;
   waitTimeoutId?: string;
+  /** Exact persistent exec identity for completion-boundary validation. */
+  execId?: string;
+  /** Exact graph fingerprint atomically recorded when a quiescence nudge is admitted. */
+  waitLivenessFingerprint?: string;
+  waitLivenessWaitId?: string;
   /** Durable producer identity used to make acknowledged external events idempotent. */
   externalEventId?: string;
 }

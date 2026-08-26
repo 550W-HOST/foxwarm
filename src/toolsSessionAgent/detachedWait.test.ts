@@ -34,8 +34,7 @@ test('detached no-timeout wait persists exact owner state without global lookup'
   try {
     const result: any = await tool_wait({
       reason: '  waiting for exact owner  ',
-      waitAllSessions: [' child-a ', 'child-a', 'child-b'],
-      waitExecIds: [' exec-a ', 'exec-a', 'exec-b'],
+      waitForInput: true,
     }, {
       sessionId: session.id,
       session,
@@ -43,8 +42,7 @@ test('detached no-timeout wait persists exact owner state without global lookup'
     } as any);
     assert.equal(persists, 1);
     assert.equal(session.meta.wait?.reason, 'waiting for exact owner');
-    assert.deepEqual(session.meta.wait?.waitAll?.sessions, ['child-a', 'child-b']);
-    assert.deepEqual(session.meta.wait?.waitExecIds, ['exec-a', 'exec-b']);
+    assert.equal(session.meta.wait?.waitForInput, true);
     assert.equal(result.__toolPostAction.explicitWaitId, session.meta.wait?.id);
     assert.equal(result.__toolLoopControl.stopCurrentTurn, true);
   } finally {
@@ -75,7 +73,7 @@ test('passed wait preserves deferred rejection and persistence-before-schedule f
   let schedules = 0;
   (mainManagementTools as any).scheduleMainWaitTimeout = async () => { schedules += 1; return { scheduled: true, waitId: 'unexpected' }; };
   try {
-    await assert.rejects(() => tool_wait({ timeoutSeconds: 3 }, {
+    await assert.rejects(() => tool_wait({ wakeIfNoActivityAfterSeconds: 3 }, {
       sessionId: session.id,
       session,
       persistCurrentSession: async () => { throw new Error('persist failed'); },
@@ -90,7 +88,7 @@ test('passed wait preserves deferred rejection and persistence-before-schedule f
       schedules += 1;
       throw new Error('schedule failed');
     };
-    await assert.rejects(() => tool_wait({ timeoutSeconds: 4 }, {
+    await assert.rejects(() => tool_wait({ wakeIfNoActivityAfterSeconds: 4 }, {
       sessionId: session.id,
       session,
       persistCurrentSession: async () => { successfulPersists += 1; },
@@ -111,7 +109,7 @@ test('passed timeout wait persists before local Main scheduling and fires canoni
   let persists = 0;
   try {
     const owner = await sessionManager.getSession(sessionId);
-    const result: any = await tool_wait({ timeoutSeconds: 0.02, reason: ' timeout reason ' }, {
+    const result: any = await tool_wait({ wakeIfNoActivityAfterSeconds: 0.02, reason: ' timeout reason ' }, {
       sessionId,
       session: owner,
       persistCurrentSession: async () => {

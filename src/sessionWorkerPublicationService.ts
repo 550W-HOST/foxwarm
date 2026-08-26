@@ -52,10 +52,11 @@ function validateProjection(value: unknown, sessionId: string): SessionWorkerPro
     && shortString(tool.name) && safeInt(tool.startedAt) && (tool.id === undefined || shortString(tool.id))
     && (tool.index === undefined || safeInt(tool.index)) && (tool.total === undefined || safeInt(tool.total))
     && (tool.executionNode === undefined || shortString(tool.executionNode)) && (tool.argsPreview === undefined || shortString(tool.argsPreview, 4096)));
-  const validWaiting = waiting === undefined || (exactKeys(waiting, ['waitId','waitingFor','reason','waitAllSessions','satisfiedSessions','pendingSessions','timeoutSeconds','timeoutAt','waitExecIds'], ['waitId','waitingFor'])
-    && shortString(waiting.waitId) && ['sessions','exec','timer'].includes(waiting.waitingFor)
+  const validWaiting = waiting === undefined || (exactKeys(waiting, ['waitId','waitingFor','reason','waitAllSessions','waitAnySessions','satisfiedSessions','pendingSessions','timeoutSeconds','timeoutAt','waitExecIds','waitForInput'], ['waitId','waitingFor'])
+    && shortString(waiting.waitId) && ['all-sessions','any-session','exec','input','fallback'].includes(waiting.waitingFor)
     && (waiting.reason === undefined || shortString(waiting.reason, 4096))
-    && ['waitAllSessions','satisfiedSessions','pendingSessions','waitExecIds'].every(key => waiting[key] === undefined || stringList(waiting[key]))
+    && ['waitAllSessions','waitAnySessions','satisfiedSessions','pendingSessions','waitExecIds'].every(key => waiting[key] === undefined || stringList(waiting[key]))
+    && (waiting.waitForInput === undefined || waiting.waitForInput === true)
     && (waiting.timeoutSeconds === undefined || (Number.isFinite(waiting.timeoutSeconds) && waiting.timeoutSeconds >= 0))
     && (waiting.timeoutAt === undefined || safeInt(waiting.timeoutAt)));
   const validRuntime = exactKeys(runtime, ['state','since','note','queueLength','busy','active','tool','waiting'], ['state','queueLength','busy'])

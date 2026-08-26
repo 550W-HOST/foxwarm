@@ -736,7 +736,7 @@ export class NodeClient {
       this.send({
         type: 'tool_call_error',
         callId,
-        error: e.message || String(e)
+        error: { message: e.message || String(e), ...(typeof e.code === 'string' ? { code: e.code } : {}) }
       });
     }
   }

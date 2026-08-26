@@ -61,19 +61,14 @@ test('handoff runtime validates waitAfterHandoff and does not compatibility-read
       /waitAfterHandoff must be a boolean/i,
     );
 
-    const legacySend: any = await tool_send_to_session(
-      { sessionId: targetId, message: 'legacy name is ignored', waitForReply: true },
+    await assert.rejects(() => tool_send_to_session(
+      { sessionId: targetId, message: 'legacy name is rejected', waitForReply: true },
       { sessionId: sourceId, session: source },
-    );
-    assert.equal(typeof legacySend, 'string');
-
-    const legacyCreate: any = await tool_create_child_session(
+    ), /unsupported argument.*waitForReply/i);
+    await assert.rejects(() => tool_create_child_session(
       { suffix: 'legacy', waitForReply: true },
       { sessionId: sourceId, session: source },
-    );
-    assert.equal(typeof legacyCreate, 'string');
-    const [childId] = sessionManager.getChildSessionIds(sourceId);
-    await sessionManager.deleteSession(childId).catch(() => false);
+    ), /unknown key: waitForReply/i);
   } finally {
     await sessionManager.deleteSession(sourceId).catch(() => false);
     await sessionManager.deleteSession(targetId).catch(() => false);
@@ -87,7 +82,7 @@ test('send_to_session requests post-batch wait only after successful delivery', 
   await resetSession(targetId);
   try {
     const result: any = await tool_send_to_session({ sessionId: targetId, message: 'hello', waitAfterHandoff: true }, { sessionId: sourceId, session: source });
-    assert.deepEqual(result.__toolPostAction, { waitForReply: true });
+    assert.deepEqual(result.__toolPostAction, { waitForReply: true, successfulSendToSessionTarget: targetId });
     assert.match(result.output, /Message sent/);
 
     await assert.rejects(
@@ -114,8 +109,8 @@ test('create_child_session waitAfterHandoff validates initial message and awaits
       { suffix: 'worker', message: 'do work', waitAfterHandoff: true },
       { sessionId: parentId, session: parent },
     );
-    assert.deepEqual(result.__toolPostAction, { waitForReply: true });
     const [childId] = sessionManager.getChildSessionIds(parentId);
+    assert.deepEqual(result.__toolPostAction, { waitForReply: true, successfulSendToSessionTarget: childId });
     assert.equal(typeof childId, 'string');
     const child = await sessionManager.getSession(childId);
     assert.equal(child.queue.length, 1);
@@ -229,5 +224,45 @@ test('fast reply queued before wait arm wakes immediately after the flagged hand
     target.busy = false;
     await sessionManager.deleteSession(sourceId).catch(() => false);
     await sessionManager.deleteSession(targetId).catch(() => false);
+  }
+});
+
+test('handoff wait aggregates only successful flagged resolved targets across mixed send/create batches', async () => {
+  const sourceId = makeId('mixed_handoff_source');
+  const flaggedId = makeId('mixed_handoff_flagged');
+  const ordinaryId = makeId('mixed_handoff_ordinary');
+  const source = await resetSession(sourceId);
+  const flagged = await resetSession(flaggedId); flagged.busy = true;
+  const ordinary = await resetSession(ordinaryId); ordinary.busy = true;
+  const router = new MessageRouter() as any;
+  const originalChat = llm.chat;
+  let calls = 0;
+  (llm as any).chat = async (parts: MessagePart[] | null, active: Session) => {
+    calls++;
+    await appendStubUser(active, parts);
+    const toolCalls = [
+      { id: 'ordinary-first', name: 'send_to_session', args: { sessionId: ordinaryId, message: 'ordinary' } },
+      { id: 'flagged-send', name: 'send_to_session', args: { sessionId: flaggedId, message: 'flagged', waitAfterHandoff: true } },
+      { id: 'flagged-create', name: 'create_child_session', args: { suffix: 'worker', message: 'created flagged', waitAfterHandoff: true } },
+      { id: 'failed-flagged', name: 'send_to_session', args: { sessionId: makeId('missing'), message: 'fails', waitAfterHandoff: true } },
+    ];
+    await appendStubModel(active, toolCalls.map(functionCall => ({ functionCall })));
+    return { text: '', toolCalls };
+  };
+  try {
+    source.queue.push({ type: 'user', parts: [{ text: 'mixed handoff' }] });
+    await sessionManager.saveSession(sourceId);
+    await router.processSessionQueue(sourceId);
+    const childId = `${sourceId}_worker`;
+    assert.equal(calls, 1);
+    assert.deepEqual(new Set(source.meta.wait?.waitAnySessions), new Set([flaggedId, childId]));
+    assert.equal(source.meta.wait?.waitAnySessions?.includes(ordinaryId), false);
+    await sessionManager.deleteSession(childId).catch(() => false);
+  } finally {
+    (llm as any).chat = originalChat;
+    flagged.busy = false; ordinary.busy = false;
+    await sessionManager.deleteSession(sourceId).catch(() => false);
+    await sessionManager.deleteSession(flaggedId).catch(() => false);
+    await sessionManager.deleteSession(ordinaryId).catch(() => false);
   }
 });

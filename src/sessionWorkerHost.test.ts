@@ -751,7 +751,7 @@ test('exec completion is serialized after a failed turn and remains one durable 
     };
     const turn = host.runPending(8);
     await firstStarted;
-    const completion = (host as any).commitExecCompletion('background exec finished');
+    const completion = (host as any).commitExecCompletion('quiet-otter', 'background exec finished');
     failFirst();
     await assert.rejects(() => turn, /turn mutation failed/);
     await completion;

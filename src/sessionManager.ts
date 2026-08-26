@@ -120,6 +120,10 @@ export interface SessionWaitState {
   timeoutSeconds?: number;
   waitExecIds?: string[];
   waitAll?: SessionWaitAllState;
+  waitAnySessions?: string[];
+  waitForInput?: true;
+  /** Present only on waits written through the current declared-source API. */
+  declarationVersion?: 1;
 }
 
 export interface SessionWaitAllState {
@@ -230,6 +234,13 @@ function markWaitAllSessionSatisfied(waitAll: SessionWaitAllState, sourceSession
 }
 
 export function applyQueuedItemToWaitState(session: Session, item: QueueItem): WaitQueueTransition {
+  if (item.waitLivenessFingerprint) {
+    if (!item.waitLivenessWaitId || getSessionWaitState(session)?.id !== item.waitLivenessWaitId) return { action: 'drop' };
+    const current = Array.isArray(session.meta.waitLivenessFingerprints)
+      ? session.meta.waitLivenessFingerprints.filter((value): value is string => typeof value === 'string') : [];
+    if (current.includes(item.waitLivenessFingerprint)) return { action: 'drop' };
+    session.meta.waitLivenessFingerprints = [...current, item.waitLivenessFingerprint].slice(-16);
+  }
   const wait = getSessionWaitState(session);
   if (!wait) {
     if (typeof item.waitTimeoutId === 'string') {
@@ -310,6 +321,9 @@ export async function startSessionWait(sessionId: string, options: {
   timeoutSeconds?: number;
   waitAllSessions?: string[];
   waitExecIds?: string[];
+  waitAnySessions?: string[];
+  waitForInput?: true;
+  declarationVersion?: 1;
 } = {}): Promise<SessionWaitState> {
   const session = await getSession(sessionId);
   return startSessionWaitForSession(session, options, () => saveSession(session.id));
@@ -320,6 +334,9 @@ export async function startSessionWaitForSession(session: Session, options: {
   timeoutSeconds?: number;
   waitAllSessions?: string[];
   waitExecIds?: string[];
+  waitAnySessions?: string[];
+  waitForInput?: true;
+  declarationVersion?: 1;
 } = {}, persistSession: () => Promise<void>): Promise<SessionWaitState> {
   const existingWait = getSessionWaitState(session);
   const existingWaitAll = existingWait ? getWaitAllState(existingWait) : undefined;
@@ -341,6 +358,9 @@ export async function startSessionWaitForSession(session: Session, options: {
   if (Array.isArray(options.waitExecIds) && options.waitExecIds.length > 0) {
     state.waitExecIds = [...options.waitExecIds];
   }
+  if (Array.isArray(options.waitAnySessions) && options.waitAnySessions.length > 0) state.waitAnySessions = [...options.waitAnySessions];
+  if (options.waitForInput === true) state.waitForInput = true;
+  if (options.declarationVersion === 1) state.declarationVersion = 1;
   if (Array.isArray(options.waitAllSessions) && options.waitAllSessions.length > 0) {
     state.waitAll = {
       sessions: [...options.waitAllSessions],
@@ -671,6 +691,7 @@ let onSessionEventUpdated: ((sessionId: string, event: SessionStreamEvent) => vo
 // latter and never needs to refetch the full list for runtime state.
 let onSessionListUpdated: (() => void) | null = null;
 let onSessionStateUpdated: ((sessionId: string) => void) | null = null;
+const sessionTransitionListeners = new Set<(sessionId: string) => void>();
 let sessionPersistenceFaultInjector: ((phase: 'history' | 'metadata', sessionId?: string) => void) | null = null;
 
 export function setSessionPersistenceFaultInjectorForTests(injector: ((phase: 'history' | 'metadata', sessionId?: string) => void) | null): void {
@@ -1130,6 +1151,14 @@ function notifySessionUpdated(sessionId: string) {
   } catch (error) {
     logger.error({ err: error, sessionId }, 'Session state update callback failed');
   }
+  for (const listener of sessionTransitionListeners) {
+    try { listener(sessionId); } catch (error) { logger.error({ err: error, sessionId }, 'Session transition listener failed'); }
+  }
+}
+
+export function addSessionTransitionListener(listener: (sessionId: string) => void): () => void {
+  sessionTransitionListeners.add(listener);
+  return () => sessionTransitionListeners.delete(listener);
 }
 
 setSessionRuntimeStateUpdateCallback((sessionId) => notifySessionUpdated(sessionId));
@@ -1901,6 +1930,33 @@ export async function sendToSession(targetSessionId: string, message: string, fr
   }, targetSessionId, message, fromSessionId);
 }
 
+export async function validateSessionWaitTargets(sourceSessionId: string, targetSessionIds: string[]): Promise<string[]> {
+  const source = getSessionCatalog(sourceSessionId);
+  if (!source) throw new Error(`Session "${sourceSessionId}" not found.`);
+  const resolved: string[] = [];
+  for (const requested of targetSessionIds) {
+    let targetId = requested;
+    if (requested === '<main>') targetId = (source.agent || 'main') === 'main' ? 'main' : `${source.agent}/main`;
+    if (requested === '<parent>') {
+      if (!source.parentSessionId) throw new Error(`Cannot resolve \`<parent>\`: current session \`${source.id}\` has no parent session.`);
+      targetId = source.parentSessionId;
+    }
+    const target = getSessionCatalog(targetId);
+    if (!target) throw new Error(`Session "${targetId}" not found.`);
+    if (target.id === source.id) {
+      throw new Error(`Wait target \`${requested}\` resolves to the current Session \`${sourceSessionId}\`.`);
+    }
+    const sourceMeta = getAgentMetadata(source.agent || 'main');
+    const targetMeta = getAgentMetadata(target.agent || 'main');
+    const direct = source.parentSessionId === target.id || target.parentSessionId === source.id;
+    if ((sourceMeta.isolated || targetMeta.isolated) && !direct) {
+      throw new Error('Isolated sessions can declare only direct parent/child Session dependencies.');
+    }
+    if (!resolved.includes(target.id)) resolved.push(target.id);
+  }
+  return resolved;
+}
+
 
 /**
  * Save a single session's history to its file
@@ -2625,12 +2681,16 @@ export async function queueSessionSystemEvent(
   type: 'background' | 'trigger' | 'onboot' = 'background',
   externalEventId?: string,
   externalEventTimestamp?: number,
+  execId?: string,
+  waitLiveness?: { fingerprint: string; waitId: string },
 ): Promise<void> {
   const enqueue = async () => {
     await enqueueSessionItem(sessionId, {
       type,
       parts: buildTimestampedSystemMessageParts(message, externalEventTimestamp),
       ...(externalEventId ? { externalEventId } : {}),
+      ...(execId ? { execId } : {}),
+      ...(waitLiveness ? { waitLivenessFingerprint: waitLiveness.fingerprint, waitLivenessWaitId: waitLiveness.waitId } : {}),
     });
   };
   if (!externalEventId) {

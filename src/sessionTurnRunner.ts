@@ -15,6 +15,7 @@ import { buildSessionRuntimeState } from './sessionRuntimeState';
 import { snapshotQueueSource, type SessionTurnFinalKind } from './sessionTurnDelivery';
 import { applyChildHandoffQueueItem, resolveChildHandoffBoundary, shouldQueueChildHandoffReminder } from './session/childHandoffState';
 import * as sessionManager from './sessionManager';
+import { armMainWaitLiveness } from './mainManagementTools';
 import * as llm from './llm';
 import { ChannelTurnProgress, ChannelTurnToolResult, FunctionCall, isQueueItem, Message, MessagePart, QueueItem, QueueSource, Session, TokenUsage } from './types';
 import { formatFoxwarmSystemTag, parseFoxwarmOpeningTag } from './utils/promptWrappers';
@@ -1219,7 +1220,14 @@ export class SessionTurnRunner {
 
         const waitForReply = (toolResultMsg as any).__toolPostAction?.waitForReply === true;
         if (waitForReply && !session.stopping && !session.meta?.wait) {
-          await this.host.startSessionWait(session);
+          const targets = (toolResultMsg as any).__toolPostAction?.successfulWaitAfterHandoffTargets;
+          const resolvedTargets = Array.isArray(targets)
+            ? [...new Set(targets.filter((target: unknown): target is string => typeof target === 'string' && !!target))]
+            : [];
+          const wait = await this.host.startSessionWait(session, resolvedTargets.length
+            ? { waitAnySessions: resolvedTargets, declarationVersion: 1 }
+            : { waitForInput: true, declarationVersion: 1 });
+          if (resolvedTargets.length) await armMainWaitLiveness({ sourceSessionId: session.id, waitId: wait.id });
         }
 
         const managedStateAfterTools = getManagedSessionState(session);

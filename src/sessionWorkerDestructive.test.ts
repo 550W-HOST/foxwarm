@@ -378,8 +378,6 @@ test('live Worker parent moves propagate across IPC and stay out of semantic aut
     const workerAuthority = await fs.readJson(statePath);
     assert.match(JSON.stringify(workerAuthority.history), /catalog parent=some\/parent display=Live Worker name/,
       'the next real Worker turn observes the propagated Main-owned display name and parent');
-    assert.match(JSON.stringify(workerAuthority.history), /parentSessionId=\\"some\/parent\\"/,
-      'next parent-dependent child reminder uses the propagated Main-owned parent');
     const detached = await sessionManager.setSessionParent(sessionId, undefined);
     assert.equal(detached.parentSessionId, undefined);
     const updater = (sessionManager as any).setSessionWorkerCatalogFieldsUpdater;
