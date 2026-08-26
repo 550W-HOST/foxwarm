@@ -1,6 +1,6 @@
 # Unit: src-channels-webui
 
-Files: src/channels/webuiChannel.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTerminalStream.test.ts
+Files: src/channels/webuiChannel.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTerminalStream.test.ts
 Secondary files: src/channels/webuiRealtime.ts, src/channels/webuiRealtime.test.ts, src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
 
 ## Purpose
@@ -22,6 +22,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 
 - Authentication and setup status.
 - Session list, history, create, update, fork, move, pin, model, cwd, and message routes.
+- Agent registry routes: enriched `GET`/existing `POST /api/agents`, memory manifest `GET /api/agents/:agentId/memory`, mutable metadata `PUT /api/agents/:agentId`, and typed-confirmation `DELETE /api/agents/:agentId`.
 - Fixed bounded `/api/session-list/sidebar`, `/children`, `/by-id`,
   `/architecture`, `/descendants/:sessionId`, and `/search` query routes.
 - One authenticated multiplexed `/api/webui/stream` WebSocket for current clients, plus legacy per-session and global session-list SSE routes.
@@ -83,6 +84,7 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 - Session ordering and pinning update the shared session metadata index rather than rewriting history snapshots.
 - Archive accepts optional `includeDescendants` only for archive-to-true and returns matched/changed IDs and counts. Delete delegates to the shared Main-owned lifecycle orchestrator. It accepts optional `includeDescendants`, recomputes and claims the canonical subtree, preflights every selected session for channel/busy blockers, revalidates graph/channel/activity state, deletes recursively deepest-first, and reports partial progress on unexpected failures. Single-session deletion claims and detaches direct survivors before deleting the root. Canonical semantics: [D-lifecycle-descendant-actions](../threads/session-lifecycle.md#d-lifecycle-descendant-actions).
 - Named session and agent-main creation return HTTP 409 with `code: "SESSION_ID_ARCHIVED"` when the requested internal ID belongs to an archived deleted lifetime. Canonical semantics: [D-lifecycle-archived-id-reservation](../threads/session-lifecycle.md#d-lifecycle-archived-id-reservation).
+- The Agent registry GET reports inheritance/isolation, inheritance chain, indexed current/active/queued Session counts, and self-owned Markdown memory summary for every persistent Agent directory, including zero-session Agents. Counts come from the Main catalog projection rather than lazy in-memory stubs, so a queued Session remains visible after restart. The memory route walks only the canonical Agent `memory/` tree, ignores symlinks, caps traversal, and returns metadata/validated absolute targets rather than file contents. Agent update delegates inheritance/isolation snapshot refresh to Session Manager. Agent delete requires exact `confirmAgentId` and delegates lifecycle blockers and deletion to `sessionManager.deleteAgent`; confirmation authorizes deletion of idle owned Sessions including queued work.
 - CTX-BLOCK expansion delegates to the read-only archive helper and never queues, saves, or broadcasts session mutations.
 - The model-test endpoint treats request exceptions as failed HTTP results rather than scanning successful model text for an `Error:` prefix.
 - Setup routes are normal authenticated WebUI routes: `GET /api/setup/status`; `POST /api/setup/models`, `/api/setup/models/test`, `/api/setup/config`, `/api/setup/channels`, `/api/setup/weixin/login/start`, and `/api/setup/weixin/login/wait`. OOBE is reported when the models file is absent; there is no separate guest/admin role API at these routes.

@@ -1185,6 +1185,69 @@ export async function setAgentIsolation(agentName: string, isolatedNode?: string
   return sessionAgentMetadata.setAgentIsolation(getAgentMetadataDeps(), agentName, normalizedNode, toolRules);
 }
 
+export async function deleteAgent(
+  agentName: string,
+  deleteOwnedSession: (sessionId: string) => Promise<boolean>,
+): Promise<{ deletedSessions: string[] }> {
+  assertAgentMetadataMutationAllowed('Agent deletion');
+  validateAgentName(agentName);
+  if (agentName === 'main') throw new Error('The main agent cannot be deleted.');
+
+  const agentDir = getAgentDir(agentName);
+  if (!await fs.pathExists(agentDir)) throw new Error(`Agent "${agentName}" not found.`);
+
+  const inheritedBy = sessionAgentMetadata.listAgentMetadataEntries()
+    .filter(([otherAgent, metadata]) => otherAgent !== agentName && metadata.inherit === agentName)
+    .map(([otherAgent]) => otherAgent);
+  if (inheritedBy.length > 0) {
+    throw new Error(`Agent "${agentName}" is inherited by: ${inheritedBy.join(', ')}. Clear those inheritance links first.`);
+  }
+
+  const ownedSessionIds = [...sessions.values()]
+    .filter(session => (session.agent || 'main') === agentName)
+    .map(session => session.id);
+  const ownedSessionIdSet = new Set(ownedSessionIds);
+  // Restart-loaded Session objects are metadata-only stubs. Use the Main
+  // catalog to stabilize the complete Agent-owned set and preserve the busy
+  // guard without hydrating Session authority before delegated deletion.
+  const indexedOwnedSessions = ownedSessionIds.length > 0 ? sessionCatalogStore.listByAgent(agentName) : [];
+  if (indexedOwnedSessions.length !== ownedSessionIds.length
+    || indexedOwnedSessions.some(session => !ownedSessionIdSet.has(session.id))) {
+    throw new Error(`Agent deletion stopped because its owned Session set changed while preflighting.`);
+  }
+  const activeSessionIds = new Set(indexedOwnedSessions
+    .filter(session => session.busy === true)
+    .map(session => session.id));
+  const ownedSessions = ownedSessionIds
+    .map(sessionId => sessions.get(sessionId))
+    .filter((session): session is Session => !!session);
+  for (const session of ownedSessions) {
+    if (session.busy) activeSessionIds.add(session.id);
+  }
+  if (activeSessionIds.size > 0) {
+    throw new Error(`Agent "${agentName}" has active sessions: ${[...activeSessionIds].join(', ')}`);
+  }
+  const channelBlockedSessions = ownedSessions.filter(session => getChannelsBySession(session.id).some(channel => channel.channelId !== 'webui'));
+  if (channelBlockedSessions.length > 0) {
+    throw new Error(`Agent "${agentName}" has sessions attached to non-WebUI channels: ${channelBlockedSessions.map(session => session.id).join(', ')}`);
+  }
+
+  const deletedSessions: string[] = [];
+  for (const session of ownedSessions) {
+    if (!await deleteOwnedSession(session.id)) {
+      throw new Error(`Agent deletion stopped because session "${session.id}" could not be deleted.`);
+    }
+    deletedSessions.push(session.id);
+  }
+  const remainingSessions = [...sessions.values()].filter(session => (session.agent || 'main') === agentName);
+  if (remainingSessions.length > 0) {
+    throw new Error(`Agent deletion stopped because new owned sessions appeared: ${remainingSessions.map(session => session.id).join(', ')}`);
+  }
+  await fs.remove(agentDir);
+  await sessionAgentMetadata.deleteAgentMetadata(agentName);
+  return { deletedSessions };
+}
+
 export async function createAgentWithMainSession(options: {
   agentName: string;
   inheritMemory?: boolean;

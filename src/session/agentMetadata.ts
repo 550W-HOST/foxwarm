@@ -121,6 +121,18 @@ export function getAgentToolRules(agentName: string): AgentToolRule[] {
   return getAgentMetadata(agentName).toolRules || [];
 }
 
+export function listAgentMetadataEntries(): Array<[string, AgentMetadata]> {
+  return [...agentMetadata.entries()].map(([agentName, metadata]) => [agentName, {
+    ...metadata,
+    ...(metadata.toolRules ? { toolRules: metadata.toolRules.map(rule => ({ ...rule })) } : {}),
+  }]);
+}
+
+export async function deleteAgentMetadata(agentName: string): Promise<void> {
+  if (!agentMetadata.delete(agentName)) return;
+  await saveAgentMetadata();
+}
+
 export function getAgentIsolationNode(agentName: string): string | undefined {
   const meta = getAgentMetadata(agentName);
   if (!meta.isolated) return undefined;

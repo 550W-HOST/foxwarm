@@ -21,6 +21,8 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 - `refreshAgentMetadata(agentName)` — refreshes one exact isolated-agent entry for a long-lived Session worker, preserving its startup snapshot when metadata cannot be read and rejecting malformed refreshed rules without installing them
 - `getAgentMetadata(agentName)` — returns metadata for an agent
 - `getAgentToolRules(agentName)` — returns only that exact agent's persisted rules; inheritance is not consulted
+- `listAgentMetadataEntries()` — returns defensive snapshots for cross-Agent dependency checks
+- `deleteAgentMetadata(agentName)` — removes and durably rewrites one Agent metadata entry
 - `getAgentIsolationNode(agentName)` — returns the isolation node if set
 - `isAgentIsolated(agentName)` — checks isolation flag
 - `isSessionEffectivelyIsolated(session)` — checks if a session's agent is isolated
@@ -55,6 +57,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 | `saveAgentMetadata()` | ~63 (agentMetadata) | Serializes in-memory map to disk |
 | `loadAgentMetadata()` / `refreshAgentMetadata(agentName)` | ~(agentMetadata) | Transactionally loads the complete authority map or refreshes one exact isolated agent for Worker authorization |
 | `getAgentMetadata(agentName)` | ~105 (agentMetadata) | Returns metadata or empty object |
+| `listAgentMetadataEntries()` / `deleteAgentMetadata()` | ~(agentMetadata) | Snapshot dependency inspection and durable metadata removal |
 | `getAgentIsolationNode(agentName)` | ~109 (agentMetadata) | Returns isolation node string if isolated |
 | `isAgentIsolated(agentName)` | ~115 (agentMetadata) | Boolean isolation check |
 | `isSessionEffectivelyIsolated(session)` | ~119 (agentMetadata) | Delegates to isAgentIsolated via session's agent |
@@ -84,7 +87,7 @@ Manages agent lifecycle operations (creation, renaming, moving sessions between 
 - Identity rename and parent-bearing creation recheck the bounded destructive-lifecycle claim immediately before their in-memory relation/identity commit. Prior identity operations drain before a delete claim is acquired. Canonical boundary: [D-lifecycle-descendant-actions](../threads/session-lifecycle.md#d-lifecycle-descendant-actions).
 - New named sessions and agent-main sessions run under the session-manager identity commit lock and remove a newly initialized agent directory when critical creation fails. A create-agent move completes nonmutating validation, durably records rollback intent and semantically bound target-directory ownership, then creates/copies the directory. Initialization failure and startup rollback remove only that owned directory idempotently; pending rollback keeps it until recovery, while finishing recovery keeps it permanently. Moves reject journal-unsafe, live, alias, or retained-archive targets before mutation, reverse known failed memory/file/archive/index/relation/attachment mutations, and commit the historical alias only after strict persistence succeeds. The validated journal records explicit `rolling-back`/`finishing` intent rather than inferring intent from metadata; display metadata changes do not enter this path.
 - Recreating an agent directory without a main session is allowed because it allocates no session lifetime. Recreating the archived main internal ID is rejected before the new directory is initialized.
-- Agent metadata is held in an in-memory `Map` backed by a single JSON file (no backup rotation). Normalization strips `skills`, cleans `isolatedNode`, and read-old accepts metadata with no `toolRules`. Present rules are exact source-aware identities; `[]` is preserved canonically as an explicit empty replacement.
+- Agent metadata is held in an in-memory `Map` backed by a single JSON file (no backup rotation). Normalization strips `skills`, cleans `isolatedNode`, and read-old accepts metadata with no `toolRules`. Present rules are exact source-aware identities; `[]` is preserved canonically as an explicit empty replacement. Listing returns defensive snapshots and deletion rewrites the durable map.
 - Rule validation rejects wildcard/extra fields and duplicate or conflicting exact identities before agent creation or metadata mutation effects. Rules remain attached only to the exact agent and are not inherited through `agent.inherit`.
 - Isolation enforcement prevents cross-agent session moves when either source or target agent is isolated.
 - Inheritance chain resolution detects cycles and logs a warning rather than throwing.
