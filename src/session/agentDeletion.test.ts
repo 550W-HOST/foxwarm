@@ -5,10 +5,19 @@ import os from 'os';
 import path from 'path';
 import { spawnSync } from 'node:child_process';
 
+function runIsolatedScript(tempRoot: string, script: string): void {
+  const result = spawnSync(process.execPath, ['-e', script], {
+    cwd: path.resolve(__dirname, '..', '..'),
+    env: { ...process.env, FOXWARM_DATA_DIR: tempRoot },
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+}
+
 test('agent deletion rejects immutable and inherited workspaces and removes an idle empty workspace', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-agent-deletion-'));
   try {
-    const script = String.raw`
+    runIsolatedScript(tempRoot, String.raw`
       const assert = require('node:assert/strict');
       const fs = require('fs-extra');
       const sm = require('./lib/sessionManager.js');
@@ -50,13 +59,68 @@ test('agent deletion rejects immutable and inherited workspaces and removes an i
         assert.equal(await fs.pathExists(config.getAgentDir('owned-agent')), false);
         process.exit(0);
       })().catch(error => { console.error(error.stack || error); process.exit(1); });
-    `;
-    const result = spawnSync(process.execPath, ['-e', script], {
-      cwd: path.resolve(__dirname, '..', '..'),
-      env: { ...process.env, FOXWARM_DATA_DIR: tempRoot },
-      encoding: 'utf8',
-    });
-    assert.equal(result.status, 0, result.stderr || result.stdout);
+    `);
+  } finally {
+    await fs.remove(tempRoot);
+  }
+});
+
+test('agent deletion rejects an authoritative queued Session after restart without partial deletion', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-agent-deletion-restart-'));
+  try {
+    runIsolatedScript(tempRoot, String.raw`
+      const assert = require('node:assert/strict');
+      const fs = require('fs-extra');
+      const sm = require('./lib/sessionManager.js');
+      const metadata = require('./lib/session/agentMetadata.js');
+      const config = require('./lib/config.js');
+      (async () => {
+        await fs.ensureDir(config.getAgentDir('queued-agent'));
+        await metadata.setAgentMetadata('queued-agent', { isolated: true, isolatedNode: 'node-a' });
+        const queued = await sm.createSessionInAgent({ agentName: 'queued-agent', sessionName: 'queued' });
+        const idle = await sm.createSessionInAgent({ agentName: 'queued-agent', sessionName: 'idle' });
+        await sm.enqueueSessionItem(queued.sessionId, { type: 'user', parts: [{ text: 'must survive rejection' }] });
+        assert.equal((await sm.getExistingSession(queued.sessionId)).queue.length, 1);
+        assert.ok(sm.getSessionCatalog(idle.sessionId));
+        process.exit(0);
+      })().catch(error => { console.error(error.stack || error); process.exit(1); });
+    `);
+
+    runIsolatedScript(tempRoot, String.raw`
+      const assert = require('node:assert/strict');
+      const fs = require('fs-extra');
+      const path = require('node:path');
+      const sm = require('./lib/sessionManager.js');
+      const metadata = require('./lib/session/agentMetadata.js');
+      const config = require('./lib/config.js');
+      (async () => {
+        await metadata.loadAgentMetadata();
+        await sm.loadSessions();
+        const queuedId = 'queued-agent/queued';
+        const idleId = 'queued-agent/idle';
+        assert.equal(sm.getSessionCatalog(queuedId).queue.length, 0, 'restart begins from a lazy catalog stub');
+        assert.equal(sm.getSessionCatalog(idleId).queue.length, 0);
+
+        const delegatedSessionIds = [];
+        await assert.rejects(
+          () => sm.deleteAgent('queued-agent', async sessionId => {
+            delegatedSessionIds.push(sessionId);
+            return sm.deleteSession(sessionId);
+          }),
+          /active or queued sessions: queued-agent\/queued/,
+        );
+        assert.deepEqual(delegatedSessionIds, [], 'preflight rejects before the first Session deletion');
+        assert.equal(await fs.pathExists(config.getAgentDir('queued-agent')), true);
+        assert.deepEqual(metadata.getAgentMetadata('queued-agent'), { isolated: true, isolatedNode: 'node-a' });
+        assert.equal(await fs.pathExists(path.join(config.SESSIONS_DIR, queuedId + '.json')), true);
+        assert.equal(await fs.pathExists(path.join(config.SESSIONS_DIR, idleId + '.json')), true);
+        const queued = await sm.getExistingSession(queuedId);
+        assert.equal(queued.queue.length, 1);
+        assert.equal(queued.queue[0].parts[0].text, 'must survive rejection');
+        assert.ok(await sm.getExistingSession(idleId));
+        process.exit(0);
+      })().catch(error => { console.error(error.stack || error); process.exit(1); });
+    `);
   } finally {
     await fs.remove(tempRoot);
   }

@@ -1191,10 +1191,30 @@ export async function deleteAgent(
     throw new Error(`Agent "${agentName}" is inherited by: ${inheritedBy.join(', ')}. Clear those inheritance links first.`);
   }
 
-  const ownedSessions = [...sessions.values()].filter(session => (session.agent || 'main') === agentName);
-  const activeSessions = ownedSessions.filter(session => session.busy || session.queue.length > 0);
-  if (activeSessions.length > 0) {
-    throw new Error(`Agent "${agentName}" has active or queued sessions: ${activeSessions.map(session => session.id).join(', ')}`);
+  const ownedSessionIds = [...sessions.values()]
+    .filter(session => (session.agent || 'main') === agentName)
+    .map(session => session.id);
+  const ownedSessionIdSet = new Set(ownedSessionIds);
+  // Restart-loaded Session objects are metadata-only stubs whose `queue` is
+  // deliberately empty. The Main catalog keeps the canonical indexed queue
+  // length, so preflight the complete Agent set there before the delegated
+  // deletion path can hydrate or clear any individual queue.
+  const indexedOwnedSessions = ownedSessionIds.length > 0 ? sessionCatalogStore.listByAgent(agentName) : [];
+  if (indexedOwnedSessions.length !== ownedSessionIds.length
+    || indexedOwnedSessions.some(session => !ownedSessionIdSet.has(session.id))) {
+    throw new Error(`Agent deletion stopped because its owned Session set changed while preflighting.`);
+  }
+  const activeSessionIds = new Set(indexedOwnedSessions
+    .filter(session => session.busy === true || Number(session.queueLength || 0) > 0)
+    .map(session => session.id));
+  const ownedSessions = ownedSessionIds
+    .map(sessionId => sessions.get(sessionId))
+    .filter((session): session is Session => !!session);
+  for (const session of ownedSessions) {
+    if (session.busy || session.queue.length > 0) activeSessionIds.add(session.id);
+  }
+  if (activeSessionIds.size > 0) {
+    throw new Error(`Agent "${agentName}" has active or queued sessions: ${[...activeSessionIds].join(', ')}`);
   }
   const channelBlockedSessions = ownedSessions.filter(session => getChannelsBySession(session.id).some(channel => channel.channelId !== 'webui'));
   if (channelBlockedSessions.length > 0) {

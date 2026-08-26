@@ -1360,7 +1360,6 @@ export class WebUIChannel implements Channel {
             const entries = await fs.pathExists(AGENTS_DIR)
               ? await fs.readdir(AGENTS_DIR, { withFileTypes: true })
               : [];
-            const allSessions = [...sessionManager.getAllSessions().values()];
             const agents = await Promise.all(entries
               .filter(entry => {
                 if (!entry.isDirectory()) return false;
@@ -1374,7 +1373,7 @@ export class WebUIChannel implements Channel {
               })
               .map(async entry => {
                 const metadata = sessionManager.getAgentMetadata(entry.name);
-                const ownedSessions = allSessions.filter(session => (session.agent || 'main') === entry.name);
+                const ownedSessions = sessionCatalogStore.listByAgent(entry.name);
                 const memory = await readAgentMemoryManifest(entry.name).catch(error => {
                   logger.warn({ err: error, agentId: entry.name }, 'Failed to summarize Agent memory manifest');
                   return { memoryRoot: path.join(getAgentDir(entry.name), 'memory'), files: [] as AgentMemoryManifestEntry[] };
@@ -1386,8 +1385,8 @@ export class WebUIChannel implements Channel {
                   isolated: !!metadata.isolated,
                   isolatedNode: sessionManager.getAgentIsolationNode(entry.name) || null,
                   sessionCount: ownedSessions.length,
-                  activeSessionCount: ownedSessions.filter(session => !!session.busy).length,
-                  queuedSessionCount: ownedSessions.filter(session => session.queue.length > 0).length,
+                  activeSessionCount: ownedSessions.filter(session => session.busy === true).length,
+                  queuedSessionCount: ownedSessions.filter(session => Number(session.queueLength || 0) > 0).length,
                   memoryRoot: memory.memoryRoot,
                   memoryFileCount: memory.files.length,
                   memoryLastModified: memory.files.reduce((latest, file) => Math.max(latest, file.modifiedAt), 0) || null,

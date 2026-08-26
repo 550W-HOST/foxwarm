@@ -103,4 +103,6 @@ test('Architecture Agent registry owns CRUD controls and bounded self-memory nav
   assert.match(files.webuiChannel, /method: 'PUT'/)
   assert.match(files.webuiChannel, /deleteSessionLifecycle\(\{ requestedSessionId: sessionId, includeDescendants: false \}\)/)
   assert.match(files.webuiChannel, /entry\.isSymbolicLink\(\)/)
+  assert.match(files.webuiChannel, /sessionCatalogStore\.listByAgent\(entry\.name\)/)
+  assert.match(files.webuiChannel, /Number\(session\.queueLength \|\| 0\) > 0/)
 })
