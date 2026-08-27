@@ -1325,7 +1325,7 @@ type ExecutedToolCall = PreparedToolCall & {
     waitForReply: boolean;
     explicitWaitId?: string;
     successfulSendToSessionTarget?: string;
-    successfulWaitAfterHandoffTarget?: string;
+    successfulWaitAfterSendTarget?: string;
     deferredExecCwdSync?: { nextCwd: string };
 };
 
@@ -1433,7 +1433,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
     let waitForReply = false;
     let explicitWaitId: string | undefined;
     let successfulSendToSessionTarget: string | undefined;
-    let successfulWaitAfterHandoffTarget: string | undefined;
+    let successfulWaitAfterSendTarget: string | undefined;
     let deferredExecCwdSync: { nextCwd: string } | undefined;
 
     try {
@@ -1465,7 +1465,9 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
                     && typeof result.__toolPostAction.successfulSendToSessionTarget === 'string'
                     ? result.__toolPostAction.successfulSendToSessionTarget
                     : undefined;
-                successfulWaitAfterHandoffTarget = successfulSendToSessionTarget && prepared.call.args?.waitAfterHandoff === true && waitForReply
+                successfulWaitAfterSendTarget = successfulSendToSessionTarget
+                    && (prepared.call.args?.afterSend === 'wait' || prepared.call.args?.waitAfterHandoff === true)
+                    && waitForReply
                     ? successfulSendToSessionTarget : undefined;
             }
             if (result.__execBatchCwdSync && typeof result.__execBatchCwdSync.nextCwd === 'string') {
@@ -1496,7 +1498,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
         waitForReply,
         explicitWaitId,
         successfulSendToSessionTarget,
-        successfulWaitAfterHandoffTarget,
+        successfulWaitAfterSendTarget,
         deferredExecCwdSync,
     };
 }
@@ -1652,7 +1654,7 @@ export async function executeTools(
     let waitForReply = false;
     const explicitWaitIds: string[] = [];
     const successfulSendToSessionTargets: string[] = [];
-    const successfulWaitAfterHandoffTargets: string[] = [];
+    const successfulWaitAfterSendTargets: string[] = [];
 
     for (const execution of executions) {
         let result = execution.result;
@@ -1685,8 +1687,8 @@ export async function executeTools(
         waitForReply = waitForReply || execution.waitForReply;
         if (execution.explicitWaitId) explicitWaitIds.push(execution.explicitWaitId);
         if (execution.successfulSendToSessionTarget) successfulSendToSessionTargets.push(execution.successfulSendToSessionTarget);
-        if (execution.successfulWaitAfterHandoffTarget && !successfulWaitAfterHandoffTargets.includes(execution.successfulWaitAfterHandoffTarget)) {
-            successfulWaitAfterHandoffTargets.push(execution.successfulWaitAfterHandoffTarget);
+        if (execution.successfulWaitAfterSendTarget && !successfulWaitAfterSendTargets.includes(execution.successfulWaitAfterSendTarget)) {
+            successfulWaitAfterSendTargets.push(execution.successfulWaitAfterSendTarget);
         }
     }
 
@@ -1706,11 +1708,11 @@ export async function executeTools(
     } else if (stopCurrentTurn) {
         logger.debug({ sessionId: toolContext.sessionId || session?.id, toolCount: functionCalls.length }, 'Suppressing stopCurrentTurn because a tool in the batch returned an error');
     }
-    if (waitForReply || successfulSendToSessionTargets.length || successfulWaitAfterHandoffTargets.length) {
+    if (waitForReply || successfulSendToSessionTargets.length || successfulWaitAfterSendTargets.length) {
         (toolMessage as any).__toolPostAction = {
             ...(waitForReply ? { waitForReply: true } : {}),
             ...(successfulSendToSessionTargets.length ? { successfulSendToSessionTargets } : {}),
-            ...(successfulWaitAfterHandoffTargets.length ? { successfulWaitAfterHandoffTargets } : {}),
+            ...(successfulWaitAfterSendTargets.length ? { successfulWaitAfterSendTargets } : {}),
         };
     }
     return toolMessage;

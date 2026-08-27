@@ -124,7 +124,7 @@ test('worker recall, agent creation, and node administration keep direct unified
   }
 });
 
-test('direct and unified send_to_session share delivery and waitAfterHandoff control semantics', async () => {
+test('direct and unified send_to_session share delivery and afterSend control semantics', async () => {
   const sourceId = makeId('management_send_source');
   const targetId = makeId('management_send_target');
   const source = await sessionManager.getSession(sourceId);
@@ -134,7 +134,7 @@ test('direct and unified send_to_session share delivery and waitAfterHandoff con
     const direct: any = await send_to_session({
       sessionId: targetId,
       message: 'direct management delivery',
-      waitAfterHandoff: true,
+      afterSend: 'wait',
     }, { sessionId: sourceId, session: source });
     assert.equal(direct.__toolPostAction?.waitForReply, true);
 
@@ -142,7 +142,7 @@ test('direct and unified send_to_session share delivery and waitAfterHandoff con
       toolId: 'builtin:send_to_session',
       args: { sessionId: targetId, message: 'unified management delivery' },
     }, { sessionId: sourceId, session: source });
-    assert.match(String(unified), /Message sent to session/);
+    assert.match(String(unified?.output ?? unified), /Message sent to session/);
 
     const target = await sessionManager.getSession(targetId);
     const queuedText = target.queue.flatMap(item => item.parts || []).map(part => part.text || part.system || '').join('\n');

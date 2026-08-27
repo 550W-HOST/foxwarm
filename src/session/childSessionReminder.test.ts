@@ -30,19 +30,21 @@ test('only model messages suppress child reminder via no-action signal', () => {
   assert.equal(isModelNoActionSignal({ role: 'tool', parts: [{ text: NO_ACTION_MARKER }] }), false);
 });
 
-test('child instructions and reminders recommend one flagged handoff and the bracketed marker', () => {
+test('child instructions and reminders distinguish final reports from reply waits', () => {
   const completion = buildChildCompletionInstruction('parent/main');
   const reminder = buildChildReminder('parent/main');
 
   assert.match(reminder, /^<foxwarm-system kind="child-reminder" event="missing-handoff" parentSessionId="parent\/main">\nReminder:[\s\S]*\n<\/foxwarm-system>$/);
   assert.match(completion, /\[NO_ACTION\]/);
   assert.match(reminder, /\[NO_ACTION\]/);
-  assert.match(completion, /waitAfterHandoff: true/);
-  assert.match(reminder, /waitAfterHandoff: true/);
-  assert.match(completion, /waits for new session activity/);
-  assert.match(reminder, /waits for new session activity/);
-  assert.match(completion, /does not wait for task completion/);
-  assert.match(reminder, /does not wait for task completion/);
+  assert.match(completion, /afterSend: "finish"/);
+  assert.match(reminder, /afterSend: "finish"/);
+  assert.match(completion, /ends the turn idle without creating a wait/);
+  assert.match(reminder, /becomes idle/);
+  assert.match(completion, /afterSend: "wait" only when you genuinely require a later reply/);
+  assert.match(reminder, /afterSend: "wait" only when you genuinely require a later reply/);
+  assert.doesNotMatch(completion, /waitAfterHandoff/);
+  assert.doesNotMatch(reminder, /waitAfterHandoff/);
   assert.doesNotMatch(completion, /event-driven|any-event/);
   assert.doesNotMatch(reminder, /event-driven|any-event/);
   assert.doesNotMatch(completion, /wait\(\{\}\)/);

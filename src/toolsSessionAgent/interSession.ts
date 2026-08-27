@@ -9,6 +9,7 @@ import {
   normalizeWaitForInput,
   normalizeCreateChildSessionArgs,
   normalizeForceModel,
+  normalizeAfterSendBehavior,
   isNonEmptyString,
   prepareChannelFile,
   formatSendFileSessionResult,
@@ -24,17 +25,15 @@ import { COMPACT_PLAN_TOOL_NAME } from '../session/compactPlan';
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_child_session');
   const normalizedArgs = normalizeCreateChildSessionArgs(args);
-  const { suffix, fork = false, message, node, noFurtherAssistantReply, waitAfterHandoff } = normalizedArgs;
+  const { suffix, fork = false, message, node } = normalizedArgs;
+  const afterSend = normalizeAfterSendBehavior(normalizedArgs, 'create_child_session');
   const forced = normalizeForceModel(normalizedArgs, 'create_child_session');
 
   if (!ctx || !ctx.sessionId) {
     throw new Error('Cannot create child session: missing context');
   }
-  if (waitAfterHandoff !== undefined && typeof waitAfterHandoff !== 'boolean') {
-    throw new Error('waitAfterHandoff must be a boolean when provided.');
-  }
-  if (waitAfterHandoff === true && (typeof message !== 'string' || !message.trim())) {
-    throw new Error('create_child_session with waitAfterHandoff=true requires a non-empty initial message.');
+  if (afterSend === 'wait' && (typeof message !== 'string' || !message.trim())) {
+    throw new Error('create_child_session with afterSend="wait" requires a non-empty initial message.');
   }
 
   const currentSessionId = ctx.sessionId;
@@ -42,7 +41,7 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
     { node, model: forced.model, effort: forced.effort, sourceOverride: (ctx as any).sourceOverride });
 
   if (message) {
-    if (waitAfterHandoff === true) {
+    if (afterSend === 'wait' || afterSend === 'finish') {
       await sessionManager.sendToSession(childSessionId, message, currentSessionId);
     } else {
       sessionManager.sendToSession(childSessionId, message, currentSessionId).catch(err => {
@@ -50,31 +49,29 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
       });
     }
     const output = `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'}). Initial message sent.`;
-    if (waitAfterHandoff === true) {
+    if (afterSend === 'wait') {
       return { output, __toolPostAction: { waitForReply: true, successfulSendToSessionTarget: childSessionId } };
     }
-    return noFurtherAssistantReply
+    return afterSend === 'finish'
       ? { ...buildEndTurnResult(), output }
       : output;
   }
 
   const output = `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'})`;
-  return noFurtherAssistantReply
+  return afterSend === 'finish'
     ? { ...buildEndTurnResult(), output }
     : output;
 }
 
 export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
-  const unknownKeys = Object.keys(args || {}).filter(key => !['sessionId', 'message', 'noFurtherAssistantReply', 'waitAfterHandoff'].includes(key));
+  const unknownKeys = Object.keys(args || {}).filter(key => !['sessionId', 'message', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff'].includes(key));
   if (unknownKeys.length) throw new Error(`send_to_session received unsupported argument${unknownKeys.length === 1 ? '' : 's'}: ${unknownKeys.join(', ')}.`);
-  const { sessionId, message, noFurtherAssistantReply, waitAfterHandoff } = args;
+  const { sessionId, message } = args;
+  const afterSend = normalizeAfterSendBehavior(args, 'send_to_session');
   const fromSessionId = ctx?.sessionId;
 
   if (!sessionId || typeof sessionId !== 'string') {
     throw new Error('sessionId is required');
-  }
-  if (waitAfterHandoff !== undefined && typeof waitAfterHandoff !== 'boolean') {
-    throw new Error('waitAfterHandoff must be a boolean when provided.');
   }
 
   const result = await sessionManager.sendToSession(sessionId, message, fromSessionId);
@@ -85,17 +82,17 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
   const includeSuccessfulTarget = !!ctx?.persistCurrentSession
     || ctx?.sessionPlacement === 'session-worker'
     || ctx?.captureSuccessfulSendToSessionTarget === true
-    || waitAfterHandoff === true;
-  if (waitAfterHandoff === true) {
+    || afterSend === 'wait';
+  if (afterSend === 'wait') {
     return { output, __toolPostAction: {
       waitForReply: true,
       ...(includeSuccessfulTarget ? { successfulSendToSessionTarget } : {}),
     } };
   }
   if (!includeSuccessfulTarget) {
-    return noFurtherAssistantReply ? { ...buildEndTurnResult(), output } : output;
+    return afterSend === 'finish' ? { ...buildEndTurnResult(), output } : output;
   }
-  return noFurtherAssistantReply
+  return afterSend === 'finish'
     ? { ...buildEndTurnResult(), output, __toolPostAction: { successfulSendToSessionTarget } }
     : { output, __toolPostAction: { successfulSendToSessionTarget } };
 }

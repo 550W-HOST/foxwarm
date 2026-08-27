@@ -240,7 +240,7 @@ async function main(): Promise<void> {
       assert(parent && child);
     });
 
-    await test('send_to_session plus wait stops the current turn without an extra LLM round', async () => {
+    await test('completed child report finishes idle without an extra LLM round', async () => {
       const parentId = makeSessionId('selftest_parent_wait');
       const childId = makeSessionId('selftest_child_wait');
       createdSessionIds.push(parentId, childId);
@@ -258,15 +258,10 @@ async function main(): Promise<void> {
             const sendToolCall = {
               id: 'child-report-wait',
               name: 'send_to_session',
-              args: { sessionId: parentId, message: 'child-wait-ok' },
+              args: { sessionId: parentId, message: 'child-wait-ok', afterSend: 'finish' },
             };
-            const waitCall = {
-              id: 'child-wait',
-              name: 'wait',
-              args: {},
-            };
-            await appendStubModelMessage(activeSession, [{ functionCall: sendToolCall }, { functionCall: waitCall }]);
-            return { text: '', toolCalls: [sendToolCall, waitCall] };
+            await appendStubModelMessage(activeSession, [{ functionCall: sendToolCall }]);
+            return { text: '', toolCalls: [sendToolCall] };
           }
 
           throw new Error(`child session should not receive a second LLM call, got ${childCallCount}`);
@@ -287,10 +282,11 @@ async function main(): Promise<void> {
       const parentAfterChildRun = await sessionManager.getSession(parentId);
       assert.strictEqual(childCallCount, 1);
       assert.strictEqual(childAfter.busy, false);
+      assert.strictEqual(childAfter.meta.wait, undefined);
       assert.strictEqual(parentAfterChildRun.queue.length, 1);
       assert.strictEqual(childAfter.history[childAfter.history.length - 1]?.role, 'tool');
       assert(childAfter.history.some(msg => msg.role === 'model' && msg.parts.some(part => part.functionCall?.name === 'send_to_session')));
-      assert(childAfter.history.some(msg => msg.role === 'model' && msg.parts.some(part => part.functionCall?.name === 'wait')));
+      assert(!childAfter.history.some(msg => msg.role === 'model' && msg.parts.some(part => part.functionCall?.name === 'wait')));
 
       await router.processSessionQueue(parentId);
 
@@ -822,7 +818,7 @@ async function main(): Promise<void> {
       assert.strictEqual(lastChild.role, 'model');
       assert.strictEqual(lastChild.modelVisible, false);
       assert.strictEqual(lastChild.__meta?.noticeType, 'llm-retry');
-      assert.match(lastChildText, /Attempt 5\/5 failed: simulated network failure\. No more retries\./);
+      assert.match(lastChildText, /Attempt \d+\/\d+ failed: (?:simulated network failure|\(same error\))\. No more retries\./);
       const parentAfter = await sessionManager.getSession(parentId);
       assert.strictEqual(parentAfter.queue.length, 0);
       assert(!parentAfter.history.some(msg => msg.parts.some(part => (part.text || '').includes(`Child session \`${childId}\` failed before reporting back.`))));

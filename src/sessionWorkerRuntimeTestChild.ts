@@ -127,7 +127,7 @@ async function start(): Promise<void> {
     // Cross-session hooks key on chatCount/session shape because the canonical
     // queue processor appends the user message itself; llm.chat receives no
     // parts. They emit real tool calls so the canonical tool loop exercises the
-    // facade handoff-wait post-action path (waitAfterHandoff arms the wait).
+    // facade handoff-wait post-action path (afterSend wait arms the wait).
     const crossSession = String(process.env.FOXWARM_TEST_CROSS_SESSION || '');
     const mainToolsBySession = process.env.FOXWARM_TEST_MAIN_TOOLS_BY_SESSION
       ? JSON.parse(process.env.FOXWARM_TEST_MAIN_TOOLS_BY_SESSION)
@@ -141,7 +141,7 @@ async function start(): Promise<void> {
       return { toolCalls: configuredMainTools };
     }
     if (crossSession.includes('create-child') && chatCount === 1 && !session.id.endsWith('_mp-child')) {
-      return { toolCalls: [{ name: 'create_child_session', args: { suffix: 'mp-child', message: 'hello child', waitAfterHandoff: true } }] };
+      return { toolCalls: [{ name: 'create_child_session', args: { suffix: 'mp-child', message: 'hello child', afterSend: 'wait' } }] };
     }
     if (crossSession.includes('reply') && chatCount === 1 && session.id.endsWith('_mp-child') && !session.id.endsWith('_mp-child_mp-child')) {
       const parentId = session.id.slice(0, -'_mp-child'.length);

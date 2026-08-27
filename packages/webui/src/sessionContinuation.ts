@@ -80,7 +80,10 @@ function hasOnlyEffectiveBareWaitArgs(args: any): boolean {
 function isTerminalCompletionCall(call: FunctionCall): boolean {
   if (call.name === 'wait') return hasOnlyEffectiveBareWaitArgs(call.args)
   return (call.name === 'send_to_session' || call.name === 'create_child_session')
-    && call.args?.waitAfterHandoff === true
+    && (call.args?.afterSend === 'wait'
+      || call.args?.afterSend === 'finish'
+      || call.args?.waitAfterHandoff === true
+      || call.args?.noFurtherAssistantReply === true)
 }
 
 function isTerminalToolCompletion(messages: readonly Message[], messageIndex: number): boolean {
