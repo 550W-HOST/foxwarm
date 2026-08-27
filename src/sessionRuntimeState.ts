@@ -1,7 +1,7 @@
 import type { Session } from './types';
 
 export type SessionRuntimeStateName = 'requesting-model' | 'running-tool' | 'waiting' | 'idle';
-export type SessionRuntimeWaitingFor = 'sessions' | 'exec' | 'timer';
+export type SessionRuntimeWaitingFor = 'all-sessions' | 'any-session' | 'exec' | 'input' | 'fallback';
 export type SessionRuntimeActivePhase = 'normal-turn' | 'compaction' | 'managed-step' | 'unknown';
 
 export interface SessionRuntimeActiveDetails {
@@ -26,11 +26,13 @@ export interface SessionRuntimeWaitingDetails {
   waitingFor: SessionRuntimeWaitingFor;
   reason?: string;
   waitAllSessions?: string[];
+  waitAnySessions?: string[];
   satisfiedSessions?: string[];
   pendingSessions?: string[];
   timeoutSeconds?: number;
   timeoutAt?: number;
   waitExecIds?: string[];
+  waitForInput?: true;
 }
 
 export interface SessionRuntimeState {
@@ -116,6 +118,8 @@ function deriveWaitingDetails(session: Session): SessionRuntimeWaitingDetails | 
   const satisfiedSessions = normalizeStringArray(waitAll?.satisfiedSessions) || [];
   const pendingSessions = getWaitAllPendingSessions(waitAll);
   const waitExecIds = normalizeStringArray(wait.waitExecIds);
+  const waitAnySessions = normalizeStringArray(wait.waitAnySessions);
+  const waitForInput = wait.waitForInput === true ? true : undefined;
   const timeoutSeconds = typeof wait.timeoutSeconds === 'number' && Number.isFinite(wait.timeoutSeconds) && wait.timeoutSeconds > 0
     ? wait.timeoutSeconds
     : undefined;
@@ -126,11 +130,15 @@ function deriveWaitingDetails(session: Session): SessionRuntimeWaitingDetails | 
   const reason = typeof wait.reason === 'string' && wait.reason.trim() ? wait.reason.trim() : undefined;
   let waitingFor: SessionRuntimeWaitingFor | undefined;
   if (waitAllSessions?.length) {
-    waitingFor = 'sessions';
+    waitingFor = 'all-sessions';
+  } else if (waitAnySessions?.length) {
+    waitingFor = 'any-session';
   } else if (waitExecIds?.length) {
     waitingFor = 'exec';
+  } else if (waitForInput) {
+    waitingFor = 'input';
   } else if (timeoutSeconds !== undefined) {
-    waitingFor = 'timer';
+    waitingFor = 'fallback';
   }
 
   if (!waitingFor) {
@@ -142,11 +150,13 @@ function deriveWaitingDetails(session: Session): SessionRuntimeWaitingDetails | 
     waitingFor,
     reason,
     waitAllSessions,
+    waitAnySessions,
     satisfiedSessions: waitAllSessions?.length ? satisfiedSessions : undefined,
     pendingSessions,
     timeoutSeconds,
     timeoutAt: timeoutSeconds !== undefined ? startedAt + timeoutSeconds * 1000 : undefined,
     waitExecIds,
+    waitForInput,
   };
 }
 
@@ -258,20 +268,21 @@ export function formatSessionRuntimeStateSummary(runtimeState: SessionRuntimeSta
       return 'waiting';
     }
 
-    if (waiting.waitingFor === 'sessions') {
+    if (waiting.waitingFor === 'all-sessions') {
       const total = waiting.waitAllSessions?.length || 0;
       const satisfied = waiting.satisfiedSessions?.length || 0;
-      return total > 0 ? `waiting:sessions ${satisfied}/${total}` : 'waiting:sessions';
+      return total > 0 ? `waiting:all ${satisfied}/${total}` : 'waiting:all';
     }
+
+    if (waiting.waitingFor === 'any-session') return `waiting:any ${waiting.waitAnySessions?.length || 0}`;
 
     if (waiting.waitingFor === 'exec') {
       const count = waiting.waitExecIds?.length || 0;
       return count > 0 ? `waiting:exec ${count}` : 'waiting:exec';
     }
 
-    if (waiting.waitingFor === 'timer') {
-      return waiting.timeoutSeconds !== undefined ? `waiting:timer ${waiting.timeoutSeconds}s` : 'waiting:timer';
-    }
+    if (waiting.waitingFor === 'input') return 'waiting:input';
+    if (waiting.waitingFor === 'fallback') return waiting.timeoutSeconds !== undefined ? `waiting:fallback ${waiting.timeoutSeconds}s` : 'waiting:fallback';
 
     return `waiting:${waiting.waitingFor}`;
   }

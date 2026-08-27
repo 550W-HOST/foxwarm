@@ -91,7 +91,7 @@ const defaultCompletionDispatcher: ExecCompletionDispatcher = async (entry, _sta
   if (!entry.sessionId) {
     return;
   }
-  await sessionManager.queueSessionSystemEvent(entry.sessionId, message, 'background');
+  await sessionManager.queueSessionSystemEvent(entry.sessionId, message, 'background', `exec-completion:${entry.id}`, Date.parse(_status.finishedAt), entry.id);
 };
 
 const defaultRuntime = createExecRuntime({

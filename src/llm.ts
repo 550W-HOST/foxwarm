@@ -1325,6 +1325,7 @@ type ExecutedToolCall = PreparedToolCall & {
     waitForReply: boolean;
     explicitWaitId?: string;
     successfulSendToSessionTarget?: string;
+    successfulWaitAfterHandoffTarget?: string;
     deferredExecCwdSync?: { nextCwd: string };
 };
 
@@ -1432,6 +1433,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
     let waitForReply = false;
     let explicitWaitId: string | undefined;
     let successfulSendToSessionTarget: string | undefined;
+    let successfulWaitAfterHandoffTarget: string | undefined;
     let deferredExecCwdSync: { nextCwd: string } | undefined;
 
     try {
@@ -1459,10 +1461,12 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
                 explicitWaitId = typeof result.__toolPostAction.explicitWaitId === 'string'
                     ? result.__toolPostAction.explicitWaitId
                     : undefined;
-                successfulSendToSessionTarget = prepared.call.name === 'send_to_session'
+                successfulSendToSessionTarget = (prepared.call.name === 'send_to_session' || prepared.call.name === 'create_child_session')
                     && typeof result.__toolPostAction.successfulSendToSessionTarget === 'string'
                     ? result.__toolPostAction.successfulSendToSessionTarget
                     : undefined;
+                successfulWaitAfterHandoffTarget = successfulSendToSessionTarget && prepared.call.args?.waitAfterHandoff === true && waitForReply
+                    ? successfulSendToSessionTarget : undefined;
             }
             if (result.__execBatchCwdSync && typeof result.__execBatchCwdSync.nextCwd === 'string') {
                 deferredExecCwdSync = { nextCwd: result.__execBatchCwdSync.nextCwd };
@@ -1492,6 +1496,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
         waitForReply,
         explicitWaitId,
         successfulSendToSessionTarget,
+        successfulWaitAfterHandoffTarget,
         deferredExecCwdSync,
     };
 }
@@ -1647,6 +1652,7 @@ export async function executeTools(
     let waitForReply = false;
     const explicitWaitIds: string[] = [];
     const successfulSendToSessionTargets: string[] = [];
+    const successfulWaitAfterHandoffTargets: string[] = [];
 
     for (const execution of executions) {
         let result = execution.result;
@@ -1679,6 +1685,9 @@ export async function executeTools(
         waitForReply = waitForReply || execution.waitForReply;
         if (execution.explicitWaitId) explicitWaitIds.push(execution.explicitWaitId);
         if (execution.successfulSendToSessionTarget) successfulSendToSessionTargets.push(execution.successfulSendToSessionTarget);
+        if (execution.successfulWaitAfterHandoffTarget && !successfulWaitAfterHandoffTargets.includes(execution.successfulWaitAfterHandoffTarget)) {
+            successfulWaitAfterHandoffTargets.push(execution.successfulWaitAfterHandoffTarget);
+        }
     }
 
     if (stopCurrentTurn && batchHasError) {
@@ -1697,10 +1706,11 @@ export async function executeTools(
     } else if (stopCurrentTurn) {
         logger.debug({ sessionId: toolContext.sessionId || session?.id, toolCount: functionCalls.length }, 'Suppressing stopCurrentTurn because a tool in the batch returned an error');
     }
-    if (waitForReply || successfulSendToSessionTargets.length) {
+    if (waitForReply || successfulSendToSessionTargets.length || successfulWaitAfterHandoffTargets.length) {
         (toolMessage as any).__toolPostAction = {
             ...(waitForReply ? { waitForReply: true } : {}),
             ...(successfulSendToSessionTargets.length ? { successfulSendToSessionTargets } : {}),
+            ...(successfulWaitAfterHandoffTargets.length ? { successfulWaitAfterHandoffTargets } : {}),
         };
     }
     return toolMessage;

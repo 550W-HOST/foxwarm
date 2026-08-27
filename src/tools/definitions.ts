@@ -294,26 +294,34 @@ Example:
         {
             name: 'wait',
             defaultInject: true,
-            description: 'Pause an otherwise-finished turn until new session activity arrives. User/inter-agent messages and supported session/system activity wake the session. Input received while model or tool work is still running queues until the next safe processing point under normal source boundaries. Use wait only when nothing useful remains to do or say. Omit timeoutSeconds or pass 0 to wait without a deadline; a positive timeout is a one-shot fallback wake, not polling.',
+            description: 'Pause an otherwise-finished turn until new activity arrives. Every call must declare at least one progress source or fallback. Session dependencies are expected-source metadata and do not filter ordinary wake activity. Use exact execId values, never PID or log paths. The fallback is a one-shot liveness wake, not sleep or polling.',
             parameters: {
                 type: 'object',
+                allOf: [{ not: { required: ['waitAllSessions', 'waitAnySessions'] } }],
                 properties: {
                     reason: { type: 'string', description: 'Optional short note for logs/debugging.' },
-                    timeoutSeconds: { type: 'number', description: 'Optional one-shot fallback wake in seconds, not a polling interval. Omit or pass 0 for no deadline. If no newer session activity wakes the session first, a positive timeout wakes it with a system message.' },
+                    wakeIfNoActivityAfterSeconds: { type: 'number', exclusiveMinimum: 0, description: 'Optional positive one-shot fallback wake in seconds. If no newer activity wakes the Session first, one system event wakes it. Not fixed sleep or polling.' },
                     waitAllSessions: {
                         type: 'array',
-                        description: 'Optional all-session report barrier. Omit or pass [] for an ordinary wait. Use two or more distinct session IDs only when the next step strictly requires a new report from every listed session; omit it for one-session follow-ups or independently actionable reports. Other session activity or timeout may still wake this session while the barrier remains pending.',
+                        description: 'All-session report barrier. Use at least two distinct accessible Session IDs only when every listed Session must report. Mutually exclusive with waitAnySessions. Other supported activity or fallback may still wake while the barrier remains pending.',
                         uniqueItems: true,
-                        anyOf: [{ maxItems: 0 }, { minItems: 2 }],
+                        minItems: 2,
                         items: { type: 'string', pattern: '.*\\S.*', description: 'Non-empty session ID that must report before this all-session barrier is satisfied.' }
+                    },
+                    waitAnySessions: {
+                        type: 'array', minItems: 1, uniqueItems: true,
+                        description: 'One or more accessible expected Session sources. This is liveness metadata, not target filtering; any supported activity may wake the Session.',
+                        items: { type: 'string', pattern: '.*\\S.*', description: 'Non-empty Session ID expected to make progress.' }
                     },
                     waitExecIds: {
                         type: 'array',
-                        description: 'Optional list of background exec IDs this session is waiting for. This is advisory runtime-state metadata for UI/status; omit it for an ordinary activity wait. wait({}) remains valid and pauses until new session activity arrives.',
-                        items: { type: 'string', description: 'Background exec ID to label as an expected wake source.' }
-                    }
+                        description: 'One or more exact active background/persistent execId values owned by this Session/Agent, or exact queued completions. Never use PID, log path, or command text.',
+                        minItems: 1, uniqueItems: true,
+                        items: { type: 'string', description: 'Exact execId shown by exec start/status/completion output.' }
+                    },
+                    waitForInput: { type: 'boolean', enum: [true], description: 'Set exactly true to declare an unknown external user/inter-agent/system input source and opt out of internal quiescence inference.' }
                 }
-            }
+            } as any
         },
         {
             name: 'send_to_channel',

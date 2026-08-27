@@ -92,7 +92,7 @@ test('unified wait calls reject a one-session waitAllSessions barrier', async ()
         toolId: 'builtin:wait',
         args: { waitAllSessions: ['only-child'] },
       }, { sessionId, session }),
-      /at least two distinct session IDs.*ordinary wait.*single-session follow-ups/i,
+      /at least two distinct session IDs/i,
     );
     assert.equal(session.meta.wait, undefined);
   } finally {
@@ -963,7 +963,7 @@ test('wait is the model-facing pause tool and end_turn is removed', () => {
   assert.ok(waitDef);
   assert.equal(waitDef.defaultInject, true);
   assert.equal((waitDef.parameters?.properties as any)?.reason?.type, 'string');
-  assert.equal((waitDef.parameters?.properties as any)?.timeoutSeconds?.type, 'number');
+  assert.equal((waitDef.parameters?.properties as any)?.wakeIfNoActivityAfterSeconds?.type, 'number');
   assert.equal((waitDef.parameters?.properties as any)?.waitExecIds?.type, 'array');
   assert.equal(Object.prototype.hasOwnProperty.call(waitDef.parameters?.properties || {}, 'timeoutMessage'), false);
   assert.equal(definitions.some(def => def.name === 'end_turn'), false);
@@ -974,15 +974,14 @@ test('wait schema documents session activity, active-turn queueing, and one-shot
   assert.ok(waitDef);
 
   const description = String(waitDef.description);
-  assert.match(description, /pause .* until new session activity arrives/i);
-  assert.match(description, /user\/inter-agent messages and supported session\/system activity wake the session/i);
-  assert.match(description, /model or tool work is still running.*queues.*next safe processing point.*source boundaries/i);
-  assert.match(description, /nothing useful remains to do or say/i);
-  assert.doesNotMatch(description, /event-driven/i);
+  assert.match(description, /pause .* until new activity arrives/i);
+  assert.match(description, /declare at least one progress source or fallback/i);
+  assert.match(description, /do not filter ordinary wake activity/i);
+  assert.match(description, /exact execId.*never PID or log paths/i);
 
-  const timeoutDescription = String((waitDef.parameters?.properties as any)?.timeoutSeconds?.description);
+  const timeoutDescription = String((waitDef.parameters?.properties as any)?.wakeIfNoActivityAfterSeconds?.description);
   assert.match(timeoutDescription, /one-shot fallback wake/i);
-  assert.match(timeoutDescription, /not a polling interval/i);
+  assert.match(timeoutDescription, /not fixed sleep or polling/i);
 });
 
 test('set_goal schema keeps goal optional so clear can omit it', () => {
@@ -1039,7 +1038,7 @@ test('default model-facing tool names and serialized schema size stay consolidat
   ]);
 
   const serializedBytes = Buffer.byteLength(JSON.stringify(modelFacingDefinitions), 'utf8');
-  assert.equal(serializedBytes, 36_788);
+  assert.equal(serializedBytes, 37_070);
   assert.ok(serializedBytes < 38_069, 'serialized default schema should stay below the pre-consolidation baseline');
 });
 

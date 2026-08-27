@@ -103,7 +103,7 @@ send_to_session({
 })
 ```
 
-无论 `waitAfterHandoff` 是 `true` 还是 `false`，后续回复都会正常投递；该选项只决定 handoff 成功后当前回合是否等待新的 session 活动。这个 wait 不按目标 session 过滤，也不等待任务完成。旧的 handoff + 显式 `wait({})` 方式仍然支持。
+无论 `waitAfterHandoff` 是 `true` 还是 `false`，后续回复都会正常投递；该选项只决定 handoff 成功后当前回合是否等待新的 session 活动。这个 wait 会记录已解析目标作为预期来源，但不按目标 session 过滤，也不等待任务完成。显式 `wait` 必须声明 `waitAllSessions`、`waitAnySessions`、精确的 `waitExecIds`、`waitForInput:true` 或正数 `wakeIfNoActivityAfterSeconds` 之一；不要再调用 `wait({})`。
 
 ### `wait`
 

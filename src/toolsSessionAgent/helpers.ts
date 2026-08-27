@@ -17,6 +17,8 @@ export interface ToolContext {
   /** In-process owner hook for persisting ctx.session; never serialized as a tool/RPC DTO. */
   persistCurrentSession?: () => Promise<void>;
   sessionPlacement?: 'local' | 'session-worker';
+  /** Process-local persistent exec owner used to validate exact waitExecIds. */
+  execRuntime?: import('../execManager').ExecRuntime;
   /** Internal tool-result metadata request used by the canonical turn runner. */
   captureSuccessfulSendToSessionTarget?: boolean;
   /** Current in-process turn reply metadata; never persisted or sent to remote tools. */
@@ -44,23 +46,27 @@ export function buildEndTurnResult(_reason?: string) {
   return { output: 'ok', __toolLoopControl: { stopCurrentTurn: true } };
 }
 
-export function normalizeWaitTimeoutSeconds(value: unknown): number | undefined {
+export function normalizeWaitFallbackSeconds(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') {
     return undefined;
   }
 
   const timeoutSeconds = Number(value);
   if (!Number.isFinite(timeoutSeconds)) {
-    throw new Error('timeoutSeconds must be a non-negative number.');
+    throw new Error('wakeIfNoActivityAfterSeconds must be a positive finite number.');
   }
   if (timeoutSeconds < 0) {
-    throw new Error('timeoutSeconds must be a non-negative number.');
+    throw new Error('wakeIfNoActivityAfterSeconds must be a positive finite number.');
   }
-  if (timeoutSeconds === 0) {
-    return undefined;
-  }
+  if (timeoutSeconds === 0) throw new Error('wakeIfNoActivityAfterSeconds must be greater than zero when provided.');
 
   return timeoutSeconds;
+}
+
+export function normalizeWaitForInput(value: unknown): true | undefined {
+  if (value === undefined) return undefined;
+  if (value !== true) throw new Error('waitForInput must be exactly true when provided.');
+  return true;
 }
 
 export function normalizeWaitAllSessions(value: unknown): string[] | undefined {
@@ -90,14 +96,26 @@ export function normalizeWaitAllSessions(value: unknown): string[] | undefined {
     }
   }
 
-  if (normalized.length === 0) {
-    return undefined;
-  }
+  if (normalized.length === 0) throw new Error('waitAllSessions must contain at least two Session IDs when explicitly provided.');
 
   if (normalized.length < 2) {
-    throw new Error('waitAllSessions must contain at least two distinct session IDs after trimming; omit it or pass [] for an ordinary wait, including single-session follow-ups.');
+    throw new Error('waitAllSessions must contain at least two distinct session IDs after trimming.');
   }
 
+  return normalized;
+}
+
+export function normalizeWaitAnySessions(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('waitAnySessions must be an array of session IDs.');
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !entry.trim()) throw new Error('waitAnySessions entries must be non-empty strings.');
+    const sessionId = entry.trim();
+    if (!seen.has(sessionId)) { seen.add(sessionId); normalized.push(sessionId); }
+  }
+  if (normalized.length === 0) throw new Error('waitAnySessions must contain at least one session ID.');
   return normalized;
 }
 
@@ -107,19 +125,19 @@ export function normalizeWaitExecIds(value: unknown): string[] | undefined {
   }
 
   if (!Array.isArray(value)) {
-    throw new Error('waitExecIds must be an array of exec IDs.');
+    throw new Error('waitExecIds must be an array of exact execId values. Never use a PID or log path.');
   }
 
   const normalized: string[] = [];
   const seen = new Set<string>();
   for (const entry of value) {
     if (typeof entry !== 'string') {
-      throw new Error('waitExecIds entries must be non-empty strings.');
+      throw new Error('waitExecIds entries must be non-empty exact execId strings. Never use a PID or log path.');
     }
 
     const execId = entry.trim();
     if (!execId) {
-      throw new Error('waitExecIds entries must be non-empty strings.');
+      throw new Error('waitExecIds entries must be non-empty exact execId strings. Never use a PID or log path.');
     }
 
     if (!seen.has(execId)) {
@@ -128,7 +146,8 @@ export function normalizeWaitExecIds(value: unknown): string[] | undefined {
     }
   }
 
-  return normalized.length > 0 ? normalized : undefined;
+  if (normalized.length === 0) throw new Error('waitExecIds must contain at least one exact execId when explicitly provided.');
+  return normalized;
 }
 
 export function normalizePositivePreviewLength(value: unknown, fallback: number): number {

@@ -236,7 +236,7 @@ async function start(): Promise<void> {
     }
     if (process.env.FOXWARM_TEST_WAIT_TOOL === '1' && chatCount === 3) {
       await tool_wait(
-        { reason: 'reverse wait', timeoutSeconds: 30 },
+        { reason: 'reverse wait', wakeIfNoActivityAfterSeconds: 30 },
         { sessionId: session.id, session, persistCurrentSession: () => options.currentSessionEffects.persistSession(session) } as any,
       );
       if (process.env.FOXWARM_TEST_EXTERNAL_REVERSE === '1') {

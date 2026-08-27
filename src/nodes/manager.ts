@@ -14,6 +14,8 @@ import { isReservedNodeId } from './registry';
 import { adaptLegacyRemoteNodeToolResult } from './legacyToolResultCompatibility';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from '../tools/placement';
 import { issueRemoteExecCompletionCapability, verifyRemoteExecCompletionCapability } from './sessionEventCapability';
+import { generatePersistentExecPetname } from '../../packages/shared/dist/persistentExec';
+import { PERSISTENT_EXEC_ID_COLLISION_CODE } from '../../packages/shared/dist/persistentExec';
 
 interface ToolDefinition {
   name: string;
@@ -42,7 +44,7 @@ interface ToolCall {
   sessionId: string;
   node: string;
   resolve: (result: any) => void;
-  reject: (error: string) => void;
+  reject: (error: unknown) => void;
 }
 
 interface PendingFileTransfer<T = any> {
@@ -81,7 +83,7 @@ export class NodesManager {
   private serviceEventListeners = new Set<(event: NodeServiceEvent) => void>();
   private tools: Set<string> = new Set(); // Available tools
   
-  constructor() {
+  constructor(private readonly runtimeOptions: { generateExecId?: () => string; remoteExecCollisionAttempts?: number } = {}) {
     this.setupTools();
     this.registerMasterNode();
   }
@@ -444,10 +446,8 @@ export class NodesManager {
       return await this.executeToolLocally(toolName, args, sessionId);
     }
     
-    // Execute on remote node via WebSocket
-    const callId = `call_${Date.now()}_${crypto.randomBytes(4).toString('hex').substring(0, 8)}`;
-    
-    return new Promise((resolve, reject) => {
+    const executeRemoteOnce = (backgroundExecId?: string): Promise<any> => new Promise((resolve, reject) => {
+      const callId = `call_${Date.now()}_${crypto.randomBytes(4).toString('hex').substring(0, 8)}`;
       const toolCall: ToolCall = {
         id: callId,
         name: toolName,
@@ -468,9 +468,6 @@ export class NodesManager {
       const routedCwd = routingSnapshot ? routingSnapshot.cwd : session.cwd;
       const shouldSendCwd = routedCurrentNode === nodeId && typeof routedCwd === 'string';
       const timeoutMs = 62000;
-      const backgroundExecId = toolName === 'exec'
-        ? `exec_${Date.now()}_${crypto.randomBytes(12).toString('hex')}`
-        : undefined;
       const completionCapability = backgroundExecId
         ? issueRemoteExecCompletionCapability(nodeId, sessionId, backgroundExecId)
         : undefined;
@@ -488,13 +485,24 @@ export class NodesManager {
       }));
       
       // Set timeout
-      setTimeout(() => {
+      const timeout = setTimeout(() => {
         if (this.toolCalls.has(callId)) {
           this.toolCalls.delete(callId);
           reject(`Tool call \`${callId}\` timed out`);
         }
       }, timeoutMs);
+      timeout.unref?.();
     });
+    if (toolName !== 'exec') return await executeRemoteOnce();
+    const maxAttempts = this.runtimeOptions.remoteExecCollisionAttempts || 16;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const backgroundExecId = this.runtimeOptions.generateExecId?.() || generatePersistentExecPetname();
+      try { return await executeRemoteOnce(backgroundExecId); }
+      catch (error: any) {
+        if (error?.code !== PERSISTENT_EXEC_ID_COLLISION_CODE) throw error;
+      }
+    }
+    throw new Error(`Remote persistent exec ID allocation exhausted after ${maxAttempts} owner-acknowledged collision retries.`);
   }
 
   /**
@@ -514,7 +522,7 @@ export class NodesManager {
   /**
    * Handle tool error from node
    */
-  handleToolError(callId: string, error: string): void {
+  handleToolError(callId: string, error: unknown): void {
     const call = this.toolCalls.get(callId);
     if (call) {
       this.toolCalls.delete(callId);
@@ -780,6 +788,7 @@ export class NodesManager {
       type,
       metadata.eventId,
       Number.isFinite(metadata.eventTimestamp) ? metadata.eventTimestamp : undefined,
+      metadata.execId,
     );
     logger.info({ nodeId, sessionId, type, eventId: metadata.eventId, execId: metadata.execId }, 'Session event received from remote node');
   }

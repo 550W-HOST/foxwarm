@@ -16,7 +16,7 @@ import type { SessionWorkerHistoryMutationResult, SessionWorkerSettingsPatch, Se
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 
 const MAX_INGRESS_BYTES = 1024 * 1024;
-const ITEM_KEYS = ['type', 'source', 'sourceSessionId', 'sourceSessionRelation', 'clientMessageId', 'parts', 'message', 'waitTimeoutId', 'externalEventId'];
+const ITEM_KEYS = ['type', 'source', 'sourceSessionId', 'sourceSessionRelation', 'clientMessageId', 'parts', 'message', 'waitTimeoutId', 'execId', 'waitLivenessFingerprint', 'waitLivenessWaitId', 'externalEventId'];
 const PART_KEYS = ['text', 'system', 'systemPayload', 'inlineDataRef', 'imageMeta'];
 const SOURCE_KEYS = ['platform', 'channelId', 'channelType', 'channelUserId', 'conversationId', 'username', 'senderId', 'weworkStreamId', 'qqbotMessageId', 'preferDirectReply'];
 
@@ -117,7 +117,7 @@ export function normalizeSessionWorkerIngressRequest(value: unknown): { sessionI
   const item: QueueItem = { type: type as QueueItem['type'] };
   if (hasParts) item.parts = normalizeParts(value.item.parts, 'item.parts'); else item.message = normalizeMessage(value.item.message);
   if (Object.prototype.hasOwnProperty.call(value.item, 'source')) item.source = normalizeIngressSource(value.item.source);
-  const stringFields = [['sourceSessionId', 256], ['clientMessageId', 512], ['waitTimeoutId', 256], ['externalEventId', 512]] as const;
+  const stringFields = [['sourceSessionId', 256], ['clientMessageId', 512], ['waitTimeoutId', 256], ['execId', 256], ['waitLivenessFingerprint', 128], ['waitLivenessWaitId', 256], ['externalEventId', 512]] as const;
   for (const [key, max] of stringFields) if (Object.prototype.hasOwnProperty.call(value.item, key)) item[key] = stringValue(value.item[key], `item.${key}`, max);
   if (item.source && type !== 'user') invalid('item.source is supported only for user input.');
   if (item.clientMessageId && type !== 'user') invalid('item.clientMessageId is supported only for user input.');
@@ -130,6 +130,9 @@ export function normalizeSessionWorkerIngressRequest(value: unknown): { sessionI
   }
   if (item.sourceSessionRelation && type !== 'intersession') invalid('item.sourceSessionRelation is supported only for intersession input.');
   if (item.waitTimeoutId && type !== 'background') invalid('item.waitTimeoutId is supported only for background input.');
+  if (item.execId && type !== 'background') invalid('item.execId is supported only for background input.');
+  if (item.waitLivenessFingerprint && type !== 'background') invalid('item.waitLivenessFingerprint is supported only for background input.');
+  if (item.waitLivenessWaitId && type !== 'background') invalid('item.waitLivenessWaitId is supported only for background input.');
   const bytes = Buffer.byteLength(stableSessionWorkerJson(item), 'utf8');
   if (bytes > MAX_INGRESS_BYTES) throw new RpcError('SESSION_WORKER_INGRESS_TOO_LARGE', `QueueItem exceeds the ${MAX_INGRESS_BYTES}-byte ingress bound.`);
   return { sessionId, item };

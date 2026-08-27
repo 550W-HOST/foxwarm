@@ -343,7 +343,7 @@ test('node exec rejects missing cwd with a friendly cwd-focused error', async ()
   }
 });
 
-test('node exec background timeout and completion point to a log path, not an opaque execId only', async () => {
+test('node exec background timeout and completion expose one execId plus PID and log path', async () => {
   const agentName = uniqueAgent('node_exec_bg');
   const outputToken = `remote-done-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const events: string[] = [];
@@ -367,7 +367,7 @@ test('node exec background timeout and completion point to a log path, not an op
     assert.match(resultText, new RegExp(`managed shell-script root PID ${managedPid}\\):\\nPID ${managedPid}: `));
     assert.match(resultText, /\n  PID \d+: sleep 2/);
     assert.match(resultText, /Log file: /);
-    assert.doesNotMatch(resultText, /execId:/);
+    assert.match(resultText, /execId: [a-z]+-[a-z]+/);
 
     const deadline = Date.now() + 9000;
     while (Date.now() < deadline && events.length === 0) {
@@ -387,7 +387,7 @@ test('node exec background timeout and completion point to a log path, not an op
 
 test('node exec uses the process-wide acknowledged dispatcher with durable completion metadata', async () => {
   const agentName = uniqueAgent('node_exec_global_dispatch');
-  const execId = `exec_${Date.now()}_globaldispatch`;
+  const execId = `quiet-otter`;
   const completionCapability = 'test-completion-capability';
   const events: any[] = [];
   const { setNodeToolSessionEventDispatcher } = await import('./nodeTools');
@@ -428,7 +428,7 @@ test('node startup recovery delivers a persisted finished exec without waiting f
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-exec-startup-recovery-'));
   const previousAgentDir = process.env.FOXWARM_AGENT_DIR;
   const agentName = uniqueAgent('node_exec_startup_recovery');
-  const execId = `exec_${Date.now()}_startuprecovery`;
+  const execId = `calm-heron`;
   const execDir = path.join(root, '.temp', 'exec');
   const logPath = path.join(execDir, `${execId}.log`);
   const statusPath = `${logPath}.exit.json`;

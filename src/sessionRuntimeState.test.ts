@@ -128,12 +128,12 @@ test('buildSessionRuntimeState derives waitAll pending sessions', () => {
   const runtimeState = buildSessionRuntimeState(session);
   assert.equal(runtimeState.state, 'waiting');
   assert.equal(runtimeState.since, 1000);
-  assert.equal(runtimeState.waiting?.waitingFor, 'sessions');
+  assert.equal(runtimeState.waiting?.waitingFor, 'all-sessions');
   assert.deepEqual(runtimeState.waiting?.waitExecIds, ['exec-advisory']);
   assert.deepEqual(runtimeState.waiting?.satisfiedSessions, ['child-a']);
   assert.deepEqual(runtimeState.waiting?.pendingSessions, ['child-b']);
   assert.equal(runtimeState.waiting?.timeoutAt, 31_000);
-  assert.equal(formatSessionRuntimeStateSummary(runtimeState), 'waiting:sessions 1/2');
+  assert.equal(formatSessionRuntimeStateSummary(runtimeState), 'waiting:all 1/2');
 });
 
 test('bare and reason-only waits derive idle while explicit waits derive waiting states', () => {

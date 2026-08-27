@@ -8,6 +8,9 @@ import {
   BACKGROUND_PROCESS_TREE_LIMIT,
   MAX_FULL_LOG_READ_BYTES,
   PersistentExecManager,
+  PERSISTENT_EXEC_ID_NAMESPACE_SIZE,
+  PERSISTENT_EXEC_ID_PATTERN,
+  generatePersistentExecPetname,
   formatProcessTreeSnapshot,
   truncateProcessCmdline,
   type PersistentExecManagerOptions,
@@ -32,6 +35,60 @@ function buildExecEntry(logPath: string, overrides: Partial<RunningExecEntry> = 
     ...overrides,
   };
 }
+
+test('persistent exec petnames are deterministic through the random seam and path-safe', () => {
+  const values = [0, 19];
+  const bounds: number[] = [];
+  const id = generatePersistentExecPetname(max => { bounds.push(max); return values.shift()!; });
+  assert.equal(id, 'amber-otter');
+  assert.deepEqual(bounds, [128, 264]);
+  assert.equal(PERSISTENT_EXEC_ID_NAMESPACE_SIZE, 33_792);
+  assert.match(id, PERSISTENT_EXEC_ID_PATTERN);
+  assert.doesNotMatch(id, /[\\/._\s]/);
+  assert.throws(() => generatePersistentExecPetname(() => -1), /out-of-range/);
+});
+
+test('persistent exec allocation retries registry collisions and fails closed on bounded exhaustion', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-petname-collision-'));
+  const registryPath = path.join(root, 'running-exec.json');
+  const staleLog = path.join(root, 'stale.log');
+  await fs.writeJson(registryPath, { execs: [{
+    id: 'amber-badger', pid: 999999, sessionId: 'source', agentName: 'main', nodeId: 'master', command: 'old',
+    initialCwd: root, logPath: staleLog, statusPath: `${staleLog}.exit.json`, cwdPath: `${staleLog}.cwd.txt`,
+    startedAt: Date.now(), notifyOnCompletion: true,
+  }] });
+  const sequence = [0, 0, 0, 1];
+  const manager = new PersistentExecManager({
+    getDefaultCwd: () => root, getExecTempDir: () => root, registryPath,
+    randomInt: () => sequence.shift()!, isEntryRunning: entry => entry.id === 'amber-badger',
+  });
+  const exhausted = new PersistentExecManager({
+    getDefaultCwd: () => root, getExecTempDir: () => root, registryPath,
+    randomInt: () => 0, isEntryRunning: () => true,
+  });
+  try {
+    await manager.initialize();
+    const entry = await manager.startPersistentExec({ command: 'printf ok', sessionId: 'source', agentName: 'main' });
+    assert.equal(entry.id, 'amber-beacon');
+    const status = await manager.waitForExecCompletion(entry.id, 5000);
+    assert.ok(status);
+    await manager.finalizeForegroundExec(entry.id);
+    await assert.rejects(
+      () => manager.startPersistentExec({ execId: entry.id, command: 'printf reused', sessionId: 'source', agentName: 'main' }),
+      /recent completion identity/,
+    );
+
+    await exhausted.initialize();
+    await assert.rejects(
+      () => exhausted.startPersistentExec({ command: 'printf never', sessionId: 'source', agentName: 'main' }),
+      /did not yield a unique ID after 128 attempts/,
+    );
+  } finally {
+    await manager.shutdown();
+    await exhausted.shutdown();
+    await fs.remove(root);
+  }
+});
 
 async function createManager(root: string): Promise<PersistentExecManager> {
   return new PersistentExecManager({
@@ -434,7 +491,7 @@ test('persistent exec preserves timeout partial-output boundary whitespace and r
     await fs.writeFile(logPath, noTrailingLf);
     const noLfResult = await manager.buildBackgroundTimeoutResult(entry, 7);
     assert.ok(noLfResult.startsWith(`Partial Output:\n${noTrailingLf}\n---\n`));
-    assert.match(noLfResult, /Partial output captured so far had no trailing newline\.\nPID: 4321/);
+    assert.match(noLfResult, /Partial output captured so far had no trailing newline\.\nexecId: test-exec\nPID: 4321/);
   } finally {
     await fs.remove(root);
   }
