@@ -33,6 +33,7 @@ import DiffPreview from './DiffPreview'
 import { ExecCommandText, ExecOutputText } from './ToolExecText'
 import ThreadLineButton from './ThreadLineButton'
 import { getLegacyEditLineCounts } from './legacyEditCounts'
+import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
 
 const formatToolResponseText = (resp: { response: unknown }): string => formatCompactObjectPreview(resp.response)
 
@@ -132,9 +133,11 @@ const getToolPairStatus = (responses: FunctionResponse[], imageParts: MessagePar
   return 'neutral'
 }
 
-const truncatePreviewText = (text: string, maxLength = 400): string => {
-  if (text.length <= maxLength) return text
-  return `${text.slice(0, maxLength)}...`
+const COLLAPSED_TOOL_RESULT_PREVIEW_MAX_CHARS = 800
+
+const truncateToolResultPreview = (text: string): string => {
+  if (text.length <= COLLAPSED_TOOL_RESULT_PREVIEW_MAX_CHARS) return text
+  return `${text.slice(0, COLLAPSED_TOOL_RESULT_PREVIEW_MAX_CHARS)}...`
 }
 
 export type OpenCodeFileHandler = (filePath: string, lines?: { startLine?: number; endLine?: number }) => void
@@ -146,13 +149,14 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
   prefix?: string
   collapsed?: boolean
 }) {
+  const pathFade = useThreadCardOverflowFade<HTMLSpanElement>('right', collapsed)
   const layoutClass = collapsed
     ? 'foxwarm-tool-code-path-collapsed min-w-0 max-w-full truncate whitespace-nowrap'
     : 'min-w-0 max-w-full whitespace-normal break-words'
   const pathClass = collapsed
     ? 'foxwarm-tool-code-path min-w-0 truncate whitespace-nowrap'
     : 'foxwarm-tool-code-path whitespace-normal break-words'
-  if (!onOpenCodeFile) return <span className={`${layoutClass} ${pathClass}`}>{prefix}{filePath}</span>
+  if (!onOpenCodeFile) return <span ref={pathFade.ref} {...pathFade.overflowFadeProps} className={`${layoutClass} ${pathClass}`}>{prefix}{filePath}</span>
   return (
     <span className={`foxwarm-tool-code-path-wrap ${layoutClass} ${collapsed ? 'inline-flex items-center gap-1' : ''}`}>
       {prefix}
@@ -168,7 +172,7 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
       >
         <Code2 size={13} aria-hidden="true" />
       </button>
-      <span className={pathClass}>{filePath}</span>
+      <span ref={pathFade.ref} {...pathFade.overflowFadeProps} className={pathClass}>{filePath}</span>
     </span>
   )
 })
@@ -411,36 +415,36 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
         : formatToolResponseText(resp)
     return expanded
       ? <pre className="whitespace-pre-wrap text-xs overflow-x-auto cursor-text"><SyntaxHighlightedText text={fileContent} filePath={call?.args?.filePath} /></pre>
-      : <div className="whitespace-pre-wrap break-all cursor-text">{fileContent ? <SyntaxHighlightedText text={truncatePreviewText(fileContent, 400)} filePath={call?.args?.filePath} /> : 'Completed'}</div>
+      : <div className="whitespace-pre-wrap break-all cursor-text">{fileContent ? <SyntaxHighlightedText text={truncateToolResultPreview(fileContent)} filePath={call?.args?.filePath} /> : 'Completed'}</div>
   }
 
   if (resp.name === 'edit' && getToolResponseStatus(resp) !== 'success') {
     const raw = formatToolResponseText(resp)
-    const preview = raw.length > 400 ? `${raw.substring(0, 400)}...` : raw
+    const preview = truncateToolResultPreview(raw)
     return <pre className="whitespace-pre-wrap break-all cursor-text text-red-700 dark:text-red-300">{expanded ? raw : preview}</pre>
   }
 
   if (resp.name === 'exec') {
     if (typeof resp.response?.output === 'string') {
       const output = resp.response.output
-      const preview = truncatePreviewText(output, 400)
+      const preview = truncateToolResultPreview(output)
       const displayStr = expanded ? output : preview
       return <div className="whitespace-pre-wrap break-all cursor-text" style={{ lineHeight: '1.3em' }}><ExecOutputText text={displayStr} command={call?.args?.command} /></div>
     }
     const raw = formatToolResponseText(resp)
-    const preview = truncatePreviewText(raw, 400)
+    const preview = truncateToolResultPreview(raw)
     return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? raw : preview}</div>
   }
 
   const download = getSendFileDownload(call, resp)
   const primaryText = formatToolResponseText(resp)
   if (primaryText && isInterSessionToolName(resp.name)) {
-    const preview = truncatePreviewText(primaryText, 400)
+    const preview = truncateToolResultPreview(primaryText)
     return <div className="whitespace-pre-wrap break-all cursor-text">{renderSystemTextWithSessionLinks(expanded ? primaryText : preview)}</div>
   }
 
   if (download) {
-    const preview = truncatePreviewText(primaryText, 400)
+    const preview = truncateToolResultPreview(primaryText)
     return (
       <div className="space-y-2">
         <ToolDownloadButton url={download.url} fileName={download.fileName} />
@@ -450,7 +454,7 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
   }
 
   if (primaryText) {
-    const preview = truncatePreviewText(primaryText, 400)
+    const preview = truncateToolResultPreview(primaryText)
     return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? primaryText : preview}</div>
   }
 
@@ -459,7 +463,7 @@ const renderToolResponseContent = (resp: FunctionResponse, expanded: boolean, ca
   }
 
   const respFormatted = formatToolResponseText(resp)
-  const preview = truncatePreviewText(respFormatted, 400)
+  const preview = truncateToolResultPreview(respFormatted)
   return <div className="whitespace-pre-wrap break-all cursor-text">{expanded ? respFormatted : preview}</div>
 }
 
@@ -526,7 +530,7 @@ const renderToolScriptResultContent = (resp: FunctionResponse, expanded: boolean
   if (!primaryText) {
     return null
   }
-  const displayText = expanded ? primaryText : truncatePreviewText(primaryText, 400)
+  const displayText = expanded ? primaryText : truncateToolResultPreview(primaryText)
   return (
     <div className="space-y-1">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">ToolScript result</div>
@@ -550,6 +554,9 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
 }) {
   const [expanded, setExpanded] = useState(false)
   const [viewMode, setViewMode] = useState<ToolViewMode>('default')
+  const headerFade = useThreadCardOverflowFade<HTMLDivElement>('right', !expanded && viewMode === 'default' && call?.name !== 'read' && call?.name !== 'write' && call?.name !== 'edit' && call?.name !== 'apply_patch')
+  const resultFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !expanded && viewMode === 'default')
+  const jsonFade = useThreadCardOverflowFade<HTMLPreElement>('bottom', !expanded && viewMode === 'json')
   const [diffViewMode, setDiffViewMode] = useState<'unified' | 'split'>(() => {
     return (localStorage.getItem('diffViewMode') as 'unified' | 'split') || 'unified'
   })
@@ -640,7 +647,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
         }}
       >
         <ToolTag name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
-        {includeCallPreview && call && <div className={`foxwarm-tool-call-summary min-w-0 max-w-full flex-1 ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile })}</div>}
+        {includeCallPreview && call && <div ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-tool-call-summary min-w-0 max-w-full flex-1 ${call.name === 'read' ? 'flex text-[13px] leading-[18px]' : THREAD_CARD_HEADER_PREVIEW_CLASS}`}>{renderToolCallPreview(call, { partial: partialToolCall, onOpenCodeFile })}</div>}
       </div>
       {includeExpandedCall && expandedCallContent && (
         <div className="foxwarm-tool-call-args min-w-0 max-w-full pt-1 pr-2" onClick={(e) => e.stopPropagation()}>
@@ -668,13 +675,13 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
       {viewMode === 'json' ? (
         <div className={baseTextClass}>
           {header()}
-          <pre className="mt-2 whitespace-pre-wrap break-all cursor-text" onClick={(e) => e.stopPropagation()} style={expanded ? undefined : clampContentStyle(6)}>{jsonText}</pre>
+          <pre ref={jsonFade.ref} {...jsonFade.overflowFadeProps} className="mt-2 whitespace-pre-wrap break-all cursor-text" onClick={(e) => e.stopPropagation()} style={expanded ? undefined : { ...clampContentStyle(6), ...jsonFade.overflowFadeProps.style }}>{jsonText}</pre>
         </div>
       ) : !expanded ? (
         <div className={baseTextClass}>
           <div className="space-y-1">
             {header(true)}
-            {responsePreview && !hasToolScriptProgress && <div className="foxwarm-tool-result-preview pr-2 text-gray-700 dark:text-gray-300" style={clampContentStyle(3)}>{responsePreview}</div>}
+            {responsePreview && !hasToolScriptProgress && <div ref={resultFade.ref} {...resultFade.overflowFadeProps} className="foxwarm-tool-result-preview pr-2 text-gray-700 dark:text-gray-300" style={{ ...clampContentStyle(3), ...resultFade.overflowFadeProps.style }}>{responsePreview}</div>}
             {hasToolScriptProgress && <ToolScriptSubCallsTags subCalls={toolScriptSubCalls!} />}
           </div>
         </div>
