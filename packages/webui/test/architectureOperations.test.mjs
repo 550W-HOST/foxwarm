@@ -10,6 +10,7 @@ const {
   getArchitectureNodePreview,
   groupArchitectureSessionsByNode,
   matchesArchitectureStatus,
+  orderArchitectureAgents,
 } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)
 
 const sessions = [
@@ -55,4 +56,21 @@ test('bounded node previews keep selected and active sessions visible before ord
   assert.deepEqual(getArchitectureNodePreview(rows, new Set(['selected']), 3).map(item => item.id), [
     'selected', 'active', 'idle-1',
   ])
+})
+
+test('Agent registry ordering is stable across selection and keeps empty workspaces last', () => {
+  const agents = [
+    { id: 'empty-b', activeSessionCount: 0, sessionCount: 0 },
+    { id: 'populated-b', activeSessionCount: 0, sessionCount: 2 },
+    { id: 'active', activeSessionCount: 1, sessionCount: 1 },
+    { id: 'main', activeSessionCount: 0, sessionCount: 4 },
+    { id: 'empty-a', activeSessionCount: 0, sessionCount: 0 },
+    { id: 'populated-a', activeSessionCount: 0, sessionCount: 1 },
+  ]
+  assert.deepEqual(orderArchitectureAgents(agents).map(agent => agent.id), [
+    'main', 'active', 'populated-a', 'populated-b', 'empty-a', 'empty-b',
+  ])
+  assert.deepEqual(agents.map(agent => agent.id), [
+    'empty-b', 'populated-b', 'active', 'main', 'empty-a', 'populated-a',
+  ], 'ordering does not mutate the fetched registry')
 })
