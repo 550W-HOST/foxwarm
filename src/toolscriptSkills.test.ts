@@ -71,12 +71,11 @@ test('global ToolScript skills are visible and loadable', async () => {
 
   const webSearch = await loadSkillDocuments('web-search', { agentName: 'main' });
   assert.match(webSearch.documents[0].content, /direct CLI.*forbidden from isolated/is);
-  assert.match(webSearch.documents[0].content, /mcp:betabot-web-search\/web_search/);
+  assert.match(webSearch.documents[0].content, /web search is unavailable there/i);
   assert.match(webSearch.documents[0].content, /no secrets, credentials, private data/i);
   assert.match(webSearch.documents[0].content, /untrusted external reference/i);
   assert.ok(webSearch.info.resourceFiles.includes('web-search.js'));
-  assert.ok(webSearch.info.resourceFiles.includes('web-search-mcp.js'));
-  assert.ok(webSearch.info.resourceFiles.includes('web-search-mcp.test.js'));
+  assert.ok(webSearch.info.resourceFiles.includes('web-search.test.js'));
 
   const mcpManagement = await loadSkillDocuments('mcp-management', { agentName: 'main' });
   const mcpText = mcpManagement.documents[0].content;
