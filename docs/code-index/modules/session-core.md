@@ -45,7 +45,7 @@ Active history transformation, compaction, archive-store, and vector retrieval a
 ## Data ownership
 
 - `state/catalog.sqlite` is the Main-owned identity/topology/list projection. Its cross-module admission rule is canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
-- `state/sessions/<id>.json` owns versioned authoritative full semantic session state: durable history, queue, wait/managed metadata, the optional child-handoff reminder boundary, prompt snapshot/cache key, message provenance, settings, and worker mailbox cursor. Unversioned legacy files receive a one-time tolerant upgrade; current-version hydration replaces semantic fields rather than merging stale catalog values. Per-session files use durable serialized replacement without numbered rotation.
+- `state/sessions/<id>.json` owns versioned authoritative full semantic session state: durable history, queue, `busy`/`busyStartedAt`/`stopping`, wait/managed metadata, the optional child-handoff reminder boundary, prompt snapshot/cache key, message provenance, settings, and worker mailbox cursor. Unversioned legacy files receive a one-time tolerant upgrade; current-version hydration replaces semantic fields rather than merging stale catalog values. Per-session files use durable serialized replacement without numbered rotation.
 - `state/channels.json` owns channel attachments.
 - `state/session-runtime.sqlite` owns Session-worker generations, incarnations, mailbox intents, and acknowledged mailbox cursors when process placement is enabled; it never owns semantic Session state.
 - `state/sessions/<id>.json` additionally persists `lastAppliedMailboxId`; worker placement must durably replace this authoritative file before SQLite acknowledges the corresponding ordered session-local mailbox prefix.
@@ -57,6 +57,8 @@ The durable JSON implementation and backup semantics are canonical in [src-utils
 ## Invariants
 
 - Queue processing is serialized per session. `busy` remains the concurrency/recovery flag, while `runtimeState` is the canonical display phase.
+- Local busy claims and releases are authoritative JSON transitions followed by catalog projection updates. A successful release must durably clear `busyStartedAt`; the catalog must never be the only persistence boundary for an authority-owned busy transition.
+- Main local-owner authority→catalog saves share one bounded per-Session process-local save lane. Local standalone compaction also uses one transient ingress admission around final release: admitted ingress drains first, then release acquires the save lane, captures/stages idle authority while the shared live Session remains busy, and opens waiting ingress only after release handling. On commit, finalization patches only its owned busy/stopping fields in live state; concurrent setter mutations wait in the lane and subsequently persist the complete current live owner. Neither lane nor admission is another durable queue or ownership ledger.
 - Per-session JSON is authoritative for semantic state. Catalog-only presentation fields are not inferred from authority files when the catalog is missing.
 - A managed session has at most one live lease. Input addressed to an actively managed target enters its managed inbox.
 - When either side is isolated, inter-session delivery requires the same session or an explicit direct parent/child relation; unrelated and sibling sessions are denied.
@@ -81,7 +83,7 @@ The durable JSON implementation and backup semantics are canonical in [src-utils
 
 ### D-session-core-authoritative-history
 
-Per-session JSON is authoritative for full semantic Session state. The Main-owned catalog may contain UI-only fields intentionally excluded from semantic state. Catalog storage and scaling are canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary); cross-process save-before-mailbox-ack ordering is canonical in [D-process-topology-session-state-authority](../threads/process-topology-and-rpc.md#d-process-topology-session-state-authority).
+Per-session JSON is authoritative for full semantic Session state, including busy concurrency/recovery fields. Local busy claim/release persistence commits that authority before updating its catalog projection; a catalog postcommit failure must not roll the live owner behind already committed JSON. The Main-owned catalog may contain UI-only fields intentionally excluded from semantic state. Catalog storage and scaling are canonical in [D-main-catalog-indexed-boundary](../threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary); cross-process save-before-mailbox-ack ordering is canonical in [D-process-topology-session-state-authority](../threads/process-topology-and-rpc.md#d-process-topology-session-state-authority).
 
 ### D-session-core-runtime-state
 
