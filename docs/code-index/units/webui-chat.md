@@ -1,6 +1,6 @@
 # Unit: WebUI Chat
 
-Files: packages/webui/src/components/Chat.tsx, packages/webui/src/components/SessionDebugModal.tsx, packages/webui/src/components/ContextScrollbar.tsx, packages/webui/src/components/contextScrollbarModel.ts, packages/webui/src/chatHistoryState.ts, packages/webui/src/chatViewportState.ts, packages/webui/src/sessionContinuation.ts, packages/webui/src/sessionHeader.ts, packages/webui/src/modelOptionsLoader.ts, packages/webui/test/sessionContinuation.test.mjs, packages/webui/test/debugSnapshot.e2e.mjs, packages/webui/test/chatHistoryState.test.mjs, packages/webui/test/chatHistoryLoading.e2e.mjs, packages/webui/test/chatViewportState.test.mjs, packages/webui/test/contextScrollbarModel.test.mjs, packages/webui/test/contextScrollbar.e2e.mjs, packages/webui/test/sessionHeader.test.mjs, packages/webui/test/modelOptionsLoader.test.mjs, packages/webui/test/sessionHeader.e2e.mjs, packages/webui/test/scrollState.e2e.mjs, packages/webui/test/streamFollow.e2e.mjs
+Files: packages/webui/src/components/Chat.tsx, packages/webui/src/components/SessionDebugModal.tsx, packages/webui/src/components/ContextScrollbar.tsx, packages/webui/src/components/contextScrollbarModel.ts, packages/webui/src/chatHistoryState.ts, packages/webui/src/chatViewportState.ts, packages/webui/src/sessionContinuation.ts, packages/webui/src/sessionHeader.ts, packages/webui/src/modelOptionsLoader.ts, packages/webui/test/sessionContinuation.test.mjs, packages/webui/test/debugSnapshot.e2e.mjs, packages/webui/test/chatHistoryState.test.mjs, packages/webui/test/chatHistoryLoading.e2e.mjs, packages/webui/test/chatViewportState.test.mjs, packages/webui/test/contextScrollbarModel.test.mjs, packages/webui/test/contextScrollbar.e2e.mjs, packages/webui/test/sessionHeader.test.mjs, packages/webui/test/modelOptionsLoader.test.mjs, packages/webui/test/sessionHeader.e2e.mjs, packages/webui/test/scrollState.e2e.mjs, packages/webui/test/lazyTimelineRestore.e2e.mjs, packages/webui/test/streamFollow.e2e.mjs
 Secondary files: packages/webui/src/components/ProcessingStatus.tsx, packages/webui/src/contextScrollbarSettings.ts
 
 ## Purpose
@@ -43,7 +43,7 @@ Owns one mounted session's committed history, queued preview, runtime/model snap
 - Streaming follow is an explicit latch. Upward wheel/keyboard/touch/scrollbar intent detaches before a token/layout update can undo it.
 - Only actual-bottom tolerance or the bottom action re-enables follow.
 - Remount state is in-memory by canonical session ID: either `bottom` or a stable committed-message anchor plus pixel offset.
-- Restoration can expand the full timeline, uses idempotent row-offset correction, retains native browser scroll anchoring, and is cancelled by new user scroll input.
+- Restoration can expand the full timeline, uses idempotent row-offset correction, retains native browser scroll anchoring, and is cancelled by new user scroll input. Lazy prepend restoration captures a small ordered set of visible and nearby stable row candidates because Tool grouping may remove the leading sliced response row after its hidden call predecessor mounts. It tries surviving candidates in order, then preserves the viewport by the exact scroll-height prepend delta when none survives; this transient recovery never substitutes a bottom state and adopts a newly visible stable anchor for later resize correction when available.
 - A ResizeObserver reapplies active bottom/anchor state for late layout changes.
 - The composer spacer tracks only real composer layout. Slash-command suggestions overlay above the form and therefore do not alter the spacer or disturb an attached bottom-follow viewport.
 - Desktop reserves a 32px context-overview gutter inside the native message scroller: the track is positioned at the scroll container's outer right edge while the inner timeline content reserves 32px on its right, so message cards do not run beneath it. The shell is transparent over the timeline while the track retains its semantic scrollbar surface. The overview represents full committed history even while Chat initially mounts only the newest timeline rows. Its custom pointer interaction requests a native-container scroll and uses the existing explicit-user-intent latch; it never creates a second scroll owner or writes during passive geometry updates.
@@ -71,6 +71,8 @@ Busy-time sends avoid a duplicate optimistic committed row; queue preview is rel
 ### D-chat-user-follow-intent
 
 Token/layout growth cannot override explicit upward user intent. Rejoin occurs only at the actual bottom or by explicit action.
+
+Lazy full-timeline expansion is part of that same user-intent contract: a regrouped or otherwise missing transient prepend anchor preserves geometry rather than falling back to bottom. Normal stored session/remount restoration retains its compact bottom-or-anchor state.
 
 ### D-chat-ephemeral-viewport
 

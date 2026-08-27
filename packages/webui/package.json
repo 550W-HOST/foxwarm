@@ -25,6 +25,7 @@
     "test:legacy-edit-counts-e2e": "node --test test/legacyEditCounts.e2e.mjs",
     "test:code-frame-overlay-e2e": "node --test test/codeFrame550aOverlay.e2e.mjs",
     "test:scroll-e2e": "node --test test/scrollState.e2e.mjs",
+    "test:lazy-timeline-restore-e2e": "node --test test/lazyTimelineRestore.e2e.mjs",
     "test:stream-follow-e2e": "node --test test/streamFollow.e2e.mjs",
     "test:session-list-e2e": "node --test test/sessionListLiveRefresh.e2e.mjs",
     "test:bounded-session-list": "node --test test/boundedSessionList.test.mjs test/boundedSessionReplay.test.mjs",
