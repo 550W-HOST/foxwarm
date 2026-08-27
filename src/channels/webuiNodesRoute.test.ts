@@ -13,6 +13,7 @@ import {
   resetNodeRegistryForTests,
   setNodeRegistryStoreForTests,
 } from '../nodes/registry';
+import { CURRENT_NODE_PROTOCOL_RANGE, LEGACY_NODE_PROTOCOL_RANGE, negotiateNodeProtocol } from '../../packages/shared/dist/nodeProtocol';
 
 const TEST_TOKEN = 'nodes-route-token';
 
@@ -28,6 +29,8 @@ async function approveNode(nodeId: string, services: Record<string, number>): Pr
       tools: [{ name: 'private-tool', description: 'must not leave the backend' }],
       services,
     },
+    nodeProtocol: CURRENT_NODE_PROTOCOL_RANGE,
+    legacyProtocol: false,
   });
   await approvePendingPairing(pending.id, nodeId);
 }
@@ -52,10 +55,10 @@ test('WebUI nodes route exposes only public launcher capability summaries', asyn
       tools: [{ name: 'private-tool', description: 'must not leave the backend' }],
       services: { 'vscode-fs': 1, 'vscode-git': 2, 'vscode-pty': 1, 'private-service': 9 },
     }, 'capable-node');
-    nodesManager.registerNodeWithTools({ send() {}, close() {} } as any, {} as any, 'cli-node', {
+    nodesManager.registerIncompatibleNodeWithTools({ send() {}, close() {} } as any, {} as any, 'cli-node', {
       tools: [{ name: 'private-tool', description: 'must not leave the backend' }],
       services: { 'vscode-fs': 1 },
-    }, 'incompatible-node');
+    }, negotiateNodeProtocol(LEGACY_NODE_PROTOCOL_RANGE, CURRENT_NODE_PROTOCOL_RANGE, true), 'incompatible-node');
 
     new WebUIChannel({ router: {} as any, token: TEST_TOKEN, enableTrigger: false, enableWebUI: true });
     await server.start();
@@ -77,7 +80,10 @@ test('WebUI nodes route exposes only public launcher capability summaries', asyn
       'vscode-git': 2,
       'vscode-pty': 1,
     });
-    assert.equal(payload.nodes.find((node: any) => node.id === 'incompatible-node').services['vscode-pty'], undefined);
+    const incompatible = payload.nodes.find((node: any) => node.id === 'incompatible-node');
+    assert.equal(incompatible.online, true);
+    assert.deepEqual(incompatible.services, {});
+    assert.equal(incompatible.protocolCompatibility.status, 'upgrade-required');
     assert.equal(payload.nodes.find((node: any) => node.id === 'offline-node').online, false);
     assert.deepEqual(payload.nodes.find((node: any) => node.id === 'offline-node').services, {
       'vscode-fs': 1,

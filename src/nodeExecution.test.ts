@@ -55,6 +55,50 @@ test('bound reverse Node handler rejects wrong source before lookup or effect', 
   } finally { (sessionManager as any).getExistingSession = originalLookup; await transport.drain(); transport.close(); }
 });
 
+test('protocol-incompatible Nodes stay visible but list, select, and dispatch fail before provider invocation', async () => {
+  const sourceId = makeId('node_protocol_source');
+  await sessionManager.getSession(sourceId);
+  let invocations = 0;
+  const unavailableNode: NodeProviderDescriptor = {
+    id: 'old-node', kind: 'remote', provider: 'protocol-test', type: 'cli-node', availability: 'error', tools: [],
+    unavailable: {
+      code: 'NODE_PROTOCOL_INCOMPATIBLE',
+      message: 'Node `old-node` is connected but requires a client upgrade.',
+      retryable: false,
+    },
+    protocolCompatibility: {
+      status: 'upgrade-required', client: { min: 1, max: 1 }, master: { min: 2, max: 2 }, legacyClient: true,
+    },
+  };
+  const descriptor: NodeProvider = {
+    id: 'protocol-test',
+    listNodes: async () => [unavailableNode],
+    getNode: async nodeId => nodeId === unavailableNode.id ? unavailableNode : undefined,
+    invokeTool: async () => { invocations += 1; return null; },
+  };
+  const providers = new NodeProviderRegistry([descriptor]);
+  const registry = new RpcServiceRegistry();
+  registry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ providerRegistry: providers }));
+  const transport = new LocalRpcTransport(registry);
+  const client = new RpcClient(nodeExecutionServiceDescriptor, transport);
+  try {
+    const listed = await client.call('list', { sourceSessionId: sourceId });
+    assert.equal(listed.nodes[0]?.availability, 'error');
+    assert.equal(listed.nodes[0]?.unavailable?.code, 'NODE_PROTOCOL_INCOMPATIBLE');
+    assert.equal(listed.nodes[0]?.protocolCompatibility?.status, 'upgrade-required');
+    await assert.rejects(() => client.call('select', { sourceSessionId: sourceId, nodeId: 'old-node' }), {
+      code: 'NODE_PROTOCOL_INCOMPATIBLE', retryable: false,
+    });
+    await assert.rejects(() => client.call('execute', { sourceSessionId: sourceId, nodeId: 'old-node', toolName: 'exec', args: {} }), {
+      code: 'NODE_PROTOCOL_INCOMPATIBLE', retryable: false,
+    });
+    assert.equal(invocations, 0);
+  } finally {
+    await transport.drain(); transport.close();
+    await cleanup(sourceId);
+  }
+});
+
 test('Node compound copy keeps bytes inside Main for master and remote sources', async () => {
   const sourceId = makeId('node_copy_source');
   await sessionManager.getSession(sourceId);

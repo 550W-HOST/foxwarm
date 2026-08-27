@@ -17,7 +17,7 @@ Manages a persistent registry of approved nodes and pending pairing requests. Ha
 - `rejectPendingPairing(pendingId, reason?)` — rejects and notifies client
 - `claimApprovedPairing(pendingId)` — retrieves credentials for offline-approved pairings
 - `listPendingPairings()` — returns pending pairings with connection status
-- `listApprovedNodes()` — returns all approved nodes sorted by ID
+- `listApprovedNodes()` — returns all approved nodes sorted by ID with compatibility recomputed against the current Master range
 - `removeApprovedNode(nodeId)` — deletes an approved node record and any unclaimed approved pending claim for that node
 - `moveApprovedNode(oldNodeId, newNodeId)` — renames an approved node record while preserving auth hash/capabilities/metadata
 - `cleanupExpiredPendingPairings(now?)` — removes stale pairings and their associated nodes
@@ -79,6 +79,7 @@ Manages a persistent registry of approved nodes and pending pairing requests. Ha
 - Administrative removal deletes the approved credential record and also clears matching unclaimed approved-pending entries so an offline-approved node cannot later claim removed credentials.
 - Administrative rename preserves the approved record's token hash/capabilities/metadata under the new id and updates matching unclaimed approved-pending entries; it does not update already-written node-side credentials.
 - Capability snapshots persist optional versioned backend `services` alongside model tool definitions so reconnect/list metadata reflects Code FS/Git support.
+- Pending and approved records persist the last advertised core Node-protocol range and compatibility status. Missing historical metadata is read as legacy generation 1; list status is recomputed against the running Master range rather than trusting an old verdict.
 
 ## Integration
 

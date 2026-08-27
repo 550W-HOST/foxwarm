@@ -7,6 +7,7 @@ import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
 import { COMPACT_KEEP_PERCENT, HTTP_PORT, MODEL_EFFORTS, resolveModelConfig, type ModelEffort } from '../config';
 import { commandSessionMessageCount, type CommandSession } from './types';
+import { CURRENT_NODE_PROTOCOL_RANGE, LEGACY_NODE_PROTOCOL_RANGE, negotiateNodeProtocol } from '../../packages/shared/dist/nodeProtocol';
 
 export function formatTimerDate(timestamp?: number | null): string {
   if (!timestamp) return 'n/a'
@@ -313,7 +314,8 @@ export async function buildNodeListReply(currentNode: string, boundNode?: string
   reply += '\n**Available Nodes**\n'
   for (const node of available) {
     const currentMarker = currentNode === node.id ? '✅ ' : ''
-    reply += `- ${currentMarker}\`${node.id}\` [${node.kind}; ${node.type}] ${node.availability}\n`
+    const reason = node.unavailable ? ` ⚠️ ${node.unavailable.code}: ${node.unavailable.message}` : ''
+    reply += `- ${currentMarker}\`${node.id}\` [${node.kind}; ${node.type}] ${node.availability}${reason}\n`
   }
   if (available.length === 0) reply += '- (No nodes are currently available)\n'
 
@@ -323,7 +325,12 @@ export async function buildNodeListReply(currentNode: string, boundNode?: string
     reply += '- (No approved remote nodes yet)\n'
   } else {
     for (const node of approved) {
-      const online = nodesManager.getNode(node.nodeId) ? '✅ online' : 'offline'
+      const runtimeNode = nodesManager.getNode(node.nodeId)
+      const connected = !!runtimeNode
+      const compatibility = runtimeNode?.protocolCompatibility || node.protocolCompatibility
+      const online = compatibility?.status === 'upgrade-required'
+        ? `${connected ? '⚠️ connected' : 'offline'} · upgrade required`
+        : connected ? '✅ online' : 'offline'
       const requestedName = node.requestedName && node.requestedName !== node.nodeId ? ` requested=\`${node.requestedName}\`` : ''
       const lastSeen = node.lastSeenAt ? ` lastSeen=${new Date(node.lastSeenAt).toLocaleString()}` : ''
       const currentMarker = currentNode === node.nodeId ? '✅ ' : ''
@@ -340,7 +347,14 @@ export async function buildNodeListReply(currentNode: string, boundNode?: string
         ? ` requested=\`${entry.requestedName}\`` : ''
       const connected = entry.connected ? ' ✅ online' : ' offline'
       const approvedMarker = entry.approvedNodeId ? ` approved→\`${entry.approvedNodeId}\`` : ''
-      reply += `- \`${entry.id}\` [${entry.nodeType}] code=\`${entry.pairCode}\`${requestedName}${connected}${approvedMarker}\n`
+      const compatibility = (entry.approvedNodeId ? nodesManager.getNode(entry.approvedNodeId)?.protocolCompatibility : undefined)
+        || negotiateNodeProtocol(
+          entry.nodeProtocol || LEGACY_NODE_PROTOCOL_RANGE,
+          CURRENT_NODE_PROTOCOL_RANGE,
+          entry.legacyProtocol ?? entry.nodeProtocol === undefined,
+        )
+      const protocol = compatibility.status === 'compatible' ? ` protocol=v${compatibility.negotiated}` : ' ⚠️ upgrade required'
+      reply += `- \`${entry.id}\` [${entry.nodeType}] code=\`${entry.pairCode}\`${requestedName}${connected}${approvedMarker}${protocol}\n`
     }
   }
 

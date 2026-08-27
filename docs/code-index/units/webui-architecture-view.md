@@ -28,13 +28,13 @@ Renders a bounded system-operations dashboard and persistent Agent registry for 
 
 - The primary surface is execution-node lanes, not a second recursive navigation tree.
 - Effective placement is the active tool's `executionNode`, otherwise `currentNode`, otherwise `master`. This makes cross-node tool execution visible while it is occurring.
-- `/nodes` supplies Master/CLI Node identity, online state, type, display name, and service count. Unknown placement IDs remain visible as unavailable node lanes rather than disappearing.
+- `/nodes` supplies Master/CLI Node identity, transport state, core protocol compatibility, type, display name, and service count. Connected incompatible Nodes remain visible as amber `upgrade required` lanes, do not count as ready, and are disabled as isolation targets. Unknown placement IDs remain visible as unavailable node lanes rather than disappearing.
 - Each lane reports loaded, active, and waiting counts. A preview shows at most six rows while prioritizing current/selected and active sessions; expanding a large lane exposes all loaded rows inside a node-owned scroll region capped at 360px so one busy node cannot push every later node far down the page.
 - Empty nodes remain as compact headers, preserving system topology without tall empty placeholder bodies.
 
 ### Operations and inspector
 
-- Summary cards expose agents, sessions, active, waiting, queued, online nodes, and managed-session count. Active/waiting/queued summary cards also set the local status filter.
+- Summary cards expose agents, sessions, active, waiting, queued, protocol-ready nodes, and managed-session count. Active/waiting/queued summary cards also set the local status filter.
 - One compact topology control bar replaces unbounded Agent/status chip clouds: search and bounded Agent/status selects occupy the primary control area, while total/cached/input/output token traffic forms one read-only trailing group. Agent selection remains backend-owned. Local filters cover all, active, waiting, queued, and isolated rows; search matches session ID/name, agent, effective node, model, active tool, and wait kind.
 - Clicking a session selects it for inspection without navigation. The explicit Open control enters the chat Session.
 - The inspector shows canonical runtime state/phase/model/queue, active tool and arguments, wait condition and pending targets, agent/node/CWD/isolation, messages/activity/tokens, and loaded parent/child relationships.

@@ -1,6 +1,6 @@
 # Unit: CLI node client
 
-Files: packages/cli-node/src/client.ts, packages/cli-node/src/nodePtyService.ts, packages/cli-node/src/nodePtyService.test.ts, packages/cli-node/scripts/build-bundle.js, packages/cli-node-runtime/package.json, packages/cli-node-runtime/package-lock.json
+Files: packages/cli-node/src/client.ts, packages/cli-node/src/nodeProtocolCompatibility.test.ts, packages/cli-node/src/nodePtyService.ts, packages/cli-node/src/nodePtyService.test.ts, packages/cli-node/scripts/build-bundle.js, packages/cli-node-runtime/package.json, packages/cli-node-runtime/package-lock.json
 
 ## Purpose
 
@@ -38,6 +38,7 @@ Implements the full remote Node.js client: pairing/authenticated WebSocket conne
 ## Behavior
 
 - Pairing mode sends `pair_request`; approved credentials are saved and the socket reconnects in authenticated mode before `node_register`.
+- Both messages advertise the current core Node-protocol range. The client validates Master's selected/range response before starting persistent-exec recovery. A legacy or disjoint Master response emits a clear incompatible status, closes the unusable transport, and suppresses automatic reconnect until update/restart; a future Master quarantine response is retained for operator diagnosis. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
 - Authentication failure clears local credentials and returns to pairing behavior.
 - Client heartbeat sends WebSocket ping frames every 30 seconds, expects pong within 10 seconds, and reconnects after a 5-second delay.
 - Model tool calls resolve against shared `nodeTools`, explicitly use the shared native file-operations backend in the CLI process, and may be rejected/timed out by `toolCallInterceptor`.
