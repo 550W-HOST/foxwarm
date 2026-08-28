@@ -1881,6 +1881,7 @@ export class WebUIChannel implements Channel {
                   online: !!runtime,
                   lastSeenAt: approved.lastSeenAt,
                   services: pickWebUiNodeLaunchServices(runtime?.services || approved.capabilities?.services),
+                  protocolCompatibility: runtime?.protocolCompatibility || approved.protocolCompatibility,
                 };
               }),
             ];

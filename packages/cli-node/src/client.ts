@@ -12,6 +12,11 @@ import WebSocket from 'ws';
 import { initializeNodeToolExecRecovery, nodeTools, setNodeToolSessionEventDispatcher, type NodeSessionEventMetadata } from '../../shared/dist/nodeTools';
 import { nativeFileOperations } from '../../shared/dist/fileOperations';
 import { CLI_NODE_CAPABILITIES } from '../../shared/dist/nodeCapabilities';
+import {
+  CURRENT_NODE_PROTOCOL_RANGE,
+  negotiateNodeProtocol,
+  resolveAdvertisedNodeProtocol,
+} from '../../shared/dist/nodeProtocol';
 import { readNodeTransferFile, writeNodeTransferFile } from '../../shared/dist/nodeFileTransfer';
 import { executeVscodeNodeService, serializeVscodeNodeServiceError, VSCODE_NODE_SERVICE_VERSIONS, type VscodeNodeServiceName } from '../../shared/dist/vscodeNodeService';
 import { createMasterWebSocketOptions, getMasterProxyInfo } from './masterProxy';
@@ -158,6 +163,7 @@ export class NodeClient {
   private heartbeatAwaitingPong = false;
   private heartbeatLastPingAt = 0;
   private pairingRejected = false;
+  private protocolIncompatible = false;
   private localTriggerEnabled = true;
   private localTriggerPort = 0;
   private localTriggerServer: http.Server | null = null;
@@ -441,7 +447,8 @@ export class NodeClient {
         this.send({
           type: 'node_register',
           nodeType: 'cli-node',
-          capabilities: this.getNodeCapabilities()
+          capabilities: this.getNodeCapabilities(),
+          nodeProtocol: CURRENT_NODE_PROTOCOL_RANGE,
         });
       } else {
         this.send({
@@ -449,6 +456,7 @@ export class NodeClient {
           requestedName: this.requestedName,
           nodeType: 'cli-node',
           capabilities: this.getNodeCapabilities(),
+          nodeProtocol: CURRENT_NODE_PROTOCOL_RANGE,
         });
       }
     });
@@ -475,6 +483,10 @@ export class NodeClient {
       this.onStatus?.('disconnected', { code, reason: reasonText });
       if (this.pairingRejected) {
         logger.warn('Pairing was rejected; not reconnecting automatically');
+        return;
+      }
+      if (this.protocolIncompatible) {
+        logger.error('Node protocol is incompatible; automatic reconnect is disabled until the Node client is updated and restarted');
         return;
       }
       if (code === 1008 && reasonText.includes('Invalid node credentials') && this.pairingToken) {
@@ -511,6 +523,29 @@ export class NodeClient {
   private async handleMessage(message: any): Promise<void> {
     switch (message.type) {
       case 'registered':
+        try {
+          const advertisedMaster = resolveAdvertisedNodeProtocol(message.nodeProtocol?.master);
+          const compatibility = negotiateNodeProtocol(CURRENT_NODE_PROTOCOL_RANGE, advertisedMaster.range);
+          if (compatibility.status !== 'compatible' || message.nodeProtocol?.negotiated !== compatibility.negotiated) {
+            this.protocolIncompatible = true;
+            const masterLabel = advertisedMaster.legacy
+              ? `legacy/${advertisedMaster.range.min}`
+              : `${advertisedMaster.range.min}-${advertisedMaster.range.max}`;
+            const protocolMessage = compatibility.status === 'compatible'
+              ? `Master returned invalid Node protocol selection ${String(message.nodeProtocol?.negotiated)}; expected ${compatibility.negotiated}. Update the Foxwarm Master or use a compatible Node client.`
+              : `Master Node protocol incompatible: client supports ${CURRENT_NODE_PROTOCOL_RANGE.min}-${CURRENT_NODE_PROTOCOL_RANGE.max}, Master supports ${masterLabel}. Update the Foxwarm Master or use a compatible Node client.`;
+            logger.error({ compatibility }, protocolMessage);
+            this.onStatus?.('protocol_incompatible', { compatibility, message: protocolMessage });
+            this.ws?.close(1008, protocolMessage.slice(0, 120));
+            return;
+          }
+        } catch (error) {
+          this.protocolIncompatible = true;
+          logger.error({ err: error }, 'Master returned an invalid Node protocol negotiation result');
+          this.ws?.close(1008, 'Invalid Node protocol negotiation result');
+          return;
+        }
+        this.protocolIncompatible = false;
         logger.info({ nodeId: message.nodeId }, 'Node registered');
         this.onStatus?.('registered', { nodeId: message.nodeId });
         this.connectedNodeId = message.nodeId;
@@ -523,6 +558,16 @@ export class NodeClient {
         if (this.localTriggerRuntime) {
           await this.writeLocalTriggerArtifacts(this.localTriggerRuntime);
         }
+        break;
+      case 'node_incompatible':
+        this.protocolIncompatible = true;
+        logger.error({
+          code: message.code,
+          nodeId: message.nodeId,
+          clientProtocol: message.clientProtocol,
+          masterProtocol: message.masterProtocol,
+        }, message.message || 'Node protocol is incompatible; update and restart this Node client');
+        this.onStatus?.('protocol_incompatible', message);
         break;
       case 'pair_pending':
         logger.info({ pendingId: message.pendingId, pairCode: message.pairCode, requestedName: message.requestedName }, 'Node pairing pending approval');

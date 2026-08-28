@@ -617,6 +617,7 @@ def build_registration_payload(node: AndroidNode) -> Dict[str, Any]:
     return {
         "type": "node_register",
         "nodeType": "android",
+        "nodeProtocol": {"min": 2, "max": 2},
         "capabilities": {
             "tools": TOOL_DEFINITIONS
         },
@@ -679,6 +680,7 @@ async def connect_to_foxwarm(node: AndroidNode):
                         "type": "pair_request",
                         "requestedName": config.requested_name,
                         "nodeType": "android",
+                        "nodeProtocol": {"min": 2, "max": 2},
                         "capabilities": {"tools": TOOL_DEFINITIONS},
                     }))
 
@@ -687,9 +689,23 @@ async def connect_to_foxwarm(node: AndroidNode):
                     message_type = data.get("type")
 
                     if message_type == "registered":
+                        master_protocol = (data.get("nodeProtocol") or {}).get("master") or {}
+                        negotiated = (data.get("nodeProtocol") or {}).get("negotiated")
+                        if not (
+                            isinstance(master_protocol.get("min"), int)
+                            and isinstance(master_protocol.get("max"), int)
+                            and master_protocol["min"] <= 2 <= master_protocol["max"]
+                            and negotiated == 2
+                        ):
+                            logger.error("Master Node protocol is incompatible; update Master or this Android Node")
+                            return
                         connected_node_id = data.get("nodeId") or connected_node_id
                         logger.info("✅ Successfully registered as node: %s", connected_node_id)
                         continue
+
+                    if message_type == "node_incompatible":
+                        logger.error("Node protocol is incompatible: %s", data.get("message") or data)
+                        return
 
                     if message_type == "pair_pending":
                         logger.info(

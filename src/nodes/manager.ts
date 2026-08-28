@@ -16,6 +16,12 @@ import { NODE_ENVIRONMENT_BUILTIN_NAMES } from '../tools/placement';
 import { issueRemoteExecCompletionCapability, verifyRemoteExecCompletionCapability } from './sessionEventCapability';
 import { generatePersistentExecPetname } from '../../packages/shared/dist/persistentExec';
 import { PERSISTENT_EXEC_ID_COLLISION_CODE } from '../../packages/shared/dist/persistentExec';
+import {
+  CURRENT_NODE_PROTOCOL_RANGE,
+  describeNodeProtocolCompatibility,
+  negotiateNodeProtocol,
+  type NodeProtocolCompatibility,
+} from '../../packages/shared/dist/nodeProtocol';
 
 interface ToolDefinition {
   name: string;
@@ -35,6 +41,16 @@ interface Node {
   tools: Set<string>;
   capabilities?: NodeCapabilities; // Tool definitions for dynamic nodes
   lastActivity: number;
+  protocolCompatibility: NodeProtocolCompatibility;
+}
+
+export class NodeProtocolIncompatibleError extends Error {
+  readonly code = 'NODE_PROTOCOL_INCOMPATIBLE';
+  readonly retryable = false;
+  constructor(public readonly nodeId: string, public readonly compatibility: NodeProtocolCompatibility) {
+    super(`Node \`${nodeId}\` is connected but cannot execute tools. ${describeNodeProtocolCompatibility(compatibility)}`);
+    this.name = 'NodeProtocolIncompatibleError';
+  }
 }
 
 interface ToolCall {
@@ -101,7 +117,8 @@ export class NodesManager {
       type: 'master',
       ws: null, // Master doesn't use WebSocket
       tools: new Set(this.tools),
-      lastActivity: Date.now()
+      lastActivity: Date.now(),
+      protocolCompatibility: negotiateNodeProtocol(CURRENT_NODE_PROTOCOL_RANGE),
     };
     
     this.nodes.set('master', masterNode);
@@ -129,7 +146,8 @@ export class NodesManager {
       type: 'legacy', // Legacy node without capabilities
       ws,
       tools: new Set(this.tools),
-      lastActivity: Date.now()
+      lastActivity: Date.now(),
+      protocolCompatibility: negotiateNodeProtocol(CURRENT_NODE_PROTOCOL_RANGE),
     };
     
     this.nodes.set(nodeId, node);
@@ -147,7 +165,42 @@ export class NodesManager {
   /**
    * Register a new node with capabilities (dynamic tools)
    */
-  registerNodeWithTools(ws: WebSocket, _req: http.IncomingMessage, nodeType: string, capabilities: NodeCapabilities, customNodeId?: string): string {
+  registerNodeWithTools(
+    ws: WebSocket,
+    _req: http.IncomingMessage,
+    nodeType: string,
+    capabilities: NodeCapabilities,
+    customNodeId?: string,
+    protocolCompatibility: NodeProtocolCompatibility = negotiateNodeProtocol(CURRENT_NODE_PROTOCOL_RANGE),
+  ): string {
+    if (protocolCompatibility.status !== 'compatible') {
+      throw new Error('Compatible Node registration requires an intersecting core protocol.');
+    }
+    return this.registerRemoteNodeWithTools(ws, nodeType, capabilities, protocolCompatibility, customNodeId, true);
+  }
+
+  registerIncompatibleNodeWithTools(
+    ws: WebSocket,
+    _req: http.IncomingMessage,
+    nodeType: string,
+    capabilities: NodeCapabilities,
+    compatibility: NodeProtocolCompatibility,
+    customNodeId?: string,
+  ): string {
+    if (compatibility.status !== 'upgrade-required') {
+      throw new Error('Protocol quarantine requires a non-intersecting core protocol.');
+    }
+    return this.registerRemoteNodeWithTools(ws, nodeType, capabilities, compatibility, customNodeId, false);
+  }
+
+  private registerRemoteNodeWithTools(
+    ws: WebSocket,
+    nodeType: string,
+    capabilities: NodeCapabilities,
+    protocolCompatibility: NodeProtocolCompatibility,
+    customNodeId: string | undefined,
+    executable: boolean,
+  ): string {
     if (customNodeId && isReservedNodeId(customNodeId)) {
       throw new Error(`Node id \`${customNodeId}\` is reserved`);
     }
@@ -169,18 +222,40 @@ export class NodesManager {
       ws,
       tools: toolNames,
       capabilities,
-      lastActivity: Date.now()
+      lastActivity: Date.now(),
+      protocolCompatibility,
     };
     
     this.nodes.set(nodeId, node);
-    logger.info({ nodeId, nodeType, toolCount: toolNames.size }, 'Node registered with capabilities');
+    logger.info({ nodeId, nodeType, toolCount: toolNames.size, protocolCompatibility }, executable
+      ? 'Node registered with compatible capabilities'
+      : 'Node connected in protocol-incompatible quarantine');
     
     // Send node ID to the node
-    ws.send(JSON.stringify({
-      type: 'registered',
-      nodeId: nodeId,
-      status: 'success'
-    }));
+    if (executable) {
+      ws.send(JSON.stringify({
+        type: 'registered',
+        nodeId: nodeId,
+        status: 'success',
+        nodeProtocol: {
+          negotiated: protocolCompatibility.negotiated,
+          master: protocolCompatibility.master,
+        },
+      }));
+    } else {
+      const message = describeNodeProtocolCompatibility(protocolCompatibility);
+      ws.send(JSON.stringify({
+        type: 'node_incompatible',
+        code: 'NODE_PROTOCOL_INCOMPATIBLE',
+        nodeId,
+        clientProtocol: protocolCompatibility.client,
+        masterProtocol: protocolCompatibility.master,
+        legacyClient: protocolCompatibility.legacyClient,
+        message,
+      }));
+      // Legacy clients do not know node_incompatible but do log ordinary errors.
+      ws.send(JSON.stringify({ type: 'error', code: 'NODE_PROTOCOL_INCOMPATIBLE', error: message }));
+    }
     
     return nodeId;
   }
@@ -282,6 +357,7 @@ export class NodesManager {
     if (!node && nodeId !== 'master') {
       throw new Error(`Node \`${nodeId}\` not found`);
     }
+    if (node) this.assertNodeProtocolCompatible(node);
     
     logger.info({ sessionId, nodeId }, 'Current node validated');
   }
@@ -293,13 +369,25 @@ export class NodesManager {
     return this.nodes.get(nodeId);
   }
 
+  private assertNodeProtocolCompatible(node: Node): void {
+    if (node.protocolCompatibility?.status === 'upgrade-required') {
+      throw new NodeProtocolIncompatibleError(node.id, node.protocolCompatibility);
+    }
+  }
+
+  private assertConnectedNodeProtocolCompatible(nodeId: string): void {
+    const node = this.nodes.get(nodeId);
+    if (node) this.assertNodeProtocolCompatible(node);
+  }
+
   /**
    * List all nodes
    */
-  listNodes(): Array<{ id: string; lastActivity: number }> {
+  listNodes(): Array<{ id: string; lastActivity: number; protocolCompatibility: NodeProtocolCompatibility }> {
     return Array.from(this.nodes.values()).map((node) => ({
       id: node.id,
-      lastActivity: node.lastActivity
+      lastActivity: node.lastActivity,
+      protocolCompatibility: node.protocolCompatibility,
     }));
   }
 
@@ -308,7 +396,7 @@ export class NodesManager {
    */
   listNodesWithTools(): Array<{ id: string; type: string; tools: ToolDefinition[] }> {
     return Array.from(this.nodes.values())
-      .filter((node) => node.type === 'master' || node.capabilities)
+      .filter((node) => (node.type === 'master' || node.capabilities) && node.protocolCompatibility?.status !== 'upgrade-required')
       .map((node) => ({
         id: node.id,
         type: node.type,
@@ -318,18 +406,20 @@ export class NodesManager {
       }));
   }
 
-  listNodeServiceSummaries(): Array<{ id: string; type: string; services: Record<string, number>; lastActivity: number }> {
+  listNodeServiceSummaries(): Array<{ id: string; type: string; services: Record<string, number>; lastActivity: number; protocolCompatibility: NodeProtocolCompatibility }> {
     return Array.from(this.nodes.values()).map((node) => ({
       id: node.id,
       type: node.type,
-      services: { ...(node.capabilities?.services || {}) },
+      services: node.protocolCompatibility?.status !== 'upgrade-required' ? { ...(node.capabilities?.services || {}) } : {},
       lastActivity: node.lastActivity,
+      protocolCompatibility: node.protocolCompatibility,
     }));
   }
 
   listNodeIdsWithService(service: string): string[] {
     return [...this.nodes.values()]
       .filter((node) => node.id !== 'master' && !!node.ws && Number(node.capabilities?.services?.[service] || 0) >= 1)
+      .filter((node) => node.protocolCompatibility?.status !== 'upgrade-required')
       .map((node) => node.id);
   }
 
@@ -340,7 +430,7 @@ export class NodesManager {
 
   handleNodeServiceEvent(nodeId: string, service: string, event: any): void {
     const node = this.nodes.get(nodeId);
-    if (!node || Number(node.capabilities?.services?.[service] || 0) < 1) {
+    if (!node || node.protocolCompatibility?.status === 'upgrade-required' || Number(node.capabilities?.services?.[service] || 0) < 1) {
       logger.warn({ nodeId, service }, 'Ignoring event for an unadvertised node service');
       return;
     }
@@ -355,6 +445,7 @@ export class NodesManager {
     if (!node || nodeId === 'master' || !node.ws) {
       throw new NodeServiceRequestError('NodeUnavailable', `Remote node \`${nodeId}\` is not connected.`, 503);
     }
+    this.assertNodeProtocolCompatible(node);
     const version = node.capabilities?.services?.[service];
     if (!Number.isInteger(version) || Number(version) < minimumVersion) {
       const requirement = minimumVersion > 1 ? ` version ${minimumVersion} or newer` : '';
@@ -383,6 +474,7 @@ export class NodesManager {
     if (!node || nodeId === 'master' || !node.ws) {
       throw new NodeServiceRequestError('NodeUnavailable', `Remote node \`${nodeId}\` is not connected.`, 503);
     }
+    this.assertNodeProtocolCompatible(node);
     if (Number(node.capabilities?.services?.[service] || 0) < 1) {
       throw new NodeServiceRequestError('UnsupportedService', `Node \`${nodeId}\` does not advertise service \`${service}\`.`, 501);
     }
@@ -433,6 +525,7 @@ export class NodesManager {
     if (!node) {
       throw new Error(`Node \`${nodeId}\` not found`);
     }
+    this.assertNodeProtocolCompatible(node);
 
     const session = sessionManager.getSessionCatalog(sessionId);
     if (!session) throw new Error(`Session \`${sessionId}\` not found`);
@@ -547,6 +640,7 @@ export class NodesManager {
     if (!node?.ws) {
       throw new Error(`Node \`${nodeId}\` not found`);
     }
+    this.assertNodeProtocolCompatible(node);
 
     const transferId = `file_${Date.now()}_${crypto.randomBytes(4).toString('hex').substring(0, 8)}`;
     return new Promise((resolve, reject) => {
@@ -591,6 +685,7 @@ export class NodesManager {
     if (!node?.ws) {
       throw new Error(`Node \`${nodeId}\` not found`);
     }
+    this.assertNodeProtocolCompatible(node);
 
     const transferId = `file_${Date.now()}_${crypto.randomBytes(4).toString('hex').substring(0, 8)}`;
     return new Promise((resolve, reject) => {
@@ -732,6 +827,7 @@ export class NodesManager {
   }
 
   async listSessionsForNode(nodeId: string) {
+    this.assertConnectedNodeProtocolCompatible(nodeId);
     const summaries = [];
     for (const session of await sessionRuntime.listSessions()) {
       if (this.nodeCanAccessSession(nodeId, session)) summaries.push(this.summarizeSession(session));
@@ -740,6 +836,7 @@ export class NodesManager {
   }
 
   async getSessionHistoryForNode(nodeId: string, sessionId: string, count = 30) {
+    this.assertConnectedNodeProtocolCompatible(nodeId);
     const catalogSession = await this.assertNodeCanAccessSession(nodeId, sessionId, 'read history for');
     const runtimeSession = await sessionRuntime.getSession(catalogSession.id);
     if (!runtimeSession || !this.nodeCanAccessSession(nodeId, runtimeSession)) {
@@ -765,6 +862,7 @@ export class NodesManager {
     type: 'background' | 'trigger' | 'onboot' = 'background',
     metadata: { eventId?: string; execId?: string; completionCapability?: string; eventTimestamp?: number } = {},
   ): Promise<void> {
+    this.assertConnectedNodeProtocolCompatible(nodeId);
     const hasCompletionMetadata = !!(
       metadata.eventId
       || metadata.execId
@@ -794,6 +892,7 @@ export class NodesManager {
   }
 
   async handleSessionUserMessage(nodeId: string, sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'trigger'): Promise<void> {
+    this.assertConnectedNodeProtocolCompatible(nodeId);
     await this.assertNodeCanAccessSession(nodeId, sessionId, 'send messages to');
     await sessionManager.queueSessionEvent(sessionId, message, type);
     logger.info({ nodeId, sessionId, type }, 'Session user message received from remote node');

@@ -41,6 +41,7 @@ Plain-ES-module Manifest V3 extension that pairs/authenticates to Foxwarm as a n
 - Master URL is converted to `/node_ws` pairing or authenticated URL.
 - Approved credentials are stored and cause a quick authenticated reconnect.
 - Ordinary close schedules a 5-second reconnect unless manually disconnected or pairing was rejected.
+- Pairing and authenticated registration advertise core Node protocol generation 2, validate Master's negotiated registration response, and stop automatic reconnect on an upgrade-required mismatch. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
 - The extension handles pairing states, registration, `tool_call`, error, and an expected JSON `pong`.
 
 ## Limitations

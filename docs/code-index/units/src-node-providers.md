@@ -18,7 +18,7 @@ Executable providers use the fixed `foxwarm-node-provider@1` JSON stdin/stdout p
 
 ## Key exports
 
-- `NodeDescriptor`, `NodeProviderDescriptor`, `NodeCapabilityDescriptor`, `NodeKind`, `NodeAvailability` — safe generic Node metadata; primitive provider descriptors omit model tool definitions and registry materialization derives them.
+- `NodeDescriptor`, `NodeProviderDescriptor`, `NodeCapabilityDescriptor`, `NodeKind`, `NodeAvailability` — safe generic Node metadata, including optional structured unavailability and core protocol compatibility; primitive provider descriptors omit model tool definitions and registry materialization derives them.
 - `NodeFilesystemRequest` / `NodeExecRequest` — fixed primitive filesystem and complete exec requests carrying exact source, Node, and bounded routing context; `NodeToolRequest` remains the authenticated-remote adapter DTO.
 - `NodeLifecycleAction`, lifecycle request/result/summary types — bounded provider-neutral control-plane DTOs with exact source/agent context, optional exact requested Node ID for create/ensure, separate opaque parameters/details, and optional effect/data-retention descriptions.
 - `NodeProvider` — fixed descriptor/list/lookup, primitive filesystem/exec, authenticated-remote adapter, and lifecycle boundary with optional startup/shutdown, default-cwd, and create/ensure/inspect/destroy methods.
@@ -34,6 +34,7 @@ Executable providers use the fixed `foxwarm-node-provider@1` JSON stdin/stdout p
 - Node IDs are exact global routing identities. Two providers advertising the same ID fail closed.
 - `source=node` remains the capability source for every Node kind; provider identity is routing metadata, not a new tool source.
 - Unsupported or unavailable capabilities fail at provider resolution and never fall back to master.
+- A connected authenticated Node with incompatible core protocol resolves as visible `availability:error` with no tools and the non-retryable `NODE_PROTOCOL_INCOMPATIBLE` reason. Registry invocation propagates that reason before calling the transport provider. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
 - The master provider is present in discovery but cannot execute through the non-master Node RPC path.
 - The authenticated remote adapter preserves the current dynamic advertised-tool boundary and forwards the existing exact cwd snapshot only when supplied by the canonical resolver.
 - Provider descriptors expose no credentials, WebSocket objects, launch commands, environment variables, or private provider state.

@@ -8,6 +8,7 @@ Owns reusable cross-package implementations for patch application, file/exec/bro
 
 - [shared-apply-patch](../units/shared-apply-patch.md) — patch envelope parsing and add/update/delete content operations.
 - [shared-node-tools](../units/shared-node-tools.md) — shared file core, node tool registry/schemas, transfer, cwd, browser, token, and formatting helpers.
+- [shared-node-protocol](../units/shared-node-protocol.md) — core Master/Node protocol range validation, legacy classification, negotiation, and diagnostics.
 - [shared-vscode-node-service](../units/shared-vscode-node-service.md) — fixed filesystem/read-only Git service and advertised versions.
 - [shared-code-helper-ipc](../units/shared-code-helper-ipc.md) — terminal-scoped helper executable and capability-authenticated local IPC.
 - [shared-persistent-exec](../units/shared-persistent-exec.md) — foreground/background process lifecycle, logs, registry, recovery, and notifications.
@@ -19,6 +20,7 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 ## Public interfaces
 
 - `nodeTools`, `CLI_NODE_CAPABILITIES`.
+- `CURRENT_NODE_PROTOCOL_RANGE`, `resolveAdvertisedNodeProtocol()`, and `negotiateNodeProtocol()`.
 - shared low-level native file/process backends, file read/write semantic core, and node transfer/path helpers.
 - patch parsing/content-application functions plus per-operation change-count summaries.
 - `PersistentExecManager` and shared timeout/cwd resolution.

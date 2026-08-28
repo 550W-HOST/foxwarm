@@ -6,6 +6,8 @@ export type WebUiNodeTarget = {
   lastSeenAt?: number
   services: Record<string, number>
   unavailable?: boolean
+  protocolStatus?: 'compatible' | 'upgrade-required'
+  protocolMessage?: string
 }
 
 export type NodeTargetService = 'vscode-fs' | 'vscode-pty'
@@ -49,6 +51,18 @@ export function parseWebUiNodeTargets(payload: unknown): WebUiNodeTarget[] {
       online: item.online === true,
       ...(Number.isFinite(item.lastSeenAt) ? { lastSeenAt: Number(item.lastSeenAt) } : {}),
       services,
+      ...(
+        item.protocolCompatibility && typeof item.protocolCompatibility === 'object'
+        && (item.protocolCompatibility as Record<string, unknown>).status === 'upgrade-required'
+          ? {
+              protocolStatus: 'upgrade-required' as const,
+              protocolMessage: typeof (item.protocolCompatibility as Record<string, unknown>).client === 'object'
+                && typeof (item.protocolCompatibility as Record<string, unknown>).master === 'object'
+                ? 'upgrade required'
+                : 'protocol incompatible',
+            }
+          : { protocolStatus: 'compatible' as const }
+      ),
     })
   }
 
@@ -71,7 +85,8 @@ export function preserveSelectedNodeTarget(nodes: readonly WebUiNodeTarget[], se
 export function getNodeTargetAvailability(node: WebUiNodeTarget, service: NodeTargetService): { available: boolean; reason?: string } {
   if (node.id === 'master') return { available: true }
   if (node.unavailable) return { available: false, reason: 'unavailable' }
-  if (!node.online) return { available: false, reason: 'offline' }
+  if (!node.online) return { available: false, reason: node.protocolStatus === 'upgrade-required' ? 'offline · upgrade required' : 'offline' }
+  if (node.protocolStatus === 'upgrade-required') return { available: false, reason: node.protocolMessage || 'upgrade required' }
   if (Number(node.services[service] || 0) < 1) {
     return { available: false, reason: service === 'vscode-pty' ? 'terminal unavailable' : 'filesystem unavailable' }
   }
