@@ -8,7 +8,7 @@ import { createSessionListRefreshScheduler, requestSessionListStreamOpenResync }
 import { BoundedReplayRevisionMismatch, createEpochRows, filterPresentationPathForAgent, mergeDeltaRows, mergeForcedPresentationPath, mergeHttpRows, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from '../boundedSessionReplay'
 import { webUiRealtime } from '../realtime'
 import { parseWebUiNodeTargets, type WebUiNodeTarget } from '../nodeTargets'
-import { filterArchitectureSessions, getArchitectureNodePreview, getArchitectureSessionNodeId, groupArchitectureSessionsByNode, type ArchitectureStatusFilter } from '../architectureOperations'
+import { filterArchitectureSessions, getArchitectureNodePreview, getArchitectureSessionNodeId, groupArchitectureSessionsByNode, orderArchitectureAgents, type ArchitectureStatusFilter } from '../architectureOperations'
 import { makeVscodeWebUrl } from '../vscodeWeb'
 
 interface ArchitectureViewProps {
@@ -803,12 +803,7 @@ export default function ArchitectureView({
   const onlineNodes = displayNodes.filter(node => node.online).length
   const totalTokens = summary.totalCachedTokens + summary.totalInputTokens + summary.totalOutputTokens
   const selectedRegistryAgent = selectedRegistryAgentId ? agentRegistry.find(agent => agent.id === selectedRegistryAgentId) || null : null
-  const orderedAgentRegistry = useMemo(() => [...agentRegistry].sort((left, right) => {
-    if (left.id === selectedRegistryAgentId) return -1
-    if (right.id === selectedRegistryAgentId) return 1
-    if ((left.activeSessionCount > 0) !== (right.activeSessionCount > 0)) return left.activeSessionCount > 0 ? -1 : 1
-    return left.id.localeCompare(right.id)
-  }), [agentRegistry, selectedRegistryAgentId])
+  const orderedAgentRegistry = useMemo(() => orderArchitectureAgents(agentRegistry), [agentRegistry])
 
   const createAgentFromRegistry = async (agentId: string, inheritAgent?: string) => {
     if (onCreateAgent) await onCreateAgent(agentId, inheritAgent)

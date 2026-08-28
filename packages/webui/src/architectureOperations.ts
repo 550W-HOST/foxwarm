@@ -16,6 +16,21 @@ export interface ArchitectureSessionLike {
   runtimeState?: SessionRuntimeState
 }
 
+export interface ArchitectureAgentLike {
+  id: string
+  activeSessionCount: number
+  sessionCount: number
+}
+
+export const orderArchitectureAgents = <T extends ArchitectureAgentLike>(agents: readonly T[]): T[] => (
+  [...agents].sort((left, right) => {
+    if ((left.id === 'main') !== (right.id === 'main')) return left.id === 'main' ? -1 : 1
+    if ((left.activeSessionCount > 0) !== (right.activeSessionCount > 0)) return left.activeSessionCount > 0 ? -1 : 1
+    if ((left.sessionCount > 0) !== (right.sessionCount > 0)) return left.sessionCount > 0 ? -1 : 1
+    return left.id.localeCompare(right.id)
+  })
+)
+
 export const getArchitectureSessionNodeId = (session: ArchitectureSessionLike): string => (
   session.runtimeState?.tool?.executionNode
   || session.currentNode
