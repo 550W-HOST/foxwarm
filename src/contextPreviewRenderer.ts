@@ -2,7 +2,7 @@ import { Message, MessagePart } from './types';
 import { formatArchiveBlockContextText, type ArchiveBlockRecord } from './session/layeredContext';
 import { formatModelVisibilitySuffix, redactDisplayOnlyMessageForModel } from './session/messageVisibility';
 import { stringifyFunctionCallArgs } from './toolCallArgs';
-import { truncateUnicodeSafe } from './utils/unicode';
+import { truncateUnicodeSafe, truncateUnicodeSafeByCodeUnitsWithEllipsis } from './utils/unicode';
 import { isFoxwarmMessageCloseLine, parseFoxwarmOpeningTag, parseFoxwarmWrappedContent } from './utils/promptWrappers';
 
 export type ContextPreviewToolDetail = 'names' | 'snippets' | 'full';
@@ -13,6 +13,7 @@ export type ContextPreviewItem = {
   body: string;
   searchText?: string;
   omittedToolText?: string;
+  priorityNotices?: string[];
 };
 
 export type ContextPreviewRenderOptions = {
@@ -550,6 +551,7 @@ export function renderContextPreviewItems(args: {
   emptyMessage: string;
   options?: ContextPreviewRenderOptions;
   maxItems?: number;
+  notices?: string[];
 }): ContextPreviewRenderResult {
   const options = args.options || {};
   const { budget, warnings } = normalizeContextPreviewBudget(options.previewLength, options.defaultPreviewLength);
@@ -567,10 +569,37 @@ export function renderContextPreviewItems(args: {
   const selectionNotice = selectionOmittedCount > 0
     ? `[selection] ${selectionOmittedCount} additional matched item(s) omitted by the requested result limit.`
     : undefined;
-  const prefixLines = [...warnings, title, ...formatFilterNotices(filtered.stats, options), selectionNotice].filter(Boolean);
+  const priorityNotices = [...(args.notices || []), ...filteredItems.flatMap(item => item.priorityNotices || [])]
+    .map(notice => String(notice || '').trim())
+    .filter(Boolean)
+    .slice(0, 4)
+    .map(notice => truncateUnicodeSafeByCodeUnitsWithEllipsis(notice, 560));
+  const mediumLines = [...warnings, ...formatFilterNotices(filtered.stats, options), selectionNotice].filter(Boolean);
+
+  const buildPrefix = (reserveForBody: number): string => {
+    const available = Math.max(0, budget - reserveForBody);
+    let used = 0;
+    const sections: string[] = [];
+    const appendBounded = (text: string, maxAllowed: number) => {
+      const separatorLength = sections.length > 0 ? 1 : 0;
+      if (!text || maxAllowed <= separatorLength) return;
+      const bounded = truncateUnicodeSafeByCodeUnitsWithEllipsis(text, maxAllowed - separatorLength);
+      if (!bounded) return;
+      sections.push(bounded);
+      used += bounded.length + separatorLength;
+    };
+    const priorityText = priorityNotices.join('\n');
+    appendBounded(priorityText, Math.min(priorityText.length, Math.max(0, Math.min(700, available - used))));
+    const mediumText = mediumLines.join('\n');
+    appendBounded(mediumText, Math.min(mediumText.length, Math.max(0, available - used)));
+    appendBounded(title, Math.max(0, available - used));
+    return sections.join('\n');
+  };
 
   if (filteredItems.length === 0) {
-    const emptyText = [...prefixLines, '', args.emptyMessage].join('\n').trimEnd();
+    const emptySuffix = `\n\n${args.emptyMessage}`;
+    const prefix = buildPrefix(emptySuffix.length);
+    const emptyText = `${prefix}${emptySuffix}`.trimStart();
     return {
       text: emptyText,
       budget,
@@ -582,7 +611,8 @@ export function renderContextPreviewItems(args: {
     };
   }
 
-  let output = `${prefixLines.join('\n')}\n\n`;
+  const prefix = buildPrefix(242);
+  let output = prefix ? `${prefix}\n\n` : '';
   let omittedCount = 0;
   for (let index = 0; index < filteredItems.length; index += 1) {
     const remainingItems = filteredItems.length - index;
@@ -611,12 +641,14 @@ export function renderContextPreviewItems(args: {
 
   if (omittedCount > 0) {
     const note = `\n\n[${omittedCount} item(s) omitted due to previewLength budget ${budget}. Narrow the range/filter or raise previewLength up to ${MAX_CONTEXT_PREVIEW_BUDGET}.]`;
-    if (output.length + note.length <= budget + warnings.join('\n').length + 1) {
+    if (output.length + note.length <= budget) {
       output += note;
     } else {
-      output = `${truncateUnicodeSafe(output, Math.max(0, budget - note.length), '…')}${note}`;
+      output = `${truncateUnicodeSafeByCodeUnitsWithEllipsis(output, Math.max(0, budget - note.length))}${note}`;
     }
   }
+
+  output = truncateUnicodeSafeByCodeUnitsWithEllipsis(output, budget);
 
   return {
     text: output.trimEnd(),

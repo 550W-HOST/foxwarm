@@ -25,6 +25,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 - `getSessionListSequenceMessageCounts` — pure bounded batch projection of local maximum message seq and actual archive fork point for Sidebar list counts.
 - `getVectorCheckpoint`, `getVectorCheckpointSync`, `setVectorCheckpointSync` — vector progress.
 - `getVectorSearchLineage`, `listSessionsNeedingVectorBackfill` — vector scope/backfill inputs.
+- `getLocalArchiveVectorMaximaSync` — read-only durable local message/block maxima for bounded Vector lag status.
 - `renameSessionArchiveStore` — bootstrapped transactional ID/parent/checkpoint/import-state rename.
 - `renameSessionArchiveStoreForRecovery` — startup-journal rollback variant that updates existing SQLite rows before normal bootstrap can infer a duplicate branch.
 - `migrateLegacySessionArchivesToSqlite` — migration-only strict import/verification inventory for active legacy message/block JSONLs.

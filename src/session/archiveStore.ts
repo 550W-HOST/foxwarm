@@ -1968,6 +1968,17 @@ export async function getVectorSearchLineage(sessionId: string): Promise<Lineage
   return buildLineage(sessionId);
 }
 
+export function getLocalArchiveVectorMaximaSync(sessionId: string): { latestLocalMessageSeq: number; latestLocalBlockId: number } {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+  const messageRow = getDb().prepare('SELECT MAX(seq) AS latest_seq FROM archive_messages WHERE session_id = ?').get(sessionId) as any;
+  const blockRow = getDb().prepare('SELECT MAX(id) AS latest_id FROM archive_blocks WHERE session_id = ?').get(sessionId) as any;
+  return {
+    latestLocalMessageSeq: Number(messageRow?.latest_seq) || 0,
+    latestLocalBlockId: Number(blockRow?.latest_id) || 0,
+  };
+}
+
 export async function listSessionsNeedingVectorBackfill(): Promise<ArchiveVectorBackfillCandidate[]> {
   await initArchiveStore();
 

@@ -1,6 +1,6 @@
 # Unit: src-vector
 
-Files: src/vector.ts, src/vectorRuntime.ts, src/vectorMaintenance.ts, src/vectorService.ts, src/vectorServiceDescriptor.ts, src/vectorFacadeProxy.ts, src/vectorServiceManager.ts, src/vectorWorker.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.indexFailure.test.ts, src/vector.lineage.test.ts, src/vector.memoryFacts.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.searchQuality.test.ts, src/vector.segmentBuilder.test.ts, src/vector.upsert.test.ts, src/vectorMaintenance.test.ts, src/vectorMaintenanceRuntime.test.ts, src/vectorService.smoke.test.ts, src/vectorServiceManager.test.ts, src/vectorExternalPlacement.test.ts, src/vectorPlacementConcurrency.test.ts
+Files: src/vector.ts, src/vectorRuntime.ts, src/vectorMaintenance.ts, src/vectorService.ts, src/vectorServiceDescriptor.ts, src/vectorFacadeProxy.ts, src/vectorServiceManager.ts, src/vectorWorker.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.indexFailure.test.ts, src/vector.lineage.test.ts, src/vector.maxLatency.test.ts, src/vector.memoryFacts.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.searchQuality.test.ts, src/vector.segmentBuilder.test.ts, src/vector.upsert.test.ts, src/vectorMaintenance.test.ts, src/vectorMaintenanceRuntime.test.ts, src/vectorService.smoke.test.ts, src/vectorServiceManager.test.ts, src/vectorExternalPlacement.test.ts, src/vectorPlacementConcurrency.test.ts
 Secondary files: src/workerConfig.test.ts
 
 ## Purpose
@@ -14,10 +14,10 @@ Provides one asynchronous, optionally disabled vector facade with local and supe
 - `getVectorServiceStatus()` — report local/worker readiness and worker generation/PID for diagnostics.
 - `search(query, limit=5, format=true, options?)` — instruction-aware Qwen3 vector query with session/agent/lineage scope, optional regex candidate filters, source-family grouping/diversification, and weak block preference for semantic ties.
 - `indexSessionArchive(sessionId, latestSeqHint?, latestBlockIdHint?)` — index one archive.
-- `scheduleSessionArchiveIndex(sessionId, latestSeqHint?, latestMessageTokenEstimate?, latestBlockIdHint?)` — pending-threshold scheduler.
+- `scheduleSessionArchiveIndex(sessionId, latestSeqHint?, latestMessageTokenEstimate?, latestBlockIdHint?)` — threshold/block scheduler with a fixed five-minute raw-content deadline.
 - `waitForStartupArchiveVectorBackfill()` — waits for the real checkpoint-selected startup backfill. There is no disconnected global reindex RPC/facade surface.
 - `indexMemoryFactsFromCompaction(input)` — best-effort fact upsert.
-- `renameSessionArchiveIndex`, `copySessionArchiveIndexCheckpoint`, `getArchiveIndexStatus`, `getArchiveIndexBatchDecision` — lifecycle/checkpoint helpers.
+- `renameSessionArchiveIndex`, `copySessionArchiveIndexCheckpoint`, `getArchiveIndexStatus`, `getArchiveIndexBatchDecision` — lifecycle/checkpoint helpers; status includes durable local maxima, pending counts, and an armed deadline.
 - Segment/row construction, token estimation, overlap, and embedding-sanitization helpers exported for tests and callers.
 - `indexNewMessages(sessionId, history, lastIndexedPosition?)` — retained history-index compatibility wrapper that delegates to archive indexing.
 
@@ -29,6 +29,7 @@ Provides one asynchronous, optionally disabled vector facade with local and supe
 - Embedding input cap: 1,500 estimated tokens.
 - Raw segment target: about 1,200 tokens with about 400 tokens of overlap.
 - Schedule threshold: 50 pending messages or 8,000 pending estimated tokens.
+- Below threshold with no pending block, the first pending raw content arms one non-sliding, unref'd five-minute owner-local timer.
 - Raw rebuild batch size is selectable through the documented vector rebuild environment override.
 - Automatic LanceDB maintenance is enabled by default with 24-hour version retention. Raw configuration accepts the designated boolean/object toggle and normalizes before owner use; internal checks run at startup, after bounded mutation volume, and periodically; optimization starts only at the internal version/fragment thresholds. General toggle shape is canonical in [D-config-feature-toggle-shorthand](./src-config.md#d-config-feature-toggle-shorthand).
 - Deterministic block and compact-fact rows use one atomic ID-keyed merge per hydrated batch, so crash retries update or insert without per-row delete versions. Raw-tail replacement keeps its separate range-delete and bounded-add checkpoint sequence.
@@ -57,6 +58,7 @@ Model-facing `contentFilter` and final preview filtering are owned by the shared
 - Raw rebuild queries local message stats first, then loads only the saved overlap tail/new-message range. A saved tail beyond the durable maximum safely falls back to the local minimum, preserving the prior rebuild behavior without materializing the checkpointed prefix. Block indexing reads only IDs after `lastIndexedBlockId`. Bounded batches and safe checkpoint advancement remain unchanged.
 - Startup backfill is asynchronous. Search can be temporarily incomplete while checkpoints show pending archive content. Raw messages and full block summaries archived while Vector is disabled retain old checkpoints and are discovered after later enablement. Fact text remains inside the formatted block summary, but dedicated fact rows are not reconstructed for disabled-period compactions; see [D-context-optional-vector](../threads/context-compaction-and-recall.md#d-context-optional-vector).
 - Concurrent index requests for one session are coalesced/scheduled rather than running duplicate rebuilds.
+- Threshold/block/forced work cancels the pending deadline and runs immediately. Timer fire uses the same serialized per-Session index chain; suffixes arriving during an in-flight run retain a later fixed deadline until indexed. Timers are transient and cleared on resolution/rejection, rename takeover, and shutdown; restart backfill remains recovery.
 - Per-session queue cleanup observes both fulfillment and rejection without creating an unhandled rejecting derivative. Direct forced indexing does not allocate an otherwise unconsumed batch waiter; it still rejects to its caller, while real scheduled/coalesced waiters retain one shared completion or rejection and clear state for retry.
 - The RPC scheduling method acknowledges accepted hints immediately rather than holding a transport request open until a future indexing threshold flushes.
 - Lone UTF-16 surrogates are replaced before embedding calls.
@@ -97,6 +99,10 @@ Compact facts share the current table and carry source ranges so ordinary lineag
 ### D-vector-source-family-ranking
 
 [2026-08-28] Semantic retrieval ranks canonical archive source families rather than individual embedding rows. Exact raw-range chunks collapse together; a block and its modern block-identified facts form one family with bounded matched-fact metadata; strongly overlapping raw families are deferred while distinct ranked ranges remain. Semantic distance is the primary ordering. Source-time recency and block/fact preferences may break only effectively equal-distance ties, so metadata cannot promote a clearly worse semantic match. The hardcoded Qwen3 model receives one stable query-only retrieval instruction, while all document/index embedding input remains unchanged. Candidate retrieval starts with the bounded normal row window and, only when that window is saturated and the pre-backfill diverse-family count remains below the request, doubles deterministically up to a hard 1,024-row cap; the same query vector, scope, lineage, filters, and owner-local maintenance gate are reused throughout. An unsaturated window or the hard cap returns the final selection with overlap-deferred families backfilled, so genuinely overlap-only corpora still fill available slots.
+
+### D-vector-max-latency-and-lag-status
+
+[2026-08-28] Preserve the existing message/token/block thresholds but bound ordinary raw-index lag with one transient, non-sliding five-minute timer per Session. Only the active Vector owner holds the unref'd timer; firing enters the canonical serialized index path, while immediate/forced/lifecycle cleanup cancels it. Status reads the archive/checkpoint SQLite authority directly and reports local message/block maxima, pending counts, and the armed deadline without hydrating Session authority.
 
 ### D-vector-owner-maintenance
 

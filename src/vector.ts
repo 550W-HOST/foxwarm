@@ -109,11 +109,7 @@ export async function waitForStartupArchiveVectorBackfill(): Promise<void> {
   await callVector('waitForStartupBackfill', {});
 }
 
-export async function getArchiveIndexStatus(sessionId: string): Promise<{
-  lastIndexedSeq: number;
-  tailStartSeq: number;
-  lastIndexedBlockId: number;
-}> {
+export async function getArchiveIndexStatus(sessionId: string): Promise<import('./vectorServiceDescriptor').VectorIndexStatus> {
   return callVector('getArchiveIndexStatus', { sessionId });
 }
 

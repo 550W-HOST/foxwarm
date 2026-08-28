@@ -23,6 +23,7 @@ import {
 } from './session/archive';
 import {
     getVectorCheckpointSync,
+    getLocalArchiveVectorMaximaSync,
     listSessionsNeedingVectorBackfill,
     initArchiveStore,
     setVectorCheckpointSync,
@@ -44,6 +45,7 @@ const SEGMENT_OVERLAP_TOKENS = 400;
 const SEGMENT_OVERLAP_MAX_MESSAGE_TOKENS = 400;
 const ARCHIVE_INDEX_MIN_PENDING_MESSAGES = 50;
 const ARCHIVE_INDEX_MIN_PENDING_TOKENS = 8000;
+const ARCHIVE_INDEX_MAX_LATENCY_MS = 5 * 60_000;
 const RAW_REBUILD_BATCH_SEGMENT_LIMIT = Math.max(1, Number(process.env.FOXWARM_VECTOR_RAW_REBUILD_BATCH_SEGMENTS || 16));
 const VECTOR_MAINTENANCE_MUTATION_CHECK_EVERY = 128;
 const VECTOR_MAINTENANCE_MAX_OLD_VERSIONS = 512;
@@ -62,6 +64,10 @@ let startupWorkCompleted = false;
 let shuttingDown = false;
 let tableOperationGate = new FairTableOperationGate();
 let maintenanceCoordinator: VectorMaintenanceCoordinator | undefined;
+type ArchiveIndexTimerHandle = { unref?: () => void };
+let archiveIndexNow = () => Date.now();
+let archiveIndexSetTimer = (callback: () => void, delayMs: number): ArchiveIndexTimerHandle => setTimeout(callback, delayMs);
+let archiveIndexClearTimer = (handle: ArchiveIndexTimerHandle) => clearTimeout(handle as ReturnType<typeof setTimeout>);
 
 type VectorRow = {
     id: string;
@@ -159,6 +165,8 @@ type SessionArchiveBatchState = {
     promise?: Promise<number>;
     resolve?: (value: number) => void;
     reject?: (reason?: unknown) => void;
+    maxLatencyDeadline?: number;
+    maxLatencyTimer?: ArchiveIndexTimerHandle;
 };
 
 type RawRebuildProgress = {
@@ -909,12 +917,37 @@ function ensureBatchPromise(state: SessionArchiveBatchState): Promise<number> {
     return state.promise;
 }
 
+function cancelBatchDeadline(state: SessionArchiveBatchState): void {
+    if (state.maxLatencyTimer) {
+        archiveIndexClearTimer(state.maxLatencyTimer);
+    }
+    state.maxLatencyTimer = undefined;
+    state.maxLatencyDeadline = undefined;
+}
+
+function armBatchDeadline(sessionId: string, state: SessionArchiveBatchState): void {
+    if (state.maxLatencyTimer || shuttingDown) return;
+    state.maxLatencyDeadline = archiveIndexNow() + ARCHIVE_INDEX_MAX_LATENCY_MS;
+    const expectedDeadline = state.maxLatencyDeadline;
+    state.maxLatencyTimer = archiveIndexSetTimer(() => {
+        const currentState = archiveIndexBatchStates.get(sessionId);
+        if (!currentState || currentState !== state || currentState.maxLatencyDeadline !== expectedDeadline || shuttingDown) return;
+        currentState.maxLatencyTimer = undefined;
+        currentState.maxLatencyDeadline = undefined;
+        void indexSessionArchive(sessionId, currentState.latestSeqHint, currentState.latestBlockIdHint).catch((err) => {
+            logger.warn({ err, sessionId }, 'Max-latency archive vector index flush failed');
+        });
+    }, ARCHIVE_INDEX_MAX_LATENCY_MS);
+    state.maxLatencyTimer.unref?.();
+}
+
 function clearBatchState(sessionId: string): void {
     const state = archiveIndexBatchStates.get(sessionId);
     if (!state) {
         return;
     }
 
+    cancelBatchDeadline(state);
     archiveIndexBatchStates.delete(sessionId);
 }
 
@@ -1294,6 +1327,7 @@ function planSessionArchiveIndex(sessionId: string): Promise<number> {
     });
 
     if (decision.shouldFlushNow) {
+        cancelBatchDeadline(state);
         if (state.flushQueued) {
             return promise;
         }
@@ -1352,6 +1386,7 @@ function planSessionArchiveIndex(sessionId: string): Promise<number> {
         return promise;
     }
 
+    armBatchDeadline(sessionId, state);
     return promise;
 }
 
@@ -1402,6 +1437,7 @@ async function indexSessionArchive(sessionId: string, latestSeqHint?: number, la
         return lastIndexedSeq;
     }
 
+    cancelBatchDeadline(state);
     state.pendingEstimatedTokens = 0;
     state.flushQueued = true;
 
@@ -1470,6 +1506,7 @@ async function runStartupArchiveVectorBackfill(): Promise<void> {
 }
 
 async function renameSessionArchiveIndex(oldSessionId: string, newSessionId: string): Promise<void> {
+    resolveBatchState(oldSessionId, getSessionArchiveCheckpoint(oldSessionId).lastIndexedSeq);
     const oldCheckpoint = getSessionArchiveCheckpoint(oldSessionId);
     const newCheckpoint = getSessionArchiveCheckpoint(newSessionId);
 
@@ -1912,6 +1949,7 @@ async function init() {
 
 async function shutdown(): Promise<void> {
     shuttingDown = true;
+    for (const state of archiveIndexBatchStates.values()) cancelBatchDeadline(state);
     await maintenanceCoordinator?.shutdown();
     const activeWork = [
         ...(startupBackfillPromise ? [startupBackfillPromise] : []),
@@ -1940,13 +1978,39 @@ async function indexNewMessages(sessionId: string, _history: Message[], _lastInd
     return _history.length;
 }
 
-function getArchiveIndexStatus(sessionId: string): { lastIndexedSeq: number; tailStartSeq: number; lastIndexedBlockId: number } {
+function getArchiveIndexStatus(sessionId: string): {
+    lastIndexedSeq: number;
+    tailStartSeq: number;
+    lastIndexedBlockId: number;
+    latestLocalMessageSeq: number;
+    latestLocalBlockId: number;
+    pendingMessageCount: number;
+    pendingBlockCount: number;
+    maxLatencyDeadline?: number;
+} {
     const checkpoint = getSessionArchiveCheckpoint(sessionId);
+    const maxima = getLocalArchiveVectorMaximaSync(sessionId);
+    const state = archiveIndexBatchStates.get(sessionId);
     return {
         lastIndexedSeq: checkpoint.lastIndexedSeq,
         tailStartSeq: checkpoint.tailStartSeq,
         lastIndexedBlockId: checkpoint.lastIndexedBlockId,
+        latestLocalMessageSeq: maxima.latestLocalMessageSeq,
+        latestLocalBlockId: maxima.latestLocalBlockId,
+        pendingMessageCount: Math.max(0, maxima.latestLocalMessageSeq - checkpoint.lastIndexedSeq),
+        pendingBlockCount: Math.max(0, maxima.latestLocalBlockId - checkpoint.lastIndexedBlockId),
+        ...(state?.maxLatencyDeadline ? { maxLatencyDeadline: state.maxLatencyDeadline } : {}),
     };
+}
+
+function setArchiveIndexTimerHooksForTests(hooks?: {
+    now?: () => number;
+    setTimer?: (callback: () => void, delayMs: number) => ArchiveIndexTimerHandle;
+    clearTimer?: (handle: ArchiveIndexTimerHandle) => void;
+}): void {
+    archiveIndexNow = hooks?.now || (() => Date.now());
+    archiveIndexSetTimer = hooks?.setTimer || ((callback, delayMs) => setTimeout(callback, delayMs));
+    archiveIndexClearTimer = hooks?.clearTimer || ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
 }
 
 export {
@@ -1969,6 +2033,7 @@ export {
     sanitizeEmbeddingInput,
     selectSearchSourceGroups,
     selectSearchSourceGroupsDetailed,
+    setArchiveIndexTimerHooksForTests,
     scheduleSessionArchiveIndex,
     search,
     shutdown,

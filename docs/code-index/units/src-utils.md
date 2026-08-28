@@ -18,7 +18,8 @@ Core utility functions for durable JSON file persistence with write coalescing a
 - `buildTimestampedSystemMessageParts`, `withInputTimePart` — freeze source-boundary timestamps on one model-visible input wrapper without standalone time parts
 - `escapeFoxwarmAttributeValue`, `escapeFoxwarmTextContent`, `formatFoxwarmSystemTag`, `formatFoxwarmMessageOpen`, `formatFoxwarmMessageClose`, `formatSystemPartForModel`, `parseFoxwarmTagLine` — build/parse Foxwarm XML-ish prompt wrapper tags with escaped attrs, opt-in escaped nested text, and raw outer message bodies
 - `replaceLoneSurrogates`, `containsLoneSurrogate`, `containsAnySurrogate` — surrogate detection/replacement
-- `takeUnicodeSafe`, `takeUnicodeSafeEnd`, `truncateUnicodeSafe`, `truncateUnicodeSafeWithEllipsis` — grapheme-aware truncation
+- `takeUnicodeSafe`, `takeUnicodeSafeEnd`, `truncateUnicodeSafe`, `truncateUnicodeSafeWithEllipsis` — grapheme-count-aware truncation
+- `truncateUnicodeSafeByCodeUnitsWithEllipsis` — whole-grapheme truncation under a JavaScript string-length/UTF-16 code-unit cap, including the ellipsis
 - `sanitizeLoneSurrogatesInPayload` — deep object sanitization of lone surrogates
 
 ## Function Index
@@ -77,6 +78,7 @@ Core utility functions for durable JSON file persistence with write coalescing a
 | `takeUnicodeSafeEnd(text, maxGraphemes)` | ~88 | Takes last N graphemes safely |
 | `truncateUnicodeSafe(text, maxGraphemes, ellipsis)` | ~100 | Truncates with appended ellipsis |
 | `truncateUnicodeSafeWithEllipsis(text, max, ellipsis)` | ~112 | Truncates counting ellipsis in budget |
+| `truncateUnicodeSafeByCodeUnitsWithEllipsis(text, maxCodeUnits, ellipsis)` | ~137 | Truncates by emitted UTF-16 code units while retaining complete grapheme segments and reserving the ellipsis inside the cap |
 | `appendPathSegment(path, key)` | ~125 | Builds JSON-path-style segment |
 | `sanitizePayloadInternal(value, path, seen)` | ~130 | Recursive deep surrogate sanitizer |
 | `sanitizeLoneSurrogatesInPayload(value, rootPath)` | ~170 | Public entry for deep sanitization |

@@ -5,6 +5,11 @@ export type VectorIndexStatus = {
   lastIndexedSeq: number;
   tailStartSeq: number;
   lastIndexedBlockId: number;
+  latestLocalMessageSeq: number;
+  latestLocalBlockId: number;
+  pendingMessageCount: number;
+  pendingBlockCount: number;
+  maxLatencyDeadline?: number;
 };
 
 export const vectorServiceDescriptor = defineRpcService('vector', 2, {

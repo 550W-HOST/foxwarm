@@ -9,7 +9,7 @@ export async function resolveMemorySearchOptions(
         targetAgentName?: string;
     },
     ctx?: ToolContext,
-): Promise<{ searchOptions: { sessionIds?: string[]; agent?: string; lineageSessions?: Array<{ sessionId: string; maxMessageSeq?: number; maxBlockId?: number }> }; effectiveScope: 'current-session' | 'current-agent' }> {
+): Promise<{ searchOptions: { sessionIds?: string[]; agent?: string; lineageSessions?: Array<{ sessionId: string; maxMessageSeq?: number; maxBlockId?: number }> }; effectiveScope: 'current-session' | 'current-agent'; resolvedSessionId?: string }> {
     if (!ctx?.sessionId) {
         throw new Error('recall vector_query requires an active session context.');
     }
@@ -50,6 +50,7 @@ export async function resolveMemorySearchOptions(
         return {
             searchOptions: await buildSessionScopedSearchOptions(session.id, session.aliases || []),
             effectiveScope: 'current-session',
+            resolvedSessionId: session.id,
         };
     }
 
@@ -70,6 +71,7 @@ export async function resolveMemorySearchOptions(
         return {
             searchOptions: await buildSessionScopedSearchOptions(targetSession.id, targetSession.aliases || []),
             effectiveScope: 'current-session',
+            resolvedSessionId: targetSession.id,
         };
     }
 
@@ -77,6 +79,7 @@ export async function resolveMemorySearchOptions(
         return {
             searchOptions: await buildSessionScopedSearchOptions(session.id, session.aliases || []),
             effectiveScope: 'current-session',
+            resolvedSessionId: session.id,
         };
     }
 
