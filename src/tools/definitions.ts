@@ -263,14 +263,14 @@ Example:
         {
             name: 'create_child_session',
             defaultInject: true,
-            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. Model/effort overrides require the explicit forceModel object; omit it for normal inheritance/default behavior. Set waitAfterHandoff=true to finish this turn and wait for new session activity after a successful initial handoff. When the current session is an agent main session such as `agent/main` (or bare `main`), the child id replaces the `main` leaf with the suffix (for example `agent/main` + `task1` => `agent/task1`); other sessions append the suffix as before.',
+            description: 'Create a child session. Can either fork (inherit context) or create new (empty). Child sessions should explicitly call send_to_session to report back. Model/effort overrides require the explicit forceModel object; omit it for normal inheritance/default behavior. afterSend controls whether this turn continues, finishes idle, or waits after a successful initial handoff. When the current session is an agent main session such as `agent/main` (or bare `main`), the child id replaces the `main` leaf with the suffix (for example `agent/main` + `task1` => `agent/task1`); other sessions append the suffix as before.',
             parameters: {
                 type: 'object',
                 properties: {
                     suffix: { type: 'string', description: 'Suffix/session leaf for identification (e.g., "task1", "research"). For main sessions it replaces the `main` leaf; otherwise it is appended to the session ID.' },
                     fork: { type: 'boolean', description: 'Whether to fork (inherit parent context) or create new session. Default: false', default: false },
                     message: { type: 'string', description: 'Optional initial message to send to the child session immediately after creation' },
-                    waitAfterHandoff: { type: 'boolean', description: 'After a successful initial message handoff, finish this turn and wait for new session activity. Replies are delivered normally whether this is true or false. This wait is not target-filtered and does not wait for task completion. Requires a non-empty message.' },
+                    afterSend: { type: 'string', enum: ['continue', 'finish', 'wait'], description: 'Behavior after a successful initial message send: continue this turn (default), finish this turn idle without waiting, or finish and wait for new activity expected from the child. The wait mode requires a non-empty message and does not filter other wake activity.' },
                     node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' },
                     forceModel: FORCE_MODEL_SCHEMA
                 },
@@ -280,13 +280,13 @@ Example:
         {
             name: 'send_to_session',
             defaultInject: true,
-            description: 'Send a message to a specific agent/session. Literal sessionId `<main>` resolves to the current agent\'s main session; `<parent>` resolves to the current session\'s parent session and errors clearly if there is no parent. Isolated sessions can only communicate with parent/child sessions. Set waitAfterHandoff=true to finish this turn and wait for new session activity after a successful handoff.',
+            description: 'Send a message to a specific agent/session. Literal sessionId `<main>` resolves to the current agent\'s main session; `<parent>` resolves to the current session\'s parent session and errors clearly if there is no parent. Isolated sessions can only communicate with parent/child sessions. Use afterSend="finish" for a completed child report so the child becomes idle; use afterSend="wait" only when a later reply is genuinely required.',
             parameters: {
                 type: 'object',
                 properties: {
                     sessionId: { type: 'string', description: 'Target session ID, or `<main>` for this agent\'s main session, or `<parent>` for this session\'s parent session.' },
                     message: { type: 'string', description: 'Message to send' },
-                    waitAfterHandoff: { type: 'boolean', description: 'After a successful handoff, finish this turn and wait for new session activity. Replies are delivered normally whether this is true or false. This wait is not target-filtered and does not wait for task completion.' }
+                    afterSend: { type: 'string', enum: ['continue', 'finish', 'wait'], description: 'Behavior after a successful send: continue this turn (default), finish this turn idle without waiting, or finish and wait for new activity expected from the target. Use finish for final completion reports. Wait is non-filtering and does not wait for task completion.' }
                 },
                 required: ['sessionId', 'message']
             }

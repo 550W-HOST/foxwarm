@@ -65,6 +65,6 @@ Provides the canonical derived runtime-state view for sessions. It combines tran
 
 ## Design Decisions
 
-- [2026-08-26] Canonical runtime state retains four top-level states while current waits expose five source kinds. Successful `waitAfterHandoff` records the resolved target as `waitAnySessions` metadata without making wake delivery target-filtered.
+- [2026-08-26, updated 2026-08-27] Canonical runtime state retains four top-level states while current waits expose five source kinds. Successful `afterSend:"wait"` records the resolved target as non-filtering `waitAnySessions` metadata; `afterSend:"finish"` creates no wait and leaves the completed Session idle.
 - [2026-08-10, updated 2026-08-11] Queue count has one effective derivation: catalog count only for a marked lightweight stub, actual queue length for a hydrated owner, and Worker projection count after overlay. Queue count is activity-independent: with no transient active phase, no recognized persisted wait, and `busy:false`, positive queued work is canonical `idle`/`busy:false` with its real queue count. It must not fabricate `requesting-model`, thinking/Stop UI, active sidebar treatment, or an idle notification transition. A real legacy `session.busy:true` without transient phase still falls back to `requesting-model`.
 - Strict Session-worker publication and malformed-tool recovery are canonical in [D-process-topology-session-events](../threads/process-topology-and-rpc.md#d-process-topology-session-events).

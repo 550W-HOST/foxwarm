@@ -65,7 +65,7 @@ test('worker child creation, reply delivery, and facade queries stay Main-owned 
     // first durable ingress (production Main and workers share one state root).
     // Mirror production: the sink durably appends then triggers processing
     // detached (queue-and-trigger semantics); an awaited variant would deadlock
-    // once a waitAfterHandoff target replies to a busy-mid-turn source.
+    // once an afterSend wait target replies to a busy-mid-turn source.
     sessionManager.setSessionWorkerEnqueueSink(async (id, item) => {
       if (id === childId) {
         const workerTreeJson = path.join(root, 'state', 'sessions', `${childId}.json`);
@@ -81,7 +81,7 @@ test('worker child creation, reply delivery, and facade queries stay Main-owned 
     const childStub = sessionManager.getAllSessions().get(childId);
     assert.ok(childStub, 'child session must be created in the Main-owned catalog');
     assert.equal(childStub!.parentSessionId, parentId);
-    // waitAfterHandoff:true armed the generic reply wait and ended the turn —
+  // afterSend:"wait" armed the generic reply wait and ended the turn —
     // the exact chain that previously deadlocked under worker placement.
     const afterHandoff = JSON.parse(await parentAuthorityText());
     assert.ok(afterHandoff.meta?.wait, 'handoff wait is armed after the successful awaited handoff');

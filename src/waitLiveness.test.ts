@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as sessionManager from './sessionManager';
-import { armWaitLivenessDiagnostic, initializeWaitLivenessDiagnostics } from './waitLiveness';
+import { armWaitLivenessDiagnostic, initializeWaitLivenessDiagnostics, MAX_CONCURRENT_LIVENESS_WAKES } from './waitLiveness';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const id = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -110,5 +110,33 @@ test('wait liveness re-evaluates dependency transitions and nudges after initial
   } finally {
     sessionManager.clearActiveSessionRuntimeState(child);
     await cleanup([parent, child]);
+  }
+});
+
+test('wait liveness bounds simultaneous model-wake admissions across one idle dependency fan-out', async () => {
+  const dependency = id('wait_liveness_fanout_dependency');
+  const waiters = Array.from({ length: MAX_CONCURRENT_LIVENESS_WAKES + 4 }, (_, index) => id(`wait_liveness_fanout_${index}`));
+  try {
+    await sessionManager.getSession(dependency);
+    for (const waiterId of waiters) {
+      await sessionManager.getSession(waiterId);
+      const wait = await sessionManager.startSessionWait(waiterId, { waitAnySessions: [dependency], declarationVersion: 1 });
+      armWaitLivenessDiagnostic(waiterId, wait.id);
+    }
+    await sleep(600);
+    const states = await Promise.all(waiters.map(waiterId => sessionManager.getSession(waiterId)));
+    const admitted = states.filter(session => session.meta.wait === undefined
+      && JSON.stringify(session.queue).includes('wait-sources-quiescent'));
+    const stillWaiting = states.filter(session => session.meta.wait?.waitAnySessions?.includes(dependency));
+    assert.equal(admitted.length, MAX_CONCURRENT_LIVENESS_WAKES);
+    assert.equal(stillWaiting.length, 4);
+
+    admitted[0].queue = [];
+    await sessionManager.saveSession(admitted[0]);
+    await sleep(100);
+    const afterOneSettles = await Promise.all(waiters.map(waiterId => sessionManager.getSession(waiterId)));
+    assert.equal(afterOneSettles.filter(session => session.meta.wait === undefined).length, MAX_CONCURRENT_LIVENESS_WAKES + 1);
+  } finally {
+    await cleanup([...waiters, dependency]);
   }
 });

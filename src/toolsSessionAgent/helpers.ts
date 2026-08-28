@@ -46,6 +46,34 @@ export function buildEndTurnResult(_reason?: string) {
   return { output: 'ok', __toolLoopControl: { stopCurrentTurn: true } };
 }
 
+export type AfterSendBehavior = 'continue' | 'finish' | 'wait';
+
+export function normalizeAfterSendBehavior(
+  args: ToolArgs,
+  toolName: 'send_to_session' | 'create_child_session',
+): AfterSendBehavior {
+  for (const key of ['waitAfterHandoff', 'noFurtherAssistantReply'] as const) {
+    if (args[key] !== undefined && typeof args[key] !== 'boolean') {
+      throw new Error(`${toolName} ${key} must be a boolean when provided.`);
+    }
+  }
+  const afterSend = args.afterSend;
+  if (afterSend !== undefined) {
+    if (afterSend !== 'continue' && afterSend !== 'finish' && afterSend !== 'wait') {
+      throw new Error(`${toolName} afterSend must be one of: continue, finish, wait.`);
+    }
+    if (args.waitAfterHandoff !== undefined || args.noFurtherAssistantReply !== undefined) {
+      throw new Error(`${toolName} afterSend cannot be combined with legacy waitAfterHandoff or noFurtherAssistantReply.`);
+    }
+    return afterSend;
+  }
+  // Hidden compatibility fields remain readable for direct callers and old
+  // persisted tool calls, but are intentionally absent from the model schema.
+  if (args.waitAfterHandoff === true) return 'wait';
+  if (args.noFurtherAssistantReply === true) return 'finish';
+  return 'continue';
+}
+
 export function normalizeWaitFallbackSeconds(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') {
     return undefined;
@@ -270,7 +298,7 @@ export type ForcedSessionModelEffort = {
 };
 
 const CREATE_CHILD_SESSION_KEYS = new Set([
-  'suffix', 'fork', 'message', 'node', 'forceModel', 'noFurtherAssistantReply', 'waitAfterHandoff',
+  'suffix', 'fork', 'message', 'node', 'forceModel', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff',
 ]);
 const CREATE_SESSION_KEYS = new Set([
   'agentName', 'sessionName', 'displayName', 'parentSessionId', 'forceModel', 'systemPromptFiles',
@@ -340,7 +368,7 @@ export function normalizeCreateChildSessionArgs(
   normalizeForceModel(args, 'create_child_session', makeError);
   const unknownKey = Object.keys(args).find(key => !CREATE_CHILD_SESSION_KEYS.has(key));
   if (unknownKey) {
-    throw makeError(`create_child_session accepts only suffix, fork, message, node, forceModel, noFurtherAssistantReply, and waitAfterHandoff; unknown key: ${unknownKey}.`);
+    throw makeError(`create_child_session accepts only suffix, fork, message, node, forceModel, and afterSend; unknown key: ${unknownKey}.`);
   }
   if (typeof args.suffix !== 'string' || !args.suffix.trim()) {
     throw makeError('create_child_session requires a non-empty suffix.');
@@ -349,6 +377,11 @@ export function normalizeCreateChildSessionArgs(
     if (args[key] !== undefined && typeof args[key] !== 'boolean') {
       throw makeError(`create_child_session ${key} must be a boolean when provided.`);
     }
+  }
+  try {
+    normalizeAfterSendBehavior(args, 'create_child_session');
+  } catch (error) {
+    throw makeError(error instanceof Error ? error.message : String(error));
   }
   if (args.message !== undefined && typeof args.message !== 'string') {
     throw makeError('create_child_session message must be a string when provided.');
