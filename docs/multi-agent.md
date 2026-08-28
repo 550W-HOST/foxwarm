@@ -65,7 +65,7 @@ send_to_session({
   suffix: string,
   fork?: boolean,
   message?: string,
-  waitAfterHandoff?: boolean,
+  afterSend?: 'continue' | 'finish' | 'wait',
   node?: string,
   forceModel?: {
     modelId?: string,
@@ -77,7 +77,7 @@ send_to_session({
 说明：
 - `fork: true` 会继承当前上下文
 - `message` 可用于直接下发第一条任务
-- `waitAfterHandoff: true` 会在初始消息成功交接后结束当前回合，并等待新的 session 活动；需要非空 `message`
+- `afterSend` 控制初始消息成功发送后的行为：`continue` 继续当前回合（默认），`finish` 结束并进入 idle，`wait` 结束并等待 child 后续活动；`wait` 需要非空 `message`
 - `node` 可让 child session 绑定到特定 node
 - 只有明确需要覆盖继承/default 行为时才传 `forceModel`；`forceModel: {}` 等同于不覆盖
 
@@ -87,36 +87,40 @@ send_to_session({
 {
   sessionId: string,
   message: string,
-  waitAfterHandoff?: boolean,
+  afterSend?: 'continue' | 'finish' | 'wait',
 }
 ```
 
 用于跨 session 协作、测试交接、结果回报等。
 
-如果成功 handoff 后就应结束当前回合并等待新的 session 活动，推荐直接设置：
+Child 完成任务并向 Parent 发送最终报告时，应使用 `finish`：
 
 ```ts
 send_to_session({
   sessionId: 'main_analysis',
   message: 'Review complete.',
-  waitAfterHandoff: true,
+  afterSend: 'finish',
 })
 ```
 
-无论 `waitAfterHandoff` 是 `true` 还是 `false`，后续回复都会正常投递；该选项只决定 handoff 成功后当前回合是否等待新的 session 活动。这个 wait 会记录已解析目标作为预期来源，但不按目标 session 过滤，也不等待任务完成。显式 `wait` 必须声明 `waitAllSessions`、`waitAnySessions`、精确的 `waitExecIds`、`waitForInput:true` 或正数 `wakeIfNoActivityAfterSeconds` 之一；不要再调用 `wait({})`。
+只有确实需要目标后续回复时才使用 `afterSend:'wait'`；它会记录已解析目标作为预期来源，但不按目标 session 过滤，也不等待任务完成。`afterSend:'continue'` 发送后继续当前工具循环。显式 `wait` 必须声明 `waitAllSessions`、`waitAnySessions`、精确的 `waitExecIds`、`waitForInput:true` 或正数 `wakeIfNoActivityAfterSeconds` 之一；不要调用 `wait({})`。
 
 ### `wait`
 
 ```ts
 {
   reason?: string,
-  timeoutSeconds?: number,
+  waitAllSessions?: string[],
+  waitAnySessions?: string[],
+  waitExecIds?: string[],
+  waitForInput?: true,
+  wakeIfNoActivityAfterSeconds?: number,
 }
 ```
 
 用于在当前这一批工具调用完成后暂停当前 session，直到新消息或事件到达。常见用法是和 `send_to_session(...)` / `create_child_session(...)` 搭配。
 
-如果传入 `timeoutSeconds`，且这段时间内没有其它消息或事件唤醒 session，系统会用固定的 timeout system message 唤醒它。
+如果传入 `wakeIfNoActivityAfterSeconds`，且这段时间内没有其它消息或事件唤醒 session，系统会用一次性 fallback system message 唤醒它。
 
 ## 常用命令
 

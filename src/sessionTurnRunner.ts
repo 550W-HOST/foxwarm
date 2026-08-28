@@ -1220,7 +1220,7 @@ export class SessionTurnRunner {
 
         const waitForReply = (toolResultMsg as any).__toolPostAction?.waitForReply === true;
         if (waitForReply && !session.stopping && !session.meta?.wait) {
-          const targets = (toolResultMsg as any).__toolPostAction?.successfulWaitAfterHandoffTargets;
+          const targets = (toolResultMsg as any).__toolPostAction?.successfulWaitAfterSendTargets;
           const resolvedTargets = Array.isArray(targets)
             ? [...new Set(targets.filter((target: unknown): target is string => typeof target === 'string' && !!target))]
             : [];

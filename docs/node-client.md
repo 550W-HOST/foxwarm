@@ -62,6 +62,14 @@ Then approve the pending node from the master:
 /node approve <pending-id> my-node
 ```
 
+## Client compatibility
+
+The Master and Node client negotiate a core Node-protocol generation during pairing and authenticated registration. This version covers the coupled execution wire contract; it is separate from individual tool schemas and Code service versions.
+
+An outdated Node may authenticate and remain connected for heartbeat/status, but Foxwarm marks it **upgrade required** and will not select it, advertise its tools/services, or dispatch work to it. `/node list` and Architecture show this state explicitly. Update the Node from the current Master's bootstrap/source bundle and restart it; approved credentials remain valid, so re-pairing is not normally required.
+
+A current Node client also rejects an old Master that omits a compatible negotiation response, rather than appearing ready until a later tool call fails.
+
 By default, the bare-metal script also:
 
 - downloads `/node/source.tar.gz`

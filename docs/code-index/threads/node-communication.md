@@ -6,12 +6,13 @@ This thread owns the authenticated remote transport contract among the master [n
 
 ## Pairing and authentication
 
-1. A new client connects to `/node_ws` in pairing mode and sends `pair_request`.
+1. A new client connects to `/node_ws` in pairing mode and sends `pair_request` with its supported core Node-protocol range.
 2. The master creates a pending record; an operator lists and approves/rejects it.
 3. The approved client claims `nodeId` plus plaintext `authToken` once and stores it locally.
 4. The master persists only the token hash.
-5. The client reconnects in authenticated mode and sends `node_register` with tool definitions and optional versioned service capabilities.
-6. The master registers the live connection in `nodesManager`.
+5. The client reconnects in authenticated mode and sends `node_register` with the same core protocol range, tool definitions, and optional versioned service capabilities.
+6. The master negotiates the newest intersecting core protocol generation before registering the live connection in `nodesManager`. A missing range is legacy generation 1.
+7. A compatible Node becomes ready. An authenticated incompatible Node stays connected in an `upgrade-required` quarantine for heartbeat and diagnostics, but advertises no executable tools/services and cannot be selected or dispatched.
 
 ## Model-tool flow
 
@@ -71,6 +72,7 @@ The master serves current launch scripts, compose, PowerShell, and a minimal dyn
 - [CLI node TUI](../units/cli-node-tui.md)
 - [browser node extension](../units/browser-node-extension.md)
 - [shared node tools](../units/shared-node-tools.md)
+- [shared Node protocol](../units/shared-node-protocol.md)
 - [terminal router](../units/src-terminal-router.md)
 
 ## Design decisions
@@ -84,6 +86,10 @@ Generic Node/provider ownership is canonical in [D-dispatch-generic-node-provide
 ### D-node-thread-authenticated-identity
 
 Master authorization binds to the authenticated WebSocket node identity. Node IDs in event/tool payloads are data, not authority.
+
+### D-node-thread-core-protocol-compatibility
+
+[2026-08-27] Authentication establishes Node identity but does not imply execution compatibility. Pairing and authenticated registration advertise an explicit bounded core Node-protocol range; absence means legacy generation 1, and Master chooses the newest intersection. A disjoint range leaves the authenticated transport connected and visible as `upgrade-required`, while every tool, file, backend-service, selection, and session-event path fails before remote dispatch with `NODE_PROTOCOL_INCOMPATIBLE`. Master and client both validate the negotiation so new-client/old-Master and old-client/new-Master combinations fail clearly instead of appearing ready and failing on a later capability call. Compatibility is transport-wide because request IDs, result envelopes, execution IDs, session events, and service framing are one coupled contract; per-tool and backend-service versions remain subordinate capability metadata.
 
 ### D-node-thread-remote-exec-completion
 

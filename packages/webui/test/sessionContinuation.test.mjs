@@ -170,7 +170,7 @@ const cases = [
   { name: 'failed ordinary sibling still completes a successful handoff terminal batch', messages: [
     { role: 'model', parts: [
       { functionCall: { id: 'read-before-handoff', name: 'read', args: {} } },
-      { functionCall: { id: 'successful-handoff', name: 'send_to_session', args: { sessionId: 'child', message: 'go', waitAfterHandoff: true } } },
+      { functionCall: { id: 'successful-handoff', name: 'send_to_session', args: { sessionId: 'child', message: 'go', afterSend: 'wait' } } },
     ] },
     { role: 'tool', parts: [
       { functionResponse: { tool_use_id: 'read-before-handoff', name: 'read', response: { error: 'read failed' } } },
@@ -183,9 +183,11 @@ const cases = [
     callMessage('nearest-read', 'read'),
     toolMessage('nearest-read', 'read'),
   ], incomplete: true },
-  { name: 'send_to_session waitAfterHandoff is terminal completion', messages: [callMessage('send-1', 'send_to_session', { sessionId: 'child', message: 'go', waitAfterHandoff: true }), toolMessage('send-1', 'send_to_session')], incomplete: false },
-  { name: 'create_child_session waitAfterHandoff is terminal completion', messages: [callMessage('child-1', 'create_child_session', { suffix: 'child', message: 'go', waitAfterHandoff: true }), toolMessage('child-1', 'create_child_session')], incomplete: false },
-  { name: 'handoff without waitAfterHandoff still needs a model response', messages: [callMessage('send-2', 'send_to_session', { sessionId: 'child', message: 'go' }), toolMessage('send-2', 'send_to_session')], incomplete: true },
+  { name: 'send_to_session afterSend wait is terminal completion', messages: [callMessage('send-1', 'send_to_session', { sessionId: 'child', message: 'go', afterSend: 'wait' }), toolMessage('send-1', 'send_to_session')], incomplete: false },
+  { name: 'send_to_session afterSend finish is terminal completion', messages: [callMessage('send-finish', 'send_to_session', { sessionId: 'parent', message: 'done', afterSend: 'finish' }), toolMessage('send-finish', 'send_to_session')], incomplete: false },
+  { name: 'create_child_session afterSend wait is terminal completion', messages: [callMessage('child-1', 'create_child_session', { suffix: 'child', message: 'go', afterSend: 'wait' }), toolMessage('child-1', 'create_child_session')], incomplete: false },
+  { name: 'legacy waitAfterHandoff remains terminal completion', messages: [callMessage('legacy-send', 'send_to_session', { sessionId: 'child', message: 'go', waitAfterHandoff: true }), toolMessage('legacy-send', 'send_to_session')], incomplete: false },
+  { name: 'handoff with default continue still needs a model response', messages: [callMessage('send-2', 'send_to_session', { sessionId: 'child', message: 'go' }), toolMessage('send-2', 'send_to_session')], incomplete: true },
   { name: 'optimistic client row never overrides committed completion', messages: [userText(), modelText(), { ...userText('optimistic'), __meta: { optimistic: true, temporary: true, clientMessageId: 'pending-1' } }], incomplete: false },
   { name: 'reconciled committed client row is an incomplete user turn', messages: [modelText(), { ...userText('committed'), __meta: { clientMessageId: 'client-1' } }], incomplete: true },
   { name: 'temporary local row is transparent over committed incompletion', messages: [modelText(), userText(), { role: 'model', parts: [{ text: 'temporary error' }], __meta: { temporary: true } }], incomplete: true },

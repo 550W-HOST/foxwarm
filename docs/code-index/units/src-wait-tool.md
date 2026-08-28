@@ -1,6 +1,6 @@
 # Unit: src-wait-tool
 
-Files: src/toolsSessionAgent/waitTool.test.ts, src/toolsSessionAgent/detachedWait.test.ts
+Files: src/toolsSessionAgent/waitTool.test.ts, src/toolsSessionAgent/detachedWait.test.ts, src/waitLiveness.ts, src/waitLiveness.test.ts
 Secondary files: src/toolsSessionAgent/interSession.ts
 
 ## Purpose
@@ -49,6 +49,7 @@ Tests the `wait` tool functionality, including timeout behavior, `waitAllSession
 - Tests interaction between compact-commit safe-point items and waitAll deferred queues
 - Covers router immediate-reply behavior around commands/authorization and confirms busy user messages are enqueued without a queued/busy acknowledgement.
 - Confirms legacy persisted waits remain readable while current source-less/reason-only calls reject.
+- Declared dependency waits use transition-driven quiescence diagnostics. Diagnostic model-wake admission is process-wide and capped at four Sessions until each admitted Session settles, with a periodic settled-state recheck for a missing terminal notification; startup reconstruction and ordinary dependency transitions share that bound.
 - The canonical wait owner exposes a passed-Session primitive with an explicit persistence callback. `tool_wait` uses it only for an exact trusted current owner; no-hook and mismatched callers retain the ID-based SessionManager path. Mutation, normalization, deferred-wait rejection, and unconditional persistence ordering are identical.
 - Timeout waits persist the wait first, then call the separate fixed `main-management-tools@1.scheduleWaitTimeout` method with only source ID, wait ID, and positive finite seconds. No-timeout waits require no Main service call.
 - Confirms session clear removes an armed activity wait, and executor coverage verifies that an explicit wait whose stop is suppressed by a sibling error clears only its own token. Flagged handoff integration is covered by `src-tools-session-agent` under [D-pipeline-handoff-wait](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait).

@@ -17,6 +17,7 @@ import type { Session } from './types';
 import { getAgentDir } from './config';
 import { checkToolPermission, isToolVisibleForSession } from './isolatedCheck';
 import { createHash } from 'node:crypto';
+import type { NodeProtocolCompatibility } from '../packages/shared/dist/nodeProtocol';
 
 export type NodeExecutionRoutingSnapshot = {
   currentNode: string;
@@ -42,6 +43,8 @@ export type NodeTopologyListResponse = { nodes: Array<{
   availability: 'ready' | 'unavailable' | 'offline' | 'error';
   lastActivity?: number;
   tools: Array<{ name: string; description?: string; parameters?: unknown }>;
+  unavailable?: { code: string; message: string; retryable: boolean };
+  protocolCompatibility?: NodeProtocolCompatibility;
 }> };
 export type NodeSelectRequest = { sourceSessionId: string; nodeId: string };
 export type NodeSelectResponse = { nodeId: string; defaultCwd: string };
@@ -59,7 +62,7 @@ export type NodeLifecycleRequest = {
 };
 export type NodeLifecycleResponse = { result: NodeLifecycleResult };
 
-export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 3, {
+export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 4, {
   execute: rpcMethod<NodeExecutionRequest, NodeExecutionResponse>(),
   list: rpcMethod<NodeTopologyListRequest, NodeTopologyListResponse>(),
   select: rpcMethod<NodeSelectRequest, NodeSelectResponse>(),
@@ -304,8 +307,17 @@ export function createNodeExecutionServiceHandler(options: {
           const parameters = parametersValue === undefined ? undefined : plainJsonWithin(parametersValue, 16 * 1024);
           tools.push({ name, ...(description ? { description } : {}), ...(parameters !== undefined ? { parameters } : {}) });
         }
+        const unavailable = node.unavailable
+          && typeof node.unavailable.code === 'string' && node.unavailable.code.length <= 128
+          && typeof node.unavailable.message === 'string' && node.unavailable.message.length <= 2000
+          ? { code: node.unavailable.code, message: node.unavailable.message, retryable: node.unavailable.retryable === true }
+          : undefined;
+        const protocolCompatibility = node.protocolCompatibility && plainJsonWithin(node.protocolCompatibility, 4096) as NodeProtocolCompatibility | undefined;
         const candidate = { id: node.id, kind: node.kind, provider: node.provider, type: node.type, availability: node.availability,
-          ...(typeof node.lastActivity === 'number' && Number.isFinite(node.lastActivity) && node.lastActivity >= 0 ? { lastActivity: node.lastActivity } : {}), tools };
+          ...(typeof node.lastActivity === 'number' && Number.isFinite(node.lastActivity) && node.lastActivity >= 0 ? { lastActivity: node.lastActivity } : {}),
+          ...(unavailable ? { unavailable } : {}),
+          ...(protocolCompatibility ? { protocolCompatibility } : {}),
+          tools };
         const size = Buffer.byteLength(JSON.stringify(candidate), 'utf8') + (output.length ? 1 : 0);
         if (totalBytes + size > 256 * 1024) break;
         totalBytes += size; output.push(candidate);

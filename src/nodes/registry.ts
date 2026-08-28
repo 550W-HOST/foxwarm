@@ -3,6 +3,13 @@ import { WebSocket } from 'ws'
 import { NODES_FILE } from '../config'
 import { logger } from '../common'
 import { DiskJsonData } from '../utils/diskJsonData'
+import {
+  CURRENT_NODE_PROTOCOL_RANGE,
+  LEGACY_NODE_PROTOCOL_RANGE,
+  negotiateNodeProtocol,
+  type NodeProtocolCompatibility,
+  type NodeProtocolRange,
+} from '../../packages/shared/dist/nodeProtocol'
 
 export type NodeToolDefinition = {
   name: string
@@ -25,6 +32,8 @@ export type ApprovedNodeRecord = {
   updatedAt: number
   lastSeenAt?: number
   capabilities?: NodeCapabilitiesSnapshot
+  nodeProtocol?: NodeProtocolRange
+  protocolCompatibility?: NodeProtocolCompatibility
 }
 
 export type PendingPairingRecord = {
@@ -35,6 +44,8 @@ export type PendingPairingRecord = {
   updatedAt: number
   pairCode: string
   capabilities: NodeCapabilitiesSnapshot
+  nodeProtocol?: NodeProtocolRange
+  legacyProtocol?: boolean
   /** Set when approved but not yet delivered to the client */
   approvedNodeId?: string
   /** Plaintext auth token — stored temporarily until client picks it up */
@@ -209,6 +220,8 @@ export async function createPendingPairing(input: {
   requestedName?: string
   nodeType: string
   capabilities: NodeCapabilitiesSnapshot
+  nodeProtocol?: NodeProtocolRange
+  legacyProtocol?: boolean
 }): Promise<PendingPairingRecord> {
   await cleanupExpiredPendingPairings()
   const data = await loadRegistry()
@@ -221,6 +234,8 @@ export async function createPendingPairing(input: {
     updatedAt: now,
     pairCode: generatePairCode(),
     capabilities: input.capabilities,
+    nodeProtocol: input.nodeProtocol || LEGACY_NODE_PROTOCOL_RANGE,
+    legacyProtocol: input.legacyProtocol ?? input.nodeProtocol === undefined,
   }
   data.pendingPairings[pending.id] = pending
   await saveRegistry()
@@ -246,7 +261,28 @@ export async function listPendingPairings(): Promise<Array<PendingPairingRecord 
 export async function listApprovedNodes(): Promise<ApprovedNodeRecord[]> {
   await cleanupExpiredPendingPairings()
   const data = await loadRegistry()
-  return Object.values(data.approvedNodes).sort((a, b) => a.nodeId.localeCompare(b.nodeId))
+  return Object.values(data.approvedNodes)
+    .map((entry) => {
+      try {
+        const nodeProtocol = entry.nodeProtocol || LEGACY_NODE_PROTOCOL_RANGE
+        return {
+          ...entry,
+          nodeProtocol,
+          protocolCompatibility: negotiateNodeProtocol(
+            nodeProtocol,
+            CURRENT_NODE_PROTOCOL_RANGE,
+            entry.protocolCompatibility?.legacyClient ?? entry.nodeProtocol === undefined,
+          ),
+        }
+      } catch {
+        return {
+          ...entry,
+          nodeProtocol: LEGACY_NODE_PROTOCOL_RANGE,
+          protocolCompatibility: negotiateNodeProtocol(LEGACY_NODE_PROTOCOL_RANGE, CURRENT_NODE_PROTOCOL_RANGE, true),
+        }
+      }
+    })
+    .sort((a, b) => a.nodeId.localeCompare(b.nodeId))
 }
 
 export async function removeApprovedNode(nodeIdInput: string): Promise<ApprovedNodeRecord> {
@@ -372,7 +408,7 @@ export async function authenticateApprovedNode(nodeId: string, authToken: string
   return record
 }
 
-export async function touchApprovedNode(nodeId: string, update: Partial<Pick<ApprovedNodeRecord, 'lastSeenAt' | 'updatedAt' | 'capabilities' | 'nodeType' | 'requestedName' | 'displayName'>> = {}): Promise<void> {
+export async function touchApprovedNode(nodeId: string, update: Partial<Pick<ApprovedNodeRecord, 'lastSeenAt' | 'updatedAt' | 'capabilities' | 'nodeType' | 'requestedName' | 'displayName' | 'nodeProtocol' | 'protocolCompatibility'>> = {}): Promise<void> {
   const data = await loadRegistry()
   const record = data.approvedNodes[nodeId]
   if (!record) {
@@ -421,6 +457,12 @@ export async function approvePendingPairing(pendingId: string, requestedNodeId?:
     createdAt: now,
     updatedAt: now,
     capabilities: pending.capabilities,
+    nodeProtocol: pending.nodeProtocol || LEGACY_NODE_PROTOCOL_RANGE,
+    protocolCompatibility: negotiateNodeProtocol(
+      pending.nodeProtocol || LEGACY_NODE_PROTOCOL_RANGE,
+      CURRENT_NODE_PROTOCOL_RANGE,
+      pending.legacyProtocol ?? pending.nodeProtocol === undefined,
+    ),
   }
   delete data.pendingPairings[pendingId]
   await saveRegistry()

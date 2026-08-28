@@ -49,6 +49,7 @@ The operator-facing deployment/configuration workflow is documented by the singl
 - Node IDs are slugged, validated against reserved IDs, and deduplicated.
 - Master-side WebSocket heartbeat sends protocol ping frames every 30 seconds and requires liveness within 10 seconds.
 - Pre-authentication messages are queued and replayed after authentication.
+- Authenticated registration negotiates the shared core Node protocol before capability admission. Incompatible clients remain connected and visible as upgrade-required, but cannot advertise executable capabilities, receive dispatch, become current, or emit application events. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
 - Ordinary node-to-session `session_event` is allowed only when the target session's `currentNode` equals the authenticated node ID, or the target belongs to an isolated agent bound to that node. Remote exec completion instead requires the scoped start-time capability, correlated ACK, deterministic mailbox identity, and newest-32 authoritative Session receipt contract defined by [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
 - Agent isolation is an agent-level permission boundary. Selecting a session `currentNode` routes execution but does not create isolation or an exclusive lease.
 - Backend services are versioned fixed protocols and do not pass through model-tool approval.
@@ -59,6 +60,8 @@ The operator-facing deployment/configuration workflow is documented by the singl
 
 ## Compatibility
 
+- Missing core protocol metadata is explicitly classified as legacy generation 1 rather than assumed current. Operators update/restart an upgrade-required Node; credentials and pairing approval remain valid.
+- Current CLI, browser-extension, and Android Node clients advertise and validate generation 2; no official client relies on the omitted-field legacy classification.
 - Approved-node rename is server-side registry migration plus old-runtime disconnect. The current client has no credential-rewrite protocol; the operator updates/restarts/re-pairs the node.
 - `/node/run-cli-node.sh` remains a bootstrap route alias for the current interactive script.
 - Existing numbered `nodes.json` backups remain readable through the durable JSON store.

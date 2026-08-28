@@ -1,6 +1,7 @@
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from '../tools/placement';
 import { nodesManager } from './manager';
 import { CLI_NODE_CAPABILITIES } from '../../packages/shared/dist/nodeCapabilities';
+import { describeNodeProtocolCompatibility, type NodeProtocolCompatibility } from '../../packages/shared/dist/nodeProtocol';
 import { read, write, edit, apply_patch } from '../../packages/shared/dist/nodeTools';
 import type { FileOperations, FileOperationStat, FileOperationDirectoryEntry } from '../../packages/shared/dist/fileOperations';
 
@@ -30,6 +31,8 @@ export type NodeDescriptor = {
   primitiveBackends?: NodePrimitiveBackends;
   lastActivity?: number;
   defaultCwd?: string;
+  unavailable?: { code: string; message: string; retryable: boolean };
+  protocolCompatibility?: NodeProtocolCompatibility;
 };
 
 /** Descriptor shape implemented by providers; primitive providers never supply model tool definitions. */
@@ -246,6 +249,13 @@ export class NodeProviderRegistry {
   async invokeTool(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown> {
     const resolved = await this.resolveNode(request.nodeId, options);
     if (!resolved || resolved.descriptor.availability !== 'ready') {
+      if (resolved?.descriptor.unavailable) {
+        throw new NodeProviderError(
+          resolved.descriptor.unavailable.code,
+          resolved.descriptor.unavailable.message,
+          resolved.descriptor.unavailable.retryable,
+        );
+      }
       throw new NodeProviderError(
         'NODE_EXECUTION_NODE_UNAVAILABLE',
         `Node \`${request.nodeId}\` is not available.`,
@@ -573,6 +583,13 @@ export class NodeProviderRegistry {
   async getDefaultCwd(request: NodeDefaultCwdRequest, options?: NodeProviderCallOptions): Promise<string | undefined> {
     const resolved = await this.resolveNode(request.nodeId, options);
     if (!resolved || resolved.descriptor.availability !== 'ready') {
+      if (resolved?.descriptor.unavailable) {
+        throw new NodeProviderError(
+          resolved.descriptor.unavailable.code,
+          resolved.descriptor.unavailable.message,
+          resolved.descriptor.unavailable.retryable,
+        );
+      }
       throw new NodeProviderError(
         'NODE_EXECUTION_NODE_UNAVAILABLE',
         `Node \`${request.nodeId}\` is not available.`,
@@ -633,6 +650,21 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
   private descriptorForRuntimeNode(nodeId: string): NodeDescriptor | undefined {
     const node: any = nodesManager.getNode(nodeId);
     if (!node || nodeId === 'master' || !node.ws) return undefined;
+    const compatibility = node.protocolCompatibility as NodeProtocolCompatibility | undefined;
+    if (compatibility?.status === 'upgrade-required') {
+      const message = `Node \`${nodeId}\` is connected but cannot execute tools. ${describeNodeProtocolCompatibility(compatibility)}`;
+      return {
+        id: nodeId,
+        kind: 'remote',
+        provider: this.id,
+        type: typeof node.type === 'string' && node.type ? node.type : 'remote',
+        availability: 'error',
+        tools: [],
+        unavailable: { code: 'NODE_PROTOCOL_INCOMPATIBLE', message, retryable: false },
+        protocolCompatibility: compatibility,
+        ...(typeof node.lastActivity === 'number' ? { lastActivity: node.lastActivity } : {}),
+      };
+    }
     const advertised = Array.isArray(node.capabilities?.tools)
       ? node.capabilities.tools
       : [...(node.tools || [])].map((name: string) => {
@@ -648,6 +680,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
       type: typeof node.type === 'string' && node.type ? node.type : 'remote',
       availability: 'ready',
       tools: advertised,
+      ...(compatibility ? { protocolCompatibility: compatibility } : {}),
       ...(typeof node.lastActivity === 'number' ? { lastActivity: node.lastActivity } : {}),
     };
   }
@@ -685,6 +718,12 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
         'NODE_EXECUTION_NODE_UNAVAILABLE',
         `Remote node \`${request.nodeId}\` is not connected.`,
         true,
+      );
+    }
+    if (node.protocolCompatibility?.status === 'upgrade-required') {
+      throw new NodeProviderError(
+        'NODE_PROTOCOL_INCOMPATIBLE',
+        `Node \`${request.nodeId}\` is connected but cannot execute tools. ${describeNodeProtocolCompatibility(node.protocolCompatibility)}`,
       );
     }
     if (!node.tools.has(request.toolName)) {

@@ -9,6 +9,7 @@ const HEARTBEAT_INTERVAL_MS = 25000;
 const HEARTBEAT_TIMEOUT_MS = 10000;
 const RECONNECT_DELAY_MS = 5000;
 const NODE_TYPE = 'browser-extension';
+const NODE_PROTOCOL = Object.freeze({ min: 2, max: 2 });
 
 let ws = null;
 let heartbeatTimer = null;
@@ -18,6 +19,7 @@ let reconnectTimer = null;
 let forceImmediateReconnect = false;
 let connectionState = 'disconnected'; // disconnected, connecting, connected, pairing, registered
 let pairingRejected = false;
+let protocolIncompatible = false;
 let currentNodeId = null;
 let manualDisconnect = false;
 let stateChangeCallback = null;
@@ -104,9 +106,30 @@ async function handleMessage(data) {
 
   switch (data.type) {
     case 'registered':
+      if (!data.nodeProtocol?.master
+        || !Number.isInteger(data.nodeProtocol.master.min)
+        || !Number.isInteger(data.nodeProtocol.master.max)
+        || data.nodeProtocol.master.min > NODE_PROTOCOL.max
+        || data.nodeProtocol.master.max < NODE_PROTOCOL.min
+        || !Number.isInteger(data.nodeProtocol.negotiated)
+        || data.nodeProtocol.negotiated < NODE_PROTOCOL.min
+        || data.nodeProtocol.negotiated > NODE_PROTOCOL.max) {
+        protocolIncompatible = true;
+        console.error('[foxwarm-node] Master Node protocol is incompatible; update Master or this extension');
+        setState('protocol_incompatible', { nodeId: data.nodeId, nodeProtocol: data.nodeProtocol });
+        ws?.close(1008, 'Master Node protocol incompatible');
+        break;
+      }
+      protocolIncompatible = false;
       console.log(`[foxwarm-node] Registered as ${data.nodeId}`);
       currentNodeId = data.nodeId;
       setState('registered', { nodeId: data.nodeId });
+      break;
+
+    case 'node_incompatible':
+      protocolIncompatible = true;
+      console.error('[foxwarm-node] Node protocol is incompatible:', data.message);
+      setState('protocol_incompatible', data);
       break;
 
     case 'pair_pending':
@@ -244,6 +267,7 @@ export async function connect() {
         type: 'node_register',
         nodeType: NODE_TYPE,
         capabilities,
+        nodeProtocol: NODE_PROTOCOL,
       });
     } else {
       send({
@@ -251,6 +275,7 @@ export async function connect() {
         requestedName: conn.nodeName || 'browser-ext',
         nodeType: NODE_TYPE,
         capabilities,
+        nodeProtocol: NODE_PROTOCOL,
       });
     }
   };
@@ -271,6 +296,10 @@ export async function connect() {
 
     if (pairingRejected) {
       console.warn('[foxwarm-node] Pairing rejected, not reconnecting');
+      return;
+    }
+    if (protocolIncompatible) {
+      console.error('[foxwarm-node] Protocol incompatible, not reconnecting until the extension is updated/reloaded');
       return;
     }
 

@@ -28,13 +28,13 @@ Renders a bounded system-operations dashboard and persistent Agent registry for 
 
 - The primary surface is execution-node lanes, not a second recursive navigation tree.
 - Effective placement is the active tool's `executionNode`, otherwise `currentNode`, otherwise `master`. This makes cross-node tool execution visible while it is occurring.
-- `/nodes` supplies Master/CLI Node identity, online state, type, display name, and service count. Unknown placement IDs remain visible as unavailable node lanes rather than disappearing.
+- `/nodes` supplies Master/CLI Node identity, transport state, core protocol compatibility, type, display name, and service count. Connected incompatible Nodes remain visible as amber `upgrade required` lanes, do not count as ready, and are disabled as isolation targets. Unknown placement IDs remain visible as unavailable node lanes rather than disappearing.
 - Each lane reports loaded, active, and waiting counts. A preview shows at most six rows while prioritizing current/selected and active sessions; expanding a large lane exposes all loaded rows inside a node-owned scroll region capped at 360px so one busy node cannot push every later node far down the page.
 - Empty nodes remain as compact headers, preserving system topology without tall empty placeholder bodies.
 
 ### Operations and inspector
 
-- Summary cards expose agents, sessions, active, waiting, queued, online nodes, and managed-session count. Active/waiting/queued summary cards also set the local status filter.
+- Summary cards expose agents, sessions, active, waiting, queued, protocol-ready nodes, and managed-session count. Active/waiting/queued summary cards also set the local status filter.
 - One compact topology control bar replaces unbounded Agent/status chip clouds: search and bounded Agent/status selects occupy the primary control area, while total/cached/input/output token traffic forms one read-only trailing group. Agent selection remains backend-owned. Local filters cover all, active, waiting, queued, and isolated rows; search matches session ID/name, agent, effective node, model, active tool, and wait kind.
 - Clicking a session selects it for inspection without navigation. The explicit Open control enters the chat Session.
 - The inspector shows canonical runtime state/phase/model/queue, active tool and arguments, wait condition and pending targets, agent/node/CWD/isolation, messages/activity/tokens, and loaded parent/child relationships.
@@ -44,7 +44,7 @@ Renders a bounded system-operations dashboard and persistent Agent registry for 
 ### Agent registry
 
 - The Topology/Agents surface switch separates runtime Session placement from persistent Agent management. The Agents summary counts real workspace directories, including valid zero-session Agents that do not appear in Session-derived catalog summaries.
-- Registry cards show self-owned memory file count/recency plus session, active, queue, inheritance, and isolation summaries. The selected Agent and Agents with active Sessions are presented before ordinary alphabetical rows.
+- Registry cards show self-owned memory file count/recency plus session, active, queue, inheritance, and isolation summaries. Their order is independent of selection so clicking a card never moves it: `main` is first, followed by active Agents, other populated Agents, and empty workspaces, with IDs alphabetical inside each group.
 - The registry reuses `AgentCreationMenu` for Agent and Session creation. Agent update changes only mutable inheritance/isolation metadata; Agent ID is not renamed because it is a durable namespace, permission scope, and archive identity component.
 - The Agent inspector displays the complete inheritance chain, allows an isolation Node selection, and loads a bounded, symlink-free Markdown manifest from self-owned `memory/`. Top-level `00_SYSTEM.md`, `MEMORY.md`, `SOUL.md`, and `USER.md` are prioritized, nested project files follow, and `archive/` is last. Folder/file actions open the exact Master path in Code without copying file content through the registry API.
 - Agent deletion requires exact typed Agent-ID confirmation. `main` is immutable; Agents inherited by another Agent and Agents with active Sessions are rejected. Confirmation authorizes destructive removal of idle owned Sessions and any queued work through canonical Session deletion, then removes the self-owned workspace and Agent metadata; durable Session archives and their reserved identities remain.

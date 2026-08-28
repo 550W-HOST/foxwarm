@@ -8,7 +8,7 @@ import { createSessionListRefreshScheduler, requestSessionListStreamOpenResync }
 import { BoundedReplayRevisionMismatch, createEpochRows, filterPresentationPathForAgent, mergeDeltaRows, mergeForcedPresentationPath, mergeHttpRows, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from '../boundedSessionReplay'
 import { webUiRealtime } from '../realtime'
 import { parseWebUiNodeTargets, type WebUiNodeTarget } from '../nodeTargets'
-import { filterArchitectureSessions, getArchitectureNodePreview, getArchitectureSessionNodeId, groupArchitectureSessionsByNode, type ArchitectureStatusFilter } from '../architectureOperations'
+import { filterArchitectureSessions, getArchitectureNodePreview, getArchitectureSessionNodeId, groupArchitectureSessionsByNode, orderArchitectureAgents, type ArchitectureStatusFilter } from '../architectureOperations'
 import { makeVscodeWebUrl } from '../vscodeWeb'
 
 interface ArchitectureViewProps {
@@ -180,20 +180,24 @@ function NodeLane({ node, rows, selectedSessionId, currentSession, now, onInspec
   const activeCount = rows.filter(isSessionRuntimeActive).length
   const waitingCount = rows.filter(session => getSessionRuntimeStateName(session) === 'waiting').length
   const serviceCount = Object.keys(node.services || {}).length
+  const upgradeRequired = node.protocolStatus === 'upgrade-required'
+  const ready = node.online && !upgradeRequired
+  const quarantined = node.online && upgradeRequired
+  const statusLabel = quarantined ? 'upgrade required' : node.online ? 'ready' : upgradeRequired ? 'offline · upgrade required' : 'offline'
   const preferredIds = new Set([selectedSessionId, currentSession].filter((id): id is string => !!id))
   const visibleRows = expanded ? rows : getArchitectureNodePreview(rows, preferredIds)
   return (
     <section data-architecture-node-id={node.id} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-4 py-3 dark:border-gray-700">
         <div className="flex min-w-0 items-center gap-3">
-          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${node.online ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300' : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'}`}>
+          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${ready ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300' : quarantined ? 'bg-amber-50 text-amber-600 dark:bg-amber-950/40 dark:text-amber-300' : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'}`}>
             <Server className="h-4 w-4" />
           </span>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h3 className="truncate text-sm font-semibold text-gray-900 dark:text-white">{node.displayName || node.id}</h3>
-              <span className={`h-1.5 w-1.5 rounded-full ${node.online ? 'bg-emerald-500' : 'bg-gray-400'}`} />
-              <span className="text-[10px] uppercase tracking-wide text-gray-400">{node.online ? 'online' : 'offline'}</span>
+              <span className={`h-1.5 w-1.5 rounded-full ${ready ? 'bg-emerald-500' : quarantined ? 'bg-amber-500' : 'bg-gray-400'}`} />
+              <span className={`text-[10px] uppercase tracking-wide ${quarantined ? 'text-amber-600 dark:text-amber-300' : 'text-gray-400'}`}>{statusLabel}</span>
             </div>
             <div className="mt-0.5 truncate font-mono text-[10px] text-gray-400">{node.id} · {node.type || 'remote'}{serviceCount ? ` · ${serviceCount} services` : ''}</div>
           </div>
@@ -471,7 +475,7 @@ function AgentRegistryInspector({ agent, allAgents, nodes, memoryFiles, memoryLo
 
         <section className="mt-4 border-t border-gray-100 pt-4 dark:border-gray-700">
           <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400"><Shield className="h-3.5 w-3.5" /> Isolation</h3>
-          <label className="mt-2 block text-xs text-gray-500">Execution node<select value={isolatedNode} onChange={event => setIsolatedNode(event.target.value)} className="mt-1 w-full rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-2 text-xs text-gray-800 outline-none focus:border-blue-400 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"><option value="">Shared runtime</option>{nodes.filter(node => node.id !== 'master').map(node => <option key={node.id} value={node.id}>{node.displayName} · {node.online ? 'online' : 'offline'}</option>)}</select></label>
+          <label className="mt-2 block text-xs text-gray-500">Execution node<select value={isolatedNode} onChange={event => setIsolatedNode(event.target.value)} className="mt-1 w-full rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-2 text-xs text-gray-800 outline-none focus:border-blue-400 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"><option value="">Shared runtime</option>{nodes.filter(node => node.id !== 'master').map(node => <option key={node.id} value={node.id} disabled={node.protocolStatus === 'upgrade-required'}>{node.displayName} · {node.protocolStatus === 'upgrade-required' ? 'upgrade required' : node.online ? 'ready' : 'offline'}</option>)}</select></label>
           <button type="button" disabled={!dirty || saving} onClick={() => { void save() }} className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-3.5 w-3.5" />{saving ? 'Saving…' : 'Save agent settings'}</button>
         </section>
 
@@ -800,15 +804,10 @@ export default function ArchitectureView({
     { id: 'isolated', label: 'Isolated', count: sessions.filter(session => session.isolated).length },
   ]
 
-  const onlineNodes = displayNodes.filter(node => node.online).length
+  const readyNodes = displayNodes.filter(node => node.online && node.protocolStatus !== 'upgrade-required').length
   const totalTokens = summary.totalCachedTokens + summary.totalInputTokens + summary.totalOutputTokens
   const selectedRegistryAgent = selectedRegistryAgentId ? agentRegistry.find(agent => agent.id === selectedRegistryAgentId) || null : null
-  const orderedAgentRegistry = useMemo(() => [...agentRegistry].sort((left, right) => {
-    if (left.id === selectedRegistryAgentId) return -1
-    if (right.id === selectedRegistryAgentId) return 1
-    if ((left.activeSessionCount > 0) !== (right.activeSessionCount > 0)) return left.activeSessionCount > 0 ? -1 : 1
-    return left.id.localeCompare(right.id)
-  }), [agentRegistry, selectedRegistryAgentId])
+  const orderedAgentRegistry = useMemo(() => orderArchitectureAgents(agentRegistry), [agentRegistry])
 
   const createAgentFromRegistry = async (agentId: string, inheritAgent?: string) => {
     if (onCreateAgent) await onCreateAgent(agentId, inheritAgent)
@@ -888,7 +887,7 @@ export default function ArchitectureView({
             <SummaryMetric label="Active" value={summary.activeCount} detail="model or tool work" icon={<Activity className="h-4 w-4" />} onClick={() => { setSurface('topology'); setStatusFilter('active') }} active={surface === 'topology' && statusFilter === 'active'} />
             <SummaryMetric label="Waiting" value={summary.waitingCount} detail="loaded wait conditions" icon={<Clock3 className="h-4 w-4" />} onClick={() => { setSurface('topology'); setStatusFilter('waiting') }} active={surface === 'topology' && statusFilter === 'waiting'} />
             <SummaryMetric label="Queued" value={summary.queuedSessions} detail="sessions with pending work" icon={<MessageSquare className="h-4 w-4" />} onClick={() => { setSurface('topology'); setStatusFilter('queued') }} active={surface === 'topology' && statusFilter === 'queued'} />
-            <SummaryMetric label="Nodes online" value={`${onlineNodes}/${displayNodes.length}`} detail="master and remote nodes" icon={<Server className="h-4 w-4" />} onClick={() => setSurface('topology')} />
+            <SummaryMetric label="Nodes ready" value={`${readyNodes}/${displayNodes.length}`} detail="protocol-compatible execution" icon={<Server className="h-4 w-4" />} onClick={() => setSurface('topology')} />
           </div>
 
         </header>

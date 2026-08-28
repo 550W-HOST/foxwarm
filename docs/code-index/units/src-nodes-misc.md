@@ -1,6 +1,6 @@
 # Unit: src-nodes-misc
 
-Files: src/nodes/websocket.ts, src/nodes/httpRoutes.ts, src/nodes/httpRoutes.test.ts, src/nodes/runSh.test.ts, src/nodes/runPs1.test.ts, src/nodes/bootstrapInfo.ts, src/nodes/bootstrapInfo.test.ts, src/nodes/cliSessionAccess.test.ts, src/tools/changeCurrentNode.test.ts, src/commands/nodeCommand.test.ts, templates/node/run.sh, templates/node/run.ps1
+Files: src/nodes/websocket.ts, src/nodes/websocketProtocol.test.ts, src/nodes/httpRoutes.ts, src/nodes/httpRoutes.test.ts, src/nodes/runSh.test.ts, src/nodes/runPs1.test.ts, src/nodes/bootstrapInfo.ts, src/nodes/bootstrapInfo.test.ts, src/nodes/cliSessionAccess.test.ts, src/tools/changeCurrentNode.test.ts, src/commands/nodeCommand.test.ts, templates/node/run.sh, templates/node/run.ps1
 
 ## Purpose
 
@@ -58,6 +58,7 @@ Manages node connectivity to the master server via WebSocket (pairing and authen
 ## Behavior
 
 - WebSocket supports two connection modes: **pairing** (new node presents a shared token, sends `pair_request`, waits for approval) and **approved** (returning node authenticates with node ID + auth token, then registers).
+- Pairing persists the offered core protocol range. Approved registration negotiates it before capability admission; omitted metadata is legacy generation 1, compatible peers receive the selected protocol, and incompatible authenticated peers receive a structured upgrade-required response while remaining connected under a message quarantine. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
 - Heartbeat pings every 30s; terminates the socket if no pong within 10s. Activity is recorded in both the in-memory manager and the persistent registry.
 - Messages received before authentication completes are queued and replayed once ready.
 - Authenticated message dispatch forwards `node_service_response`, `node_service_error`, and `node_service_event` to the manager with the actual socket's node identity, preventing one node from satisfying another node's pending request/event channel.

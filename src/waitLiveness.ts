@@ -1,11 +1,17 @@
 import crypto from 'crypto';
 import * as sessionManager from './sessionManager';
+import { logger } from './common';
 import { formatFoxwarmSystem } from './utils/promptWrappers';
 
 const GRACE_MS = 300;
+export const MAX_CONCURRENT_LIVENESS_WAKES = 4;
+const ACTIVE_WAKE_RECHECK_MS = 5 * 60 * 1000;
 const scheduled = new Map<string, NodeJS.Timeout>();
 const dependenciesByWaiter = new Map<string, string[]>();
 const waitersByDependency = new Map<string, Set<string>>();
+const pendingWakeOrder: string[] = [];
+const pendingWakes = new Map<string, { waitId: string; fingerprint: string; message: string }>();
+const activeWakes = new Map<string, NodeJS.Timeout>();
 let initialized = false;
 
 type WaitProjection = {
@@ -68,9 +74,63 @@ function schedule(sessionId: string): void {
 }
 
 function onTransition(sessionId: string): void {
+  releaseWakeSlotIfSettled(sessionId);
   replaceIndex(sessionId);
   schedule(sessionId);
   for (const waiter of waitersByDependency.get(sessionId) || []) schedule(waiter);
+}
+
+function releaseWakeSlot(sessionId: string): void {
+  const lease = activeWakes.get(sessionId);
+  if (!lease) return;
+  clearTimeout(lease);
+  activeWakes.delete(sessionId);
+  pumpWakeQueue();
+}
+
+function releaseWakeSlotIfSettled(sessionId: string): void {
+  if (!activeWakes.has(sessionId)) return;
+  const session = sessionManager.getSessionCatalog(sessionId);
+  if (!session) { releaseWakeSlot(sessionId); return; }
+  const runtime = sessionManager.buildSessionRuntimeState(session);
+  const active = runtime.state === 'requesting-model' || runtime.state === 'running-tool';
+  if (!active && runtime.queueLength === 0) releaseWakeSlot(sessionId);
+}
+
+function queueBoundedWake(sourceSessionId: string, waitId: string, fingerprint: string, message: string): void {
+  if (activeWakes.has(sourceSessionId)) return;
+  if (!pendingWakes.has(sourceSessionId)) pendingWakeOrder.push(sourceSessionId);
+  pendingWakes.set(sourceSessionId, { waitId, fingerprint, message });
+  pumpWakeQueue();
+}
+
+function armWakeSlotRecheck(sessionId: string): NodeJS.Timeout {
+  const timer = setTimeout(() => {
+    if (!activeWakes.has(sessionId)) return;
+    releaseWakeSlotIfSettled(sessionId);
+    if (activeWakes.has(sessionId)) activeWakes.set(sessionId, armWakeSlotRecheck(sessionId));
+  }, ACTIVE_WAKE_RECHECK_MS);
+  timer.unref?.();
+  return timer;
+}
+
+function pumpWakeQueue(): void {
+  while (activeWakes.size < MAX_CONCURRENT_LIVENESS_WAKES && pendingWakeOrder.length > 0) {
+    const sourceSessionId = pendingWakeOrder.shift()!;
+    const pending = pendingWakes.get(sourceSessionId);
+    pendingWakes.delete(sourceSessionId);
+    if (!pending) continue;
+    const wait = currentWait(sourceSessionId);
+    if (!isDiagnosticCandidate(wait) || wait.id !== pending.waitId) continue;
+
+    activeWakes.set(sourceSessionId, armWakeSlotRecheck(sourceSessionId));
+    void sessionManager.queueSessionSystemEvent(sourceSessionId, pending.message, 'background', undefined, undefined, undefined,
+      { fingerprint: pending.fingerprint, waitId: pending.waitId })
+      .catch(error => {
+        logger.error({ err: error, sessionId: sourceSessionId, waitId: pending.waitId }, 'Failed to admit bounded wait-liveness wake');
+        releaseWakeSlot(sourceSessionId);
+      });
+  }
 }
 
 export function initializeWaitLivenessDiagnostics(): void {
@@ -134,6 +194,5 @@ async function diagnose(sourceSessionId: string, expectedWaitId: string): Promis
   if (Array.isArray(source?.meta?.waitLivenessFingerprints) && source.meta.waitLivenessFingerprints.includes(result.fingerprint)) return;
   const message = formatFoxwarmSystem({ kind: 'event', type: 'wait-sources-quiescent', fingerprint: result.fingerprint },
     'The declared wait dependency Sessions currently show no queued, active, timed, exec-backed, input-backed, or transitively declared progress path after a short recheck. This is an observed potentially quiescent state, not proof of deadlock; explicit user or inter-session input may be needed.');
-  await sessionManager.queueSessionSystemEvent(sourceSessionId, message, 'background', undefined, undefined, undefined,
-    { fingerprint: result.fingerprint, waitId: expectedWaitId });
+  queueBoundedWake(sourceSessionId, expectedWaitId, result.fingerprint, message);
 }

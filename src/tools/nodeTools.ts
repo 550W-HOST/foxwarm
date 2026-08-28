@@ -84,6 +84,7 @@ export const tool_list_nodes = async (_args: ToolArgs = {}, ctx?: ToolContext) =
     const body = nodes.map(node => {
         const label = node.kind === 'master' ? 'local' : node.kind;
         return `- \`${node.id}\` (${label})${node.id === currentNode ? ' ✅ current' : ''}`
+            + (node.availability !== 'ready' ? ` ⚠️ ${node.unavailable?.message || node.availability}` : '')
             + (typeof node.lastActivity === 'number' ? ` - Last activity: ${new Date(node.lastActivity).toISOString()}` : '');
     }).join('\n');
     return `Found ${nodes.length} node(s). Current node: \`${currentNode}\`.\n\n${body}\n${providerBody}`
