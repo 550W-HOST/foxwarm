@@ -74,6 +74,12 @@ test('handoff runtime validates afterSend, preserves hidden legacy controls, and
       { sessionId: sourceId, session: source },
     );
     assert.equal(legacy.__toolPostAction.waitForReply, true);
+    const legacyFinish: any = await tool_send_to_session(
+      { sessionId: targetId, message: 'legacy finish', noFurtherAssistantReply: true },
+      { sessionId: sourceId, session: source },
+    );
+    assert.equal(legacyFinish.__toolLoopControl.stopCurrentTurn, true);
+    assert.deepEqual(legacyFinish.__toolPostAction, { finishAfterSend: true });
 
     await assert.rejects(() => tool_send_to_session(
       { sessionId: targetId, message: 'legacy name is rejected', waitForReply: true },
@@ -135,7 +141,7 @@ test('create_child_session afterSend wait validates initial message and awaits s
       { sessionId: parentId, session: parent },
     );
     assert.equal(finish.__toolLoopControl?.stopCurrentTurn, true);
-    assert.equal(finish.__toolPostAction, undefined);
+    assert.deepEqual(finish.__toolPostAction, { finishAfterSend: true });
     const [finishChildId] = sessionManager.getChildSessionIds(parentId);
     const finishChild = await sessionManager.getSession(finishChildId);
     assert.equal(finishChild.queue.length, 1);
@@ -236,6 +242,45 @@ test('completed child report finishes idle without arming a wait or another LLM 
     parent.busy = false;
     await sessionManager.deleteSession(childId).catch(() => false);
     await sessionManager.deleteSession(parentId).catch(() => false);
+  }
+});
+
+test('afterSend finish remains terminal after a sibling error and appends the complete tool batch once', async () => {
+  const sourceId = makeId('finish_error_source');
+  const targetId = makeId('finish_error_target');
+  const source = await resetSession(sourceId);
+  const target = await resetSession(targetId);
+  target.busy = true;
+  const router = new MessageRouter() as any;
+  const originalChat = llm.chat;
+  let calls = 0;
+  (llm as any).chat = async (parts: MessagePart[] | null, active: Session) => {
+    calls++;
+    await appendStubUser(active, parts);
+    const finishCall = { id: 'finish-send', name: 'send_to_session', args: { sessionId: targetId, message: 'done', afterSend: 'finish' } };
+    const errorCall = { id: 'finish-sibling-error', name: 'read', args: { filePath: `/missing-finish-${Date.now()}` } };
+    await appendStubModel(active, [{ functionCall: finishCall }, { functionCall: errorCall }]);
+    return { text: '', toolCalls: [finishCall, errorCall] };
+  };
+  try {
+    source.queue.push({ type: 'user', parts: [{ text: 'finish after delivery' }] });
+    await sessionManager.saveSession(sourceId);
+    await router.processSessionQueue(sourceId);
+    assert.equal(calls, 1);
+    assert.equal(source.busy, false);
+    assert.equal(source.meta.wait, undefined);
+    assert.equal(target.queue.length, 1);
+    assert.equal(source.history.filter(message => message.role === 'model').length, 1);
+    const toolMessage = source.history.at(-1)!;
+    assert.equal(toolMessage.role, 'tool');
+    assert.deepEqual(toolMessage.parts.map(part => part.functionResponse?.name), ['send_to_session', 'read']);
+    assert.equal(toolMessage.parts[0].functionResponse?.response?.error, undefined);
+    assert.notEqual(toolMessage.parts[1].functionResponse?.response?.error, undefined);
+  } finally {
+    (llm as any).chat = originalChat;
+    target.busy = false;
+    await sessionManager.deleteSession(sourceId).catch(() => false);
+    await sessionManager.deleteSession(targetId).catch(() => false);
   }
 });
 

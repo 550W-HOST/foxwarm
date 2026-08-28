@@ -1326,6 +1326,7 @@ type ExecutedToolCall = PreparedToolCall & {
     explicitWaitId?: string;
     successfulSendToSessionTarget?: string;
     successfulWaitAfterSendTarget?: string;
+    successfulFinishAfterSend: boolean;
     deferredExecCwdSync?: { nextCwd: string };
 };
 
@@ -1434,6 +1435,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
     let explicitWaitId: string | undefined;
     let successfulSendToSessionTarget: string | undefined;
     let successfulWaitAfterSendTarget: string | undefined;
+    let successfulFinishAfterSend = false;
     let deferredExecCwdSync: { nextCwd: string } | undefined;
 
     try {
@@ -1469,6 +1471,8 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
                     && (prepared.call.args?.afterSend === 'wait' || prepared.call.args?.waitAfterHandoff === true)
                     && waitForReply
                     ? successfulSendToSessionTarget : undefined;
+                successfulFinishAfterSend = (prepared.call.name === 'send_to_session' || prepared.call.name === 'create_child_session')
+                    && result.__toolPostAction.finishAfterSend === true;
             }
             if (result.__execBatchCwdSync && typeof result.__execBatchCwdSync.nextCwd === 'string') {
                 deferredExecCwdSync = { nextCwd: result.__execBatchCwdSync.nextCwd };
@@ -1499,6 +1503,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
         explicitWaitId,
         successfulSendToSessionTarget,
         successfulWaitAfterSendTarget,
+        successfulFinishAfterSend,
         deferredExecCwdSync,
     };
 }
@@ -1531,6 +1536,7 @@ function buildFailedToolCall(prepared: PreparedToolCall, error: any): ExecutedTo
         imageParts: [],
         stopCurrentTurn: false,
         waitForReply: false,
+        successfulFinishAfterSend: false,
     };
 }
 
@@ -1541,6 +1547,7 @@ function buildSkippedToolCall(prepared: PreparedToolCall): ExecutedToolCall {
         imageParts: [],
         stopCurrentTurn: false,
         waitForReply: false,
+        successfulFinishAfterSend: false,
     };
 }
 
@@ -1655,6 +1662,7 @@ export async function executeTools(
     const explicitWaitIds: string[] = [];
     const successfulSendToSessionTargets: string[] = [];
     const successfulWaitAfterSendTargets: string[] = [];
+    let successfulFinishAfterSend = false;
 
     for (const execution of executions) {
         let result = execution.result;
@@ -1690,6 +1698,7 @@ export async function executeTools(
         if (execution.successfulWaitAfterSendTarget && !successfulWaitAfterSendTargets.includes(execution.successfulWaitAfterSendTarget)) {
             successfulWaitAfterSendTargets.push(execution.successfulWaitAfterSendTarget);
         }
+        successfulFinishAfterSend = successfulFinishAfterSend || execution.successfulFinishAfterSend;
     }
 
     if (stopCurrentTurn && batchHasError) {
@@ -1703,14 +1712,15 @@ export async function executeTools(
     }
 
     const toolMessage: Message = { role: 'tool', parts };
-    if (stopCurrentTurn && !batchHasError) {
+    if ((stopCurrentTurn && !batchHasError) || successfulFinishAfterSend) {
         (toolMessage as any).__toolLoopControl = { stopCurrentTurn: true };
     } else if (stopCurrentTurn) {
         logger.debug({ sessionId: toolContext.sessionId || session?.id, toolCount: functionCalls.length }, 'Suppressing stopCurrentTurn because a tool in the batch returned an error');
     }
-    if (waitForReply || successfulSendToSessionTargets.length || successfulWaitAfterSendTargets.length) {
+    if (waitForReply || successfulFinishAfterSend || successfulSendToSessionTargets.length || successfulWaitAfterSendTargets.length) {
         (toolMessage as any).__toolPostAction = {
             ...(waitForReply ? { waitForReply: true } : {}),
+            ...(successfulFinishAfterSend ? { finishAfterSend: true } : {}),
             ...(successfulSendToSessionTargets.length ? { successfulSendToSessionTargets } : {}),
             ...(successfulWaitAfterSendTargets.length ? { successfulWaitAfterSendTargets } : {}),
         };

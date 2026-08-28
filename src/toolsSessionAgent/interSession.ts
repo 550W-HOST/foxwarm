@@ -53,13 +53,13 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
       return { output, __toolPostAction: { waitForReply: true, successfulSendToSessionTarget: childSessionId } };
     }
     return afterSend === 'finish'
-      ? { ...buildEndTurnResult(), output }
+      ? { ...buildEndTurnResult(), output, __toolPostAction: { finishAfterSend: true } }
       : output;
   }
 
   const output = `Child session created: \`${childSessionId}\` (${fork ? 'forked from parent' : 'new session'})`;
   return afterSend === 'finish'
-    ? { ...buildEndTurnResult(), output }
+    ? { ...buildEndTurnResult(), output, __toolPostAction: { finishAfterSend: true } }
     : output;
 }
 
@@ -90,10 +90,12 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
     } };
   }
   if (!includeSuccessfulTarget) {
-    return afterSend === 'finish' ? { ...buildEndTurnResult(), output } : output;
+    return afterSend === 'finish'
+      ? { ...buildEndTurnResult(), output, __toolPostAction: { finishAfterSend: true } }
+      : output;
   }
   return afterSend === 'finish'
-    ? { ...buildEndTurnResult(), output, __toolPostAction: { successfulSendToSessionTarget } }
+    ? { ...buildEndTurnResult(), output, __toolPostAction: { finishAfterSend: true, successfulSendToSessionTarget } }
     : { output, __toolPostAction: { successfulSendToSessionTarget } };
 }
 
