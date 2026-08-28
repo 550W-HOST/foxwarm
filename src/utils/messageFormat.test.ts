@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Message } from '../types';
-import { formatMessagePreviewText } from './messageFormat';
+import { formatMessagePreviewText, formatSubstantiveMessageSearchText } from './messageFormat';
 import { formatMessagePreviewLine, getMessagePreview } from './messagePreview';
 import { containsLoneSurrogate } from './unicode';
 
@@ -61,4 +61,25 @@ test('tool response preview truncation does not split surrogate pairs', () => {
 
   assert.equal(containsLoneSurrogate(preview), false);
   assert.doesNotMatch(JSON.stringify(preview), /\\ud83e(?!\\udd8a)/i);
+});
+
+test('substantive search formatting preserves canonical channel precedence and dual fields', () => {
+  const channelWrapped = makeMessage([{
+    text: 'ignored sibling AlphaNode_42',
+    system: '<foxwarm-message type="channel">\nwrapped channel authority\n</foxwarm-message>',
+    functionCall: { id: 'call-1', name: 'search', args: { query: 'ignored tool AlphaNode_42' } },
+  }]);
+  assert.equal(formatSubstantiveMessageSearchText(channelWrapped), 'wrapped channel authority');
+
+  const dual = makeMessage([{ text: 'ordinary text', system: 'ordinary system ÄÖÜß_名' }]);
+  const dualText = formatSubstantiveMessageSearchText(dual);
+  assert.match(dualText, /ordinary text/);
+  assert.match(dualText, /ordinary system ÄÖÜß_名/);
+
+  assert.equal(formatSubstantiveMessageSearchText({ ...dual, modelVisible: false }), '');
+  assert.equal(formatSubstantiveMessageSearchText(makeMessage([{
+    text: '--- RELEVANT MEMORY SNIPPETS (RAG) --- hidden',
+    thinking: 'hidden',
+    functionCall: { id: 'call-2', name: 'search', args: { query: 'hidden' } },
+  }])), '');
 });

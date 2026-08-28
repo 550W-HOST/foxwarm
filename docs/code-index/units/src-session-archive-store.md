@@ -1,6 +1,6 @@
 # Unit: src-session-archive-store
 
-Files: src/session/archiveStore.ts, src/session/archiveBootstrapImport.test.ts, src/session/archiveImportState.test.ts, src/session/archiveLineageStore.test.ts, src/session/archiveMessageStats.test.ts, src/session/archivePureReads.test.ts
+Files: src/session/archiveStore.ts, src/session/archiveBootstrapImport.test.ts, src/session/archiveImportState.test.ts, src/session/archiveLexicalSearch.test.ts, src/session/archiveLineageStore.test.ts, src/session/archiveMessageStats.test.ts, src/session/archivePureReads.test.ts
 Secondary files: src/session/sessionIdAllocation.test.ts
 
 ## Purpose
@@ -26,6 +26,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 - `getVectorCheckpoint`, `getVectorCheckpointSync`, `setVectorCheckpointSync` — vector progress.
 - `getVectorSearchLineage`, `listSessionsNeedingVectorBackfill` — vector scope/backfill inputs.
 - `getLocalArchiveVectorMaximaSync` — read-only durable local message/block maxima for bounded Vector lag status.
+- `locateEffectiveArchiveCandidatesBySubstring` — pure identifier-candidate lookup over existing message/block rows with alias-aware cumulative fork caps, canonical shared raw-message formatting before the match cap, bounded NFKC/lower matching, parameterized block-summary ASCII matching, and hard lineage/row/result bounds.
 - `renameSessionArchiveStore` — bootstrapped transactional ID/parent/checkpoint/import-state rename.
 - `renameSessionArchiveStoreForRecovery` — startup-journal rollback variant that updates existing SQLite rows before normal bootstrap can infer a duplicate branch.
 - `migrateLegacySessionArchivesToSqlite` — migration-only strict import/verification inventory for active legacy message/block JSONLs.
@@ -63,6 +64,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 - Message statistics aggregate covering `(session_id, seq)` range scans per lineage branch without materializing message JSON. Empty, unknown, aliased, inherited, capped, and out-of-range queries match the corresponding local/effective reader result exactly.
 - Session-list sequence counts use one SQL statement for up to 200 exact live Session IDs. Ordinary/branch-absent rows return the local maximum seq; rows whose archive branch has a parent return the nonnegative local maximum minus that branch's immediate fork point. The query never consults Session-tree relations or materializes message JSON.
 - Ordinary local/effective readers, branch lookup, archived-ID lookup, and vector-lineage lookup open the SQLite schema and resolve committed aliases without creating branches or repairing/re-writing reservation state. Startup initialization and explicit lifecycle/write operations retain the repair/ownership path.
+- Identifier candidate lookup follows the same read-only alias/lineage boundary. Its bounded lineage builder stops before reading a seventeenth branch, while ordinary exact/vector lineage callers retain the unbounded cycle-safe behavior. Raw lookup loads at most 2,000 newest role/model-visible rows per entry, parses them, renders each through `formatSubstantiveMessageSearchText`, performs NFKC/lower locator matching, and only then applies the 64-match cap. This shares exact final-scoring semantics for channel-wrapper precedence, dual text/system fields, and display/tool/thinking/ephemeral/RAG exclusion instead of duplicating them in SQL. Block-summary lookup remains separately bounded and parameterized for ASCII locators. The operation returns loaded Archive records only and never creates FTS/schema/checkpoint/branch state.
 - Current message/block writes return only rows actually inserted by that call. The active-history commit path may delete those exact rows if authoritative JSON persistence fails, so a retry can reuse the same identity without overwriting or deleting an older immutable replay row.
 - Child branch creation seeds vector checkpoints at its fork boundaries.
 - Backfill candidates are sessions whose latest local message/block exceeds the checkpoint.

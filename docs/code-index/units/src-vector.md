@@ -48,6 +48,8 @@ Provides one asynchronous, optionally disabled vector facade with local and supe
 
 Model-facing `contentFilter` and final preview filtering are owned by the shared context preview renderer, not by the vector table.
 
+Exact/current-Session model-facing recall may supplement these dense families with the nonpersistent Archive identifier side-channel owned by `src/toolsSessionAgent/archiveLexicalRecall.ts`. That side-channel does not change this Vector runtime, table, embeddings, checkpoints, disabled behavior, or RPC descriptor.
+
 ## Indexing behavior
 
 - Raw archive records become overlapping segment rows; block summaries become one row per block.

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as sessionManager from '../sessionManager';
 import * as vector from '../vector';
+import * as archiveLexicalRecall from './archiveLexicalRecall';
 import type { Session } from '../types';
 import { containsLoneSurrogate } from '../utils/unicode';
 import { selectVectorRawMessageWindow, tool_recall } from './archiveRecall';
@@ -119,6 +120,8 @@ async function withRecallStubs<T>(options: {
   messages?: (args: any) => any;
   status?: (sessionId: string) => any;
   session?: Session;
+  lexical?: (sessionId: string, query: string, limit: number) => any;
+  dense?: () => any;
 }, run: (ctx: any) => Promise<T>): Promise<T> {
   const session = options.session || createSession();
   const originals = {
@@ -127,8 +130,9 @@ async function withRecallStubs<T>(options: {
     blocks: sessionManager.getArchivedBlocks,
     messages: sessionManager.getArchivedMessages,
     isolated: sessionManager.isSessionEffectivelyIsolated,
+    lexical: archiveLexicalRecall.searchArchiveLexicalSideChannel,
   };
-  (vector as any).search = async () => options.hits;
+  (vector as any).search = async () => options.dense ? options.dense() : options.hits;
   (vector as any).getArchiveIndexStatus = async (sessionId: string) => options.status?.(sessionId) || ({
     lastIndexedSeq: 0, tailStartSeq: 0, lastIndexedBlockId: 0,
     latestLocalMessageSeq: 0, latestLocalBlockId: 0, pendingMessageCount: 0, pendingBlockCount: 0,
@@ -138,6 +142,7 @@ async function withRecallStubs<T>(options: {
   (sessionManager as any).getArchivedMessages = async (_sessionId: string, args: any) => options.messages?.(args)
     || ({ records: [], totalMatched: 0, returnedCount: 0, availableRange: {}, requestedRange: args });
   (sessionManager as any).isSessionEffectivelyIsolated = () => false;
+  (archiveLexicalRecall as any).searchArchiveLexicalSideChannel = async (sessionId: string, query: string, limit: number) => options.lexical?.(sessionId, query, limit) || [];
   try {
     return await run({ sessionId: session.id, session, persistCurrentSession: async () => {} } as any);
   } finally {
@@ -146,6 +151,7 @@ async function withRecallStubs<T>(options: {
     (sessionManager as any).getArchivedBlocks = originals.blocks;
     (sessionManager as any).getArchivedMessages = originals.messages;
     (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
+    (archiveLexicalRecall as any).searchArchiveLexicalSideChannel = originals.lexical;
   }
 }
 
@@ -210,6 +216,56 @@ test('vector recall filters source groups before enforcing the final unique-sour
   assert.doesNotMatch(output, /Alpha keep third/);
   assert.doesNotMatch(output, /drop fourth/);
   assert.match(output, /1 additional matched item\(s\) omitted by the requested result limit/);
+});
+
+test('exact-session lexical side-channel rescues dense misses and retains filters, limits, and budgets', async () => {
+  let lexicalCalls = 0;
+  const output = String(await withRecallStubs({
+    hits: [],
+    lexical: (sessionId, query) => {
+      lexicalCalls += 1;
+      assert.equal(sessionId, 'vector-quality-owner');
+      assert.equal(query, 'AlphaNode_42');
+      return [
+        { id: 'lex-1', kind: 'raw', session_id: 'source-session', start_seq: 1, end_seq: 1, raw_start_seq: 1, raw_end_seq: 1, source_family: 'source-session:raw:1-1', lexical_score: 500, lexical_locators: ['AlphaNode_42'] },
+        { id: 'lex-2', kind: 'raw', session_id: 'source-session', start_seq: 2, end_seq: 2, raw_start_seq: 2, raw_end_seq: 2, source_family: 'source-session:raw:2-2', lexical_score: 450, lexical_locators: ['AlphaNode_42'] },
+      ];
+    },
+    messages: args => ({ records: [messageRecord(args.startSeq, args.startSeq === 1 ? 'AlphaNode_42 keep authority' : 'AlphaNode_42 drop noise')], requestedRange: args }),
+  }, ctx => tool_recall({
+    vector_query: 'AlphaNode_42', scope: 'current-session', contentFilter: 'keep', limit: 1, previewLength: 1000,
+  }, ctx)));
+  assert.equal(lexicalCalls, 1);
+  assert.match(output, /AlphaNode_42 keep authority/);
+  assert.doesNotMatch(output, /drop noise/);
+  assert.ok(output.length <= 1000);
+});
+
+test('broad semantic scope skips Archive lexical scan and lexical failure preserves dense results', async () => {
+  let broadCalls = 0;
+  await withRecallStubs({
+    hits: [],
+    lexical: () => { broadCalls += 1; return []; },
+  }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-agent', limit: 1 }, ctx));
+  assert.equal(broadCalls, 0);
+
+  const output = String(await withRecallStubs({
+    hits: [{
+      id: 'dense', kind: 'raw', session_id: 'source-session', start_seq: 3, end_seq: 3,
+      raw_start_seq: 3, raw_end_seq: 3, source_family: 'source-session:raw:3-3', chunk_text: 'dense authority',
+    }],
+    lexical: () => { throw new Error('Archive lexical unavailable'); },
+    messages: args => ({ records: [messageRecord(args.startSeq, 'dense authority survives')], requestedRange: args }),
+  }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-session', limit: 1 }, ctx)));
+  assert.match(output, /dense authority survives/);
+
+  let disabledLexicalCalls = 0;
+  await assert.rejects(() => withRecallStubs({
+    hits: [],
+    dense: () => { throw Object.assign(new Error('Vector is disabled'), { code: 'VECTOR_DISABLED' }); },
+    lexical: () => { disabledLexicalCalls += 1; return []; },
+  }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-session', limit: 1 }, ctx)), /Vector is disabled/);
+  assert.equal(disabledLexicalCalls, 0, 'disabled Vector must not become lexical-only recall');
 });
 
 test('vector recall labels full and selected raw windows while preview budget remains bounded', async () => {

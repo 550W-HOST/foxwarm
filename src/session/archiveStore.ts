@@ -11,6 +11,7 @@ import type { ArchiveBlockRecord } from './layeredContext';
 import type { ExtractedMemoryFact } from './compactPlan';
 import { loadSessionsMetadataSnapshot } from './metadataStore';
 import { syncDirectoryDurably } from '../utils/diskJsonData';
+import { formatSubstantiveMessageSearchText } from '../utils/messageFormat';
 
 export type ArchiveBranchRecord = {
   sessionId: string;
@@ -1068,6 +1069,7 @@ function parseMemoryFactsJson(value: unknown): ExtractedMemoryFact[] | undefined
 }
 
 function getBranchInternal(sessionId: string): ArchiveBranchRecord | null {
+  archiveBranchReadObserverForTests?.(sessionId);
   const row = getDb().prepare(`
     SELECT session_id, parent_session_id, fork_message_seq, fork_block_id, created_at, updated_at
     FROM archive_branches
@@ -1076,7 +1078,13 @@ function getBranchInternal(sessionId: string): ArchiveBranchRecord | null {
   return normalizeBranch(row);
 }
 
-function buildLineage(sessionId: string): LineageEntry[] {
+let archiveBranchReadObserverForTests: ((sessionId: string) => void) | undefined;
+
+export function setArchiveBranchReadObserverForTests(observer?: (sessionId: string) => void): void {
+  archiveBranchReadObserverForTests = observer;
+}
+
+function buildLineage(sessionId: string, maxEntries: number = Number.MAX_SAFE_INTEGER): LineageEntry[] {
   const lineage: LineageEntry[] = [];
   let currentSessionId: string | undefined = sessionId;
   let currentMaxMessageSeq: number | undefined = undefined;
@@ -1084,7 +1092,8 @@ function buildLineage(sessionId: string): LineageEntry[] {
   let inherited = false;
   const seen = new Set<string>();
 
-  while (currentSessionId && !seen.has(currentSessionId)) {
+  const boundedMaxEntries = Math.max(1, Math.floor(maxEntries));
+  while (currentSessionId && !seen.has(currentSessionId) && lineage.length < boundedMaxEntries) {
     seen.add(currentSessionId);
     lineage.push({
       sessionId: currentSessionId,
@@ -1092,6 +1101,8 @@ function buildLineage(sessionId: string): LineageEntry[] {
       maxMessageSeq: currentMaxMessageSeq,
       maxBlockId: currentMaxBlockId,
     });
+
+    if (lineage.length >= boundedMaxEntries) break;
 
     const branch = getBranchInternal(currentSessionId);
     if (!branch?.parentSessionId) {
@@ -1553,6 +1564,156 @@ export async function readEffectiveArchiveBlocks(sessionId: string, startId?: nu
   }
 
   return results.sort((a, b) => a.id - b.id || Number(a.createdAt) - Number(b.createdAt));
+}
+
+export type ArchiveLexicalCandidate =
+  | { kind: 'message'; sourceSessionId: string; inherited: boolean; record: ArchiveMessageRecord }
+  | { kind: 'block'; sourceSessionId: string; inherited: boolean; record: ArchiveBlockRecord };
+
+const ARCHIVE_LEXICAL_LINEAGE_LIMIT = 16;
+const ARCHIVE_LEXICAL_MESSAGE_SCAN_LIMIT = 2000;
+const ARCHIVE_LEXICAL_BLOCK_SCAN_LIMIT = 1000;
+const ARCHIVE_LEXICAL_PER_BRANCH_RESULT_LIMIT = 64;
+const ARCHIVE_LEXICAL_TOTAL_RESULT_LIMIT = 256;
+
+function normalizeArchiveLexicalText(value: unknown): string {
+  return String(value || '').normalize('NFKC').toLowerCase();
+}
+
+/**
+ * Bounded exact-lineage lexical candidate lookup over existing Archive rows.
+ * Locators are always bound SQL parameters; no query/user content enters SQL text.
+ */
+export async function locateEffectiveArchiveCandidatesBySubstring(
+  sessionId: string,
+  locators: readonly string[],
+): Promise<ArchiveLexicalCandidate[]> {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+  const normalizedLocators = [...new Set(locators
+    .filter(locator => typeof locator === 'string')
+    .map(locator => locator.trim())
+    .filter(locator => locator.length >= 2 && locator.length <= 160))].slice(0, 4);
+  if (normalizedLocators.length === 0) return [];
+
+  const asciiLocators = normalizedLocators.filter(locator => /^[\x00-\x7F]+$/.test(locator));
+  const unicodeLocators = normalizedLocators.filter(locator => !/^[\x00-\x7F]+$/.test(locator));
+  const normalizedMessageLocators = normalizedLocators.map(normalizeArchiveLexicalText);
+  const asciiBlockPredicate = asciiLocators.map(() => 'instr(lower(search_text), lower(?)) > 0').join(' OR ');
+  const messageWindowStatement = getDb().prepare(`
+    SELECT agent, seq, timestamp, role, message_json
+    FROM archive_messages
+    WHERE session_id = ? AND (? IS NULL OR seq <= ?)
+      AND role IN ('user', 'model')
+      AND COALESCE(json_extract(message_json, '$.modelVisible'), 1) != 0
+    ORDER BY seq DESC
+    LIMIT ?
+  `);
+  const blockWindowSql = `
+    SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
+      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
+    FROM (
+      SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
+        raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, summary AS search_text,
+        memory_facts_json, created_at
+      FROM archive_blocks
+      WHERE session_id = ? AND (? IS NULL OR id <= ?)
+      ORDER BY id DESC
+      LIMIT ?
+    )
+  `;
+  const blockWindowStatement = getDb().prepare(`${blockWindowSql} ORDER BY id DESC`);
+  const blockAsciiStatement = asciiLocators.length > 0 ? getDb().prepare(`
+    ${blockWindowSql}
+    WHERE (${asciiBlockPredicate})
+    ORDER BY id DESC
+    LIMIT ?
+  `) : undefined;
+
+  const results: ArchiveLexicalCandidate[] = [];
+  for (const entry of buildLineage(sessionId, ARCHIVE_LEXICAL_LINEAGE_LIMIT)) {
+    if (results.length >= ARCHIVE_LEXICAL_TOTAL_RESULT_LIMIT) break;
+    if (entry.maxMessageSeq === undefined || entry.maxMessageSeq > 0) {
+      const rowsBySeq = new Map<number, any>();
+      const rows = messageWindowStatement.all(
+        entry.sessionId, entry.maxMessageSeq ?? null, entry.maxMessageSeq ?? null, ARCHIVE_LEXICAL_MESSAGE_SCAN_LIMIT,
+      ) as any[];
+      for (const row of rows) {
+        const message = JSON.parse(row.message_json) as Message;
+        const normalizedText = normalizeArchiveLexicalText(formatSubstantiveMessageSearchText(message));
+        if (normalizedMessageLocators.some(locator => normalizedText.includes(locator))) rowsBySeq.set(Number(row.seq), row);
+      }
+      const matchingRows = [...rowsBySeq.values()].sort((a, b) => Number(b.seq) - Number(a.seq)).slice(0, ARCHIVE_LEXICAL_PER_BRANCH_RESULT_LIMIT);
+      for (const row of matchingRows) {
+        if (results.length >= ARCHIVE_LEXICAL_TOTAL_RESULT_LIMIT) break;
+        results.push({
+          kind: 'message',
+          sourceSessionId: entry.sessionId,
+          inherited: entry.inherited,
+          record: {
+            v: 1,
+            kind: 'message',
+            sessionId: entry.sessionId,
+            agent: row.agent || 'main',
+            seq: Number(row.seq),
+            timestamp: Number(row.timestamp),
+            role: row.role,
+            message: JSON.parse(row.message_json) as Message,
+          },
+        });
+      }
+    }
+    if (results.length >= ARCHIVE_LEXICAL_TOTAL_RESULT_LIMIT) break;
+    if (entry.maxBlockId === undefined || entry.maxBlockId > 0) {
+      const rowsById = new Map<number, any>();
+      if (blockAsciiStatement) {
+        const rows = blockAsciiStatement.all(
+          entry.sessionId, entry.maxBlockId ?? null, entry.maxBlockId ?? null,
+          ARCHIVE_LEXICAL_BLOCK_SCAN_LIMIT, ...asciiLocators, ARCHIVE_LEXICAL_PER_BRANCH_RESULT_LIMIT,
+        ) as any[];
+        rows.forEach(row => rowsById.set(Number(row.id), row));
+      }
+      if (unicodeLocators.length > 0) {
+        const normalizedUnicodeLocators = unicodeLocators.map(normalizeArchiveLexicalText);
+        const rows = blockWindowStatement.all(
+          entry.sessionId, entry.maxBlockId ?? null, entry.maxBlockId ?? null, ARCHIVE_LEXICAL_BLOCK_SCAN_LIMIT,
+        ) as any[];
+        for (const row of rows) {
+          const normalizedText = normalizeArchiveLexicalText(row.summary);
+          if (normalizedUnicodeLocators.some(locator => normalizedText.includes(locator))) rowsById.set(Number(row.id), row);
+        }
+      }
+      const rows = [...rowsById.values()].sort((a, b) => Number(b.id) - Number(a.id)).slice(0, ARCHIVE_LEXICAL_PER_BRANCH_RESULT_LIMIT);
+      for (const row of rows) {
+        if (results.length >= ARCHIVE_LEXICAL_TOTAL_RESULT_LIMIT) break;
+        results.push({
+          kind: 'block',
+          sourceSessionId: entry.sessionId,
+          inherited: entry.inherited,
+          record: {
+            v: 1,
+            kind: 'block',
+            sessionId: entry.sessionId,
+            agent: row.agent || 'main',
+            id: Number(row.id),
+            level: Number(row.level),
+            sourceKind: row.source_kind,
+            sourceStart: Number(row.source_start),
+            sourceEnd: Number(row.source_end),
+            sourceBlockIds: parseSourceBlockIdsJson(row.source_block_ids_json),
+            rawStartSeq: Number(row.raw_start_seq),
+            rawEndSeq: Number(row.raw_end_seq),
+            rawStartTimestamp: row.raw_start_timestamp == null ? undefined : Number(row.raw_start_timestamp),
+            rawEndTimestamp: row.raw_end_timestamp == null ? undefined : Number(row.raw_end_timestamp),
+            summary: String(row.summary || ''),
+            ...(parseMemoryFactsJson(row.memory_facts_json) ? { memoryFacts: parseMemoryFactsJson(row.memory_facts_json) } : {}),
+            createdAt: Number(row.created_at),
+          },
+        });
+      }
+    }
+  }
+  return results;
 }
 
 export async function getVectorCheckpoint(sessionId: string): Promise<ArchiveVectorCheckpoint> {

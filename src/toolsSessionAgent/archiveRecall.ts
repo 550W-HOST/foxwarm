@@ -20,6 +20,7 @@ import { logger } from '../common';
 import { formatMessageText } from '../utils/messageFormat';
 import { requireNotIsolated, requireNotIsolatedForSession, checkArchivedReadPermission, checkArchivedReadPermissionForSession } from '../isolatedCheck';
 import { resolveMemorySearchOptions } from '../tools/vectorTools';
+import { fuseDenseAndLexicalHits, searchArchiveLexicalSideChannel } from './archiveLexicalRecall';
 import {
   ToolArgs,
   ToolContext,
@@ -1543,10 +1544,19 @@ async function buildRecallVectorQuery(
     targetAgentName: args.agentName,
   }, ctx);
   const candidateLimit = Math.max(limit * 4, 20);
-  const hits = await vector.search(vectorQuery, candidateLimit, false, {
+  const denseHits = await vector.search(vectorQuery, candidateLimit, false, {
     ...searchOptions,
     preferBlocks: args.preferBlocks,
   }) as any[];
+  let hits = denseHits;
+  if (effectiveScope === 'current-session' && resolvedSessionId) {
+    try {
+      const lexicalHits = await searchArchiveLexicalSideChannel(resolvedSessionId, vectorQuery, candidateLimit);
+      hits = fuseDenseAndLexicalHits(denseHits, lexicalHits, candidateLimit);
+    } catch {
+      // Dense retrieval remains authoritative when the bounded Archive side-channel is unavailable.
+    }
+  }
 
   const items: ContextPreviewItem[] = [];
   const seen = new Set<string>();
