@@ -55,6 +55,7 @@ test('exact empty raw tool arguments canonicalize to an empty object for seriali
 test('executeTools turns malformed tool arguments into a structured tool error', async () => {
   const sessionId = makeSessionId('tool_args_test');
   try {
+    const session = await sessionManager.getSession(sessionId);
     const toolMessage = await executeTools(
       [{
         id: 'call_bad_args',
@@ -63,8 +64,8 @@ test('executeTools turns malformed tool arguments into a structured tool error',
         rawArgsText: '{"filePath":',
         argsParseError: 'Invalid tool arguments JSON: Unexpected end of JSON input',
       }],
-      { sessionId, session: { agent: 'main' } },
-      { agent: 'main', verbose: false },
+      { sessionId, session },
+      session,
     );
 
     assert.equal(toolMessage.role, 'tool');
@@ -126,35 +127,41 @@ test('executeTools emits bounded string previews for primitive and structured ar
 });
 
 test('executeTools persists previous LLM timing only on the first tool response', async () => {
-  const toolMessage = await executeTools(
-    [
-      { id: 'call_first', name: 'read', args: {}, rawArgsText: '{', argsParseError: 'bad args' },
-      { id: 'call_second', name: 'read', args: {}, rawArgsText: '{', argsParseError: 'bad args' },
-    ],
-    {
-      sessionId: 'tool-timing-test/main',
-      session: { agent: 'main' },
-      previousLlmRequest: { completedAt: new Date('2026-07-27T05:00:00+08:00').getTime(), durationMs: 8200 },
-    },
-    { agent: 'main', verbose: false },
-  );
-  const responses = toolMessage.parts.map(part => part.functionResponse);
-  assert.deepEqual(responses[0]?.previousLlmRequest, { time: '2026-07-27 05:00:00 +0800', durationMs: 8200 });
-  assert.equal(responses[1]?.previousLlmRequest, undefined);
+  const sessionId = makeSessionId('tool_timing_test');
+  try {
+    const session = await sessionManager.getSession(sessionId);
+    const toolMessage = await executeTools(
+      [
+        { id: 'call_first', name: 'read', args: {}, rawArgsText: '{', argsParseError: 'bad args' },
+        { id: 'call_second', name: 'read', args: {}, rawArgsText: '{', argsParseError: 'bad args' },
+      ],
+      {
+        sessionId,
+        session,
+        previousLlmRequest: { completedAt: new Date('2026-07-27T05:00:00+08:00').getTime(), durationMs: 8200 },
+      },
+      session,
+    );
+    const responses = toolMessage.parts.map(part => part.functionResponse);
+    assert.deepEqual(responses[0]?.previousLlmRequest, { time: '2026-07-27 05:00:00 +0800', durationMs: 8200 });
+    assert.equal(responses[1]?.previousLlmRequest, undefined);
+  } finally {
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
 });
 
 test('executeTools suppresses wait when a later tool in the batch returns an error', async () => {
   const sessionId = makeSessionId('tool_wait_after_error_late');
-  const toolMessage = await executeTools(
-    [
-      { id: 'call_wait_first', name: 'wait', args: {} },
-      { id: 'call_read_missing', name: 'read', args: { filePath: makeMissingFilePath() } },
-    ],
-    { sessionId, session: { agent: 'main' } },
-    { agent: 'main', verbose: false },
-  );
-
   try {
+    const session = await sessionManager.getSession(sessionId);
+    const toolMessage = await executeTools(
+      [
+        { id: 'call_wait_first', name: 'wait', args: {} },
+        { id: 'call_read_missing', name: 'read', args: { filePath: makeMissingFilePath() } },
+      ],
+      { sessionId, session },
+      session,
+    );
     assert.equal(hasStopCurrentTurn(toolMessage), false);
     assert.equal(toolMessage.parts.length, 2);
     assert.equal(toolMessage.parts[1].functionResponse?.name, 'read');
@@ -168,16 +175,16 @@ test('executeTools suppresses wait when a later tool in the batch returns an err
 
 test('executeTools suppresses wait when an earlier tool in the batch returns an error', async () => {
   const sessionId = makeSessionId('tool_wait_after_error_early');
-  const toolMessage = await executeTools(
-    [
-      { id: 'call_read_missing', name: 'read', args: { filePath: makeMissingFilePath() } },
-      { id: 'call_wait_last', name: 'wait', args: {} },
-    ],
-    { sessionId, session: { agent: 'main' } },
-    { agent: 'main', verbose: false },
-  );
-
   try {
+    const session = await sessionManager.getSession(sessionId);
+    const toolMessage = await executeTools(
+      [
+        { id: 'call_read_missing', name: 'read', args: { filePath: makeMissingFilePath() } },
+        { id: 'call_wait_last', name: 'wait', args: {} },
+      ],
+      { sessionId, session },
+      session,
+    );
     assert.equal(hasStopCurrentTurn(toolMessage), false);
     assert.equal(toolMessage.parts.length, 2);
     assert.equal(toolMessage.parts[0].functionResponse?.name, 'read');
@@ -189,29 +196,58 @@ test('executeTools suppresses wait when an earlier tool in the batch returns an 
   }
 });
 
-test('executeTools keeps wait behavior for successful send_to_session handoff batches', async () => {
+test('executeTools encodes successful afterSend wait handoffs as terminal post-actions', async () => {
   const sourceSessionId = makeSessionId('tool_wait_handoff_source');
   const targetSessionId = makeSessionId('tool_wait_handoff_target');
 
-  await sessionManager.getSession(sourceSessionId);
+  const source = await sessionManager.getSession(sourceSessionId);
   await sessionManager.getSession(targetSessionId);
 
   const toolMessage = await executeTools(
     [
-      { id: 'call_send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'handoff ok' } },
-      { id: 'call_wait', name: 'wait', args: {} },
+      { id: 'call_send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'handoff ok', afterSend: 'wait' } },
     ],
-    { sessionId: sourceSessionId, session: { agent: 'main' } },
-    { agent: 'main', verbose: false },
+    { sessionId: sourceSessionId, session: source },
+    source,
   );
 
   try {
-    assert.equal(hasStopCurrentTurn(toolMessage), true);
-    assert.equal(toolMessage.parts.length, 2);
-    assert.deepEqual(toolMessage.parts.map(part => part.functionResponse?.name), ['send_to_session', 'wait']);
+    assert.equal(hasStopCurrentTurn(toolMessage), false);
+    assert.equal(toolMessage.parts.length, 1);
+    assert.deepEqual(toolMessage.parts.map(part => part.functionResponse?.name), ['send_to_session']);
     assert.equal(toolMessage.parts[0].functionResponse?.response?.error, undefined);
-    assert.equal(toolMessage.parts[1].functionResponse?.response?.error, undefined);
-    assert.equal(typeof (await sessionManager.getSession(sourceSessionId)).meta.wait?.id, 'string');
+    assert.deepEqual((toolMessage as any).__toolPostAction, {
+      waitForReply: true,
+      successfulSendToSessionTargets: [targetSessionId],
+      successfulWaitAfterSendTargets: [targetSessionId],
+    });
+    assert.equal(source.meta.wait, undefined);
+  } finally {
+    await sessionManager.deleteSession(sourceSessionId).catch(() => false);
+    await sessionManager.deleteSession(targetSessionId).catch(() => false);
+  }
+});
+
+test('successful afterSend finish remains terminal when a sibling tool fails', async () => {
+  const sourceSessionId = makeSessionId('tool_finish_handoff_source');
+  const targetSessionId = makeSessionId('tool_finish_handoff_target');
+  const source = await sessionManager.getSession(sourceSessionId);
+  await sessionManager.getSession(targetSessionId);
+  try {
+    const toolMessage: any = await executeTools([
+      { id: 'call_send', name: 'send_to_session', args: { sessionId: targetSessionId, message: 'done', afterSend: 'finish' } },
+      { id: 'call_read_missing', name: 'read', args: { filePath: makeMissingFilePath() } },
+    ], { sessionId: sourceSessionId, session: source }, source);
+
+    assert.equal(hasStopCurrentTurn(toolMessage), true);
+    assert.deepEqual(toolMessage.parts.map((part: any) => part.functionResponse?.name), ['send_to_session', 'read']);
+    assert.equal(toolMessage.parts[0].functionResponse?.response?.error, undefined);
+    assert.notEqual(toolMessage.parts[1].functionResponse?.response?.error, undefined);
+    assert.deepEqual(toolMessage.__toolPostAction, {
+      finishAfterSend: true,
+      successfulSendToSessionTargets: [targetSessionId],
+    });
+    assert.equal(source.meta.wait, undefined);
   } finally {
     await sessionManager.deleteSession(sourceSessionId).catch(() => false);
     await sessionManager.deleteSession(targetSessionId).catch(() => false);
@@ -299,22 +335,22 @@ test('flagged handoff plus explicit wait remains deterministic when a sibling fa
 
 test('executeTools suppresses wait when malformed tool arguments produce a structured error', async () => {
   const sessionId = makeSessionId('tool_wait_bad_args');
-  const toolMessage = await executeTools(
-    [
-      {
-        id: 'call_bad_args',
-        name: 'read',
-        args: {},
-        rawArgsText: '{"filePath":',
-        argsParseError: 'Invalid tool arguments JSON: Unexpected end of JSON input',
-      },
-      { id: 'call_wait', name: 'wait', args: {} },
-    ],
-    { sessionId, session: { agent: 'main' } },
-    { agent: 'main', verbose: false },
-  );
-
   try {
+    const session = await sessionManager.getSession(sessionId);
+    const toolMessage = await executeTools(
+      [
+        {
+          id: 'call_bad_args',
+          name: 'read',
+          args: {},
+          rawArgsText: '{"filePath":',
+          argsParseError: 'Invalid tool arguments JSON: Unexpected end of JSON input',
+        },
+        { id: 'call_wait', name: 'wait', args: {} },
+      ],
+      { sessionId, session },
+      session,
+    );
     assert.equal(hasStopCurrentTurn(toolMessage), false);
     assert.equal(toolMessage.parts.length, 2);
     assert.equal(toolMessage.parts[0].functionResponse?.name, 'read');

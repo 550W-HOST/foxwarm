@@ -28,7 +28,7 @@ function messageQueue(ws: WebSocket) {
   return () => queued.length ? Promise.resolve(queued.shift()) : new Promise<any>(resolve => waiters.push(resolve));
 }
 
-test('authenticated legacy client stays connected but is quarantined before application messages', async () => {
+test('authenticated unversioned legacy client registers ready and can dispatch application messages', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-protocol-ws-'));
   setNodeRegistryStoreForTests(createNodeRegistryStore(path.join(tempDir, 'nodes.json')));
   resetNodeRegistryForTests();
@@ -60,19 +60,17 @@ test('authenticated legacy client stays connected but is quarantined before appl
       capabilities: { tools: [{ name: 'exec', description: 'exec' }] },
       // Deliberately omitted: old clients had no nodeProtocol field.
     }));
-    const incompatible = await nextMessage();
-    const legacyError = await nextMessage();
-    assert.equal(incompatible.type, 'node_incompatible');
-    assert.equal(incompatible.code, 'NODE_PROTOCOL_INCOMPATIBLE');
-    assert.deepEqual(incompatible.clientProtocol, { min: 1, max: 1 });
-    assert.equal(legacyError.code, 'NODE_PROTOCOL_INCOMPATIBLE');
+    const registered = await nextMessage();
+    assert.equal(registered.type, 'registered');
+    assert.deepEqual(registered.nodeProtocol, { negotiated: 1, master: { min: 1, max: 2 } });
     assert.equal(ws.readyState, WebSocket.OPEN);
-    assert.equal(nodesManager.getNode('legacy-wire-node')?.protocolCompatibility.status, 'upgrade-required');
+    assert.equal(nodesManager.getNode('legacy-wire-node')?.protocolCompatibility.status, 'compatible');
 
     ws.send(JSON.stringify({ type: 'session_list_request', requestId: 'after-register' }));
-    const rejected = await nextMessage();
-    assert.equal(rejected.code, 'NODE_PROTOCOL_INCOMPATIBLE');
-    assert.equal(rejected.requestId, 'after-register');
+    const dispatched = await nextMessage();
+    assert.equal(dispatched.type, 'cli_response');
+    assert.equal(dispatched.requestId, 'after-register');
+    assert.equal(dispatched.ok, true);
     assert.equal(ws.readyState, WebSocket.OPEN);
   } finally {
     ws.close();

@@ -54,11 +54,11 @@ test('WebUI nodes route exposes only public launcher capability summaries', asyn
     nodesManager.registerNodeWithTools({ send() {}, close() {} } as any, {} as any, 'cli-node', {
       tools: [{ name: 'private-tool', description: 'must not leave the backend' }],
       services: { 'vscode-fs': 1, 'vscode-git': 2, 'vscode-pty': 1, 'private-service': 9 },
-    }, 'capable-node');
+    }, 'capable-node', negotiateNodeProtocol(LEGACY_NODE_PROTOCOL_RANGE, CURRENT_NODE_PROTOCOL_RANGE, true));
     nodesManager.registerIncompatibleNodeWithTools({ send() {}, close() {} } as any, {} as any, 'cli-node', {
       tools: [{ name: 'private-tool', description: 'must not leave the backend' }],
       services: { 'vscode-fs': 1 },
-    }, negotiateNodeProtocol(LEGACY_NODE_PROTOCOL_RANGE, CURRENT_NODE_PROTOCOL_RANGE, true), 'incompatible-node');
+    }, negotiateNodeProtocol({ min: 3, max: 3 }, CURRENT_NODE_PROTOCOL_RANGE), 'incompatible-node');
 
     new WebUIChannel({ router: {} as any, token: TEST_TOKEN, enableTrigger: false, enableWebUI: true });
     await server.start();
@@ -75,6 +75,8 @@ test('WebUI nodes route exposes only public launcher capability summaries', asyn
     const master = payload.nodes.find((node: any) => node.id === 'master');
     assert.deepEqual(master, { id: 'master', type: 'master', displayName: 'master', online: true, services: {} });
     assert.equal(payload.nodes.find((node: any) => node.id === 'capable-node').online, true);
+    assert.equal(payload.nodes.find((node: any) => node.id === 'capable-node').protocolCompatibility.negotiated, 1);
+    assert.equal(payload.nodes.find((node: any) => node.id === 'capable-node').protocolCompatibility.status, 'compatible');
     assert.deepEqual(payload.nodes.find((node: any) => node.id === 'capable-node').services, {
       'vscode-fs': 1,
       'vscode-git': 2,

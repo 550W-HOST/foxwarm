@@ -63,6 +63,21 @@ interface ToolCall {
   reject: (error: unknown) => void;
 }
 
+const LEGACY_PERSISTENT_EXEC_INVALID_ID_ERROR = 'Persistent exec ID is invalid.';
+
+function exactRemoteErrorMessage(error: unknown): string | undefined {
+  if (typeof error === 'string') return error;
+  if (!error || typeof error !== 'object' || Array.isArray(error)) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(error, 'message');
+  return descriptor && 'value' in descriptor && typeof descriptor.value === 'string'
+    ? descriptor.value
+    : undefined;
+}
+
+function legacyPersistentExecCollisionMessage(execId: string): string {
+  return `Persistent exec \`${execId}\` already exists.`;
+}
+
 interface PendingFileTransfer<T = any> {
   id: string;
   nodeId: string;
@@ -588,6 +603,22 @@ export class NodesManager {
     });
     if (toolName !== 'exec') return await executeRemoteOnce();
     const maxAttempts = this.runtimeOptions.remoteExecCollisionAttempts || 16;
+    if (node.protocolCompatibility?.negotiated === 1) {
+      const currentExecId = this.runtimeOptions.generateExecId?.() || generatePersistentExecPetname();
+      try { return await executeRemoteOnce(currentExecId); }
+      catch (error) {
+        if (exactRemoteErrorMessage(error) !== LEGACY_PERSISTENT_EXEC_INVALID_ID_ERROR) throw error;
+      }
+
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const legacyExecId = `exec_${this.runtimeOptions.generateExecId?.() || generatePersistentExecPetname()}`;
+        try { return await executeRemoteOnce(legacyExecId); }
+        catch (error) {
+          if (exactRemoteErrorMessage(error) !== legacyPersistentExecCollisionMessage(legacyExecId)) throw error;
+        }
+      }
+      throw new Error(`Remote legacy persistent exec ID allocation exhausted after ${maxAttempts} owner-acknowledged collision retries.`);
+    }
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const backgroundExecId = this.runtimeOptions.generateExecId?.() || generatePersistentExecPetname();
       try { return await executeRemoteOnce(backgroundExecId); }

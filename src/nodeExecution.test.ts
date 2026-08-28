@@ -67,7 +67,7 @@ test('protocol-incompatible Nodes stay visible but list, select, and dispatch fa
       retryable: false,
     },
     protocolCompatibility: {
-      status: 'upgrade-required', client: { min: 1, max: 1 }, master: { min: 2, max: 2 }, legacyClient: true,
+      status: 'upgrade-required', client: { min: 3, max: 3 }, master: { min: 1, max: 2 }, legacyClient: false,
     },
   };
   const descriptor: NodeProvider = {

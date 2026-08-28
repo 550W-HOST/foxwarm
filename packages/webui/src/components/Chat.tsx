@@ -54,6 +54,16 @@ const ASR_CONTEXT_MAX_CHARS = 2400
 const ASR_CONTEXT_MAX_MESSAGES = 8
 const DEFAULT_VISIBLE_TIMELINE_MESSAGES = 100
 
+type PendingViewportRestore =
+  | { kind: 'state'; state: ChatViewportState; interactionVersion: number }
+  | {
+      kind: 'prepend'
+      anchors: Array<{ messageKey: string; offsetPx: number }>
+      scrollTop: number
+      scrollHeight: number
+      interactionVersion: number
+    }
+
 function getMessagePlainText(message: Message): string {
   return message.parts
     .map((part) => part.text?.trim() || '')
@@ -251,10 +261,12 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const composerHeightRef = useRef<number | null>(null)
   const initialViewportState = getStoredChatViewportState(viewportSessionId) || { kind: 'bottom' as const }
   const currentViewportStateRef = useRef<ChatViewportState>(initialViewportState)
-  const pendingViewportRestoreRef = useRef<{ state: ChatViewportState; interactionVersion: number } | null>({
+  const pendingViewportRestoreRef = useRef<PendingViewportRestore | null>({
+    kind: 'state',
     state: initialViewportState,
     interactionVersion: 0,
   })
+  const currentViewportGeometryRef = useRef<{ scrollTop: number; scrollHeight: number } | null>(null)
   const userInteractionVersionRef = useRef(0)
   const capturedInteractionVersionRef = useRef(0)
   const resizeRestoreFrameRef = useRef<number | null>(null)
@@ -382,6 +394,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       container.scrollTop = container.scrollHeight
       const state: ChatViewportState = { kind: 'bottom' }
       currentViewportStateRef.current = state
+      currentViewportGeometryRef.current = null
       shouldAutoScrollRef.current = true
       pendingUserLeaveBottomRef.current = false
       storeChatViewportState(viewportSessionId, state)
@@ -450,6 +463,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     if (!state) return null
 
     currentViewportStateRef.current = state
+    currentViewportGeometryRef.current = null
     capturedInteractionVersionRef.current = userInteractionVersionRef.current
     storeChatViewportState(viewportSessionId, state)
     return state
@@ -462,6 +476,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     if (state.kind === 'bottom') {
       container.scrollTop = container.scrollHeight
       currentViewportStateRef.current = state
+      currentViewportGeometryRef.current = null
       shouldAutoScrollRef.current = true
       pendingUserLeaveBottomRef.current = false
       storeChatViewportState(viewportSessionId, state)
@@ -481,15 +496,34 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       container.scrollTop += adjustment
     }
     currentViewportStateRef.current = state
+    currentViewportGeometryRef.current = null
     shouldAutoScrollRef.current = false
     pendingUserLeaveBottomRef.current = false
     storeChatViewportState(viewportSessionId, state)
     return true
   }, [viewportSessionId])
 
+  const applyViewportAnchorCandidates = useCallback((anchors: Array<{ messageKey: string; offsetPx: number }>): boolean => {
+    for (const candidate of anchors) {
+      const state: ChatViewportState = { kind: 'anchor', ...candidate }
+      if (!applyViewportState(state)) continue
+      const container = messagesContainerRef.current
+      const timeline = committedTimelineRef.current
+      const anchor = timeline
+        ? Array.from(timeline.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
+          .find((element) => element.getAttribute('data-chat-message-anchor-key') === candidate.messageKey)
+        : null
+      if (!container || !anchor) continue
+      const restoredOffset = anchor.getBoundingClientRect().top - container.getBoundingClientRect().top
+      if (Math.abs(restoredOffset - candidate.offsetPx) <= 2) return true
+    }
+    return false
+  }, [applyViewportState])
+
   const markUserViewportInteraction = useCallback(() => {
     userInteractionVersionRef.current += 1
     pendingViewportRestoreRef.current = null
+    currentViewportGeometryRef.current = null
   }, [])
 
   const leaveBottomFollow = useCallback(() => {
@@ -549,17 +583,38 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
       setShowScrollButton(distanceFromBottom > 200)
       setShowScrollTopButton(scrollTop > 200)
-      const viewportState = captureCurrentViewportState()
+      captureCurrentViewportState()
 
       if (!showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES && scrollTop < 120) {
-        const restoreState = viewportState?.kind === 'anchor' ? viewportState : readCurrentViewportState()
-        if (restoreState?.kind === 'anchor') {
-          pendingViewportRestoreRef.current = {
-            state: restoreState,
-            interactionVersion: userInteractionVersionRef.current,
-          }
-          setShowFullTimeline(true)
+        const containerRect = container.getBoundingClientRect()
+        const anchors = committedTimelineRef.current
+          ? Array.from(committedTimelineRef.current.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR))
+            .map((element, index) => {
+              const rect = element.getBoundingClientRect()
+              return {
+                messageKey: element.getAttribute('data-chat-message-anchor-key') || '',
+                offsetPx: rect.top - containerRect.top,
+                distancePx: rect.bottom <= containerRect.top
+                  ? containerRect.top - rect.bottom
+                  : rect.top >= containerRect.bottom
+                    ? rect.top - containerRect.bottom
+                    : 0,
+                index,
+              }
+            })
+            .filter((anchor) => anchor.messageKey)
+            .sort((left, right) => left.distancePx - right.distancePx || left.index - right.index)
+            .slice(0, 8)
+            .map(({ messageKey, offsetPx }) => ({ messageKey, offsetPx }))
+          : []
+        pendingViewportRestoreRef.current = {
+          kind: 'prepend',
+          anchors,
+          scrollTop,
+          scrollHeight,
+          interactionVersion: userInteractionVersionRef.current,
         }
+        setShowFullTimeline(true)
       }
     }
 
@@ -630,7 +685,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         window.removeEventListener('keydown', handleWindowKeyDown)
       }
     }
-  }, [captureCurrentViewportState, leaveBottomFollow, markUserViewportInteraction, messages.length, readCurrentViewportState, showFullTimeline])
+  }, [captureCurrentViewportState, leaveBottomFollow, markUserViewportInteraction, messages.length, showFullTimeline])
 
   const applySessionState = useCallback((session: SessionListRecord | null | undefined) => {
     if (!session || typeof session.id !== 'string') return
@@ -1084,22 +1139,52 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       return
     }
 
-    if (applyViewportState(pending.state)) {
-      pendingViewportRestoreRef.current = null
-      return
-    }
+    if (pending.kind === 'state') {
+      if (applyViewportState(pending.state)) {
+        pendingViewportRestoreRef.current = null
+        return
+      }
 
-    if (pending.state.kind === 'anchor' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
-      setShowFullTimeline(true)
-      return
-    }
+      if (pending.state.kind === 'anchor' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES) {
+        setShowFullTimeline(true)
+        return
+      }
 
-    if (historyLoaded) {
+      if (!historyLoaded) return
       const fallbackState: ChatViewportState = { kind: 'bottom' }
       pendingViewportRestoreRef.current = null
       applyViewportState(fallbackState)
+      return
     }
-  }, [applyViewportState, historyLoaded, messages.length, showFullTimeline, timelineMessages])
+
+    if (applyViewportAnchorCandidates(pending.anchors)) {
+      pendingViewportRestoreRef.current = null
+      return
+    }
+
+    if (!showFullTimeline || !historyLoaded) return
+
+    const container = messagesContainerRef.current
+    if (!container) return
+    container.scrollTop = pending.scrollTop + (container.scrollHeight - pending.scrollHeight)
+    pendingViewportRestoreRef.current = null
+    shouldAutoScrollRef.current = false
+    pendingUserLeaveBottomRef.current = false
+
+    const nextState = readCurrentViewportState(CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX)
+    if (nextState?.kind === 'anchor') {
+      currentViewportStateRef.current = nextState
+      currentViewportGeometryRef.current = null
+      capturedInteractionVersionRef.current = userInteractionVersionRef.current
+      storeChatViewportState(viewportSessionId, nextState)
+    } else {
+      currentViewportGeometryRef.current = {
+        scrollTop: container.scrollTop,
+        scrollHeight: container.scrollHeight,
+      }
+      capturedInteractionVersionRef.current = userInteractionVersionRef.current
+    }
+  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, showFullTimeline, timelineMessages, viewportSessionId])
 
   useLayoutEffect(() => {
     const pending = pendingContextScrollbarNavigationRef.current
@@ -1111,7 +1196,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
   useEffect(() => {
     const content = messagesContentRef.current
-    if (!content) return
+    const container = messagesContainerRef.current
+    if (!content || !container) return
 
     const observer = new ResizeObserver(() => {
       if (resizeRestoreFrameRef.current !== null) {
@@ -1124,7 +1210,20 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         const pending = pendingViewportRestoreRef.current
         if (pending) {
           if (pending.interactionVersion === userInteractionVersionRef.current) {
-            applyViewportState(pending.state)
+            if (pending.kind === 'state') {
+              applyViewportState(pending.state)
+            } else {
+              applyViewportAnchorCandidates(pending.anchors)
+            }
+          }
+          return
+        }
+        const geometry = currentViewportGeometryRef.current
+        if (geometry) {
+          container.scrollTop = geometry.scrollTop + (container.scrollHeight - geometry.scrollHeight)
+          currentViewportGeometryRef.current = {
+            scrollTop: container.scrollTop,
+            scrollHeight: container.scrollHeight,
           }
           return
         }
@@ -1140,7 +1239,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         resizeRestoreFrameRef.current = null
       }
     }
-  }, [applyViewportState])
+  }, [applyViewportAnchorCandidates, applyViewportState])
 
   useLayoutEffect(() => () => {
     captureCurrentViewportState()

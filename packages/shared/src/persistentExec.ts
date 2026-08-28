@@ -200,6 +200,7 @@ const EXEC_ID_NOUNS = [
   'zephyr', 'harvest', 'hemlock', 'hickory', 'holly', 'magnolia', 'mulberry', 'nectarine',
 ] as const;
 export const PERSISTENT_EXEC_ID_PATTERN = /^[a-z]+-[a-z]+$/;
+export const LEGACY_PERSISTENT_EXEC_ID_PATTERN = /^exec_[A-Za-z0-9_-]{8,160}$/;
 export const PERSISTENT_EXEC_ID_NAMESPACE_SIZE = EXEC_ID_ADJECTIVES.length * EXEC_ID_NOUNS.length;
 export const PERSISTENT_EXEC_ID_MAX_ATTEMPTS = 128;
 export const PERSISTENT_EXEC_RECENT_ID_LIMIT = 1024;
@@ -208,6 +209,11 @@ export const PERSISTENT_EXEC_ID_COLLISION_CODE = 'PERSISTENT_EXEC_ID_COLLISION';
 export class PersistentExecIdCollisionError extends Error {
   readonly code = PERSISTENT_EXEC_ID_COLLISION_CODE;
   constructor(id: string) { super(`Persistent exec \`${id}\` already exists or is retained as a recent completion identity.`); }
+}
+
+export function isSupportedPersistentExecId(value: unknown): value is string {
+  return typeof value === 'string'
+    && (PERSISTENT_EXEC_ID_PATTERN.test(value) || LEGACY_PERSISTENT_EXEC_ID_PATTERN.test(value));
 }
 
 export function generatePersistentExecPetname(randomInt: (maxExclusive: number) => number = max => crypto.randomInt(max)): string {
@@ -472,7 +478,7 @@ export class PersistentExecManager {
     await previous;
     try {
       if (requested !== undefined) {
-        if (!PERSISTENT_EXEC_ID_PATTERN.test(requested)) throw new Error('Persistent exec ID must be a lowercase adjective+noun petname such as `quiet-otter`.');
+        if (!isSupportedPersistentExecId(requested)) throw new Error('Persistent exec ID must be a lowercase adjective+noun petname such as `quiet-otter` or a supported legacy `exec_...` ID.');
         if (this.runningExecs.has(requested) || this.reservedExecIds.has(requested) || this.recentExecIds.includes(requested)) throw new PersistentExecIdCollisionError(requested);
         this.reservedExecIds.add(requested);
         return requested;
@@ -508,12 +514,12 @@ export class PersistentExecManager {
     try {
       const data = await fs.readJson(registryPath);
       this.recentExecIds = Array.isArray(data?.recentExecIds)
-        ? [...new Set<string>((data.recentExecIds as unknown[]).filter((id: unknown): id is string => typeof id === 'string' && PERSISTENT_EXEC_ID_PATTERN.test(id)))].slice(-PERSISTENT_EXEC_RECENT_ID_LIMIT)
+        ? [...new Set<string>((data.recentExecIds as unknown[]).filter(isSupportedPersistentExecId))].slice(-PERSISTENT_EXEC_RECENT_ID_LIMIT)
         : [];
       const rawExecs = Array.isArray(data?.execs) ? data.execs : [];
       for (const raw of rawExecs) {
         if (!raw || typeof raw !== 'object') continue;
-        if (typeof raw.id !== 'string' || typeof raw.logPath !== 'string' || typeof raw.statusPath !== 'string') continue;
+        if (!isSupportedPersistentExecId(raw.id) || typeof raw.logPath !== 'string' || typeof raw.statusPath !== 'string') continue;
         if (!Number.isFinite(Number(raw.pid)) || !Number.isFinite(Number(raw.startedAt))) continue;
         const agentName = typeof raw.agentName === 'string' && raw.agentName.trim().length > 0 ? raw.agentName : 'main';
         const entry: RunningExecEntry = {

@@ -526,7 +526,10 @@ export class NodeClient {
         try {
           const advertisedMaster = resolveAdvertisedNodeProtocol(message.nodeProtocol?.master);
           const compatibility = negotiateNodeProtocol(CURRENT_NODE_PROTOCOL_RANGE, advertisedMaster.range);
-          if (compatibility.status !== 'compatible' || message.nodeProtocol?.negotiated !== compatibility.negotiated) {
+          const selectedProtocol = message.nodeProtocol === undefined && advertisedMaster.legacy
+            ? compatibility.negotiated
+            : message.nodeProtocol?.negotiated;
+          if (compatibility.status !== 'compatible' || selectedProtocol !== compatibility.negotiated) {
             this.protocolIncompatible = true;
             const masterLabel = advertisedMaster.legacy
               ? `legacy/${advertisedMaster.range.min}`

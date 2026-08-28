@@ -10,6 +10,7 @@ import {
   type Message,
 } from './chatShared'
 import ThreadLineButton from './ThreadLineButton'
+import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
 
 export type ContextBlockExpansionKind = 'child-blocks' | 'messages'
 
@@ -161,6 +162,8 @@ const ContextBlockCard = memo(function ContextBlockCard({
 }: ContextBlockCardProps) {
   const [expanded, setExpanded] = useState(false)
   const [expansion, setExpansion] = useState<ExpansionState>({})
+  const headerFade = useThreadCardOverflowFade<HTMLSpanElement>('right', !expanded)
+  const summaryFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !expanded)
 
   const summary = useMemo(() => getContextBlockSummaryText(text), [text])
   const summaryHtml = useMemo(() => renderMarkdown(summary), [summary])
@@ -227,15 +230,17 @@ const ContextBlockCard = memo(function ContextBlockCard({
         onClick={expanded ? (e) => { e.stopPropagation(); setExpanded(false) } : undefined}
       >
         <ToolTag name="ctx-block" label="CTX-BLOCK" tone="neutral" className="foxwarm-context-block-tag" />
-        <span className="foxwarm-context-block-preview min-w-0 flex-1 truncate text-[11px] font-medium leading-[18px] text-slate-500 dark:text-slate-400" title={blockMetaLabel}>{blockMetaLabel}</span>
+        <span ref={headerFade.ref} {...headerFade.overflowFadeProps} className="foxwarm-context-block-preview min-w-0 flex-1 truncate text-[11px] font-medium leading-[18px] text-slate-500 dark:text-slate-400" title={blockMetaLabel}>{blockMetaLabel}</span>
       </div>
 
       <div className="min-w-0 space-y-2">
         <div
+          ref={summaryFade.ref}
+          {...summaryFade.overflowFadeProps}
           className={`foxwarm-markdown prose max-w-none text-[13px] prose-p:my-1 prose-headings:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 ${contextBlockBodyClasses}`}
           dangerouslySetInnerHTML={{ __html: summaryHtml }}
           onClick={expanded ? handleMarkdownLinkClick : undefined}
-          style={expanded ? undefined : clampContentStyle(3)}
+          style={expanded ? summaryFade.overflowFadeProps.style : { ...clampContentStyle(5), ...summaryFade.overflowFadeProps.style }}
         />
 
         {expanded && expansion.loading && (

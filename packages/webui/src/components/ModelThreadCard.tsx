@@ -1,6 +1,7 @@
 import { type ReactNode, useState } from 'react'
 import { THREAD_CARD_HEADER_PREVIEW_CLASS, THREAD_CARD_HEADER_ROW_CLASS, ToolTag } from './chatShared'
 import ThreadLineButton from './ThreadLineButton'
+import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
 
 type ModelThreadTone = 'message' | 'processing'
 
@@ -56,6 +57,7 @@ const ModelThreadCard = ({
   defaultExpanded,
 }: ModelThreadCardProps) => {
   const [expanded, setExpanded] = useState(defaultExpanded ?? tone === 'processing')
+  const previewFade = useThreadCardOverflowFade<HTMLSpanElement>('right', !expanded)
   const semanticPrefix = `foxwarm-${kind}`
   const readableKind = kind === 'web-search' ? 'web search' : kind
 
@@ -77,7 +79,7 @@ const ModelThreadCard = ({
       >
         <ToolTag name={kind} iconName={iconName} label={label} tone="neutral" className={`${semanticPrefix}-tag`} />
         {!expanded && (
-          <span className={`${semanticPrefix}-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS} ${previewClassName}`} title={preview}>
+          <span ref={previewFade.ref} {...previewFade.overflowFadeProps} className={`${semanticPrefix}-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS} ${previewClassName}`} title={preview}>
             {preview}
           </span>
         )}

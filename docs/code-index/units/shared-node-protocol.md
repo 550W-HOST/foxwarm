@@ -18,7 +18,7 @@ Defines the pure cross-package core Node-protocol compatibility contract used by
 
 ## Behavior
 
-Malformed ranges reject; omitted ranges become legacy generation 1; disjoint ranges never silently select a fallback. Negotiation returns data rather than performing transport effects so registration, persistence, provider routing, CLI validation, WebUI status, and tests consume one implementation.
+Malformed ranges reject; omitted ranges become legacy generation 1; disjoint ranges never silently select a fallback. The current range is 1-2: current peers negotiate 2, while either current/legacy direction negotiates 1. Negotiation returns data rather than performing transport effects so registration, persistence, provider routing, CLI validation, WebUI status, and tests consume one implementation.
 
 The protocol covers the coupled WebSocket execution contract, including request/result envelopes, execution IDs, session events, file transfer, and backend-service framing. It is separate from per-tool schemas and individual backend-service version numbers.
 

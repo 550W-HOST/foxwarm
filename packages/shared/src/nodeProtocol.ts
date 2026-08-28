@@ -9,7 +9,7 @@ export type NodeProtocolCompatibility = {
 };
 
 export const LEGACY_NODE_PROTOCOL_RANGE: NodeProtocolRange = Object.freeze({ min: 1, max: 1 });
-export const CURRENT_NODE_PROTOCOL_RANGE: NodeProtocolRange = Object.freeze({ min: 2, max: 2 });
+export const CURRENT_NODE_PROTOCOL_RANGE: NodeProtocolRange = Object.freeze({ min: 1, max: 2 });
 
 export function normalizeNodeProtocolRange(value: unknown, label = 'nodeProtocol'): NodeProtocolRange {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {

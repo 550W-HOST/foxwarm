@@ -692,15 +692,84 @@ let onSessionEventUpdated: ((sessionId: string, event: SessionStreamEvent) => vo
 let onSessionListUpdated: (() => void) | null = null;
 let onSessionStateUpdated: ((sessionId: string) => void) | null = null;
 const sessionTransitionListeners = new Set<(sessionId: string) => void>();
-let sessionPersistenceFaultInjector: ((phase: 'history' | 'metadata', sessionId?: string) => void) | null = null;
+let sessionPersistenceFaultInjector: ((phase: 'history' | 'metadata', sessionId?: string, session?: Session) => void | Promise<void>) | null = null;
 
-export function setSessionPersistenceFaultInjectorForTests(injector: ((phase: 'history' | 'metadata', sessionId?: string) => void) | null): void {
+export function setSessionPersistenceFaultInjectorForTests(injector: ((phase: 'history' | 'metadata', sessionId?: string, session?: Session) => void | Promise<void>) | null): void {
   sessionPersistenceFaultInjector = injector;
 }
 
 // Track active in-flight LLM requests so /stop can abort the underlying HTTP call.
 const sessionAbortControllers = new Map<string, AbortController>();
 const standaloneCompactSessions = new Set<string>();
+
+interface StandaloneCompactAdmission {
+  closing: boolean;
+  inFlight: number;
+  released: Promise<void>;
+  resolveReleased: () => void;
+  resolveDrained?: () => void;
+}
+
+const standaloneCompactAdmissions = new Map<string, StandaloneCompactAdmission>();
+const sessionAuthoritySaveTails = new Map<string, Promise<void>>();
+
+async function withSessionAuthoritySaveLane<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+  if (SESSION_WORKER_PROCESS) return operation();
+  const previous = sessionAuthoritySaveTails.get(sessionId) || Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>(resolve => { release = resolve; });
+  sessionAuthoritySaveTails.set(sessionId, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (sessionAuthoritySaveTails.get(sessionId) === current) sessionAuthoritySaveTails.delete(sessionId);
+  }
+}
+
+function createStandaloneCompactAdmission(sessionId: string): void {
+  let resolveReleased!: () => void;
+  standaloneCompactAdmissions.set(sessionId, {
+    closing: false,
+    inFlight: 0,
+    released: new Promise<void>(resolve => { resolveReleased = resolve; }),
+    resolveReleased,
+  });
+}
+
+async function enterStandaloneCompactAdmission(sessionId: string): Promise<() => void> {
+  const admission = standaloneCompactAdmissions.get(sessionId);
+  if (!admission) return () => {};
+  if (admission.closing) {
+    await admission.released;
+    return () => {};
+  }
+  admission.inFlight += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    admission.inFlight = Math.max(0, admission.inFlight - 1);
+    if (admission.closing && admission.inFlight === 0) admission.resolveDrained?.();
+  };
+}
+
+async function beginStandaloneCompactRelease(sessionId: string): Promise<void> {
+  const admission = standaloneCompactAdmissions.get(sessionId);
+  if (!admission) return;
+  admission.closing = true;
+  if (admission.inFlight > 0) {
+    await new Promise<void>(resolve => { admission.resolveDrained = resolve; });
+  }
+}
+
+function completeStandaloneCompactRelease(sessionId: string): void {
+  const admission = standaloneCompactAdmissions.get(sessionId);
+  if (!admission) return;
+  standaloneCompactAdmissions.delete(sessionId);
+  admission.resolveReleased();
+}
 
 export function setOnHistoryUpdated(callback: (sessionId: string, message: Message) => void) {
   onHistoryUpdated = callback;
@@ -741,13 +810,14 @@ export function abortSessionInFlight(sessionId: string): boolean {
 }
 
 export async function requestSessionStop(sessionId: string): Promise<{ abortedInFlight: boolean; stoppedCurrent: boolean }> {
+  const canonicalSessionId = resolveLoadedSessionId(sessionId);
+  if (standaloneCompactSessions.has(canonicalSessionId)) {
+    return { abortedInFlight: false, stoppedCurrent: false };
+  }
+
   const session = await getExistingSession(sessionId);
   if (!session) {
     throw new Error(`Session \`${sessionId}\` not found.`);
-  }
-
-  if (standaloneCompactSessions.has(sessionId)) {
-    return { abortedInFlight: false, stoppedCurrent: false };
   }
 
   session.stopping = true;
@@ -994,13 +1064,43 @@ async function createEmptySessionUnlocked(sessionId?: string): Promise<{ session
 
 export async function updateSessionBusyState(session: Session, busy: boolean): Promise<void> {
   if (busy) assertSessionDestructiveMutationAllowed([session.id], 'start new work');
+  // Busy ownership is authoritative Session state. A catalog-only transition
+  // can be overwritten by the next current-format lazy hydration.
   await updateSessionBusyStateForSession(
     session,
     busy,
-    () => saveSessionCatalogEntries([session.id]),
+    () => saveSessionCritical(session.id),
     clearActiveSessionRuntimeState,
-    notifySessionUpdated,
+    undefined,
+    error => !isSessionAuthorityPostCommitError(error),
   );
+}
+
+function stageStandaloneCompactIdleRelease(session: Session): Session {
+  const staged = { ...session } as Session;
+  restoreSessionSemanticState(staged, captureSessionSemanticState(session));
+  staged.busy = false;
+  delete staged.busyStartedAt;
+  staged.stopping = false;
+  return staged;
+}
+
+function applyStandaloneCompactIdleRelease(session: Session): void {
+  session.busy = false;
+  delete session.busyStartedAt;
+  session.stopping = false;
+}
+
+async function persistStandaloneCompactIdleRelease(staged: Session, live: Session): Promise<void> {
+  await saveSessionStateOnlyCritical(staged);
+  try {
+    await saveDetachedSessionCatalogProjectionCritical(staged, live);
+  } catch (error) {
+    throw new SessionAuthorityPostCommitError(
+      `Session ${staged.id} standalone compact idle authority committed, but its catalog projection failed.`,
+      error,
+    );
+  }
 }
 
 export async function updateSessionBusyStateForSession(
@@ -1981,6 +2081,10 @@ async function saveSessionCritical(sessionId: string): Promise<void> {
 }
 
 async function saveSessionForSessionCritical(session: Session): Promise<void> {
+  await withSessionAuthoritySaveLane(session.id, () => saveSessionForSessionCriticalUnlocked(session));
+}
+
+async function saveSessionForSessionCriticalUnlocked(session: Session): Promise<void> {
   const sessionId = session.id;
   await saveSessionStateOnlyCritical(session);
 
@@ -2017,7 +2121,7 @@ async function saveSessionForSessionCritical(session: Session): Promise<void> {
 
 /** Local save composition half; the underlying state-file writer is worker-safe. */
 async function saveSessionStateOnlyCritical(session: Session): Promise<void> {
-  sessionPersistenceFaultInjector?.('history', session.id);
+  await sessionPersistenceFaultInjector?.('history', session.id, session);
   await writeAuthoritativeSessionState(session);
 }
 
@@ -2043,7 +2147,7 @@ async function saveSessionCatalogEntriesCritical(sessionIds: Iterable<string>): 
 }
 
 async function saveSessionCatalogEntriesCriticalUnlocked(sessionIds: string[]): Promise<void> {
-  sessionPersistenceFaultInjector?.('metadata');
+  await sessionPersistenceFaultInjector?.('metadata');
   const upserts: Record<string, any>[] = [];
   const deletes: string[] = [];
   for (const sessionId of sessionIds) {
@@ -2069,6 +2173,21 @@ async function saveSessionCatalogEntriesCriticalUnlocked(sessionIds: string[]): 
     upserts.push(metadata);
   }
   sessionCatalogStore.upsertMany(upserts, deletes);
+}
+
+async function saveDetachedSessionCatalogProjectionCritical(
+  authority: Session,
+  catalogFields: Session,
+): Promise<void> {
+  if (SESSION_WORKER_PROCESS) throw new Error('Session workers cannot write catalog.sqlite.');
+  await withSessionsMetadataWriteLock(async () => {
+    if (!sessionCatalogStore.exists()) await sessionCatalogStore.initialize();
+    await sessionPersistenceFaultInjector?.('metadata', authority.id, authority);
+    const projection = { ...catalogFields } as Session;
+    restoreSessionSemanticState(projection, captureSessionSemanticState(authority));
+    await externalizeAuthoritativeSessionQueueImages(projection);
+    sessionCatalogStore.upsertMany([buildSessionCatalogProjection(projection)]);
+  });
 }
 
 /** Commit the complete bounded projection after an exact Worker handback. */
@@ -2546,8 +2665,14 @@ export async function enqueueSessionItem(sessionId: string, item: QueueItem): Pr
     await workerEnqueueSink(canonicalSessionId, item);
     return;
   }
-  const session = await getSession(sessionId);
-  await enqueueSessionItemForLoadedSession(session, item);
+  const canonicalSessionId = resolveLoadedSessionId(sessionId);
+  const releaseAdmission = await enterStandaloneCompactAdmission(canonicalSessionId);
+  try {
+    const session = await getSession(canonicalSessionId);
+    await enqueueSessionItemForLoadedSession(session, item);
+  } finally {
+    releaseAdmission();
+  }
 }
 
 export async function requestSessionCompaction(
@@ -2582,6 +2707,7 @@ export async function requestSessionCompaction(
   const canRunAwaitedNow = !getManagedSessionState(session) && !session.busy && session.queue.length === 0;
   if (canRunAwaitedNow) {
     await updateSessionBusyState(session, true);
+    createStandaloneCompactAdmission(sessionId);
     standaloneCompactSessions.add(sessionId);
 
     void (async () => {
@@ -2597,13 +2723,48 @@ export async function requestSessionCompaction(
           session.broadcast(`Error: ${error?.message || 'Compaction failed'}`);
         }
       } finally {
-        try { await updateSessionBusyState(session, false); }
-        finally { standaloneCompactSessions.delete(sessionId); }
-        if (session.queue.length > 0) {
-          void onSessionTriggered?.(sessionId);
+        await beginStandaloneCompactRelease(sessionId);
+        try {
+          await withSessionAuthoritySaveLane(sessionId, async () => {
+            const stagedRelease = stageStandaloneCompactIdleRelease(session);
+            try {
+              await persistStandaloneCompactIdleRelease(stagedRelease, session);
+              applyStandaloneCompactIdleRelease(session);
+              clearActiveSessionRuntimeState(sessionId);
+              notifySessionUpdated(sessionId);
+            } catch (error) {
+              logger.error({ err: error, sessionId }, 'Failed to release standalone session compaction busy state');
+              if (isSessionAuthorityPostCommitError(error)) {
+                applyStandaloneCompactIdleRelease(session);
+                clearActiveSessionRuntimeState(sessionId);
+                try {
+                  await saveDetachedSessionCatalogProjectionCritical(stagedRelease, session);
+                  notifySessionUpdated(sessionId);
+                } catch (retryError) {
+                  logger.error({ err: retryError, sessionId }, 'Failed to retry standalone compaction catalog projection after authoritative release');
+                }
+              }
+            }
+          });
+
+          const triggerQueuedSession = onSessionTriggered;
+          if (!session.busy && session.queue.length > 0 && triggerQueuedSession) {
+            try {
+              void Promise.resolve(triggerQueuedSession(sessionId)).catch(error => {
+                logger.error({ err: error, sessionId }, 'Failed to trigger queued work after standalone session compaction');
+              });
+            } catch (error) {
+              logger.error({ err: error, sessionId }, 'Failed to trigger queued work after standalone session compaction');
+            }
+          }
+        } finally {
+          standaloneCompactSessions.delete(sessionId);
+          completeStandaloneCompactRelease(sessionId);
         }
       }
-    })();
+    })().catch(error => {
+      logger.error({ err: error, sessionId }, 'Standalone session compaction wrapper failed unexpectedly');
+    });
 
     return {
       alreadyQueued: false,

@@ -28,6 +28,7 @@ import ReasoningCard from './ReasoningCard'
 import WebSearchCard from './WebSearchCard'
 import { getWebSearchAction, type WebSearchAction } from '../webSearchAction'
 import ContextBlockCard, { getContextBlockMetaFromMessage } from './ContextBlockCard'
+import { useThreadCardOverflowFade } from './useThreadCardOverflowFade'
 import CommitMarkerCard, { type OpenCodeCommitHandler } from './CommitMarkerCard'
 import { splitCommitMarkers } from '../commitMarker'
 import {
@@ -444,6 +445,8 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ text }: { text: 
 
 const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, messageKey }: { msg: Message; messageKey: string }) {
   const [expanded, setExpanded] = useState(false)
+  const headerFade = useThreadCardOverflowFade<HTMLSpanElement>('right', !expanded)
+  const resultFade = useThreadCardOverflowFade<HTMLDivElement>('bottom', !expanded)
   const allLines = useMemo(() => msg.parts.flatMap((part) => {
     if (part.system) {
       return formatStructuredSystemText(part.system).split('\n')
@@ -492,7 +495,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
         >
           <ToolTag name="system" iconName={`system-${messageKind.kind}`} label={messageKind.kind} tone="system" className="foxwarm-system-message-tag" />
           {!expanded && (
-            <span className={`foxwarm-system-message-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS}`} title={messageKind.kind === 'inter-agent' && messageKind.previewSessionId ? `From ${messageKind.previewSessionId}:` : preview}>
+            <span ref={headerFade.ref} {...headerFade.overflowFadeProps} className={`foxwarm-system-message-preview ${THREAD_CARD_HEADER_PREVIEW_CLASS}`} title={messageKind.kind === 'inter-agent' && messageKind.previewSessionId ? `From ${messageKind.previewSessionId}:` : preview}>
               {messageKind.previewSessionId ? (
                 <>From <span onClick={(event) => event.stopPropagation()}><SessionHashLink sessionId={messageKind.previewSessionId} /></span>:{messageKind.kind !== 'inter-agent' ? ` ${preview.slice(messageKind.previewPrefix.length)}` : null}</>
               ) : preview}
@@ -500,7 +503,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
           )}
         </div>
         {!expanded && interAgentPreview && (
-          <div className="foxwarm-system-message-result-preview mt-1 whitespace-pre-wrap break-all pr-2 text-slate-700 dark:text-slate-300" style={{ ...clampContentStyle(3), opacity: 0.92 }}>
+          <div ref={resultFade.ref} {...resultFade.overflowFadeProps} className="foxwarm-system-message-result-preview mt-1 whitespace-pre-wrap break-all pr-2 text-slate-700 dark:text-slate-300" style={{ ...clampContentStyle(3), opacity: 0.92, ...resultFade.overflowFadeProps.style }}>
             {interAgentPreview}
           </div>
         )}
