@@ -31,6 +31,7 @@ import {
 const DB_PATH = DB_DIR;
 const TABLE_NAME = 'messages_v7';
 const EMBEDDING_MODEL = 'qwen3-embedding:0.6b';
+const QUERY_RETRIEVAL_INSTRUCTION = 'Instruct: Retrieve relevant historical conversation context for the query.\nQuery: ';
 
 // Keep a conservative margin under the embedding model's real 4096-token limit
 // because estimateTokenCount() can undercount slightly on some inputs.
@@ -50,6 +51,7 @@ const VECTOR_MAINTENANCE_MAX_SMALL_FRAGMENTS = 256;
 const VECTOR_MAINTENANCE_DELAY_MS = 60_000;
 const VECTOR_MAINTENANCE_PERIODIC_MS = 24 * 60 * 60_000;
 const VECTOR_MAINTENANCE_RETRY_MS = 60 * 60_000;
+const MAX_SEARCH_CANDIDATE_ROWS = 1024;
 
 let connection: any;
 let table: any;
@@ -87,6 +89,13 @@ type VectorRow = {
     source_start: number | null;
     source_end: number | null;
     vector: number[];
+};
+
+type MatchedFactMetadata = {
+    text: string;
+    fact_kind?: MemoryFactKind;
+    attributed_to?: MemoryFactAttribution;
+    distance: number;
 };
 
 export type SearchOptions = {
@@ -778,8 +787,13 @@ async function indexMemoryFactsFromCompaction(input: CompactMemoryFactIndexInput
     });
 }
 
-async function getEmbedding(text: string) {
-    const truncated = truncateToTokenLimit(text, EMBEDDING_MAX_LENGTH);
+function formatQueryEmbeddingInput(query: string): string {
+    return `${QUERY_RETRIEVAL_INSTRUCTION}${query}`;
+}
+
+async function getEmbedding(text: string, kind: 'document' | 'query' = 'document') {
+    const embeddingText = kind === 'query' ? formatQueryEmbeddingInput(text) : text;
+    const truncated = truncateToTokenLimit(embeddingText, EMBEDDING_MAX_LENGTH);
     const sanitized = sanitizeEmbeddingInput(truncated);
     if (!VECTOR_BASE_URL) {
         throw new Error('Vector embedding base URL is not configured.');
@@ -1490,7 +1504,7 @@ function formatSeqLabel(startSeq: number, endSeq: number): string {
 }
 
 function getMemorySearchCandidateCount(limit: number): number {
-    return Math.max(limit * 4, 20);
+    return Math.max(limit * 8, 40);
 }
 
 function buildSearchRegex(pattern: string | undefined, label: 'includeRegex' | 'excludeRegex'): RegExp | null {
@@ -1505,51 +1519,164 @@ function buildSearchRegex(pattern: string | undefined, label: 'includeRegex' | '
     }
 }
 
-function reciprocalRank(rank: number, k: number = 60): number {
-    return 1 / (k + rank + 1);
+function finiteDistance(row: any): number {
+    const distance = Number(row?._distance);
+    return Number.isFinite(distance) ? distance : Number.POSITIVE_INFINITY;
 }
 
-function rerankSearchResultsByRecency(results: any[], limit: number, options?: SearchOptions): any[] {
-    if (results.length <= 1) {
-        return results.slice(0, limit);
+function sourceFamilyKey(row: any): string {
+    const sessionId = String(row.session_id || '');
+    const blockId = Number(row.block_id);
+    if ((row.kind === 'block' || row.kind === 'fact') && Number.isInteger(blockId) && blockId > 0) {
+        return `${sessionId}:block:${blockId}`;
+    }
+    if (row.kind === 'raw') {
+        return `${sessionId}:raw:${Number(row.start_seq ?? row.seq ?? 0)}-${Number(row.end_seq ?? row.seq ?? 0)}`;
+    }
+    return `${sessionId}:${String(row.kind || 'raw')}:${String(row.id || row.message_id || '')}`;
+}
+
+function buildMatchedFactMetadata(row: any): MatchedFactMetadata | undefined {
+    if (row.kind !== 'fact') return undefined;
+    const text = String(row.text || '').trim();
+    if (!text) return undefined;
+    return {
+        text: text.slice(0, 1000),
+        fact_kind: row.fact_kind,
+        attributed_to: row.attributed_to,
+        distance: finiteDistance(row),
+    };
+}
+
+function groupSearchResultsBySource(results: any[]): any[] {
+    const groups = new Map<string, any[]>();
+    for (const row of results) {
+        const key = sourceFamilyKey(row);
+        const members = groups.get(key) || [];
+        members.push(row);
+        groups.set(key, members);
     }
 
-    const semanticRank = new Map<string, number>();
-    const recencyRank = new Map<string, number>();
+    return [...groups.entries()].map(([familyKey, members]) => {
+        const sortedMembers = [...members].sort((a, b) => finiteDistance(a) - finiteDistance(b) || String(a.id).localeCompare(String(b.id)));
+        const representative = sortedMembers[0];
+        const blockMember = sortedMembers.find(member => member.kind === 'block');
+        const matchedFacts = sortedMembers
+            .map(buildMatchedFactMetadata)
+            .filter((fact): fact is MatchedFactMetadata => Boolean(fact))
+            .sort((a, b) => a.distance - b.distance || a.text.localeCompare(b.text))
+            .slice(0, 3);
+        const sourceTimestamp = Number(blockMember?.end_timestamp ?? blockMember?.start_timestamp ?? blockMember?.timestamp
+            ?? representative.end_timestamp ?? representative.start_timestamp ?? representative.timestamp ?? 0);
+        return {
+            ...representative,
+            source_family: familyKey,
+            source_group_size: members.length,
+            source_timestamp: Number.isFinite(sourceTimestamp) ? sourceTimestamp : 0,
+            has_block_source: Boolean(blockMember),
+            matched_facts: matchedFacts,
+            _distance: finiteDistance(representative),
+        };
+    });
+}
 
-    [...results]
-        .sort((a, b) => {
-            const ad = Number.isFinite(Number(a._distance)) ? Number(a._distance) : Number.POSITIVE_INFINITY;
-            const bd = Number.isFinite(Number(b._distance)) ? Number(b._distance) : Number.POSITIVE_INFINITY;
-            return ad - bd;
-        })
-        .forEach((row, index) => semanticRank.set(String(row.id), index));
+function metadataTieScore(row: any, recencyRank: number, options?: SearchOptions): number {
+    let score = 0;
+    if (row.has_block_source || row.kind === 'block') score += options?.preferBlocks ? 4 : 1;
+    if (Array.isArray(row.matched_facts) && row.matched_facts.length > 0) score += 2;
+    score += 1 / (recencyRank + 2);
+    return score;
+}
 
-    [...results]
-        .sort((a, b) => Number(b.end_timestamp ?? b.start_timestamp ?? b.timestamp ?? 0) - Number(a.end_timestamp ?? a.start_timestamp ?? a.timestamp ?? 0))
-        .forEach((row, index) => recencyRank.set(String(row.id), index));
+function rankSourceGroupsBySemanticDistance(groups: any[], options?: SearchOptions): any[] {
+    const recencyRanks = new Map<string, number>();
+    [...groups]
+        .sort((a, b) => Number(b.source_timestamp || 0) - Number(a.source_timestamp || 0) || String(a.source_family).localeCompare(String(b.source_family)))
+        .forEach((row, index) => recencyRanks.set(String(row.source_family), index));
 
-    return [...results]
-        .map((row) => {
-            const id = String(row.id);
-            const semantic = reciprocalRank(semanticRank.get(id) ?? results.length);
-            const recency = reciprocalRank(recencyRank.get(id) ?? results.length);
-            const blockBoost = row.kind === 'block'
-                ? (options?.preferBlocks ? 0.012 : 0.004)
-                : 0;
-            const factBoost = row.kind === 'fact' ? 0.01 : 0;
-            return {
-                ...row,
-                _rerankScore: semantic + (recency * 0.75) + blockBoost + factBoost,
-            };
-        })
-        .sort((a, b) => {
-            if (b._rerankScore !== a._rerankScore) {
-                return b._rerankScore - a._rerankScore;
-            }
-            return (Number(a._distance) || 0) - (Number(b._distance) || 0);
-        })
-        .slice(0, limit);
+    return [...groups].sort((a, b) => {
+        // Distance is the primary ordering. Metadata can only break effectively
+        // equal distances after stable six-decimal quantization.
+        const distanceBandA = Math.round(finiteDistance(a) * 1_000_000);
+        const distanceBandB = Math.round(finiteDistance(b) * 1_000_000);
+        if (distanceBandA !== distanceBandB) return distanceBandA - distanceBandB;
+        const tieA = metadataTieScore(a, recencyRanks.get(String(a.source_family)) ?? groups.length, options);
+        const tieB = metadataTieScore(b, recencyRanks.get(String(b.source_family)) ?? groups.length, options);
+        if (tieA !== tieB) return tieB - tieA;
+        const exactDistanceA = finiteDistance(a);
+        const exactDistanceB = finiteDistance(b);
+        if (exactDistanceA !== exactDistanceB) return exactDistanceA < exactDistanceB ? -1 : 1;
+        return String(a.source_family).localeCompare(String(b.source_family));
+    });
+}
+
+function rawRangeOverlapRatio(a: any, b: any): number {
+    if (a.kind !== 'raw' || b.kind !== 'raw' || a.session_id !== b.session_id) return 0;
+    const aStart = Number(a.start_seq ?? a.seq ?? 0);
+    const aEnd = Number(a.end_seq ?? a.seq ?? 0);
+    const bStart = Number(b.start_seq ?? b.seq ?? 0);
+    const bEnd = Number(b.end_seq ?? b.seq ?? 0);
+    const intersection = Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart) + 1);
+    const smallerLength = Math.max(1, Math.min(aEnd - aStart + 1, bEnd - bStart + 1));
+    return intersection / smallerLength;
+}
+
+function diversifyOverlappingRawGroups(ranked: any[], limit: number): { selected: any[]; diverseCount: number } {
+    const diverse: any[] = [];
+    const deferred: any[] = [];
+    for (const row of ranked) {
+        const overlapsSelected = row.kind === 'raw'
+            && diverse.some(existing => rawRangeOverlapRatio(row, existing) >= 0.65);
+        if (overlapsSelected) deferred.push(row);
+        else diverse.push(row);
+        if (diverse.length >= limit) {
+            return { selected: diverse.slice(0, limit), diverseCount: limit };
+        }
+    }
+    const selected = [...diverse];
+    for (const row of deferred) {
+        selected.push(row);
+        if (selected.length >= limit) break;
+    }
+    return { selected, diverseCount: diverse.length };
+}
+
+function selectSearchSourceGroupsDetailed(results: any[], limit: number, options?: SearchOptions): { selected: any[]; diverseCount: number } {
+    if (results.length === 0) return { selected: [], diverseCount: 0 };
+    const grouped = groupSearchResultsBySource(results);
+    const ranked = rankSourceGroupsBySemanticDistance(grouped, options);
+    return diversifyOverlappingRawGroups(ranked, limit);
+}
+
+function selectSearchSourceGroups(results: any[], limit: number, options?: SearchOptions): any[] {
+    return selectSearchSourceGroupsDetailed(results, limit, options).selected;
+}
+
+async function fetchSearchCandidatesAdaptively<T, R>({
+    initialRowLimit,
+    hardRowLimit,
+    requiredSourceCount,
+    fetchRows,
+    selectSources,
+}: {
+    initialRowLimit: number;
+    hardRowLimit: number;
+    requiredSourceCount: number;
+    fetchRows: (rowLimit: number) => Promise<T[]>;
+    selectSources: (rows: T[]) => Promise<{ selected: R[]; diverseCount: number }>;
+}): Promise<R[]> {
+    const hardCap = Math.max(1, Math.floor(hardRowLimit));
+    let rowLimit = Math.min(hardCap, Math.max(1, Math.floor(initialRowLimit)));
+
+    while (true) {
+        const rows = await fetchRows(rowLimit);
+        const selection = await selectSources(rows);
+        const saturated = rows.length >= rowLimit;
+        if (selection.diverseCount >= requiredSourceCount || !saturated || rowLimit >= hardCap) {
+            return selection.selected;
+        }
+        rowLimit = Math.min(hardCap, rowLimit * 2);
+    }
 }
 
 function buildMemoryPreview(text: string, maxChars: number = 420): string {
@@ -1631,75 +1758,80 @@ async function clipResultToLineageBoundary(result: any, options?: SearchOptions)
 }
 
 async function search(query: string, limit = 5, format = true, options?: SearchOptions) {
-    const vector = await getEmbedding(query);
+    const vector = await getEmbedding(query, 'query');
     return tableOperationGate.runRegular(() => searchWithVector(vector, limit, format, options));
 }
 
 async function searchWithVector(vector: number[], limit = 5, format = true, options?: SearchOptions) {
-    const results: any[] = [];
-    const candidateLimit = options?.includeRegex || options?.excludeRegex || options?.preferBlocks
+    const initialCandidateLimit = Math.min(MAX_SEARCH_CANDIDATE_ROWS, options?.includeRegex || options?.excludeRegex || options?.preferBlocks
         ? Math.max(getMemorySearchCandidateCount(limit) * 2, 40)
-        : getMemorySearchCandidateCount(limit);
-    let searchQuery = table.search(vector);
+        : getMemorySearchCandidateCount(limit));
     const predicate = buildFilterPredicate(options);
-    if (predicate) {
-        searchQuery = searchQuery.where(predicate);
-    }
-    const iterator = await searchQuery.limit(candidateLimit).execute();
-
-    for await (const row of iterator) {
-        const records = row.toArray();
-        for (const record of records) {
-            if (!record.text || record.session_id === '__init__') continue;
-            results.push({
-                id: record.id,
-                kind: record.memory_kind || 'raw',
-                message_id: record.message_id,
-                session_id: record.session_id,
-                agent: record.agent,
-                seq: record.start_seq ?? record.seq,
-                start_seq: record.start_seq ?? record.seq,
-                end_seq: record.end_seq ?? record.seq,
-                raw_start_seq: record.raw_start_seq ?? record.start_seq ?? record.seq,
-                raw_end_seq: record.raw_end_seq ?? record.end_seq ?? record.seq,
-                message_count: record.message_count ?? 1,
-                role: record.role,
-                timestamp: record.timestamp,
-                start_timestamp: record.start_timestamp ?? record.timestamp,
-                end_timestamp: record.end_timestamp ?? record.timestamp,
-                chunk_index: record.chunk_index,
-                chunk_count: record.chunk_count,
-                block_id: record.block_id ?? undefined,
-                block_level: record.block_level ?? undefined,
-                fact_kind: parseMemoryFactKind(record.source_kind),
-                attributed_to: parseMemoryFactAttribution(record.role),
-                source_kind: record.source_kind ?? undefined,
-                source_start: record.source_start ?? undefined,
-                source_end: record.source_end ?? undefined,
-                text: record.text,
-                chunk_text: record.chunk_text,
-                _distance: record._distance,
-            });
-        }
-    }
-
-    const normalizedResults = (await Promise.all(results.map(result => clipResultToLineageBoundary(result, options))))
-        .filter((result): result is any => Boolean(result));
-
     const includeRegex = buildSearchRegex(options?.includeRegex, 'includeRegex');
     const excludeRegex = buildSearchRegex(options?.excludeRegex, 'excludeRegex');
-    const filteredResults = normalizedResults.filter((result) => {
-        const haystack = `${result.text || ''}\n${result.chunk_text || ''}`;
-        if (includeRegex && !includeRegex.test(haystack)) {
-            return false;
-        }
-        if (excludeRegex && excludeRegex.test(haystack)) {
-            return false;
-        }
-        return true;
+    const reranked = await fetchSearchCandidatesAdaptively<any, any>({
+        initialRowLimit: initialCandidateLimit,
+        hardRowLimit: MAX_SEARCH_CANDIDATE_ROWS,
+        requiredSourceCount: Math.max(1, Math.floor(limit)),
+        fetchRows: async (candidateLimit) => {
+            const results: any[] = [];
+            let searchQuery = table.search(vector);
+            if (predicate) searchQuery = searchQuery.where(predicate);
+            const iterator = await searchQuery.limit(candidateLimit).execute();
+            for await (const row of iterator) {
+                for (const record of row.toArray()) {
+                    if (!record.text || record.session_id === '__init__') continue;
+                    results.push({
+                        id: record.id,
+                        kind: record.memory_kind || 'raw',
+                        message_id: record.message_id,
+                        session_id: record.session_id,
+                        agent: record.agent,
+                        seq: record.start_seq ?? record.seq,
+                        start_seq: record.start_seq ?? record.seq,
+                        end_seq: record.end_seq ?? record.seq,
+                        raw_start_seq: record.raw_start_seq ?? record.start_seq ?? record.seq,
+                        raw_end_seq: record.raw_end_seq ?? record.end_seq ?? record.seq,
+                        message_count: record.message_count ?? 1,
+                        role: record.role,
+                        timestamp: record.timestamp,
+                        start_timestamp: record.start_timestamp ?? record.timestamp,
+                        end_timestamp: record.end_timestamp ?? record.timestamp,
+                        chunk_index: record.chunk_index,
+                        chunk_count: record.chunk_count,
+                        block_id: record.block_id ?? undefined,
+                        block_level: record.block_level ?? undefined,
+                        fact_kind: parseMemoryFactKind(record.source_kind),
+                        attributed_to: parseMemoryFactAttribution(record.role),
+                        source_kind: record.source_kind ?? undefined,
+                        source_start: record.source_start ?? undefined,
+                        source_end: record.source_end ?? undefined,
+                        text: record.text,
+                        chunk_text: record.chunk_text,
+                        _distance: record._distance,
+                    });
+                }
+            }
+            return results;
+        },
+        selectSources: async (results) => {
+            const normalizedResults = (await Promise.all(results.map(result => clipResultToLineageBoundary(result, options))))
+                .filter((result): result is any => Boolean(result));
+            const filteredResults = normalizedResults.filter((result) => {
+                const haystack = `${result.text || ''}\n${result.chunk_text || ''}`;
+                if (includeRegex) {
+                    includeRegex.lastIndex = 0;
+                    if (!includeRegex.test(haystack)) return false;
+                }
+                if (excludeRegex) {
+                    excludeRegex.lastIndex = 0;
+                    if (excludeRegex.test(haystack)) return false;
+                }
+                return true;
+            });
+            return selectSearchSourceGroupsDetailed(filteredResults, limit, options);
+        },
     });
-
-    const reranked = rerankSearchResultsByRecency(filteredResults, limit, options);
 
     if (!format) return reranked;
     if (reranked.length === 0) return '';
@@ -1825,6 +1957,8 @@ export {
     createRowsFromSegment,
     createRowFromBlockRecord,
     estimateArchiveMessageTokenCount,
+    fetchSearchCandidatesAdaptively,
+    formatQueryEmbeddingInput,
     getArchiveIndexBatchDecision,
     getArchiveIndexStatus,
     indexMemoryFactsFromCompaction,
@@ -1833,6 +1967,8 @@ export {
     init,
     renameSessionArchiveIndex,
     sanitizeEmbeddingInput,
+    selectSearchSourceGroups,
+    selectSearchSourceGroupsDetailed,
     scheduleSessionArchiveIndex,
     search,
     shutdown,

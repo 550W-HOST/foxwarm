@@ -23,8 +23,9 @@ function makeRecord(sessionId: string, seq: number, text: string) {
   };
 }
 
-async function startEmbeddingServer(): Promise<{ baseUrl: string; paths: string[]; close: () => Promise<void> }> {
+async function startEmbeddingServer(): Promise<{ baseUrl: string; paths: string[]; inputs: string[]; close: () => Promise<void> }> {
   const paths: string[] = [];
+  const inputs: string[] = [];
   const server = http.createServer((request, response) => {
     let body = '';
     request.setEncoding('utf8');
@@ -33,6 +34,7 @@ async function startEmbeddingServer(): Promise<{ baseUrl: string; paths: string[
       paths.push(request.url || '');
       const parsed = JSON.parse(body || '{}');
       const input = String(parsed.input || '');
+      inputs.push(input);
       const vector = new Array(1024).fill(0);
       vector[input.toLowerCase().includes('worker') ? 1 : 0] = 1;
       response.writeHead(200, { 'Content-Type': 'application/json' });
@@ -48,6 +50,7 @@ async function startEmbeddingServer(): Promise<{ baseUrl: string; paths: string[
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     paths,
+    inputs,
     close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())),
   };
 }
@@ -133,6 +136,9 @@ test('vector facade preserves search behavior and exact API-root embeddings path
     await vector.shutdown();
     assert.ok(embedding.paths.length > 0);
     assert.deepEqual([...new Set(embedding.paths)], ['/openai/v1/embeddings']);
+    assert.ok(embedding.inputs.includes('[user] local mode alpha'), 'document/index embedding input must remain unchanged');
+    assert.ok(embedding.inputs.includes('deterministic block row'), 'block document embedding input must remain unchanged');
+    assert.ok(embedding.inputs.includes('Instruct: Retrieve relevant historical conversation context for the query.\nQuery: local mode alpha'));
 
     // Simulate a crash after the Lance block-row commit but before its SQLite
     // checkpoint. The worker retry must replace, not duplicate, the row.

@@ -546,19 +546,28 @@ function renderSingleItem(item: ContextPreviewItem, maxChars: number, filters: C
 
 export function renderContextPreviewItems(args: {
   items: ContextPreviewItem[];
-  title: string | ((info: { matchedCount: number; inputCount: number; budget: number }) => string);
+  title: string | ((info: { matchedCount: number; totalMatchedCount: number; inputCount: number; budget: number }) => string);
   emptyMessage: string;
   options?: ContextPreviewRenderOptions;
+  maxItems?: number;
 }): ContextPreviewRenderResult {
   const options = args.options || {};
   const { budget, warnings } = normalizeContextPreviewBudget(options.previewLength, options.defaultPreviewLength);
   const filters = compilePreviewFilters(options);
   const filtered = filterPreviewItems(args.items, filters);
-  const filteredItems = filtered.items;
+  const totalMatchedCount = filtered.items.length;
+  const maxItems = typeof args.maxItems === 'number' && Number.isFinite(args.maxItems)
+    ? Math.max(0, Math.floor(args.maxItems))
+    : undefined;
+  const filteredItems = maxItems === undefined ? filtered.items : filtered.items.slice(0, maxItems);
+  const selectionOmittedCount = totalMatchedCount - filteredItems.length;
   const title = typeof args.title === 'function'
-    ? args.title({ matchedCount: filteredItems.length, inputCount: args.items.length, budget })
+    ? args.title({ matchedCount: filteredItems.length, totalMatchedCount, inputCount: args.items.length, budget })
     : args.title;
-  const prefixLines = [...warnings, title, ...formatFilterNotices(filtered.stats, options)].filter(Boolean);
+  const selectionNotice = selectionOmittedCount > 0
+    ? `[selection] ${selectionOmittedCount} additional matched item(s) omitted by the requested result limit.`
+    : undefined;
+  const prefixLines = [...warnings, title, ...formatFilterNotices(filtered.stats, options), selectionNotice].filter(Boolean);
 
   if (filteredItems.length === 0) {
     const emptyText = [...prefixLines, '', args.emptyMessage].join('\n').trimEnd();

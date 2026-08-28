@@ -1242,8 +1242,9 @@ async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRe
     return [];
   }
 
+  const modernFact = hit.kind === 'fact' && typeof hit.block_id === 'number';
   let missingBlockSource = false;
-  if (hit.kind === 'block' && typeof hit.block_id === 'number') {
+  if ((hit.kind === 'block' || modernFact) && typeof hit.block_id === 'number') {
     const result = await sessionManager.getArchivedBlocks(sourceSessionId, {
       startId: hit.block_id,
       endId: hit.block_id,
@@ -1251,14 +1252,35 @@ async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRe
     const block = (result.records as ArchiveBlockRecord[]).find(record => record.id === hit.block_id) || result.records[0];
     if (block) {
       const hydrated = await hydrateRecallBlockTimeRange(sourceSessionId, block as ArchiveBlockRecord);
-      return [createArchivedBlockContextPreviewItem({
+      const item = createArchivedBlockContextPreviewItem({
         key: `vector:block:${sourceSessionId}:${hydrated.id}`,
         headingPrefix: `[vector source session:${sourceSessionId}] `,
         block: hydrated,
         includeSourceText: formatArchiveSourceLabel(hydrated.sourceKind, hydrated.sourceStart, hydrated.sourceEnd, hydrated.sourceBlockIds),
-      })];
+      });
+      const matchedFacts = Array.isArray(hit.matched_facts) ? hit.matched_facts.slice(0, 3) : [];
+      if (matchedFacts.length > 0) {
+        const factDetails = matchedFacts.map((fact: any) => {
+          const labels = [fact.fact_kind, fact.attributed_to ? `attributed:${fact.attributed_to}` : undefined].filter(Boolean).join(', ');
+          return `[matched memory fact${labels ? `: ${labels}` : ''}]\n${truncateUnicodeSafe(String(fact.text || ''), 1000)}`;
+        }).join('\n\n');
+        item.body = `${item.body}\n\n${factDetails}`;
+        item.searchText = `${item.searchText || item.body}\n${matchedFacts.map((fact: any) => String(fact.text || '')).join('\n')}`;
+      }
+      return [item];
     }
     missingBlockSource = true;
+    if (modernFact) {
+      const range = vectorHitRawRange(hit);
+      warnVectorRecallCompatibilityFallback(hit, sourceSessionId, range, 'archive-block-source-missing');
+      const seqLabel = range ? formatMessageLogRange(range.startSeq, range.endSeq) : `seq:${hit.seq ?? '?'}`;
+      return [{
+        key: `vector:fallback:${String(hit.id || `${sourceSessionId}:${seqLabel}`)}`,
+        heading: `[vector source session:${sourceSessionId} ${seqLabel}]`,
+        body: String(hit.text || hit.chunk_text || '[empty vector hit]'),
+        searchText: String(hit.text || hit.chunk_text || ''),
+      }];
+    }
   }
 
   const range = vectorHitRawRange(hit);
@@ -1269,7 +1291,7 @@ async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRe
       endSeq: range.endSeq,
     });
     if (result.records.length > 0) {
-      return result.records.map((record: any) => createMessageContextPreviewItem({
+      const messageItems = result.records.map((record: any) => createMessageContextPreviewItem({
         key: `vector:msg:${sourceSessionId}:${record.seq}`,
         heading: formatMessageHeading({
           label: `[#${record.seq}${formatArchivedMessageTime(record)}]`,
@@ -1281,6 +1303,13 @@ async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRe
         toolDetail: renderOptions.toolDetail as ContextPreviewToolDetail | undefined,
         renderOptions,
       }));
+      return [{
+        key: String(hit.source_family || `vector:raw:${sourceSessionId}:${range.startSeq}-${range.endSeq}`),
+        heading: `[vector source session:${sourceSessionId} ${formatMessageLogRange(range.startSeq, range.endSeq)}]`,
+        body: messageItems.map(item => `${item.heading}\n${item.body}`).join('\n\n'),
+        searchText: messageItems.map(item => item.searchText || item.body).join('\n\n'),
+        omittedToolText: messageItems.map(item => item.omittedToolText || '').filter(Boolean).join('\n\n') || undefined,
+      }];
     }
     missingMessageSource = true;
   }
@@ -1348,9 +1377,10 @@ async function buildRecallVectorQuery(
 
   return renderContextPreviewItems({
     items,
-    title: ({ matchedCount }) => `Recall vector search for \`${vectorQuery}\` (${effectiveScope}; source archive ranges loaded before preview) - showing ${Math.min(matchedCount, limit)} source item(s) from ${hits.length} vector hit(s).`,
+    title: ({ matchedCount, totalMatchedCount }) => `Recall vector search for \`${vectorQuery}\` (${effectiveScope}; source archive ranges loaded before preview) - showing ${matchedCount} unique source group(s)${totalMatchedCount > matchedCount ? ` of ${totalMatchedCount} matched` : ''} from ${hits.length} ranked vector source group(s).`,
     emptyMessage: `No archived source messages or blocks found for vector_query \`${vectorQuery}\`.`,
     options: renderOptions,
+    maxItems: limit,
   }).text;
 }
 

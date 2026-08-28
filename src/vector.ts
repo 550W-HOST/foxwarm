@@ -232,5 +232,9 @@ export const estimateArchiveMessageTokenCount: typeof runtime.estimateArchiveMes
   });
   return text ? estimateTokenCount(text) : 0;
 };
+export const fetchSearchCandidatesAdaptively: typeof runtime.fetchSearchCandidatesAdaptively = (...args) => localRuntime().fetchSearchCandidatesAdaptively(...args);
+export const formatQueryEmbeddingInput: typeof runtime.formatQueryEmbeddingInput = (...args) => localRuntime().formatQueryEmbeddingInput(...args);
 export const getArchiveIndexBatchDecision: typeof runtime.getArchiveIndexBatchDecision = (...args) => localRuntime().getArchiveIndexBatchDecision(...args);
 export const sanitizeEmbeddingInput: typeof runtime.sanitizeEmbeddingInput = (...args) => localRuntime().sanitizeEmbeddingInput(...args);
+export const selectSearchSourceGroups: typeof runtime.selectSearchSourceGroups = (...args) => localRuntime().selectSearchSourceGroups(...args);
+export const selectSearchSourceGroupsDetailed: typeof runtime.selectSearchSourceGroupsDetailed = (...args) => localRuntime().selectSearchSourceGroupsDetailed(...args);
