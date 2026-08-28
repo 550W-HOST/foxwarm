@@ -15,6 +15,7 @@ import {
   resetNodeRegistryForTests,
   setNodeRegistryStoreForTests,
 } from '../nodes/registry';
+import { CURRENT_NODE_PROTOCOL_RANGE, LEGACY_NODE_PROTOCOL_RANGE, negotiateNodeProtocol } from '../../packages/shared/dist/nodeProtocol';
 
 async function withTempDir(run: (dirPath: string) => Promise<void>): Promise<void> {
   const dirPath = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-command-'));
@@ -42,7 +43,7 @@ async function approveTestNode(nodeId: string, label = nodeId) {
   return approvePendingPairing(pending.id, nodeId);
 }
 
-function registerRuntimeNode(nodeId: string) {
+function registerRuntimeNode(nodeId: string, legacy = false) {
   const sentMessages: string[] = [];
   const closeEvents: Array<{ code?: number; reason?: string | Buffer }> = [];
   const ws = {
@@ -50,7 +51,16 @@ function registerRuntimeNode(nodeId: string) {
     close: (code?: number, reason?: string | Buffer) => { closeEvents.push({ code, reason }); },
     terminate: () => { closeEvents.push({ reason: 'terminated' }); },
   };
-  nodesManager.registerNodeWithTools(ws as any, {} as any, 'worker', capabilities(nodeId), nodeId);
+  nodesManager.registerNodeWithTools(
+    ws as any,
+    {} as any,
+    'worker',
+    capabilities(nodeId),
+    nodeId,
+    legacy
+      ? negotiateNodeProtocol(LEGACY_NODE_PROTOCOL_RANGE, CURRENT_NODE_PROTOCOL_RANGE, true)
+      : negotiateNodeProtocol(CURRENT_NODE_PROTOCOL_RANGE),
+  );
   return { ws, sentMessages, closeEvents };
 }
 
@@ -94,7 +104,7 @@ test('/node list marks online rows and suppresses requested names equal to assig
 
     const nodeId = 'matching-requested-id';
     const approved = await approveTestNode(nodeId, nodeId);
-    const runtime = registerRuntimeNode(approved.nodeId);
+    const runtime = registerRuntimeNode(approved.nodeId, true);
     const replies: string[] = [];
     try {
       await COMMANDS['/node'].handler(

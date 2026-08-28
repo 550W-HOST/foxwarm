@@ -106,7 +106,7 @@ Android node now follows the same pairing-based flow as the shared node client:
 3. approve it from foxwarm with `/node approve ...`
 4. store per-node credentials locally
 5. reconnect with `?id=...&auth=...`
-6. negotiate core Node protocol generation 2 before tool registration
+6. negotiate the newest shared core Node protocol generation (range 1-2; current peers select generation 2) before tool registration
 
 If Master reports an incompatible protocol, the Android Node logs the upgrade requirement and stops reconnecting. Update either Master or this Node implementation; pairing credentials remain valid.
 

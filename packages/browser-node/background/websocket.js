@@ -4,12 +4,12 @@
 
 import * as storage from './storage.js';
 import { TOOL_DEFINITIONS, TOOL_HANDLERS } from './tools.js';
+import { NODE_PROTOCOL, resolveMasterNodeProtocol } from './nodeProtocol.js';
 
 const HEARTBEAT_INTERVAL_MS = 25000;
 const HEARTBEAT_TIMEOUT_MS = 10000;
 const RECONNECT_DELAY_MS = 5000;
 const NODE_TYPE = 'browser-extension';
-const NODE_PROTOCOL = Object.freeze({ min: 2, max: 2 });
 
 let ws = null;
 let heartbeatTimer = null;
@@ -105,17 +105,12 @@ async function handleMessage(data) {
   heartbeatAwaitingPong = false;
 
   switch (data.type) {
-    case 'registered':
-      if (!data.nodeProtocol?.master
-        || !Number.isInteger(data.nodeProtocol.master.min)
-        || !Number.isInteger(data.nodeProtocol.master.max)
-        || data.nodeProtocol.master.min > NODE_PROTOCOL.max
-        || data.nodeProtocol.master.max < NODE_PROTOCOL.min
-        || !Number.isInteger(data.nodeProtocol.negotiated)
-        || data.nodeProtocol.negotiated < NODE_PROTOCOL.min
-        || data.nodeProtocol.negotiated > NODE_PROTOCOL.max) {
+    case 'registered': {
+      try {
+        resolveMasterNodeProtocol(data.nodeProtocol);
+      } catch (error) {
         protocolIncompatible = true;
-        console.error('[foxwarm-node] Master Node protocol is incompatible; update Master or this extension');
+        console.error('[foxwarm-node] Master Node protocol is incompatible; update Master or this extension', error);
         setState('protocol_incompatible', { nodeId: data.nodeId, nodeProtocol: data.nodeProtocol });
         ws?.close(1008, 'Master Node protocol incompatible');
         break;
@@ -125,6 +120,7 @@ async function handleMessage(data) {
       currentNodeId = data.nodeId;
       setState('registered', { nodeId: data.nodeId });
       break;
+    }
 
     case 'node_incompatible':
       protocolIncompatible = true;

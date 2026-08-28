@@ -16,13 +16,13 @@ function makeClient() {
   return { client, statuses, closes };
 }
 
-test('current client rejects a legacy Master registered response before starting work', async () => {
+test('current client accepts an unversioned legacy Master registered response as protocol v1', async () => {
   const { client, statuses, closes } = makeClient();
   await (client as any).handleMessage({ type: 'registered', nodeId: 'node-a' });
-  assert.equal((client as any).protocolIncompatible, true);
-  assert.equal(statuses[0]?.status, 'protocol_incompatible');
-  assert.equal(closes[0]?.[0], 1008);
-  assert.equal((client as any).execRecoveryStarted, false);
+  assert.equal((client as any).protocolIncompatible, false);
+  assert.equal(statuses[0]?.status, 'registered');
+  assert.equal(closes.length, 0);
+  assert.equal((client as any).execRecoveryStarted, true);
 });
 
 test('current client remains connected but quarantined after Master incompatibility response', async () => {
@@ -31,7 +31,7 @@ test('current client remains connected but quarantined after Master incompatibil
     type: 'node_incompatible',
     code: 'NODE_PROTOCOL_INCOMPATIBLE',
     nodeId: 'node-a',
-    clientProtocol: { min: 2, max: 2 },
+    clientProtocol: { min: 1, max: 2 },
     masterProtocol: { min: 3, max: 3 },
     message: 'upgrade required',
   });

@@ -13,7 +13,7 @@ test('connected protocol-incompatible Nodes remain visible but unavailable to la
     id: 'old-node', type: 'cli-node', displayName: 'Old Node', online: true,
     services: { 'vscode-fs': 1, 'vscode-pty': 1 },
     protocolCompatibility: {
-      status: 'upgrade-required', client: { min: 1, max: 1 }, master: { min: 2, max: 2 }, legacyClient: true,
+      status: 'upgrade-required', client: { min: 3, max: 3 }, master: { min: 1, max: 2 }, legacyClient: false,
     },
   }] })
   const oldNode = nodes.find(node => node.id === 'old-node')
@@ -24,10 +24,23 @@ test('connected protocol-incompatible Nodes remain visible but unavailable to la
   assert.match(formatNodeTargetLabel(oldNode, 'vscode-pty'), /Old Node \(old-node\) · upgrade required/)
 })
 
+test('negotiated legacy v1 remains a ready launch target', () => {
+  const node = parseWebUiNodeTargets({ nodes: [{
+    id: 'legacy-ready', online: true, services: { 'vscode-fs': 1, 'vscode-pty': 1 },
+    protocolCompatibility: {
+      status: 'compatible', client: { min: 1, max: 1 }, master: { min: 1, max: 2 }, legacyClient: true, negotiated: 1,
+    },
+  }] }).find(item => item.id === 'legacy-ready')
+  assert.ok(node)
+  assert.equal(node.protocolStatus, 'compatible')
+  assert.deepEqual(getNodeTargetAvailability(node, 'vscode-fs'), { available: true })
+  assert.match(formatNodeTargetLabel(node, 'vscode-pty'), /legacy-ready · online/)
+})
+
 test('offline incompatible status remains distinct from connected quarantine', () => {
   const node = parseWebUiNodeTargets({ nodes: [{
     id: 'offline-old', online: false, services: {},
-    protocolCompatibility: { status: 'upgrade-required', client: { min: 1, max: 1 }, master: { min: 2, max: 2 } },
+    protocolCompatibility: { status: 'upgrade-required', client: { min: 3, max: 3 }, master: { min: 1, max: 2 } },
   }] }).find(item => item.id === 'offline-old')
   assert.ok(node)
   assert.deepEqual(getNodeTargetAvailability(node, 'vscode-fs'), { available: false, reason: 'offline · upgrade required' })

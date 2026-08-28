@@ -20,6 +20,7 @@ import uiautomator2 as u2
 from aiohttp import web
 import websockets
 from node_auth import (
+    NodeProtocolGate,
     build_node_ws_url,
     clear_stored_credentials,
     load_stored_credentials,
@@ -617,7 +618,7 @@ def build_registration_payload(node: AndroidNode) -> Dict[str, Any]:
     return {
         "type": "node_register",
         "nodeType": "android",
-        "nodeProtocol": {"min": 2, "max": 2},
+        "nodeProtocol": {"min": 1, "max": 2},
         "capabilities": {
             "tools": TOOL_DEFINITIONS
         },
@@ -665,6 +666,7 @@ async def connect_to_foxwarm(node: AndroidNode):
             connected_node_id,
         )
 
+        protocol_gate = NodeProtocolGate()
         try:
             async with websockets.connect(
                 ws_url,
@@ -680,7 +682,7 @@ async def connect_to_foxwarm(node: AndroidNode):
                         "type": "pair_request",
                         "requestedName": config.requested_name,
                         "nodeType": "android",
-                        "nodeProtocol": {"min": 2, "max": 2},
+                        "nodeProtocol": {"min": 1, "max": 2},
                         "capabilities": {"tools": TOOL_DEFINITIONS},
                     }))
 
@@ -688,24 +690,27 @@ async def connect_to_foxwarm(node: AndroidNode):
                     data = json.loads(message)
                     message_type = data.get("type")
 
+                    if message_type == "node_incompatible":
+                        protocol_gate.mark_incompatible()
+                        logger.error("Node protocol is incompatible: %s", data.get("message") or data)
+                        continue
+
+                    if not protocol_gate.allows_application_work():
+                        if message_type == "error":
+                            logger.error("Master diagnostic while protocol-incompatible: %s", data.get("error") or data)
+                        else:
+                            logger.warning("Ignoring %s while Node protocol is incompatible", message_type)
+                        continue
+
                     if message_type == "registered":
-                        master_protocol = (data.get("nodeProtocol") or {}).get("master") or {}
-                        negotiated = (data.get("nodeProtocol") or {}).get("negotiated")
-                        if not (
-                            isinstance(master_protocol.get("min"), int)
-                            and isinstance(master_protocol.get("max"), int)
-                            and master_protocol["min"] <= 2 <= master_protocol["max"]
-                            and negotiated == 2
-                        ):
+                        try:
+                            protocol_gate.accept_registered(data)
+                        except ValueError:
                             logger.error("Master Node protocol is incompatible; update Master or this Android Node")
                             return
                         connected_node_id = data.get("nodeId") or connected_node_id
                         logger.info("✅ Successfully registered as node: %s", connected_node_id)
                         continue
-
-                    if message_type == "node_incompatible":
-                        logger.error("Node protocol is incompatible: %s", data.get("message") or data)
-                        return
 
                     if message_type == "pair_pending":
                         logger.info(
@@ -758,6 +763,9 @@ async def connect_to_foxwarm(node: AndroidNode):
             logger.error("Connection error: %s", e)
 
         if pairing_rejected:
+            return
+
+        if not protocol_gate.should_reconnect():
             return
 
         await asyncio.sleep(0.25 if force_immediate_reconnect else 5)

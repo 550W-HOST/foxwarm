@@ -8,9 +8,11 @@ import {
   BACKGROUND_PROCESS_TREE_LIMIT,
   MAX_FULL_LOG_READ_BYTES,
   PersistentExecManager,
+  LEGACY_PERSISTENT_EXEC_ID_PATTERN,
   PERSISTENT_EXEC_ID_NAMESPACE_SIZE,
   PERSISTENT_EXEC_ID_PATTERN,
   generatePersistentExecPetname,
+  isSupportedPersistentExecId,
   formatProcessTreeSnapshot,
   truncateProcessCmdline,
   type PersistentExecManagerOptions,
@@ -44,8 +46,48 @@ test('persistent exec petnames are deterministic through the random seam and pat
   assert.deepEqual(bounds, [128, 264]);
   assert.equal(PERSISTENT_EXEC_ID_NAMESPACE_SIZE, 33_792);
   assert.match(id, PERSISTENT_EXEC_ID_PATTERN);
+  assert.equal(isSupportedPersistentExecId(id), true);
+  assert.equal(isSupportedPersistentExecId('exec_quiet-otter'), true);
+  assert.match('exec_quiet-otter', LEGACY_PERSISTENT_EXEC_ID_PATTERN);
+  assert.equal(isSupportedPersistentExecId('exec_short'), false);
   assert.doesNotMatch(id, /[\\/._\s]/);
   assert.throws(() => generatePersistentExecPetname(() => -1), /out-of-range/);
+});
+
+test('persistent exec accepts current and legacy requested, recovered, and recent IDs while generating petnames', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-id-compat-'));
+  const registryPath = path.join(root, 'running-exec.json');
+  const legacyLog = path.join(root, 'legacy.log');
+  await fs.writeJson(registryPath, {
+    recentExecIds: ['quiet-otter', 'exec_legacy-recent', 'invalid'],
+    execs: [{
+      id: 'exec_legacy-running', pid: process.pid, sessionId: 'source', agentName: 'main', nodeId: 'master', command: 'sleep',
+      initialCwd: root, logPath: legacyLog, statusPath: `${legacyLog}.status.json`, cwdPath: `${legacyLog}.cwd.txt`,
+      startedAt: Date.now(), notifyOnCompletion: true,
+    }],
+  });
+  const sequence = [0, 1];
+  const manager = new PersistentExecManager({
+    getDefaultCwd: () => root, getExecTempDir: () => root, registryPath,
+    randomInt: () => sequence.shift()!, isEntryRunning: entry => entry.id === 'exec_legacy-running',
+  });
+  try {
+    await manager.initialize();
+    assert.deepEqual(manager.listRunningExecs().map(entry => entry.id), ['exec_legacy-running']);
+    await assert.rejects(() => manager.startPersistentExec({ execId: 'exec_legacy-recent', command: 'printf no' }), /recent completion identity/);
+    const requested = await manager.startPersistentExec({ execId: 'exec_requested-id', command: 'printf requested' });
+    assert.equal(requested.id, 'exec_requested-id');
+    assert.ok(await manager.waitForExecCompletion(requested.id, 5000));
+    await manager.finalizeForegroundExec(requested.id);
+    const generated = await manager.startPersistentExec({ command: 'printf generated' });
+    assert.equal(generated.id, 'amber-beacon');
+    assert.match(generated.id, PERSISTENT_EXEC_ID_PATTERN);
+    assert.ok(await manager.waitForExecCompletion(generated.id, 5000));
+    await manager.finalizeForegroundExec(generated.id);
+  } finally {
+    await manager.shutdown();
+    await fs.remove(root);
+  }
 });
 
 test('persistent exec allocation retries registry collisions and fails closed on bounded exhaustion', async () => {
@@ -319,7 +361,7 @@ test('persistent exec reconciles a dead stale entry after its dated artifact dir
   const registryPath = path.join(root, 'running-exec.json');
   const statusPath = path.join(root, 'exec', '2026-07-27', 'stale.log.exit.json');
   const entry = buildExecEntry(statusPath.slice(0, -'.exit.json'.length), {
-    id: 'stale-background-exec',
+    id: 'exec_stale-background',
     pid: 99_999_999,
     startedAt: Date.now() - 10_000,
     notifyOnCompletion: true,
