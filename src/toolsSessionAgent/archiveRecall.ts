@@ -1601,8 +1601,10 @@ async function buildRecallVectorQuery(
     }
   }
 
-  const searchLabel = detailed.lexical.used
-    ? 'hybrid search'
+  const searchLabel = detailed.lexical.used && fallbackUsed
+    ? 'hybrid search with bounded identifier fallback'
+    : detailed.lexical.used
+      ? 'hybrid search'
     : fallbackUsed
       ? 'semantic search with bounded identifier fallback'
       : 'vector search';

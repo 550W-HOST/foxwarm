@@ -289,19 +289,54 @@ test('persistent hybrid coverage suppresses or selects the bounded Phase2A boots
   assert.match(complete, /persistent hybrid authority/);
 
   const unstableRescue = String(await withRecallStubs({
-    hits: [],
-    detailedLexical: { configured: true, ready: true, used: false, coverageComplete: false, backfilling: false },
+    hits: [hit],
+    detailedLexical: { configured: true, ready: true, used: true, coverageComplete: false, backfilling: false },
     lexical: () => {
       fallbackCalls += 1;
       return [{
+        id: 'bootstrap-duplicate', kind: 'raw', session_id: 'source-session', agent: 'main',
+        source_family: 'source-session:raw:1-1', lexical_score: 101, lexical_locators: ['AlphaNode_42'],
+        start_seq: 1, end_seq: 1, raw_start_seq: 1, raw_end_seq: 1,
+      }, {
         id: 'bootstrap-rescue', kind: 'raw', session_id: 'source-session', agent: 'main',
         source_family: 'source-session:raw:2-2', lexical_score: 100, lexical_locators: ['AlphaNode_42'],
         start_seq: 2, end_seq: 2, raw_start_seq: 2, raw_end_seq: 2,
       }];
     },
-    messages: args => ({ records: [messageRecord(2, 'Phase2A rescues authority appended during FTS')], requestedRange: args }),
-  }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-session', limit: 1 }, ctx)));
+    messages: args => ({
+      records: [messageRecord(args.startSeq, args.startSeq === 1
+        ? 'persistent partial hybrid authority'
+        : 'Phase2A rescues authority appended during FTS')],
+      requestedRange: args,
+    }),
+  }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-session', limit: 2 }, ctx)));
+  assert.match(unstableRescue, /Recall hybrid search with bounded identifier fallback/);
+  assert.match(unstableRescue, /persistent partial hybrid authority/);
   assert.match(unstableRescue, /Phase2A rescues authority appended during FTS/);
+  assert.equal((unstableRescue.match(/persistent partial hybrid authority/g) || []).length, 1, 'persistent and Phase2A duplicate families collapse');
+
+  const fallbackOnly = String(await withRecallStubs({
+    hits: [],
+    detailedLexical: { configured: true, ready: true, used: false, coverageComplete: false, backfilling: false },
+    lexical: () => {
+      fallbackCalls += 1;
+      return [{
+        id: 'fallback-only', kind: 'raw', session_id: 'source-session', agent: 'main',
+        source_family: 'source-session:raw:2-2', lexical_score: 100, lexical_locators: ['AlphaNode_42'],
+        start_seq: 2, end_seq: 2, raw_start_seq: 2, raw_end_seq: 2,
+      }];
+    },
+    messages: args => ({ records: [messageRecord(2, 'fallback-only authority')], requestedRange: args }),
+  }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-session', limit: 1 }, ctx)));
+  assert.match(fallbackOnly, /Recall semantic search with bounded identifier fallback/);
+
+  const vectorOnly = String(await withRecallStubs({
+    hits: [hit],
+    detailedLexical: { configured: true, ready: true, used: false, coverageComplete: true, backfilling: false },
+    lexical: () => { fallbackCalls += 1; return []; },
+    messages: args => ({ records: [messageRecord(1, 'dense-only authority')], requestedRange: args }),
+  }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-session', limit: 1 }, ctx)));
+  assert.match(vectorOnly, /Recall vector search/);
 
   for (const detailedLexical of [
     { configured: true, ready: true, used: false, coverageComplete: false, backfilling: true },
@@ -312,14 +347,14 @@ test('persistent hybrid coverage suppresses or selects the bounded Phase2A boots
       lexical: () => { fallbackCalls += 1; return []; },
     }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-session', limit: 1 }, ctx));
   }
-  assert.equal(fallbackCalls, 3, 'unstable, incomplete, and unavailable exact scopes use bounded bootstrap fallback');
+  assert.equal(fallbackCalls, 4, 'partial, unstable, incomplete, and unavailable exact scopes use bounded bootstrap fallback');
 
   await withRecallStubs({
     hits: [],
     detailedLexical: { configured: true, ready: true, used: false, coverageComplete: false, backfilling: true },
     lexical: () => { fallbackCalls += 1; return []; },
   }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-agent', limit: 1 }, ctx));
-  assert.equal(fallbackCalls, 3, 'current-agent partial coverage never scans Archive through Phase2A');
+  assert.equal(fallbackCalls, 4, 'current-agent partial coverage never scans Archive through Phase2A');
 });
 
 test('vector recall labels full and selected raw windows while preview budget remains bounded', async () => {

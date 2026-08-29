@@ -358,9 +358,16 @@ test('dark lexical owner backfills and schedules independently with fixed freshn
       lineageSessions: [{ sessionId: 'lexical/runtime', maxMessageSeq: 110, maxBlockId: 2 }],
     });
     assert.equal(cappedLineage.metadata.coverageComplete, true, 'fork caps bound exact coverage requirements');
-    const incompleteExact = await runtime.query('CoveragePendingToken_111', 10, { sessionIds: ['lexical/runtime'] });
+    const incompleteExact = await runtime.query('immediate', 10, { sessionIds: ['lexical/runtime'] });
     assert.equal(incompleteExact.metadata.coverageComplete, false);
-    assert.deepEqual(incompleteExact.hits, []);
+    assert.equal(incompleteExact.metadata.used, true);
+    assert(incompleteExact.hits.length > 0, 'incomplete exact coverage still returns bounded persistent FTS hits');
+    runtime.setTestHooks({ backfilling: true });
+    const backfillingPartial = await runtime.query('immediate', 10, { sessionIds: ['lexical/runtime'] });
+    assert.equal(backfillingPartial.metadata.coverageComplete, false);
+    assert.equal(backfillingPartial.metadata.backfilling, true);
+    assert(backfillingPartial.hits.length > 0, 'startup backfill does not suppress safe partial persistent hits');
+    runtime.setTestHooks({ backfilling: false });
     const partialAgent = await runtime.query('NoHintForceToken_1', 10, { agent: 'main' });
     assert.equal(partialAgent.metadata.coverageComplete, false);
     assert.equal(partialAgent.metadata.used, true);

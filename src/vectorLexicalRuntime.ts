@@ -736,15 +736,13 @@ export async function query(queryText: string, limit: number, options?: SearchOp
     coverageComplete: false,
     backfilling,
   };
-  if (!VECTOR_HYBRID_SEARCH_ENABLED || !ready || !lexicalIndex || shuttingDown) {
+  if (!VECTOR_HYBRID_SEARCH_ENABLED || !ready || !lexicalIndex || rebuilding || shuttingDown) {
     return { hits: [], metadata: { ...base, ...(lastErrorCode ? { errorCode: lastErrorCode } : {}) } };
   }
   try {
     beforeQuery?.();
     const preCoverage = await coverageSnapshotForOptions(options);
-    if (preCoverage.exact && (!preCoverage.complete || backfilling)) {
-      return { hits: [], metadata: { ...base, coverageComplete: preCoverage.complete } };
-    }
+    const preBackfilling = backfilling;
     await afterCoveragePre?.();
     const result = lexicalIndex.query(queryText, {
       sessionIds: options?.sessionIds,
@@ -764,15 +762,15 @@ export async function query(queryText: string, limit: number, options?: SearchOp
     const postCoverage = preCoverage.exact ? await coverageSnapshotForOptions(options) : preCoverage;
     // Exact coverage is valid only across one stable Archive authority window.
     // Catch-up during FTS cannot retroactively make that query cover the append.
-    const coverageComplete = postCoverage.complete
+    const coverageComplete = preCoverage.complete && postCoverage.complete && !preBackfilling
       && (!preCoverage.exact || preCoverage.authoritySignature === postCoverage.authoritySignature);
     return {
       hits,
-      metadata: { ...base, used: hits.length > 0, coverageComplete },
+      metadata: { ...base, used: hits.length > 0, coverageComplete, backfilling },
     };
   } catch (error) {
     const code = errorCode(error, 'LEXICAL_QUERY_FAILED');
-    return { hits: [], metadata: { ...base, errorCode: code } };
+    return { hits: [], metadata: { ...base, backfilling, errorCode: code } };
   }
 }
 
@@ -972,6 +970,7 @@ export function setTestHooks(hooks?: {
   getFreeBytes?: () => Promise<number>;
   beforePromotionValidation?: () => void | Promise<void>;
   beforeLifecycleMutation?: () => void;
+  backfilling?: boolean;
 }): void {
   now = hooks?.now || (() => Date.now());
   setTimer = hooks?.setTimer || ((callback, delayMs) => setTimeout(callback, delayMs));
@@ -986,4 +985,5 @@ export function setTestHooks(hooks?: {
   });
   beforePromotionValidation = hooks?.beforePromotionValidation;
   beforeLifecycleMutation = hooks?.beforeLifecycleMutation;
+  if (hooks?.backfilling !== undefined) backfilling = hooks.backfilling;
 }
