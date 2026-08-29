@@ -1554,7 +1554,6 @@ async function buildRecallVectorQuery(
   const shouldUseBootstrapFallback = effectiveScope === 'current-session' && resolvedSessionId
     && (!detailed.lexical.configured
       || !detailed.lexical.ready
-      || !detailed.lexical.coverageComplete
       || detailed.lexical.backfilling
       || Boolean(detailed.lexical.errorCode));
   if (shouldUseBootstrapFallback && resolvedSessionId) {
@@ -1586,21 +1585,6 @@ async function buildRecallVectorQuery(
     }
   }
 
-  const notices: string[] = [];
-  if (effectiveScope === 'current-session' && resolvedSessionId) {
-    try {
-      const status = await vector.getArchiveIndexStatus(resolvedSessionId);
-      if (status.pendingMessageCount > 0 || status.pendingBlockCount > 0) {
-        const deadline = status.maxLatencyDeadline
-          ? `; max-latency flush due ${new Date(status.maxLatencyDeadline).toISOString()}`
-          : '';
-        notices.push(`[vector lag] ${status.pendingMessageCount} archived message(s) and ${status.pendingBlockCount} block(s) are newer than this Session's vector checkpoint${deadline}.`);
-      }
-    } catch {
-      // Lag diagnostics are best-effort and must not turn a successful search into failure.
-    }
-  }
-
   const searchLabel = detailed.lexical.used && fallbackUsed
     ? 'hybrid search with bounded identifier fallback'
     : detailed.lexical.used
@@ -1614,7 +1598,6 @@ async function buildRecallVectorQuery(
     emptyMessage: 'No archived source messages or blocks found for this vector_query.',
     options: renderOptions,
     maxItems: limit,
-    notices,
   }).text;
   return rendered;
 }

@@ -272,7 +272,7 @@ test('broad semantic scope skips Archive lexical scan and lexical failure preser
   assert.equal(disabledLexicalCalls, 0, 'disabled Vector must not become lexical-only recall');
 });
 
-test('persistent hybrid coverage suppresses or selects the bounded Phase2A bootstrap fallback by scope', async () => {
+test('persistent hybrid exact recall treats ordinary lag as eventual consistency and reserves Phase2A for bootstrap states', async () => {
   const hit = {
     id: 'hybrid', kind: 'raw', session_id: 'source-session', start_seq: 1, end_seq: 1,
     raw_start_seq: 1, raw_end_seq: 1, source_family: 'source-session:raw:1-1', lexical_lane: 'identifier',
@@ -288,36 +288,20 @@ test('persistent hybrid coverage suppresses or selects the bounded Phase2A boots
   assert.match(complete, /Recall hybrid search/);
   assert.match(complete, /persistent hybrid authority/);
 
-  const unstableRescue = String(await withRecallStubs({
+  const partialPersistent = String(await withRecallStubs({
     hits: [hit],
     detailedLexical: { configured: true, ready: true, used: true, coverageComplete: false, backfilling: false },
-    lexical: () => {
-      fallbackCalls += 1;
-      return [{
-        id: 'bootstrap-duplicate', kind: 'raw', session_id: 'source-session', agent: 'main',
-        source_family: 'source-session:raw:1-1', lexical_score: 101, lexical_locators: ['AlphaNode_42'],
-        start_seq: 1, end_seq: 1, raw_start_seq: 1, raw_end_seq: 1,
-      }, {
-        id: 'bootstrap-rescue', kind: 'raw', session_id: 'source-session', agent: 'main',
-        source_family: 'source-session:raw:2-2', lexical_score: 100, lexical_locators: ['AlphaNode_42'],
-        start_seq: 2, end_seq: 2, raw_start_seq: 2, raw_end_seq: 2,
-      }];
-    },
-    messages: args => ({
-      records: [messageRecord(args.startSeq, args.startSeq === 1
-        ? 'persistent partial hybrid authority'
-        : 'Phase2A rescues authority appended during FTS')],
-      requestedRange: args,
-    }),
+    lexical: () => { fallbackCalls += 1; return []; },
+    messages: args => ({ records: [messageRecord(1, 'persistent partial hybrid authority')], requestedRange: args }),
   }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-session', limit: 2 }, ctx)));
-  assert.match(unstableRescue, /Recall hybrid search with bounded identifier fallback/);
-  assert.match(unstableRescue, /persistent partial hybrid authority/);
-  assert.match(unstableRescue, /Phase2A rescues authority appended during FTS/);
-  assert.equal((unstableRescue.match(/persistent partial hybrid authority/g) || []).length, 1, 'persistent and Phase2A duplicate families collapse');
+  assert.equal(fallbackCalls, 0, 'ordinary exact coverage lag does not invoke Phase2A');
+  assert.match(partialPersistent, /Recall hybrid search/);
+  assert.doesNotMatch(partialPersistent, /bounded identifier fallback/);
+  assert.match(partialPersistent, /persistent partial hybrid authority/);
 
   const fallbackOnly = String(await withRecallStubs({
     hits: [],
-    detailedLexical: { configured: true, ready: true, used: false, coverageComplete: false, backfilling: false },
+    detailedLexical: { configured: false, ready: false, used: false, coverageComplete: false, backfilling: false },
     lexical: () => {
       fallbackCalls += 1;
       return [{
@@ -338,16 +322,35 @@ test('persistent hybrid coverage suppresses or selects the bounded Phase2A boots
   }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-session', limit: 1 }, ctx)));
   assert.match(vectorOnly, /Recall vector search/);
 
+  const startupCombined = String(await withRecallStubs({
+    hits: [hit],
+    detailedLexical: { configured: true, ready: true, used: true, coverageComplete: false, backfilling: true },
+    lexical: () => {
+      fallbackCalls += 1;
+      return [{
+        id: 'startup-rescue', kind: 'raw', session_id: 'source-session', agent: 'main',
+        source_family: 'source-session:raw:2-2', lexical_score: 100, lexical_locators: ['AlphaNode_42'],
+        start_seq: 2, end_seq: 2, raw_start_seq: 2, raw_end_seq: 2,
+      }];
+    },
+    messages: args => ({ records: [messageRecord(args.startSeq, args.startSeq === 1
+      ? 'startup persistent authority'
+      : 'startup fallback authority')], requestedRange: args }),
+  }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-session', limit: 2 }, ctx)));
+  assert.match(startupCombined, /Recall hybrid search with bounded identifier fallback/);
+  assert.match(startupCombined, /startup persistent authority/);
+  assert.match(startupCombined, /startup fallback authority/);
+
   for (const detailedLexical of [
-    { configured: true, ready: true, used: false, coverageComplete: false, backfilling: true },
     { configured: true, ready: false, used: false, coverageComplete: false, backfilling: false, errorCode: 'ARCHIVE_SEARCH_REBUILD_REQUIRED' },
+    { configured: true, ready: true, used: false, coverageComplete: false, backfilling: false, errorCode: 'LEXICAL_QUERY_FAILED' },
   ]) {
     await withRecallStubs({
       hits: [], detailedLexical,
       lexical: () => { fallbackCalls += 1; return []; },
     }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-session', limit: 1 }, ctx));
   }
-  assert.equal(fallbackCalls, 4, 'partial, unstable, incomplete, and unavailable exact scopes use bounded bootstrap fallback');
+  assert.equal(fallbackCalls, 4, 'disabled, startup-backfilling, unavailable, and errored exact scopes use bounded bootstrap fallback');
 
   await withRecallStubs({
     hits: [],
@@ -420,7 +423,7 @@ test('positive filters localize raw windows and report distant omitted requireme
   assert.equal(containsLoneSurrogate(minBudgetOutput), false);
 });
 
-test('exact-session vector recall reports bounded lag without making status failures fatal', async () => {
+test('semantic recall omits vector lag diagnostics and does not call archive status', async () => {
   let statusCalls = 0;
   const pendingOutput = String(await withRecallStubs({
     hits: [],
@@ -433,28 +436,23 @@ test('exact-session vector recall reports bounded lag without making status fail
       };
     },
   }, ctx => tool_recall({ vector_query: 'lag', scope: 'current-session', limit: 1, previewLength: 1000 }, ctx)));
-  assert.equal(statusCalls, 1);
-  assert.match(pendingOutput, /\[vector lag\] 2 archived message\(s\) and 1 block\(s\)/);
-  assert.match(pendingOutput, /2026-08-28T12:00:00.000Z/);
-  assert.ok(pendingOutput.length <= 1000, 'lag notice must participate in the shared total preview budget');
+  assert.equal(statusCalls, 0);
+  assert.doesNotMatch(pendingOutput, /\[vector lag\]/);
+  assert.match(pendingOutput, /No archived source messages or blocks found/);
 
+  let longStatusCalls = 0;
   const longQueryOutput = String(await withRecallStubs({
     hits: [],
-    status: () => ({
+    status: () => { longStatusCalls += 1; return {
       lastIndexedSeq: 4, tailStartSeq: 2, lastIndexedBlockId: 1,
       latestLocalMessageSeq: 6, latestLocalBlockId: 1, pendingMessageCount: 2, pendingBlockCount: 0,
-    }),
+    }; },
   }, ctx => tool_recall({ vector_query: `lag-${'😀'.repeat(5000)}`, scope: 'current-session', limit: 1, previewLength: 1000 }, ctx)));
+  assert.equal(longStatusCalls, 0);
   assert.ok(longQueryOutput.length <= 1000);
-  assert.match(longQueryOutput, /\[vector lag\]/);
+  assert.doesNotMatch(longQueryOutput, /\[vector lag\]/);
   assert.match(longQueryOutput, /No archived source messages or blocks found for this vector_query\./);
   assert.equal(containsLoneSurrogate(longQueryOutput), false);
-
-  const successful = String(await withRecallStubs({
-    hits: [],
-    status: () => { throw new Error('diagnostic unavailable'); },
-  }, ctx => tool_recall({ vector_query: 'lag', scope: 'current-session', limit: 1 }, ctx)));
-  assert.match(successful, /No archived source messages or blocks found/);
 
   let broadStatusCalls = 0;
   await withRecallStubs({
@@ -464,7 +462,7 @@ test('exact-session vector recall reports bounded lag without making status fail
   assert.equal(broadStatusCalls, 0, 'broad semantic scopes must not fan out archive status calls');
 });
 
-test('historical alias lag status uses the resolved canonical Session ID', async () => {
+test('historical alias recall also skips archive status diagnostics', async () => {
   const session = createSession();
   session.aliases = ['historical-owner'];
   let requestedStatusSessionId = '';
@@ -480,6 +478,6 @@ test('historical alias lag status uses the resolved canonical Session ID', async
       };
     },
   }, ctx => tool_recall({ vector_query: 'alias', sessionId: 'historical-owner', limit: 1 }, ctx)));
-  assert.equal(requestedStatusSessionId, session.id);
+  assert.equal(requestedStatusSessionId, '');
   assert.doesNotMatch(output, /\[vector lag\]/);
 });
