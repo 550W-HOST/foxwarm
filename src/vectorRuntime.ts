@@ -10,6 +10,7 @@ import {
     VectorMaintenanceTrigger,
 } from './vectorMaintenance';
 import { formatMessageText } from './utils/messageFormat';
+import * as lexicalRuntime from './vectorLexicalRuntime';
 import { isModelVisibleMessage } from './session/messageVisibility';
 import type { ExtractedMemoryFact, MemoryFactAttribution, MemoryFactKind } from './session/compactPlan';
 import {
@@ -223,7 +224,9 @@ async function readVectorTableMaintenanceSnapshot(cleanupOlderThan: Date): Promi
 }
 
 async function runVectorMaintenanceCheck(triggers: VectorMaintenanceTrigger[]): Promise<void> {
-    await tableOperationGate.runExclusive(async () => {
+    let denseError: unknown;
+    try {
+      await tableOperationGate.runExclusive(async () => {
         if (!table || shuttingDown) {
             return;
         }
@@ -269,7 +272,12 @@ async function runVectorMaintenanceCheck(triggers: VectorMaintenanceTrigger[]): 
             }, 'LanceDB maintenance failed');
             throw error;
         }
-    });
+      });
+    } catch (error) {
+      denseError = error;
+    }
+    await lexicalRuntime.runMaintenance();
+    if (denseError) throw denseError;
 }
 
 function createMaintenanceCoordinator(): VectorMaintenanceCoordinator {
@@ -889,7 +897,7 @@ function startStartupArchiveVectorBackfill(): Promise<void> {
 }
 
 async function waitForStartupArchiveVectorBackfill(): Promise<void> {
-    await startStartupArchiveVectorBackfill();
+    await Promise.all([startStartupArchiveVectorBackfill(), lexicalRuntime.waitForStartupBackfill()]);
 }
 
 function getOrCreateBatchState(sessionId: string): SessionArchiveBatchState {
@@ -1391,6 +1399,7 @@ function planSessionArchiveIndex(sessionId: string): Promise<number> {
 }
 
 async function scheduleSessionArchiveIndex(sessionId: string, latestSeqHint?: number, latestMessageTokenEstimate?: number, latestBlockIdHint?: number): Promise<number> {
+    lexicalRuntime.schedule(sessionId, latestSeqHint, latestBlockIdHint);
     const checkpoint = getSessionArchiveCheckpoint(sessionId);
     const lastIndexedSeq = checkpoint.lastIndexedSeq;
     if ((latestSeqHint === undefined || latestSeqHint <= lastIndexedSeq)
@@ -1420,6 +1429,7 @@ async function scheduleSessionArchiveIndex(sessionId: string, latestSeqHint?: nu
 }
 
 async function indexSessionArchive(sessionId: string, latestSeqHint?: number, latestBlockIdHint?: number): Promise<number> {
+    lexicalRuntime.force(sessionId, latestSeqHint, latestBlockIdHint);
     const checkpoint = getSessionArchiveCheckpoint(sessionId);
     const lastIndexedSeq = checkpoint.lastIndexedSeq;
     const state = getOrCreateBatchState(sessionId);
@@ -1506,6 +1516,7 @@ async function runStartupArchiveVectorBackfill(): Promise<void> {
 }
 
 async function renameSessionArchiveIndex(oldSessionId: string, newSessionId: string): Promise<void> {
+    await lexicalRuntime.disableForDeferredLifecycle();
     resolveBatchState(oldSessionId, getSessionArchiveCheckpoint(oldSessionId).lastIndexedSeq);
     const oldCheckpoint = getSessionArchiveCheckpoint(oldSessionId);
     const newCheckpoint = getSessionArchiveCheckpoint(newSessionId);
@@ -1524,6 +1535,7 @@ async function renameSessionArchiveIndex(oldSessionId: string, newSessionId: str
 }
 
 async function copySessionArchiveIndexCheckpoint(sourceSessionId: string, targetSessionId: string): Promise<void> {
+    await lexicalRuntime.disableForDeferredLifecycle();
     const sourceCheckpoint = getSessionArchiveCheckpoint(sourceSessionId);
     if (sourceCheckpoint.updatedAt <= 0) {
         return;
@@ -1942,6 +1954,8 @@ async function init() {
     maintenanceCoordinator = createMaintenanceCoordinator();
     maintenanceCoordinator.start();
 
+    await lexicalRuntime.init();
+
     void startStartupArchiveVectorBackfill().catch((err) => {
         logger.error({ err }, 'Startup archive vector backfill failed');
     });
@@ -1951,6 +1965,7 @@ async function shutdown(): Promise<void> {
     shuttingDown = true;
     for (const state of archiveIndexBatchStates.values()) cancelBatchDeadline(state);
     await maintenanceCoordinator?.shutdown();
+    await lexicalRuntime.shutdown();
     const activeWork = [
         ...(startupBackfillPromise ? [startupBackfillPromise] : []),
         ...indexingChains.values(),
@@ -1987,6 +2002,7 @@ function getArchiveIndexStatus(sessionId: string): {
     pendingMessageCount: number;
     pendingBlockCount: number;
     maxLatencyDeadline?: number;
+    lexical?: lexicalRuntime.VectorLexicalStatus;
 } {
     const checkpoint = getSessionArchiveCheckpoint(sessionId);
     const maxima = getLocalArchiveVectorMaximaSync(sessionId);
@@ -2000,6 +2016,7 @@ function getArchiveIndexStatus(sessionId: string): {
         pendingMessageCount: Math.max(0, maxima.latestLocalMessageSeq - checkpoint.lastIndexedSeq),
         pendingBlockCount: Math.max(0, maxima.latestLocalBlockId - checkpoint.lastIndexedBlockId),
         ...(state?.maxLatencyDeadline ? { maxLatencyDeadline: state.maxLatencyDeadline } : {}),
+        ...(lexicalRuntime.isConfigured() ? { lexical: lexicalRuntime.getStatus(sessionId) } : {}),
     };
 }
 

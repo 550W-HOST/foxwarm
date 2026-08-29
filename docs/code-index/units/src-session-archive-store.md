@@ -1,6 +1,6 @@
 # Unit: src-session-archive-store
 
-Files: src/session/archiveStore.ts, src/session/archiveBootstrapImport.test.ts, src/session/archiveImportState.test.ts, src/session/archiveLexicalSearch.test.ts, src/session/archiveLineageStore.test.ts, src/session/archiveMessageStats.test.ts, src/session/archivePureReads.test.ts
+Files: src/session/archiveStore.ts, src/session/archiveBootstrapImport.test.ts, src/session/archiveImportState.test.ts, src/session/archiveLexicalSearch.test.ts, src/session/archiveLexicalBatchReads.test.ts, src/session/archiveLineageStore.test.ts, src/session/archiveMessageStats.test.ts, src/session/archivePureReads.test.ts
 Secondary files: src/session/sessionIdAllocation.test.ts
 
 ## Purpose
@@ -27,6 +27,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 - `getVectorSearchLineage`, `listSessionsNeedingVectorBackfill` — vector scope/backfill inputs.
 - `getLocalArchiveVectorMaximaSync` — read-only durable local message/block maxima for bounded Vector lag status.
 - `locateEffectiveArchiveCandidatesBySubstring` — pure identifier-candidate lookup over existing message/block rows with alias-aware cumulative fork caps, canonical shared raw-message formatting before the match cap, bounded NFKC/lower matching, parameterized block-summary ASCII matching, and hard lineage/row/result bounds.
+- `readLocalArchiveMessageBatch`, `readLocalArchiveBlockBatch`, `listLocalArchiveSessionMaxima` — bounded read-only local-source primitives for the dark exact-owner lexical backfill; they do not hydrate Sessions, create branches, or mutate authority/checkpoints.
 - `renameSessionArchiveStore` — bootstrapped transactional ID/parent/checkpoint/import-state rename.
 - `renameSessionArchiveStoreForRecovery` — startup-journal rollback variant that updates existing SQLite rows before normal bootstrap can infer a duplicate branch.
 - `migrateLegacySessionArchivesToSqlite` — migration-only strict import/verification inventory for active legacy message/block JSONLs.

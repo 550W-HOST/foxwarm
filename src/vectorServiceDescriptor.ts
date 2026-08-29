@@ -10,6 +10,20 @@ export type VectorIndexStatus = {
   pendingMessageCount: number;
   pendingBlockCount: number;
   maxLatencyDeadline?: number;
+  lexical?: {
+    configured: boolean;
+    ready: boolean;
+    backfilling: boolean;
+    rawLastIndexedSeq: number;
+    lastIndexedBlockId: number;
+    latestLocalMessageSeq: number;
+    latestLocalBlockId: number;
+    pendingMessageCount: number;
+    pendingBlockCount: number;
+    maxLatencyDeadline?: number;
+    lastErrorCode?: string;
+    lastErrorAt?: number;
+  };
 };
 
 export const vectorServiceDescriptor = defineRpcService('vector', 2, {

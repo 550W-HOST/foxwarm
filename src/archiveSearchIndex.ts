@@ -531,22 +531,33 @@ export class ArchiveSearchIndex {
     factInputs: ArchiveSearchDocumentInput[],
     lastIndexedBlockId: number,
   ): void {
+    this.replaceBlockDocumentBatch(sessionId, [{ block: blockInput, facts: factInputs }], lastIndexedBlockId);
+  }
+
+  replaceBlockDocumentBatch(
+    sessionId: string,
+    entries: Array<{ block: ArchiveSearchDocumentInput; facts: ArchiveSearchDocumentInput[] }>,
+    lastIndexedBlockId: number,
+  ): void {
     this.assertOpen();
-    const block = prepareArchiveSearchDocument(blockInput);
-    const facts = factInputs.map(prepareArchiveSearchDocument);
-    if (block.sessionId !== sessionId || block.memoryKind !== 'block' || !Number.isSafeInteger(block.blockId)) {
-      throw new Error('Block archive search batch identity mismatch.');
-    }
-    if (facts.some(fact => fact.sessionId !== sessionId || fact.memoryKind !== 'fact'
-      || fact.blockId !== block.blockId || fact.sourceFamily !== block.sourceFamily)) {
-      throw new Error('Fact archive search batch must use its creating block family.');
+    const prepared = entries.map(entry => ({ block: prepareArchiveSearchDocument(entry.block), facts: entry.facts.map(prepareArchiveSearchDocument) }));
+    for (const { block, facts } of prepared) {
+      if (block.sessionId !== sessionId || block.memoryKind !== 'block' || !Number.isSafeInteger(block.blockId)) {
+        throw new Error('Block archive search batch identity mismatch.');
+      }
+      if (facts.some(fact => fact.sessionId !== sessionId || fact.memoryKind !== 'fact'
+        || fact.blockId !== block.blockId || fact.sourceFamily !== block.sourceFamily)) {
+        throw new Error('Fact archive search batch must use its creating block family.');
+      }
     }
     runTransaction(this.db, () => {
       const now = Date.now();
-      this.db.prepare(`DELETE FROM archive_search_documents WHERE session_id = ? AND memory_kind = 'fact' AND block_id = ?`)
-        .run(sessionId, block.blockId!);
-      this.upsertDocument(block, now);
-      facts.forEach(fact => this.upsertDocument(fact, now));
+      const deleteFacts = this.db.prepare(`DELETE FROM archive_search_documents WHERE session_id = ? AND memory_kind = 'fact' AND block_id = ?`);
+      for (const { block, facts } of prepared) {
+        deleteFacts.run(sessionId, block.blockId!);
+        this.upsertDocument(block, now);
+        facts.forEach(fact => this.upsertDocument(fact, now));
+      }
       this.advanceCheckpoint(sessionId, { lastIndexedBlockId }, now);
     });
   }
@@ -722,6 +733,11 @@ export class ArchiveSearchIndex {
     const boundedPages = Math.max(1, Math.min(4096, Math.floor(maxPages) || 256));
     this.db.prepare(`INSERT INTO archive_search_fts(archive_search_fts, rank) VALUES ('merge', ?)`).run(boundedPages);
     this.db.exec('PRAGMA optimize');
+  }
+
+  checkpointWal(): void {
+    this.assertOpen();
+    this.db.exec('PRAGMA wal_checkpoint(PASSIVE)');
   }
 
   close(): void {

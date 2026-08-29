@@ -42,11 +42,14 @@ Enable it with an OpenAI-compatible API base root. Include the version prefix or
 ```yaml
 vector:
   baseUrl: http://localhost:11434/v1
+  lexicalIndex: false
 ```
 
 A Vector object opts in unless it sets `enabled: false`. Enabled Vector requires a nonempty absolute HTTP(S) URL without username, password, query, or fragment components. A custom gateway root such as `https://gateway.example/openai/v1` is preserved exactly apart from trailing-slash removal.
 
 For compatibility, when top-level `vector` is absent, a nonempty legacy `llm.ollamaBaseUrl` still enables Vector. That field historically named the server root, so Foxwarm normalizes it to an API base ending in `/v1` before calling `/embeddings`. Explicit top-level `vector` always wins, and current configuration should use `vector.baseUrl`.
+
+`vector.lexicalIndex` is an opt-in, startup-only dark indexing lane and defaults to `false`. When true, the exact local or child Vector owner builds a separate derived `state/db/archive-search.sqlite` index with independent checkpoints. Slice 2 does not query that database from recall, does not replace the Phase 2A identifier side-channel, and disables the lane on rename/fork checkpoint-copy boundaries pending the later lifecycle rollout.
 
 With Vector disabled:
 

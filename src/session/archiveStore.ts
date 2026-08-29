@@ -1375,6 +1375,20 @@ export async function readLocalArchiveMessages(sessionId: string, startSeq?: num
   }));
 }
 
+export async function readLocalArchiveMessageBatch(sessionId: string, afterSeq: number, limit: number): Promise<ArchiveMessageRecord[]> {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+  const boundedLimit = Math.max(1, Math.min(1000, Math.floor(limit) || 500));
+  const rows = getDb().prepare(`
+    SELECT agent, seq, timestamp, role, message_json
+    FROM archive_messages WHERE session_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?
+  `).all(sessionId, Math.max(0, Math.floor(afterSeq)), boundedLimit) as any[];
+  return rows.map(row => ({
+    v: 1, kind: 'message' as const, sessionId, agent: row.agent || 'main', seq: Number(row.seq),
+    timestamp: Number(row.timestamp), role: row.role, message: JSON.parse(row.message_json) as Message,
+  }));
+}
+
 function readLocalArchiveMessageStatsByCanonicalId(sessionId: string, startSeq?: number, endSeq?: number): ArchiveMessageStats {
   const row = getDb().prepare(`
     SELECT COUNT(*) AS count, MIN(seq) AS min_seq, MAX(seq) AS max_seq
@@ -1530,6 +1544,26 @@ export async function readLocalArchiveBlocks(sessionId: string, startId?: number
     rawStartTimestamp: row.raw_start_timestamp == null ? undefined : Number(row.raw_start_timestamp),
     rawEndTimestamp: row.raw_end_timestamp == null ? undefined : Number(row.raw_end_timestamp),
     summary: String(row.summary || ''),
+    ...(parseMemoryFactsJson(row.memory_facts_json) ? { memoryFacts: parseMemoryFactsJson(row.memory_facts_json) } : {}),
+    createdAt: Number(row.created_at),
+  }));
+}
+
+export async function readLocalArchiveBlockBatch(sessionId: string, afterId: number, limit: number): Promise<ArchiveBlockRecord[]> {
+  initArchiveStoreSync();
+  sessionId = resolveArchivedRecordSessionIdReadOnly(sessionId);
+  const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit) || 100));
+  const rows = getDb().prepare(`
+    SELECT agent, id, level, source_kind, source_start, source_end, source_block_ids_json,
+      raw_start_seq, raw_end_seq, raw_start_timestamp, raw_end_timestamp, summary, memory_facts_json, created_at
+    FROM archive_blocks WHERE session_id = ? AND id > ? ORDER BY id ASC LIMIT ?
+  `).all(sessionId, Math.max(0, Math.floor(afterId)), boundedLimit) as any[];
+  return rows.map(row => ({
+    v: 1, kind: 'block' as const, sessionId, agent: row.agent || 'main', id: Number(row.id), level: Number(row.level),
+    sourceKind: row.source_kind, sourceStart: Number(row.source_start), sourceEnd: Number(row.source_end),
+    sourceBlockIds: parseSourceBlockIdsJson(row.source_block_ids_json), rawStartSeq: Number(row.raw_start_seq),
+    rawEndSeq: Number(row.raw_end_seq), rawStartTimestamp: row.raw_start_timestamp == null ? undefined : Number(row.raw_start_timestamp),
+    rawEndTimestamp: row.raw_end_timestamp == null ? undefined : Number(row.raw_end_timestamp), summary: String(row.summary || ''),
     ...(parseMemoryFactsJson(row.memory_facts_json) ? { memoryFacts: parseMemoryFactsJson(row.memory_facts_json) } : {}),
     createdAt: Number(row.created_at),
   }));
@@ -2138,6 +2172,24 @@ export function getLocalArchiveVectorMaximaSync(sessionId: string): { latestLoca
     latestLocalMessageSeq: Number(messageRow?.latest_seq) || 0,
     latestLocalBlockId: Number(blockRow?.latest_id) || 0,
   };
+}
+
+export async function listLocalArchiveSessionMaxima(): Promise<Array<{ sessionId: string; latestLocalMessageSeq: number; latestLocalBlockId: number }>> {
+  await initArchiveStore();
+  const rows = getDb().prepare(`
+    WITH message_max AS (SELECT session_id, MAX(seq) AS max_seq FROM archive_messages GROUP BY session_id),
+    block_max AS (SELECT session_id, MAX(id) AS max_id FROM archive_blocks GROUP BY session_id)
+    SELECT b.session_id, COALESCE(m.max_seq, 0) AS max_seq, COALESCE(bl.max_id, 0) AS max_id
+    FROM archive_branches b
+    LEFT JOIN message_max m ON m.session_id = b.session_id
+    LEFT JOIN block_max bl ON bl.session_id = b.session_id
+    ORDER BY b.session_id
+  `).all() as any[];
+  return rows.map(row => ({
+    sessionId: String(row.session_id),
+    latestLocalMessageSeq: Number(row.max_seq) || 0,
+    latestLocalBlockId: Number(row.max_id) || 0,
+  }));
 }
 
 export async function listSessionsNeedingVectorBackfill(): Promise<ArchiveVectorBackfillCandidate[]> {

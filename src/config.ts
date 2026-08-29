@@ -300,11 +300,13 @@ export type NormalizedVectorMaintenanceConfig = {
 export type VectorConfig = false | {
   enabled?: boolean;
   baseUrl?: string;
+  lexicalIndex?: boolean;
 };
 
 export type NormalizedVectorConfig = {
   enabled: boolean;
   baseUrl?: string;
+  lexicalIndex: boolean;
   source: 'disabled-default' | 'vector' | 'legacy-ollama';
 };
 
@@ -374,7 +376,7 @@ export function normalizeVectorConfig(
 ): NormalizedVectorConfig {
   if (vectorValue === undefined) {
     if (typeof legacyOllamaBaseUrl !== 'string' || legacyOllamaBaseUrl.trim().length === 0) {
-      return { enabled: false, source: 'disabled-default' };
+      return { enabled: false, lexicalIndex: false, source: 'disabled-default' };
     }
     const legacyRoot = normalizeAbsoluteHttpUrl(legacyOllamaBaseUrl, 'llm.ollamaBaseUrl');
     const parsed = new URL(legacyRoot);
@@ -385,11 +387,12 @@ export function normalizeVectorConfig(
     return {
       enabled: true,
       baseUrl: parsed.toString().replace(/\/+$/, ''),
+      lexicalIndex: false,
       source: 'legacy-ollama',
     };
   }
   if (vectorValue === false) {
-    return { enabled: false, source: 'vector' };
+    return { enabled: false, lexicalIndex: false, source: 'vector' };
   }
   if (!vectorValue || typeof vectorValue !== 'object' || Array.isArray(vectorValue)) {
     throw new Error('app config `vector` must be false or an object.');
@@ -398,9 +401,13 @@ export function normalizeVectorConfig(
   if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
     throw new Error('app config `vector.enabled` must be a boolean.');
   }
+  if (raw.lexicalIndex !== undefined && typeof raw.lexicalIndex !== 'boolean') {
+    throw new Error('app config `vector.lexicalIndex` must be a boolean.');
+  }
   if (raw.enabled === false) {
     return {
       enabled: false,
+      lexicalIndex: false,
       ...(raw.baseUrl === undefined ? {} : { baseUrl: normalizeAbsoluteHttpUrl(raw.baseUrl, 'vector.baseUrl') }),
       source: 'vector',
     };
@@ -408,6 +415,7 @@ export function normalizeVectorConfig(
   return {
     enabled: true,
     baseUrl: normalizeAbsoluteHttpUrl(raw.baseUrl, 'vector.baseUrl'),
+    lexicalIndex: raw.lexicalIndex === true,
     source: 'vector',
   };
 }
@@ -677,6 +685,7 @@ export const COMPACTION_CONFIG = normalizeCompactionConfig(APP_CONFIG.llm);
 export const VECTOR_CONFIG = normalizeVectorConfig(APP_CONFIG.vector, APP_CONFIG.llm?.ollamaBaseUrl);
 export const VECTOR_ENABLED = VECTOR_CONFIG.enabled;
 export const VECTOR_BASE_URL = VECTOR_CONFIG.baseUrl;
+export const VECTOR_LEXICAL_INDEX_ENABLED = VECTOR_CONFIG.lexicalIndex;
 export const SESSION_WORKERS_CONFIG = normalizeSessionWorkersConfig(APP_CONFIG.sessionWorkers);
 export const SESSION_WORKERS_ENABLED = SESSION_WORKERS_CONFIG.enabled;
 export const SESSION_WORKER_IDLE_SECONDS = SESSION_WORKERS_CONFIG.idleSeconds;
