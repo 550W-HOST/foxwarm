@@ -1,11 +1,11 @@
 # Unit: src-vector
 
-Files: src/vector.ts, src/vectorRuntime.ts, src/vectorMaintenance.ts, src/vectorService.ts, src/vectorServiceDescriptor.ts, src/vectorFacadeProxy.ts, src/vectorServiceManager.ts, src/vectorWorker.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.indexFailure.test.ts, src/vector.lineage.test.ts, src/vector.maxLatency.test.ts, src/vector.memoryFacts.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.searchQuality.test.ts, src/vector.segmentBuilder.test.ts, src/vector.upsert.test.ts, src/vectorMaintenance.test.ts, src/vectorMaintenanceRuntime.test.ts, src/vectorService.smoke.test.ts, src/vectorServiceManager.test.ts, src/vectorExternalPlacement.test.ts, src/vectorPlacementConcurrency.test.ts
+Files: src/vector.ts, src/vectorRuntime.ts, src/vectorMaintenance.ts, src/vectorService.ts, src/vectorServiceDescriptor.ts, src/vectorFacadeProxy.ts, src/vectorServiceManager.ts, src/vectorWorker.ts, src/archiveSearchIndex.ts, src/archiveSearchIndex.test.ts, src/vector.blockRows.test.ts, src/vector.embeddingSanitize.test.ts, src/vector.indexFailure.test.ts, src/vector.lineage.test.ts, src/vector.maxLatency.test.ts, src/vector.memoryFacts.test.ts, src/vector.rawRebuildProgress.test.ts, src/vector.searchFilters.test.ts, src/vector.searchQuality.test.ts, src/vector.segmentBuilder.test.ts, src/vector.upsert.test.ts, src/vectorMaintenance.test.ts, src/vectorMaintenanceRuntime.test.ts, src/vectorService.smoke.test.ts, src/vectorServiceManager.test.ts, src/vectorExternalPlacement.test.ts, src/vectorPlacementConcurrency.test.ts
 Secondary files: src/workerConfig.test.ts
 
 ## Purpose
 
-Provides one asynchronous, optionally disabled vector facade with local and supervised-child placement. When enabled, the selected owner indexes archived raw-message segments, summary blocks, and compact-extracted facts in LanceDB and returns metadata-rich semantic locations. Model-facing `recall({ vector_query })` reloads authoritative archive sources from those locations before rendering them.
+Provides one asynchronous, optionally disabled vector facade with local and supervised-child placement. When enabled, the selected owner indexes archived raw-message segments, summary blocks, and compact-extracted facts in LanceDB and returns metadata-rich semantic locations. Model-facing `recall({ vector_query })` reloads authoritative archive sources from those locations before rendering them. The unit also contains a dark, path-explicit derived SQLite FTS5 core for a future exact-owner hybrid index; Slice 2B-1 does not initialize, backfill, query, or wire that core into runtime behavior.
 
 ## Key exports
 
@@ -20,6 +20,7 @@ Provides one asynchronous, optionally disabled vector facade with local and supe
 - `renameSessionArchiveIndex`, `copySessionArchiveIndexCheckpoint`, `getArchiveIndexStatus`, `getArchiveIndexBatchDecision` — lifecycle/checkpoint helpers; status includes durable local maxima, pending counts, and an armed deadline.
 - Segment/row construction, token estimation, overlap, and embedding-sanitization helpers exported for tests and callers.
 - `indexNewMessages(sessionId, history, lastIndexedPosition?)` — retained history-index compatibility wrapper that delegates to archive indexing.
+- `ArchiveSearchIndex.open(path, options)`, document preparation/normalization/query compilation helpers — dark path-explicit SQLite FTS5 core with no module-global connection or runtime caller.
 
 ## Current constants and storage
 
@@ -33,6 +34,7 @@ Provides one asynchronous, optionally disabled vector facade with local and supe
 - Raw rebuild batch size is selectable through the documented vector rebuild environment override.
 - Automatic LanceDB maintenance is enabled by default with 24-hour version retention. Raw configuration accepts the designated boolean/object toggle and normalizes before owner use; internal checks run at startup, after bounded mutation volume, and periodically; optimization starts only at the internal version/fragment thresholds. General toggle shape is canonical in [D-config-feature-toggle-shorthand](./src-config.md#d-config-feature-toggle-shorthand).
 - Deterministic block and compact-fact rows use one atomic ID-keyed merge per hydrated batch, so crash retries update or insert without per-row delete versions. Raw-tail replacement keeps its separate range-delete and bounded-add checkpoint sequence.
+- Dark lexical schema v1 is a separate caller-supplied SQLite DB: metadata versions, independent per-Session raw/block checkpoints, canonical documents, and an external-content FTS5 trigram index. It stores one derived row per raw message/block/fact and is not opened by current Vector initialization.
 
 ## Search behavior
 
@@ -49,6 +51,8 @@ Provides one asynchronous, optionally disabled vector facade with local and supe
 Model-facing `contentFilter` and final preview filtering are owned by the shared context preview renderer, not by the vector table.
 
 Exact/current-Session model-facing recall may supplement these dense families with the nonpersistent Archive identifier side-channel owned by `src/toolsSessionAgent/archiveLexicalRecall.ts`. That side-channel does not change this Vector runtime, table, embeddings, checkpoints, disabled behavior, or RPC descriptor.
+
+`src/archiveSearchIndex.ts` is intentionally absent from this search path in Slice 2B-1. Its identifier/prose lane results and BM25 ranks are test-only library outputs until a later authorized owner-wiring and hybrid-fusion slice.
 
 ## Indexing behavior
 
@@ -80,6 +84,7 @@ Exact/current-Session model-facing recall may supplement these dense families wi
 - `vectorFacadeProxy.ts` registers the same bounded vector descriptor on Main but delegates only through the already selected `vector.ts` facade, preserving `dbWorkers` ownership rather than calling `vectorRuntime` directly.
 - Facade initialization serializes one exact placement identity across dynamic manager import/start: identical owned or borrowed placement joins, while local-vs-worker, owned-vs-borrowed, and different borrowed transports fail before another owner/client can publish. Shutdown waits for that initialization and preserves an already-published failed manager fence.
 - `vectorRuntime.ts` owns LanceDB state and imports the native LanceDB module lazily, so the main process does not load it when `dbWorkers:true`.
+- `archiveSearchIndex.ts` accepts one absolute caller-supplied DB path, owns only its returned instance connection, and performs no import-time or module-global open. Future placement belongs to the selected exact Vector owner; current Main/Worker bootstrap does not call it.
 - `vectorMaintenance.ts` supplies the fair shared/exclusive table-operation gate and coalesced owner-local scheduler. Maintenance drains complete reads and write/checkpoint sequences before `optimize`, and later table operations cannot bypass a pending exclusive run.
 - `vectorService.ts` maps bounded request/response DTOs to the same runtime in either placement.
 - `vectorServiceManager.ts` starts the child, waits until LanceDB is open, reports retryable unavailability while it is down, and restarts an unexpected exit with bounded backoff. It never opens a local fallback owner after a child failure.
@@ -101,6 +106,10 @@ Compact facts share the current table and carry source ranges so ordinary lineag
 ### D-vector-source-family-ranking
 
 [2026-08-28] Semantic retrieval ranks canonical archive source families rather than individual embedding rows. Exact raw-range chunks collapse together; a block and its modern block-identified facts form one family with bounded matched-fact metadata; strongly overlapping raw families are deferred while distinct ranked ranges remain. Semantic distance is the primary ordering. Source-time recency and block/fact preferences may break only effectively equal-distance ties, so metadata cannot promote a clearly worse semantic match. The hardcoded Qwen3 model receives one stable query-only retrieval instruction, while all document/index embedding input remains unchanged. Candidate retrieval starts with the bounded normal row window and, only when that window is saturated and the pre-backfill diverse-family count remains below the request, doubles deterministically up to a hard 1,024-row cap; the same query vector, scope, lineage, filters, and owner-local maintenance gate are reused throughout. An unsaturated window or the hard cap returns the final selection with overlap-deferred families backfilled, so genuinely overlap-only corpora still fill available slots.
+
+### D-archive-search-index-dark-core
+
+[2026-08-29] Phase 2B Slice 1 adds only a dark derived lexical-index library. One explicit caller-owned SQLite connection stores schema/normalizer metadata, independent raw/block checkpoints, canonical source metadata, and an external-content FTS5 index using NFKC/lower trigram text plus bounded synthetic Han bigram tokens. Opening validates object types, canonical essential table/FTS clauses, required columns, and the unique document identity. The three derived synchronization triggers are defined once and sqlite_master SQL must equal those canonical normalized statements exactly, modulo case, whitespace, and terminal semicolons; extra side effects or reordered operations fail with rebuild-required before writes. Document/trigger/checkpoint changes share one lexical transaction; block replacement removes stale creating-block facts. Selective derived deletion resets the affected checkpoint axis, and block deletion removes its fact rows so authoritative reindex can repair the family. Safe query compilation classifies CamelCase from original bounded spelling before emitting normalized quoted MATCH text. Fork-capped lineage input deduplicates Session IDs and merges conflicting caps to the most restrictive effective values before enforcing the 64-Session bound. No current bootstrap, scheduler, RPC, recall, dense checkpoint, or model-facing behavior uses this library.
 
 ### D-vector-max-latency-and-lag-status
 
