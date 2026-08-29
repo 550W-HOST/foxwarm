@@ -58,6 +58,8 @@ Move-journal rollback before Vector placement conservatively clears both affecte
 
 Failed-lifetime reset remains effective during shadow rebuild: it is serialized against the active next-generation writer and fenced across promotion/catch-up. Shadow orphan reconciliation removes only derived IDs lacking a durable Archive branch/reservation; retained historical IDs remain searchable, while a recommitted reused ID backfills only its new lifetime.
 
+Before Vector placement, reset/rollback repairs every existing recoverable lexical generation (`archive-search.sqlite`, `.next`, and `.bak`) without creating a missing DB. Valid generations are selectively reset and checkpointed; rebuildable corrupt/incompatible derived files are removed so recovery cannot promote stale lifetime state, while permission/path failures remain untouched and unavailable.
+
 With Vector disabled:
 
 - archive writes and compaction remain fully functional;

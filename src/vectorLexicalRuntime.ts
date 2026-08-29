@@ -326,15 +326,25 @@ async function openOrRecover(): Promise<void> {
 }
 
 async function resetPersistedDerivedIdentities(sessionIds: string[]): Promise<void> {
-  if (!VECTOR_LEXICAL_INDEX_ENABLED || !await fs.pathExists(DB_PATH)) return;
-  let index: ArchiveSearchIndex | undefined;
-  try {
-    index = ArchiveSearchIndex.open(DB_PATH);
-    for (const sessionId of new Set(sessionIds.filter(Boolean))) index.deleteDocuments(sessionId);
-  } catch (error) {
-    recordError(error, 'LEXICAL_PREINIT_RESET_FAILED');
-  } finally {
-    try { index?.close(); } catch {}
+  if (!VECTOR_LEXICAL_INDEX_ENABLED) return;
+  const identities = [...new Set(sessionIds.filter(Boolean))];
+  for (const dbPath of [DB_PATH, NEXT_DB_PATH, BACKUP_DB_PATH]) {
+    if (!await fs.pathExists(dbPath)) continue;
+    let index: ArchiveSearchIndex | undefined;
+    try {
+      index = ArchiveSearchIndex.open(dbPath);
+      for (const sessionId of identities) index.deleteDocuments(sessionId);
+      index.checkpointWal();
+    } catch (error) {
+      if (isRebuildableDerivedDbError(error)) {
+        try { await removeDbFamily(dbPath); }
+        catch (removeError) { recordError(removeError, 'LEXICAL_PREINIT_RESET_REMOVE_FAILED'); }
+      } else {
+        recordError(error, 'LEXICAL_PREINIT_RESET_FAILED');
+      }
+    } finally {
+      try { index?.close(); } catch {}
+    }
   }
 }
 
