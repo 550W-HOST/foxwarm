@@ -1544,15 +1544,24 @@ async function buildRecallVectorQuery(
     targetAgentName: args.agentName,
   }, ctx);
   const candidateLimit = Math.max(limit * 4, 20);
-  const denseHits = await vector.search(vectorQuery, candidateLimit, false, {
+  const detailed = await vector.searchDetailed(vectorQuery, candidateLimit, false, {
     ...searchOptions,
     preferBlocks: args.preferBlocks,
-  }) as any[];
-  let hits = denseHits;
-  if (effectiveScope === 'current-session' && resolvedSessionId) {
+  });
+  const denseOrHybridHits = detailed.hits as any[];
+  let hits = denseOrHybridHits;
+  let fallbackUsed = false;
+  const shouldUseBootstrapFallback = effectiveScope === 'current-session' && resolvedSessionId
+    && (!detailed.lexical.configured
+      || !detailed.lexical.ready
+      || !detailed.lexical.coverageComplete
+      || detailed.lexical.backfilling
+      || Boolean(detailed.lexical.errorCode));
+  if (shouldUseBootstrapFallback && resolvedSessionId) {
     try {
       const lexicalHits = await searchArchiveLexicalSideChannel(resolvedSessionId, vectorQuery, candidateLimit);
-      hits = fuseDenseAndLexicalHits(denseHits, lexicalHits, candidateLimit);
+      hits = fuseDenseAndLexicalHits(denseOrHybridHits, lexicalHits, candidateLimit);
+      fallbackUsed = lexicalHits.length > 0;
     } catch {
       // Dense retrieval remains authoritative when the bounded Archive side-channel is unavailable.
     }
@@ -1592,9 +1601,14 @@ async function buildRecallVectorQuery(
     }
   }
 
+  const searchLabel = detailed.lexical.used
+    ? 'hybrid search'
+    : fallbackUsed
+      ? 'semantic search with bounded identifier fallback'
+      : 'vector search';
   const rendered = renderContextPreviewItems({
     items,
-    title: ({ matchedCount, totalMatchedCount }) => `Recall vector search for \`${vectorQuery}\` (${effectiveScope}; source archive ranges loaded before preview) - showing ${matchedCount} unique source group(s)${totalMatchedCount > matchedCount ? ` of ${totalMatchedCount} matched` : ''} from ${hits.length} ranked vector source group(s).`,
+    title: ({ matchedCount, totalMatchedCount }) => `Recall ${searchLabel} for \`${vectorQuery}\` (${effectiveScope}; source archive ranges loaded before preview) - showing ${matchedCount} unique source group(s)${totalMatchedCount > matchedCount ? ` of ${totalMatchedCount} matched` : ''} from ${hits.length} ranked source group(s).`,
     emptyMessage: 'No archived source messages or blocks found for this vector_query.',
     options: renderOptions,
     maxItems: limit,

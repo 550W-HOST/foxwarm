@@ -2174,12 +2174,13 @@ export function getLocalArchiveVectorMaximaSync(sessionId: string): { latestLoca
   };
 }
 
-export async function listLocalArchiveSessionMaxima(): Promise<Array<{ sessionId: string; latestLocalMessageSeq: number; latestLocalBlockId: number }>> {
+export async function listLocalArchiveSessionMaxima(): Promise<Array<{ sessionId: string; agent: string; latestLocalMessageSeq: number; latestLocalBlockId: number }>> {
   await initArchiveStore();
   const rows = getDb().prepare(`
-    WITH message_max AS (SELECT session_id, MAX(seq) AS max_seq FROM archive_messages GROUP BY session_id),
-    block_max AS (SELECT session_id, MAX(id) AS max_id FROM archive_blocks GROUP BY session_id)
-    SELECT b.session_id, COALESCE(m.max_seq, 0) AS max_seq, COALESCE(bl.max_id, 0) AS max_id
+    WITH message_max AS (SELECT session_id, MAX(agent) AS agent, MAX(seq) AS max_seq FROM archive_messages GROUP BY session_id),
+    block_max AS (SELECT session_id, MAX(agent) AS agent, MAX(id) AS max_id FROM archive_blocks GROUP BY session_id)
+    SELECT b.session_id, COALESCE(m.agent, bl.agent, 'main') AS agent,
+      COALESCE(m.max_seq, 0) AS max_seq, COALESCE(bl.max_id, 0) AS max_id
     FROM archive_branches b
     LEFT JOIN message_max m ON m.session_id = b.session_id
     LEFT JOIN block_max bl ON bl.session_id = b.session_id
@@ -2187,6 +2188,7 @@ export async function listLocalArchiveSessionMaxima(): Promise<Array<{ sessionId
   `).all() as any[];
   return rows.map(row => ({
     sessionId: String(row.session_id),
+    agent: String(row.agent || 'main'),
     latestLocalMessageSeq: Number(row.max_seq) || 0,
     latestLocalBlockId: Number(row.max_id) || 0,
   }));

@@ -301,12 +301,14 @@ export type VectorConfig = false | {
   enabled?: boolean;
   baseUrl?: string;
   lexicalIndex?: boolean;
+  hybridSearch?: boolean;
 };
 
 export type NormalizedVectorConfig = {
   enabled: boolean;
   baseUrl?: string;
   lexicalIndex: boolean;
+  hybridSearch: boolean;
   source: 'disabled-default' | 'vector' | 'legacy-ollama';
 };
 
@@ -376,7 +378,7 @@ export function normalizeVectorConfig(
 ): NormalizedVectorConfig {
   if (vectorValue === undefined) {
     if (typeof legacyOllamaBaseUrl !== 'string' || legacyOllamaBaseUrl.trim().length === 0) {
-      return { enabled: false, lexicalIndex: false, source: 'disabled-default' };
+      return { enabled: false, lexicalIndex: false, hybridSearch: false, source: 'disabled-default' };
     }
     const legacyRoot = normalizeAbsoluteHttpUrl(legacyOllamaBaseUrl, 'llm.ollamaBaseUrl');
     const parsed = new URL(legacyRoot);
@@ -388,11 +390,12 @@ export function normalizeVectorConfig(
       enabled: true,
       baseUrl: parsed.toString().replace(/\/+$/, ''),
       lexicalIndex: false,
+      hybridSearch: false,
       source: 'legacy-ollama',
     };
   }
   if (vectorValue === false) {
-    return { enabled: false, lexicalIndex: false, source: 'vector' };
+    return { enabled: false, lexicalIndex: false, hybridSearch: false, source: 'vector' };
   }
   if (!vectorValue || typeof vectorValue !== 'object' || Array.isArray(vectorValue)) {
     throw new Error('app config `vector` must be false or an object.');
@@ -404,10 +407,14 @@ export function normalizeVectorConfig(
   if (raw.lexicalIndex !== undefined && typeof raw.lexicalIndex !== 'boolean') {
     throw new Error('app config `vector.lexicalIndex` must be a boolean.');
   }
+  if (raw.hybridSearch !== undefined && typeof raw.hybridSearch !== 'boolean') {
+    throw new Error('app config `vector.hybridSearch` must be a boolean.');
+  }
   if (raw.enabled === false) {
     return {
       enabled: false,
       lexicalIndex: false,
+      hybridSearch: false,
       ...(raw.baseUrl === undefined ? {} : { baseUrl: normalizeAbsoluteHttpUrl(raw.baseUrl, 'vector.baseUrl') }),
       source: 'vector',
     };
@@ -416,6 +423,7 @@ export function normalizeVectorConfig(
     enabled: true,
     baseUrl: normalizeAbsoluteHttpUrl(raw.baseUrl, 'vector.baseUrl'),
     lexicalIndex: raw.lexicalIndex === true,
+    hybridSearch: raw.lexicalIndex === true && raw.hybridSearch === true,
     source: 'vector',
   };
 }
@@ -686,6 +694,7 @@ export const VECTOR_CONFIG = normalizeVectorConfig(APP_CONFIG.vector, APP_CONFIG
 export const VECTOR_ENABLED = VECTOR_CONFIG.enabled;
 export const VECTOR_BASE_URL = VECTOR_CONFIG.baseUrl;
 export const VECTOR_LEXICAL_INDEX_ENABLED = VECTOR_CONFIG.lexicalIndex;
+export const VECTOR_HYBRID_SEARCH_ENABLED = VECTOR_CONFIG.hybridSearch;
 export const SESSION_WORKERS_CONFIG = normalizeSessionWorkersConfig(APP_CONFIG.sessionWorkers);
 export const SESSION_WORKERS_ENABLED = SESSION_WORKERS_CONFIG.enabled;
 export const SESSION_WORKER_IDLE_SECONDS = SESSION_WORKERS_CONFIG.idleSeconds;

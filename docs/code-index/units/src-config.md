@@ -48,7 +48,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 
 Worker placement is startup configuration:
 
-- `vector` is a connection/feature object, not a general boolean shorthand. Omission or `false` disables Vector; an object opts in unless `enabled:false`. Enabled Vector requires a nonempty absolute HTTP(S) `baseUrl` without credentials, query, or fragment components that already includes its OpenAI-compatible API root; runtime appends only `/embeddings`. `vector.lexicalIndex` is a narrow startup boolean, defaults false, and when true enables only the dark exact-owner derived lexical indexing lane.
+- `vector` is a connection/feature object, not a general boolean shorthand. Omission or `false` disables Vector; an object opts in unless `enabled:false`. Enabled Vector requires a nonempty absolute HTTP(S) `baseUrl` without credentials, query, or fragment components that already includes its OpenAI-compatible API root; runtime appends only `/embeddings`. `vector.lexicalIndex` is a narrow startup boolean and defaults false. `vector.hybridSearch` also defaults false and normalizes false unless Vector and lexical indexing are both enabled.
 - `sessionWorkers` is experimental and accepts a boolean or object. Omission/`false` keeps the default in-process session runtime. `true` enables default worker settings. An object enables workers unless `enabled:false`; `idleSeconds` defaults to 60 and accepts numeric YAML integers from 1 through 86,400 (boolean and string coercion is rejected).
 - `dbWorkers` is boolean, defaults to `true`, and currently moves only an enabled LanceDB/vector owner into a child process. It has no effect while Vector is disabled.
 - `vectorMaintenance` accepts `false`, `true`, or an options object; the normalized default is enabled with positive-integer `retentionHours` defaulting to `24`. Its exact-owner execution contract is canonical in [D-vector-owner-maintenance](src-vector.md#d-vector-owner-maintenance).
@@ -75,6 +75,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 | model effort | all six levels allowed / `high` default |
 | Vector / API base URL | disabled / none |
 | Dark Vector lexical indexing lane | disabled |
+| Persistent lexical+dense hybrid reads | disabled |
 | Session workers / idle release | disabled / `60` seconds |
 | Vector database worker | enabled |
 | Vector maintenance / version retention | enabled / `24` hours |

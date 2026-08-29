@@ -3,6 +3,7 @@ import {
   locateEffectiveArchiveCandidatesBySubstring,
   type ArchiveLexicalCandidate,
 } from '../session/archiveStore';
+export { fuseDenseAndLexicalHits } from '../vectorHybridFusion';
 
 const MAX_QUERY_LENGTH = 2000;
 const MAX_LOCATOR_LENGTH = 160;
@@ -186,59 +187,4 @@ export async function searchArchiveLexicalSideChannel(sessionId: string, query: 
     if (result.length >= limit) break;
   }
   return result;
-}
-
-export function fuseDenseAndLexicalHits(denseHits: any[], lexicalHits: ArchiveLexicalHit[], limit: number): any[] {
-  if (lexicalHits.length === 0) return denseHits.slice(0, limit);
-  const families = new Map<string, {
-    hit: any;
-    denseRank?: number;
-    lexicalRank?: number;
-    lexicalScore?: number;
-  }>();
-  denseHits.forEach((hit, index) => {
-    const family = String(hit.source_family || hit.id || `dense:${index}`);
-    if (!families.has(family)) families.set(family, { hit, denseRank: index });
-  });
-  lexicalHits.forEach((hit, index) => {
-    let family = hit.source_family;
-    if (hit.kind === 'raw' && typeof hit.raw_start_seq === 'number') {
-      const containingDense = denseHits
-        .map((denseHit, denseRank) => ({ denseHit, denseRank }))
-        .filter(({ denseHit }) => denseHit.kind === 'raw'
-          && denseHit.session_id === hit.session_id
-          && Number(denseHit.raw_start_seq ?? denseHit.start_seq) <= hit.raw_start_seq!
-          && Number(denseHit.raw_end_seq ?? denseHit.end_seq) >= hit.raw_start_seq!)
-        .sort((a, b) => {
-          const aWidth = Number(a.denseHit.raw_end_seq ?? a.denseHit.end_seq) - Number(a.denseHit.raw_start_seq ?? a.denseHit.start_seq);
-          const bWidth = Number(b.denseHit.raw_end_seq ?? b.denseHit.end_seq) - Number(b.denseHit.raw_start_seq ?? b.denseHit.start_seq);
-          return aWidth - bWidth || a.denseRank - b.denseRank;
-        })[0];
-      if (containingDense) family = String(containingDense.denseHit.source_family || containingDense.denseHit.id);
-    }
-    const existing = families.get(family);
-    if (existing) {
-      if (existing.lexicalRank === undefined) {
-        existing.lexicalRank = index;
-        existing.lexicalScore = hit.lexical_score;
-        existing.hit = { ...existing.hit, lexical_score: hit.lexical_score, lexical_locators: hit.lexical_locators };
-      }
-    } else {
-      families.set(family, { hit, lexicalRank: index, lexicalScore: hit.lexical_score });
-    }
-  });
-
-  return [...families.values()]
-    .map(entry => {
-      const denseContribution = entry.denseRank === undefined ? 0 : 1000 / (entry.denseRank + 1);
-      const lexicalContribution = entry.lexicalRank === undefined ? 0 : 1400 / (entry.lexicalRank + 1);
-      const sharedBoost = entry.denseRank !== undefined && entry.lexicalRank !== undefined ? 280 : 0;
-      return { ...entry, fusedScore: denseContribution + lexicalContribution + sharedBoost };
-    })
-    .sort((a, b) => b.fusedScore - a.fusedScore
-      || (b.lexicalScore || 0) - (a.lexicalScore || 0)
-      || (a.denseRank ?? Number.MAX_SAFE_INTEGER) - (b.denseRank ?? Number.MAX_SAFE_INTEGER)
-      || String(a.hit.source_family || a.hit.id).localeCompare(String(b.hit.source_family || b.hit.id)))
-    .slice(0, Math.max(1, limit))
-    .map(entry => entry.hit);
 }

@@ -11,6 +11,7 @@ export function createVectorFacadeProxyHandler(): RpcServiceHandler<typeof vecto
     },
     async waitForStartupBackfill() { await vector.waitForStartupArchiveVectorBackfill(); return { completed: true }; },
     async search(input) { return vector.search(input.query, input.limit, input.format, input.options); },
+    async searchDetailed(input) { return vector.searchDetailed(input.query, input.limit, input.format, input.options); },
     async getArchiveIndexStatus(input) { return vector.getArchiveIndexStatus(input.sessionId); },
     async scheduleIndex(input) {
       await vector.scheduleSessionArchiveIndex(input.sessionId, input.latestSeqHint, input.latestMessageTokenEstimate, input.latestBlockIdHint);

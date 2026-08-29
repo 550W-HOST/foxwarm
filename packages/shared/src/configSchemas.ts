@@ -338,6 +338,7 @@ export const APP_CONFIG_SCHEMA = {
             enabled: { type: 'boolean' },
             baseUrl: { type: 'string', pattern: '^https?://' },
             lexicalIndex: { type: 'boolean', default: false },
+            hybridSearch: { type: 'boolean', default: false },
           },
         },
       ],

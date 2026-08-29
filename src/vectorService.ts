@@ -20,6 +20,9 @@ export function createVectorServiceHandler(): RpcServiceHandler<typeof vectorSer
     async search(input) {
       return runtime.search(input.query, input.limit, input.format, input.options);
     },
+    async searchDetailed(input) {
+      return runtime.searchDetailed(input.query, input.limit, input.format, input.options);
+    },
     async getArchiveIndexStatus(input) {
       return runtime.getArchiveIndexStatus(input.sessionId);
     },

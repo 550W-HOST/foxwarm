@@ -16,13 +16,15 @@ test('dark lexical owner backfills and schedules independently with fixed freshn
   const previous = process.env.FOXWARM_DATA_DIR;
   const previousFetch = globalThis.fetch;
   process.env.FOXWARM_DATA_DIR = root;
-  await fs.outputFile(path.join(root, 'state', 'config.yaml'), 'vector:\n  baseUrl: http://127.0.0.1:11434/v1\n  lexicalIndex: true\n');
+  await fs.outputFile(path.join(root, 'state', 'config.yaml'), 'vector:\n  baseUrl: http://127.0.0.1:11434/v1\n  lexicalIndex: true\n  hybridSearch: true\n');
   let embeddingCalls = 0;
   globalThis.fetch = (async () => { embeddingCalls += 1; throw new Error('embedding must not be called'); }) as any;
   try {
     const store = await import('./session/archiveStore');
     await store.ensureSessionBranch('lexical/runtime');
-    await store.writeArchiveMessages(Array.from({ length: 55 }, (_, index) => messageRecord('lexical/runtime', index + 1, `RawToken_${index + 1}`)) as any);
+    await store.writeArchiveMessages(Array.from({ length: 55 }, (_, index) => messageRecord(
+      'lexical/runtime', index + 1, index === 20 ? '部署节点 中文检索' : `RawToken_${index + 1}`,
+    )) as any);
     await store.writeArchiveMessages([{
       ...messageRecord('lexical/runtime', 56, 'display hidden'),
       message: { role: 'user', modelVisible: false, parts: [{ text: 'HiddenToken_56' }], __meta: { seq: 56, timestamp: 56000 } },
@@ -312,6 +314,65 @@ test('dark lexical owner backfills and schedules independently with fixed freshn
     await runtime.init();
     await runtime.waitForStartupBackfill();
     assert.equal(runtime.getStatus('lexical/runtime').pendingMessageCount, 0);
+    const identifierQuery = await runtime.query('NoHintForceToken_1', 10, { sessionIds: ['lexical/force-no-hint'] });
+    assert.equal(identifierQuery.metadata.coverageComplete, true);
+    assert.equal(identifierQuery.metadata.used, true);
+    assert(identifierQuery.hits.some(hit => hit.source_family === 'lexical/force-no-hint:raw:1-1'));
+    assert.equal(Object.prototype.hasOwnProperty.call(identifierQuery.hits[0], 'chunk_text'), false, 'derived lexical text is never presentation authority');
+    const proseQuery = await runtime.query('immediate', 10, { sessionIds: ['lexical/runtime'] });
+    assert(proseQuery.hits.some(hit => hit.kind === 'block' && hit.lexical_lane === 'prose'));
+    const factQuery = await runtime.query('FactToken_2', 10, { sessionIds: ['lexical/runtime'] });
+    assert(factQuery.hits.some(hit => hit.kind === 'block' && hit.source_family === 'lexical/runtime:block:2'));
+    const cjkQuery = await runtime.query('中文检索', 10, { sessionIds: ['lexical/runtime'] });
+    assert(cjkQuery.hits.some(hit => hit.kind === 'raw' && hit.lexical_lane === 'prose'));
+
+    await store.ensureSessionBranch('lexical/toctou');
+    await store.writeArchiveMessages([messageRecord('lexical/toctou', 1, 'StableSnapshotToken_1')] as any);
+    runtime.force('lexical/toctou');
+    await runtime.waitForIdleForTests();
+    const stableSnapshot = await runtime.query('StableSnapshotToken_1', 10, { sessionIds: ['lexical/toctou'] });
+    assert.equal(stableSnapshot.metadata.coverageComplete, true);
+    runtime.setTestHooks({
+      afterCoveragePre: async () => {
+        await store.writeArchiveMessages([messageRecord('lexical/toctou', 2, 'AppendBetweenCoverageAndFts_2')] as any);
+      },
+    });
+    const appendDuringQuery = await runtime.query('StableSnapshotToken_1', 10, { sessionIds: ['lexical/toctou'] });
+    assert.equal(appendDuringQuery.metadata.coverageComplete, false, 'authority append between pre-coverage and FTS cannot suppress fallback');
+    runtime.setTestHooks();
+    runtime.force('lexical/toctou');
+    await runtime.waitForIdleForTests();
+    runtime.setTestHooks({
+      afterCoveragePre: async () => {
+        await store.writeArchiveMessages([messageRecord('lexical/toctou', 3, 'AppendAndCatchUpBeforePost_3')] as any);
+        runtime.force('lexical/toctou');
+        await runtime.waitForIdleForTests();
+      },
+    });
+    const caughtUpDuringQuery = await runtime.query('StableSnapshotToken_1', 10, { sessionIds: ['lexical/toctou'] });
+    assert.equal(caughtUpDuringQuery.metadata.coverageComplete, false, 'changed authority signature remains incomplete even if lexical catches up before post-check');
+    runtime.setTestHooks();
+
+    await store.writeArchiveMessages([messageRecord('lexical/runtime', 111, 'CoveragePendingToken_111')] as any);
+    const cappedLineage = await runtime.query('immediate', 10, {
+      lineageSessions: [{ sessionId: 'lexical/runtime', maxMessageSeq: 110, maxBlockId: 2 }],
+    });
+    assert.equal(cappedLineage.metadata.coverageComplete, true, 'fork caps bound exact coverage requirements');
+    const incompleteExact = await runtime.query('CoveragePendingToken_111', 10, { sessionIds: ['lexical/runtime'] });
+    assert.equal(incompleteExact.metadata.coverageComplete, false);
+    assert.deepEqual(incompleteExact.hits, []);
+    const partialAgent = await runtime.query('NoHintForceToken_1', 10, { agent: 'main' });
+    assert.equal(partialAgent.metadata.coverageComplete, false);
+    assert.equal(partialAgent.metadata.used, true);
+    runtime.setTestHooks({ beforeQuery: () => { throw Object.assign(new Error('do not expose query'), { code: 'INJECTED_QUERY_FAILURE' }); } });
+    const failedQuery = await runtime.query('NoHintForceToken_1', 10, { sessionIds: ['lexical/force-no-hint'] });
+    assert.deepEqual(failedQuery.hits, []);
+    assert.equal(failedQuery.metadata.errorCode, 'INJECTED_QUERY_FAILURE');
+    runtime.setTestHooks();
+    await runtime.disableForDeferredLifecycle();
+    const lifecycleDisabled = await runtime.query('NoHintForceToken_1', 10, { sessionIds: ['lexical/force-no-hint'] });
+    assert.equal(lifecycleDisabled.metadata.ready, false);
+    assert.equal(lifecycleDisabled.metadata.errorCode, 'LEXICAL_LIFECYCLE_DEFERRED');
     await runtime.shutdown();
     assert.equal(embeddingCalls, 0);
   } finally {

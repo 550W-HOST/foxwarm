@@ -122,17 +122,21 @@ async function withRecallStubs<T>(options: {
   session?: Session;
   lexical?: (sessionId: string, query: string, limit: number) => any;
   dense?: () => any;
+  detailedLexical?: any;
 }, run: (ctx: any) => Promise<T>): Promise<T> {
   const session = options.session || createSession();
   const originals = {
-    search: vector.search,
+    searchDetailed: vector.searchDetailed,
     status: vector.getArchiveIndexStatus,
     blocks: sessionManager.getArchivedBlocks,
     messages: sessionManager.getArchivedMessages,
     isolated: sessionManager.isSessionEffectivelyIsolated,
     lexical: archiveLexicalRecall.searchArchiveLexicalSideChannel,
   };
-  (vector as any).search = async () => options.dense ? options.dense() : options.hits;
+  (vector as any).searchDetailed = async () => ({
+    hits: options.dense ? await options.dense() : options.hits,
+    lexical: options.detailedLexical || { configured: false, ready: false, used: false, coverageComplete: false, backfilling: false },
+  });
   (vector as any).getArchiveIndexStatus = async (sessionId: string) => options.status?.(sessionId) || ({
     lastIndexedSeq: 0, tailStartSeq: 0, lastIndexedBlockId: 0,
     latestLocalMessageSeq: 0, latestLocalBlockId: 0, pendingMessageCount: 0, pendingBlockCount: 0,
@@ -146,7 +150,7 @@ async function withRecallStubs<T>(options: {
   try {
     return await run({ sessionId: session.id, session, persistCurrentSession: async () => {} } as any);
   } finally {
-    (vector as any).search = originals.search;
+    (vector as any).searchDetailed = originals.searchDetailed;
     (vector as any).getArchiveIndexStatus = originals.status;
     (sessionManager as any).getArchivedBlocks = originals.blocks;
     (sessionManager as any).getArchivedMessages = originals.messages;
@@ -210,7 +214,7 @@ test('vector recall filters source groups before enforcing the final unique-sour
     vector_query: 'keep', limit: 2, contentFilter: 'keep', includeRegex: 'Alpha|中文', excludeRegex: 'drop', previewLength: 4000,
   }, ctx)));
 
-  assert.match(output, /showing 2 unique source group\(s\) of 3 matched from 4 ranked vector source group\(s\)/);
+    assert.match(output, /showing 2 unique source group\(s\) of 3 matched from 4 ranked source group\(s\)/);
   assert.match(output, /Alpha keep first/);
   assert.match(output, /中文 keep second/);
   assert.doesNotMatch(output, /Alpha keep third/);
@@ -266,6 +270,56 @@ test('broad semantic scope skips Archive lexical scan and lexical failure preser
     lexical: () => { disabledLexicalCalls += 1; return []; },
   }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-session', limit: 1 }, ctx)), /Vector is disabled/);
   assert.equal(disabledLexicalCalls, 0, 'disabled Vector must not become lexical-only recall');
+});
+
+test('persistent hybrid coverage suppresses or selects the bounded Phase2A bootstrap fallback by scope', async () => {
+  const hit = {
+    id: 'hybrid', kind: 'raw', session_id: 'source-session', start_seq: 1, end_seq: 1,
+    raw_start_seq: 1, raw_end_seq: 1, source_family: 'source-session:raw:1-1', lexical_lane: 'identifier',
+  };
+  let fallbackCalls = 0;
+  const complete = String(await withRecallStubs({
+    hits: [hit],
+    detailedLexical: { configured: true, ready: true, used: true, coverageComplete: true, backfilling: false },
+    lexical: () => { fallbackCalls += 1; return []; },
+    messages: args => ({ records: [messageRecord(1, 'persistent hybrid authority')], requestedRange: args }),
+  }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-session', limit: 1 }, ctx)));
+  assert.equal(fallbackCalls, 0);
+  assert.match(complete, /Recall hybrid search/);
+  assert.match(complete, /persistent hybrid authority/);
+
+  const unstableRescue = String(await withRecallStubs({
+    hits: [],
+    detailedLexical: { configured: true, ready: true, used: false, coverageComplete: false, backfilling: false },
+    lexical: () => {
+      fallbackCalls += 1;
+      return [{
+        id: 'bootstrap-rescue', kind: 'raw', session_id: 'source-session', agent: 'main',
+        source_family: 'source-session:raw:2-2', lexical_score: 100, lexical_locators: ['AlphaNode_42'],
+        start_seq: 2, end_seq: 2, raw_start_seq: 2, raw_end_seq: 2,
+      }];
+    },
+    messages: args => ({ records: [messageRecord(2, 'Phase2A rescues authority appended during FTS')], requestedRange: args }),
+  }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-session', limit: 1 }, ctx)));
+  assert.match(unstableRescue, /Phase2A rescues authority appended during FTS/);
+
+  for (const detailedLexical of [
+    { configured: true, ready: true, used: false, coverageComplete: false, backfilling: true },
+    { configured: true, ready: false, used: false, coverageComplete: false, backfilling: false, errorCode: 'ARCHIVE_SEARCH_REBUILD_REQUIRED' },
+  ]) {
+    await withRecallStubs({
+      hits: [], detailedLexical,
+      lexical: () => { fallbackCalls += 1; return []; },
+    }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-session', limit: 1 }, ctx));
+  }
+  assert.equal(fallbackCalls, 3, 'unstable, incomplete, and unavailable exact scopes use bounded bootstrap fallback');
+
+  await withRecallStubs({
+    hits: [],
+    detailedLexical: { configured: true, ready: true, used: false, coverageComplete: false, backfilling: true },
+    lexical: () => { fallbackCalls += 1; return []; },
+  }, ctx => tool_recall({ vector_query: 'AlphaNode_42', scope: 'current-agent', limit: 1 }, ctx));
+  assert.equal(fallbackCalls, 3, 'current-agent partial coverage never scans Archive through Phase2A');
 });
 
 test('vector recall labels full and selected raw windows while preview budget remains bounded', async () => {

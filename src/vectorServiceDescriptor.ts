@@ -26,10 +26,11 @@ export type VectorIndexStatus = {
   };
 };
 
-export const vectorServiceDescriptor = defineRpcService('vector', 2, {
+export const vectorServiceDescriptor = defineRpcService('vector', 3, {
   init: rpcMethod<Record<string, never>, { ready: true }>(),
   waitForStartupBackfill: rpcMethod<Record<string, never>, { completed: true }>(),
   search: rpcMethod<{ query: string; limit?: number; format?: boolean; options?: runtime.SearchOptions }, unknown>(),
+  searchDetailed: rpcMethod<{ query: string; limit?: number; format?: boolean; options?: runtime.SearchOptions }, runtime.SearchDetailedResult>(),
   getArchiveIndexStatus: rpcMethod<{ sessionId: string }, VectorIndexStatus>(),
   scheduleIndex: rpcMethod<{
     sessionId: string; latestSeqHint?: number; latestMessageTokenEstimate?: number; latestBlockIdHint?: number;

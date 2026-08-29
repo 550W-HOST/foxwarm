@@ -250,6 +250,7 @@ llm:
 vector:
   baseUrl: http://localhost:11434/v1
   lexicalIndex: false
+  hybridSearch: false
 vectorMaintenance:
   enabled: true
   retentionHours: 24
@@ -272,7 +273,8 @@ rejects credentials, query strings, and fragments, and appends only
 still read when top-level `vector` is absent, but new configuration should use
 `vector.baseUrl`. Optional `vector.lexicalIndex: true` enables a dark,
 exact-Vector-owner derived lexical indexing lane; it defaults off and is not
-yet consumed by recall. Vector, worker placement, and maintenance settings are read
+consumed by recall unless `vector.hybridSearch: true` is also set. Hybrid search
+requires the lexical index and remains disabled by default. Vector, worker placement, and maintenance settings are read
 at process startup.
 
 LanceDB maintenance is enabled by default. It compacts fragmented vector data

@@ -23,7 +23,7 @@ test('dark lexical Archive batch/maxima reads are bounded and authority-pure', a
     assert.deepEqual(batch.map(row => row.seq), [1, 2]);
     const maxima = await store.listLocalArchiveSessionMaxima();
     assert.deepEqual(maxima.find(row => row.sessionId === 'known/lexical-read'), {
-      sessionId: 'known/lexical-read', latestLocalMessageSeq: 3, latestLocalBlockId: 0,
+      sessionId: 'known/lexical-read', agent: 'main', latestLocalMessageSeq: 3, latestLocalBlockId: 0,
     });
   } finally {
     if (previous === undefined) delete process.env.FOXWARM_DATA_DIR;

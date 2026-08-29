@@ -102,7 +102,7 @@ test('vector facade preserves search behavior and exact API-root embeddings path
   process.env.FOXWARM_DATA_DIR = tempRoot;
   await fs.outputFile(
     path.join(tempRoot, 'state', 'config.yaml'),
-    `vector:\n  baseUrl: ${embedding.baseUrl}/openai/v1/\n`,
+    `vector:\n  baseUrl: ${embedding.baseUrl}/openai/v1/\n  lexicalIndex: true\n  hybridSearch: true\n`,
   );
 
   let vector: typeof import('./vector') | undefined;
@@ -129,10 +129,14 @@ test('vector facade preserves search behavior and exact API-root embeddings path
     }]);
 
     await vector.init({ useWorker: false });
+    await vector.waitForStartupArchiveVectorBackfill();
     await vector.indexSessionArchive('dual-mode', 1);
     const localHits = await vector.search('local mode alpha', 5, false) as any[];
     assert(localHits.some(hit => String(hit.text).includes('local mode alpha')));
     assert.equal(vector.getVectorServiceStatus().mode, 'local');
+    const localDetailed = await vector.searchDetailed('local mode alpha', 5, false, { sessionIds: ['dual-mode'] });
+    assert.equal(localDetailed.lexical.coverageComplete, true);
+    assert.equal(localDetailed.lexical.used, true);
     await vector.shutdown();
     assert.ok(embedding.paths.length > 0);
     assert.deepEqual([...new Set(embedding.paths)], ['/openai/v1/embeddings']);
@@ -147,9 +151,13 @@ test('vector facade preserves search behavior and exact API-root embeddings path
     await vector.init({ useWorker: true });
     assert.equal(vector.getVectorServiceStatus().mode, 'worker');
     assert.ok(vector.getVectorServiceStatus().pid);
+    await vector.waitForStartupArchiveVectorBackfill();
     await vector.indexSessionArchive('dual-mode', 2);
     const workerHits = await vector.search('worker mode beta', 5, false) as any[];
     assert(workerHits.some(hit => String(hit.text).includes('worker mode beta')));
+    const workerDetailed = await vector.searchDetailed('worker mode beta', 5, false, { sessionIds: ['dual-mode'] });
+    assert.equal(workerDetailed.lexical.coverageComplete, true);
+    assert.equal(workerDetailed.lexical.used, true);
 
     const firstWorkerPid = vector.getVectorServiceStatus().pid;
     assert.ok(firstWorkerPid);

@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import path from 'path';
 import { logger } from './common';
-import { DB_DIR, VECTOR_LEXICAL_INDEX_ENABLED } from './config';
+import { DB_DIR, VECTOR_HYBRID_SEARCH_ENABLED, VECTOR_LEXICAL_INDEX_ENABLED } from './config';
 import {
   ArchiveSearchIndex,
   type ArchiveSearchDocumentInput,
@@ -14,6 +14,8 @@ import {
 } from './session/archiveStore';
 import type { ArchiveBlockRecord } from './session/layeredContext';
 import { formatSubstantiveMessageSearchText } from './utils/messageFormat';
+import type { SearchOptions } from './vectorRuntime';
+import type { LexicalFusionHit } from './vectorHybridFusion';
 
 const RAW_BATCH_SIZE = 500;
 const BLOCK_BATCH_SIZE = 100;
@@ -48,6 +50,20 @@ export type VectorLexicalStatus = {
   lastErrorAt?: number;
 };
 
+export type VectorLexicalQueryMetadata = {
+  configured: boolean;
+  ready: boolean;
+  used: boolean;
+  coverageComplete: boolean;
+  backfilling: boolean;
+  errorCode?: string;
+};
+
+export type VectorLexicalQueryResult = {
+  hits: LexicalFusionHit[];
+  metadata: VectorLexicalQueryMetadata;
+};
+
 let lexicalIndex: ArchiveSearchIndex | undefined;
 let ready = false;
 let backfilling = false;
@@ -62,6 +78,9 @@ let now = () => Date.now();
 let setTimer = (callback: () => void, delayMs: number): TimerHandle => setTimeout(callback, delayMs);
 let clearTimer = (handle: TimerHandle): void => clearTimeout(handle);
 let yieldControl = async (): Promise<void> => { await new Promise<void>(resolve => setImmediate(resolve)); };
+let beforeQuery: (() => void) | undefined;
+let afterCoveragePre: (() => void | Promise<void>) | undefined;
+let afterFtsQuery: (() => void | Promise<void>) | undefined;
 
 function errorCode(error: unknown, fallback: string): string {
   const candidate = error as any;
@@ -347,6 +366,155 @@ export function getStatus(sessionId: string): VectorLexicalStatus {
   };
 }
 
+function mapQueryHit(result: import('./archiveSearchIndex').ArchiveSearchQueryResult): LexicalFusionHit {
+  const isRaw = result.memoryKind === 'raw';
+  return {
+    id: `fts:${result.memoryKind}:${result.sessionId}:${result.sourceKey}`,
+    kind: isRaw ? 'raw' : 'block',
+    session_id: result.sessionId,
+    agent: result.agent,
+    source_family: result.sourceFamily,
+    lexical_lane: result.lane,
+    lexical_rank: Math.max(0, result.rank - 1),
+    lexical_score: Math.max(1, 1000 - result.rank),
+    ...(isRaw ? {
+      start_seq: result.startSeq ?? result.seq,
+      end_seq: result.endSeq ?? result.seq,
+      raw_start_seq: result.rawStartSeq ?? result.seq,
+      raw_end_seq: result.rawEndSeq ?? result.seq,
+    } : {
+      block_id: result.blockId,
+      block_level: result.blockLevel,
+      raw_start_seq: result.rawStartSeq,
+      raw_end_seq: result.rawEndSeq,
+    }),
+  };
+}
+
+type CoverageSnapshot = {
+  complete: boolean;
+  exact: boolean;
+  authoritySignature: string;
+  entries: Array<{
+    sessionId: string;
+    maxMessageSeq?: number;
+    maxBlockId?: number;
+    latestLocalMessageSeq: number;
+    latestLocalBlockId: number;
+    requiredMessageSeq: number;
+    requiredBlockId: number;
+    lexicalMessageSeq: number;
+    lexicalBlockId: number;
+  }>;
+};
+
+async function coverageSnapshotForOptions(options?: SearchOptions): Promise<CoverageSnapshot> {
+  const index = lexicalIndex!;
+  if (options?.lineageSessions?.length || options?.sessionIds?.length) {
+    const entries: Array<{ sessionId: string; maxMessageSeq?: number; maxBlockId?: number }> = options.lineageSessions?.length
+      ? options.lineageSessions
+      : (options.sessionIds || []).map(sessionId => ({ sessionId }));
+    const snapshotEntries = entries.slice(0, 64).map(entry => {
+      const maxima = getLocalArchiveVectorMaximaSync(entry.sessionId);
+      const requiredSeq = entry.maxMessageSeq === undefined ? maxima.latestLocalMessageSeq : Math.min(maxima.latestLocalMessageSeq, entry.maxMessageSeq);
+      const requiredBlock = entry.maxBlockId === undefined ? maxima.latestLocalBlockId : Math.min(maxima.latestLocalBlockId, entry.maxBlockId);
+      const checkpoint = index.getCheckpoint(entry.sessionId);
+      return {
+        sessionId: entry.sessionId,
+        maxMessageSeq: entry.maxMessageSeq,
+        maxBlockId: entry.maxBlockId,
+        latestLocalMessageSeq: maxima.latestLocalMessageSeq,
+        latestLocalBlockId: maxima.latestLocalBlockId,
+        requiredMessageSeq: requiredSeq,
+        requiredBlockId: requiredBlock,
+        lexicalMessageSeq: checkpoint.rawLastIndexedSeq,
+        lexicalBlockId: checkpoint.lastIndexedBlockId,
+      };
+    });
+    const authoritySignature = JSON.stringify(snapshotEntries.map(entry => [
+      entry.sessionId, entry.maxMessageSeq ?? null, entry.maxBlockId ?? null,
+      entry.requiredMessageSeq, entry.requiredBlockId,
+    ]));
+    return {
+      complete: entries.length <= 64 && snapshotEntries.every(entry => (
+        entry.lexicalMessageSeq >= entry.requiredMessageSeq && entry.lexicalBlockId >= entry.requiredBlockId
+      )),
+      exact: true,
+      authoritySignature,
+      entries: snapshotEntries,
+    };
+  }
+  const maxima = (await listLocalArchiveSessionMaxima()).filter(entry => !options?.agent || entry.agent === options.agent);
+  const snapshotEntries = maxima.slice(0, 64).map(entry => {
+    const checkpoint = index.getCheckpoint(entry.sessionId);
+    return {
+      sessionId: entry.sessionId,
+      latestLocalMessageSeq: entry.latestLocalMessageSeq,
+      latestLocalBlockId: entry.latestLocalBlockId,
+      requiredMessageSeq: entry.latestLocalMessageSeq,
+      requiredBlockId: entry.latestLocalBlockId,
+      lexicalMessageSeq: checkpoint.rawLastIndexedSeq,
+      lexicalBlockId: checkpoint.lastIndexedBlockId,
+    };
+  });
+  return {
+    complete: maxima.length <= 64 && snapshotEntries.every(entry => (
+      entry.lexicalMessageSeq >= entry.requiredMessageSeq && entry.lexicalBlockId >= entry.requiredBlockId
+    )),
+    exact: false,
+    authoritySignature: '',
+    entries: snapshotEntries,
+  };
+}
+
+export async function query(queryText: string, limit: number, options?: SearchOptions): Promise<VectorLexicalQueryResult> {
+  const base = {
+    configured: VECTOR_HYBRID_SEARCH_ENABLED,
+    ready,
+    used: false,
+    coverageComplete: false,
+    backfilling,
+  };
+  if (!VECTOR_HYBRID_SEARCH_ENABLED || !ready || !lexicalIndex || shuttingDown) {
+    return { hits: [], metadata: { ...base, ...(lastErrorCode ? { errorCode: lastErrorCode } : {}) } };
+  }
+  try {
+    beforeQuery?.();
+    const preCoverage = await coverageSnapshotForOptions(options);
+    if (preCoverage.exact && (!preCoverage.complete || backfilling)) {
+      return { hits: [], metadata: { ...base, coverageComplete: preCoverage.complete } };
+    }
+    await afterCoveragePre?.();
+    const result = lexicalIndex.query(queryText, {
+      sessionIds: options?.sessionIds,
+      agent: options?.agent,
+      lineageSessions: options?.lineageSessions,
+    }, Math.max(20, Math.min(200, limit * 4)));
+    await afterFtsQuery?.();
+    const seen = new Set<string>();
+    const hits: LexicalFusionHit[] = [];
+    for (const row of [...result.identifier, ...result.prose]) {
+      const hit = mapQueryHit(row);
+      const key = `${hit.lexical_lane}:${hit.source_family}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      hits.push(hit);
+    }
+    const postCoverage = preCoverage.exact ? await coverageSnapshotForOptions(options) : preCoverage;
+    // Exact coverage is valid only across one stable Archive authority window.
+    // Catch-up during FTS cannot retroactively make that query cover the append.
+    const coverageComplete = postCoverage.complete
+      && (!preCoverage.exact || preCoverage.authoritySignature === postCoverage.authoritySignature);
+    return {
+      hits,
+      metadata: { ...base, used: hits.length > 0, coverageComplete },
+    };
+  } catch (error) {
+    const code = errorCode(error, 'LEXICAL_QUERY_FAILED');
+    return { hits: [], metadata: { ...base, errorCode: code } };
+  }
+}
+
 export async function runMaintenance(): Promise<void> {
   if (!ready || !lexicalIndex || shuttingDown) return;
   try {
@@ -425,9 +593,15 @@ export function setTestHooks(hooks?: {
   setTimer?: (callback: () => void, delayMs: number) => TimerHandle;
   clearTimer?: (handle: TimerHandle) => void;
   yieldControl?: () => Promise<void>;
+  beforeQuery?: () => void;
+  afterCoveragePre?: () => void | Promise<void>;
+  afterFtsQuery?: () => void | Promise<void>;
 }): void {
   now = hooks?.now || (() => Date.now());
   setTimer = hooks?.setTimer || ((callback, delayMs) => setTimeout(callback, delayMs));
   clearTimer = hooks?.clearTimer || ((handle) => clearTimeout(handle));
   yieldControl = hooks?.yieldControl || (async () => { await new Promise<void>(resolve => setImmediate(resolve)); });
+  beforeQuery = hooks?.beforeQuery;
+  afterCoveragePre = hooks?.afterCoveragePre;
+  afterFtsQuery = hooks?.afterFtsQuery;
 }

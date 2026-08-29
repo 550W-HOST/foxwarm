@@ -105,6 +105,15 @@ export async function search(
   return callVector('search', { query, limit, format, options });
 }
 
+export async function searchDetailed(
+  query: string,
+  limit = 5,
+  format = false,
+  options?: runtime.SearchOptions,
+): Promise<runtime.SearchDetailedResult> {
+  return callVector('searchDetailed', { query, limit, format, options });
+}
+
 export async function waitForStartupArchiveVectorBackfill(): Promise<void> {
   await callVector('waitForStartupBackfill', {});
 }

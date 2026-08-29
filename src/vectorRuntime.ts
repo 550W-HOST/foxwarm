@@ -11,6 +11,7 @@ import {
 } from './vectorMaintenance';
 import { formatMessageText } from './utils/messageFormat';
 import * as lexicalRuntime from './vectorLexicalRuntime';
+import { fuseDenseAndLexicalHits } from './vectorHybridFusion';
 import { isModelVisibleMessage } from './session/messageVisibility';
 import type { ExtractedMemoryFact, MemoryFactAttribution, MemoryFactKind } from './session/compactPlan';
 import {
@@ -112,6 +113,11 @@ export type SearchOptions = {
     includeRegex?: string;
     excludeRegex?: string;
     preferBlocks?: boolean;
+};
+
+export type SearchDetailedResult = {
+    hits: any[];
+    lexical: lexicalRuntime.VectorLexicalQueryMetadata;
 };
 
 export type CompactMemoryFactIndexInput = {
@@ -1811,6 +1817,19 @@ async function search(query: string, limit = 5, format = true, options?: SearchO
     return tableOperationGate.runRegular(() => searchWithVector(vector, limit, format, options));
 }
 
+async function searchDetailed(query: string, limit = 5, _format = false, options?: SearchOptions): Promise<SearchDetailedResult> {
+    const denseHits = await search(query, limit, false, options) as any[];
+    const lexical = await lexicalRuntime.query(query, limit, options);
+    const hits = lexical.hits.length > 0 ? fuseDenseAndLexicalHits(denseHits, lexical.hits, limit) : denseHits;
+    return {
+        hits,
+        lexical: {
+            ...lexical.metadata,
+            used: hits.some(hit => hit?.lexical_lane === 'identifier' || hit?.lexical_lane === 'prose'),
+        },
+    };
+}
+
 async function searchWithVector(vector: number[], limit = 5, format = true, options?: SearchOptions) {
     const initialCandidateLimit = Math.min(MAX_SEARCH_CANDIDATE_ROWS, options?.includeRegex || options?.excludeRegex || options?.preferBlocks
         ? Math.max(getMemorySearchCandidateCount(limit) * 2, 40)
@@ -2053,6 +2072,7 @@ export {
     setArchiveIndexTimerHooksForTests,
     scheduleSessionArchiveIndex,
     search,
+    searchDetailed,
     shutdown,
     waitForStartupArchiveVectorBackfill,
 };
