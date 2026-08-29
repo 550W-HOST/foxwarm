@@ -18,7 +18,7 @@ test('sessionWorkers and vector default off while dbWorkers defaults on', () => 
     idleSeconds: DEFAULT_SESSION_WORKER_IDLE_SECONDS,
   });
   assert.equal(normalizeDbWorkersEnabled(undefined), true);
-  assert.deepEqual(normalizeVectorConfig(undefined), { enabled: false, source: 'disabled-default' });
+  assert.deepEqual(normalizeVectorConfig(undefined), { enabled: false, lexicalIndex: false, hybridSearch: false, source: 'disabled-default' });
   assert.deepEqual(normalizeVectorMaintenanceConfig(undefined), {
     enabled: true,
     retentionHours: DEFAULT_VECTOR_MAINTENANCE_RETENTION_HOURS,
@@ -26,21 +26,23 @@ test('sessionWorkers and vector default off while dbWorkers defaults on', () => 
 });
 
 test('vector config validates explicit enablement and preserves exact API roots', () => {
-  assert.deepEqual(normalizeVectorConfig(false), { enabled: false, source: 'vector' });
-  assert.deepEqual(normalizeVectorConfig({ enabled: false }), { enabled: false, source: 'vector' });
+  assert.deepEqual(normalizeVectorConfig(false), { enabled: false, lexicalIndex: false, hybridSearch: false, source: 'vector' });
+  assert.deepEqual(normalizeVectorConfig({ enabled: false }), { enabled: false, lexicalIndex: false, hybridSearch: false, source: 'vector' });
   assert.deepEqual(normalizeVectorConfig({ enabled: false, baseUrl: ' https://example.test/openai/v1/ ' }), {
-    enabled: false, baseUrl: 'https://example.test/openai/v1', source: 'vector',
+    enabled: false, lexicalIndex: false, hybridSearch: false, baseUrl: 'https://example.test/openai/v1', source: 'vector',
   });
   assert.deepEqual(normalizeVectorConfig({ baseUrl: 'http://host.test:3082/v1/' }), {
-    enabled: true, baseUrl: 'http://host.test:3082/v1', source: 'vector',
+    enabled: true, lexicalIndex: false, hybridSearch: false, baseUrl: 'http://host.test:3082/v1', source: 'vector',
   });
   assert.deepEqual(normalizeVectorConfig({ enabled: true, baseUrl: 'https://gateway.test/openai/v1/' }), {
-    enabled: true, baseUrl: 'https://gateway.test/openai/v1', source: 'vector',
+    enabled: true, lexicalIndex: false, hybridSearch: false, baseUrl: 'https://gateway.test/openai/v1', source: 'vector',
   });
   assert.throws(() => normalizeVectorConfig(true), /must be false or an object/);
   assert.throws(() => normalizeVectorConfig('enabled'), /must be false or an object/);
   assert.throws(() => normalizeVectorConfig({}), /baseUrl.*non-empty absolute http\(s\) URL/);
   assert.throws(() => normalizeVectorConfig({ enabled: 'yes', baseUrl: 'https://example.test/v1' }), /enabled.*boolean/);
+  assert.throws(() => normalizeVectorConfig({ lexicalIndex: 'yes', baseUrl: 'https://example.test/v1' }), /lexicalIndex.*boolean/);
+  assert.throws(() => normalizeVectorConfig({ hybridSearch: 'yes', baseUrl: 'https://example.test/v1' }), /hybridSearch.*boolean/);
   assert.throws(() => normalizeVectorConfig({ baseUrl: '/v1' }), /absolute http\(s\) URL/);
   assert.throws(() => normalizeVectorConfig({ baseUrl: 'ftp://example.test/v1' }), /absolute http\(s\) URL/);
   assert.throws(() => normalizeVectorConfig({ baseUrl: 'https://user@example.test/v1' }), /absolute http\(s\) URL/);
@@ -48,26 +50,35 @@ test('vector config validates explicit enablement and preserves exact API roots'
   assert.throws(() => normalizeVectorConfig({ baseUrl: 'https://example.test/v1?tenant=one' }), /absolute http\(s\) URL/);
   assert.throws(() => normalizeVectorConfig({ baseUrl: 'https://example.test/v1#embedding' }), /absolute http\(s\) URL/);
   assert.deepEqual(normalizeVectorConfig({ baseUrl: 'https://example.test/' }), {
-    enabled: true, baseUrl: 'https://example.test', source: 'vector',
+    enabled: true, lexicalIndex: false, hybridSearch: false, baseUrl: 'https://example.test', source: 'vector',
+  });
+  assert.deepEqual(normalizeVectorConfig({ baseUrl: 'https://example.test/v1', lexicalIndex: true }), {
+    enabled: true, lexicalIndex: true, hybridSearch: false, baseUrl: 'https://example.test/v1', source: 'vector',
+  });
+  assert.deepEqual(normalizeVectorConfig({ baseUrl: 'https://example.test/v1', hybridSearch: true }), {
+    enabled: true, lexicalIndex: false, hybridSearch: false, baseUrl: 'https://example.test/v1', source: 'vector',
+  });
+  assert.deepEqual(normalizeVectorConfig({ baseUrl: 'https://example.test/v1', lexicalIndex: true, hybridSearch: true }), {
+    enabled: true, lexicalIndex: true, hybridSearch: true, baseUrl: 'https://example.test/v1', source: 'vector',
   });
 });
 
 test('legacy llm.ollamaBaseUrl enables vector only when top-level vector is absent', () => {
   assert.deepEqual(normalizeVectorConfig(undefined, ' http://legacy.test:3082/ '), {
-    enabled: true, baseUrl: 'http://legacy.test:3082/v1', source: 'legacy-ollama',
+    enabled: true, lexicalIndex: false, hybridSearch: false, baseUrl: 'http://legacy.test:3082/v1', source: 'legacy-ollama',
   });
   assert.deepEqual(normalizeVectorConfig(undefined, 'http://legacy.test:3082/v1/'), {
-    enabled: true, baseUrl: 'http://legacy.test:3082/v1', source: 'legacy-ollama',
+    enabled: true, lexicalIndex: false, hybridSearch: false, baseUrl: 'http://legacy.test:3082/v1', source: 'legacy-ollama',
   });
   assert.deepEqual(normalizeVectorConfig(undefined, 'https://gateway.test/openai/v1/'), {
-    enabled: true, baseUrl: 'https://gateway.test/openai/v1', source: 'legacy-ollama',
+    enabled: true, lexicalIndex: false, hybridSearch: false, baseUrl: 'https://gateway.test/openai/v1', source: 'legacy-ollama',
   });
   assert.throws(() => normalizeVectorConfig(undefined, 'https://user@legacy.test'), /absolute http\(s\) URL/);
   assert.throws(() => normalizeVectorConfig(undefined, 'https://legacy.test?tenant=one'), /absolute http\(s\) URL/);
   assert.throws(() => normalizeVectorConfig(undefined, 'https://legacy.test#embedding'), /absolute http\(s\) URL/);
-  assert.deepEqual(normalizeVectorConfig(false, 'http://legacy.test:3082'), { enabled: false, source: 'vector' });
+  assert.deepEqual(normalizeVectorConfig(false, 'http://legacy.test:3082'), { enabled: false, lexicalIndex: false, hybridSearch: false, source: 'vector' });
   assert.deepEqual(normalizeVectorConfig({ baseUrl: 'https://new.test/custom/v1' }, 'http://legacy.test:3082'), {
-    enabled: true, baseUrl: 'https://new.test/custom/v1', source: 'vector',
+    enabled: true, lexicalIndex: false, hybridSearch: false, baseUrl: 'https://new.test/custom/v1', source: 'vector',
   });
 });
 

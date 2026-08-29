@@ -11,14 +11,15 @@ Core utility functions for durable JSON file persistence with write coalescing a
 - `DiskJsonData<T>` — class for durable JSON read/write with atomic rename, backup rotation, and write coalescing
 - `getNumberedBackupPath`, `getLegacyBackupPath` — backup path helpers
 - `shouldIgnoreDirectorySyncError`, `syncDirectoryDurably` — strict file-write durability support with platform-aware directory sync
-- `formatMessageText`, `formatMessagePreviewText`, `formatPrefixedMultilineText` — message-to-text formatting
+- `formatMessageText`, `formatMessagePreviewText`, `formatPrefixedMultilineText`, `formatSubstantiveMessageSearchText` — canonical message-to-text formatting, including the shared model-visible search body
 - `getMessagePreview`, `formatMessagePreviewLine`, `formatSessionMessagesPreview` — message preview utilities
 - `formatLocalTimestamp`, `formatLocalTimeRange` — local time formatting with numeric UTC offset
 - `buildSystemMessageParts`, `isSystemPayloadTextPart` — split system messages into header + payload parts
 - `buildTimestampedSystemMessageParts`, `withInputTimePart` — freeze source-boundary timestamps on one model-visible input wrapper without standalone time parts
 - `escapeFoxwarmAttributeValue`, `escapeFoxwarmTextContent`, `formatFoxwarmSystemTag`, `formatFoxwarmMessageOpen`, `formatFoxwarmMessageClose`, `formatSystemPartForModel`, `parseFoxwarmTagLine` — build/parse Foxwarm XML-ish prompt wrapper tags with escaped attrs, opt-in escaped nested text, and raw outer message bodies
 - `replaceLoneSurrogates`, `containsLoneSurrogate`, `containsAnySurrogate` — surrogate detection/replacement
-- `takeUnicodeSafe`, `takeUnicodeSafeEnd`, `truncateUnicodeSafe`, `truncateUnicodeSafeWithEllipsis` — grapheme-aware truncation
+- `takeUnicodeSafe`, `takeUnicodeSafeEnd`, `truncateUnicodeSafe`, `truncateUnicodeSafeWithEllipsis` — grapheme-count-aware truncation
+- `truncateUnicodeSafeByCodeUnitsWithEllipsis` — whole-grapheme truncation under a JavaScript string-length/UTF-16 code-unit cap, including the ellipsis
 - `sanitizeLoneSurrogatesInPayload` — deep object sanitization of lone surrogates
 
 ## Function Index
@@ -50,6 +51,7 @@ Core utility functions for durable JSON file persistence with write coalescing a
 | `formatFunctionResponse(part)` | ~69 | Extracts and formats tool response content |
 | `formatPartLines(message, part, options)` | ~89 | Converts a single MessagePart to display lines |
 | `formatMessageText(message, options)` | ~126 | Formats full message with optional role prefix |
+| `formatSubstantiveMessageSearchText(message)` | ~191 | Renders canonical model-visible user/model search text with tool/thinking/display/ephemeral/RAG exclusion and channel-wrapper precedence |
 | `formatMessagePreviewText(message, previewLength, options)` | ~145 | Short preview of a message |
 | `getMessagePreview(msg, previewLength, options)` | ~12 | Preview with display-only redaction support |
 | `formatMessagePreviewLine(msg, idx, previewLength, options)` | ~17 | Indexed emoji-prefixed preview line |
@@ -77,6 +79,7 @@ Core utility functions for durable JSON file persistence with write coalescing a
 | `takeUnicodeSafeEnd(text, maxGraphemes)` | ~88 | Takes last N graphemes safely |
 | `truncateUnicodeSafe(text, maxGraphemes, ellipsis)` | ~100 | Truncates with appended ellipsis |
 | `truncateUnicodeSafeWithEllipsis(text, max, ellipsis)` | ~112 | Truncates counting ellipsis in budget |
+| `truncateUnicodeSafeByCodeUnitsWithEllipsis(text, maxCodeUnits, ellipsis)` | ~137 | Truncates by emitted UTF-16 code units while retaining complete grapheme segments and reserving the ellipsis inside the cap |
 | `appendPathSegment(path, key)` | ~125 | Builds JSON-path-style segment |
 | `sanitizePayloadInternal(value, path, seen)` | ~130 | Recursive deep surrogate sanitizer |
 | `sanitizeLoneSurrogatesInPayload(value, rootPath)` | ~170 | Public entry for deep sanitization |
@@ -111,12 +114,12 @@ system text and split `systemPayload` are read compatibility only.
 - Backup rotation shifts numbered backups (N → N+1) before each write; errors are swallowed in `bestEffort` mode.
 - `loadFirstAvailable` iterates primary then backups, returning the first parseable file — provides automatic recovery from corruption.
 - Unicode utilities use `Intl.Segmenter` when available for grapheme-accurate truncation, falling back to code-point iteration.
-- Message formatting handles multiple part types (text, system, thinking, function calls, function responses, inline data) with configurable truncation and filtering of ephemeral/RAG content.
+- Message formatting handles multiple part types (text, system, thinking, function calls, function responses, inline data) with configurable truncation and filtering of ephemeral/RAG content. `formatSubstantiveMessageSearchText` is the canonical shared body for search candidate selection and scoring; it preserves ordinary dual text/system fields but honors channel-wrapper precedence that replaces sibling fields for a wrapped channel part.
 
 ## Integration
 
 - `DiskJsonData` is the persistence layer for session state and other JSON-backed stores throughout the application.
-- `formatMessageText` / `getMessagePreview` are used by session display, logging, and context-building code to render messages as compact text.
+- `formatMessageText` / `getMessagePreview` are used by session display, logging, and context-building code to render messages as compact text; `formatSubstantiveMessageSearchText` is shared by bounded Archive lexical prefiltering and final lexical scoring.
 - `truncateUnicodeSafe` is consumed by message formatting and anywhere safe string length limits are needed.
 - `buildSystemMessageParts` structures system-injected messages before they enter the message pipeline.
 - `sanitizeLoneSurrogatesInPayload` guards outbound payloads (e.g., to APIs) against invalid Unicode.

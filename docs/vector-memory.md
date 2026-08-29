@@ -42,11 +42,23 @@ Enable it with an OpenAI-compatible API base root. Include the version prefix or
 ```yaml
 vector:
   baseUrl: http://localhost:11434/v1
+  lexicalIndex: false
+  hybridSearch: false
 ```
 
 A Vector object opts in unless it sets `enabled: false`. Enabled Vector requires a nonempty absolute HTTP(S) URL without username, password, query, or fragment components. A custom gateway root such as `https://gateway.example/openai/v1` is preserved exactly apart from trailing-slash removal.
 
 For compatibility, when top-level `vector` is absent, a nonempty legacy `llm.ollamaBaseUrl` still enables Vector. That field historically named the server root, so Foxwarm normalizes it to an API base ending in `/v1` before calling `/embeddings`. Explicit top-level `vector` always wins, and current configuration should use `vector.baseUrl`.
+
+`vector.lexicalIndex` is an opt-in, startup-only indexing lane and defaults to `false`. When true, the exact local or child Vector owner builds a separate derived `state/db/archive-search.sqlite` index with independent checkpoints. `vector.hybridSearch` also defaults false and is normalized off unless lexical indexing is enabled. When both are true, source-backed recall may fuse persistent identifier/prose matches with required dense retrieval inside the exact Vector owner. Ordinary checkpoint lag is expected: exact-session recall uses safe partial persistent hits and does not invoke the bounded Archive identifier side-channel solely because `coverageComplete` is false. That fallback is reserved for disabled/unconfigured, unready/rebuilding, startup-backfilling, or query-error bootstrap paths; broad agent scope never performs the Archive scan. Recall does not emit model-facing vector-lag notices.
+
+The opt-in lexical derivative follows committed Archive identity changes. Rename reconciles derived identity best-effort and conflict falls back to authoritative reindex. Fork targets begin at their committed Archive fork caps and index only target-local suffixes; parent documents are not copied. Incompatible lexical schema/normalizer versions rebuild asynchronously through `archive-search.sqlite.next`, with one temporary `.bak` rollback file and bounded free-space preflight. Dense retrieval and Phase2A exact-session fallback remain available while rebuild is incomplete. Archive and Lance state are never mutated by lexical recovery.
+
+Move-journal rollback before Vector placement conservatively clears both affected derived identities, and failed Session/fork creation clears its derived target so a reused ID starts from new Archive authority. Rebuildable derived SQLite corruption follows the same shadow path as schema mismatch; permission, path, read-only, and open failures do not trigger destructive rebuild attempts.
+
+Failed-lifetime reset remains effective during shadow rebuild: it is serialized against the active next-generation writer and fenced across promotion/catch-up. Shadow orphan reconciliation removes only derived IDs lacking a durable Archive branch/reservation; retained historical IDs remain searchable, while a recommitted reused ID backfills only its new lifetime.
+
+Before Vector placement, reset/rollback repairs every existing recoverable lexical generation (`archive-search.sqlite`, `.next`, and `.bak`) without creating a missing DB. Valid generations are selectively reset and checkpointed; rebuildable corrupt/incompatible derived files are removed so recovery cannot promote stale lifetime state, while permission/path failures remain untouched and unavailable.
 
 With Vector disabled:
 

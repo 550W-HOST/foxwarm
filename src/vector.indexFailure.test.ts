@@ -111,6 +111,10 @@ test('caught forced and scheduled vector failures do not leak rejected promises 
       lastIndexedSeq: 2,
       tailStartSeq: 1,
       lastIndexedBlockId: 0,
+      latestLocalMessageSeq: 3,
+      latestLocalBlockId: 0,
+      pendingMessageCount: 1,
+      pendingBlockCount: 0,
     });
 
     await runtime.indexSessionArchive(forcedSessionId, 3, 0);
@@ -118,6 +122,10 @@ test('caught forced and scheduled vector failures do not leak rejected promises 
       lastIndexedSeq: 3,
       tailStartSeq: 1,
       lastIndexedBlockId: 0,
+      latestLocalMessageSeq: 3,
+      latestLocalBlockId: 0,
+      pendingMessageCount: 0,
+      pendingBlockCount: 0,
     });
     const forcedRows = await readRawRows(config.DB_DIR, forcedSessionId);
     assert.equal(forcedRows.length, 1);
@@ -142,6 +150,10 @@ test('caught forced and scheduled vector failures do not leak rejected promises 
       lastIndexedSeq: 0,
       tailStartSeq: 0,
       lastIndexedBlockId: 0,
+      latestLocalMessageSeq: 1,
+      latestLocalBlockId: 0,
+      pendingMessageCount: 1,
+      pendingBlockCount: 0,
     });
 
     const requestsBeforeRetry = embeddingRequests;
@@ -151,6 +163,10 @@ test('caught forced and scheduled vector failures do not leak rejected promises 
       lastIndexedSeq: 1,
       tailStartSeq: 1,
       lastIndexedBlockId: 0,
+      latestLocalMessageSeq: 1,
+      latestLocalBlockId: 0,
+      pendingMessageCount: 0,
+      pendingBlockCount: 0,
     });
     const scheduledRows = await readRawRows(config.DB_DIR, scheduledSessionId);
     assert.equal(scheduledRows.length, 1);

@@ -169,7 +169,7 @@ test('detached vector scope resolution matches legacy for session, alias, and ag
     getCatalog: sessionManager.getSessionCatalog,
     isolated: sessionManager.isSessionEffectivelyIsolated,
     lineage: archiveStore.getVectorSearchLineage,
-    search: vector.search,
+    searchDetailed: vector.searchDetailed,
   };
   (sessionManager as any).isSessionEffectivelyIsolated = () => false;
   (sessionManager as any).getSession = async () => session;
@@ -191,7 +191,10 @@ test('detached vector scope resolution matches legacy for session, alias, and ag
     assert.deepEqual(detached, legacy);
 
     const vectorOptions: any[] = [];
-    (vector as any).search = async (...callArgs: any[]): Promise<any[]> => { vectorOptions.push(callArgs[3]); return []; };
+    (vector as any).searchDetailed = async (...callArgs: any[]) => {
+      vectorOptions.push(callArgs[3]);
+      return { hits: [] as any[], lexical: { configured: false, ready: false, used: false, coverageComplete: false, backfilling: false } };
+    };
     for (const args of [
       { vector_query: 'needle' },
       { vector_query: 'needle', scope: 'current-session' },
@@ -219,6 +222,6 @@ test('detached vector scope resolution matches legacy for session, alias, and ag
     (sessionManager as any).getSessionCatalog = originals.getCatalog;
     (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
     (archiveStore as any).getVectorSearchLineage = originals.lineage;
-    (vector as any).search = originals.search;
+    (vector as any).searchDetailed = originals.searchDetailed;
   }
 });

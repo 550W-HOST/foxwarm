@@ -12,6 +12,7 @@ import { setArchiveWriteFaultInjectorForTests } from './archive';
 import * as sessionChannels from './channels';
 import { setAgentDirectoryFaultInjectorForTests } from './agentOps';
 import { getSessionHistoryFilePath } from './metadataStore';
+import * as vector from '../vector';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -626,6 +627,47 @@ test('known persistence failures roll back creation and allow the same requested
     }
     await fs.remove(getAgentDir(failedAgent));
     await fs.remove(getAgentDir(moveTargetAgent));
+  }
+});
+
+test('normal fork initializes committed derived baseline before append and resets it on failed creation', async () => {
+  await sessionManager.loadSessions();
+  const parentId = makeId('derived_fork_parent');
+  const forkId = `${parentId}_fork`;
+  await createParent(parentId);
+  const originalCopy = vector.copySessionArchiveIndexCheckpoint;
+  const originalReset = vector.resetSessionArchiveDerived;
+  const events: string[] = [];
+  try {
+    (vector as any).copySessionArchiveIndexCheckpoint = async (sourceSessionId: string, targetSessionId: string) => {
+      assert.equal(sourceSessionId, parentId);
+      assert.equal(targetSessionId, forkId);
+      events.push('baseline');
+    };
+    (vector as any).resetSessionArchiveDerived = async (sessionId: string) => {
+      assert.equal(sessionId, forkId);
+      events.push('reset');
+    };
+    let fail = true;
+    setArchiveWriteFaultInjectorForTests((phase, sessionId) => {
+      if (fail && phase === 'before-sqlite-write' && sessionId === forkId) {
+        fail = false;
+        assert.deepEqual(events, ['baseline'], 'derived baseline is awaited before fork suffix append');
+        throw new Error('injected derived fork append failure');
+      }
+    });
+    await assert.rejects(sessionManager.forkSession(parentId), /injected derived fork append failure/);
+    assert.deepEqual(events, ['baseline', 'reset'], 'failed fork creation clears its derived baseline before ID reuse');
+    setArchiveWriteFaultInjectorForTests(null);
+    assert.equal(await sessionManager.forkSession(parentId), forkId);
+    assert.deepEqual(events, ['baseline', 'reset', 'baseline']);
+  } finally {
+    (vector as any).copySessionArchiveIndexCheckpoint = originalCopy;
+    (vector as any).resetSessionArchiveDerived = originalReset;
+    setArchiveWriteFaultInjectorForTests(null);
+    for (const id of [parentId, forkId]) {
+      if (sessionManager.getAllSessions().has(id)) await sessionManager.deleteSession(id).catch(() => {});
+    }
   }
 });
 

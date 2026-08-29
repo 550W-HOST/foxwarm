@@ -134,6 +134,32 @@ export function truncateUnicodeSafeWithEllipsis(text: string, maxGraphemesInclud
   return `${graphemes.slice(0, take).join('')}${ellipsisText}`;
 }
 
+/**
+ * Truncates to a JavaScript string-length (UTF-16 code-unit) budget while
+ * retaining only whole grapheme segments and reserving the ellipsis inside
+ * that same budget.
+ */
+export function truncateUnicodeSafeByCodeUnitsWithEllipsis(text: string, maxCodeUnits: number, ellipsis: string = '…'): string {
+  const sanitized = replaceLoneSurrogates(text).text;
+  if (!Number.isFinite(maxCodeUnits) || maxCodeUnits <= 0) return '';
+  const limit = Math.floor(maxCodeUnits);
+  if (sanitized.length <= limit) return sanitized;
+
+  const ellipsisText = replaceLoneSurrogates(ellipsis).text;
+  let boundedEllipsis = '';
+  for (const segment of splitGraphemes(ellipsisText)) {
+    if (boundedEllipsis.length + segment.length > limit) break;
+    boundedEllipsis += segment;
+  }
+  const contentLimit = Math.max(0, limit - boundedEllipsis.length);
+  let result = '';
+  for (const segment of splitGraphemes(sanitized)) {
+    if (result.length + segment.length > contentLimit) break;
+    result += segment;
+  }
+  return `${result}${boundedEllipsis}`;
+}
+
 function appendPathSegment(path: string, key: string): string {
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key)
     ? `${path}.${key}`

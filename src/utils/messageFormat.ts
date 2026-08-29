@@ -185,6 +185,26 @@ export function formatMessageText(message: Message, options: FormatMessageTextOp
   );
 }
 
+/** Canonical model-visible body text used by semantic/lexical search. */
+export function formatSubstantiveMessageSearchText(message: Message): string {
+  if (message.modelVisible === false || (message.role !== 'user' && message.role !== 'model')) return '';
+  const parts = (message.parts || []).filter(part => (
+    (typeof part.text === 'string' && part.text.trim())
+    || (typeof part.system === 'string' && part.system.trim())
+  )).map(part => ({
+    ...(typeof part.text === 'string' ? { text: part.text } : {}),
+    ...(typeof part.system === 'string' ? { system: part.system } : {}),
+  }));
+  if (parts.length === 0) return '';
+  return formatMessageText({ ...message, parts }, {
+    includeRolePrefix: false,
+    skipEphemeralSystem: true,
+    skipRagMemorySnippets: true,
+    skipThinking: true,
+    toolCharLimit: 0,
+  }).trim();
+}
+
 export function formatMessagePreviewText(
   message: Message,
   previewLength: number = 100,

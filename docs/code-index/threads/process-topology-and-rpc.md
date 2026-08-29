@@ -28,7 +28,7 @@ The hot turn loop does not move full history, images, or tool output through a c
 
 ## Vector placement
 
-The vector service owns the LanceDB connection/table, per-session indexing chains, batch state, startup backfill, embedding requests, searches, and vector lifecycle operations. It reads durable archive rows and vector checkpoints directly from the archive SQLite store. Archive durability and exact recall remain independent of vector availability.
+The vector service owns the LanceDB connection/table, optional derived lexical-index or shadow-rebuild connection, per-session indexing/lifecycle chains, batch state, startup backfill, embedding requests, dense/detailed hybrid searches, and vector lifecycle operations. It reads durable archive rows and independent checkpoints directly from the archive SQLite store and lexical derivative. Rename/fork/reset/rebuild remains exact-owner work behind the same one-writer boundary, except conservative pre-placement local identity reset during move-journal recovery. Archive durability and exact recall remain independent of vector availability. Descriptor v4 retains detailed hybrid search and legacy array search while adding only internal failed-creation derived reset; pre-v4 borrowed owners fail version negotiation without local fallback.
 
 When Vector is enabled, `dbWorkers:false` runs the vector service handler locally and `dbWorkers:true` gives a supervised child ownership of LanceDB. The main process never silently opens a second fallback owner after a worker failure. When Vector is disabled, neither placement is created and `dbWorkers` has no runtime effect.
 

@@ -26,13 +26,16 @@ async function exerciseFallback(
   const session = createSession();
   const warnings: any[][] = [];
   const originals = {
-    search: vector.search,
+    searchDetailed: vector.searchDetailed,
     blocks: sessionManager.getArchivedBlocks,
     messages: sessionManager.getArchivedMessages,
     isolated: sessionManager.isSessionEffectivelyIsolated,
     warn: logger.warn,
   };
-  (vector as any).search = async () => [hit];
+  (vector as any).searchDetailed = async () => ({
+    hits: [hit],
+    lexical: { configured: false, ready: false, used: false, coverageComplete: false, backfilling: false },
+  });
   (sessionManager as any).getArchivedBlocks = async () => ({ records: [] as any[], totalMatched: 0, returnedCount: 0, requestedRange: {} });
   (sessionManager as any).getArchivedMessages = async () => ({ records: [] as any[], totalMatched: 0, returnedCount: 0, availableRange: {}, requestedRange: {} });
   (sessionManager as any).isSessionEffectivelyIsolated = () => false;
@@ -51,7 +54,7 @@ async function exerciseFallback(
     } as any));
     return { output, warnings };
   } finally {
-    (vector as any).search = originals.search;
+    (vector as any).searchDetailed = originals.searchDetailed;
     (sessionManager as any).getArchivedBlocks = originals.blocks;
     (sessionManager as any).getArchivedMessages = originals.messages;
     (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
