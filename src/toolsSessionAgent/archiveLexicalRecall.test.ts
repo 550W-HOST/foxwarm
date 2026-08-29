@@ -8,7 +8,7 @@ test('strong Archive locator extraction is deterministic, bounded, and rejects g
   ]);
   assert.ok(extractStrongArchiveLocators('inspect agent/session-42 and src/tools/foo_bar.ts').some(item => item.value === 'agent/session-42'));
   assert.ok(extractStrongArchiveLocators('inspect agent/session-42 and src/tools/foo_bar.ts').some(item => item.value === 'src/tools/foo_bar.ts'));
-  assert.ok(extractStrongArchiveLocators('inspect sandbox-docker:node-42').some(item => item.value === 'sandbox-docker:node-42'));
+  assert.ok(extractStrongArchiveLocators('inspect isolated-docker:node-42').some(item => item.value === 'isolated-docker:node-42'));
   assert.ok(extractStrongArchiveLocators('run /compact tools').some(item => item.value === '/compact tools'));
   assert.ok(extractStrongArchiveLocators('find AlphaNode_42 and threshold 16384').some(item => item.value === 'AlphaNode_42'));
   assert.ok(extractStrongArchiveLocators('find AlphaNode_42 and threshold 16384').some(item => item.value === '16384'));
@@ -17,7 +17,7 @@ test('strong Archive locator extraction is deterministic, bounded, and rejects g
   for (const proseToken of ['current-session', 'source-backed', 'recent-window', 'error-handling', 'phase-2', 'context-compaction-and-recall']) {
     assert.deepEqual(extractStrongArchiveLocators(proseToken), [], proseToken);
   }
-  assert.ok(extractStrongArchiveLocators('gpu-vm').some(item => item.value === 'gpu-vm'));
+  assert.ok(extractStrongArchiveLocators('render-vm').some(item => item.value === 'render-vm'));
   assert.ok(extractStrongArchiveLocators('Node ID: current-session').some(item => item.value === 'current-session'));
   assert.ok(extractStrongArchiveLocators('use `recent-window` exactly').some(item => item.value === 'recent-window'));
 
