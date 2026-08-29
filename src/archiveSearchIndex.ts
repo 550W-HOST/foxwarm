@@ -594,6 +594,60 @@ export class ArchiveSearchIndex {
     });
   }
 
+  listSessionIds(): string[] {
+    this.assertOpen();
+    const rows = this.db.prepare(`
+      SELECT session_id FROM archive_search_checkpoints
+      UNION SELECT session_id FROM archive_search_documents
+      ORDER BY session_id
+    `).all() as any[];
+    return rows.map(row => String(row.session_id));
+  }
+
+  renameSessionDerived(oldSessionId: string, newSessionId: string): 'renamed' | 'missing' | 'conflict' {
+    this.assertOpen();
+    return runTransaction(this.db, () => {
+      const oldCount = Number((this.db.prepare(`
+        SELECT (SELECT count(*) FROM archive_search_documents WHERE session_id = ?) +
+          (SELECT count(*) FROM archive_search_checkpoints WHERE session_id = ?) AS count
+      `).get(oldSessionId, oldSessionId) as any)?.count) || 0;
+      if (oldCount === 0) return 'missing';
+      const targetCount = Number((this.db.prepare(`
+        SELECT (SELECT count(*) FROM archive_search_documents WHERE session_id = ?) +
+          (SELECT count(*) FROM archive_search_checkpoints WHERE session_id = ?) AS count
+      `).get(newSessionId, newSessionId) as any)?.count) || 0;
+      if (targetCount > 0) return 'conflict';
+      this.db.prepare(`
+        UPDATE archive_search_documents SET
+          session_id = ?,
+          source_family = CASE
+            WHEN substr(source_family, 1, length(?) + 1) = ? || ':' THEN ? || substr(source_family, length(?) + 1)
+            ELSE source_family
+          END,
+          updated_at = ?
+        WHERE session_id = ?
+      `).run(newSessionId, oldSessionId, oldSessionId, newSessionId, oldSessionId, Date.now(), oldSessionId);
+      this.db.prepare(`UPDATE archive_search_checkpoints SET session_id = ?, updated_at = ? WHERE session_id = ?`)
+        .run(newSessionId, Date.now(), oldSessionId);
+      return 'renamed';
+    });
+  }
+
+  resetSessionDerived(sessionId: string, rawLastIndexedSeq = 0, lastIndexedBlockId = 0): void {
+    this.assertOpen();
+    runTransaction(this.db, () => {
+      this.db.prepare(`DELETE FROM archive_search_documents WHERE session_id = ?`).run(sessionId);
+      this.db.prepare(`
+        INSERT INTO archive_search_checkpoints(session_id, raw_last_indexed_seq, last_indexed_block_id, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(session_id) DO UPDATE SET
+          raw_last_indexed_seq = excluded.raw_last_indexed_seq,
+          last_indexed_block_id = excluded.last_indexed_block_id,
+          updated_at = excluded.updated_at
+      `).run(sessionId, Math.max(0, Math.floor(rawLastIndexedSeq)), Math.max(0, Math.floor(lastIndexedBlockId)), Date.now());
+    });
+  }
+
   getCheckpoint(sessionId: string): ArchiveSearchCheckpoint {
     this.assertOpen();
     const row = this.db.prepare(`
@@ -624,6 +678,11 @@ export class ArchiveSearchIndex {
       blockCount: Number(row?.block_count) || 0,
       factCount: Number(row?.fact_count) || 0,
     };
+  }
+
+  getGeneration(): string {
+    this.assertOpen();
+    return String((this.db.prepare(`SELECT value FROM archive_search_metadata WHERE key = 'build_generation'`).get() as any)?.value || '');
   }
 
   private queryLane(

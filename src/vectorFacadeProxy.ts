@@ -27,5 +27,8 @@ export function createVectorFacadeProxyHandler(): RpcServiceHandler<typeof vecto
     async copySessionArchiveIndexCheckpoint(input) {
       await vector.copySessionArchiveIndexCheckpoint(input.sourceSessionId, input.targetSessionId); return { completed: true };
     },
+    async resetSessionArchiveDerived(input) {
+      await vector.resetSessionArchiveDerived(input.sessionId); return { completed: true };
+    },
   };
 }

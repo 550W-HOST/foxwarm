@@ -203,6 +203,35 @@ test('raw archive max-latency scheduling is fixed, serialized, retryable, and sh
       assert.equal(await pendingRename, 0);
     });
 
+    await t.test('fork checkpoint copy uses committed target caps rather than source current checkpoint', async () => {
+      const parentId = 'latency/fork-parent';
+      const childId = 'latency/fork-child';
+      await store.ensureSessionBranch(parentId);
+      await store.writeArchiveMessages(Array.from({ length: 5 }, (_, index) => messageRecord(parentId, index + 1)) as any);
+      store.setVectorCheckpointSync(parentId, { rawLastIndexedSeq: 5, rawTailStartSeq: 4, lastIndexedBlockId: 3 });
+      await store.ensureSessionBranch(childId, { parentSessionId: parentId, forkMessageSeq: 2, forkBlockId: 1 });
+      await runtime.copySessionArchiveIndexCheckpoint(parentId, childId);
+      const status = runtime.getArchiveIndexStatus(childId);
+      assert.equal(status.lastIndexedSeq, 2);
+      assert.equal(status.tailStartSeq, 3);
+      assert.equal(status.lastIndexedBlockId, 1);
+      assert.equal(status.pendingMessageCount, 0);
+    });
+
+    await t.test('failed-creation derived reset clears dense checkpoint for lower-sequence ID reuse', async () => {
+      const sessionId = 'latency/reused-target';
+      await prepare(sessionId, [messageRecord(sessionId, 1, 'stale lifetime')]);
+      await runtime.indexSessionArchive(sessionId, 1, 0);
+      assert.equal(runtime.getArchiveIndexStatus(sessionId).lastIndexedSeq, 1);
+      await store.rollbackUncommittedSessionArchive(sessionId);
+      await runtime.resetSessionArchiveDerived(sessionId);
+      assert.equal(runtime.getArchiveIndexStatus(sessionId).lastIndexedSeq, 0);
+      await store.ensureSessionBranch(sessionId);
+      await store.writeArchiveMessages([messageRecord(sessionId, 1, 'fresh lifetime')] as any);
+      await runtime.indexSessionArchive(sessionId, 1, 0);
+      assert.equal(runtime.getArchiveIndexStatus(sessionId).lastIndexedSeq, 1);
+    });
+
     await t.test('shutdown cancels pending deadlines and resolves pending schedules', async () => {
       const sessionId = 'latency/shutdown';
       await prepare(sessionId, [messageRecord(sessionId, 1)]);

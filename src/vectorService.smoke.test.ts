@@ -182,6 +182,14 @@ test('vector facade preserves search behavior and exact API-root embeddings path
     assert.notEqual(restartedStatus.pid, firstWorkerPid);
     const recoveredHits = await vector.search('worker mode beta', 5, false) as any[];
     assert(recoveredHits.some(hit => String(hit.text).includes('worker mode beta')));
+    await archiveStore.ensureSessionBranch('reset-rpc');
+    await archiveStore.writeArchiveMessages([makeRecord('reset-rpc', 1, 'reset rpc lifetime')]);
+    await vector.indexSessionArchive('reset-rpc', 1, 0);
+    assert.equal((await vector.getArchiveIndexStatus('reset-rpc')).lastIndexedSeq, 1);
+    await vector.resetSessionArchiveDerived('reset-rpc');
+    const resetStatus = await vector.getArchiveIndexStatus('reset-rpc');
+    assert.equal(resetStatus.lastIndexedSeq, 0, 'v4 child-owner reset clears dense checkpoint');
+    assert.equal(resetStatus.lexical?.rawLastIndexedSeq, 0, 'v4 child-owner reset clears lexical checkpoint');
     await vector.shutdown();
 
     const config = await import('./config');

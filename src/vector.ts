@@ -173,6 +173,15 @@ export async function copySessionArchiveIndexCheckpoint(sourceSessionId: string,
   await callVector('copySessionArchiveIndexCheckpoint', { sourceSessionId, targetSessionId });
 }
 
+export async function resetSessionArchiveDerived(sessionId: string): Promise<void> {
+  if (isDisabled()) return;
+  if (!manager && !externalClient) {
+    await localRuntime().resetSessionArchiveDerived(sessionId);
+    return;
+  }
+  await callVector('resetSessionArchiveDerived', { sessionId });
+}
+
 // Compatibility wrapper retained without sending full history through RPC.
 export async function indexNewMessages(sessionId: string, history: Message[], _lastIndexedPosition = 0): Promise<number> {
   await indexSessionArchive(sessionId);

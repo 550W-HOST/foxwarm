@@ -28,6 +28,7 @@ Implements the SQLite/WAL authority for raw messages, summary blocks, branch lin
 - `getLocalArchiveVectorMaximaSync` — read-only durable local message/block maxima for bounded Vector lag status.
 - `locateEffectiveArchiveCandidatesBySubstring` — pure identifier-candidate lookup over existing message/block rows with alias-aware cumulative fork caps, canonical shared raw-message formatting before the match cap, bounded NFKC/lower matching, parameterized block-summary ASCII matching, and hard lineage/row/result bounds.
 - `readLocalArchiveMessageBatch`, `readLocalArchiveBlockBatch`, `listLocalArchiveSessionMaxima` — bounded read-only local-source primitives for the dark exact-owner lexical backfill; they do not hydrate Sessions, create branches, or mutate authority/checkpoints.
+- `resolveArchiveSessionIdReadOnly` — resolves only committed Archive reservation aliases for derived lexical startup reconciliation; unknown IDs remain unchanged and no branch/reservation is created.
 - `renameSessionArchiveStore` — bootstrapped transactional ID/parent/checkpoint/import-state rename.
 - `renameSessionArchiveStoreForRecovery` — startup-journal rollback variant that updates existing SQLite rows before normal bootstrap can infer a duplicate branch.
 - `migrateLegacySessionArchivesToSqlite` — migration-only strict import/verification inventory for active legacy message/block JSONLs.

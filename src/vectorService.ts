@@ -58,6 +58,10 @@ export function createVectorServiceHandler(): RpcServiceHandler<typeof vectorSer
       await runtime.copySessionArchiveIndexCheckpoint(input.sourceSessionId, input.targetSessionId);
       return { completed: true };
     },
+    async resetSessionArchiveDerived(input) {
+      await runtime.resetSessionArchiveDerived(input.sessionId);
+      return { completed: true };
+    },
   };
 }
 

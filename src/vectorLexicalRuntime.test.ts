@@ -369,10 +369,6 @@ test('dark lexical owner backfills and schedules independently with fixed freshn
     assert.deepEqual(failedQuery.hits, []);
     assert.equal(failedQuery.metadata.errorCode, 'INJECTED_QUERY_FAILURE');
     runtime.setTestHooks();
-    await runtime.disableForDeferredLifecycle();
-    const lifecycleDisabled = await runtime.query('NoHintForceToken_1', 10, { sessionIds: ['lexical/force-no-hint'] });
-    assert.equal(lifecycleDisabled.metadata.ready, false);
-    assert.equal(lifecycleDisabled.metadata.errorCode, 'LEXICAL_LIFECYCLE_DEFERRED');
     await runtime.shutdown();
     assert.equal(embeddingCalls, 0);
   } finally {

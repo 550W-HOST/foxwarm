@@ -26,6 +26,7 @@ import {
 import {
     getVectorCheckpointSync,
     getLocalArchiveVectorMaximaSync,
+    getSessionBranch,
     listSessionsNeedingVectorBackfill,
     initArchiveStore,
     setVectorCheckpointSync,
@@ -1522,7 +1523,7 @@ async function runStartupArchiveVectorBackfill(): Promise<void> {
 }
 
 async function renameSessionArchiveIndex(oldSessionId: string, newSessionId: string): Promise<void> {
-    await lexicalRuntime.disableForDeferredLifecycle();
+    await lexicalRuntime.renameSession(oldSessionId, newSessionId);
     resolveBatchState(oldSessionId, getSessionArchiveCheckpoint(oldSessionId).lastIndexedSeq);
     const oldCheckpoint = getSessionArchiveCheckpoint(oldSessionId);
     const newCheckpoint = getSessionArchiveCheckpoint(newSessionId);
@@ -1540,18 +1541,39 @@ async function renameSessionArchiveIndex(oldSessionId: string, newSessionId: str
     });
 }
 
-async function copySessionArchiveIndexCheckpoint(sourceSessionId: string, targetSessionId: string): Promise<void> {
-    await lexicalRuntime.disableForDeferredLifecycle();
-    const sourceCheckpoint = getSessionArchiveCheckpoint(sourceSessionId);
-    if (sourceCheckpoint.updatedAt <= 0) {
+async function copySessionArchiveIndexCheckpoint(_sourceSessionId: string, targetSessionId: string): Promise<void> {
+    await lexicalRuntime.initializeForkCheckpoint(targetSessionId);
+    const branch = await getSessionBranch(targetSessionId);
+    if (!branch?.parentSessionId) {
         return;
     }
 
     setVectorCheckpointSync(targetSessionId, {
-        rawLastIndexedSeq: sourceCheckpoint.lastIndexedSeq,
-        rawTailStartSeq: sourceCheckpoint.lastIndexedSeq > 0 ? sourceCheckpoint.lastIndexedSeq + 1 : 0,
-        lastIndexedBlockId: sourceCheckpoint.lastIndexedBlockId,
+        rawLastIndexedSeq: branch.forkMessageSeq,
+        rawTailStartSeq: branch.forkMessageSeq > 0 ? branch.forkMessageSeq + 1 : 0,
+        lastIndexedBlockId: branch.forkBlockId,
     });
+}
+
+async function resetSessionArchiveDerived(sessionId: string): Promise<void> {
+    await lexicalRuntime.resetSessionDerived(sessionId);
+    resolveBatchState(sessionId, 0);
+    try {
+        const previous = indexingChains.get(sessionId);
+        if (previous) await previous.catch(() => 0);
+        if (table) {
+            await tableOperationGate.runRegular(() => runTableMutation(
+                () => table.delete(`session_id = '${escapeFilterValue(sessionId)}'`),
+            ));
+        }
+        setVectorCheckpointSync(sessionId, {
+            rawLastIndexedSeq: 0,
+            rawTailStartSeq: 0,
+            lastIndexedBlockId: 0,
+        });
+    } catch (error) {
+        logger.warn({ code: (error as any)?.code || 'VECTOR_DERIVED_RESET_FAILED', sessionId }, 'Failed to reset dense Session derivative');
+    }
 }
 
 function formatSeqLabel(startSeq: number, endSeq: number): string {
@@ -2053,6 +2075,7 @@ export {
     buildArchiveSegments,
     calculateNextSegmentStartIndex,
     copySessionArchiveIndexCheckpoint,
+    resetSessionArchiveDerived,
     createRowsFromMemoryFacts,
     createRowsFromSegment,
     createRowFromBlockRecord,

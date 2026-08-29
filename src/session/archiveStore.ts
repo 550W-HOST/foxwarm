@@ -411,6 +411,11 @@ function resolveArchivedRecordSessionIdReadOnly(sessionId: string): string {
   throw new Error(`Session ID reservation state contains an alias cycle involving "${current}".`);
 }
 
+export function resolveArchiveSessionIdReadOnly(sessionId: string): string {
+  initArchiveStoreSync();
+  return resolveArchivedRecordSessionIdReadOnly(sessionId);
+}
+
 export async function resolveArchivedSessionId(sessionId: string): Promise<string> {
   initArchiveStoreSync();
   return resolveArchivedRecordSessionIdReadOnly(sessionId);

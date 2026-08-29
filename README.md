@@ -277,6 +277,8 @@ consumed by recall unless `vector.hybridSearch: true` is also set. Hybrid search
 requires the lexical index and remains disabled by default. Vector, worker placement, and maintenance settings are read
 at process startup.
 
+When explicitly enabled, the lexical derivative follows committed Session rename/fork boundaries and rebuilds incompatible derived schemas through a restart-resumable shadow SQLite file. These operations are best-effort derived maintenance: they do not make Archive commits or dense Vector availability depend on lexical health.
+
 LanceDB maintenance is enabled by default. It compacts fragmented vector data
 and removes table versions older than the configured positive whole-hour
 retention window; the default is 24 hours. `vectorMaintenance: true` enables
