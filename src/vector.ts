@@ -105,15 +105,20 @@ export async function search(
   return callVector('search', { query, limit, format, options });
 }
 
+export async function searchDetailed(
+  query: string,
+  limit = 5,
+  format = false,
+  options?: runtime.SearchOptions,
+): Promise<runtime.SearchDetailedResult> {
+  return callVector('searchDetailed', { query, limit, format, options });
+}
+
 export async function waitForStartupArchiveVectorBackfill(): Promise<void> {
   await callVector('waitForStartupBackfill', {});
 }
 
-export async function getArchiveIndexStatus(sessionId: string): Promise<{
-  lastIndexedSeq: number;
-  tailStartSeq: number;
-  lastIndexedBlockId: number;
-}> {
+export async function getArchiveIndexStatus(sessionId: string): Promise<import('./vectorServiceDescriptor').VectorIndexStatus> {
   return callVector('getArchiveIndexStatus', { sessionId });
 }
 
@@ -166,6 +171,15 @@ export async function copySessionArchiveIndexCheckpoint(sourceSessionId: string,
     return;
   }
   await callVector('copySessionArchiveIndexCheckpoint', { sourceSessionId, targetSessionId });
+}
+
+export async function resetSessionArchiveDerived(sessionId: string): Promise<void> {
+  if (isDisabled()) return;
+  if (!manager && !externalClient) {
+    await localRuntime().resetSessionArchiveDerived(sessionId);
+    return;
+  }
+  await callVector('resetSessionArchiveDerived', { sessionId });
 }
 
 // Compatibility wrapper retained without sending full history through RPC.
@@ -232,5 +246,9 @@ export const estimateArchiveMessageTokenCount: typeof runtime.estimateArchiveMes
   });
   return text ? estimateTokenCount(text) : 0;
 };
+export const fetchSearchCandidatesAdaptively: typeof runtime.fetchSearchCandidatesAdaptively = (...args) => localRuntime().fetchSearchCandidatesAdaptively(...args);
+export const formatQueryEmbeddingInput: typeof runtime.formatQueryEmbeddingInput = (...args) => localRuntime().formatQueryEmbeddingInput(...args);
 export const getArchiveIndexBatchDecision: typeof runtime.getArchiveIndexBatchDecision = (...args) => localRuntime().getArchiveIndexBatchDecision(...args);
 export const sanitizeEmbeddingInput: typeof runtime.sanitizeEmbeddingInput = (...args) => localRuntime().sanitizeEmbeddingInput(...args);
+export const selectSearchSourceGroups: typeof runtime.selectSearchSourceGroups = (...args) => localRuntime().selectSearchSourceGroups(...args);
+export const selectSearchSourceGroupsDetailed: typeof runtime.selectSearchSourceGroupsDetailed = (...args) => localRuntime().selectSearchSourceGroupsDetailed(...args);

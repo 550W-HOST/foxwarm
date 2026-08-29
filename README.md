@@ -249,6 +249,8 @@ llm:
   compactThresholdPercent: 0.85
 vector:
   baseUrl: http://localhost:11434/v1
+  lexicalIndex: false
+  hybridSearch: false
 vectorMaintenance:
   enabled: true
   retentionHours: 24
@@ -269,8 +271,13 @@ rejects credentials, query strings, and fragments, and appends only
 `/embeddings`, so a custom gateway may use a value such as
 `https://gateway.example/openai/v1`. The legacy `llm.ollamaBaseUrl` field is
 still read when top-level `vector` is absent, but new configuration should use
-`vector.baseUrl`. Vector, worker placement, and maintenance settings are read
+`vector.baseUrl`. Optional `vector.lexicalIndex: true` enables a dark,
+exact-Vector-owner derived lexical indexing lane; it defaults off and is not
+consumed by recall unless `vector.hybridSearch: true` is also set. Hybrid search
+requires the lexical index and remains disabled by default. Vector, worker placement, and maintenance settings are read
 at process startup.
+
+When explicitly enabled, the lexical derivative follows committed Session rename/fork boundaries and rebuilds incompatible derived schemas through a restart-resumable shadow SQLite file. These operations are best-effort derived maintenance: they do not make Archive commits or dense Vector availability depend on lexical health.
 
 LanceDB maintenance is enabled by default. It compacts fragmented vector data
 and removes table versions older than the configured positive whole-hour

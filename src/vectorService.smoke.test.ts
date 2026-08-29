@@ -23,8 +23,9 @@ function makeRecord(sessionId: string, seq: number, text: string) {
   };
 }
 
-async function startEmbeddingServer(): Promise<{ baseUrl: string; paths: string[]; close: () => Promise<void> }> {
+async function startEmbeddingServer(): Promise<{ baseUrl: string; paths: string[]; inputs: string[]; close: () => Promise<void> }> {
   const paths: string[] = [];
+  const inputs: string[] = [];
   const server = http.createServer((request, response) => {
     let body = '';
     request.setEncoding('utf8');
@@ -33,6 +34,7 @@ async function startEmbeddingServer(): Promise<{ baseUrl: string; paths: string[
       paths.push(request.url || '');
       const parsed = JSON.parse(body || '{}');
       const input = String(parsed.input || '');
+      inputs.push(input);
       const vector = new Array(1024).fill(0);
       vector[input.toLowerCase().includes('worker') ? 1 : 0] = 1;
       response.writeHead(200, { 'Content-Type': 'application/json' });
@@ -48,6 +50,7 @@ async function startEmbeddingServer(): Promise<{ baseUrl: string; paths: string[
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     paths,
+    inputs,
     close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())),
   };
 }
@@ -99,7 +102,7 @@ test('vector facade preserves search behavior and exact API-root embeddings path
   process.env.FOXWARM_DATA_DIR = tempRoot;
   await fs.outputFile(
     path.join(tempRoot, 'state', 'config.yaml'),
-    `vector:\n  baseUrl: ${embedding.baseUrl}/openai/v1/\n`,
+    `vector:\n  baseUrl: ${embedding.baseUrl}/openai/v1/\n  lexicalIndex: true\n  hybridSearch: true\n`,
   );
 
   let vector: typeof import('./vector') | undefined;
@@ -126,13 +129,20 @@ test('vector facade preserves search behavior and exact API-root embeddings path
     }]);
 
     await vector.init({ useWorker: false });
+    await vector.waitForStartupArchiveVectorBackfill();
     await vector.indexSessionArchive('dual-mode', 1);
     const localHits = await vector.search('local mode alpha', 5, false) as any[];
     assert(localHits.some(hit => String(hit.text).includes('local mode alpha')));
     assert.equal(vector.getVectorServiceStatus().mode, 'local');
+    const localDetailed = await vector.searchDetailed('local mode alpha', 5, false, { sessionIds: ['dual-mode'] });
+    assert.equal(localDetailed.lexical.coverageComplete, true);
+    assert.equal(localDetailed.lexical.used, true);
     await vector.shutdown();
     assert.ok(embedding.paths.length > 0);
     assert.deepEqual([...new Set(embedding.paths)], ['/openai/v1/embeddings']);
+    assert.ok(embedding.inputs.includes('[user] local mode alpha'), 'document/index embedding input must remain unchanged');
+    assert.ok(embedding.inputs.includes('deterministic block row'), 'block document embedding input must remain unchanged');
+    assert.ok(embedding.inputs.includes('Instruct: Retrieve relevant historical conversation context for the query.\nQuery: local mode alpha'));
 
     // Simulate a crash after the Lance block-row commit but before its SQLite
     // checkpoint. The worker retry must replace, not duplicate, the row.
@@ -141,9 +151,13 @@ test('vector facade preserves search behavior and exact API-root embeddings path
     await vector.init({ useWorker: true });
     assert.equal(vector.getVectorServiceStatus().mode, 'worker');
     assert.ok(vector.getVectorServiceStatus().pid);
+    await vector.waitForStartupArchiveVectorBackfill();
     await vector.indexSessionArchive('dual-mode', 2);
     const workerHits = await vector.search('worker mode beta', 5, false) as any[];
     assert(workerHits.some(hit => String(hit.text).includes('worker mode beta')));
+    const workerDetailed = await vector.searchDetailed('worker mode beta', 5, false, { sessionIds: ['dual-mode'] });
+    assert.equal(workerDetailed.lexical.coverageComplete, true);
+    assert.equal(workerDetailed.lexical.used, true);
 
     const firstWorkerPid = vector.getVectorServiceStatus().pid;
     assert.ok(firstWorkerPid);
@@ -168,6 +182,14 @@ test('vector facade preserves search behavior and exact API-root embeddings path
     assert.notEqual(restartedStatus.pid, firstWorkerPid);
     const recoveredHits = await vector.search('worker mode beta', 5, false) as any[];
     assert(recoveredHits.some(hit => String(hit.text).includes('worker mode beta')));
+    await archiveStore.ensureSessionBranch('reset-rpc');
+    await archiveStore.writeArchiveMessages([makeRecord('reset-rpc', 1, 'reset rpc lifetime')]);
+    await vector.indexSessionArchive('reset-rpc', 1, 0);
+    assert.equal((await vector.getArchiveIndexStatus('reset-rpc')).lastIndexedSeq, 1);
+    await vector.resetSessionArchiveDerived('reset-rpc');
+    const resetStatus = await vector.getArchiveIndexStatus('reset-rpc');
+    assert.equal(resetStatus.lastIndexedSeq, 0, 'v4 child-owner reset clears dense checkpoint');
+    assert.equal(resetStatus.lexical?.rawLastIndexedSeq, 0, 'v4 child-owner reset clears lexical checkpoint');
     await vector.shutdown();
 
     const config = await import('./config');

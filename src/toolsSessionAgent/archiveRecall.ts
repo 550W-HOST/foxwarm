@@ -17,8 +17,10 @@ import {
 import { truncateUnicodeSafe } from '../utils/unicode';
 import { formatLocalTimestamp } from '../utils/localTime';
 import { logger } from '../common';
+import { formatMessageText } from '../utils/messageFormat';
 import { requireNotIsolated, requireNotIsolatedForSession, checkArchivedReadPermission, checkArchivedReadPermissionForSession } from '../isolatedCheck';
 import { resolveMemorySearchOptions } from '../tools/vectorTools';
+import { fuseDenseAndLexicalHits, searchArchiveLexicalSideChannel } from './archiveLexicalRecall';
 import {
   ToolArgs,
   ToolContext,
@@ -1236,14 +1238,204 @@ function warnVectorRecallCompatibilityFallback(
   }
 }
 
-async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRenderOptions): Promise<ContextPreviewItem[]> {
+type RawMessageWindowSelection = {
+  records: any[];
+  selectedStartSeq: number;
+  selectedEndSeq: number;
+  omittedMessageCount: number;
+  filterNotices: string[];
+};
+
+function normalizedLexicalText(value: unknown): string {
+  return String(value || '').normalize('NFKC').toLowerCase();
+}
+
+function queryLocatorTokens(query: string): string[] {
+  const normalized = normalizedLexicalText(query);
+  const tokens = new Set<string>();
+  for (const match of normalized.matchAll(/[\p{L}\p{N}_][\p{L}\p{N}_.:/#-]{1,}/gu)) {
+    const token = match[0];
+    if (token.length >= 2) tokens.add(token);
+  }
+  for (const match of normalized.matchAll(/[\p{Script=Han}]{2,}/gu)) {
+    const run = match[0];
+    tokens.add(run);
+    for (let index = 0; index < run.length - 1; index += 1) tokens.add(run.slice(index, index + 2));
+  }
+  return [...tokens].sort((a, b) => b.length - a.length || a.localeCompare(b));
+}
+
+function rawRecordSearchText(record: any): string {
+  return formatMessageText(record.message, {
+    includeRolePrefix: false,
+    skipEphemeralSystem: true,
+    skipRagMemorySnippets: true,
+    skipThinking: true,
+    toolCharLimit: Number.MAX_SAFE_INTEGER,
+  }).trim();
+}
+
+function hasSubstantiveMessageText(record: any): boolean {
+  if (record.message?.role !== 'user' && record.message?.role !== 'model') return false;
+  return (record.message?.parts || []).some((part: any) =>
+    (typeof part.text === 'string' && part.text.trim())
+    || (typeof part.system === 'string' && part.system.trim() && !part.functionCall && !part.functionResponse));
+}
+
+function toolExchangeGroups(records: any[]): Map<number, { start: number; end: number }> {
+  const groups = new Map<number, { start: number; end: number }>();
+  for (let index = 0; index < records.length; index += 1) {
+    const message = records[index].message;
+    if (message?.role !== 'model') continue;
+    const rawCallIds = (message.parts || [])
+      .map((part: any) => part.functionCall?.id)
+      .filter((id: unknown): id is string => typeof id === 'string' && id.length > 0);
+    const callIds = new Set<string>(rawCallIds);
+    if (callIds.size === 0 || callIds.size !== rawCallIds.length) continue;
+    const seen = new Set<string>();
+    let end = index;
+    let malformed = false;
+    for (let cursor = index + 1; cursor < records.length && records[cursor].message?.role === 'tool'; cursor += 1) {
+      const responseIds = (records[cursor].message.parts || [])
+        .map((part: any) => part.functionResponse?.tool_use_id)
+        .filter((id: unknown): id is string => typeof id === 'string' && id.length > 0);
+      if (responseIds.length === 0 || new Set(responseIds).size !== responseIds.length
+        || responseIds.some((id: string) => !callIds.has(id) || seen.has(id))) {
+        malformed = true;
+        break;
+      }
+      responseIds.forEach((id: string) => seen.add(id));
+      end = cursor;
+    }
+    if (malformed || end === index || seen.size !== callIds.size || end - index + 1 > 16) continue;
+    const group = { start: index, end };
+    for (let cursor = index; cursor <= end; cursor += 1) groups.set(cursor, group);
+    index = end;
+  }
+  return groups;
+}
+
+export function selectVectorRawMessageWindow(
+  records: any[],
+  query: string,
+  chunkText: string | undefined,
+  positiveFilters: { contentFilter?: unknown; includeRegex?: unknown } = {},
+): RawMessageWindowSelection {
+  if (records.length === 0) return { records: [], selectedStartSeq: 0, selectedEndSeq: 0, omittedMessageCount: 0, filterNotices: [] };
+  const normalizedQuery = normalizedLexicalText(query);
+  const normalizedChunk = normalizedLexicalText(chunkText);
+  const tokens = queryLocatorTokens(query);
+  const contentFilter = typeof positiveFilters.contentFilter === 'string' && positiveFilters.contentFilter.trim()
+    ? normalizedLexicalText(positiveFilters.contentFilter.trim())
+    : undefined;
+  let includeRegex: RegExp | undefined;
+  if (typeof positiveFilters.includeRegex === 'string' && positiveFilters.includeRegex.trim()) {
+    try {
+      includeRegex = new RegExp(positiveFilters.includeRegex, 'i');
+    } catch {
+      // The shared renderer owns the user-facing invalid-regex error.
+    }
+  }
+  const scored = records.map((record, index) => {
+    const text = rawRecordSearchText(record);
+    const normalized = normalizedLexicalText(text);
+    let score = 0;
+    if (normalized.length >= 8 && normalizedChunk) {
+      if (normalizedChunk.includes(normalized)) score += 1000;
+      else if (normalized.includes(normalizedChunk) && normalizedChunk.length >= 8) score += 700;
+    }
+    if (normalizedQuery.length >= 3 && normalized.includes(normalizedQuery)) score += 200;
+    if (contentFilter && normalized.includes(contentFilter)) score += 3000;
+    if (includeRegex) {
+      includeRegex.lastIndex = 0;
+      if (includeRegex.test(text)) score += 2500;
+    }
+    for (const token of tokens) {
+      if (normalized.includes(token)) score += token.length >= 8 ? 40 : 12;
+    }
+    if (hasSubstantiveMessageText(record)) score += 3;
+    return { index, score, substantive: hasSubstantiveMessageText(record), textLength: normalized.length };
+  });
+  const meaningful = scored.some(entry => entry.score > (entry.substantive ? 3 : 0));
+  const anchor = meaningful
+    ? [...scored].sort((a, b) => b.score - a.score || Number(b.substantive) - Number(a.substantive)
+      || b.textLength - a.textLength || a.index - b.index)[0]
+    : [...scored].sort((a, b) => Number(b.substantive) - Number(a.substantive) || b.index - a.index)[0];
+
+  const groups = toolExchangeGroups(records);
+  const anchorGroup = groups.get(anchor.index);
+  let start = anchorGroup?.start ?? anchor.index;
+  let end = anchorGroup?.end ?? anchor.index;
+  const anchorStart = start;
+  const anchorEnd = end;
+  const targetWindow = 7;
+  const hardWindow = 16;
+  const isBarrier = (index: number) => {
+    const message = records[index]?.message;
+    if (!message) return true;
+    const hasCall = message.role === 'model' && (message.parts || []).some((part: any) => part.functionCall);
+    return (message.role === 'tool' || hasCall) && !groups.has(index);
+  };
+  let leftBlocked = isBarrier(start) && !anchorGroup;
+  let rightBlocked = leftBlocked;
+  while (end - start + 1 < targetWindow && end - start + 1 < hardWindow) {
+    const left = start - 1;
+    const right = end + 1;
+    if (left < 0) leftBlocked = true;
+    if (right >= records.length) rightBlocked = true;
+    const leftGroup = left >= 0 ? groups.get(left) : undefined;
+    const rightGroup = right < records.length ? groups.get(right) : undefined;
+    const leftStart = leftGroup?.end === left ? leftGroup.start : left;
+    const rightEnd = rightGroup?.start === right ? rightGroup.end : right;
+    if (!leftBlocked && (isBarrier(left) || end - leftStart + 1 > hardWindow)) leftBlocked = true;
+    if (!rightBlocked && (isBarrier(right) || rightEnd - start + 1 > hardWindow)) rightBlocked = true;
+    if (leftBlocked && rightBlocked) break;
+    const leftScore = leftBlocked ? Number.NEGATIVE_INFINITY : Math.max(...scored.slice(leftStart, left + 1).map(entry => entry.score));
+    const rightScore = rightBlocked ? Number.NEGATIVE_INFINITY : Math.max(...scored.slice(right, rightEnd + 1).map(entry => entry.score));
+    if (rightScore > leftScore
+      || (rightScore === leftScore && end - anchorEnd <= anchorStart - start)) end = rightEnd;
+    else start = leftStart;
+  }
+  const selected = records.slice(start, end + 1);
+  const selectedSeqs = new Set(selected.map(record => Number(record.seq)));
+  const filterNotices: string[] = [];
+  const appendOmittedNotice = (label: string, matchingRecords: any[]) => {
+    const omitted = matchingRecords.filter(record => !selectedSeqs.has(Number(record.seq)));
+    if (matchingRecords.length === 0 || omitted.length !== matchingRecords.length) return;
+    const seqs = omitted.map(record => Number(record.seq)).filter(seq => Number.isSafeInteger(seq) && seq > 0);
+    const shown = seqs.slice(0, 6);
+    const targets = shown.map(seq => `\`msg#${seq}\``).join(', ');
+    const drillDown = shown.map(seq => `recall({ target: "msg#${seq}" })`).join('; ');
+    const extra = seqs.length > shown.length ? `; ${seqs.length - shown.length} additional matching message(s) omitted` : '';
+    filterNotices.push(`[source filter match omitted from selected window] ${label} matched ${targets}${extra}. Inspect exact source with ${drillDown}.`);
+  };
+  if (contentFilter) {
+    appendOmittedNotice('contentFilter', records.filter(record => normalizedLexicalText(rawRecordSearchText(record)).includes(contentFilter)));
+  }
+  if (includeRegex) {
+    appendOmittedNotice('includeRegex', records.filter(record => {
+      includeRegex!.lastIndex = 0;
+      return includeRegex!.test(rawRecordSearchText(record));
+    }));
+  }
+  return {
+    records: selected,
+    selectedStartSeq: Number(selected[0]?.seq) || 0,
+    selectedEndSeq: Number(selected[selected.length - 1]?.seq) || 0,
+    omittedMessageCount: Math.max(0, records.length - selected.length),
+    filterNotices,
+  };
+}
+
+async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRenderOptions, vectorQuery: string): Promise<ContextPreviewItem[]> {
   const sourceSessionId = String(hit.session_id || '');
   if (!sourceSessionId) {
     return [];
   }
 
+  const modernFact = hit.kind === 'fact' && typeof hit.block_id === 'number';
   let missingBlockSource = false;
-  if (hit.kind === 'block' && typeof hit.block_id === 'number') {
+  if ((hit.kind === 'block' || modernFact) && typeof hit.block_id === 'number') {
     const result = await sessionManager.getArchivedBlocks(sourceSessionId, {
       startId: hit.block_id,
       endId: hit.block_id,
@@ -1251,14 +1443,35 @@ async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRe
     const block = (result.records as ArchiveBlockRecord[]).find(record => record.id === hit.block_id) || result.records[0];
     if (block) {
       const hydrated = await hydrateRecallBlockTimeRange(sourceSessionId, block as ArchiveBlockRecord);
-      return [createArchivedBlockContextPreviewItem({
+      const item = createArchivedBlockContextPreviewItem({
         key: `vector:block:${sourceSessionId}:${hydrated.id}`,
         headingPrefix: `[vector source session:${sourceSessionId}] `,
         block: hydrated,
         includeSourceText: formatArchiveSourceLabel(hydrated.sourceKind, hydrated.sourceStart, hydrated.sourceEnd, hydrated.sourceBlockIds),
-      })];
+      });
+      const matchedFacts = Array.isArray(hit.matched_facts) ? hit.matched_facts.slice(0, 3) : [];
+      if (matchedFacts.length > 0) {
+        const factDetails = matchedFacts.map((fact: any) => {
+          const labels = [fact.fact_kind, fact.attributed_to ? `attributed:${fact.attributed_to}` : undefined].filter(Boolean).join(', ');
+          return `[matched memory fact${labels ? `: ${labels}` : ''}]\n${truncateUnicodeSafe(String(fact.text || ''), 1000)}`;
+        }).join('\n\n');
+        item.body = `${item.body}\n\n${factDetails}`;
+        item.searchText = `${item.searchText || item.body}\n${matchedFacts.map((fact: any) => String(fact.text || '')).join('\n')}`;
+      }
+      return [item];
     }
     missingBlockSource = true;
+    if (modernFact) {
+      const range = vectorHitRawRange(hit);
+      warnVectorRecallCompatibilityFallback(hit, sourceSessionId, range, 'archive-block-source-missing');
+      const seqLabel = range ? formatMessageLogRange(range.startSeq, range.endSeq) : `seq:${hit.seq ?? '?'}`;
+      return [{
+        key: `vector:fallback:${String(hit.id || `${sourceSessionId}:${seqLabel}`)}`,
+        heading: `[vector source session:${sourceSessionId} ${seqLabel}]`,
+        body: String(hit.text || hit.chunk_text || '[empty vector hit]'),
+        searchText: String(hit.text || hit.chunk_text || ''),
+      }];
+    }
   }
 
   const range = vectorHitRawRange(hit);
@@ -1269,7 +1482,8 @@ async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRe
       endSeq: range.endSeq,
     });
     if (result.records.length > 0) {
-      return result.records.map((record: any) => createMessageContextPreviewItem({
+      const window = selectVectorRawMessageWindow(result.records, vectorQuery, String(hit.chunk_text || ''), renderOptions);
+      const messageItems = window.records.map((record: any) => createMessageContextPreviewItem({
         key: `vector:msg:${sourceSessionId}:${record.seq}`,
         heading: formatMessageHeading({
           label: `[#${record.seq}${formatArchivedMessageTime(record)}]`,
@@ -1281,6 +1495,14 @@ async function vectorHitToPreviewItems(hit: any, renderOptions: ContextPreviewRe
         toolDetail: renderOptions.toolDetail as ContextPreviewToolDetail | undefined,
         renderOptions,
       }));
+      return [{
+        key: String(hit.source_family || `vector:raw:${sourceSessionId}:${range.startSeq}-${range.endSeq}`),
+        heading: `[vector source session:${sourceSessionId}; full hit ${formatMessageLogRange(range.startSeq, range.endSeq)}; selected ${formatMessageLogRange(window.selectedStartSeq, window.selectedEndSeq)}; omitted ${window.omittedMessageCount} message(s)]`,
+        body: messageItems.map(item => `${item.heading}\n${item.body}`).join('\n\n'),
+        searchText: result.records.map((record: any) => rawRecordSearchText(record)).join('\n\n'),
+        omittedToolText: messageItems.map(item => item.omittedToolText || '').filter(Boolean).join('\n\n') || undefined,
+        priorityNotices: window.filterNotices,
+      }];
     }
     missingMessageSource = true;
   }
@@ -1316,21 +1538,39 @@ async function buildRecallVectorQuery(
   }
 
   const limit = normalizeRecallVectorLimit(args.limit);
-  const { searchOptions, effectiveScope } = await resolveMemorySearchOptions({
+  const { searchOptions, effectiveScope, resolvedSessionId } = await resolveMemorySearchOptions({
     scope: args.scope,
     targetSessionId: args.sessionId || (args.scope === 'current-session' ? targetSessionId : undefined),
     targetAgentName: args.agentName,
   }, ctx);
   const candidateLimit = Math.max(limit * 4, 20);
-  const hits = await vector.search(vectorQuery, candidateLimit, false, {
+  const detailed = await vector.searchDetailed(vectorQuery, candidateLimit, false, {
     ...searchOptions,
     preferBlocks: args.preferBlocks,
-  }) as any[];
+  });
+  const denseOrHybridHits = detailed.hits as any[];
+  let hits = denseOrHybridHits;
+  let fallbackUsed = false;
+  const shouldUseBootstrapFallback = effectiveScope === 'current-session' && resolvedSessionId
+    && (!detailed.lexical.configured
+      || !detailed.lexical.ready
+      || !detailed.lexical.coverageComplete
+      || detailed.lexical.backfilling
+      || Boolean(detailed.lexical.errorCode));
+  if (shouldUseBootstrapFallback && resolvedSessionId) {
+    try {
+      const lexicalHits = await searchArchiveLexicalSideChannel(resolvedSessionId, vectorQuery, candidateLimit);
+      hits = fuseDenseAndLexicalHits(denseOrHybridHits, lexicalHits, candidateLimit);
+      fallbackUsed = lexicalHits.length > 0;
+    } catch {
+      // Dense retrieval remains authoritative when the bounded Archive side-channel is unavailable.
+    }
+  }
 
   const items: ContextPreviewItem[] = [];
   const seen = new Set<string>();
   for (const hit of hits) {
-    const hitItems = await vectorHitToPreviewItems(hit, renderOptions);
+    const hitItems = await vectorHitToPreviewItems(hit, renderOptions, vectorQuery);
     for (const item of hitItems) {
       if (seen.has(item.key)) {
         continue;
@@ -1346,12 +1586,35 @@ async function buildRecallVectorQuery(
     }
   }
 
-  return renderContextPreviewItems({
+  const notices: string[] = [];
+  if (effectiveScope === 'current-session' && resolvedSessionId) {
+    try {
+      const status = await vector.getArchiveIndexStatus(resolvedSessionId);
+      if (status.pendingMessageCount > 0 || status.pendingBlockCount > 0) {
+        const deadline = status.maxLatencyDeadline
+          ? `; max-latency flush due ${new Date(status.maxLatencyDeadline).toISOString()}`
+          : '';
+        notices.push(`[vector lag] ${status.pendingMessageCount} archived message(s) and ${status.pendingBlockCount} block(s) are newer than this Session's vector checkpoint${deadline}.`);
+      }
+    } catch {
+      // Lag diagnostics are best-effort and must not turn a successful search into failure.
+    }
+  }
+
+  const searchLabel = detailed.lexical.used
+    ? 'hybrid search'
+    : fallbackUsed
+      ? 'semantic search with bounded identifier fallback'
+      : 'vector search';
+  const rendered = renderContextPreviewItems({
     items,
-    title: ({ matchedCount }) => `Recall vector search for \`${vectorQuery}\` (${effectiveScope}; source archive ranges loaded before preview) - showing ${Math.min(matchedCount, limit)} source item(s) from ${hits.length} vector hit(s).`,
-    emptyMessage: `No archived source messages or blocks found for vector_query \`${vectorQuery}\`.`,
+    title: ({ matchedCount, totalMatchedCount }) => `Recall ${searchLabel} for \`${vectorQuery}\` (${effectiveScope}; source archive ranges loaded before preview) - showing ${matchedCount} unique source group(s)${totalMatchedCount > matchedCount ? ` of ${totalMatchedCount} matched` : ''} from ${hits.length} ranked source group(s).`,
+    emptyMessage: 'No archived source messages or blocks found for this vector_query.',
     options: renderOptions,
+    maxItems: limit,
+    notices,
   }).text;
+  return rendered;
 }
 
 export async function tool_recall(args: ToolArgs = {}, ctx?: ToolContext) {

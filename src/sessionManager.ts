@@ -1181,6 +1181,9 @@ async function rollbackFailedSessionCreation(sessionId: string, expectedSession:
   await rollbackUncommittedSessionArchive(sessionId).catch(error => {
     logger.error({ err: error, sessionId }, 'Failed to roll back uncommitted session archive');
   });
+  await vector.resetSessionArchiveDerived(sessionId).catch(error => {
+    logger.warn({ code: (error as any)?.code || 'VECTOR_DERIVED_RESET_FAILED', sessionId }, 'Failed to reset derived Session index after creation rollback');
+  });
   await saveSessionCatalogEntriesCritical([sessionId]).catch(error => {
     logger.error({ err: error, sessionId }, 'Failed to persist session-creation rollback');
   });
@@ -1806,6 +1809,9 @@ async function forkSessionUnlocked(sourceSessionId: string, suffix?: string, isC
       parentSessionId: realSourceSessionId,
       forkMessageSeq: Math.max(0, (sourceSession.nextMessageSeq || 1) - 1),
       forkBlockId: Math.max(0, (sourceSession.nextBlockId || 1) - 1),
+    });
+    await vector.copySessionArchiveIndexCheckpoint(realSourceSessionId, newSessionId).catch(error => {
+      logger.warn({ code: (error as any)?.code || 'VECTOR_FORK_BASELINE_FAILED', sessionId: newSessionId }, 'Failed to initialize derived fork baseline');
     });
     await appendSessionMessages(forkedSession, appendedForkMessages, { strictPersistence: true });
   } catch (error) {

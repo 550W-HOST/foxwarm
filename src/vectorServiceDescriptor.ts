@@ -5,12 +5,34 @@ export type VectorIndexStatus = {
   lastIndexedSeq: number;
   tailStartSeq: number;
   lastIndexedBlockId: number;
+  latestLocalMessageSeq: number;
+  latestLocalBlockId: number;
+  pendingMessageCount: number;
+  pendingBlockCount: number;
+  maxLatencyDeadline?: number;
+  lexical?: {
+    configured: boolean;
+    ready: boolean;
+    backfilling: boolean;
+    rebuilding: boolean;
+    generation?: string;
+    rawLastIndexedSeq: number;
+    lastIndexedBlockId: number;
+    latestLocalMessageSeq: number;
+    latestLocalBlockId: number;
+    pendingMessageCount: number;
+    pendingBlockCount: number;
+    maxLatencyDeadline?: number;
+    lastErrorCode?: string;
+    lastErrorAt?: number;
+  };
 };
 
-export const vectorServiceDescriptor = defineRpcService('vector', 2, {
+export const vectorServiceDescriptor = defineRpcService('vector', 4, {
   init: rpcMethod<Record<string, never>, { ready: true }>(),
   waitForStartupBackfill: rpcMethod<Record<string, never>, { completed: true }>(),
   search: rpcMethod<{ query: string; limit?: number; format?: boolean; options?: runtime.SearchOptions }, unknown>(),
+  searchDetailed: rpcMethod<{ query: string; limit?: number; format?: boolean; options?: runtime.SearchOptions }, runtime.SearchDetailedResult>(),
   getArchiveIndexStatus: rpcMethod<{ sessionId: string }, VectorIndexStatus>(),
   scheduleIndex: rpcMethod<{
     sessionId: string; latestSeqHint?: number; latestMessageTokenEstimate?: number; latestBlockIdHint?: number;
@@ -21,4 +43,5 @@ export const vectorServiceDescriptor = defineRpcService('vector', 2, {
   indexMemoryFacts: rpcMethod<runtime.CompactMemoryFactIndexInput, { indexed: number }>(),
   renameSessionArchiveIndex: rpcMethod<{ oldSessionId: string; newSessionId: string }, { completed: true }>(),
   copySessionArchiveIndexCheckpoint: rpcMethod<{ sourceSessionId: string; targetSessionId: string }, { completed: true }>(),
+  resetSessionArchiveDerived: rpcMethod<{ sessionId: string }, { completed: true }>(),
 });
