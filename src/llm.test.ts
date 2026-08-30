@@ -40,6 +40,39 @@ function makeChatCompletionStream(text = 'ok', usage: Record<string, unknown> = 
   return stream;
 }
 
+function makeChatReasoningToolCallStream(reasoningFields: Record<string, string>): PassThrough {
+  const stream = new PassThrough();
+  process.nextTick(() => {
+    stream.write(`data: ${JSON.stringify({
+      choices: [{
+        index: 0,
+        delta: {
+          role: 'assistant',
+          ...reasoningFields,
+          tool_calls: [{
+            index: 0,
+            id: 'call_reasoning_round_trip',
+            type: 'function',
+            function: { name: 'read', arguments: '{"filePath":"README.md"}' },
+          }],
+        },
+        finish_reason: 'tool_calls',
+      }],
+    })}\n\n`);
+    stream.write(`data: ${JSON.stringify({
+      choices: [],
+      usage: {
+        prompt_tokens: 4,
+        completion_tokens: 3,
+        prompt_tokens_details: { cached_tokens: 0 },
+      },
+    })}\n\n`);
+    stream.write('data: [DONE]\n\n');
+    stream.end();
+  });
+  return stream;
+}
+
 function makeResponsesStream(text = 'ok', usage: Record<string, unknown> = {
   input_tokens: 1,
   output_tokens: 1,
@@ -1451,6 +1484,133 @@ test('executeTools without effects rejects a missing source without creating it'
     new RegExp(`source session .*${missingId}.* was not found`),
   );
   assert.equal(sessionManager.getAllSessions().has(missingId), false);
+});
+
+test('OpenAI Chat Completions canonical parsing accepts compatible reasoning fields with established precedence', async t => {
+  const originalPost = axios.post;
+  const model = {
+    providerKey: 'fixture',
+    providerType: 'openai-completions',
+    baseUrl: 'https://fixture.example',
+    apiKey: '',
+    model: 'reasoning-model',
+    extraFields: {},
+    extraHeaders: {},
+  } as any;
+
+  const parse = async (reasoningFields: Record<string, string>) => {
+    (axios as any).post = async () => ({
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: makeChatReasoningToolCallStream(reasoningFields),
+    });
+    return requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'inspect the repository' }] }],
+      systemPrompt: '',
+      modelEntryOverride: model,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+  };
+
+  try {
+    await t.test('uses the aggregate message.reasoning fallback with a streamed tool call', async () => {
+      const result = await parse({ reasoning: 'Reasoning fallback' });
+      assert.deepEqual(result.allParts?.filter(part => part.thinking || part.functionCall), [
+        { thinking: 'Reasoning fallback' },
+        {
+          functionCall: {
+            id: 'call_reasoning_round_trip',
+            name: 'read',
+            args: { filePath: 'README.md' },
+            rawArgsText: '{"filePath":"README.md"}',
+          },
+        },
+      ]);
+    });
+
+    await t.test('preserves the established message.reasoning_content field', async () => {
+      const result = await parse({ reasoning_content: 'Established reasoning content' });
+      assert.equal(result.allParts?.find(part => part.thinking)?.thinking, 'Established reasoning content');
+    });
+
+    await t.test('prefers reasoning_content when both aggregate fields are non-empty', async () => {
+      const result = await parse({
+        reasoning_content: 'Established reasoning content',
+        reasoning: 'Compatible reasoning fallback',
+      });
+      assert.deepEqual(result.allParts?.filter(part => part.thinking), [
+        { thinking: 'Established reasoning content' },
+      ]);
+    });
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('chat round-trips streamed reasoning through canonical thinking and the existing reasoning_content request field', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession('chat_reasoning_round_trip_session');
+  const requestBodies: any[] = [];
+  let requestIndex = 0;
+
+  (axios as any).post = async (_url: string, data: any) => {
+    requestBodies.push(data);
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: requestIndex++ === 0
+        ? makeChatReasoningToolCallStream({ reasoning: 'Inspect the repository before editing.' })
+        : makeChatCompletionStream('continued'),
+    };
+  };
+
+  try {
+    const firstResult = await chat([{ text: 'call a tool' }], session, 0, {
+      appendMessage: async (message: Message) => {
+        session.history.push(message);
+      },
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+    assert.equal(firstResult.toolCalls?.[0]?.id, 'call_reasoning_round_trip');
+    assert.equal(
+      session.history.find(message => message.role === 'model')?.parts.find(part => part.thinking)?.thinking,
+      'Inspect the repository before editing.',
+    );
+
+    session.history.push({
+      role: 'tool',
+      parts: [{
+        functionResponse: {
+          tool_use_id: 'call_reasoning_round_trip',
+          name: 'read',
+          response: { output: 'repository contents' },
+        },
+      }],
+    });
+    await chat(null, session, 1, {
+      appendMessage: async (message: Message) => {
+        session.history.push(message);
+      },
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    const priorAssistant = requestBodies[1].messages.find((message: any) =>
+      message.role === 'assistant'
+      && message.tool_calls?.[0]?.id === 'call_reasoning_round_trip',
+    );
+    assert.equal(priorAssistant.reasoning_content, 'Inspect the repository before editing.');
+    assert.equal('reasoning' in priorAssistant, false);
+  } finally {
+    (axios as any).post = originalPost;
+  }
 });
 
 test('chat persists streamed provider-specific fields and only the same concrete model receives them later', async () => {

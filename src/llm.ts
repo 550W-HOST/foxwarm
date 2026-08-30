@@ -2308,9 +2308,11 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
                 sourceModelId: plan.modelId,
             };
         }
-        if (message?.reasoning_content) {
-            logger.info({ reasoningLength: message.reasoning_content.length }, 'Received reasoning content from OpenAI');
-            allParts.push({ thinking: message.reasoning_content });
+        const reasoningContent = message?.reasoning_content
+            || (typeof message?.reasoning === 'string' ? message.reasoning : undefined);
+        if (reasoningContent) {
+            logger.info({ reasoningLength: reasoningContent.length }, 'Received reasoning content from OpenAI');
+            allParts.push({ thinking: reasoningContent });
         }
         if (typeof message?.content === 'string') {
             responseText = message.content;

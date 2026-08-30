@@ -42,6 +42,37 @@ test('collectOpenAIChatCompletionsStream aggregates streamed text and usage', as
   assert.ok(progress.some(snapshot => snapshot.text === 'Hello'));
 });
 
+test('collectOpenAIChatCompletionsStream aggregates reasoning compatibility deltas with tool calls', async () => {
+  const stream = makeStream([
+    {
+      choices: [{
+        index: 0,
+        delta: {
+          role: 'assistant',
+          reasoning: 'Inspect the repository first.',
+          tool_calls: [{
+            index: 0,
+            id: 'call_reasoning',
+            type: 'function',
+            function: { name: 'read', arguments: '{"filePath":"README.md"}' },
+          }],
+        },
+        finish_reason: 'tool_calls',
+      }],
+    },
+    '[DONE]',
+  ]);
+
+  const progress: any[] = [];
+  const response = await collectOpenAIChatCompletionsStream(stream, new AbortController().signal, {
+    onProgress: snapshot => progress.push(structuredClone(snapshot)),
+  });
+
+  assert.equal(response.choices[0].message.reasoning, 'Inspect the repository first.');
+  assert.equal(response.choices[0].message.tool_calls[0].id, 'call_reasoning');
+  assert.ok(progress.some(snapshot => snapshot.reasoning === 'Inspect the repository first.'));
+});
+
 test('collectOpenAIChatCompletionsStream captures delta provider_specific_fields', async () => {
   const stream = makeStream([
     {
