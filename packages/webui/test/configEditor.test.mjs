@@ -26,6 +26,7 @@ const schemas = await loadModule('src/yamlConfigSchemas.ts', 'schemas.cjs')
 const sharedSchemas = await loadModule(path.resolve(webuiRoot, '../shared/src/configSchemas.ts'), 'shared-schemas.cjs')
 const completions = await loadModule('src/modelsYamlCompletions.ts', 'completions.cjs')
 const validateModelsSchema = new Ajv({ allErrors: true, strict: false }).compile(schemas.MODELS_CONFIG_SCHEMA)
+const validateSharedModelsSchema = new Ajv({ allErrors: true, strict: false }).compile(sharedSchemas.MODELS_CONFIG_SCHEMA)
 const validateAppConfigSchema = new Ajv({ allErrors: true, strict: false }).compile(schemas.APP_CONFIG_SCHEMA)
 
 after(async () => {
@@ -189,7 +190,7 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
       providers: {
         current: {
           providerType: 'openai-completions',
-          models: ['model-a'],
+          models: [{ id: 'model-a', historyReasoningField: 'reasoning_content' }],
           historyReasoningField: 'reasoning',
           effort: { allowed: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], default: 'high' },
           webSearch: true,
@@ -234,10 +235,20 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
   ]
   for (const fixture of fixtures) {
     assert.equal(validateModelsSchema(fixture), true, JSON.stringify(validateModelsSchema.errors))
+    assert.equal(validateSharedModelsSchema(fixture), true, JSON.stringify(validateSharedModelsSchema.errors))
   }
-  assert.equal(validateModelsSchema({ providers: { empty: '   ' } }), false)
-  assert.equal(validateModelsSchema({ providers: { invalid: { providerType: 'openai-completions', models: ['model'], historyReasoningField: 'other' } } }), false)
-  assert.equal(validateModelsSchema({ providers: { invalid: { providerType: 'openai-responses', models: ['model'], historyReasoningField: 'reasoning' } } }), false)
+  const invalidFixtures = [
+    { providers: { empty: '   ' } },
+    { providers: { invalid: { providerType: 'openai-completions', models: ['model'], historyReasoningField: 'other' } } },
+    { providers: { invalid: { providerType: 'openai-responses', models: ['model'], historyReasoningField: 'reasoning' } } },
+    { providers: { invalid: { providerType: 'openai-responses', models: [{ id: 'model', historyReasoningField: 'reasoning' }] } } },
+    { providers: { invalid: { providerType: 'anthropic', model: [{ id: 'model', historyReasoningField: 'reasoning_content' }] } } },
+    { providers: { invalid: { providerType: 'company-protocol', models: [{ id: 'model', historyReasoningField: 'reasoning' }] } } },
+  ]
+  for (const fixture of invalidFixtures) {
+    assert.equal(validateModelsSchema(fixture), false)
+    assert.equal(validateSharedModelsSchema(fixture), false)
+  }
 })
 
 test('legacy virtual providers receive the same target and forbidden-field diagnostics', () => {

@@ -517,6 +517,13 @@ var modelItem = {
     }
   ]
 };
+var modelListContainsHistoryReasoningField = {
+  type: "array",
+  contains: {
+    type: "object",
+    required: ["historyReasoningField"]
+  }
+};
 var providerObjectEntry = {
   type: "object",
   additionalProperties: true,
@@ -571,7 +578,15 @@ var providerObjectEntry = {
     },
     {
       if: { not: effectiveProviderTypeIs("openai-completions") },
-      then: { not: { required: ["historyReasoningField"] } }
+      then: {
+        not: {
+          anyOf: [
+            { required: ["historyReasoningField"] },
+            { required: ["models"], properties: { models: modelListContainsHistoryReasoningField } },
+            { required: ["model"], properties: { model: modelListContainsHistoryReasoningField } }
+          ]
+        }
+      }
     }
   ]
 };

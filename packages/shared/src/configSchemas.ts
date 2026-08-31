@@ -114,6 +114,14 @@ const modelItem = {
   ],
 }
 
+const modelListContainsHistoryReasoningField = {
+  type: 'array',
+  contains: {
+    type: 'object',
+    required: ['historyReasoningField'],
+  },
+}
+
 const providerObjectEntry = {
   type: 'object',
   additionalProperties: true,
@@ -168,7 +176,15 @@ const providerObjectEntry = {
     },
     {
       if: { not: effectiveProviderTypeIs('openai-completions') },
-      then: { not: { required: ['historyReasoningField'] } },
+      then: {
+        not: {
+          anyOf: [
+            { required: ['historyReasoningField'] },
+            { required: ['models'], properties: { models: modelListContainsHistoryReasoningField } },
+            { required: ['model'], properties: { model: modelListContainsHistoryReasoningField } },
+          ],
+        },
+      },
     },
   ],
 }
