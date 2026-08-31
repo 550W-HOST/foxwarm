@@ -6,6 +6,7 @@ import {
   AppConfig,
   getActiveModelsConfigPath,
   ProviderConfigEntry,
+  ProviderModelListItem,
   loadModelsConfigFromObject,
   normalizeDbWorkersEnabled,
   normalizeCompactionConfig,
@@ -252,7 +253,7 @@ export function buildModelsConfigFromSetupForm(body: any, existingConfig: any = 
     if (isVirtual) {
       const targets = splitModelIds(hasOwn(draft, 'targets') ? draft.targets : existingProvider.targets);
       nextProvider.targets = targets;
-      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'asyncCompact'] as const) {
+      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'historyReasoningField', 'asyncCompact'] as const) {
         delete nextProvider[field];
       }
       if (providerType === 'session-hash') {
@@ -321,6 +322,15 @@ export function buildModelsConfigFromSetupForm(body: any, existingConfig: any = 
 
     const existingModels = existingProvider.models ?? existingProvider.model;
     nextProvider.models = buildModelListPreservingOverrides(existingModels, modelIds);
+    if (providerType !== 'openai-completions') {
+      delete nextProvider.historyReasoningField;
+      nextProvider.models = nextProvider.models.map(model => {
+        if (!isPlainObject(model) || !hasOwn(model, 'historyReasoningField')) return model;
+        const nextModel = cloneConfigValue(model);
+        delete nextModel.historyReasoningField;
+        return nextModel as ProviderModelListItem;
+      });
+    }
     delete nextProvider.model;
 
     nextProviders[providerKey] = nextProvider;

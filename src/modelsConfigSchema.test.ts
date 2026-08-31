@@ -103,6 +103,56 @@ test('new providers root + models object list applies model overrides and merge 
   });
 });
 
+test('Chat Completions history reasoning field defaults, inherits, and overrides per model', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'chat/default-model',
+    providers: {
+      chat: {
+        providerType: 'openai-completions',
+        historyReasoningField: 'reasoning',
+        models: [
+          'default-model',
+          { id: 'standard-model', historyReasoningField: 'reasoning_content' },
+        ],
+      },
+      omitted: {
+        providerType: 'openai-completions',
+        models: ['model'],
+      },
+    },
+  });
+
+  assert.equal(parsed.models['chat/default-model'].historyReasoningField, 'reasoning');
+  assert.equal(parsed.models['chat/standard-model'].historyReasoningField, 'reasoning_content');
+  assert.equal(parsed.models.omitted.historyReasoningField, 'reasoning_content');
+});
+
+test('history reasoning field rejects invalid values and non-Chat concrete or virtual providers', () => {
+  const parse = (provider: any) => loadModelsConfigFromObject({ default: 'provider', providers: { provider } });
+  assert.throws(
+    () => parse({ providerType: 'openai-completions', historyReasoningField: 'other', models: ['model'] }),
+    /must be one of: reasoning_content, reasoning/,
+  );
+  assert.throws(
+    () => parse({ providerType: 'openai-responses', historyReasoningField: 'reasoning', models: ['model'] }),
+    /supported only for openai-completions/,
+  );
+  assert.throws(
+    () => parse({ providerType: 'anthropic', models: [{ id: 'model', historyReasoningField: 'reasoning' }] }),
+    /supported only for openai-completions/,
+  );
+  assert.throws(
+    () => loadModelsConfigFromObject({
+      default: 'route',
+      providers: {
+        leaf: { providerType: 'openai-completions', models: ['model'] },
+        route: { providerType: 'session-hash', targets: ['leaf/model'], historyReasoningField: 'reasoning' },
+      },
+    }),
+    /forbids field `historyReasoningField`/,
+  );
+});
+
 test('effort capabilities default, inherit, and replace at model level', () => {
   const parsed = loadModelsConfigFromObject({
     default: 'openai/model-a',
@@ -534,6 +584,7 @@ test('route fingerprint deterministically covers resolved concrete request plans
     (() => { const value = structuredClone(raw); value.providers.leaf.asyncCompact = false; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); (value.providers.leaf as any).webSearch = { enabled: true }; return fingerprint(value); })(),
     (() => { const value = structuredClone(raw); (value.providers.leaf as any).effort = { allowed: ['low', 'high'], default: 'low' }; return fingerprint(value); })(),
+    (() => { const value = structuredClone(raw); (value.providers.leaf as any).historyReasoningField = 'reasoning'; return fingerprint(value); })(),
   ];
   assert.ok(changedFingerprints.every(value => value !== baseFingerprint));
 

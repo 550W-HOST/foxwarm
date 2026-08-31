@@ -309,6 +309,90 @@ test('virtual failover re-filters historical reasoning for each concrete attempt
   }
 });
 
+test('each Chat Completions concrete attempt uses its resolved history reasoning field', async () => {
+  const config = loadModelsConfigFromObject({
+    default: 'route',
+    providers: {
+      compatible: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://compatible.test/v1',
+        historyReasoningField: 'reasoning',
+        models: ['model-a'],
+      },
+      standard: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://standard.test/v1',
+        models: ['model-b'],
+      },
+      route: {
+        providerType: 'failover',
+        targets: ['compatible/model-a', 'standard/model-b'],
+        failureThreshold: 1,
+      },
+    },
+  });
+  const calls: Array<{ url: string; body: any }> = [];
+  const originalPost = axios.post;
+  (axios as any).post = async (url: string, body: any) => {
+    calls.push({ url, body });
+    if (calls.length === 1) throw new Error('force second leaf');
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatStream('ok') };
+  };
+
+  try {
+    await withImmediateRetryTimers(() => requestLlmOnce({
+      ...baseRequest('route', 2),
+      modelsConfigOverride: config,
+      contents: [
+        { role: 'model' as const, parts: [{ thinking: 'legacy reasoning' }, { text: 'answer' }] },
+        { role: 'user' as const, parts: [{ text: 'continue' }] },
+      ],
+    }));
+    assert.equal(calls[0].body.messages[0].reasoning, 'legacy reasoning');
+    assert.equal('reasoning_content' in calls[0].body.messages[0], false);
+    assert.equal(calls[1].body.messages[0].reasoning_content, 'legacy reasoning');
+    assert.equal('reasoning' in calls[1].body.messages[0], false);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('the current concrete config controls serialization when the canonical model id is unchanged', async () => {
+  const configFor = (historyReasoningField?: 'reasoning_content' | 'reasoning') => loadModelsConfigFromObject({
+    default: 'chat',
+    providers: {
+      chat: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://same-model.test/v1',
+        ...(historyReasoningField ? { historyReasoningField } : {}),
+        models: ['model'],
+      },
+    },
+  });
+  const calls: any[] = [];
+  const originalPost = axios.post;
+  (axios as any).post = async (_url: string, body: any) => {
+    calls.push(body);
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatStream('ok') };
+  };
+  const contents = [{
+    role: 'model' as const,
+    parts: [{ thinking: 'same-model reasoning' }, { text: 'answer' }],
+    __meta: { modelId: 'chat/model' },
+  }, { role: 'user' as const, parts: [{ text: 'continue' }] }];
+
+  try {
+    await requestLlmOnce({ ...baseRequest('chat', 1), contents, modelsConfigOverride: configFor('reasoning') });
+    await requestLlmOnce({ ...baseRequest('chat', 1), contents, modelsConfigOverride: configFor() });
+    assert.equal(calls[0].messages[0].reasoning, 'same-model reasoning');
+    assert.equal('reasoning_content' in calls[0].messages[0], false);
+    assert.equal(calls[1].messages[0].reasoning_content, 'same-model reasoning');
+    assert.equal('reasoning' in calls[1].messages[0], false);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('virtual routing requests the actual qualified leaf when a model id contains the provider prefix and slash', async () => {
   const originalPost = axios.post;
   const slashModels = loadModelsConfigFromObject({

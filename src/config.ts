@@ -921,6 +921,7 @@ function mergeOpenAIWebSearchConfig(
 export type ModelConfigOverride = {
   contextLimit?: number;
   effort?: ModelEffortConfig;
+  historyReasoningField?: HistoryReasoningField;
   extraFields?: Record<string, any>;
   extraHeaders?: Record<string, any>;
   webSearch?: OpenAIWebSearchConfig;
@@ -937,6 +938,7 @@ export type ProviderConfigEntry = {
   apiKey?: string;
   contextLimit?: number;
   effort?: ModelEffortConfig;
+  historyReasoningField?: HistoryReasoningField;
   asyncCompact?: boolean;
   requestCompression?: 'gzip' | 'br';
   extraFields?: Record<string, any>;
@@ -950,6 +952,8 @@ export type ProviderConfigEntry = {
 export type ProviderConfigValue = ProviderConfigEntry | string;
 
 export type VirtualProviderType = 'session-hash' | 'failover';
+
+export type HistoryReasoningField = 'reasoning_content' | 'reasoning';
 
 export type VirtualModelRoutingConfig = {
   strategy: VirtualProviderType;
@@ -968,6 +972,7 @@ export type ModelConfigEntry = {
   apiKey?: string;
   contextLimit?: number;
   effort?: NormalizedModelEffortConfig;
+  historyReasoningField?: HistoryReasoningField;
   asyncCompact?: boolean;
   requestCompression?: 'gzip' | 'br';
   extraFields?: Record<string, any>;
@@ -1042,6 +1047,13 @@ function normalizeEffortValue(value: unknown, label: string): ModelEffort {
     throw new Error(`${label} must be one of: ${MODEL_EFFORTS.join(', ')}.`);
   }
   return value as ModelEffort;
+}
+
+function normalizeHistoryReasoningField(value: unknown, label: string): HistoryReasoningField {
+  if (value !== 'reasoning_content' && value !== 'reasoning') {
+    throw new Error(`${label} must be one of: reasoning_content, reasoning.`);
+  }
+  return value;
 }
 
 function normalizeEffortAllowed(value: unknown, label: string): ModelEffort[] {
@@ -1162,6 +1174,21 @@ function applyProviderDefaults(providerEntry: ProviderConfigEntry): ProviderConf
 
 function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderConfigEntry, modelId: string, modelOverride?: ModelConfigOverride): ModelConfigEntry {
   const resolvedProviderEntry = applyProviderDefaults(providerEntry);
+  const providerType = resolvedProviderEntry.providerType;
+  const hasProviderHistoryReasoningField = resolvedProviderEntry.historyReasoningField !== undefined;
+  const hasModelHistoryReasoningField = modelOverride?.historyReasoningField !== undefined;
+  if (providerType !== 'openai-completions' && (hasProviderHistoryReasoningField || hasModelHistoryReasoningField)) {
+    const scope = hasModelHistoryReasoningField ? `Model \`${providerKey}/${modelId}\`` : `Provider \`${providerKey}\``;
+    throw new Error(`${scope} historyReasoningField is supported only for openai-completions providers.`);
+  }
+  const historyReasoningField = providerType === 'openai-completions'
+    ? normalizeHistoryReasoningField(
+      modelOverride?.historyReasoningField ?? resolvedProviderEntry.historyReasoningField ?? 'reasoning_content',
+      hasModelHistoryReasoningField
+        ? `Model \`${providerKey}/${modelId}\` historyReasoningField`
+        : `Provider \`${providerKey}\` historyReasoningField`,
+    )
+    : undefined;
   const providerEffort = normalizeModelEffortConfig(
     resolvedProviderEntry.effort,
     undefined,
@@ -1179,12 +1206,13 @@ function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderCon
   return {
     providerKey,
     canonicalModelKey: modelId ? `${providerKey}/${modelId}` : providerKey,
-    providerType: resolvedProviderEntry.providerType,
+    providerType,
     model: modelId,
     baseUrl: resolvedProviderEntry.baseUrl,
     apiKey: resolvedProviderEntry.apiKey,
     contextLimit: modelOverride?.contextLimit ?? resolvedProviderEntry.contextLimit,
     effort,
+    ...(historyReasoningField ? { historyReasoningField } : {}),
     asyncCompact: resolvedProviderEntry.asyncCompact,
     requestCompression: resolvedProviderEntry.requestCompression,
     extraHeaders: {
@@ -1275,6 +1303,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
     'extraHeaders',
     'contextLimit',
     'effort',
+    'historyReasoningField',
     'asyncCompact',
     'webSearch',
   ];
@@ -1366,6 +1395,7 @@ export function expandModelsConfig(rawProviderEntries: Record<string, ProviderCo
           contextLimit: entry.contextLimit ?? CONTEXT_LIMIT,
           asyncCompact: entry.asyncCompact !== false,
           effort: getConcreteModelEffortConfig(entry),
+          historyReasoningField: entry.historyReasoningField || null,
           apiKeyHash: hashConfigValue(entry.apiKey || ''),
           extraFieldsHash: hashConfigValue(entry.extraFields || {}),
           extraHeadersHash: hashConfigValue(entry.extraHeaders || {}),

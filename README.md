@@ -321,6 +321,25 @@ Provider notes:
 - `anthropic` uses Anthropic-compatible requests
 - OpenAI-compatible local gateways can be configured by changing `baseUrl` and model ids. `apiKey` may be left empty if your gateway does not require one.
 
+Some Chat Completions-compatible providers return assistant thinking as
+`reasoning_content` but require that history to be replayed under `reasoning`.
+Configure that request dialect explicitly when needed; omission keeps the
+standard Foxwarm `reasoning_content` behavior:
+
+```yaml
+providers:
+  compatible-chat:
+    providerType: openai-completions
+    historyReasoningField: reasoning
+    models:
+      - compatible-model
+```
+
+`historyReasoningField` accepts only `reasoning_content` or `reasoning`, and is
+valid only for concrete `openai-completions` providers. A model object may
+override its provider value when models behind one endpoint use different
+dialects.
+
 Provider and model entries can declare first-class effort capabilities and a
 default. When omitted, all six levels are allowed and `high` is the default:
 

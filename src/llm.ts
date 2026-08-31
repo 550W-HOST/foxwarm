@@ -2130,7 +2130,11 @@ function buildConcreteRequestPlan(options: {
             stream: true,
         };
     } else if (useOpenAIChatCompletionsApi) {
-        messages = convertToOpenAIFormatProvider(providerContents, modelId);
+        messages = convertToOpenAIFormatProvider(
+            providerContents,
+            modelId,
+            modelEntry.historyReasoningField || 'reasoning_content',
+        );
         url = `${baseUrl}/chat/completions`;
         headers = {
             'Content-Type': 'application/json',

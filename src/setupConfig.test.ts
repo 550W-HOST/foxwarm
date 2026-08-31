@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'os';
 import path from 'path';
 import fs from 'fs-extra';
+import yaml from 'js-yaml';
 import { buildModelsConfigFromSetupForm, validateAppConfigYaml, writeAppConfigWithChannels, writeRawAppConfig, writeRawModelsConfig } from './setupConfig';
 import { loadModelsConfigFromObject, normalizeNodeProvidersConfig } from './config';
 
@@ -15,10 +16,12 @@ providers:
   openai:
     # keep provider comment
     providerType: "openai-completions"
+    historyReasoningField: "reasoning"
     baseUrl: "https://example.test/v1"
     customProviderField: true
     models:
       - id: "gpt-5.2-codex"
+        historyReasoningField: "reasoning_content"
         contextLimit: 400000
         customModelField: "keep"
 `;
@@ -26,6 +29,8 @@ providers:
   writeRawModelsConfig(rawYaml, filePath);
 
   assert.equal(await fs.readFile(filePath, 'utf8'), rawYaml);
+  const loaded = loadModelsConfigFromObject(yaml.load(rawYaml));
+  assert.equal(loaded.models.openai.historyReasoningField, 'reasoning_content');
   await fs.remove(dir);
 });
 
@@ -208,6 +213,7 @@ test('models setup form preserves unknown provider and model fields', () => {
         extraFields: {
           providerExtra: 'keep',
         },
+        historyReasoningField: 'reasoning',
         webSearch: {
           enabled: true,
           toolChoice: 'auto',
@@ -241,6 +247,7 @@ test('models setup form preserves unknown provider and model fields', () => {
   assert.equal(next.providers?.openai.apiKey, 'new-key');
   assert.deepEqual((next.providers?.openai as any).customProviderField, { nested: true });
   assert.deepEqual(next.providers?.openai.extraFields, { providerExtra: 'keep' });
+  assert.equal(next.providers?.openai.historyReasoningField, undefined);
   assert.deepEqual(next.providers?.openai.webSearch, { enabled: true, toolChoice: 'auto' });
   assert.deepEqual(next.providers?.openai.models?.[0], {
     id: 'gpt-5.2-codex',

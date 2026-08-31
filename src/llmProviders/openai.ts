@@ -179,7 +179,11 @@ function isProviderSpecificFields(value: unknown): value is Record<string, unkno
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-export function convertToOpenAIFormat(contents: Message[], concreteModelId?: string): any[] {
+export function convertToOpenAIFormat(
+    contents: Message[],
+    concreteModelId?: string,
+    historyReasoningField: 'reasoning_content' | 'reasoning' = 'reasoning_content',
+): any[] {
     const openaiMessages = [];
 
     for (const msg of contents) {
@@ -334,7 +338,7 @@ export function convertToOpenAIFormat(contents: Message[], concreteModelId?: str
         const message: any = { role };
 
         if (reasoningContent) {
-            message.reasoning_content = reasoningContent;
+            message[historyReasoningField] = reasoningContent;
         }
 
         if (content.length === 1 && content[0].type === 'text') {

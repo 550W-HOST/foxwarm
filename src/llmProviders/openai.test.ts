@@ -854,3 +854,29 @@ test('convertToOpenAIFormat echoes assistant providerSpecificFields only to the 
   const otherModelChat = convertToOpenAIFormat(history, 'provider/model-b');
   assert.equal('provider_specific_fields' in otherModelChat[1], false);
 });
+
+test('convertToOpenAIFormat selects exactly one configured assistant history reasoning key', () => {
+  const history: Message[] = [{
+    role: 'model',
+    parts: [
+      { thinking: 'historical reasoning' },
+      { text: 'visible answer' },
+      { functionCall: { id: 'call_1', name: 'read', args: { filePath: 'x' } } },
+    ],
+    providerMeta: {
+      providerSpecificFields: { reasoning_signature: 'sig-xyz' },
+      sourceModelId: 'provider/model-a',
+    },
+  }];
+
+  const standard = convertToOpenAIFormat(history, 'provider/model-a');
+  assert.equal(standard[0].reasoning_content, 'historical reasoning');
+  assert.equal('reasoning' in standard[0], false);
+
+  const compatible = convertToOpenAIFormat(history, 'provider/model-a', 'reasoning');
+  assert.equal(compatible[0].reasoning, 'historical reasoning');
+  assert.equal('reasoning_content' in compatible[0], false);
+  assert.equal(compatible[0].content, 'visible answer');
+  assert.equal(compatible[0].tool_calls[0].id, 'call_1');
+  assert.deepEqual(compatible[0].provider_specific_fields, { reasoning_signature: 'sig-xyz' });
+});

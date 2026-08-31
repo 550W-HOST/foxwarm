@@ -90,6 +90,10 @@ const modelEffortConfig = {
 const modelOverrideProperties = {
   contextLimit: { type: 'integer', minimum: 1, description: 'Context window size in tokens.' },
   effort: modelEffortConfig,
+  historyReasoningField: {
+    enum: ['reasoning_content', 'reasoning'],
+    description: 'Assistant-history reasoning field used by this Chat Completions provider/model. Defaults to reasoning_content.',
+  },
   extraFields: { type: 'object', additionalProperties: true, description: 'Provider-specific request fields.' },
   extraHeaders: { type: 'object', additionalProperties: true, description: 'Provider-specific HTTP headers. Values are passed through to the canonical backend loader.' },
   webSearch: openaiWebSearchConfig,
@@ -129,6 +133,7 @@ const providerObjectEntry = {
     },
     contextLimit: modelOverrideProperties.contextLimit,
     effort: modelEffortConfig,
+    historyReasoningField: modelOverrideProperties.historyReasoningField,
     asyncCompact: { type: 'boolean', description: 'Whether background compaction may use this provider.' },
     requestCompression: { enum: ['gzip', 'br'], description: 'Optional request-body compression.' },
     extraFields: modelOverrideProperties.extraFields,
@@ -144,7 +149,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'asyncCompact', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'historyReasoningField', 'asyncCompact', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -152,7 +157,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'asyncCompact'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'historyReasoningField', 'asyncCompact'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -160,6 +165,10 @@ const providerObjectEntry = {
       then: {
         not: { anyOf: ['targets', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
+    },
+    {
+      if: { not: effectiveProviderTypeIs('openai-completions') },
+      then: { not: { required: ['historyReasoningField'] } },
     },
   ],
 }

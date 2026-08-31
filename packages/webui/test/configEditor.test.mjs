@@ -39,6 +39,7 @@ test('static config schemas are distinct, permissive, and omit the removed model
   assert.equal(schemas.APP_CONFIG_SCHEMA.additionalProperties, true)
   const providerObject = schemas.MODELS_CONFIG_SCHEMA.properties.providers.additionalProperties.oneOf.find((entry) => entry.type === 'object')
   assert.equal(providerObject.additionalProperties, true)
+  assert.deepEqual(providerObject.properties.historyReasoningField.enum, ['reasoning_content', 'reasoning'])
   assert.equal(schemas.APP_CONFIG_SCHEMA.properties.channels.additionalProperties.additionalProperties, true)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.paths.properties, 'modelsConfigPath'), false)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.llm.properties, 'thinkingBudget'), false)
@@ -189,6 +190,7 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
         current: {
           providerType: 'openai-completions',
           models: ['model-a'],
+          historyReasoningField: 'reasoning',
           effort: { allowed: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], default: 'high' },
           webSearch: true,
           extraHeaders: { nested: { supportedByLoader: true }, numeric: 42 },
@@ -234,6 +236,8 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
     assert.equal(validateModelsSchema(fixture), true, JSON.stringify(validateModelsSchema.errors))
   }
   assert.equal(validateModelsSchema({ providers: { empty: '   ' } }), false)
+  assert.equal(validateModelsSchema({ providers: { invalid: { providerType: 'openai-completions', models: ['model'], historyReasoningField: 'other' } } }), false)
+  assert.equal(validateModelsSchema({ providers: { invalid: { providerType: 'openai-responses', models: ['model'], historyReasoningField: 'reasoning' } } }), false)
 })
 
 test('legacy virtual providers receive the same target and forbidden-field diagnostics', () => {
