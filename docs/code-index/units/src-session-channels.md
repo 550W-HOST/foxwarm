@@ -17,6 +17,7 @@ Owns persisted channel-instance/conversation attachments to sessions, direct cha
 - `sendFileToSession(deps, sessionId, file, options?)`.
 - `createSessionBroadcast(sessionId)`.
 - `deliverCommittedFinalToAttachments(sessionId, text, options)` — narrowly awaited one-attempt attachment delivery for the Worker committed-final Main service; ordinary broadcast remains unchanged.
+- `reportChannelTurnProgress`, `finishChannelTurnProgress`, `decorateChannelProgressText`, and `resetChannelTurnProgress` — Main-side transient ordinary-text progress integration over current attachments/configured instances.
 
 No runtime getter/setter aliases for `dangerouslyAllowAllGroupMembers` exist. That field is a stored-data reader only.
 
@@ -34,6 +35,7 @@ No runtime getter/setter aliases for `dangerouslyAllowAllGroupMembers` exist. Th
 - Session file delivery reports delivered, skipped, and failed targets. `send-only` attachments and channels without file support are skipped.
 - Session broadcast is fire-and-forget: it can target one attached channel, omit excluded/send-only channels, optionally allow an empty platform-finalization message, and logs asynchronous send failures.
 - Worker committed-final attachment delivery applies the same target/exclusion/send-only/empty-final selection but awaits each selected channel once and returns bounded attempted/delivered/failure counts to its Main handler.
+- Ordinary broadcast and awaited Worker attachment delivery decorate only messages carrying the ephemeral turn ID. Each target consumes its own pending progress baseline; direct tool/file sends do not carry that marker and remain untouched.
 - `getChannelBySession` prefers `session.meta.lastChannel`, then scans recent user source wrappers, then falls back to the first attachment.
 
 ## Compatibility

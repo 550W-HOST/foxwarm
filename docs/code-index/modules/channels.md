@@ -44,6 +44,7 @@ Persisted conversation attachments and broadcast selection are owned by [session
 - Internal WebUI/TUI pass channel authorization; external sources require allowlist or explicit per-attachment allow-all-users.
 - Inbound files go to the agent's master `.temp/channel-files` area unless an isolated session targets its bound remote node. Descriptors report node and path without prescribing a file tool.
 - Session broadcast is fire-and-forget; platform send failures are logged. `turnFinal` is a generic completion option that platform adapters may consume.
+- Managed ordinary-text channel instances may opt into bounded in-memory tool progress with `channelProgress.intervalMs`; WebUI and the active WeWork stream-card target are excluded.
 
 ## Adapter-specific invariants
 
@@ -82,6 +83,14 @@ Configuration reload restarts the complete managed channel set; it is not a fiel
 ### D-channel-fire-and-forget-broadcast
 
 Session broadcast has no aggregate failure promise. It dispatches to eligible channels, logs asynchronous errors, and carries generic turn metadata.
+
+### D-channel-ordinary-text-progress
+
+[2026-09-01] Ordinary-text tool progress is a generic per-channel-instance presentation option, configured as `channelProgress: { intervalMs }` with a 30,000–1,800,000 ms bound; omission or `false` disables it. Main owns one transient in-memory coordinator keyed by turn, channel instance, and conversation. It consumes only provider-neutral top-level tool start/finish facts, stores bounded sanitized names/counts/running call IDs, uses fixed non-sliding per-target timers, and never writes Session history, archives, catalog state, or recovery data.
+
+Each target has an independent interval and report baseline. A due timer sends a best-effort standalone summary when starts are new or tools remain running. Before ordinary intermediate/final/stop/error text is delivered, that target's unreported summary is prepended and only its baseline is consumed; a terminal turn with pending activity and no ordinary text gets one final standalone flush. Delivery failure cannot poison the semantic turn, and reload/terminal cleanup plus a TTL fence remove stale timers. Explicit tool-owned channel sends, file delivery, typing, WebUI realtime/history, and canonical model content bypass decoration. Active WeWork stream-card delivery remains native and receives no duplicate text fallback; non-stream WeWork and other configured ordinary-text targets use the common path. Source-bound QQ delivery metadata remains attached to progress and decorated turn text.
+
+The exact builtin tool name `wait` is presentation-silent for this fallback: its start/result is excluded from counts, running state, timers, heartbeats, prepends, and terminal flushes. This does not match aliases or suffixes and does not change the tool's Session wait semantics.
 
 ### D-channel-conversation-latest-passive-context
 

@@ -419,10 +419,21 @@ channels:
     type: telegram
     enabled: true
     botToken: "123456:telegram-token"
+    # Optional best-effort ordinary-text tool progress for this channel instance.
+    # Omit it or set it to false to disable. Valid interval: 30000–1800000 ms.
+    channelProgress:
+      intervalMs: 60000
     mainAttachUser: "your-telegram-user-id"
     allowedUsers:
       - "your-telegram-user-id"
 ```
+
+`channelProgress` is common to managed ordinary-text channels. It reports only
+bounded top-level tool names/counts in transient messages; it never stores
+progress in Session history or archives. Each attached channel target keeps an
+independent timer and report baseline. WebUI is excluded, and an active WeWork
+stream card continues to use its native progress instead of receiving a
+duplicate text fallback.
 
 Example Weixin channel:
 

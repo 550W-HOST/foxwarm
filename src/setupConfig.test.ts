@@ -113,6 +113,18 @@ llm:
   await fs.remove(dir);
 });
 
+test('app config validates bounded per-instance ordinary-text channel progress', () => {
+  const parsed = validateAppConfigYaml(`channels:\n  telegram-a:\n    type: telegram\n    channelProgress:\n      intervalMs: 60000\n  telegram-b:\n    type: telegram\n    channelProgress: false\n`);
+  assert.equal((parsed.channels?.['telegram-a'] as any).channelProgress.intervalMs, 60_000);
+  assert.equal((parsed.channels?.['telegram-b'] as any).channelProgress, false);
+  for (const value of ['true', '{}', '{ intervalMs: 29999 }', '{ intervalMs: 1800001 }', '{ intervalMs: 60000.5 }']) {
+    assert.throws(
+      () => validateAppConfigYaml(`channels:\n  telegram:\n    type: telegram\n    channelProgress: ${value}\n`),
+      /channels\.telegram\.channelProgress/,
+    );
+  }
+});
+
 test('raw app config setup rejects invalid compaction percentages', () => {
   for (const [field, value] of [
     ['compactKeepPercent', 'true'],

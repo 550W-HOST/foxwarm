@@ -4,6 +4,7 @@ import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
 import { Channel, registerChannel, unregisterChannel } from '../channel';
+import { APP_CONFIG_PATH } from '../config';
 import {
   attachChannel,
   attachChannelDurably,
@@ -13,6 +14,8 @@ import {
   getSessionByChannel,
   importLegacyChannelAttachments,
   loadChannels,
+  finishChannelTurnProgress,
+  reportChannelTurnProgress,
   resetChannelsForTests,
   saveChannels,
   setChannelsStoreForTests,
@@ -130,5 +133,43 @@ test('createSessionBroadcast can target an empty platform finalization broadcast
     unregisterChannel('wework-b');
     resetChannelsForTests();
   }
+  });
+});
+
+test('configured progress targets exclude WebUI/native WeWork stream and preserve QQ source metadata', async () => {
+  await withTempDir(async dirPath => {
+    setChannelsStoreForTests(createChannelsStore(path.join(dirPath, 'channels.json')));
+    const previousConfig = await fs.pathExists(APP_CONFIG_PATH) ? await fs.readFile(APP_CONFIG_PATH, 'utf8') : undefined;
+    await fs.ensureDir(path.dirname(APP_CONFIG_PATH));
+    await fs.writeFile(APP_CONFIG_PATH, `channels:\n  qq:\n    type: qqbot\n    channelProgress: { intervalMs: 30000 }\n  telegram:\n    type: telegram\n    channelProgress: { intervalMs: 60000 }\n  webui:\n    type: webui\n    channelProgress: { intervalMs: 30000 }\n  wework:\n    type: wework\n    channelProgress: { intervalMs: 30000 }\n`);
+    const sent: Array<{ id: string; text: string; options: any }> = [];
+    const register = (id: string, platform = id) => registerChannel(id, {
+      name: id, platform, start: async () => {}, stop: async () => {}, onMessage: () => {}, sendTyping: async () => {},
+      sendMessage: async (_conversationId, text, options) => { sent.push({ id, text, options }); },
+    });
+    for (const [id, platform] of [['qq', 'qqbot'], ['telegram', 'telegram'], ['webui', 'webui'], ['wework', 'wework']] as const) register(id, platform);
+    try {
+      for (const id of ['qq', 'telegram', 'webui', 'wework']) attachChannel(id, 'room', 'progress-session');
+      reportChannelTurnProgress('progress-session', 'native-turn', {
+        platform: 'wework', channelId: 'wework', channelUserId: 'room', conversationId: 'room', weworkStreamId: 'stream-1',
+      }, { type: 'tool-calls-start', calls: [{ id: 'read-1', name: 'read' }] });
+      await finishChannelTurnProgress('native-turn');
+      assert.deepEqual(sent.map(item => item.id).sort(), ['qq', 'telegram']);
+      sent.length = 0;
+
+      reportChannelTurnProgress('progress-session', 'qq-turn', {
+        platform: 'qqbot', channelId: 'qq', channelUserId: 'room', conversationId: 'room', qqbotMessageId: 'msg-1',
+      }, { type: 'tool-calls-start', calls: [{ id: 'exec-1', name: 'exec' }] });
+      await finishChannelTurnProgress('qq-turn');
+      assert.deepEqual(sent.map(item => item.id).sort(), ['qq', 'telegram', 'wework']);
+      const qq = sent.find(item => item.id === 'qq')!;
+      assert.equal(qq.text, '⏳ Tools: exec ×1');
+      assert.deepEqual(qq.options, { qqbotMessageId: 'msg-1', qqbotChannelId: 'qq', qqbotConversationId: 'room' });
+      assert.equal(sent.some(item => item.id === 'webui'), false);
+    } finally {
+      for (const id of ['qq', 'telegram', 'webui', 'wework']) unregisterChannel(id);
+      if (previousConfig === undefined) await fs.remove(APP_CONFIG_PATH);
+      else await fs.writeFile(APP_CONFIG_PATH, previousConfig);
+    }
   });
 });

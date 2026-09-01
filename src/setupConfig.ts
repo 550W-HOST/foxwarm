@@ -10,6 +10,7 @@ import {
   loadModelsConfigFromObject,
   normalizeDbWorkersEnabled,
   normalizeCompactionConfig,
+  normalizeChannelProgressInterval,
   normalizeNodeProvidersConfig,
   normalizeSessionWorkersConfig,
   normalizeVectorConfig,
@@ -87,6 +88,11 @@ export function validateAppConfigYaml(rawYaml: string): AppConfig {
   const config = parseYamlObject(rawYaml, 'app config') as AppConfig;
   if (config.channels !== undefined && !isPlainObject(config.channels)) {
     throw new Error('app config `channels` must be a YAML object.');
+  }
+  for (const [channelId, channel] of Object.entries(config.channels || {})) {
+    if (!isPlainObject(channel)) throw new Error(`app config channel \`${channelId}\` must be a YAML object.`);
+    try { normalizeChannelProgressInterval(channel.channelProgress); }
+    catch (error: any) { throw new Error(`channels.${channelId}.${error?.message || error}`); }
   }
   normalizeNodeProvidersConfig(config.nodeProviders);
   normalizeSessionWorkersConfig(config.sessionWorkers);

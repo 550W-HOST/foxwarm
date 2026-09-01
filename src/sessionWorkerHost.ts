@@ -20,6 +20,7 @@ import { applyQueuedItemToWaitState, appendSessionMessagesForSession, buildManua
 import { clearActiveSessionRuntimeState, setActiveSessionRuntimeState, setSessionRuntimeStateUpdateCallback } from './sessionRuntimeState';
 import { LocalSessionTurnHost, SessionTurnRunner, type SessionTurnHost } from './sessionTurnRunner';
 import type { SessionTurnFinalKind } from './sessionTurnDelivery';
+import type { ChannelTurnProgress } from './types';
 import {
   buildSessionWorkerProjection,
   SessionWorkerPersistence,
@@ -39,8 +40,10 @@ export type SessionWorkerHostDependencies = {
   initialize?: () => Promise<void>;
   createTurnHost?: (effects: CurrentSessionTurnEffects, session: Session) => SessionTurnHost;
   publishCommitted?: (projection: SessionWorkerProjection) => Promise<void>;
-  deliverIntermediateText?: (source: QueueSource, text: string) => Promise<void>;
-  deliverCommittedFinal?: (source: NonNullable<QueueItem['source']>, text: string, outcome: SessionTurnFinalKind) => Promise<void>;
+  deliverIntermediateText?: (source: QueueSource, text: string, turnId?: string) => Promise<void>;
+  deliverCommittedFinal?: (source: NonNullable<QueueItem['source']>, text: string, outcome: SessionTurnFinalKind, turnId?: string) => Promise<void>;
+  reportChannelProgress?: (turnId: string, source: QueueSource | undefined, progress: ChannelTurnProgress) => Promise<void>;
+  finishChannelProgress?: (turnId: string) => Promise<void>;
   /** Transient presentation channel: appended-message copies for the WebUI fan-out. */
   publishPresentationMessage?: (message: Message) => Promise<void>;
   /** Transient presentation channel: model-stream events for the WebUI fan-out. */
@@ -695,15 +698,27 @@ export class SessionWorkerHost {
           await this.ingestPendingMailbox(4096);
         },
         ...(this.dependencies.deliverCommittedFinal ? {
-          deliverCommittedFinal: async (_session, source, text, outcome) => {
-            try { await this.dependencies.deliverCommittedFinal!(source, text, outcome); }
+          deliverCommittedFinal: async (_session, source, text, outcome, turnId) => {
+            try { await this.dependencies.deliverCommittedFinal!(source, text, outcome, turnId); }
             catch (error) { logger.error({ err: error, sessionId: owner.id, outcome }, 'Committed final reverse delivery failed'); }
           },
         } : {}),
         ...(this.dependencies.deliverIntermediateText ? {
-          deliverIntermediateText: async (_session, source, text) => {
-            try { await this.dependencies.deliverIntermediateText!(source, text); }
+          deliverIntermediateText: async (_session, source, text, turnId) => {
+            try { await this.dependencies.deliverIntermediateText!(source, text, turnId); }
             catch (error) { logger.error({ err: error, sessionId: owner.id }, 'Intermediate Worker channel delivery failed'); }
+          },
+        } : {}),
+        ...(this.dependencies.reportChannelProgress ? {
+          reportChannelProgress: async (_session, turnId, source, progress) => {
+            try { await this.dependencies.reportChannelProgress!(turnId, source, progress); }
+            catch (error) { logger.error({ err: error, sessionId: owner.id, turnId }, 'Worker channel progress delivery failed'); }
+          },
+        } : {}),
+        ...(this.dependencies.finishChannelProgress ? {
+          finishChannelProgress: async (_session, turnId) => {
+            try { await this.dependencies.finishChannelProgress!(turnId); }
+            catch (error) { logger.error({ err: error, sessionId: owner.id, turnId }, 'Worker channel progress cleanup failed'); }
           },
         } : {}),
       },

@@ -249,6 +249,20 @@ const channelEntry = {
       description: 'Known managed channel type or a custom channel type.',
     },
     enabled: { type: 'boolean' },
+    channelProgress: {
+      oneOf: [
+        { const: false },
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['intervalMs'],
+          properties: {
+            intervalMs: { type: 'integer', minimum: 30000, maximum: 1800000 },
+          },
+        },
+      ],
+      description: 'Best-effort ordinary-text tool progress. Omission or false disables it.',
+    },
     appId: { type: 'string' },
     clientSecret: { type: 'string' },
     requireMention: { type: 'boolean', description: 'Require @mention in QQ groups; defaults to true.' },

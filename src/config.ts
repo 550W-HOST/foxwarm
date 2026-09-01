@@ -6,7 +6,15 @@ import crypto from 'crypto';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
 
-export type TelegramConfig = {
+export type ChannelProgressConfig = false | {
+  intervalMs: number;
+};
+
+export type CommonChannelConfig = {
+  channelProgress?: ChannelProgressConfig;
+};
+
+export type TelegramConfig = CommonChannelConfig & {
   enabled?: boolean;
   botToken?: string;
   allowedUsers?: string[];
@@ -14,7 +22,7 @@ export type TelegramConfig = {
   guestAgent?: GuestAgentConfig;
 };
 
-export type MatrixConfig = {
+export type MatrixConfig = CommonChannelConfig & {
   enabled?: boolean;
   homeserver?: string;
   accessToken?: string;
@@ -23,7 +31,7 @@ export type MatrixConfig = {
   guestAgent?: GuestAgentConfig;
 };
 
-export type WeWorkConfig = {
+export type WeWorkConfig = CommonChannelConfig & {
   enabled?: boolean;
   webhookUrl?: string;
   token?: string;
@@ -47,7 +55,7 @@ export type WeWorkConfig = {
   guestAgent?: GuestAgentConfig;
 };
 
-export type WeixinConfig = {
+export type WeixinConfig = CommonChannelConfig & {
   enabled?: boolean;
   baseUrl?: string;
   token?: string;
@@ -68,7 +76,7 @@ export type QQBotMediaConfig = {
   maxAttachments?: number;
 };
 
-export type QQBotConfig = {
+export type QQBotConfig = CommonChannelConfig & {
   enabled?: boolean;
   appId?: string;
   clientSecret?: string;
@@ -92,7 +100,7 @@ export type GuestAgentConfig = {
   node?: string;
 };
 
-export type GenericChannelConfig = Record<string, any> & {
+export type GenericChannelConfig = Record<string, any> & CommonChannelConfig & {
   type?: string;
   enabled?: boolean;
   allowedUsers?: string[];
@@ -106,6 +114,18 @@ export type NormalizedChannelConfig<T extends AnyChannelConfig = AnyChannelConfi
   type: string;
   config: T;
 };
+
+export function normalizeChannelProgressInterval(value: unknown): number | undefined {
+  if (value === undefined || value === false) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('channelProgress must be false or an object.');
+  }
+  const intervalMs = (value as Record<string, unknown>).intervalMs;
+  if (!Number.isInteger(intervalMs) || (intervalMs as number) < 30_000 || (intervalMs as number) > 1_800_000) {
+    throw new Error('channelProgress.intervalMs must be an integer between 30000 and 1800000.');
+  }
+  return intervalMs as number;
+}
 
 export type AsrServiceConfig = {
   enabled?: boolean;

@@ -6,6 +6,7 @@ Secondary files: src/sessionWorkerStore.test.ts, src/sessionWorkerSupervisor.tes
 ## Purpose
 
 Provides durable ownership/mailbox coordination, save-before-ack authoritative state persistence, a pure bounded projection DTO, supervised process lifecycle, and the activated child caller of the canonical SessionTurnRunner. With `sessionWorkers:true`, production SessionRuntime and ordinary channel ingress use the exact Worker owner; the child uses fixed Main reverse services for supported tool, history, intermediate/final delivery, and presentation paths.
+Ordinary-text channel progress uses the same fixed reverse delivery service: the Worker reports ordered transient turn/tool facts while Main remains the only owner of channel topology, per-target timers, and actual text decoration.
 
 ## Key exports
 
