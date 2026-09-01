@@ -4,6 +4,7 @@ import { Message, MessagePart, OpenAIResponsesContent } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
 import { appendImageGuidanceText } from '../toolImages';
+import { deduplicateProviderRequestImages } from '../providerImageDedup';
 import { formatFoxwarmSystemTag } from '../utils/promptWrappers';
 import { formatSystemPartForModel } from '../utils/promptWrappers';
 
@@ -179,11 +180,63 @@ function isProviderSpecificFields(value: unknown): value is Record<string, unkno
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+interface ToolImageAssociations {
+    byResponsePartIndex: Map<number, MessagePart[]>;
+    orphanImagePartIndexes: Set<number>;
+}
+
+function associateToolImagesByOccurrence(
+    parts: MessagePart[],
+    isDeduplicated: (part: MessagePart) => boolean,
+): ToolImageAssociations {
+    const responseIndexesByToolId = new Map<string, number[]>();
+    for (let index = 0; index < parts.length; index += 1) {
+        const part = parts[index];
+        const toolId = part.functionResponse?.tool_use_id || (part.functionResponse ? part.toolUseId : undefined);
+        if (!toolId) continue;
+        const indexes = responseIndexesByToolId.get(toolId) || [];
+        indexes.push(index);
+        responseIndexesByToolId.set(toolId, indexes);
+    }
+
+    const byResponsePartIndex = new Map<number, MessagePart[]>();
+    const orphanImagePartIndexes = new Set<number>();
+    for (let imageIndex = 0; imageIndex < parts.length; imageIndex += 1) {
+        const image = parts[imageIndex];
+        if (!image.toolUseId || (!image.inlineData && !isDeduplicated(image))) continue;
+        const responseIndexes = responseIndexesByToolId.get(image.toolUseId) || [];
+        if (responseIndexes.length === 0) {
+            orphanImagePartIndexes.add(imageIndex);
+            continue;
+        }
+
+        let selected = responseIndexes[0];
+        let selectedDistance = Math.abs(selected - imageIndex);
+        for (const responseIndex of responseIndexes.slice(1)) {
+            const distance = Math.abs(responseIndex - imageIndex);
+            const selectedIsFollowing = selected > imageIndex;
+            const candidateIsPreceding = responseIndex < imageIndex;
+            if (distance < selectedDistance
+                || (distance === selectedDistance && selectedIsFollowing && candidateIsPreceding)) {
+                selected = responseIndex;
+                selectedDistance = distance;
+            }
+        }
+        const associated = byResponsePartIndex.get(selected) || [];
+        associated.push(image);
+        byResponsePartIndex.set(selected, associated);
+    }
+    return { byResponsePartIndex, orphanImagePartIndexes };
+}
+
 export function convertToOpenAIFormat(
     contents: Message[],
     concreteModelId?: string,
     historyReasoningField: 'reasoning_content' | 'reasoning' = 'reasoning_content',
 ): any[] {
+    const preparedImages = deduplicateProviderRequestImages(contents, 'openai-chat-completions');
+    contents = preparedImages.messages;
+    const isDeduplicated = preparedImages.isDeduplicated;
     const openaiMessages = [];
 
     for (const msg of contents) {
@@ -192,9 +245,10 @@ export function convertToOpenAIFormat(
 
         if (role === 'tool') {
             const groupedByToolId = new Map<string, any[]>();
-            const imagePartsByToolId = new Map<string, MessagePart[]>();
             const toolIdOrder: string[] = [];
             const pendingInlineWithoutId: any[] = [];
+            const pendingDeduplicatedWithoutId: MessagePart[] = [];
+            const associations = associateToolImagesByOccurrence(msg.parts || [], isDeduplicated);
 
             const ensureGroup = (toolId: string) => {
                 if (!groupedByToolId.has(toolId)) {
@@ -212,8 +266,19 @@ export function convertToOpenAIFormat(
                 groupedByToolId.get(toolId)!.unshift(part);
             };
 
-            for (const part of msg.parts || []) {
-                if (part.inlineData) {
+            for (let partIndex = 0; partIndex < (msg.parts || []).length; partIndex += 1) {
+                const part = msg.parts[partIndex];
+                if (part.inlineData || isDeduplicated(part)) {
+                    const toolId = part.toolUseId;
+                    if (!part.inlineData) {
+                        if (!toolId) {
+                            pendingDeduplicatedWithoutId.push(part);
+                        } else if (associations.orphanImagePartIndexes.has(partIndex)) {
+                            const marker = appendImageGuidanceText([part], '', isDeduplicated);
+                            if (marker) pushGroupPart(toolId, { type: 'text', text: marker });
+                        }
+                        continue;
+                    }
                     const imagePart = {
                         type: 'image_url',
                         image_url: {
@@ -221,11 +286,7 @@ export function convertToOpenAIFormat(
                         }
                     };
 
-                    const toolId = part.toolUseId;
                     if (toolId) {
-                        const groupedImageParts = imagePartsByToolId.get(toolId) || [];
-                        groupedImageParts.push(part);
-                        imagePartsByToolId.set(toolId, groupedImageParts);
                         pushGroupPart(toolId, imagePart);
                     } else {
                         pendingInlineWithoutId.push(imagePart);
@@ -254,8 +315,16 @@ export function convertToOpenAIFormat(
                         }
                         pendingInlineWithoutId.length = 0;
                     }
-
-                    const outputText = appendImageGuidanceText(imagePartsByToolId.get(toolId) || [], formatToolResponsePayload(resp));
+                    const responseImageParts = [
+                        ...(associations.byResponsePartIndex.get(partIndex) || []),
+                        ...pendingDeduplicatedWithoutId,
+                    ];
+                    pendingDeduplicatedWithoutId.length = 0;
+                    const outputText = appendImageGuidanceText(
+                        responseImageParts,
+                        formatToolResponsePayload(resp),
+                        isDeduplicated,
+                    );
                     if (outputText !== '') {
                         pushGroupPart(toolId, { type: 'text', text: outputText });
                     }
@@ -369,6 +438,9 @@ export function convertToOpenAIFormat(
 }
 
 export function convertToOpenAIResponsesFormat(contents: Message[], concreteModelId?: string): any[] {
+    const preparedImages = deduplicateProviderRequestImages(contents, 'openai-responses');
+    contents = preparedImages.messages;
+    const isDeduplicated = preparedImages.isDeduplicated;
     const responseInput = [];
 
     const getCompatibleResponsesMeta = (part: MessagePart) => {
@@ -401,9 +473,10 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
     for (const msg of contents) {
         if (msg.role === 'tool') {
             const groupedByToolId = new Map<string, any[]>();
-            const imagePartsByToolId = new Map<string, MessagePart[]>();
             const toolIdOrder: string[] = [];
             const pendingInlineWithoutId: any[] = [];
+            const pendingDeduplicatedWithoutId: MessagePart[] = [];
+            const associations = associateToolImagesByOccurrence(msg.parts || [], isDeduplicated);
 
             const ensureGroup = (toolId: string) => {
                 if (!groupedByToolId.has(toolId)) {
@@ -421,18 +494,25 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
                 groupedByToolId.get(toolId)!.unshift(part);
             };
 
-            for (const part of msg.parts || []) {
-                if (part.inlineData) {
+            for (let partIndex = 0; partIndex < (msg.parts || []).length; partIndex += 1) {
+                const part = msg.parts[partIndex];
+                if (part.inlineData || isDeduplicated(part)) {
+                    const toolId = part.toolUseId;
+                    if (!part.inlineData) {
+                        if (!toolId) {
+                            pendingDeduplicatedWithoutId.push(part);
+                        } else if (associations.orphanImagePartIndexes.has(partIndex)) {
+                            const marker = appendImageGuidanceText([part], '', isDeduplicated);
+                            if (marker) pushGroupPart(toolId, { type: 'input_text', text: marker });
+                        }
+                        continue;
+                    }
                     const imagePart = {
                         type: 'input_image',
                         image_url: `data:${part.inlineData.mimeType || part.inlineData.mime_type || 'image/png'};base64,${part.inlineData.data}`
                     };
 
-                    const toolId = part.toolUseId;
                     if (toolId) {
-                        const groupedImageParts = imagePartsByToolId.get(toolId) || [];
-                        groupedImageParts.push(part);
-                        imagePartsByToolId.set(toolId, groupedImageParts);
                         pushGroupPart(toolId, imagePart);
                     } else {
                         pendingInlineWithoutId.push(imagePart);
@@ -462,8 +542,16 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
                         }
                         pendingInlineWithoutId.length = 0;
                     }
-
-                    const outputText = appendImageGuidanceText(imagePartsByToolId.get(toolId) || [], formatToolResponsePayload(resp));
+                    const responseImageParts = [
+                        ...(associations.byResponsePartIndex.get(partIndex) || []),
+                        ...pendingDeduplicatedWithoutId,
+                    ];
+                    pendingDeduplicatedWithoutId.length = 0;
+                    const outputText = appendImageGuidanceText(
+                        responseImageParts,
+                        formatToolResponsePayload(resp),
+                        isDeduplicated,
+                    );
                     if (outputText !== '') {
                         pushGroupPart(toolId, { type: 'input_text', text: outputText });
                     }

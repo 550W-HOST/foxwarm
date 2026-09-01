@@ -69,6 +69,37 @@ test('externalization is idempotent, provider hydration is clone-only, and failu
   }
 });
 
+test('externalization scrubs reserved provider image helper keys from canonical messages', async () => {
+  const buffer = await makePng();
+  const message: Message = {
+    role: 'user',
+    parts: [{
+      inlineData: { data: buffer.toString('base64'), mimeType: 'image/png' },
+      __providerImageIdentity: { mimeType: 'image/png', sha256: 'f'.repeat(64) },
+      __providerImageDeduplicated: true,
+    }],
+  };
+  const snapshot = structuredClone(message);
+  const converted = await externalizeMessages([message]);
+  const ref = converted.messages[0].parts[0].inlineDataRef!;
+  try {
+    assert.equal(converted.changed, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(converted.messages[0].parts[0], '__providerImageIdentity'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(converted.messages[0].parts[0], '__providerImageDeduplicated'), false);
+    assert.equal(JSON.stringify(converted.messages).includes('__providerImage'), false, 'canonical/WebUI source shape cannot leak reserved helpers');
+    assert.deepEqual(message, snapshot, 'read-old/write-current conversion does not mutate its input');
+
+    const refOnly = await externalizeMessages([{
+      role: 'user',
+      parts: [{ inlineDataRef: ref, __providerImageIdentity: 'stale', __providerImageDeduplicated: 'stale' }],
+    }]);
+    assert.equal(refOnly.changed, true);
+    assert.equal(JSON.stringify(refOnly.messages).includes('__providerImage'), false);
+  } finally {
+    if (ref.blobId) await fs.remove(resolveImageBlobPath(ref.blobId));
+  }
+});
+
 test('provider hydration normalizes real HEIC bytes for both MIME aliases without mutating canonical state', async () => {
   const cases = [
     {
@@ -148,6 +179,30 @@ test('provider hydration rejects malformed claimed HEIC before serialization', a
     );
   } finally {
     if (ref.blobId) await fs.remove(resolveImageBlobPath(ref.blobId));
+  }
+});
+
+test('provider dedup compares HEIF references after provider-safe normalization', async () => {
+  const buffer = await fs.readFile(SYNTHETIC_HEIC_FIXTURE);
+  const first = await putImageBlob({ buffer, mimeType: 'image/heic', imageId: 'heic-first' });
+  const second = { ...first, imageId: 'heic-second' };
+  const canonical: Message[] = [{
+    role: 'user',
+    parts: [
+      { inlineDataRef: first, imageMeta: { imageId: 'heic-first', mimeType: 'image/heic' } },
+      { inlineDataRef: second, imageMeta: { imageId: 'heic-second', mimeType: 'image/heic' } },
+    ],
+  }];
+  const snapshot = structuredClone(canonical);
+  try {
+    const hydrated = await hydrateMessagesForProvider(canonical);
+    const payload = convertToOpenAIFormat(hydrated);
+    const serialized = JSON.stringify(payload);
+    assert.equal(serialized.match(/data:image\/jpeg;base64,/g)?.length, 1);
+    assert.match(serialized, /\[IMAGE: deduplicated=true\] Identical image bytes were present earlier/);
+    assert.deepEqual(canonical, snapshot);
+  } finally {
+    if (first.blobId) await fs.remove(resolveImageBlobPath(first.blobId));
   }
 });
 

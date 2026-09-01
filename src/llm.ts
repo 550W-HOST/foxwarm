@@ -28,7 +28,8 @@ import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 import { formatFoxwarmSystemTag, formatSystemPartForModel, isFoxwarmMetadataLine } from './utils/promptWrappers';
 import { formatLocalTimestamp } from './utils/localTime';
 import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages';
-import { hydrateMessagesForProvider } from './imageBlobs';
+import { hydrateMessagesForProvider, stripReservedProviderImageHelperFields } from './imageBlobs';
+import { deduplicateProviderRequestImages } from './providerImageDedup';
 import { guardToolOutputForModel } from './toolOutputGuard';
 import { sanitizeLoneSurrogatesInPayload, truncateUnicodeSafeWithEllipsis } from './utils/unicode';
 import { isModelVisibleMessage } from './session/messageVisibility';
@@ -1143,7 +1144,10 @@ function prepareHistoryForConcreteModel(contents: Message[], destinationModelId:
  * Internal format: { role: 'user'|'model'|'tool', parts: [{ text, functionCall, functionResponse }] }
  * Anthropic format: { role: 'user'|'assistant'|'user', content: string | array }
  */
-function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry): AnthropicMessage[] {
+export function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry): AnthropicMessage[] {
+    const preparedImages = deduplicateProviderRequestImages(contents, 'anthropic');
+    contents = preparedImages.messages;
+    const isDeduplicated = preparedImages.isDeduplicated;
     const anthropicMessages: AnthropicMessage[] = [];
 
     const asContentBlocks = (value: any): AnthropicContentBlock[] => {
@@ -1169,9 +1173,10 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
 
         let content = [];
         const imagePartsByToolUseId = new Map<string, MessagePart[]>();
+        const emittedToolImageIds = new Set<string>();
         if (msg.role === 'tool') {
             for (const part of msg.parts || []) {
-                if (!part.inlineData || !part.toolUseId) {
+                if ((!part.inlineData && !isDeduplicated(part)) || !part.toolUseId) {
                     continue;
                 }
                 const grouped = imagePartsByToolUseId.get(part.toolUseId) || [];
@@ -1212,9 +1217,18 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
             if (part.functionResponse) {
                 const resp = part.functionResponse.response || {};
                 const toolUseId = part.functionResponse.tool_use_id || part.toolUseId || 'unknown';
-                const outputText = appendImageGuidanceText(imagePartsByToolUseId.get(toolUseId) || [], formatToolResponsePayload(resp));
                 const timingPrefix = formatPreviousLlmRequestPrefix(part);
-                const images = imagePartsByToolUseId.get(toolUseId) || [];
+                const repeatedToolImages = emittedToolImageIds.has(toolUseId);
+                const associatedImages = imagePartsByToolUseId.get(toolUseId) || [];
+                const outputText = appendImageGuidanceText(
+                    associatedImages,
+                    formatToolResponsePayload(resp),
+                    repeatedToolImages ? () => true : isDeduplicated,
+                );
+                const images = repeatedToolImages
+                    ? []
+                    : associatedImages;
+                emittedToolImageIds.add(toolUseId);
                 const toolResult: any = {
                     type: 'tool_result',
                     tool_use_id: toolUseId,
@@ -1224,7 +1238,7 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
                     toolResult.content = [
                         ...(timingPrefix ? [{ type: 'text', text: timingPrefix }] : []),
                         ...(outputText ? [{ type: 'text', text: outputText }] : []),
-                        ...images.map(image => ({
+                        ...images.filter(image => !!image.inlineData).map(image => ({
                             type: 'image',
                             source: {
                                 type: 'base64',
@@ -2419,7 +2433,9 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     // Repair the provider-neutral source form first. This exact canonical
     // array is journaled before clone-only provider hydration, so durable
     // session image references are never expanded into provider base64 here.
-    const canonicalContents = fixToolCalls(structuredClone(options.contents || []));
+    const canonicalContents = stripReservedProviderImageHelperFields(
+        fixToolCalls(structuredClone(options.contents || [])),
+    );
     const fixedContents = await hydrateMessagesForProvider(canonicalContents);
     const resolvedModel = options.modelsConfigOverride
         ? (() => {

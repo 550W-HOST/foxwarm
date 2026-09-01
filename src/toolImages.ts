@@ -160,17 +160,34 @@ export function buildImageGuidanceLabel(meta: ImageMeta): string {
   return `[IMAGE: id=${imageId}, size=${formatImageSize(meta)}] you can use image_crop({ id: \"${imageId}\", x: 0, y: 0, width: 100, height: 100 }) and image_write_to_file({ id: \"${imageId}\", filePath: \"artifacts/${sampleFileName}\" })`;
 }
 
-export function buildImageGuidanceText(parts: MessagePart[]): string {
+export function buildImageGuidanceText(
+  parts: MessagePart[],
+  isDeduplicated: (part: MessagePart) => boolean = () => false,
+): string {
   const labels = parts
-    .map(getImageMetaFromPart)
-    .filter((meta): meta is ImageMeta => !!meta?.imageId)
-    .map(buildImageGuidanceLabel);
+    .map(part => {
+      const meta = getImageMetaFromPart(part);
+      if (!meta?.imageId) {
+        return isDeduplicated(part)
+          ? '[IMAGE: deduplicated=true; identical image bytes were present earlier in this request and have already been read]'
+          : null;
+      }
+      const label = buildImageGuidanceLabel(meta);
+      return isDeduplicated(part)
+        ? `${label} [deduplicated=true; identical image bytes were present earlier in this request and have already been read]`
+        : label;
+    })
+    .filter((label): label is string => !!label);
 
   return labels.join('\n');
 }
 
-export function appendImageGuidanceText(parts: MessagePart[], existingText: string): string {
-  const guidanceText = buildImageGuidanceText(parts);
+export function appendImageGuidanceText(
+  parts: MessagePart[],
+  existingText: string,
+  isDeduplicated?: (part: MessagePart) => boolean,
+): string {
+  const guidanceText = buildImageGuidanceText(parts, isDeduplicated);
   if (!guidanceText) {
     return existingText;
   }

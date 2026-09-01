@@ -4,7 +4,7 @@ import axios from 'axios';
 import { PassThrough } from 'node:stream';
 import path from 'path';
 
-import { createDefaultCurrentSessionEffects, CurrentSessionEffects, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
+import { createDefaultCurrentSessionEffects, CurrentSessionEffects, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, convertToAnthropicFormat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
 import { LOGS_DIR, MAX_OUTPUT } from './config';
 import { formatDate } from './logRotation';
 import type { Message, Session } from './types';
@@ -23,6 +23,61 @@ const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 test('default maximum provider output is 32768 tokens', () => {
   assert.equal(MAX_OUTPUT, 32768);
+});
+
+test('Anthropic serialization deduplicates repeated ordinary and tool-result images without mutating history', () => {
+  const data = Buffer.from('anthropic-provider-dedup').toString('base64');
+  const history: Message[] = [
+    {
+      role: 'user',
+      parts: [{ text: '<foxwarm-image name="source.png" node="master" path="/tmp/source.png" />', inlineData: { mimeType: 'image/png', data } }],
+    },
+    {
+      role: 'tool',
+      parts: [
+        {
+          toolUseId: 'call_image',
+          inlineData: { mimeType: 'image/png', data },
+          imageMeta: { imageId: 'tool-copy', mimeType: 'image/png', width: 4, height: 5 },
+        },
+        { functionResponse: { tool_use_id: 'call_image', name: 'capture', response: { output: 'done' } } },
+      ],
+    },
+    { role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data } }] },
+  ];
+  const snapshot = structuredClone(history);
+
+  const messages = convertToAnthropicFormat(history, { baseUrl: 'https://anthropic.test' } as any);
+  const serialized = JSON.stringify(messages);
+  assert.equal(serialized.match(/"type":"image"/g)?.length, 1);
+  assert.match(serialized, /id=tool-copy/);
+  assert.match(serialized, /deduplicated=true; identical image bytes were present earlier/);
+  assert.match(serialized, /\[IMAGE: deduplicated=true\] Identical image bytes were present earlier/);
+  assert.deepEqual(history, snapshot);
+});
+
+test('Anthropic repeated tool results mark later suppressed image bytes as deduplicated', () => {
+  const data = Buffer.from('anthropic-repeated-tool-result').toString('base64');
+  const history: Message[] = [{
+    role: 'tool',
+    parts: [
+      { functionResponse: { tool_use_id: 'call_repeat', name: 'capture', response: { output: 'first' } } },
+      {
+        toolUseId: 'call_repeat',
+        inlineData: { mimeType: 'image/png', data },
+        imageMeta: { imageId: 'repeat-image', mimeType: 'image/png', width: 2, height: 2 },
+      },
+      { functionResponse: { tool_use_id: 'call_repeat', name: 'capture', response: { output: 'second' } } },
+    ],
+  }];
+
+  const messages = convertToAnthropicFormat(history, { baseUrl: 'https://anthropic.test' } as any);
+  const serialized = JSON.stringify(messages);
+  assert.equal(serialized.match(/"type":"image"/g)?.length, 1);
+  assert.equal(serialized.match(/id=repeat-image/g)?.length, 2);
+  assert.equal(serialized.match(/deduplicated=true/g)?.length, 1);
+  assert.match(serialized, /first/);
+  assert.match(serialized, /second/);
 });
 
 function makeChatCompletionStream(text = 'ok', usage: Record<string, unknown> = {
@@ -2152,6 +2207,57 @@ test('chat journals only historical concrete model provenance and strips all __m
       assert.equal(JSON.stringify(reconstructed.messages[0]).includes('reasoningTokens'), false);
       assert.equal(JSON.stringify(reconstructed.messages[0]).includes('virtualModelKey'), false);
     }
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('requestLlmOnce scrubs reserved provider image helper keys before journal and wire serialization', async () => {
+  const originalPost = axios.post;
+  let capturedBody: any = null;
+  const identityValue = 'forged-provider-image-identity-value';
+  const deduplicatedValue = 'forged-provider-image-deduplicated-value';
+  const contents: Message[] = [{
+    role: 'user',
+    parts: [{
+      text: 'direct inline request',
+      inlineData: { mimeType: 'image/png', data: Buffer.from('direct-inline-image').toString('base64') },
+      __providerImageIdentity: identityValue,
+      __providerImageDeduplicated: deduplicatedValue,
+    }],
+  }];
+  const snapshot = structuredClone(contents);
+
+  (axios as any).post = async (_url: string, body: any) => {
+    capturedBody = body;
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream('journal scrub ok') };
+  };
+
+  try {
+    const result = await requestLlmOnce({
+      contents,
+      systemPrompt: '',
+      model: 'fixture/chat',
+      modelEntryOverride: {
+        providerKey: 'fixture', providerType: 'openai-completions', baseUrl: 'https://fixture.example', apiKey: '', model: 'chat', extraFields: {}, extraHeaders: {},
+      } as any,
+      toolDefinitions: [],
+      maxRetries: 1,
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    const wire = JSON.stringify(capturedBody);
+    assert.equal(wire.includes('__providerImage'), false);
+    assert.equal(wire.includes(identityValue), false);
+    assert.equal(wire.includes(deduplicatedValue), false);
+    const reconstructed = await reconstructLlmRequest(result.llmRequestId!);
+    assert.equal(reconstructed.completeness, 'complete');
+    const journal = JSON.stringify(reconstructed);
+    assert.equal(journal.includes('__providerImage'), false);
+    assert.equal(journal.includes(identityValue), false);
+    assert.equal(journal.includes(deduplicatedValue), false);
+    assert.deepEqual(contents, snapshot, 'request-local scrub must not mutate caller input');
   } finally {
     (axios as any).post = originalPost;
   }

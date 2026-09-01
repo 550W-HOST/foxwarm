@@ -211,6 +211,49 @@ test('failover uses outer attempts A x5 then rebuilds a clean Anthropic request 
   }
 });
 
+test('virtual physical attempts make independent inline image dedup decisions', async () => {
+  const originalPost = axios.post;
+  const calls: Array<{ url: string; body: any; headers: any }> = [];
+  (axios as any).post = async (url: string, body: any, config: any) => {
+    calls.push({ url, body, headers: config.headers });
+    if (calls.length === 1) throw new Error('switch leaf after first physical attempt');
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: { content: [{ type: 'text', text: 'ok' }] },
+    };
+  };
+
+  const data = Buffer.from('virtual-attempt-image').toString('base64');
+  const request = {
+    ...baseRequest('fastFallback', 2),
+    contents: [{
+      role: 'user' as const,
+      parts: [
+        { inlineData: { mimeType: 'image/png', data } },
+        { inlineData: { mimeType: 'image/png', data } },
+      ],
+    }],
+  };
+  const snapshot = structuredClone(request.contents);
+
+  try {
+    await withImmediateRetryTimers(() => requestLlmOnce(request));
+    assert.equal(calls.length, 2);
+    const chatBody = calls[0].body;
+    assert.equal(JSON.stringify(chatBody).match(/data:image\/png;base64,/g)?.length, 1);
+    assert.match(JSON.stringify(chatBody), /deduplicated=true/);
+
+    const anthropicBody = JSON.parse(zlib.gunzipSync(calls[1].body).toString('utf8'));
+    assert.equal(JSON.stringify(anthropicBody).match(/"type":"image"/g)?.length, 1);
+    assert.match(JSON.stringify(anthropicBody), /deduplicated=true/);
+    assert.deepEqual(request.contents, snapshot);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('virtual attempts with unset effort use each concrete leaf default independently', async () => {
   const config = loadModelsConfigFromObject({
     default: 'route',
