@@ -113,6 +113,10 @@ test('requestLlmOnce uses native Gemini streaming endpoint and parses its respon
     assert.equal(capturedBodies[0].tools[0].functionDeclarations[0].parameters.additionalProperties, undefined);
     assert.deepEqual(capturedBodies[1].generationConfig.thinkingConfig, { thinkingBudget: 0 });
     assert.equal(result.text, 'Hello Gemini');
+    assert.deepEqual(result.allParts, [
+      { text: 'Hello Gemini' },
+      { functionCall: { id: 'call-1', name: 'read', args: { filePath: 'x' } } },
+    ]);
     assert.deepEqual(result.toolCalls, [{ id: 'call-1', name: 'read', args: { filePath: 'x' } }]);
     assert.deepEqual(result.usage, { inputTokens: 10, outputTokens: 8, cachedTokens: 2, reasoningTokens: 3 });
     assert.equal(result.modelId, 'fixture/gemini-3.1-pro-high');

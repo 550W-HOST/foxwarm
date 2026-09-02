@@ -19,7 +19,7 @@ Implements Gemini's native `generateContent` protocol: provider-neutral history 
 - Persisted provider thought signatures are sent as `thoughtSignature` only when the shared concrete-model compatibility filter retained them.
 - Function responses retain call IDs and names, carry formatted structured output, and attach matching tool-result images. All responses for a tool batch are serialized before timing markers, interruption text, or images in the immediately following user turn; this satisfies both native Gemini and Claude-backed gateways that preserve Anthropic's strict tool-result adjacency rule.
 - Missing streamed function-call IDs receive deterministic content-derived IDs so Foxwarm can pair later tool responses.
-- Streaming preserves ordered text, thought, function-call, and inline-data parts and retains the last usage metadata and finish reason.
+- Streaming preserves ordered text, thought, function-call, and inline-data parts and retains the last usage metadata and finish reason. Consecutive SSE text fragments of the same semantic kind are coalesced before normalization, so provider transport chunk boundaries never become separate persisted or rendered message parts.
 - Abort and malformed SSE behavior follow the same request-layer error/retry path as OpenAI stream collectors.
 
 ## Integration

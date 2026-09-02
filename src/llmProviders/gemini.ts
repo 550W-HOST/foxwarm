@@ -217,6 +217,34 @@ function stableGeneratedCallId(part: any, index: number): string {
   return `gemini_${createHash('sha256').update(serialized).digest('hex').slice(0, 20)}`;
 }
 
+function appendGeminiStreamPart(accumulatedParts: any[], rawPart: any): void {
+  const part = { ...rawPart };
+  if (part.functionCall) {
+    part.functionCall = { ...part.functionCall };
+    if (!part.functionCall.id) part.functionCall.id = stableGeneratedCallId(part, accumulatedParts.length);
+  }
+
+  if (typeof part.text === 'string' && !part.functionCall && !part.inlineData) {
+    const previous = accumulatedParts[accumulatedParts.length - 1];
+    const sameTextKind = typeof previous?.text === 'string'
+      && (previous.thought === true) === (part.thought === true)
+      && !previous.functionCall
+      && !previous.inlineData;
+    const signaturesCompatible = !previous?.thoughtSignature
+      || !part.thoughtSignature
+      || previous.thoughtSignature === part.thoughtSignature;
+    if (sameTextKind && signaturesCompatible) {
+      previous.text += part.text;
+      if (!previous.thoughtSignature && part.thoughtSignature) {
+        previous.thoughtSignature = part.thoughtSignature;
+      }
+      return;
+    }
+  }
+
+  accumulatedParts.push(part);
+}
+
 /** Collect Gemini streamGenerateContent SSE into one generateContent response. */
 export async function collectGeminiStream(
   stream: any,
@@ -261,12 +289,7 @@ export async function collectGeminiStream(
       const incoming = candidate?.content?.parts;
       if (!Array.isArray(incoming)) return;
       for (const rawPart of incoming) {
-        const part = { ...rawPart };
-        if (part.functionCall) {
-          part.functionCall = { ...part.functionCall };
-          if (!part.functionCall.id) part.functionCall.id = stableGeneratedCallId(part, accumulatedParts.length);
-        }
-        accumulatedParts.push(part);
+        appendGeminiStreamPart(accumulatedParts, rawPart);
       }
       options?.onProgress?.(snapshot());
     };

@@ -155,12 +155,27 @@ test('collectGeminiStream aggregates text, thoughts, tools, image output and usa
 
   assert.equal(response.candidates[0].finishReason, 'STOP');
   assert.equal(response.candidates[0].content.parts[0].text, 'think ');
-  assert.equal(response.candidates[0].content.parts[2].text, 'lo');
-  assert.match(response.candidates[0].content.parts[3].functionCall.id, /^gemini_[a-f0-9]{20}$/);
+  assert.equal(response.candidates[0].content.parts[1].text, 'Hello');
+  assert.match(response.candidates[0].content.parts[2].functionCall.id, /^gemini_[a-f0-9]{20}$/);
+  assert.equal(response.candidates[0].content.parts.length, 4);
   assert.deepEqual(response.usageMetadata, { promptTokenCount: 11, candidatesTokenCount: 7, thoughtsTokenCount: 3, cachedContentTokenCount: 2 });
   assert.ok(progress.some(snapshot => snapshot.reasoning === 'think ' && snapshot.text === 'Hello'));
   assert.ok(progress.some(snapshot => snapshot.toolCalls?.[0]?.name === 'read'));
   assert.equal(blocks.length, 3);
+});
+
+test('collectGeminiStream coalesces transport text fragments but preserves semantic boundaries', async () => {
+  const stream = makeStream([
+    { candidates: [{ content: { role: 'model', parts: [{ text: 'rea', thought: true }] } }] },
+    { candidates: [{ content: { role: 'model', parts: [{ text: 'son', thought: true, thoughtSignature: 'sig' }, { text: 'ans' }] } }] },
+    { candidates: [{ content: { role: 'model', parts: [{ text: 'wer' }] } }] },
+  ]);
+
+  const response = await collectGeminiStream(stream, new AbortController().signal);
+  assert.deepEqual(response.candidates[0].content.parts, [
+    { text: 'reason', thought: true, thoughtSignature: 'sig' },
+    { text: 'answer' },
+  ]);
 });
 
 test('collectGeminiStream aborts an active stream', async () => {
