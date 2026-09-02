@@ -22,6 +22,11 @@ import {
     convertToOpenAIFormat as convertToOpenAIFormatProvider,
     convertToOpenAIResponsesFormat as convertToOpenAIResponsesFormatProvider,
 } from './llmProviders/openai';
+import {
+    collectGeminiStream as collectGeminiStreamProvider,
+    convertJsonSchemaToGeminiSchema,
+    convertToGeminiFormat,
+} from './llmProviders/gemini';
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
@@ -961,9 +966,11 @@ export function redactProviderImagesForLog(value: any): any {
     for (const [key, entry] of Object.entries(value)) {
         if (key === 'data'
             && typeof entry === 'string'
-            && value.type === 'base64'
-            && typeof value.media_type === 'string'
-            && value.media_type.startsWith('image/')) {
+            && ((value.type === 'base64'
+                && typeof value.media_type === 'string'
+                && value.media_type.startsWith('image/'))
+              || (typeof (value.mimeType || value.mime_type) === 'string'
+                && (value.mimeType || value.mime_type).startsWith('image/')))) {
             result[key] = '[image omitted from diagnostics]';
         } else {
             result[key] = redactProviderImagesForLog(entry);
@@ -1854,6 +1861,7 @@ type ConcreteRequestPlan = {
     compressionHeaders: Record<string, string>;
     useOpenAIResponsesApi: boolean;
     useOpenAIChatCompletionsApi: boolean;
+    useGeminiApi: boolean;
     useStreamingApi: boolean;
 };
 
@@ -1894,6 +1902,19 @@ function applyFirstClassEffort(
     }
     if (openaiRequestApi === 'chat-completions') {
         data.reasoning_effort = effort;
+        return;
+    }
+
+    if (providerType === 'gemini') {
+        // Gemini model generations expose different non-zero thinking controls
+        // (budget for 2.5, level for 3.x). Keep the model/server default for
+        // non-zero effort, while `none` has one portable native meaning.
+        if (effort === 'none') {
+            data.generationConfig = {
+                ...(isPlainRequestObject(data.generationConfig) ? data.generationConfig : {}),
+                thinkingConfig: { thinkingBudget: 0 },
+            };
+        }
         return;
     }
 
@@ -2066,7 +2087,8 @@ function buildConcreteRequestPlan(options: {
     const openaiRequestApi = getOpenAIRequestApi(providerType);
     const useOpenAIResponsesApi = openaiRequestApi === 'responses';
     const useOpenAIChatCompletionsApi = openaiRequestApi === 'chat-completions';
-    const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatCompletionsApi;
+    const useGeminiApi = providerType === 'gemini';
+    const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatCompletionsApi || useGeminiApi;
     const webSearchConfig = useOpenAIResponsesApi
         && request.purpose !== 'compact-plan'
         && request.purpose !== 'setup-test'
@@ -2157,6 +2179,32 @@ function buildConcreteRequestPlan(options: {
                 },
             })) : undefined,
         };
+    } else if (useGeminiApi) {
+        messages = convertToGeminiFormat(providerContents);
+        const nativeModelName = modelName.startsWith('models/') ? modelName.slice('models/'.length) : modelName;
+        url = `${baseUrl.replace(/\/+$/u, '')}/models/${encodeURIComponent(nativeModelName)}:streamGenerateContent?alt=sse`;
+        headers = {
+            'Content-Type': 'application/json',
+            ...(apiKey ? { 'x-goog-api-key': apiKey } : {}),
+            'user-agent': 'foxwarm/1.0',
+        };
+        data = {
+            contents: messages,
+            systemInstruction: request.systemPrompt?.trim()
+                ? { parts: [{ text: request.systemPrompt }] }
+                : undefined,
+            tools: availableToolDefinitions.length > 0 ? [{
+                functionDeclarations: availableToolDefinitions.map(fd => ({
+                    name: fd.name,
+                    description: fd.description,
+                    parameters: convertJsonSchemaToGeminiSchema(fd.parameters),
+                })),
+            }] : undefined,
+            toolConfig: availableToolDefinitions.length > 0
+                ? { functionCallingConfig: { mode: 'AUTO' } }
+                : undefined,
+            generationConfig: { maxOutputTokens: MAX_OUTPUT },
+        };
     } else {
         // Preserve current custom-provider behavior: any concrete provider type
         // not recognized as OpenAI-compatible uses Anthropic serialization.
@@ -2222,6 +2270,7 @@ function buildConcreteRequestPlan(options: {
         compressionHeaders,
         useOpenAIResponsesApi,
         useOpenAIChatCompletionsApi,
+        useGeminiApi,
         useStreamingApi,
     };
 }
@@ -2329,6 +2378,43 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
                 }
             }
         }
+    } else if (plan.useGeminiApi) {
+        const outputParts = resp?.candidates?.[0]?.content?.parts;
+        if (Array.isArray(outputParts)) {
+            for (let index = 0; index < outputParts.length; index += 1) {
+                const outputPart = outputParts[index];
+                const signature = typeof outputPart?.thoughtSignature === 'string' && outputPart.thoughtSignature
+                    ? { providerMeta: { signature: outputPart.thoughtSignature } }
+                    : {};
+                if (typeof outputPart?.text === 'string') {
+                    if (outputPart.thought === true) {
+                        allParts.push({ thinking: outputPart.text, ...signature });
+                    } else {
+                        responseText += outputPart.text;
+                        allParts.push({ text: outputPart.text, ...signature });
+                    }
+                } else if (outputPart?.functionCall) {
+                    const rawArgs = outputPart.functionCall.args;
+                    const parsedArgs = typeof rawArgs === 'string'
+                        ? parseFunctionCallArgs(rawArgs)
+                        : { args: isPlainRequestObject(rawArgs) ? rawArgs : {} };
+                    const callId = outputPart.functionCall.id
+                        || `gemini_${crypto.createHash('sha256').update(`${outputPart.functionCall.name || ''}:${JSON.stringify(rawArgs || {})}:${index}`).digest('hex').slice(0, 20)}`;
+                    allParts.push({
+                        functionCall: { id: callId, name: outputPart.functionCall.name, ...parsedArgs },
+                        ...signature,
+                    });
+                } else if (outputPart?.inlineData?.data) {
+                    allParts.push({
+                        inlineData: {
+                            mimeType: outputPart.inlineData.mimeType || outputPart.inlineData.mime_type || 'application/octet-stream',
+                            data: outputPart.inlineData.data,
+                        },
+                        ...signature,
+                    });
+                }
+            }
+        }
     } else if (Array.isArray(resp?.content)) {
         for (const rawBlock of resp.content) {
             const block = rawBlock as AnthropicContentBlock;
@@ -2355,8 +2441,9 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
     }
 
     const toolCalls = allParts.filter(part => !!part.functionCall).map(part => part.functionCall!);
-    if (!responseText.trim() && toolCalls.length === 0) {
-        throw new ConcreteAttemptFailure('Model response contained no non-whitespace content or tool call', {
+    const hasInlineOutput = allParts.some(part => !!part.inlineData);
+    if (!responseText.trim() && toolCalls.length === 0 && !hasInlineOutput) {
+        throw new ConcreteAttemptFailure('Model response contained no non-whitespace content, tool call, or inline output', {
             kind: 'response-error',
             retryable: true,
             countable: true,
@@ -2389,6 +2476,26 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
             inputTokens: resp.usage.prompt_tokens - cached,
             outputTokens: resp.usage.completion_tokens,
             cachedTokens: cached,
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+        } : null;
+    } else if (plan.useGeminiApi) {
+        const usageMetadata = resp?.usageMetadata;
+        const cachedTokens = Number.isFinite(usageMetadata?.cachedContentTokenCount)
+            ? usageMetadata.cachedContentTokenCount
+            : 0;
+        const promptTokens = Number.isFinite(usageMetadata?.promptTokenCount)
+            ? usageMetadata.promptTokenCount
+            : 0;
+        const candidateTokens = Number.isFinite(usageMetadata?.candidatesTokenCount)
+            ? usageMetadata.candidatesTokenCount
+            : 0;
+        const reasoningTokens = Number.isFinite(usageMetadata?.thoughtsTokenCount)
+            ? usageMetadata.thoughtsTokenCount
+            : undefined;
+        usage = usageMetadata ? {
+            inputTokens: Math.max(0, promptTokens - cachedTokens),
+            outputTokens: candidateTokens + (reasoningTokens || 0),
+            cachedTokens,
             ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
         } : null;
     } else {
@@ -2624,7 +2731,9 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                     };
                     resp = plan.useOpenAIResponsesApi
                         ? await collectOpenAIResponsesStreamProvider(response.data, abortController.signal, streamCollectOptions)
-                        : await collectOpenAIChatCompletionsStreamProvider(response.data, abortController.signal, streamCollectOptions);
+                        : plan.useOpenAIChatCompletionsApi
+                            ? await collectOpenAIChatCompletionsStreamProvider(response.data, abortController.signal, streamCollectOptions)
+                            : await collectGeminiStreamProvider(response.data, abortController.signal, streamCollectOptions);
                 } else {
                     resp = response.data;
                 }

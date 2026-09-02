@@ -6,7 +6,7 @@ The real-time streaming flow from LLM token generation through server-side event
 
 ## Steps
 
-1. The LLM adapter initiates a streaming request to the provider (OpenAI SSE stream or Anthropic equivalent).
+1. The LLM adapter initiates a request to the provider (OpenAI or Gemini SSE stream, or the Anthropic response path).
 2. `collectOpenAIResponsesStream` or `collectOpenAIChatCompletionsStream` reassembles the SSE chunks, invoking a progress callback on each delta and optional raw-capture callbacks for decoded chunks / complete SSE blocks.
 3. `createModelStreamEventEmitter` throttles these deltas and emits `model-stream-update` `SessionStreamEvent` objects into the session's event bus.
 4. The WebUI channel multiplexes current-browser list and canonical per-session subscriptions over one authenticated `/api/webui/stream` WebSocket per browsing context. Legacy per-session and global SSE routes remain compatibility surfaces.

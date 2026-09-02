@@ -96,7 +96,7 @@ Provides utilities for serializing/parsing tool call arguments, guarding oversiz
 ## Integration
 
 - The output guard is called by `executeTools` in the LLM layer before tool results are appended to session history, ensuring model context stays within token limits.
-- The guard preserves the structured tool-result object shape; provider serializers later call `formatToolResponsePayload()` to produce string content for OpenAI Chat Completions, OpenAI Responses function_call_output, and Anthropic tool_result blocks.
+- The guard preserves the structured tool-result object shape; provider serializers later call `formatToolResponsePayload()` to produce string content for OpenAI Chat Completions, OpenAI Responses function_call_output, Anthropic tool_result blocks, and Gemini function responses.
 - Image normalization feeds into the message part system, enabling downstream image tools (`image_crop`, `image_write_to_file`) to reference prior tool images by ID.
 - Durable image storage and provider/WebUI boundaries are canonical in [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - `stringifyFunctionCallArgs` is used by OpenAI format converters to serialize tool calls for the provider API, preserving exact raw text when available.

@@ -76,7 +76,7 @@ HTTP 400, 413, and 422 are terminal and do not affect route health unless the bo
 
 Abort, stop, and cancellation terminate immediately and do not count as target health failures.
 
-Across OpenAI Chat Completions, OpenAI Responses, Anthropic, and compatible concrete providers, a successful model turn must contain non-whitespace assistant content or at least one tool call. Thinking/reasoning alone is not content. A tool-call-only response is valid. An empty, whitespace-only, or reasoning-only response is a retryable `response-error` and never creates fake model-visible `Error:` history.
+Across OpenAI Chat Completions, OpenAI Responses, Anthropic, Gemini, and compatible concrete providers, a successful model turn must contain non-whitespace assistant content, at least one tool call, or provider inline output such as a generated image. Thinking/reasoning alone is not content. A tool-call-only or inline-output-only response is valid. An empty, whitespace-only, or reasoning-only response is a retryable `response-error` and never creates fake model-visible `Error:` history.
 
 ## Surfaces and attribution
 
@@ -126,7 +126,7 @@ There is one outer LLM attempt loop, with six total attempts by default. Each vi
 
 [2026-08-11] Model effort is one provider-neutral request setting with canonical values `none`, `low`, `medium`, `high`, `xhigh`, and `max`. Concrete provider/model configuration owns `{ allowed, default }`; omission allows all values and defaults to `high`. A model-level allowed list replaces the provider list, while a virtual model derives the ordered union of its concrete leaves and cannot define its own request override.
 
-The requested effort is captured once per outer request. Each physical attempt uses it only when the selected concrete leaf allows it, otherwise that leaf's default is used; omission also uses the leaf default. OpenAI Responses maps to `reasoning.effort`, OpenAI Chat Completions to `reasoning_effort`, and Anthropic-format providers to `output_config.effort`. `none` uses OpenAI's native value and disables Anthropic thinking while omitting Anthropic output effort. First-class mapping is applied after expanded `extraFields` without mutating configuration, so it is authoritative over known effort paths while preserving unrelated custom fields. The former global numeric thinking budget is removed.
+The requested effort is captured once per outer request. Each physical attempt uses it only when the selected concrete leaf allows it, otherwise that leaf's default is used; omission also uses the leaf default. OpenAI Responses maps to `reasoning.effort`, OpenAI Chat Completions to `reasoning_effort`, and Anthropic-format providers to `output_config.effort`. `none` uses OpenAI's native value, disables Anthropic thinking, and maps to Gemini's portable zero thinking budget. Non-zero Gemini effort leaves the selected model's native policy unchanged because model generations expose incompatible budget/level controls. First-class mapping is applied after expanded `extraFields` without mutating configuration, so it is authoritative over known effort paths while preserving unrelated custom fields. The former global numeric thinking budget is removed.
 
 [2026-08-11] A Session may persist optional raw `effort` and `childEffortDefault` overrides. Absence remains canonical unset/default and is never materialized from a concrete model's configured default; `none` is an explicit stored value. Current and prospective-child model/effort settings are normalized atomically from one models-config snapshot. Explicit effort must belong to the selected concrete allowed set or virtual union; a model-only change preserves a compatible stored effort and clears an incompatible one in the same persistence transaction. Existing persisted effort that becomes unsupported after configuration changes remains readable and request-time fallback stays leaf-local until a later settings mutation canonicalizes it.
 
@@ -138,7 +138,7 @@ Failover health is process-local, configuration-fingerprinted, generation-scoped
 
 ### D-model-routing-usable-response
 
-A provider success requires non-whitespace assistant content or a tool call. Reasoning-only and empty responses are retryable response failures across all provider protocols.
+A provider success requires non-whitespace assistant content, a tool call, or provider inline output such as a generated image. Reasoning-only and empty responses are retryable response failures across all provider protocols.
 
 ### D-model-routing-concrete-attribution
 

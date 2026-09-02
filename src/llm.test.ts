@@ -73,6 +73,21 @@ function makeResponsesStream(text = 'ok', usage: Record<string, unknown> = {
   return stream;
 }
 
+function makeGeminiStream(text = 'ok', usageMetadata: Record<string, unknown> = {
+  promptTokenCount: 1,
+  candidatesTokenCount: 1,
+}): PassThrough {
+  const stream = new PassThrough();
+  process.nextTick(() => {
+    stream.write(`data: ${JSON.stringify({
+      candidates: [{ content: { role: 'model', parts: [{ text }] }, finishReason: 'STOP' }],
+      usageMetadata,
+    })}\n\n`);
+    stream.end();
+  });
+  return stream;
+}
+
 function makeResponsesWebSearchStream(): PassThrough {
   const citation = {
     type: 'url_citation',
@@ -754,6 +769,7 @@ test('all provider protocols hydrate canonical image refs only in outbound paylo
     responses: { providerKey: 'fixture', providerType: 'openai-responses', baseUrl: 'https://fixture.example', apiKey: '', model: 'responses', extraFields: {}, extraHeaders: {} },
     chat: { providerKey: 'fixture', providerType: 'openai-completions', baseUrl: 'https://fixture.example', apiKey: '', model: 'chat', extraFields: {}, extraHeaders: {} },
     anthropic: { providerKey: 'fixture', providerType: 'anthropic', baseUrl: 'https://fixture.example', apiKey: '', model: 'claude', extraFields: {}, extraHeaders: {} },
+    gemini: { providerKey: 'fixture', providerType: 'gemini', baseUrl: 'https://fixture.example/v1beta', apiKey: '', model: 'gemini', extraFields: {}, extraHeaders: {} },
   } as const;
 
   try {
@@ -778,8 +794,15 @@ test('all provider protocols hydrate canonical image refs only in outbound paylo
       };
       await requestLlmOnce({ contents: canonical, systemPrompt: '', modelEntryOverride: models.anthropic as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
     });
+    await t.test('Gemini generateContent', async () => {
+      (axios as any).post = async (_url: string, data: any) => {
+        captured.push(data);
+        return { status: 200, statusText: 'OK', headers: {}, data: makeGeminiStream() };
+      };
+      await requestLlmOnce({ contents: canonical, systemPrompt: '', modelEntryOverride: models.gemini as any, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false });
+    });
 
-    assert.equal(captured.length, 3);
+    assert.equal(captured.length, 4);
     for (const payload of captured) {
       assert.equal(JSON.stringify(payload).includes(imageBase64), true);
       assert.equal(JSON.stringify(payload).includes('provider_call'), true);

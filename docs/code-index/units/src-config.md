@@ -89,7 +89,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - A single-model provider gets both provider-key and provider/model lookup entries; multi-model providers use provider/model keys.
 - Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly, and `webSearch` settings merge from provider to concrete model override.
 - First-class `effort` uses `{ allowed, default }`. Omission allows `none`, `low`, `medium`, `high`, `xhigh`, and `max` with `high` as the default. A model-level `allowed` list replaces the provider list; omitted model fields inherit provider values, and the resulting default must be allowed. Virtual entries cannot configure effort directly and expose the canonical union of reachable concrete levels.
-- `openai`, `openai-responses`, and `openai-completions` receive OpenAI defaults; `anthropic` receives Anthropic defaults; custom types must provide their own base URL/protocol-compatible settings.
+- `openai`, `openai-responses`, and `openai-completions` receive OpenAI defaults; `anthropic` receives Anthropic defaults; `gemini` defaults to `https://generativelanguage.googleapis.com/v1beta`; custom types must provide their own base URL/protocol-compatible settings.
 - Invalid provider objects, model lists, and cross-strategy fields fail with provider-qualified validation errors.
 - A non-empty provider string is normalized at expansion to one `session-hash` target and then follows the canonical leaf-only virtual routing contract; it is not retained as a separate runtime alias type.
 - `session-hash` and `failover` entries resolve strict concrete lookup keys, safe context/async-compact values, and a stable full-leaf configuration fingerprint. Their schema and semantics are canonical in [model routing](../threads/model-routing.md).
@@ -137,7 +137,7 @@ The mutable models configuration has one active location: `<data-root>/state/mod
 
 ### D-config-default-max-output
 
-[2026-08-18] `llm.maxOutput` remains the single application-level provider output-token override and defaults to `32768` when omitted. The default applies as `max_output_tokens` for OpenAI Responses requests and `max_tokens` for OpenAI Chat Completions and Anthropic-compatible requests; provider/model `extraFields` retain their existing later override position.
+[2026-08-18, updated 2026-09-02] `llm.maxOutput` remains the single application-level provider output-token override and defaults to `32768` when omitted. The default applies as `max_output_tokens` for OpenAI Responses, `max_tokens` for OpenAI Chat Completions and Anthropic-compatible requests, and `generationConfig.maxOutputTokens` for Gemini; provider/model `extraFields` retain their existing later override position.
 
 ## Canonical ownership
 
