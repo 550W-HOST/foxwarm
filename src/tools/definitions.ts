@@ -474,11 +474,11 @@ Example:
         {
             name: 'set_goal',
             defaultInject: true,
-            description: 'Set or clear the long-term goal reminder for the current session. The goal is preserved across session compaction so the session can retain its long-horizon objective even when older context is summarized.',
+            description: 'Set or clear a long-term goal reminder for the current session. Use this only when the current session itself expects to perform many tool calls or long-running work for this task and may be compacted before completion. Do not use it for short tasks, tasks requiring only a few tool calls, or when most work will be delegated to child sessions. It affects only the current session and does not set goals for child sessions. The goal is preserved across this session\'s compaction.',
             parameters: {
                 type: 'object',
                 properties: {
-                    goal: { type: 'string', description: 'Goal text. Use empty string to clear.' },
+                    goal: { type: 'string', description: 'Long-horizon objective for this current session. Use empty string to clear.' },
                     remindEvery: { type: 'number', description: 'Optional. Remind after this many later non-reminder session messages. If omitted, reuse the current goal setting or default to 20.' },
                     clear: { type: 'boolean', description: 'If true, clear the current session goal reminder.' }
                 }
