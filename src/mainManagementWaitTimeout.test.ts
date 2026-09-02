@@ -17,6 +17,8 @@ import {
   shutdownMainManagementTools,
 } from './mainManagementTools';
 import type { Session } from './types';
+import { issueRemoteExecCompletionCapability, setNodeEventCapabilitySecretForTests } from './nodes/sessionEventCapability';
+import { activateRemoteExecLivenessClaim, reserveRemoteExecIdentity, resetRemoteExecLivenessClaimsForTests } from './nodes/remoteExecLiveness';
 
 function session(id: string): Session {
   return { id, agent: 'main' } as Session;
@@ -71,17 +73,32 @@ test('bound reverse handler rejects wrong source before lookup or mutation', asy
   const originalCreate = timers.createWaitTimeoutTimer;
   let timerWrites = 0;
   sessionManager.getAllSessions().set('owned', session('owned'));
+  setNodeEventCapabilitySecretForTests(Buffer.alloc(32, 31));
+  const completionCapability = issueRemoteExecCompletionCapability('remote-node', 'owned', 'steady-ibis');
+  assert.equal(reserveRemoteExecIdentity({
+    authenticatedNodeId: 'remote-node', canonicalSessionId: 'owned', sessionIdentityIds: ['owned'],
+    agentName: 'main', execId: 'steady-ibis', completionCapability,
+  }), true);
+  activateRemoteExecLivenessClaim({
+    authenticatedNodeId: 'remote-node', originalSessionId: 'owned', execId: 'steady-ibis', completionCapability,
+  });
   (timers as any).createWaitTimeoutTimer = async () => { timerWrites += 1; return { id: 'timer' }; };
   try {
     await assert.rejects(() => client.call('execute', { sourceSessionId: 'wrong', operation: 'list_agents', args: {} }),
       { code: 'MAIN_MANAGEMENT_SOURCE_MISMATCH' });
     await assert.rejects(() => client.call('scheduleWaitTimeout', { sourceSessionId: 'wrong', waitId: 'w', timeoutSeconds: 1 }),
       { code: 'MAIN_MANAGEMENT_SOURCE_MISMATCH' });
+    await assert.rejects(() => client.call('validateWaitExecIds', { sourceSessionId: 'wrong', execIds: ['steady-ibis'] }),
+      { code: 'MAIN_MANAGEMENT_SOURCE_MISMATCH' });
     assert.equal(timerWrites, 0);
     assert.deepEqual(await client.call('scheduleWaitTimeout', { sourceSessionId: 'owned', waitId: 'w', timeoutSeconds: 1 }),
       { scheduled: true, waitId: 'w' });
     assert.equal(timerWrites, 1);
+    assert.deepEqual(await client.call('validateWaitExecIds', { sourceSessionId: 'owned', execIds: ['steady-ibis', 'unknown-exec'] }),
+      { activeExecIds: ['steady-ibis'] });
   } finally {
+    resetRemoteExecLivenessClaimsForTests();
+    setNodeEventCapabilitySecretForTests();
     sessionManager.getAllSessions().delete('owned');
     (timers as any).createWaitTimeoutTimer = originalCreate;
     await transport.drain(); transport.close();

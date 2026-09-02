@@ -17,7 +17,7 @@ import {
   buildSendFileResult,
 } from './helpers';
 import * as sessionManager from '../sessionManager';
-import { armMainWaitLiveness, scheduleMainWaitTimeout, validateMainWaitSessions } from '../mainManagementTools';
+import { armMainWaitLiveness, scheduleMainWaitTimeout, validateMainWaitExecIds, validateMainWaitSessions } from '../mainManagementTools';
 import { logger } from '../common';
 import { requireNotIsolated, checkChannelPermission, checkSendFilePermission } from '../isolatedCheck';
 import { COMPACT_PLAN_TOOL_NAME } from '../session/compactPlan';
@@ -128,10 +128,17 @@ export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
     if (waitExecIds) {
       const active = ctx.execRuntime?.listRunningExecs() || [];
       const queued = new Set((ctx.session?.queue || []).map((item: any) => item?.execId).filter((id: unknown): id is string => typeof id === 'string'));
+      const unresolved: string[] = [];
       for (const execId of waitExecIds) {
         const entry = active.find(candidate => candidate.id === execId);
         const owned = entry && entry.sessionId === ctx.sessionId && entry.agentName === (ctx.session?.agent || 'main');
-        if (!owned && !queued.has(execId)) {
+        if (!owned && !queued.has(execId)) unresolved.push(execId);
+      }
+      const remoteActive = unresolved.length
+        ? new Set((await validateMainWaitExecIds({ sourceSessionId: ctx.sessionId, execIds: unresolved })).activeExecIds)
+        : new Set<string>();
+      for (const execId of unresolved) {
+        if (!remoteActive.has(execId)) {
           throw new Error(`waitExecIds entry \`${execId}\` is not an accessible active exec owned by this Session/Agent and has no queued completion. Use the exact execId, never a PID, log path, or command text.`);
         }
       }

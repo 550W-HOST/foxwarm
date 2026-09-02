@@ -104,6 +104,7 @@ export interface StartPersistentExecOptions {
   cwd?: unknown;
   sessionCwd?: unknown;
   completionCapability?: string;
+  onProcessStarted?: () => void;
 }
 
 interface ResolvedExecPaths {
@@ -704,6 +705,7 @@ export class PersistentExecManager {
         detached: platform !== 'win32',
         windowsHide: true,
       });
+      options.onProcessStarted?.();
     } catch (err: any) {
       if (err?.code === 'ENOENT') {
         throw new Error(`Failed to start exec on node \`${nodeId}\`: ${err.message}. Working directory was validated as \`${initialCwd}\`.`);

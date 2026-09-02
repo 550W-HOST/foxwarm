@@ -286,7 +286,7 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
           nodesManager.handleToolResponse(data.callId, data.result);
           break;
         case 'tool_call_error':
-          nodesManager.handleToolError(data.callId, data.error);
+          nodesManager.handleToolError(data.callId, data.error, typeof data.execStarted === 'boolean' ? data.execStarted : undefined);
           break;
         case 'file_read_response':
           nodesManager.handleFileReadResponse(data.transferId, data.file);
@@ -338,6 +338,21 @@ export function registerNodeWebSocket(httpServer: HttpServer, nodeToken: string)
               requestId: data.requestId,
               error: error?.message || String(error),
             }));
+          }
+          break;
+        case 'remote_exec_background':
+          try {
+            if (typeof data.sessionId !== 'string' || typeof data.execId !== 'string'
+              || typeof data.completionCapability !== 'string') {
+              throw new Error('Invalid remote_exec_background message.');
+            }
+            nodesManager.registerRemoteExecBackground(nodeId || authenticatedNodeId || 'unknown-node', {
+              sessionId: data.sessionId,
+              execId: data.execId,
+              completionCapability: data.completionCapability,
+            });
+          } catch (error: any) {
+            logger.warn({ err: error, nodeId: nodeId || authenticatedNodeId }, 'Rejected remote background exec liveness registration');
           }
           break;
         case 'session_list_request': {

@@ -38,7 +38,7 @@ Tests the `wait` tool functionality, including timeout behavior, `waitAllSession
 
 ## Behavior
 
-- Validates required declared-source semantics, all/any mutual exclusion, existence/self/access resolution, exact exec ownership/queued completion identity, the fallback rename, and rejection of old `timeoutSeconds`.
+- Validates required declared-source semantics, all/any mutual exclusion, existence/self/access resolution, exact local/Worker exec ownership, Main-verified remote background liveness, queued completion identity, the fallback rename, and rejection of old `timeoutSeconds`.
 - Verifies that wait timeouts queue a system event and clear wait metadata
 - Confirms the compact-commit queue item is wait-neutral (does not cancel the wait); compact planning itself is no longer queued
 - Tests that stop signals during tool execution prevent stale compaction triggers
@@ -51,7 +51,7 @@ Tests the `wait` tool functionality, including timeout behavior, `waitAllSession
 - Confirms legacy persisted waits remain readable while current source-less/reason-only calls reject.
 - Declared dependency waits use transition-driven quiescence diagnostics. Diagnostic model-wake admission is process-wide and capped at four Sessions until each admitted Session settles, with a periodic settled-state recheck for a missing terminal notification; startup reconstruction and ordinary dependency transitions share that bound.
 - The canonical wait owner exposes a passed-Session primitive with an explicit persistence callback. `tool_wait` uses it only for an exact trusted current owner; no-hook and mismatched callers retain the ID-based SessionManager path. Mutation, normalization, deferred-wait rejection, and unconditional persistence ordering are identical.
-- Timeout waits persist the wait first, then call the separate fixed `main-management-tools@1.scheduleWaitTimeout` method with only source ID, wait ID, and positive finite seconds. No-timeout waits require no Main service call.
+- Timeout waits persist the wait first, then call the separate fixed `main-management-tools.scheduleWaitTimeout` method with only source ID, wait ID, and positive finite seconds. No-timeout waits require no timeout-scheduling call. For `waitExecIds`, the exact owner first checks its process-local active execs and queued completions, then sends only unresolved exact IDs through `validateWaitExecIds`; Main returns active authenticated remote records bound to the current canonical Session/Agent or one of that Session's bounded aliases, preserving supported local rename semantics.
 - Confirms session clear removes an armed activity wait, and executor coverage verifies that an explicit wait whose stop is suppressed by a sibling error clears only its own token. Flagged handoff integration is covered by `src-tools-session-agent` under [D-pipeline-handoff-wait](../threads/message-processing-pipeline.md#d-pipeline-handoff-wait).
 
 ## Integration

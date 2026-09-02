@@ -11,6 +11,7 @@ import { logger } from './common';
 import { ChannelFile, ChannelSendFileOptions } from './channel';
 import * as llm from './llm';
 import { RpcError } from './rpc';
+import { clearRemoteExecStateForSession, rebindRemoteExecSessionAgent } from './nodes/remoteExecLiveness';
 import { buildChildCompletionInstruction } from './session/childSessionReminder';
 import { cloneQueueItem, getManagedSessionState, isManagedSessionLeaseExpired, ManagedSessionState, setManagedSessionState, shouldRouteQueueItemToManagedInbox } from './session/managedState';
 import { applyAcceptedExternalEventReceiptPlan, planAcceptedExternalEventReceipt, type AcceptedExternalEventReceiptPlan } from './session/externalEventReceipts';
@@ -1525,6 +1526,7 @@ export async function moveSessionToTarget(options: {
     assertSessionDestructiveMutationAllowed([sourceSession.id, requestedParentSessionId], 'move or rename');
     return sessionAgentOps.moveSessionToTarget(options, getSessionAgentOpsDeps(true));
   });
+  rebindRemoteExecSessionAgent([result.oldSessionId, ...result.aliases], result.targetAgent);
 
   let parentSessionId = (await getExistingSession(result.targetSessionId))?.parentSessionId || undefined;
   let parentUpdateError: string | undefined;
@@ -3177,6 +3179,9 @@ export async function deleteSession(sessionId: string, owningClaimId?: string): 
   if (!sessions.has(sessionId)) {
     return false;
   }
+
+  const deletingSession = sessions.get(sessionId)!;
+  clearRemoteExecStateForSession([deletingSession.id, ...(deletingSession.aliases || [])]);
 
   sessionHistory.discardPendingCompactWork(sessionId);
   
