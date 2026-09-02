@@ -38,6 +38,7 @@ export function convertToGeminiFormat(contents: Message[]): any[] {
   for (const message of contents) {
     const role = message.role === 'model' ? 'model' : 'user';
     const parts: any[] = [];
+    const leadingFunctionResponses: any[] = [];
     const imagePartsByToolUseId = new Map<string, MessagePart[]>();
 
     if (message.role === 'tool') {
@@ -73,14 +74,18 @@ export function convertToGeminiFormat(contents: Message[]): any[] {
         const images = imagePartsByToolUseId.get(toolUseId) || [];
         const timingPrefix = formatPreviousLlmRequestPrefix(part);
         const responseText = appendImageGuidanceText(images, formatToolResponsePayload(part.functionResponse.response || {}));
-        if (timingPrefix) parts.push({ text: timingPrefix });
-        parts.push({
+        // Native Gemini accepts function responses among ordinary user parts,
+        // but Claude-backed Gemini gateways preserve Anthropic's stronger
+        // requirement: every response for the preceding function calls must
+        // appear before any text or image in the immediately following turn.
+        leadingFunctionResponses.push({
           functionResponse: {
             ...(toolUseId !== 'unknown' ? { id: toolUseId } : {}),
             name: part.functionResponse.name,
             response: normalizeFunctionResponse(responseText),
           },
         });
+        if (timingPrefix) parts.push({ text: timingPrefix });
         for (const image of images) {
           parts.push({
             inlineData: {
@@ -101,14 +106,26 @@ export function convertToGeminiFormat(contents: Message[]): any[] {
       }
     }
 
-    if (parts.length === 0) {
+    const orderedParts = message.role === 'tool'
+      ? [...leadingFunctionResponses, ...parts]
+      : parts;
+
+    if (orderedParts.length === 0) {
       const legacyContent = (message as Message & { content?: unknown }).content;
-      parts.push({ text: typeof legacyContent === 'string' && legacyContent ? legacyContent : ' ' });
+      orderedParts.push({ text: typeof legacyContent === 'string' && legacyContent ? legacyContent : ' ' });
     }
 
     const previous = result[result.length - 1];
-    if (previous?.role === role) previous.parts.push(...parts);
-    else result.push({ role, parts });
+    if (previous?.role === role) {
+      if (message.role === 'tool' && leadingFunctionResponses.length > 0) {
+        let insertAt = 0;
+        while (previous.parts[insertAt]?.functionResponse) insertAt += 1;
+        previous.parts.splice(insertAt, 0, ...leadingFunctionResponses);
+        previous.parts.push(...parts);
+      } else {
+        previous.parts.push(...orderedParts);
+      }
+    } else result.push({ role, parts: orderedParts });
   }
 
   return result;

@@ -54,11 +54,42 @@ test('convertToGeminiFormat preserves text, thought signatures, tools and images
     functionCall: { id: 'call-1', name: 'read', args: { filePath: 'a' } },
     thoughtSignature: 'call-sig',
   });
-  assert.match(converted[2].parts[0].text, /prevLLMReqTime="1\.2s"/);
-  assert.equal(converted[2].parts[1].functionResponse.id, 'call-1');
-  assert.equal(converted[2].parts[1].functionResponse.name, 'read');
-  assert.match(converted[2].parts[1].functionResponse.response.output, /done/);
+  assert.equal(converted[2].parts[0].functionResponse.id, 'call-1');
+  assert.equal(converted[2].parts[0].functionResponse.name, 'read');
+  assert.match(converted[2].parts[0].functionResponse.response.output, /done/);
+  assert.match(converted[2].parts[1].text, /prevLLMReqTime="1\.2s"/);
   assert.deepEqual(converted[2].parts[2], { inlineData: { mimeType: 'image/jpeg', data: 'xyz' } });
+});
+
+test('convertToGeminiFormat keeps all function responses ahead of timing and interruption text', () => {
+  const converted = convertToGeminiFormat([
+    {
+      role: 'model',
+      parts: [
+        { functionCall: { id: 'call-a', name: 'a', args: {} } },
+        { functionCall: { id: 'call-b', name: 'b', args: {} } },
+      ],
+    },
+    { role: 'user', parts: [{ system: 'interruption' }] },
+    {
+      role: 'tool',
+      parts: [
+        {
+          functionResponse: {
+            tool_use_id: 'call-a', name: 'a', response: { output: 'A' },
+            previousLlmRequest: { time: '2026-09-02T00:00:00Z', durationMs: 1000 },
+          },
+        },
+        { functionResponse: { tool_use_id: 'call-b', name: 'b', response: { output: 'B' } } },
+      ],
+    },
+  ]);
+
+  assert.equal(converted.length, 2);
+  assert.deepEqual(converted[1].parts.slice(0, 2).map((part: any) => part.functionResponse?.id), ['call-a', 'call-b']);
+  assert.ok(converted[1].parts.slice(2).every((part: any) => !part.functionResponse));
+  assert.match(converted[1].parts[2].text, /kind="system"/);
+  assert.match(converted[1].parts[3].text, /prevLLMReqTime="1\.0s"/);
 });
 
 test('convertToGeminiFormat merges adjacent provider roles without mutating source', () => {
