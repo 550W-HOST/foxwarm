@@ -5,6 +5,7 @@ import './index.css'
 import App from './App'
 import { EmbeddedAgentsApp, EmbeddedChatApp, EmbeddedSetupApp, EmbeddedSidebarApp } from './EmbeddedWebUiApp'
 import { parseFoxwarmEmbeddedTarget } from './embeddedWebUi'
+import { initializeThemeRuntime } from './theme/runtime'
 
 function syncViewportHeight() {
   const vv = window.visualViewport
@@ -16,6 +17,7 @@ function syncViewportHeight() {
 }
 
 syncViewportHeight()
+initializeThemeRuntime()
 
 window.visualViewport?.addEventListener('resize', syncViewportHeight)
 window.visualViewport?.addEventListener('scroll', syncViewportHeight)

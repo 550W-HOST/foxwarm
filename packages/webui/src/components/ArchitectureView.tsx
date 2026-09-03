@@ -69,20 +69,20 @@ const formatTokenCount = (value: number | undefined) => {
 
 const renderMetaBadge = (label: string, tone: 'default' | 'active' | 'warning' | 'muted' = 'default') => {
   const toneClasses = {
-    default: 'bg-gray-100 text-gray-700 dark:bg-gray-700/70 dark:text-gray-200',
-    active: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200',
-    warning: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200',
-    muted: 'bg-gray-50 text-gray-500 dark:bg-gray-800 dark:text-gray-400',
+    default: 'bg-fw-neutral-surface text-fw-text dark:bg-fw-surface-raised/70 dark:text-fw-text-strong',
+    active: 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent',
+    warning: 'bg-fw-warning-surface text-fw-warning dark:bg-fw-warning-surface-strong/40 dark:text-fw-warning',
+    muted: 'bg-fw-surface-sunken text-fw-text-muted dark:bg-fw-surface dark:text-fw-text-muted',
   }
   return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${toneClasses[tone]}`}>{label}</span>
 }
 
 const getStatusTone = (session: Session) => {
   const state = getSessionRuntimeStateName(session)
-  if (state === 'requesting-model') return 'bg-blue-500'
-  if (state === 'running-tool') return 'bg-violet-500'
-  if (state === 'waiting') return 'bg-amber-500'
-  return 'bg-gray-300 dark:bg-gray-600'
+  if (state === 'requesting-model') return 'bg-fw-accent'
+  if (state === 'running-tool') return 'bg-fw-special'
+  if (state === 'waiting') return 'bg-fw-warning'
+  return 'bg-fw-border-strong dark:bg-fw-text'
 }
 
 function SummaryMetric({ label, value, detail, icon, active, onClick }: {
@@ -96,16 +96,16 @@ function SummaryMetric({ label, value, detail, icon, active, onClick }: {
   const content = (
     <>
       <div className="flex items-center justify-between gap-3">
-        <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-gray-500 dark:text-gray-400">{label}</span>
-        <span className="text-gray-400 dark:text-gray-500">{icon}</span>
+        <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-fw-text-muted">{label}</span>
+        <span className="text-fw-text-muted">{icon}</span>
       </div>
-      <div className="mt-2 text-2xl font-semibold tabular-nums text-gray-900 dark:text-white">{value}</div>
-      {detail ? <div className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">{detail}</div> : null}
+      <div className="mt-2 text-2xl font-semibold tabular-nums text-fw-text-strong">{value}</div>
+      {detail ? <div className="mt-1 truncate text-xs text-fw-text-muted">{detail}</div> : null}
     </>
   )
   const classes = `rounded-xl border p-3 text-left transition-colors ${active
-    ? 'border-blue-400 bg-blue-50 dark:border-blue-600 dark:bg-blue-950/30'
-    : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'} ${onClick ? 'hover:border-gray-300 dark:hover:border-gray-600' : ''}`
+    ? 'border-fw-accent-border bg-fw-accent-surface dark:border-fw-accent-border dark:bg-fw-accent-surface-strong/30'
+    : 'border-fw-border bg-fw-surface dark:border-fw-border dark:bg-fw-surface'} ${onClick ? 'hover:border-fw-border-strong dark:hover:border-fw-border-strong' : ''}`
   return onClick ? <button type="button" onClick={onClick} className={classes}>{content}</button> : <div className={classes}>{content}</div>
 }
 
@@ -133,24 +133,24 @@ function SessionOperationRow({ session, selected, current, now, onInspect, onOpe
       onClick={onInspect}
       onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onInspect() } }}
       className={`group rounded-lg border px-3 py-2.5 outline-none transition-colors ${selected
-        ? 'border-blue-400 bg-blue-50/80 ring-1 ring-blue-200 dark:border-blue-600 dark:bg-blue-950/30 dark:ring-blue-900'
-        : 'border-gray-200 bg-gray-50/70 hover:border-gray-300 hover:bg-white dark:border-gray-700 dark:bg-gray-900/40 dark:hover:border-gray-600 dark:hover:bg-gray-800'} focus-visible:ring-2 focus-visible:ring-blue-500`}
+        ? 'border-fw-accent-border bg-fw-accent-surface/80 ring-1 ring-fw-focus-ring dark:border-fw-accent-border dark:bg-fw-accent-surface-strong/30 dark:ring-fw-focus-ring'
+        : 'border-fw-border bg-fw-surface-sunken/70 hover:border-fw-border-strong hover:bg-fw-surface dark:border-fw-border dark:bg-fw-canvas/40 dark:hover:border-fw-border-strong dark:hover:bg-fw-hover'} focus-visible:ring-2 focus-visible:ring-fw-focus-ring`}
     >
       <div className="flex items-start gap-2.5">
         <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${getStatusTone(session)}`} />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-sm font-semibold text-gray-900 dark:text-white" title={name}>{name}</span>
+            <span className="truncate text-sm font-semibold text-fw-text-strong" title={name}>{name}</span>
             {current ? renderMetaBadge('current', 'active') : null}
             {session.isolated ? renderMetaBadge('isolated', 'warning') : null}
             {session.archived ? renderMetaBadge('archived', 'muted') : null}
           </div>
-          {session.displayName ? <div className="mt-0.5 truncate font-mono text-[10px] text-gray-400 dark:text-gray-500">{session.id}</div> : null}
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-gray-500 dark:text-gray-400">
-            <span className="font-medium text-gray-700 dark:text-gray-200">{runtimeSummary}</span>
+          {session.displayName ? <div className="mt-0.5 truncate font-mono text-[10px] text-fw-text-muted">{session.id}</div> : null}
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fw-text-muted">
+            <span className="font-medium text-fw-text-strong">{runtimeSummary}</span>
             {runtimeState !== 'idle' ? <span>{formatBusyDuration(activeSince, now)}</span> : null}
             <span>agent {session.agent || 'main'}</span>
-            {queueLength > 0 ? <span className="text-amber-600 dark:text-amber-300">queued {queueLength}</span> : null}
+            {queueLength > 0 ? <span className="text-fw-warning dark:text-fw-warning">queued {queueLength}</span> : null}
             {model ? <span className="max-w-[180px] truncate" title={model}>model {model}</span> : null}
           </div>
         </div>
@@ -158,7 +158,7 @@ function SessionOperationRow({ session, selected, current, now, onInspect, onOpe
           type="button"
           onClick={(event) => { event.stopPropagation(); onOpen() }}
           title="Open session"
-          className="rounded-md p-1.5 text-gray-400 opacity-70 transition hover:bg-gray-100 hover:text-gray-700 group-hover:opacity-100 dark:hover:bg-gray-700 dark:hover:text-gray-100"
+          className="rounded-md p-1.5 text-fw-text-muted opacity-70 transition hover:bg-fw-hover hover:text-fw-text group-hover:opacity-100 dark:hover:bg-fw-hover dark:hover:text-fw-text-strong"
         >
           <ExternalLink className="h-3.5 w-3.5" />
         </button>
@@ -187,25 +187,25 @@ function NodeLane({ node, rows, selectedSessionId, currentSession, now, onInspec
   const preferredIds = new Set([selectedSessionId, currentSession].filter((id): id is string => !!id))
   const visibleRows = expanded ? rows : getArchitectureNodePreview(rows, preferredIds)
   return (
-    <section data-architecture-node-id={node.id} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-4 py-3 dark:border-gray-700">
+    <section data-architecture-node-id={node.id} className="overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-sm dark:border-fw-border dark:bg-fw-surface">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-fw-border-muted px-4 py-3 dark:border-fw-border">
         <div className="flex min-w-0 items-center gap-3">
-          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${ready ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300' : quarantined ? 'bg-amber-50 text-amber-600 dark:bg-amber-950/40 dark:text-amber-300' : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'}`}>
+          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${ready ? 'bg-fw-success-surface text-fw-success' : quarantined ? 'bg-fw-warning-surface text-fw-warning' : 'bg-fw-neutral-surface text-fw-text-muted'}`}>
             <Server className="h-4 w-4" />
           </span>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h3 className="truncate text-sm font-semibold text-gray-900 dark:text-white">{node.displayName || node.id}</h3>
-              <span className={`h-1.5 w-1.5 rounded-full ${ready ? 'bg-emerald-500' : quarantined ? 'bg-amber-500' : 'bg-gray-400'}`} />
-              <span className={`text-[10px] uppercase tracking-wide ${quarantined ? 'text-amber-600 dark:text-amber-300' : 'text-gray-400'}`}>{statusLabel}</span>
+              <h3 className="truncate text-sm font-semibold text-fw-text-strong">{node.displayName || node.id}</h3>
+              <span className={`h-1.5 w-1.5 rounded-full ${ready ? 'bg-fw-success' : quarantined ? 'bg-fw-warning' : 'bg-fw-text-subtle'}`} />
+              <span className={`text-[10px] uppercase tracking-wide ${quarantined ? 'text-fw-warning' : 'text-fw-text-muted'}`}>{statusLabel}</span>
             </div>
-            <div className="mt-0.5 truncate font-mono text-[10px] text-gray-400">{node.id} · {node.type || 'remote'}{serviceCount ? ` · ${serviceCount} services` : ''}</div>
+            <div className="mt-0.5 truncate font-mono text-[10px] text-fw-text-muted">{node.id} · {node.type || 'remote'}{serviceCount ? ` · ${serviceCount} services` : ''}</div>
           </div>
         </div>
-        <div className="flex items-center gap-3 text-[11px] text-gray-500 dark:text-gray-400">
+        <div className="flex items-center gap-3 text-[11px] text-fw-text-muted">
           <span>{rows.length} loaded</span>
-          {activeCount > 0 ? <span className="text-blue-600 dark:text-blue-300">{activeCount} active</span> : null}
-          {waitingCount > 0 ? <span className="text-amber-600 dark:text-amber-300">{waitingCount} waiting</span> : null}
+          {activeCount > 0 ? <span className="text-fw-accent dark:text-fw-accent">{activeCount} active</span> : null}
+          {waitingCount > 0 ? <span className="text-fw-warning dark:text-fw-warning">{waitingCount} waiting</span> : null}
         </div>
       </header>
       {rows.length > 0 ? (
@@ -226,8 +226,8 @@ function NodeLane({ node, rows, selectedSessionId, currentSession, now, onInspec
             </div>
           </div>
           {rows.length > 6 ? (
-            <div className="border-t border-gray-100 px-3 py-2 dark:border-gray-700">
-              <button type="button" onClick={() => setExpanded(value => !value)} className="w-full rounded-lg px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-950/30">
+            <div className="border-t border-fw-border-muted px-3 py-2 dark:border-fw-border">
+              <button type="button" onClick={() => setExpanded(value => !value)} className="w-full rounded-lg px-3 py-1.5 text-xs font-medium text-fw-accent hover:bg-fw-accent-surface dark:text-fw-accent dark:hover:bg-fw-accent-surface-strong/30">
                 {expanded ? 'Show operational preview' : `Browse ${rows.length - visibleRows.length} more in this node…`}
               </button>
             </div>
@@ -240,8 +240,8 @@ function NodeLane({ node, rows, selectedSessionId, currentSession, now, onInspec
 
 const InspectorField = ({ label, value, mono = false }: { label: string; value: ReactNode; mono?: boolean }) => (
   <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 py-1.5 text-xs">
-    <dt className="text-gray-400 dark:text-gray-500">{label}</dt>
-    <dd className={`min-w-0 break-words text-gray-700 dark:text-gray-200 ${mono ? 'font-mono text-[11px]' : ''}`}>{value || '—'}</dd>
+    <dt className="text-fw-text-muted">{label}</dt>
+    <dd className={`min-w-0 break-words text-fw-text-strong ${mono ? 'font-mono text-[11px]' : ''}`}>{value || '—'}</dd>
   </div>
 )
 
@@ -260,10 +260,10 @@ function SessionInspector({ session, parent, children, childTotal, hasMoreChildr
 }) {
   if (!session) {
     return (
-      <aside className="rounded-xl border border-dashed border-gray-300 bg-white/60 p-6 text-center dark:border-gray-700 dark:bg-gray-800/50">
-        <CircleDot className="mx-auto h-6 w-6 text-gray-300 dark:text-gray-600" />
-        <h3 className="mt-3 text-sm font-semibold text-gray-700 dark:text-gray-200">Select a session</h3>
-        <p className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">Inspect runtime, placement, queue, tokens, and lineage without navigating away.</p>
+      <aside className="rounded-xl border border-dashed border-fw-border-strong bg-fw-surface/60 p-6 text-center dark:border-fw-border dark:bg-fw-surface/50">
+        <CircleDot className="mx-auto h-6 w-6 text-fw-text" />
+        <h3 className="mt-3 text-sm font-semibold text-fw-text-strong">Select a session</h3>
+        <p className="mt-1 text-xs leading-5 text-fw-text-muted">Inspect runtime, placement, queue, tokens, and lineage without navigating away.</p>
       </aside>
     )
   }
@@ -278,30 +278,30 @@ function SessionInspector({ session, parent, children, childTotal, hasMoreChildr
   const tool = runtime?.tool
 
   return (
-    <aside data-architecture-inspector-session-id={session.id} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800 xl:sticky xl:top-4">
-      <div className="border-b border-gray-100 p-4 dark:border-gray-700">
+    <aside data-architecture-inspector-session-id={session.id} className="overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-sm dark:border-fw-border dark:bg-fw-surface xl:sticky xl:top-4">
+      <div className="border-b border-fw-border-muted p-4 dark:border-fw-border">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="truncate text-base font-semibold text-gray-900 dark:text-white">{session.displayName || session.id}</h2>
+              <h2 className="truncate text-base font-semibold text-fw-text-strong">{session.displayName || session.id}</h2>
               {current ? renderMetaBadge('current', 'active') : null}
             </div>
-            {session.displayName ? <div className="mt-1 break-all font-mono text-[10px] text-gray-400">{session.id}</div> : null}
+            {session.displayName ? <div className="mt-1 break-all font-mono text-[10px] text-fw-text-muted">{session.id}</div> : null}
           </div>
-          <button type="button" onClick={() => onOpen(session.id)} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-gray-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-gray-700 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-200">
+          <button type="button" onClick={() => onOpen(session.id)} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-fw-text-strong px-2.5 py-1.5 text-xs font-medium text-fw-surface hover:bg-fw-text">
             <ExternalLink className="h-3.5 w-3.5" /> Open
           </button>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
           <span className={`h-2 w-2 rounded-full ${getStatusTone(session)}`} />
-          <span className="font-medium text-gray-800 dark:text-gray-100">{getRuntimeStateSummary(runtime, !!session.busy)}</span>
-          {state !== 'idle' ? <span className="text-gray-400">for {formatBusyDuration(runtime?.since || session.busyStartedAt, now)}</span> : null}
+          <span className="font-medium text-fw-text-strong">{getRuntimeStateSummary(runtime, !!session.busy)}</span>
+          {state !== 'idle' ? <span className="text-fw-text-muted">for {formatBusyDuration(runtime?.since || session.busyStartedAt, now)}</span> : null}
         </div>
       </div>
 
       <div className="max-h-[calc(100vh-220px)] overflow-y-auto p-4">
         <section>
-          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400">Runtime</h3>
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Runtime</h3>
           <dl className="mt-1">
             <InspectorField label="State" value={state} />
             <InspectorField label="Phase" value={runtime?.active?.phase || '—'} />
@@ -313,8 +313,8 @@ function SessionInspector({ session, parent, children, childTotal, hasMoreChildr
         </section>
 
         {waiting ? (
-          <section className="mt-4 border-t border-gray-100 pt-4 dark:border-gray-700">
-            <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-500">Wait condition</h3>
+          <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+            <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-warning">Wait condition</h3>
             <dl className="mt-1">
               <InspectorField label="Waiting for" value={waiting.waitingFor} />
               <InspectorField label="Reason" value={waiting.reason || '—'} />
@@ -325,19 +325,19 @@ function SessionInspector({ session, parent, children, childTotal, hasMoreChildr
           </section>
         ) : null}
 
-        <section className="mt-4 border-t border-gray-100 pt-4 dark:border-gray-700">
-          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400">Placement</h3>
+        <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Placement</h3>
           <dl className="mt-1">
             <InspectorField label="Agent" value={session.agent || 'main'} />
-            <InspectorField label="Node" value={<span className="inline-flex items-center gap-1.5"><span className={`h-1.5 w-1.5 rounded-full ${node?.online ? 'bg-emerald-500' : 'bg-gray-400'}`} />{node?.displayName || getArchitectureSessionNodeId(session)}</span>} />
+            <InspectorField label="Node" value={<span className="inline-flex items-center gap-1.5"><span className={`h-1.5 w-1.5 rounded-full ${node?.online ? 'bg-fw-success' : 'bg-fw-text-subtle'}`} />{node?.displayName || getArchitectureSessionNodeId(session)}</span>} />
             <InspectorField label="Node ID" value={getArchitectureSessionNodeId(session)} mono />
             <InspectorField label="CWD" value={session.cwd || '—'} mono />
             <InspectorField label="Isolation" value={session.isolated ? 'isolated agent' : 'shared runtime'} />
           </dl>
         </section>
 
-        <section className="mt-4 border-t border-gray-100 pt-4 dark:border-gray-700">
-          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400">Activity</h3>
+        <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Activity</h3>
           <dl className="mt-1">
             <InspectorField label="Messages" value={String(session.messageCount || 0)} />
             <InspectorField label="Updated" value={formatRelativeTime(session.lastMessageTime)} />
@@ -347,25 +347,25 @@ function SessionInspector({ session, parent, children, childTotal, hasMoreChildr
           </dl>
         </section>
 
-        <section className="mt-4 border-t border-gray-100 pt-4 dark:border-gray-700">
-          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400">Relationships</h3>
+        <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Relationships</h3>
           <div className="mt-2 space-y-1.5">
             {parent ? (
-              <button type="button" onClick={() => onInspect(parent.id)} className="flex w-full items-center gap-2 rounded-lg border border-gray-200 px-2.5 py-2 text-left text-xs hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700">
-                <GitFork className="h-3.5 w-3.5 rotate-180 text-gray-400" />
-                <span className="min-w-0 flex-1 truncate"><span className="text-gray-400">parent</span> {parent.displayName || parent.id}</span>
-                <ChevronRight className="h-3.5 w-3.5 text-gray-300" />
+              <button type="button" onClick={() => onInspect(parent.id)} className="flex w-full items-center gap-2 rounded-lg border border-fw-border px-2.5 py-2 text-left text-xs hover:bg-fw-hover dark:border-fw-border dark:hover:bg-fw-hover">
+                <GitFork className="h-3.5 w-3.5 rotate-180 text-fw-text-muted" />
+                <span className="min-w-0 flex-1 truncate"><span className="text-fw-text-muted">parent</span> {parent.displayName || parent.id}</span>
+                <ChevronRight className="h-3.5 w-3.5 text-fw-text" />
               </button>
-            ) : <div className="text-xs text-gray-400">Root session</div>}
+            ) : <div className="text-xs text-fw-text-muted">Root session</div>}
             {children.map(child => (
-              <button key={child.id} type="button" onClick={() => onInspect(child.id)} className="flex w-full items-center gap-2 rounded-lg border border-gray-200 px-2.5 py-2 text-left text-xs hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700">
-                <GitFork className="h-3.5 w-3.5 text-gray-400" />
-                <span className="min-w-0 flex-1 truncate"><span className="text-gray-400">child</span> {child.displayName || child.id}</span>
-                <ChevronRight className="h-3.5 w-3.5 text-gray-300" />
+              <button key={child.id} type="button" onClick={() => onInspect(child.id)} className="flex w-full items-center gap-2 rounded-lg border border-fw-border px-2.5 py-2 text-left text-xs hover:bg-fw-hover dark:border-fw-border dark:hover:bg-fw-hover">
+                <GitFork className="h-3.5 w-3.5 text-fw-text-muted" />
+                <span className="min-w-0 flex-1 truncate"><span className="text-fw-text-muted">child</span> {child.displayName || child.id}</span>
+                <ChevronRight className="h-3.5 w-3.5 text-fw-text" />
               </button>
             ))}
-            {children.length === 0 && childTotal === 0 ? <div className="text-xs text-gray-400">No child sessions</div> : null}
-            {hasMoreChildren ? <button type="button" onClick={() => onLoadMoreChildren(session.id)} className="w-full rounded-lg px-2.5 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-950/30">Load more relationships…</button> : null}
+            {children.length === 0 && childTotal === 0 ? <div className="text-xs text-fw-text-muted">No child sessions</div> : null}
+            {hasMoreChildren ? <button type="button" onClick={() => onLoadMoreChildren(session.id)} className="w-full rounded-lg px-2.5 py-1.5 text-xs font-medium text-fw-accent hover:bg-fw-accent-surface dark:text-fw-accent dark:hover:bg-fw-accent-surface-strong/30">Load more relationships…</button> : null}
           </div>
         </section>
       </div>
@@ -387,25 +387,25 @@ function AgentRegistryCard({ agent, selected, onSelect }: { agent: AgentRegistry
       data-architecture-agent-selected={selected ? 'true' : 'false'}
       onClick={onSelect}
       className={`rounded-xl border p-4 text-left shadow-sm transition-colors ${selected
-        ? 'border-blue-400 bg-blue-50/80 ring-1 ring-blue-200 dark:border-blue-600 dark:bg-blue-950/30 dark:ring-blue-900'
-        : 'border-gray-200 bg-white hover:border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-600'}`}
+        ? 'border-fw-accent-border bg-fw-accent-surface/80 ring-1 ring-fw-focus-ring dark:border-fw-accent-border dark:bg-fw-accent-surface-strong/30 dark:ring-fw-focus-ring'
+        : 'border-fw-border bg-fw-surface hover:border-fw-border-strong dark:border-fw-border dark:bg-fw-surface dark:hover:border-fw-border-strong'}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-300"><Bot className="h-4 w-4" /></span>
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-fw-special-surface text-fw-special dark:bg-fw-special-surface/40 dark:text-fw-special"><Bot className="h-4 w-4" /></span>
           <div className="min-w-0">
-            <h3 className="truncate text-sm font-semibold text-gray-900 dark:text-white">{agent.id}</h3>
-            <p className="mt-0.5 truncate text-[11px] text-gray-400">{agent.inherit ? `inherits ${agent.inherit}` : 'independent memory'}</p>
+            <h3 className="truncate text-sm font-semibold text-fw-text-strong">{agent.id}</h3>
+            <p className="mt-0.5 truncate text-[11px] text-fw-text-muted">{agent.inherit ? `inherits ${agent.inherit}` : 'independent memory'}</p>
           </div>
         </div>
         {agent.isolated ? renderMetaBadge(agent.isolatedNode ? `isolated · ${agent.isolatedNode}` : 'isolated', 'warning') : null}
       </div>
       <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-        <div className="rounded-lg bg-gray-50 px-2 py-2 dark:bg-gray-900/50"><div className="text-base font-semibold tabular-nums text-gray-900 dark:text-white">{agent.sessionCount}</div><div className="text-[10px] uppercase tracking-wide text-gray-400">sessions</div></div>
-        <div className="rounded-lg bg-gray-50 px-2 py-2 dark:bg-gray-900/50"><div className="text-base font-semibold tabular-nums text-blue-600 dark:text-blue-300">{agent.activeSessionCount}</div><div className="text-[10px] uppercase tracking-wide text-gray-400">active</div></div>
-        <div className="rounded-lg bg-gray-50 px-2 py-2 dark:bg-gray-900/50"><div className="text-base font-semibold tabular-nums text-gray-900 dark:text-white">{agent.memoryFileCount}</div><div className="text-[10px] uppercase tracking-wide text-gray-400">memory</div></div>
+        <div className="rounded-lg bg-fw-surface-sunken px-2 py-2 dark:bg-fw-canvas/50"><div className="text-base font-semibold tabular-nums text-fw-text-strong">{agent.sessionCount}</div><div className="text-[10px] uppercase tracking-wide text-fw-text-muted">sessions</div></div>
+        <div className="rounded-lg bg-fw-surface-sunken px-2 py-2 dark:bg-fw-canvas/50"><div className="text-base font-semibold tabular-nums text-fw-accent dark:text-fw-accent">{agent.activeSessionCount}</div><div className="text-[10px] uppercase tracking-wide text-fw-text-muted">active</div></div>
+        <div className="rounded-lg bg-fw-surface-sunken px-2 py-2 dark:bg-fw-canvas/50"><div className="text-base font-semibold tabular-nums text-fw-text-strong">{agent.memoryFileCount}</div><div className="text-[10px] uppercase tracking-wide text-fw-text-muted">memory</div></div>
       </div>
-      <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-gray-400">
+      <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-fw-text-muted">
         <span>{agent.queuedSessionCount > 0 ? `${agent.queuedSessionCount} queued` : 'queue clear'}</span>
         <span>{agent.memoryLastModified ? `memory ${formatRelativeTime(agent.memoryLastModified)}` : 'no memory files'}</span>
       </div>
@@ -440,7 +440,7 @@ function AgentRegistryInspector({ agent, allAgents, nodes, memoryFiles, memoryLo
   }, [agent?.id, agent?.inherit, agent?.isolatedNode])
 
   if (!agent) {
-    return <aside className="rounded-xl border border-dashed border-gray-300 bg-white/60 p-6 text-center dark:border-gray-700 dark:bg-gray-800/50"><Bot className="mx-auto h-6 w-6 text-gray-300" /><h3 className="mt-3 text-sm font-semibold text-gray-700 dark:text-gray-200">Select an agent</h3><p className="mt-1 text-xs text-gray-500">Inspect memory, inheritance, isolation, and lifecycle controls.</p></aside>
+    return <aside className="rounded-xl border border-dashed border-fw-border-strong bg-fw-surface/60 p-6 text-center dark:border-fw-border dark:bg-fw-surface/50"><Bot className="mx-auto h-6 w-6 text-fw-text" /><h3 className="mt-3 text-sm font-semibold text-fw-text-strong">Select an agent</h3><p className="mt-1 text-xs text-fw-text-muted">Inspect memory, inheritance, isolation, and lifecycle controls.</p></aside>
   }
 
   const dirty = inheritAgent !== (agent.inherit || '') || isolatedNode !== (agent.isolatedNode || '')
@@ -457,49 +457,49 @@ function AgentRegistryInspector({ agent, allAgents, nodes, memoryFiles, memoryLo
   }
 
   return (
-    <aside data-architecture-agent-inspector-id={agent.id} className="order-first overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800 xl:order-none xl:sticky xl:top-4">
-      <header className="border-b border-gray-100 p-4 dark:border-gray-700">
+    <aside data-architecture-agent-inspector-id={agent.id} className="order-first overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-sm dark:border-fw-border dark:bg-fw-surface xl:order-none xl:sticky xl:top-4">
+      <header className="border-b border-fw-border-muted p-4 dark:border-fw-border">
         <div className="flex items-start justify-between gap-3">
-          <div><h2 className="text-base font-semibold text-gray-900 dark:text-white">{agent.id}</h2><p className="mt-1 text-xs text-gray-400">Persistent workspace and memory owner</p></div>
-          <button type="button" onClick={() => onOpenMemory(agent.memoryRoot)} className="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-gray-700 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-200"><FolderOpen className="h-3.5 w-3.5" /> Memory</button>
+          <div><h2 className="text-base font-semibold text-fw-text-strong">{agent.id}</h2><p className="mt-1 text-xs text-fw-text-muted">Persistent workspace and memory owner</p></div>
+          <button type="button" onClick={() => onOpenMemory(agent.memoryRoot)} className="inline-flex items-center gap-1.5 rounded-lg bg-fw-text-strong px-2.5 py-1.5 text-xs font-medium text-fw-surface hover:bg-fw-text"><FolderOpen className="h-3.5 w-3.5" /> Memory</button>
         </div>
         <div className="mt-3 flex flex-wrap gap-2">{renderMetaBadge(`${agent.sessionCount} sessions`)}{agent.activeSessionCount ? renderMetaBadge(`${agent.activeSessionCount} active`, 'active') : null}{agent.isolated ? renderMetaBadge('isolated', 'warning') : renderMetaBadge('shared runtime', 'muted')}</div>
       </header>
 
       <div className="max-h-[calc(100vh-220px)] overflow-y-auto p-4">
         <section>
-          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400">Memory inheritance</h3>
-          <div className="mt-2 flex flex-wrap items-center gap-1 text-xs text-gray-500">{agent.inheritanceChain.map((item, index) => <span key={item} className="inline-flex items-center gap-1"><span className={`rounded px-1.5 py-0.5 ${item === agent.id ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-200' : 'bg-gray-100 dark:bg-gray-700'}`}>{item}</span>{index < agent.inheritanceChain.length - 1 ? <ChevronRight className="h-3 w-3" /> : null}</span>)}</div>
-          <label className="mt-3 block text-xs text-gray-500">Inherit agent<select value={inheritAgent} onChange={event => setInheritAgent(event.target.value)} className="mt-1 w-full rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-2 text-xs text-gray-800 outline-none focus:border-blue-400 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"><option value="">None</option>{allAgents.filter(item => item.id !== agent.id && !item.isolated).map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label>
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Memory inheritance</h3>
+          <div className="mt-2 flex flex-wrap items-center gap-1 text-xs text-fw-text-muted">{agent.inheritanceChain.map((item, index) => <span key={item} className="inline-flex items-center gap-1"><span className={`rounded px-1.5 py-0.5 ${item === agent.id ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : 'bg-fw-neutral-surface dark:bg-fw-surface-raised'}`}>{item}</span>{index < agent.inheritanceChain.length - 1 ? <ChevronRight className="h-3 w-3" /> : null}</span>)}</div>
+          <label className="mt-3 block text-xs text-fw-text-muted">Inherit agent<select value={inheritAgent} onChange={event => setInheritAgent(event.target.value)} className="mt-1 w-full rounded-lg border border-fw-border bg-fw-surface-sunken px-2.5 py-2 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong"><option value="">None</option>{allAgents.filter(item => item.id !== agent.id && !item.isolated).map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label>
         </section>
 
-        <section className="mt-4 border-t border-gray-100 pt-4 dark:border-gray-700">
-          <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400"><Shield className="h-3.5 w-3.5" /> Isolation</h3>
-          <label className="mt-2 block text-xs text-gray-500">Execution node<select value={isolatedNode} onChange={event => setIsolatedNode(event.target.value)} className="mt-1 w-full rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-2 text-xs text-gray-800 outline-none focus:border-blue-400 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"><option value="">Shared runtime</option>{nodes.filter(node => node.id !== 'master').map(node => <option key={node.id} value={node.id} disabled={node.protocolStatus === 'upgrade-required'}>{node.displayName} · {node.protocolStatus === 'upgrade-required' ? 'upgrade required' : node.online ? 'ready' : 'offline'}</option>)}</select></label>
-          <button type="button" disabled={!dirty || saving} onClick={() => { void save() }} className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-3.5 w-3.5" />{saving ? 'Saving…' : 'Save agent settings'}</button>
+        <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+          <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted"><Shield className="h-3.5 w-3.5" /> Isolation</h3>
+          <label className="mt-2 block text-xs text-fw-text-muted">Execution node<select value={isolatedNode} onChange={event => setIsolatedNode(event.target.value)} className="mt-1 w-full rounded-lg border border-fw-border bg-fw-surface-sunken px-2.5 py-2 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong"><option value="">Shared runtime</option>{nodes.filter(node => node.id !== 'master').map(node => <option key={node.id} value={node.id} disabled={node.protocolStatus === 'upgrade-required'}>{node.displayName} · {node.protocolStatus === 'upgrade-required' ? 'upgrade required' : node.online ? 'ready' : 'offline'}</option>)}</select></label>
+          <button type="button" disabled={!dirty || saving} onClick={() => { void save() }} className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-fw-accent px-3 py-2 text-xs font-medium text-fw-text-inverse hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-3.5 w-3.5" />{saving ? 'Saving…' : 'Save agent settings'}</button>
         </section>
 
-        <section className="mt-4 border-t border-gray-100 pt-4 dark:border-gray-700">
-          <div className="flex items-center justify-between gap-2"><h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-400"><MemoryStick className="h-3.5 w-3.5" /> Memory files</h3><span className="text-[10px] text-gray-400">{memoryFiles.length} Markdown</span></div>
+        <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+          <div className="flex items-center justify-between gap-2"><h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted"><MemoryStick className="h-3.5 w-3.5" /> Memory files</h3><span className="text-[10px] text-fw-text-muted">{memoryFiles.length} Markdown</span></div>
           <div className="mt-2 max-h-64 space-y-1 overflow-y-auto">
-            {memoryLoading ? <div className="py-4 text-center text-xs text-gray-400">Loading memory manifest…</div> : null}
-            {memoryError ? <div className="rounded-lg bg-red-50 px-2.5 py-2 text-xs text-red-600 dark:bg-red-950/30 dark:text-red-300">{memoryError}</div> : null}
+            {memoryLoading ? <div className="py-4 text-center text-xs text-fw-text-muted">Loading memory manifest…</div> : null}
+            {memoryError ? <div className="rounded-lg bg-fw-danger-surface px-2.5 py-2 text-xs text-fw-danger dark:bg-fw-danger-surface-strong/30 dark:text-fw-danger">{memoryError}</div> : null}
             {!memoryLoading && !memoryError && memoryFiles.map(file => (
-              <button key={file.path} type="button" onClick={() => onOpenMemory(agent.memoryRoot, file.absolutePath)} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-gray-50 dark:hover:bg-gray-700">
-                <FileText className="h-3.5 w-3.5 shrink-0 text-gray-400" /><span className="min-w-0 flex-1 truncate font-mono text-[10px] text-gray-700 dark:text-gray-200" title={file.path}>{file.path}</span><span className="shrink-0 text-[9px] text-gray-400">{formatBytes(file.size)}</span>
+              <button key={file.path} type="button" onClick={() => onOpenMemory(agent.memoryRoot, file.absolutePath)} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-fw-hover dark:hover:bg-fw-hover">
+                <FileText className="h-3.5 w-3.5 shrink-0 text-fw-text-muted" /><span className="min-w-0 flex-1 truncate font-mono text-[10px] text-fw-text-strong" title={file.path}>{file.path}</span><span className="shrink-0 text-[9px] text-fw-text-muted">{formatBytes(file.size)}</span>
               </button>
             ))}
-            {!memoryLoading && !memoryError && memoryFiles.length === 0 ? <div className="py-4 text-center text-xs text-gray-400">No Markdown memory files.</div> : null}
+            {!memoryLoading && !memoryError && memoryFiles.length === 0 ? <div className="py-4 text-center text-xs text-fw-text-muted">No Markdown memory files.</div> : null}
           </div>
         </section>
 
-        <section className="mt-4 border-t border-gray-100 pt-4 dark:border-gray-700">
-          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-red-400">Danger zone</h3>
-          {agent.id === 'main' ? <p className="mt-2 text-xs text-gray-400">The main agent cannot be deleted.</p> : !deleteOpen ? <button type="button" onClick={() => setDeleteOpen(true)} className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/30"><Trash2 className="h-3.5 w-3.5" /> Delete agent</button> : (
-            <div className="mt-2 rounded-lg border border-red-200 bg-red-50/50 p-3 dark:border-red-900 dark:bg-red-950/20"><p className="text-xs leading-5 text-red-700 dark:text-red-300">Deletes {agent.sessionCount} session(s), this workspace, and self-owned memory. Durable session archives remain reserved. Type <strong>{agent.id}</strong> to confirm.</p><input value={deleteConfirm} onChange={event => setDeleteConfirm(event.target.value)} className="mt-2 w-full rounded-md border border-red-200 bg-white px-2.5 py-1.5 font-mono text-xs outline-none dark:border-red-900 dark:bg-gray-900" /><div className="mt-2 flex gap-2"><button type="button" onClick={() => { setDeleteOpen(false); setDeleteConfirm('') }} className="flex-1 rounded-md border border-gray-200 px-2 py-1.5 text-xs dark:border-gray-700">Cancel</button><button type="button" disabled={deleteConfirm !== agent.id || saving} onClick={() => { void remove() }} className="flex-1 rounded-md bg-red-600 px-2 py-1.5 text-xs font-medium text-white disabled:opacity-40">Delete</button></div></div>
+        <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-danger">Danger zone</h3>
+          {agent.id === 'main' ? <p className="mt-2 text-xs text-fw-text-muted">The main agent cannot be deleted.</p> : !deleteOpen ? <button type="button" onClick={() => setDeleteOpen(true)} className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-fw-danger-border px-2.5 py-1.5 text-xs font-medium text-fw-danger hover:bg-fw-danger-surface dark:border-fw-danger-border dark:text-fw-danger dark:hover:bg-fw-danger-surface-strong/30"><Trash2 className="h-3.5 w-3.5" /> Delete agent</button> : (
+            <div className="mt-2 rounded-lg border border-fw-danger-border bg-fw-danger-surface/50 p-3 dark:border-fw-danger-border dark:bg-fw-danger-surface-strong/20"><p className="text-xs leading-5 text-fw-danger dark:text-fw-danger">Deletes {agent.sessionCount} session(s), this workspace, and self-owned memory. Durable session archives remain reserved. Type <strong>{agent.id}</strong> to confirm.</p><input value={deleteConfirm} onChange={event => setDeleteConfirm(event.target.value)} className="mt-2 w-full rounded-md border border-fw-danger-border bg-fw-surface px-2.5 py-1.5 font-mono text-xs outline-none dark:border-fw-danger-border dark:bg-fw-canvas" /><div className="mt-2 flex gap-2"><button type="button" onClick={() => { setDeleteOpen(false); setDeleteConfirm('') }} className="flex-1 rounded-md border border-fw-border px-2 py-1.5 text-xs dark:border-fw-border">Cancel</button><button type="button" disabled={deleteConfirm !== agent.id || saving} onClick={() => { void remove() }} className="flex-1 rounded-md bg-fw-danger px-2 py-1.5 text-xs font-medium text-fw-text-inverse disabled:opacity-40">Delete</button></div></div>
           )}
         </section>
-        {error ? <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 dark:bg-red-950/30 dark:text-red-300">{error}</div> : null}
+        {error ? <div className="mt-3 rounded-lg bg-fw-danger-surface px-3 py-2 text-xs text-fw-danger dark:bg-fw-danger-surface-strong/30 dark:text-fw-danger">{error}</div> : null}
       </div>
     </aside>
   )
@@ -852,28 +852,28 @@ export default function ArchitectureView({
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-gray-100 dark:bg-gray-900">
+    <div className="h-full overflow-y-auto bg-fw-canvas">
       <div className="mx-auto max-w-[1500px] p-4 md:p-5 lg:p-6">
         <header className="mb-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-3">
                 {onBack ? (
-                  <button onClick={onBack} className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 md:hidden">
+                  <button onClick={onBack} className="inline-flex items-center gap-1 rounded-lg border border-fw-border bg-fw-surface px-3 py-1.5 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong dark:hover:bg-fw-hover md:hidden">
                     <ArrowLeft className="h-4 w-4" /> Back
                   </button>
                 ) : null}
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-gray-900 text-white dark:bg-white dark:text-gray-900"><Network className="h-5 w-5" /></span>
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-fw-text-strong text-fw-surface"><Network className="h-5 w-5" /></span>
                 <div>
-                  <h1 className="text-2xl font-bold text-gray-900 dark:text-white">System Architecture</h1>
-                  <p className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">{surface === 'topology' ? 'Operational topology, runtime placement, and session diagnostics.' : 'Agent lifecycle, inheritance, isolation, and memory workspaces.'}</p>
+                  <h1 className="text-2xl font-bold text-fw-text-strong">System Architecture</h1>
+                  <p className="mt-0.5 text-sm text-fw-text-muted">{surface === 'topology' ? 'Operational topology, runtime placement, and session diagnostics.' : 'Agent lifecycle, inheritance, isolation, and memory workspaces.'}</p>
                 </div>
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-              <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5 dark:border-gray-700 dark:bg-gray-800">
-                <button type="button" onClick={() => setSurface('topology')} className={`rounded-md px-2.5 py-1 text-xs font-medium ${surface === 'topology' ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}>Topology</button>
-                <button type="button" onClick={() => setSurface('agents')} className={`rounded-md px-2.5 py-1 text-xs font-medium ${surface === 'agents' ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}>Agents</button>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-fw-text-muted">
+              <div className="inline-flex rounded-lg border border-fw-border bg-fw-surface p-0.5 dark:border-fw-border dark:bg-fw-surface">
+                <button type="button" data-active={surface === 'topology'} aria-pressed={surface === 'topology'} onClick={() => setSurface('topology')} className={`foxwarm-architecture-surface-tab rounded-md px-2.5 py-1 text-xs font-medium ${surface === 'topology' ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>Topology</button>
+                <button type="button" data-active={surface === 'agents'} aria-pressed={surface === 'agents'} onClick={() => setSurface('agents')} className={`foxwarm-architecture-surface-tab rounded-md px-2.5 py-1 text-xs font-medium ${surface === 'agents' ? 'bg-fw-text-strong text-fw-surface' : 'text-fw-text-muted hover:bg-fw-hover'}`}>Agents</button>
               </div>
               <span>{sessions.length} loaded of {summary.sessionCount} sessions</span>
               {summary.managedCount > 0 ? renderMetaBadge(`${summary.managedCount} managed`, 'active') : null}
@@ -892,35 +892,35 @@ export default function ArchitectureView({
 
         </header>
 
-        {surface === 'topology' ? <div className="mb-4 rounded-xl border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        {surface === 'topology' ? <div className="mb-4 rounded-xl border border-fw-border bg-fw-surface p-3 shadow-sm dark:border-fw-border dark:bg-fw-surface">
           <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center">
             <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center">
               <label className="relative min-w-0 flex-1 sm:min-w-64">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                <input value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Search sessions, models, tools…" className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-3 text-xs text-gray-800 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:focus:border-blue-600 dark:focus:ring-blue-900" />
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fw-text-muted" />
+                <input value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Search sessions, models, tools…" className="w-full rounded-lg border border-fw-border bg-fw-surface-sunken py-2 pl-9 pr-3 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong dark:focus:border-fw-accent-border dark:focus:ring-fw-focus-ring" />
               </label>
               <label className="relative sm:w-56">
-                <Bot className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
-                <select aria-label="Filter by agent" value={selectedAgent || ''} onChange={event => setSelectedAgent(event.target.value || null)} className="h-9 w-full appearance-none rounded-lg border border-gray-200 bg-gray-50 py-0 pl-9 pr-8 text-xs font-medium leading-5 text-gray-700 outline-none focus:border-blue-400 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200">
+                <Bot className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fw-text-muted" />
+                <select aria-label="Filter by agent" value={selectedAgent || ''} onChange={event => setSelectedAgent(event.target.value || null)} className="h-9 w-full appearance-none rounded-lg border border-fw-border bg-fw-surface-sunken py-0 pl-9 pr-8 text-xs font-medium leading-5 text-fw-text outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong">
                   <option value="">All agents · {summary.sessionCount}</option>
                   {agents.map(agent => <option key={agent.name} value={agent.name}>{agent.name} · {agent.sessionCount}</option>)}
                 </select>
-                <ChevronRight className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rotate-90 text-gray-400" />
+                <ChevronRight className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rotate-90 text-fw-text-muted" />
               </label>
               <label className="relative sm:w-44">
-                <ListFilter className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
-                <select aria-label="Filter by status" value={statusFilter} onChange={event => setStatusFilter(event.target.value as ArchitectureStatusFilter)} className="h-9 w-full appearance-none rounded-lg border border-gray-200 bg-gray-50 py-0 pl-9 pr-8 text-xs font-medium leading-5 text-gray-700 outline-none focus:border-blue-400 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200">
+                <ListFilter className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fw-text-muted" />
+                <select aria-label="Filter by status" value={statusFilter} onChange={event => setStatusFilter(event.target.value as ArchitectureStatusFilter)} className="h-9 w-full appearance-none rounded-lg border border-fw-border bg-fw-surface-sunken py-0 pl-9 pr-8 text-xs font-medium leading-5 text-fw-text outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong">
                   {statusFilters.map(filter => <option key={filter.id} value={filter.id}>{filter.label}{typeof filter.count === 'number' ? ` · ${filter.count}` : ''}</option>)}
                 </select>
-                <ChevronRight className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rotate-90 text-gray-400" />
+                <ChevronRight className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rotate-90 text-fw-text-muted" />
               </label>
             </div>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-gray-100 pt-3 text-[11px] text-gray-500 dark:border-gray-700 dark:text-gray-400 2xl:border-l 2xl:border-t-0 2xl:pl-4 2xl:pt-0">
-              <span className="font-semibold uppercase tracking-[0.12em] text-gray-400">Traffic</span>
-              <span><strong className="font-semibold text-gray-800 dark:text-gray-100">{formatTokenCount(totalTokens)}</strong> total</span>
-              <span><strong className="font-semibold text-gray-700 dark:text-gray-200">{formatTokenCount(summary.totalCachedTokens)}</strong> cached</span>
-              <span><strong className="font-semibold text-gray-700 dark:text-gray-200">{formatTokenCount(summary.totalInputTokens)}</strong> input</span>
-              <span><strong className="font-semibold text-gray-700 dark:text-gray-200">{formatTokenCount(summary.totalOutputTokens)}</strong> output</span>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-fw-border-muted pt-3 text-[11px] text-fw-text-muted dark:border-fw-border dark:text-fw-text-muted 2xl:border-l 2xl:border-t-0 2xl:pl-4 2xl:pt-0">
+              <span className="font-semibold uppercase tracking-[0.12em] text-fw-text-muted">Traffic</span>
+              <span><strong className="font-semibold text-fw-text-strong">{formatTokenCount(totalTokens)}</strong> total</span>
+              <span><strong className="font-semibold text-fw-text-strong">{formatTokenCount(summary.totalCachedTokens)}</strong> cached</span>
+              <span><strong className="font-semibold text-fw-text-strong">{formatTokenCount(summary.totalInputTokens)}</strong> input</span>
+              <span><strong className="font-semibold text-fw-text-strong">{formatTokenCount(summary.totalOutputTokens)}</strong> output</span>
             </div>
           </div>
         </div> : null}
@@ -929,10 +929,10 @@ export default function ArchitectureView({
           <main className="min-w-0 space-y-3">
             <div className="flex items-center justify-between gap-3 px-1">
               <div>
-                <h2 className="text-sm font-semibold text-gray-900 dark:text-white">Execution topology</h2>
-                <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">Sessions are grouped by their effective tool-execution node, not sidebar hierarchy.</p>
+                <h2 className="text-sm font-semibold text-fw-text-strong">Execution topology</h2>
+                <p className="mt-0.5 text-xs text-fw-text-muted">Sessions are grouped by their effective tool-execution node, not sidebar hierarchy.</p>
               </div>
-              <span className="text-xs text-gray-400">{visibleSessions.length} matching</span>
+              <span className="text-xs text-fw-text-muted">{visibleSessions.length} matching</span>
             </div>
             {displayNodes.map(node => (
               <NodeLane
@@ -947,7 +947,7 @@ export default function ArchitectureView({
               />
             ))}
             {rootCursor ? (
-              <button type="button" onClick={() => { void replayArchitecture(rootTargetRef.current + 50, new Map(branchTargetsRef.current)) }} className="w-full rounded-xl border border-dashed border-gray-300 bg-white/60 px-3 py-2.5 text-sm font-medium text-blue-600 hover:bg-white dark:border-gray-700 dark:bg-gray-800/50 dark:text-blue-300 dark:hover:bg-gray-800">
+              <button type="button" onClick={() => { void replayArchitecture(rootTargetRef.current + 50, new Map(branchTargetsRef.current)) }} className="w-full rounded-xl border border-dashed border-fw-border-strong bg-fw-surface/60 px-3 py-2.5 text-sm font-medium text-fw-accent hover:bg-fw-surface dark:border-fw-border dark:bg-fw-surface/50 dark:text-fw-accent dark:hover:bg-fw-hover">
                 Load 50 more root sessions…
               </button>
             ) : null}
@@ -970,13 +970,13 @@ export default function ArchitectureView({
           <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
             <main className="min-w-0">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3 px-1">
-                <div><h2 className="text-sm font-semibold text-gray-900 dark:text-white">Agent registry</h2><p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">Manage persistent workspace owners and open self-owned memory in Code.</p></div>
-                <div className="flex items-center gap-2"><span className="text-xs text-gray-400">{agentRegistry.length} agents</span><AgentCreationMenu agents={agentRegistry.map(agent => ({ id: agent.id, inherit: agent.inherit || undefined }))} currentAgent={selectedRegistryAgentId || undefined} compact onCreateAgent={createAgentFromRegistry} onCreateSession={createSessionFromRegistry} /></div>
+                <div><h2 className="text-sm font-semibold text-fw-text-strong">Agent registry</h2><p className="mt-0.5 text-xs text-fw-text-muted">Manage persistent workspace owners and open self-owned memory in Code.</p></div>
+                <div className="flex items-center gap-2"><span className="text-xs text-fw-text-muted">{agentRegistry.length} agents</span><AgentCreationMenu agents={agentRegistry.map(agent => ({ id: agent.id, inherit: agent.inherit || undefined }))} currentAgent={selectedRegistryAgentId || undefined} compact onCreateAgent={createAgentFromRegistry} onCreateSession={createSessionFromRegistry} /></div>
               </div>
-              {agentRegistryError ? <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">{agentRegistryError}</div> : null}
+              {agentRegistryError ? <div className="mb-3 rounded-xl border border-fw-danger-border bg-fw-danger-surface px-3 py-2 text-xs text-fw-danger dark:border-fw-danger-border dark:bg-fw-danger-surface-strong/30 dark:text-fw-danger">{agentRegistryError}</div> : null}
               <div className="grid gap-3 md:grid-cols-2">
                 {orderedAgentRegistry.map(agent => <AgentRegistryCard key={agent.id} agent={agent} selected={selectedRegistryAgentId === agent.id} onSelect={() => setSelectedRegistryAgentId(agent.id)} />)}
-                {agentRegistry.length === 0 && !agentRegistryError ? <div className="col-span-full rounded-xl border border-dashed border-gray-300 py-10 text-center text-sm text-gray-400 dark:border-gray-700">No agents found.</div> : null}
+                {agentRegistry.length === 0 && !agentRegistryError ? <div className="col-span-full rounded-xl border border-dashed border-fw-border-strong py-10 text-center text-sm text-fw-text-muted dark:border-fw-border">No agents found.</div> : null}
               </div>
             </main>
             <AgentRegistryInspector agent={selectedRegistryAgent} allAgents={agentRegistry} nodes={displayNodes} memoryFiles={agentMemoryFiles} memoryLoading={agentMemoryLoading} memoryError={agentMemoryError} onOpenMemory={openAgentMemory} onSave={saveRegistryAgent} onDelete={deleteRegistryAgent} />

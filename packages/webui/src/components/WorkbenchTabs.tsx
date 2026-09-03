@@ -156,7 +156,7 @@ function TabStripRow({
   return (
     <div
       ref={setNodeRef}
-      className={`pb-px ${isOver ? 'rounded-lg bg-blue-500/5 dark:bg-blue-500/10' : ''}`}
+      className={`pb-px ${isOver ? 'rounded-lg bg-fw-accent/5 dark:bg-fw-accent/10' : ''}`}
     >
       <SortableContext items={tabs.map((tab) => tab.id)} strategy={horizontalListSortingStrategy}>
         <div
@@ -254,7 +254,7 @@ function SortableTab({
           onSelectTab(tab.id)
         }
       }}
-      className={`group relative -mb-px flex min-w-[88px] max-w-[12rem] shrink-0 cursor-pointer items-center gap-1.5 rounded-t-lg border border-b-0 px-2.5 py-2 text-sm transition-colors ${active ? 'border-gray-200 bg-white text-blue-700 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-blue-200' : 'border-transparent bg-gray-200/70 text-gray-700 hover:bg-white/70 dark:bg-gray-800/70 dark:text-gray-300 dark:hover:bg-gray-800'} ${isDragging ? 'opacity-50' : ''}`}
+      className={`group relative -mb-px flex min-w-[88px] max-w-[12rem] shrink-0 cursor-pointer items-center gap-1.5 rounded-t-lg border border-b-0 px-2.5 py-2 text-sm transition-colors ${active ? 'border-fw-border bg-fw-surface text-fw-accent shadow-sm dark:border-fw-border dark:bg-fw-surface dark:text-fw-accent' : 'border-transparent bg-fw-neutral-border/70 text-fw-text hover:bg-fw-surface/70 dark:bg-fw-surface/70 dark:text-fw-text dark:hover:bg-fw-hover'} ${isDragging ? 'opacity-50' : ''}`}
       title={isPreview ? `${tab.title} (preview)` : tab.title}
       {...attributes}
       {...listeners}
@@ -266,7 +266,7 @@ function SortableTab({
           event.stopPropagation()
           onCloseTab(tab.id)
         }}
-        className="rounded p-0.5 text-gray-400 opacity-70 hover:bg-black/5 hover:text-gray-600 group-hover:opacity-100 dark:hover:bg-white/10 dark:hover:text-gray-200"
+        className="rounded p-0.5 text-fw-text-muted opacity-70 hover:bg-fw-overlay/5 hover:text-fw-text group-hover:opacity-100 dark:hover:bg-fw-surface/10 dark:hover:text-fw-text-strong"
         title="Close tab"
       >
         <X className="h-3.5 w-3.5" />
@@ -368,7 +368,7 @@ export default function WorkbenchTabs({
   }
 
   return (
-    <div className="overflow-hidden border-b border-gray-200 bg-gray-100 px-3 pt-2 dark:border-gray-700 dark:bg-gray-900">
+    <div className="overflow-hidden border-b border-fw-border bg-fw-neutral-surface px-3 pt-2 dark:border-fw-border dark:bg-fw-canvas">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <TabStripRow

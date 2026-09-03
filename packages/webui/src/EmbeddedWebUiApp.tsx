@@ -11,25 +11,19 @@ import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 import { postFoxwarmEmbedHostMessage, readEmbeddedSessionLink, readFoxwarmActiveTargetMessage, readFoxwarmFocusModelsMessage, readFoxwarmVisibleSessionIdsMessage, type FoxwarmActiveTarget, type FoxwarmEmbeddedTarget } from './embeddedWebUi'
 import { useSessionIdleNotifications } from './sessionIdleNotifications'
 import { useBoundedSessionList } from './boundedSessionList'
+import { useTheme } from './theme/useTheme'
 
 const ArchitectureView = lazy(() => import('./components/ArchitectureView'))
 const SetupView = lazy(() => import('./components/SetupView'))
 
-const UI_THEME_STYLE_STORAGE_KEY = 'foxwarm_ui_theme_style_v1'
 const SEND_KEY_MODE_STORAGE_KEY = 'foxwarm_send_key_mode_v1'
 const GROUP_TOOLS_STORAGE_KEY = 'foxwarm_group_tools_v1'
 const SHOW_USAGE_BADGE_STORAGE_KEY = 'foxwarm_show_usage_badge_v1'
 
-type ThemeMode = 'auto' | 'light' | 'dark'
-type UiThemeStyle = 'default' | '550a'
 type SendKeyMode = 'modEnter' | 'enter'
 type WebUiSettings = { instanceName: string; tabIcon: string }
 
 type EmbeddedPreferences = {
-  themeMode: ThemeMode
-  setThemeMode: (mode: ThemeMode) => void
-  uiThemeStyle: UiThemeStyle
-  setUiThemeStyle: (style: UiThemeStyle) => void
   sendKeyMode: SendKeyMode
   setSendKeyMode: (mode: SendKeyMode) => void
   groupTools: boolean
@@ -39,8 +33,6 @@ type EmbeddedPreferences = {
 }
 
 const readPreferences = () => ({
-  themeMode: (['auto', 'light', 'dark'].includes(localStorage.getItem('themeMode') || '') ? localStorage.getItem('themeMode') : 'auto') as ThemeMode,
-  uiThemeStyle: (localStorage.getItem(UI_THEME_STYLE_STORAGE_KEY) === '550a' ? '550a' : 'default') as UiThemeStyle,
   sendKeyMode: (localStorage.getItem(SEND_KEY_MODE_STORAGE_KEY) === 'enter' ? 'enter' : 'modEnter') as SendKeyMode,
   groupTools: localStorage.getItem(GROUP_TOOLS_STORAGE_KEY) === 'true',
   showUsageBadge: localStorage.getItem(SHOW_USAGE_BADGE_STORAGE_KEY) !== 'false',
@@ -48,29 +40,9 @@ const readPreferences = () => ({
 
 function useEmbeddedPreferences(): EmbeddedPreferences {
   const initial = useMemo(readPreferences, [])
-  const [themeMode, setThemeMode] = useState<ThemeMode>(initial.themeMode)
-  const [uiThemeStyle, setUiThemeStyle] = useState<UiThemeStyle>(initial.uiThemeStyle)
   const [sendKeyMode, setSendKeyMode] = useState<SendKeyMode>(initial.sendKeyMode)
   const [groupTools, setGroupTools] = useState(initial.groupTools)
   const [showUsageBadge, setShowUsageBadge] = useState(initial.showUsageBadge)
-  const [systemDark, setSystemDark] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches || false)
-
-  useEffect(() => {
-    const media = window.matchMedia('(prefers-color-scheme: dark)')
-    const update = (event: MediaQueryListEvent) => setSystemDark(event.matches)
-    media.addEventListener('change', update)
-    return () => media.removeEventListener('change', update)
-  }, [])
-
-  useEffect(() => {
-    const dark = themeMode === 'dark' || (themeMode === 'auto' && systemDark)
-    document.documentElement.classList.toggle('dark', dark)
-    if (uiThemeStyle === '550a') document.documentElement.setAttribute('data-foxwarm-ui-style', '550a')
-    else document.documentElement.removeAttribute('data-foxwarm-ui-style')
-  }, [systemDark, themeMode, uiThemeStyle])
-
-  useEffect(() => { localStorage.setItem('themeMode', themeMode) }, [themeMode])
-  useEffect(() => { localStorage.setItem(UI_THEME_STYLE_STORAGE_KEY, uiThemeStyle) }, [uiThemeStyle])
   useEffect(() => { localStorage.setItem(SEND_KEY_MODE_STORAGE_KEY, sendKeyMode) }, [sendKeyMode])
   useEffect(() => { localStorage.setItem(GROUP_TOOLS_STORAGE_KEY, groupTools ? 'true' : 'false') }, [groupTools])
   useEffect(() => { localStorage.setItem(SHOW_USAGE_BADGE_STORAGE_KEY, showUsageBadge ? 'true' : 'false') }, [showUsageBadge])
@@ -78,8 +50,6 @@ function useEmbeddedPreferences(): EmbeddedPreferences {
   useEffect(() => {
     const sync = () => {
       const next = readPreferences()
-      setThemeMode(next.themeMode)
-      setUiThemeStyle(next.uiThemeStyle)
       setSendKeyMode(next.sendKeyMode)
       setGroupTools(next.groupTools)
       setShowUsageBadge(next.showUsageBadge)
@@ -88,7 +58,7 @@ function useEmbeddedPreferences(): EmbeddedPreferences {
     return () => window.removeEventListener('storage', sync)
   }, [])
 
-  return { themeMode, setThemeMode, uiThemeStyle, setUiThemeStyle, sendKeyMode, setSendKeyMode, groupTools, setGroupTools, showUsageBadge, setShowUsageBadge }
+  return { sendKeyMode, setSendKeyMode, groupTools, setGroupTools, showUsageBadge, setShowUsageBadge }
 }
 
 function normalizeSettings(value: unknown): WebUiSettings {
@@ -100,6 +70,7 @@ function normalizeSettings(value: unknown): WebUiSettings {
 }
 
 export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbeddedTarget, { kind: 'sidebar' }> }) {
+  useTheme()
   const preferences = useEmbeddedPreferences()
   const [agents, setAgents] = useState<AgentSummary[]>([])
   const [settings, setSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
@@ -214,14 +185,12 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
   const agentsActive = activeTarget?.kind === 'agents'
   return (
     <DndContext>
-      <div className="foxwarm-fixed-viewport-shell flex h-full min-h-0 flex-col bg-white dark:bg-gray-800">
-        <div className="border-b border-gray-200 p-3 dark:border-gray-700">
+      <div className="foxwarm-fixed-viewport-shell flex h-full min-h-0 flex-col bg-fw-surface">
+        <div className="border-b border-fw-border p-3 dark:border-fw-border">
           <div className="flex items-center justify-between gap-2">
-            <h1 className="flex min-w-0 items-center gap-2 truncate text-lg font-bold text-gray-900 dark:text-white"><Bot className="h-4 w-4 shrink-0" /> Foxwarm</h1>
+            <h1 className="flex min-w-0 items-center gap-2 truncate text-lg font-bold text-fw-text-strong"><Bot className="h-4 w-4 shrink-0" /> Foxwarm</h1>
             <div className="flex items-stretch gap-1">
               <GlobalUiSettingsMenu
-                themeMode={preferences.themeMode} onThemeChange={preferences.setThemeMode}
-                uiThemeStyle={preferences.uiThemeStyle} onUiThemeStyleChange={preferences.setUiThemeStyle}
                 sendKeyMode={preferences.sendKeyMode} onSendKeyModeChange={preferences.setSendKeyMode}
                 groupTools={preferences.groupTools} onGroupToolsChange={preferences.setGroupTools}
                 showUsageBadge={preferences.showUsageBadge} onShowUsageBadgeChange={preferences.setShowUsageBadge}
@@ -233,12 +202,12 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
               />
             </div>
           </div>
-          {loadError && <div className="mt-2 rounded bg-red-50 px-2 py-1 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">{loadError}</div>}
+          {loadError && <div className="mt-2 rounded bg-fw-danger-surface px-2 py-1 text-xs text-fw-danger dark:bg-fw-danger-surface-strong/40 dark:text-fw-danger">{loadError}</div>}
           <div className="mt-3 flex items-stretch gap-1">
             <button
               type="button"
               onClick={openAgents}
-              className={`inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${agentsActive ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'}`}
+              className={`inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${agentsActive ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'}`}
               title="Open agents overview"
               aria-pressed={agentsActive}
             >
@@ -255,7 +224,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
             />
           </div>
         </div>
-        <div className="min-h-0 flex-1 border-t border-gray-200 dark:border-gray-700">
+        <div className="min-h-0 flex-1 border-t border-fw-border">
           <SessionListCore sessions={sidebarSessions} currentSession={currentSession} onSelectSession={openSession} onKeepSession={openSession} toolbarContainerClassName="p-2 pb-1" listContainerClassName="p-2 pt-1" dragEnabled={false} idleNotificationModes={idleNotificationModes} unreadSessionIds={unreadSessionIds} onToggleIdleNotificationMode={toggleIdleNotificationMode} bounded={boundedPresentation} />
         </div>
       </div>
@@ -264,16 +233,17 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
 }
 
 function EmbeddedLeafFallback({ label }: { label: string }) {
-  return <div className="flex h-full items-center justify-center bg-gray-100 text-sm text-gray-500 dark:bg-gray-900 dark:text-gray-400">Loading {label}…</div>
+  return <div className="flex h-full items-center justify-center bg-fw-neutral-surface text-sm text-fw-text-muted dark:bg-fw-canvas dark:text-fw-text-muted">Loading {label}…</div>
 }
 
 export function EmbeddedAgentsApp({ target }: { target: Extract<FoxwarmEmbeddedTarget, { kind: 'agents' }> }) {
+  useTheme()
   useEmbeddedPreferences()
   const openSession = (sessionId: string) => {
     postFoxwarmEmbedHostMessage(target.nonce, { type: 'open-session', sessionId, title: sessionId })
   }
   return (
-    <div className="foxwarm-fixed-viewport-shell h-full min-h-0 overflow-hidden bg-gray-100 dark:bg-gray-900">
+    <div className="foxwarm-fixed-viewport-shell h-full min-h-0 overflow-hidden bg-fw-canvas">
       <Suspense fallback={<EmbeddedLeafFallback label="Agents" />}>
         <ArchitectureView onSelectSession={openSession} />
       </Suspense>
@@ -282,6 +252,7 @@ export function EmbeddedAgentsApp({ target }: { target: Extract<FoxwarmEmbeddedT
 }
 
 export function EmbeddedSetupApp({ target }: { target: Extract<FoxwarmEmbeddedTarget, { kind: 'setup' }> }) {
+  useTheme()
   useEmbeddedPreferences()
   const [focusModelsRequest, setFocusModelsRequest] = useState(0)
   useEffect(() => {
@@ -296,7 +267,7 @@ export function EmbeddedSetupApp({ target }: { target: Extract<FoxwarmEmbeddedTa
     return () => window.removeEventListener('message', handleHostMessage)
   }, [target.nonce])
   return (
-    <div className="foxwarm-fixed-viewport-shell h-full min-h-0 overflow-hidden bg-gray-50 dark:bg-gray-950">
+    <div className="foxwarm-fixed-viewport-shell h-full min-h-0 overflow-hidden bg-fw-surface-sunken dark:bg-fw-canvas-edge">
       <Suspense fallback={<EmbeddedLeafFallback label="Setup" />}>
         <SetupView focusModelsRequest={focusModelsRequest} />
       </Suspense>
@@ -305,6 +276,7 @@ export function EmbeddedSetupApp({ target }: { target: Extract<FoxwarmEmbeddedTa
 }
 
 export function EmbeddedChatApp({ target }: { target: Extract<FoxwarmEmbeddedTarget, { kind: 'chat' }> }) {
+  useTheme()
   const preferences = useEmbeddedPreferences()
 
   useEffect(() => {
@@ -319,7 +291,7 @@ export function EmbeddedChatApp({ target }: { target: Extract<FoxwarmEmbeddedTar
   }, [target.nonce])
 
   return (
-    <div className="foxwarm-fixed-viewport-shell h-full min-h-0 overflow-hidden bg-gray-100 dark:bg-gray-900">
+    <div className="foxwarm-fixed-viewport-shell h-full min-h-0 overflow-hidden bg-fw-canvas">
       <Chat
         sessionId={target.sessionId}
         canonicalSessionId={target.sessionId}

@@ -307,7 +307,7 @@ function ModelSelector({
   const renderCheckbox = (checked: boolean, label: string) => (
     <span
       aria-label={label}
-      className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border text-[12px] font-semibold ${checked ? 'border-blue-500 bg-blue-500 text-white' : 'border-gray-300 bg-white text-transparent dark:border-gray-600 dark:bg-gray-900'}`}
+      className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border text-[12px] font-semibold ${checked ? 'border-fw-accent-border bg-fw-accent text-fw-text-inverse' : 'border-fw-border-strong bg-fw-surface text-transparent dark:border-fw-border-strong dark:bg-fw-canvas'}`}
     >
       ✓
     </span>
@@ -316,20 +316,20 @@ function ModelSelector({
   const renderRow = (row: { key: string | null; label: string; title: string; currentChecked: boolean; childChecked: boolean; defaultRow?: boolean }) => (
     <div
       key={row.key || '__default__'}
-      className="foxwarm-model-selector-grid grid items-stretch border-t border-gray-100 text-xs first:border-t-0 dark:border-gray-800"
+      className="foxwarm-model-selector-grid grid items-stretch border-t border-fw-border-muted text-xs first:border-t-0 dark:border-fw-border-muted"
       data-model-selector-row="true"
     >
       <button
         type="button"
         disabled={busy}
         onClick={() => applyCurrentModel(row.key)}
-        className={`col-span-2 grid min-w-0 grid-cols-[minmax(0,1fr)_100px] items-stretch text-left transition-colors hover:bg-blue-50 focus-visible:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-blue-950/30 dark:focus-visible:bg-blue-950/30 ${row.currentChecked ? 'text-blue-700 dark:text-blue-200' : 'text-gray-700 dark:text-gray-200'}`}
+        className={`col-span-2 grid min-w-0 grid-cols-[minmax(0,1fr)_100px] items-stretch text-left transition-colors hover:bg-fw-accent-surface focus-visible:bg-fw-accent-surface disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-fw-accent-surface-strong/30 dark:focus-visible:bg-fw-accent-surface-strong/30 ${row.currentChecked ? 'text-fw-accent dark:text-fw-accent' : 'text-fw-text-strong'}`}
         title={row.title}
         aria-label={`Use ${row.label} as current session model`}
         data-model-current-region="true"
       >
         <span className="min-w-0 px-3 py-2" data-model-selector-column="model"><span className="block truncate font-medium">{row.label}</span></span>
-        <span className="flex items-center justify-center border-l border-gray-100 dark:border-gray-800" data-model-selector-column="current">
+        <span className="flex items-center justify-center border-l border-fw-border-muted dark:border-fw-border-muted" data-model-selector-column="current">
           {renderCheckbox(row.currentChecked, 'current model selected')}
         </span>
       </button>
@@ -337,7 +337,7 @@ function ModelSelector({
         type="button"
         disabled={busy}
         onClick={() => applyChildModel(row.key)}
-        className="flex items-center justify-center transition hover:bg-purple-50 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-purple-950/30"
+        className="flex items-center justify-center transition hover:bg-fw-special-surface disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-fw-special-surface/30"
         title={`Use ${row.label} as child default model`}
         data-model-selector-column="child"
       >
@@ -352,26 +352,26 @@ function ModelSelector({
         ref={buttonRef}
         type="button"
         onClick={toggleOpen}
-        className="inline-flex h-8 max-w-[19rem] shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-gray-500 transition hover:bg-gray-200 hover:text-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+        className="inline-flex h-8 max-w-[19rem] shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
         aria-haspopup="dialog"
         aria-expanded={open}
       >
-        <span className="shrink-0 text-gray-500 dark:text-gray-400">Model</span>
+        <span className="shrink-0 text-fw-text-muted">Model</span>
         <span className="min-w-0 truncate" title={currentModelKey || defaultModelKey || 'model'}>{currentModelKey || defaultModelKey || 'model'} · {effectiveEffort || effort || 'default'}</span>
         {(childModelDefault || childEffortDefault) && (
           <>
-            <span className="hidden shrink-0 text-gray-400 dark:text-gray-500 sm:inline">/</span>
-            <span className="hidden min-w-0 truncate text-gray-500 dark:text-gray-400 sm:inline" title={childModelDefault || 'follow'}>child {childModelDefault || 'follow'} · {effectiveChildEffort || childEffortDefault || 'default'}</span>
+            <span className="hidden shrink-0 text-fw-text-muted sm:inline">/</span>
+            <span className="hidden min-w-0 truncate text-fw-text-muted sm:inline" title={childModelDefault || 'follow'}>child {childModelDefault || 'follow'} · {effectiveChildEffort || childEffortDefault || 'default'}</span>
           </>
         )}
-        {(busy || refreshing) && <span className="shrink-0 text-gray-400 dark:text-gray-500">…</span>}
-        {error && <span className="shrink-0 text-red-500 dark:text-red-300">!</span>}
+        {(busy || refreshing) && <span className="shrink-0 text-fw-text-muted">…</span>}
+        {error && <span className="shrink-0 text-fw-danger dark:text-fw-danger">!</span>}
       </button>
 
       {open && createPortal(
         <div
           ref={popupRef}
-          className="foxwarm-model-selector-popup z-[1000] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900"
+          className="foxwarm-model-selector-popup z-[1000] overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-2xl dark:border-fw-border dark:bg-fw-canvas"
           style={{
             ...popupStyle,
             '--foxwarm-model-selector-scrollbar-width': `${scrollbarWidth}px`,
@@ -382,12 +382,12 @@ function ModelSelector({
           data-model-selector-popup="true"
         >
           <div
-            className="foxwarm-model-selector-grid foxwarm-model-selector-scrollbar-aligned grid items-stretch border-b border-gray-200 bg-gray-50 px-0 text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
+            className="foxwarm-model-selector-grid foxwarm-model-selector-scrollbar-aligned grid items-stretch border-b border-fw-border bg-fw-surface-sunken px-0 text-[11px] font-semibold uppercase tracking-wide text-fw-text-muted dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-muted"
             data-model-selector-header="true"
           >
             <div className="flex items-center px-3 py-2">Model id</div>
-            <div className="flex items-center justify-center border-l border-gray-200/80 px-2 py-2 text-center dark:border-gray-700/80">Current</div>
-            <div className="flex items-center justify-center border-l border-gray-200/80 px-2 py-2 text-center dark:border-gray-700/80">Child</div>
+            <div className="flex items-center justify-center border-l border-fw-border/80 px-2 py-2 text-center dark:border-fw-border/80">Current</div>
+            <div className="flex items-center justify-center border-l border-fw-border/80 px-2 py-2 text-center dark:border-fw-border/80">Child</div>
           </div>
           <div className="overflow-y-scroll" style={{ maxHeight: typeof popupStyle.maxHeight === 'number' ? popupStyle.maxHeight - (error ? 144 : 110) : undefined }} data-model-selector-scroll="true">
             {renderRow({
@@ -406,20 +406,20 @@ function ModelSelector({
               childChecked: childModelDefault === option.key,
             }))}
           </div>
-          {error && <div className="border-t border-red-100 px-3 py-2 text-xs text-red-600 dark:border-red-900/50 dark:text-red-300">{error}</div>}
+          {error && <div className="border-t border-fw-danger-border px-3 py-2 text-xs text-fw-danger dark:border-fw-danger-border/50 dark:text-fw-danger">{error}</div>}
           <div
-            className="foxwarm-model-selector-grid foxwarm-model-selector-scrollbar-aligned grid items-stretch border-t border-gray-200 bg-gray-50/70 text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:border-gray-700 dark:bg-gray-800/70 dark:text-gray-400"
+            className="foxwarm-model-selector-grid foxwarm-model-selector-scrollbar-aligned grid items-stretch border-t border-fw-border bg-fw-surface-sunken/70 text-[11px] font-semibold uppercase tracking-wide text-fw-text-muted dark:border-fw-border dark:bg-fw-surface/70 dark:text-fw-text-muted"
             data-model-effort-footer="true"
           >
             <div className="flex items-center px-3 py-1.5">Effort</div>
-            <label className="flex min-w-0 items-center border-l border-gray-200/80 px-1.5 py-1 dark:border-gray-700/80">
+            <label className="flex min-w-0 items-center border-l border-fw-border/80 px-1.5 py-1 dark:border-fw-border/80">
               <select
                 aria-label="Current effort"
                 aria-describedby={`${effortDescriptionId}-current`}
                 disabled={busy}
                 value={effort || ''}
                 onChange={(event) => void onChangeEffort(event.target.value || null).catch(() => {})}
-                className="foxwarm-model-effort-select h-6 w-full min-w-0 rounded-md border border-gray-200 bg-white/90 px-1 text-[11px] font-medium normal-case tracking-normal text-gray-700 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-300 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-900/90 dark:text-gray-200 dark:focus:border-blue-500 dark:focus:ring-blue-700"
+                className="foxwarm-model-effort-select h-6 w-full min-w-0 rounded-md border border-fw-border bg-fw-surface/90 px-1 text-[11px] font-medium normal-case tracking-normal text-fw-text outline-none focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring disabled:opacity-60 dark:border-fw-border-strong dark:bg-fw-canvas/90 dark:text-fw-text-strong dark:focus:border-fw-accent-border dark:focus:ring-fw-focus-ring"
                 title={`Current effort: ${currentStaleFullLabel || (effort || currentDefaultFullLabel)}`}
               >
                 <option value="" label={currentDefaultShortLabel} title={currentDefaultFullLabel}>{currentDefaultFullLabel}</option>
@@ -428,14 +428,14 @@ function ModelSelector({
               </select>
               <span id={`${effortDescriptionId}-current`} className="sr-only">Current effort: {currentStaleFullLabel || (effort || currentDefaultFullLabel)}</span>
             </label>
-            <label className="flex min-w-0 items-center border-l border-gray-200/80 px-1.5 py-1 dark:border-gray-700/80">
+            <label className="flex min-w-0 items-center border-l border-fw-border/80 px-1.5 py-1 dark:border-fw-border/80">
               <select
                 aria-label="Child effort"
                 aria-describedby={`${effortDescriptionId}-child`}
                 disabled={busy}
                 value={childEffortDefault || ''}
                 onChange={(event) => void onChangeChildEffort(event.target.value || null).catch(() => {})}
-                className="foxwarm-model-effort-select h-6 w-full min-w-0 rounded-md border border-gray-200 bg-white/90 px-1 text-[11px] font-medium normal-case tracking-normal text-gray-700 outline-none focus:border-purple-400 focus:ring-1 focus:ring-purple-300 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-900/90 dark:text-gray-200 dark:focus:border-purple-500 dark:focus:ring-purple-700"
+                className="foxwarm-model-effort-select h-6 w-full min-w-0 rounded-md border border-fw-border bg-fw-surface/90 px-1 text-[11px] font-medium normal-case tracking-normal text-fw-text outline-none focus:border-fw-special-border focus:ring-1 focus:ring-fw-focus-ring disabled:opacity-60 dark:border-fw-border-strong dark:bg-fw-canvas/90 dark:text-fw-text-strong dark:focus:border-fw-special-border dark:focus:ring-fw-focus-ring"
                 title={`Child effort: ${childStaleFullLabel || (childEffortDefault || childDefaultFullLabel)}`}
               >
                 <option value="" label={childDefaultShortLabel} title={childDefaultFullLabel}>{childDefaultFullLabel}</option>
@@ -445,14 +445,14 @@ function ModelSelector({
               <span id={`${effortDescriptionId}-child`} className="sr-only">Child effort: {childStaleFullLabel || (childEffortDefault || childDefaultFullLabel)}</span>
             </label>
           </div>
-          <div className="flex min-w-0 items-center gap-1.5 border-t border-gray-200 p-1.5 dark:border-gray-700">
+          <div className="flex min-w-0 items-center gap-1.5 border-t border-fw-border p-1.5 dark:border-fw-border">
             <button
               type="button"
               onClick={() => {
                 setOpen(false)
                 onOpenModelSettings()
               }}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
               aria-label="Configure models"
               title="Configure models"
             >
@@ -468,7 +468,7 @@ function ModelSelector({
               onCompositionEnd={() => { filterComposingRef.current = false }}
               aria-label="Filter models"
               placeholder="Filter models"
-              className="foxwarm-model-filter-input h-8 min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2.5 text-xs text-gray-800 outline-none placeholder:text-gray-400 focus:border-blue-400 focus:ring-1 focus:ring-blue-400 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100 dark:placeholder:text-gray-500"
+              className="foxwarm-model-filter-input h-8 min-w-0 flex-1 rounded-lg border border-fw-border bg-fw-surface px-2.5 text-xs text-fw-text-strong outline-none placeholder:text-fw-text-muted focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring dark:border-fw-border dark:bg-fw-canvas-edge dark:text-fw-text-strong dark:placeholder:text-fw-text-muted"
             />
           </div>
         </div>,
@@ -1215,8 +1215,8 @@ const ChatComposer = memo(function ChatComposer({
       className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-4 pt-10"
     >
       {isDragging && (
-        <div className="absolute inset-0 flex items-center justify-center bg-blue-100/80 dark:bg-blue-900/40 pointer-events-none">
-          <div className="inline-flex items-center gap-2 rounded-lg border border-blue-300 dark:border-blue-700 bg-white/90 dark:bg-gray-900/80 px-4 py-3 text-blue-700 dark:text-blue-200 text-base font-semibold shadow-sm">
+        <div className="absolute inset-0 flex items-center justify-center bg-fw-accent-surface/80 dark:bg-fw-accent-surface-strong/40 pointer-events-none">
+          <div className="inline-flex items-center gap-2 rounded-lg border border-fw-accent-border dark:border-fw-accent-border bg-fw-surface/90 dark:bg-fw-canvas/80 px-4 py-3 text-fw-accent dark:text-fw-accent text-base font-semibold shadow-sm">
             <Paperclip size={18} />
             <span>Drop files here to upload</span>
           </div>
@@ -1230,14 +1230,14 @@ const ChatComposer = memo(function ChatComposer({
         onDrop={handleDrop}
       >
         {transcribeError && (
-          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/80 dark:bg-amber-900/20 dark:text-amber-200">
+          <div className="mb-3 rounded-lg border border-fw-warning-border bg-fw-warning-surface px-3 py-2 text-sm text-fw-warning dark:border-fw-warning-border/80 dark:bg-fw-warning-surface-strong/20 dark:text-fw-warning">
             ASR 实验入口失败：{transcribeError}
           </div>
         )}
         {(isRecordingAudio || transcribingAudio || liveTranscriptionPreview) && (
           <div className="mb-3 flex justify-start">
-            <div className="max-w-[min(100%,32rem)] rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 shadow-sm dark:border-blue-800/80 dark:bg-blue-900/20 dark:text-blue-100">
-              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-blue-700 dark:text-blue-300">
+            <div className="max-w-[min(100%,32rem)] rounded-2xl border border-fw-accent-border bg-fw-accent-surface px-4 py-3 text-sm text-fw-accent shadow-sm dark:border-fw-accent-border/80 dark:bg-fw-accent-surface-strong/20 dark:text-fw-accent">
+              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-fw-accent dark:text-fw-accent">
                 <span>{isRecordingAudio ? 'Live ASR preview' : 'ASR finalizing'}</span>
               </div>
               <div className="whitespace-pre-wrap break-words">
@@ -1248,27 +1248,27 @@ const ChatComposer = memo(function ChatComposer({
         )}
 
         {sessionMissing && (
-          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/80 dark:bg-amber-900/20 dark:text-amber-200">
+          <div className="mb-3 rounded-lg border border-fw-warning-border bg-fw-warning-surface px-3 py-2 text-sm text-fw-warning dark:border-fw-warning-border/80 dark:bg-fw-warning-surface-strong/20 dark:text-fw-warning">
             Session not found. Select an existing session from the list, or create a new session instead of opening a missing hash directly.
           </div>
         )}
 
         <div className="foxwarm-chat-composer-form-anchor relative">
           {showSlashCommandMenu && (
-            <div className="absolute inset-x-0 bottom-[calc(100%+0.5rem)] z-10 flex max-h-[min(20rem,calc(100vh-1rem))] flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-900" data-slash-command-overlay="true">
-            <div className="flex items-center justify-between gap-2 border-b border-gray-200 px-3 py-2 text-xs font-medium text-gray-500 dark:border-gray-700 dark:text-gray-400">
+            <div className="absolute inset-x-0 bottom-[calc(100%+0.5rem)] z-10 flex max-h-[min(20rem,calc(100vh-1rem))] flex-col overflow-hidden rounded-lg border border-fw-border bg-fw-surface shadow-lg dark:border-fw-border dark:bg-fw-canvas" data-slash-command-overlay="true">
+            <div className="flex items-center justify-between gap-2 border-b border-fw-border px-3 py-2 text-xs font-medium text-fw-text-muted dark:border-fw-border dark:text-fw-text-muted">
               <span>Slash commands</span>
               <span className="text-[11px]">↑↓ select · Enter/Tab apply · Esc dismiss</span>
             </div>
             <div ref={slashMenuRef} className="min-h-0 flex-1 overflow-y-auto">
               {commandsLoading && (
-                <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">Loading commands...</div>
+                <div className="px-3 py-2 text-sm text-fw-text-muted">Loading commands...</div>
               )}
               {!commandsLoading && commandsError && slashCommandSuggestions.length === 0 && slashCommandHints.length === 0 && (
-                <div className="px-3 py-2 text-sm text-red-600 dark:text-red-300">{commandsError}</div>
+                <div className="px-3 py-2 text-sm text-fw-danger dark:text-fw-danger">{commandsError}</div>
               )}
               {!commandsLoading && !commandsError && slashCommandSuggestions.length === 0 && slashCommandHints.length === 0 && (
-                <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">No matching commands.</div>
+                <div className="px-3 py-2 text-sm text-fw-text-muted">No matching commands.</div>
               )}
               {slashCommandSuggestions.map((command, index) => {
                 const isActive = index === highlightedCommandIndex
@@ -1282,17 +1282,17 @@ const ChatComposer = memo(function ChatComposer({
                       applySlashCommand(command)
                     }}
                     onMouseEnter={() => setHighlightedCommandIndex(index)}
-                    className={`w-full border-b border-gray-100 px-3 py-2 text-left transition last:border-b-0 dark:border-gray-800 ${isActive ? 'bg-blue-50 dark:bg-blue-900/30' : 'hover:bg-gray-50 dark:hover:bg-gray-800/80'}`}
+                    className={`w-full border-b border-fw-border-muted px-3 py-2 text-left transition last:border-b-0 dark:border-fw-border-muted ${isActive ? 'bg-fw-accent-surface dark:bg-fw-accent-surface-strong/30' : 'hover:bg-fw-hover dark:hover:bg-fw-hover/80'}`}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{command.label}</span>
+                      <span className="font-mono text-sm text-fw-text-strong">{command.label}</span>
                       {command.requiresSession === false && (
-                        <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-gray-800 dark:text-gray-400">global</span>
+                        <span className="rounded bg-fw-neutral-surface px-1.5 py-0.5 text-[10px] text-fw-text-muted dark:bg-fw-surface dark:text-fw-text-muted">global</span>
                       )}
                     </div>
-                    <div className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">{command.description}</div>
+                    <div className="mt-0.5 text-xs text-fw-text">{command.description}</div>
                     {command.usage && (
-                      <div className="mt-1 font-mono text-[11px] text-gray-500 dark:text-gray-400">{command.usage}</div>
+                      <div className="mt-1 font-mono text-[11px] text-fw-text-muted">{command.usage}</div>
                     )}
                   </button>
                 )
@@ -1300,14 +1300,14 @@ const ChatComposer = memo(function ChatComposer({
               {slashCommandHints.map((hint, index) => (
                 <div
                   key={hint.key}
-                  className={`px-3 py-2 text-left ${slashCommandSuggestions.length > 0 || index > 0 ? 'border-t border-gray-100 dark:border-gray-800' : ''}`}
+                  className={`px-3 py-2 text-left ${slashCommandSuggestions.length > 0 || index > 0 ? 'border-t border-fw-border-muted dark:border-fw-border-muted' : ''}`}
                 >
-                  <div className="font-mono text-sm text-gray-700 dark:text-gray-200">{hint.label}</div>
+                  <div className="font-mono text-sm text-fw-text-strong">{hint.label}</div>
                   {hint.description && (
-                    <div className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">{hint.description}</div>
+                    <div className="mt-0.5 text-xs text-fw-text">{hint.description}</div>
                   )}
                   {hint.usage && (
-                    <div className="mt-1 font-mono text-[11px] text-gray-500 dark:text-gray-400">{hint.usage}</div>
+                    <div className="mt-1 font-mono text-[11px] text-fw-text-muted">{hint.usage}</div>
                   )}
                 </div>
               ))}
@@ -1317,8 +1317,8 @@ const ChatComposer = memo(function ChatComposer({
 
           <form
             onSubmit={handleSubmit}
-            className={`foxwarm-chat-composer-form rounded-[30px] border border-gray-200/90 bg-gray-50/75 px-3.5 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.06)] backdrop-blur-[5px] transition focus-within:border-gray-300 focus-within:bg-white/92 dark:border-gray-700/90 dark:bg-gray-800/70 dark:focus-within:border-gray-600 dark:focus-within:bg-gray-800/92 ${
-              isDragging ? 'border-blue-400 dark:border-blue-500' : ''
+            className={`foxwarm-chat-composer-form rounded-[30px] border border-fw-border/90 bg-fw-surface-sunken/75 px-3.5 py-2 shadow-[var(--foxwarm-panel-shadow)] backdrop-blur-[5px] transition focus-within:border-fw-border-strong focus-within:bg-fw-surface/92 dark:border-fw-border/90 dark:bg-fw-surface/70 dark:focus-within:border-fw-border-strong dark:focus-within:bg-fw-surface/92 ${
+              isDragging ? 'border-fw-accent-border dark:border-fw-accent-border' : ''
             }`}
           >
         <input
@@ -1363,7 +1363,7 @@ const ChatComposer = memo(function ChatComposer({
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
-          className="foxwarm-chat-composer-textarea mb-1.5 min-h-[60px] w-full resize-none overflow-y-auto border-0 bg-transparent px-3 py-1 text-[16px] leading-6 text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-0 dark:text-white dark:placeholder:text-gray-500"
+          className="foxwarm-chat-composer-textarea mb-1.5 min-h-[60px] w-full resize-none overflow-y-auto border-0 bg-transparent px-3 py-1 text-[16px] leading-6 text-fw-text-strong placeholder:text-fw-text-muted focus:outline-none focus:ring-0 dark:text-fw-text-strong dark:placeholder:text-fw-text-muted"
           style={{ maxHeight: '200px', fontSize: '16px' }}
           placeholder={sessionMissing
             ? 'Session not found'
@@ -1373,7 +1373,7 @@ const ChatComposer = memo(function ChatComposer({
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto pb-0.5">
             <label
               htmlFor="file-upload"
-              className="inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-gray-500 transition hover:bg-gray-200 hover:text-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+              className="inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-fw-text-muted transition hover:bg-fw-hover hover:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
               title="Attach files"
               aria-label="Attach files"
             >
@@ -1381,7 +1381,7 @@ const ChatComposer = memo(function ChatComposer({
             </label>
             <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
               {attachments.length === 0 ? (
-                <div className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium text-gray-500 dark:text-gray-400">
+                <div className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[13px] font-medium text-fw-text-muted">
                   <Paperclip size={13} />
                   <span>No files</span>
                 </div>
@@ -1389,14 +1389,14 @@ const ChatComposer = memo(function ChatComposer({
                 attachments.map((file, idx) => (
                   <div
                     key={`${file.name}-${idx}`}
-                    className="foxwarm-attachment-chip inline-flex h-8 max-w-[12rem] shrink-0 items-center gap-2 rounded-full border border-gray-200 bg-white px-3 text-[13px] shadow-sm dark:border-gray-700 dark:bg-gray-800"
+                    className="foxwarm-attachment-chip inline-flex h-8 max-w-[12rem] shrink-0 items-center gap-2 rounded-full border border-fw-border bg-fw-surface px-3 text-[13px] shadow-sm dark:border-fw-border dark:bg-fw-surface"
                   >
-                    <Paperclip size={12} className="shrink-0 text-gray-400 dark:text-gray-500" />
-                    <span className="truncate text-gray-700 dark:text-gray-300">{file.name}</span>
+                    <Paperclip size={12} className="shrink-0 text-fw-text-muted" />
+                    <span className="truncate text-fw-text">{file.name}</span>
                     <button
                       type="button"
                       onClick={() => updateAttachments(prev => prev.filter((_, i) => i !== idx))}
-                      className="shrink-0 text-gray-400 transition hover:text-red-500"
+                      className="shrink-0 text-fw-text-muted transition hover:text-fw-danger"
                       title="Remove attachment"
                     >
                       ×
@@ -1412,7 +1412,7 @@ const ChatComposer = memo(function ChatComposer({
                     type="button"
                     onClick={() => void handleRecordToggle()}
                     disabled={transcribingAudio}
-                    className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-l-full rounded-r-none px-3 text-[13px] font-medium leading-none transition disabled:cursor-not-allowed ${isRecordingAudio ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-200 dark:hover:bg-red-900/60' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'} ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : ''}`}
+                    className={`inline-flex h-8 shrink-0 items-center gap-1 rounded-l-full rounded-r-none px-3 text-[13px] font-medium leading-none transition disabled:cursor-not-allowed ${isRecordingAudio ? 'bg-fw-danger-surface text-fw-danger hover:bg-fw-danger-surface-strong dark:bg-fw-danger-surface-strong/40 dark:text-fw-danger dark:hover:bg-fw-danger-surface-strong/60' : 'text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse'} ${transcribingAudio ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : ''}`}
                     title={isRecordingAudio ? 'Stop recording and transcribe' : 'Start recording'}
                   >
                     {isRecordingAudio ? <Square size={13} className="shrink-0" /> : <Mic size={13} className="shrink-0" />}
@@ -1438,7 +1438,7 @@ const ChatComposer = memo(function ChatComposer({
                         e.preventDefault()
                       }
                     }}
-                    className={`inline-flex h-8 shrink-0 items-center justify-center rounded-r-full rounded-l-none px-3 text-[13px] font-medium transition ${isRecordingAudio || transcribingAudio ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${transcribingAudio ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200' : 'text-gray-600 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'} ${isRecordingAudio ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200' : ''}`}
+                    className={`inline-flex h-8 shrink-0 items-center justify-center rounded-r-full rounded-l-none px-3 text-[13px] font-medium transition ${isRecordingAudio || transcribingAudio ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${transcribingAudio ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : 'text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse'} ${isRecordingAudio ? 'bg-fw-danger-surface text-fw-danger dark:bg-fw-danger-surface-strong/40 dark:text-fw-danger' : ''}`}
                     title="Upload audio file and append transcript to draft"
                   >
                     <span>file</span>
@@ -1475,7 +1475,7 @@ const ChatComposer = memo(function ChatComposer({
           <button
             type="submit"
             disabled={loading || sessionMissing || (!input.trim() && attachments.length === 0)}
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-900 text-white transition hover:bg-black disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed dark:bg-gray-200 dark:text-gray-900 dark:hover:bg-white dark:disabled:bg-gray-700 dark:disabled:text-gray-500"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-fw-text-strong text-fw-surface transition hover:bg-fw-text disabled:bg-fw-border-strong disabled:text-fw-text-muted disabled:cursor-not-allowed"
             aria-label="Send message"
             title="Send message"
           >

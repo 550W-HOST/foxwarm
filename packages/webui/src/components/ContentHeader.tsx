@@ -13,27 +13,27 @@ interface ContentHeaderProps {
 
 export default function ContentHeader({ icon, title, subtitle, actions, onBack, sticky = false, below }: ContentHeaderProps) {
   return (
-    <div className={`${sticky ? 'sticky top-0 z-30 ' : ''}border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800`}>
+    <div className={`${sticky ? 'sticky top-0 z-30 ' : ''}border-b border-fw-border bg-fw-surface dark:border-fw-border dark:bg-fw-surface`}>
       <div className="flex h-16 items-center justify-between gap-3 px-3">
         <div className="flex min-w-0 items-center gap-3">
           {onBack && (
             <button
               onClick={onBack}
-              className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+              className="rounded-lg p-2 text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover"
               title="Back"
             >
               <ArrowLeft className="h-5 w-5" />
             </button>
           )}
 
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-600 dark:bg-gray-700/70 dark:text-gray-200">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-fw-neutral-surface text-fw-text dark:bg-fw-surface-raised/70 dark:text-fw-text-strong">
             {icon}
           </div>
 
           <div className="min-w-0">
-            <div className="truncate text-lg font-semibold text-gray-900 dark:text-white">{title}</div>
+            <div className="truncate text-lg font-semibold text-fw-text-strong">{title}</div>
             {subtitle && (
-              <div className="truncate text-sm text-gray-500 dark:text-gray-400">
+              <div className="truncate text-sm text-fw-text-muted">
                 {subtitle}
               </div>
             )}

@@ -152,18 +152,18 @@ const sessionMatchesFilter = (session: Session, normalizedQuery: string): boolea
 
 const getRuntimeBadgeTone = (session: Session): string => {
   const state = getSessionRuntimeStateName(session)
-  if (state === 'requesting-model') return 'text-blue-600 dark:text-blue-300'
-  if (state === 'running-tool') return 'text-purple-600 dark:text-purple-300'
-  if (state === 'waiting') return 'text-amber-600 dark:text-amber-300'
-  return 'text-gray-500 dark:text-gray-400'
+  if (state === 'requesting-model') return 'text-fw-accent dark:text-fw-accent'
+  if (state === 'running-tool') return 'text-fw-special dark:text-fw-special'
+  if (state === 'waiting') return 'text-fw-warning dark:text-fw-warning'
+  return 'text-fw-text-muted'
 }
 
 const RuntimeActivityDots = ({ state }: { state: string }) => {
   const colorClass = state === 'running-tool'
-    ? 'bg-purple-500 dark:bg-purple-400'
+    ? 'bg-fw-special dark:bg-fw-special'
     : state === 'waiting'
-      ? 'bg-amber-500 dark:bg-amber-400'
-      : 'bg-blue-500 dark:bg-blue-400'
+      ? 'bg-fw-warning dark:bg-fw-warning'
+      : 'bg-fw-accent dark:bg-fw-accent'
 
   if (state === 'waiting') {
     return <span className={`w-1.5 h-1.5 ${colorClass} rounded-full`} />
@@ -301,10 +301,10 @@ function SidebarRootDropZone({ visible, disabled, allowOrder }: { visible: boole
       ref={setNodeRef}
       className={`mb-2 rounded-lg border border-dashed px-3 py-2 text-xs transition-colors ${
         isOver && !disabled
-          ? 'border-blue-400 bg-blue-50 text-blue-700 dark:border-blue-500/70 dark:bg-blue-950/40 dark:text-blue-200'
+          ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent dark:border-fw-accent-border/70 dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent'
           : disabled
-            ? 'border-gray-200 bg-gray-50 text-gray-400 dark:border-gray-700 dark:bg-gray-900/50 dark:text-gray-500'
-            : 'border-gray-200 bg-gray-50 text-gray-500 dark:border-gray-700 dark:bg-gray-900/50 dark:text-gray-400'
+            ? 'border-fw-border bg-fw-surface-sunken text-fw-text-muted dark:border-fw-border dark:bg-fw-canvas/50 dark:text-fw-text-muted'
+            : 'border-fw-border bg-fw-surface-sunken text-fw-text-muted dark:border-fw-border dark:bg-fw-canvas/50 dark:text-fw-text-muted'
       }`}
     >
       <div className="flex items-center gap-2 font-medium">
@@ -344,7 +344,7 @@ function SessionRowDropLayer({
           }}
           className="pointer-events-none absolute inset-x-0 top-0 h-[28%]"
         >
-          {(isOver) => isOver ? <div className="absolute inset-x-2 top-0 h-0.5 rounded-full bg-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.18)]" /> : null}
+          {(isOver) => isOver ? <div className="absolute inset-x-2 top-0 h-0.5 rounded-full bg-fw-accent ring-2 ring-fw-accent/20" /> : null}
         </SidebarDropZone>
       )}
       {allowParentDrop && (
@@ -360,7 +360,7 @@ function SessionRowDropLayer({
           className="pointer-events-none absolute inset-x-0 top-[28%] bottom-[28%]"
         >
           {(isOver) => isOver ? (
-            <div className="absolute inset-x-1 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-md border border-blue-300 bg-blue-50/95 px-2 py-1 text-[11px] font-medium text-blue-700 shadow-sm dark:border-blue-500/60 dark:bg-blue-950/95 dark:text-blue-200">
+            <div className="absolute inset-x-1 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-md border border-fw-accent-border bg-fw-accent-surface/95 px-2 py-1 text-[11px] font-medium text-fw-accent shadow-sm dark:border-fw-accent-border/60 dark:bg-fw-accent-surface-strong/95 dark:text-fw-accent">
               Assign as child
             </div>
           ) : null}
@@ -377,7 +377,7 @@ function SessionRowDropLayer({
           }}
           className="pointer-events-none absolute inset-x-0 bottom-0 h-[28%]"
         >
-          {(isOver) => isOver ? <div className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.18)]" /> : null}
+          {(isOver) => isOver ? <div className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-fw-accent ring-2 ring-fw-accent/20" /> : null}
         </SidebarDropZone>
       )}
     </div>
@@ -1164,8 +1164,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           session={session}
           className={`group relative flex items-center rounded cursor-pointer active:cursor-grabbing mt-1 ${
             isCurrentSession
-              ? 'bg-blue-100 dark:bg-blue-900/30' 
-              : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+              ? 'bg-fw-accent-surface dark:bg-fw-accent-surface-strong/30'
+              : 'hover:bg-fw-hover dark:hover:bg-fw-hover'
           } ${session.archived ? 'opacity-70' : ''}`}
           onClick={() => onSelectSession(session.id)}
           onDoubleClick={() => onKeepSession?.(session.id)}
@@ -1183,27 +1183,27 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               />
               <div className="flex flex-1 min-w-0 items-start py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
                 <div className="min-w-0 flex-1">
-                  <div className="font-medium truncate text-gray-900 dark:text-white text-sm">
+                  <div className="font-medium truncate text-fw-text-strong text-sm">
                     {session.pinned && (
-                      <Pin className="mr-1 inline h-3.5 w-3.5 align-[-2px] text-blue-500 dark:text-blue-300" aria-label="Pinned session" />
+                      <Pin className="mr-1 inline h-3.5 w-3.5 align-[-2px] text-fw-accent dark:text-fw-accent" aria-label="Pinned session" />
                     )}
                     {session.displayName || displayId}
                     {unreadSessionIds.has(session.id) && (
                       <span className="ml-1.5 inline-flex items-center align-middle">
-                        <span className="h-2 w-2 rounded-full bg-blue-500" aria-hidden="true" />
+                        <span className="h-2 w-2 rounded-full bg-fw-accent" aria-hidden="true" />
                         <span className="sr-only">Unread idle completion</span>
                       </span>
                     )}
                     {session.archived && (
-                      <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">[Archived]</span>
+                      <span className="ml-2 text-xs text-fw-text-muted">[Archived]</span>
                     )}
                   </div>
                   {session.displayName && (
-                    <div className="text-xs text-gray-400 dark:text-gray-500 font-mono truncate">
+                    <div className="text-xs text-fw-text-muted font-mono truncate">
                       {displayId}
                     </div>
                   )}
-                  <div className="text-xs text-gray-500 dark:text-gray-400 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                  <div className="text-xs text-fw-text-muted flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                     {showRuntimeBadge && (
                       <>
                         <span className={`inline-flex items-center gap-1 ${getRuntimeBadgeTone(session)}`} title={session.runtimeState?.note || undefined}>
@@ -1222,7 +1222,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                     <span>{session.sequenceMessageCount ?? session.messageCount ?? 0} msgs</span>
                   </div>
                   {hasChildren && (
-                    <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-fw-text-muted">
                       <button
                         type="button"
                         onClick={(e) => {
@@ -1232,7 +1232,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                         onPointerDown={(e) => e.stopPropagation()}
                         onKeyDown={(e) => e.stopPropagation()}
                         onDoubleClick={(e) => e.stopPropagation()}
-                        className="-ml-1 -my-1 inline-flex items-center gap-x-1.5 gap-y-0.5 rounded px-1 py-1 text-left text-gray-500 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 dark:text-gray-400 dark:hover:text-gray-200"
+                        className="-ml-1 -my-1 inline-flex items-center gap-x-1.5 gap-y-0.5 rounded px-1 py-1 text-left text-fw-text-muted hover:text-fw-text focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/40 dark:text-fw-text-muted dark:hover:text-fw-text-strong"
                         title={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
                         aria-label={isExpanded ? 'Collapse child sessions' : 'Expand child sessions'}
                         aria-expanded={isExpanded}
@@ -1248,7 +1248,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                         {descendantBusyCount > 0 && (
                           <>
                             <span>•</span>
-                            <span className="text-blue-600 dark:text-blue-300">{descendantBusyCount} active</span>
+                            <span className="text-fw-accent dark:text-fw-accent">{descendantBusyCount} active</span>
                           </>
                         )}
                       </button>
@@ -1260,7 +1260,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               <button
                 onClick={(e) => handleMenuClick(e, session.id)}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 rounded md:hidden"
+                className="p-2 text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text hover:bg-fw-hover dark:hover:bg-fw-hover rounded md:hidden"
                 title="More options"
               >
                 <MoreVertical className="w-4 h-4" />
@@ -1275,7 +1275,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               <div
                 data-session-branch-loading={session.id}
                 aria-live="polite"
-                className="p-2 text-xs text-gray-500 dark:text-gray-400"
+                className="p-2 text-xs text-fw-text-muted"
                 style={{ paddingLeft: `${28 + (level + 1) * 16}px` }}
               >
                 {boundedChildPage ? 'Loading more child sessions…' : 'Loading child sessions…'}
@@ -1287,7 +1287,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 data-session-branch-retry={session.id}
                 onClick={(event) => { event.stopPropagation(); bounded?.onRetryBranch(session.id) }}
                 onPointerDown={(event) => event.stopPropagation()}
-                className="w-full p-2 text-left text-xs text-red-600 hover:text-red-700 dark:text-red-300 dark:hover:text-red-200"
+                className="w-full p-2 text-left text-xs text-fw-danger hover:text-fw-danger dark:text-fw-danger dark:hover:text-fw-danger"
                 style={{ paddingLeft: `${28 + (level + 1) * 16}px` }}
                 title={branchLoadState?.message || 'Failed to load child sessions'}
               >
@@ -1299,7 +1299,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
             {showMoreChildren && (
               <button
                 onClick={() => toggleShowMore(session.id)}
-                className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
                 style={{ paddingLeft: `${28 + (level + 1) * 16}px` }}
               >
                 {`▼ Show ${Math.min(hiddenCount, MORE_VISIBLE_CHILDREN_STEP)} more...`}
@@ -1308,7 +1308,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
             {!bounded && hiddenCount <= 0 && children.length > DEFAULT_VISIBLE_CHILDREN && (
               <button
                 onClick={() => toggleShowMore(session.id)}
-                className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
                 style={{ paddingLeft: `${28 + (level + 1) * 16}px` }}
               >
                 ▲ Show less
@@ -1363,7 +1363,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       {
         key: 'idle-notification',
         icon: idleNotificationMode
-          ? <BellRing size={14} className="text-blue-600 dark:text-blue-300" />
+          ? <BellRing size={14} className="text-fw-accent dark:text-fw-accent" />
           : <Bell size={14} />,
         label: 'Notify on idle',
         checked: idleNotificationMode === 'once',
@@ -1419,23 +1419,23 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
   return (
     <>
       <div className="flex h-full min-h-0 flex-col">
-        <div className={`shrink-0 bg-white/95 dark:bg-gray-800/95 ${toolbarContainerClassName}`}>
+        <div className={`shrink-0 bg-fw-surface/95 dark:bg-fw-surface/95 ${toolbarContainerClassName}`}>
           <div className="flex items-center gap-1.5">
             <div className="relative min-w-0 flex-1">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-fw-text-muted" />
               <input
                 type="search"
                 value={filterText}
                 onChange={(e) => setFilterText(e.currentTarget.value)}
                 placeholder="Search sessions"
                 aria-label="Search sessions"
-                className="w-full rounded-lg border border-gray-200 bg-white py-1 pl-8 pr-8 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:border-blue-500"
+                className="w-full rounded-lg border border-fw-border bg-fw-surface py-1 pl-8 pr-8 text-sm text-fw-text-strong outline-none transition placeholder:text-fw-text-muted focus:border-fw-accent-border focus:ring-2 focus:ring-fw-focus-ring/20 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong dark:placeholder:text-fw-text-muted dark:focus:border-fw-accent-border"
               />
               {filterText && (
                 <button
                   type="button"
                   onClick={() => setFilterText('')}
-                  className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                  className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-strong"
                   aria-label="Clear session search"
                   title="Clear search"
                 >
@@ -1446,7 +1446,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
             <button
               type="button"
               onClick={cycleViewMode}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 transition hover:border-blue-300 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:border-blue-500/70 dark:hover:text-blue-200"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-fw-border bg-fw-surface text-fw-text-muted transition hover:border-fw-accent-border hover:text-fw-accent focus:outline-none focus:ring-2 focus:ring-fw-focus-ring/30 dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text dark:hover:border-fw-accent-border/70 dark:hover:text-fw-accent"
               title={`${SESSION_LIST_VIEW_MODE_LABELS[viewMode]} mode. ${SESSION_LIST_VIEW_MODE_TITLES[viewMode]} Click to switch mode.`}
               aria-label={`Session list mode: ${SESSION_LIST_VIEW_MODE_LABELS[viewMode]}`}
             >
@@ -1464,7 +1464,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 {hiddenRootCount > 0 && (
                   <button
                     onClick={toggleShowMoreRoots}
-                    className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                    className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
                   >
                     {`▼ Show ${Math.min(hiddenRootCount, MORE_VISIBLE_ROOTS_STEP)} more...`}
                   </button>
@@ -1472,14 +1472,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 {!bounded && hiddenRootCount <= 0 && rootSessions.length > DEFAULT_VISIBLE_ROOTS && (
                   <button
                     onClick={toggleShowMoreRoots}
-                    className="w-full text-left p-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                    className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
                   >
                     ▲ Show less
                   </button>
                 )}
               </>
             ) : (
-              <div className="px-2 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+              <div className="px-2 py-6 text-center text-sm text-fw-text-muted">
                 {isFiltering ? 'No sessions match your search.' : 'No sessions yet.'}
               </div>
             )}
@@ -1498,14 +1498,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
       {/* Rename Dialog */}
       {renameSessionId && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">
+        <div className="fixed inset-0 bg-fw-overlay flex items-center justify-center z-50">
+          <div className="bg-fw-surface rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold mb-4 text-fw-text-strong">
               Rename Session
             </h3>
             <div className="space-y-3">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-fw-text mb-2">
                   Display name
                 </label>
                 <input
@@ -1524,10 +1524,10 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                     }
                   }}
                   placeholder="Enter a custom chat name"
-                  className="w-full px-3 py-2 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 rounded border border-fw-border-strong dark:border-fw-border-strong bg-fw-surface dark:bg-fw-canvas text-fw-text-strong focus:outline-none focus:ring-2 focus:ring-fw-focus-ring"
                 />
               </div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
+              <p className="text-sm text-fw-text-muted">
                 Session ID: <span className="font-mono text-xs">{renameSessionId}</span>
                 <br />
                 Leave the display name empty to clear it.
@@ -1539,14 +1539,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   setRenameSessionId(null)
                   setRenameValue('')
                 }}
-                className="px-4 py-2 text-sm rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+                className="px-4 py-2 text-sm rounded bg-fw-neutral-border dark:bg-fw-surface-raised text-fw-text hover:bg-fw-border-strong dark:hover:bg-fw-hover"
                 disabled={renameSubmitting}
               >
                 Cancel
               </button>
               <button
                 onClick={() => renameSession()}
-                className="px-4 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
+                className="px-4 py-2 text-sm rounded bg-fw-accent text-fw-text-inverse hover:bg-fw-accent disabled:opacity-60"
                 disabled={renameSubmitting}
               >
                 {renameSubmitting ? 'Saving...' : (renameValue.trim() ? 'Save' : 'Clear name')}
@@ -1558,18 +1558,18 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
       {/* Delete Confirmation Dialog */}
       {deleteConfirm && (
-        <div className="foxwarm-session-delete-modal-backdrop fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="foxwarm-session-delete-modal bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="foxwarm-session-delete-modal-title text-lg font-semibold mb-4 text-gray-900 dark:text-white">
+        <div className="foxwarm-session-delete-modal-backdrop fixed inset-0 bg-fw-overlay flex items-center justify-center z-50">
+          <div className="foxwarm-session-delete-modal bg-fw-surface rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="foxwarm-session-delete-modal-title text-lg font-semibold mb-4 text-fw-text-strong">
               Delete Session
             </h3>
-            <p className="foxwarm-session-delete-modal-body text-gray-600 dark:text-gray-400 mb-4">
+            <p className="foxwarm-session-delete-modal-body text-fw-text-muted mb-4">
               Are you sure you want to delete session <span className="foxwarm-session-delete-session-id font-mono text-sm">{deleteConfirm}</span>?
               This action cannot be undone.
             </p>
-            {deleteDescendantSummaryLoading && <p className="mb-4 text-sm text-gray-500 dark:text-gray-400">Loading descendant summary…</p>}
+            {deleteDescendantSummaryLoading && <p className="mb-4 text-sm text-fw-text-muted">Loading descendant summary…</p>}
             {deleteDescendantCount > 0 && (
-              <label className="mb-4 flex cursor-pointer items-start gap-2 rounded border border-gray-200 p-3 text-sm text-gray-700 dark:border-gray-700 dark:text-gray-300">
+              <label className="mb-4 flex cursor-pointer items-start gap-2 rounded border border-fw-border p-3 text-sm text-fw-text dark:border-fw-border dark:text-fw-text">
                 <input
                   type="checkbox"
                   className="mt-0.5"
@@ -1581,7 +1581,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               </label>
             )}
             {deleteError && (
-              <p role="alert" className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900/70 dark:bg-red-950/40 dark:text-red-200">
+              <p role="alert" className="mb-4 rounded border border-fw-danger-border bg-fw-danger-surface p-3 text-sm text-fw-danger dark:border-fw-danger-border/70 dark:bg-fw-danger-surface-strong/40 dark:text-fw-danger">
                 {deleteError}
               </p>
             )}
@@ -1592,14 +1592,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   setDeleteIncludeDescendants(false)
                   setDeleteError('')
                 }}
-                className="foxwarm-session-delete-cancel-button px-4 py-2 text-sm rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+                className="foxwarm-session-delete-cancel-button px-4 py-2 text-sm rounded bg-fw-neutral-border dark:bg-fw-surface-raised text-fw-text hover:bg-fw-border-strong dark:hover:bg-fw-hover"
                 disabled={deleteSubmitting}
               >
                 Cancel
               </button>
               <button
                 onClick={() => deleteSession(deleteConfirm, effectiveDeleteIncludeDescendants)}
-                className="foxwarm-session-delete-confirm-button px-4 py-2 text-sm rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
+                className="foxwarm-session-delete-confirm-button px-4 py-2 text-sm rounded bg-fw-danger text-fw-text-inverse hover:bg-fw-danger disabled:opacity-60"
                 disabled={deleteSubmitting || deleteDescendantSummaryLoading}
               >
                 {deleteSubmitting
@@ -1615,14 +1615,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
       {/* Archive Confirmation Dialog */}
       {archiveConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-          <div className="mx-4 w-full max-w-md rounded-lg bg-white p-6 dark:bg-gray-800">
-            <h3 className="mb-4 text-lg font-semibold text-gray-900 dark:text-white">Archive Session</h3>
-            <p className="mb-4 text-gray-600 dark:text-gray-400">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-fw-overlay">
+          <div className="mx-4 w-full max-w-md rounded-lg bg-fw-surface p-6 dark:bg-fw-surface">
+            <h3 className="mb-4 text-lg font-semibold text-fw-text-strong">Archive Session</h3>
+            <p className="mb-4 text-fw-text-muted">
               Archive session <span className="font-mono text-sm">{archiveConfirm}</span>?
             </p>
             {archiveDescendantCount > 0 && (
-              <label className="mb-4 flex cursor-pointer items-start gap-2 rounded border border-gray-200 p-3 text-sm text-gray-700 dark:border-gray-700 dark:text-gray-300">
+              <label className="mb-4 flex cursor-pointer items-start gap-2 rounded border border-fw-border p-3 text-sm text-fw-text dark:border-fw-border dark:text-fw-text">
                 <input
                   type="checkbox"
                   className="mt-0.5"
@@ -1634,7 +1634,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               </label>
             )}
             {archiveError && (
-              <p role="alert" className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900/70 dark:bg-red-950/40 dark:text-red-200">
+              <p role="alert" className="mb-4 rounded border border-fw-danger-border bg-fw-danger-surface p-3 text-sm text-fw-danger dark:border-fw-danger-border/70 dark:bg-fw-danger-surface-strong/40 dark:text-fw-danger">
                 {archiveError}
               </p>
             )}
@@ -1645,14 +1645,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   setArchiveIncludeDescendants(false)
                   setArchiveError('')
                 }}
-                className="rounded bg-gray-200 px-4 py-2 text-sm text-gray-700 hover:bg-gray-300 disabled:opacity-60 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+                className="rounded bg-fw-neutral-border px-4 py-2 text-sm text-fw-text hover:bg-fw-border-strong disabled:opacity-60 dark:bg-fw-surface-raised dark:text-fw-text dark:hover:bg-fw-hover"
                 disabled={archiveSubmitting}
               >
                 Cancel
               </button>
               <button
                 onClick={() => toggleArchive(archiveConfirm, true, effectiveArchiveIncludeDescendants)}
-                className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-60"
+                className="rounded bg-fw-accent px-4 py-2 text-sm text-fw-text-inverse hover:bg-fw-accent disabled:opacity-60"
                 disabled={archiveSubmitting}
               >
                 {archiveSubmitting

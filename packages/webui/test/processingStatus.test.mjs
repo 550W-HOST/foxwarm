@@ -62,7 +62,7 @@ test('thinking status is blue and animated, with active queue continuation and c
   })
 
   assert.match(html, /data-processing-runtime-state="requesting-model"/)
-  assert.match(html, /bg-blue-50/)
+  assert.match(html, /bg-fw-accent-surface/)
   assert.match(html, /Thinking\.\.\. · compaction • 2 queued messages will be inserted after this model response/)
   assert.equal((html.match(/animate-bounce/g) || []).length, 3)
   assert.match(html, />Stop<\/button>/)
@@ -80,7 +80,7 @@ test('running-tool status is purple and uses tool-call queue continuation', () =
   })
 
   assert.match(html, /data-processing-runtime-state="running-tool"/)
-  assert.match(html, /bg-purple-50/)
+  assert.match(html, /bg-fw-special-surface/)
   assert.match(html, /tool: exec 2\/4 • 1 queued message will be inserted after this tool call/)
   assert.equal((html.match(/animate-bounce/g) || []).length, 3)
   assert.match(html, />Stop<\/button>/)
@@ -97,7 +97,7 @@ test('waiting status is amber with one static dot, resume copy, and no Stop acti
   })
 
   assert.match(html, /data-processing-runtime-state="waiting"/)
-  assert.match(html, /bg-amber-50/)
+  assert.match(html, /bg-fw-warning-surface/)
   assert.match(html, /data-processing-status-dot="static"/)
   assert.doesNotMatch(html, /animate-bounce/)
   assert.match(html, /waiting: sessions 1\/2 • 2 queued messages will be inserted when this session resumes/)
@@ -154,5 +154,5 @@ test('loading indicator still takes precedence over runtime status', () => {
   assert.doesNotMatch(html, /data-processing-runtime-state/)
   assert.doesNotMatch(html, /tool: exec/)
   assert.equal((html.match(/animate-bounce/g) || []).length, 3)
-  assert.match(html, /bg-gray-400/)
+  assert.match(html, /bg-fw-text-subtle/)
 })

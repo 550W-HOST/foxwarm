@@ -46,7 +46,8 @@ Renders an interactive terminal session in the browser using xterm.js, connectin
 
 ## Behavior
 
-- On mount, creates an xterm.js Terminal with a FitAddon and attaches a ResizeObserver to auto-fit and send resize messages over WebSocket. Initial/font-ready/window resize fit passes are repeated so the PTY dimensions converge after fonts and pane layout settle.
+- On mount, creates an xterm.js Terminal with a FitAddon and the active theme variant's generated xterm palette, then attaches a ResizeObserver to auto-fit and send resize messages over WebSocket. Initial/font-ready/window resize fit passes are repeated so the PTY dimensions converge after fonts and pane layout settle.
+- Subscribes to the shared theme runtime and updates the live xterm palette in place when theme family, color mode, or system mode changes. Palette adaptation is owned by [webui-theme-system](./webui-theme-system.md).
 - On mount, resolves a terminal ID by: checking an explicit `initialTerminalId`, listing existing terminals for exact normalized node-and-cwd reuse, or creating a new one via POST with the requested `nodeId`, `cwd`, `cols`, and `rows`. It never substitutes `master` for a valid requested remote node.
 - Opens a WebSocket to `/terminals/stream`, forwarding user keystrokes and xterm binary-input events as `input` messages and writing received `output` data to xterm.
 - Keeps xterm `onData` as the only terminal-input-to-WebSocket route. Virtual keys call public `term.input(encoded, true)` and paste calls public `term.paste(text)`; the keyboard does not call backend APIs or xterm private members.

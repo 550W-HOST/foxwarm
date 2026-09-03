@@ -14,6 +14,20 @@ let page
 let server
 let fixtureUrl
 
+function normalizeCssColors(value) {
+  if (typeof value === 'string') {
+    const match = /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?\)$/.exec(value)
+    if (!match) return value
+    const channels = match.slice(1, 4).map(channel => Math.round(Number(channel) * 255))
+    return match[4] === undefined
+      ? `rgb(${channels.join(', ')})`
+      : `rgba(${channels.join(', ')}, ${Number(match[4])})`
+  }
+  if (Array.isArray(value)) return value.map(normalizeCssColors)
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, normalizeCssColors(item)]))
+  return value
+}
+
 async function buildFixtureBundle() {
   const source = `
     import React from 'react'
@@ -21,6 +35,13 @@ async function buildFixtureBundle() {
     import ChatTimeline from ${JSON.stringify(timelineEntry)}
     import { ToolTag } from './src/components/chatShared'
     import ReasoningCard from './src/components/ReasoningCard'
+    import { initializeThemeRuntime, setThemeSelection } from './src/theme/runtime'
+
+    initializeThemeRuntime()
+    window.setFixtureTheme = (style, dark) => setThemeSelection({
+      themeId: style === '550a' ? 'foxwarm.550a' : 'foxwarm.default',
+      colorMode: dark ? 'dark' : 'light',
+    })
 
     const image = { data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', mimeType: 'image/png' }
     const longBody = 'overflow-safe-body-' + 'x'.repeat(360)
@@ -78,9 +99,7 @@ async function mountFixture(width = 900, dark = false, style = 'default') {
   await page.setViewport({ width, height: 700, isMobile: width < 768, hasTouch: width < 768, deviceScaleFactor: 1 })
   await page.goto(fixtureUrl, { waitUntil: 'load' })
   await page.evaluate(({ dark, style }) => {
-    document.documentElement.classList.toggle('dark', dark)
-    if (style === '550a') document.documentElement.setAttribute('data-foxwarm-ui-style', '550a')
-    else document.documentElement.removeAttribute('data-foxwarm-ui-style')
+    window.setFixtureTheme(style, dark)
   }, { dark, style })
   await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 11)
 }
@@ -110,10 +129,10 @@ after(async () => {
 test('550A reasoning selectors do not retain system-blue declarations', async () => {
   const css = await readFile(new URL('../src/index.css', import.meta.url), 'utf8')
   const reasoningBlocks = css.match(/[^{}]+\{[^{}]*\}/g)?.filter(block => (
-    block.includes('data-foxwarm-ui-style="550a"') && block.includes('.foxwarm-reasoning')
+    block.includes('data-foxwarm-component-treatment="console"') && block.includes('.foxwarm-reasoning')
   )) || []
   assert.ok(reasoningBlocks.length > 0)
-  assert.equal(reasoningBlocks.some(block => block.includes('--foxwarm-550a-blue')), false)
+  assert.equal(reasoningBlocks.some(block => block.includes('--foxwarm-console-blue')), false)
 })
 
 test('heavy system and non-channel messages use kind-tagged thread cards while direct users stay bubbles', async () => {
@@ -277,7 +296,7 @@ test('every system kind uses the blue thread-card palette in default light and d
     return { event: sample('event'), interAgent: sample('interAgent') }
   })
 
-  assert.deepEqual(colors.event, {
+  assert.deepEqual(normalizeCssColors(colors.event), {
     tone: 'system',
     surface: 'rgba(239, 246, 255, 0.55)',
     header: 'rgba(219, 234, 254, 0.8)',
@@ -285,7 +304,7 @@ test('every system kind uses the blue thread-card palette in default light and d
     line: 'rgb(147, 197, 253)',
     body: 'rgb(51, 65, 85)',
   })
-  assert.deepEqual(colors.interAgent, colors.event, 'every system kind shares the blue card tone')
+  assert.deepEqual(normalizeCssColors(colors.interAgent), normalizeCssColors(colors.event), 'every system kind shares the blue card tone')
   assert.deepEqual(previewLight, ['rgb(51, 65, 85)', 'rgb(51, 65, 85)'])
 
   await mountFixture(900, true)
@@ -314,8 +333,8 @@ test('every system kind uses the blue thread-card palette in default light and d
     line: 'rgb(29, 78, 216)',
     body: 'rgb(203, 213, 225)',
   }
-  assert.deepEqual(systemDark.event, expectedDark)
-  assert.deepEqual(systemDark.interAgent, expectedDark)
+  assert.deepEqual(normalizeCssColors(systemDark.event), expectedDark)
+  assert.deepEqual(normalizeCssColors(systemDark.interAgent), expectedDark)
   assert.deepEqual(previewDark, ['rgb(203, 213, 225)', 'rgb(203, 213, 225)'])
 })
 
@@ -350,20 +369,20 @@ test('550A reserves blue semantic chrome for system cards while both reasoning t
       }
       return {
         blue: {
-          surface: resolveVariable('--foxwarm-550a-blue-surface', 'background-color'),
-          strong: resolveVariable('--foxwarm-550a-blue-surface-strong', 'background-color'),
-          border: resolveVariable('--foxwarm-550a-blue-border', 'border-color'),
-          color: resolveVariable('--foxwarm-550a-blue'),
-          input: resolveVariable('--foxwarm-550a-input', 'background-color'),
+          surface: resolveVariable('--foxwarm-console-blue-surface', 'background-color'),
+          strong: resolveVariable('--foxwarm-console-blue-surface-strong', 'background-color'),
+          border: resolveVariable('--foxwarm-console-blue-border', 'border-color'),
+          color: resolveVariable('--foxwarm-console-blue'),
+          input: resolveVariable('--foxwarm-console-input', 'background-color'),
         },
         neutral: {
-          panel: resolveVariable('--foxwarm-550a-panel', 'background-color'),
-          input: resolveVariable('--foxwarm-550a-input', 'background-color'),
-          hover: resolveVariable('--foxwarm-550a-hover', 'background-color'),
-          border: resolveVariable('--foxwarm-550a-border-panel', 'border-color'),
-          text: resolveVariable('--foxwarm-550a-text'),
-          bright: resolveVariable('--foxwarm-550a-text-bright'),
-          dim: resolveVariable('--foxwarm-550a-text-dim'),
+          panel: resolveVariable('--foxwarm-console-panel', 'background-color'),
+          input: resolveVariable('--foxwarm-console-input', 'background-color'),
+          hover: resolveVariable('--foxwarm-console-hover', 'background-color'),
+          border: resolveVariable('--foxwarm-console-border-panel', 'border-color'),
+          text: resolveVariable('--foxwarm-console-text'),
+          bright: resolveVariable('--foxwarm-console-text-bright'),
+          dim: resolveVariable('--foxwarm-console-text-dim'),
         },
         system: { surface: systemCard.backgroundColor, shadow: systemCard.boxShadow, header: systemHeader.backgroundColor, tag: systemTag.backgroundColor, tagBorder: systemTag.borderColor, line: systemLine.backgroundColor, body: systemBody.color, bodySurface: systemBody.backgroundColor, bodyBorderWidth: systemBody.borderTopWidth, bodyShadow: systemBody.boxShadow },
         message: reasoning('reasoningMessage'),
@@ -410,13 +429,13 @@ test('default reasoning retains its finished slate and active processing-blue di
   })
 
   await mountFixture()
-  assert.deepEqual(await readReasoning(), {
+  assert.deepEqual(normalizeCssColors(await readReasoning()), {
     message: { surface: 'rgba(241, 245, 249, 0.45)', header: 'rgba(226, 232, 240, 0.8)' },
     processing: { surface: 'rgba(239, 246, 255, 0.55)', header: 'rgba(219, 234, 254, 0.8)' },
   })
 
   await mountFixture(900, true)
-  assert.deepEqual(await readReasoning(), {
+  assert.deepEqual(normalizeCssColors(await readReasoning()), {
     message: { surface: 'rgba(30, 41, 59, 0.2)', header: 'rgba(51, 65, 85, 0.25)' },
     processing: { surface: 'rgba(30, 58, 138, 0.1)', header: 'rgba(30, 64, 175, 0.2)' },
   })

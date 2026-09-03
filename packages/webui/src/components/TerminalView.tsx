@@ -15,6 +15,8 @@ import {
   TERMINAL_DEFAULT_FONT_SIZE,
 } from '../terminalPinchZoom'
 import TerminalVirtualKeyboard, { TerminalKeyboardHeaderControl } from './TerminalVirtualKeyboard'
+import { terminalThemeFromSnapshot } from '../theme/integrations'
+import { getThemeSnapshot, THEME_CHANGED_EVENT } from '../theme/runtime'
 
 type TerminalStatus = 'connecting' | 'ready' | 'closed' | 'error'
 
@@ -98,11 +100,10 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
       fontSize: initialFontSize,
       convertEol: false,
       scrollback: 5000,
-      theme: {
-        background: '#111827',
-        foreground: '#e5e7eb',
-      },
+      theme: terminalThemeFromSnapshot(getThemeSnapshot()),
     })
+    const syncTheme = () => { term.options.theme = terminalThemeFromSnapshot(getThemeSnapshot()) }
+    window.addEventListener(THEME_CHANGED_EVENT, syncTheme)
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
 
@@ -198,6 +199,7 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
       disposePinchZoom = null
       fitAndNotifyResizeRef.current = null
       window.removeEventListener('resize', fitAndNotifyResize)
+      window.removeEventListener(THEME_CHANGED_EVENT, syncTheme)
       resizeObserverRef.current?.disconnect()
       resizeObserverRef.current = null
       wsRef.current?.close()
@@ -380,16 +382,16 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
   }, [])
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-gray-100 dark:bg-gray-900">
-      <div className="border-b border-gray-200 bg-gray-100 px-2.5 py-1.5 dark:border-gray-700 dark:bg-gray-900">
+    <div className="flex h-full min-h-0 flex-col bg-fw-canvas">
+      <div className="border-b border-fw-border bg-fw-neutral-surface px-2.5 py-1.5 dark:border-fw-border dark:bg-fw-canvas">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-gray-600 dark:text-gray-300">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fw-text">
               {onBack && (
                 <button
                   type="button"
                   onClick={onBack}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-500 hover:bg-gray-200 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100 md:hidden"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-strong md:hidden"
                   aria-label="Back"
                 >
                   <ArrowLeft className="h-4 w-4" />
@@ -410,7 +412,7 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
               )}
             </div>
             {error && (
-              <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-200">
+              <div className="mt-2 rounded-md border border-fw-danger-border bg-fw-danger-surface px-2.5 py-1.5 text-xs text-fw-danger dark:border-fw-danger-border/60 dark:bg-fw-danger-surface-strong/20 dark:text-fw-danger">
                 {error}
               </div>
             )}
@@ -418,7 +420,7 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-hidden bg-[#111827]">
+      <div className="min-h-0 flex-1 overflow-hidden bg-fw-terminal-background">
         <div ref={hostRef} className="h-full w-full" />
       </div>
       <TerminalVirtualKeyboard

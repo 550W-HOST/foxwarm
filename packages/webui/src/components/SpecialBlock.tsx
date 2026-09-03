@@ -2,6 +2,9 @@ import { Check, Code, Copy, Eye } from 'lucide-react'
 import { memo, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { copyTextToClipboard, IconToggleButton } from './chatShared'
 import { getMermaidSourcePolicyError } from './mermaidPolicy'
+import { mermaidThemeFromSnapshot } from '../theme/integrations'
+import type { ThemeRuntimeSnapshot } from '../theme/runtime'
+import { useTheme } from '../theme/useTheme'
 
 type SpecialBlockProps = {
   kind: 'latex' | 'mermaid'
@@ -40,10 +43,10 @@ const SpecialBlock = memo(function SpecialBlock({ kind, label, raw, children }: 
     <section
       data-special-block
       data-special-block-kind={kind}
-      className={`foxwarm-special-block not-prose group/special relative my-2 min-w-0 max-w-full overflow-hidden ${kind === 'latex' ? '' : 'rounded-md border border-slate-200 bg-slate-50/60 dark:border-slate-700 dark:bg-slate-900/40'}`}
+      className={`foxwarm-special-block not-prose group/special relative my-2 min-w-0 max-w-full overflow-hidden ${kind === 'latex' ? '' : 'rounded-md border border-fw-border bg-fw-surface-sunken/60 dark:border-fw-border dark:bg-fw-canvas/40'}`}
     >
       {hasVisibleHeader ? (
-        <span data-special-block-header className="pointer-events-none absolute left-2 top-1.5 z-10 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
+        <span data-special-block-header className="pointer-events-none absolute left-2 top-1.5 z-10 text-[10px] font-medium uppercase tracking-wide text-fw-text-muted dark:text-fw-text-muted">
           {label}
         </span>
       ) : null}
@@ -61,7 +64,7 @@ const SpecialBlock = memo(function SpecialBlock({ kind, label, raw, children }: 
       {rawVisible ? (
         <pre
           data-special-block-raw
-          className="m-0 max-h-80 min-w-0 max-w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent font-mono text-xs text-slate-800 dark:text-slate-200"
+          className="m-0 max-h-80 min-w-0 max-w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent font-mono text-xs text-fw-text-strong dark:text-fw-text-strong"
         >
           {raw}
         </pre>
@@ -160,12 +163,13 @@ export const sanitizeMermaidSvg = (svg: string): string => {
   return serialized
 }
 
-const renderMermaid = (source: string, dark: boolean): Promise<MermaidRenderResult> => {
+const renderMermaid = (source: string, themeSnapshot: ThemeRuntimeSnapshot): Promise<MermaidRenderResult> => {
   const policyError = getMermaidSourcePolicyError(source)
   if (policyError) return Promise.reject(new Error(policyError))
 
   const task = mermaidRenderQueue.then(async () => {
     const { default: mermaid } = await import('mermaid')
+    const resolvedTheme = mermaidThemeFromSnapshot(themeSnapshot)
     mermaid.initialize({
       startOnLoad: false,
       securityLevel: 'strict',
@@ -174,7 +178,7 @@ const renderMermaid = (source: string, dark: boolean): Promise<MermaidRenderResu
       maxEdges: 500,
       htmlLabels: false,
       secure: MERMAID_SECURE_CONFIG_KEYS,
-      theme: dark ? 'dark' : 'neutral',
+      ...resolvedTheme,
     })
     mermaidRenderSequence += 1
     return mermaid.render(`foxwarm-mermaid-${mermaidRenderSequence}`, source)
@@ -184,22 +188,8 @@ const renderMermaid = (source: string, dark: boolean): Promise<MermaidRenderResu
   return task
 }
 
-const useDarkTheme = (): boolean => {
-  const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'))
-
-  useEffect(() => {
-    const root = document.documentElement
-    const syncTheme = () => setDark(root.classList.contains('dark'))
-    const observer = new MutationObserver(syncTheme)
-    observer.observe(root, { attributes: true, attributeFilter: ['class'] })
-    return () => observer.disconnect()
-  }, [])
-
-  return dark
-}
-
 export const MermaidDiagram = memo(function MermaidDiagram({ source }: { source: string }) {
-  const dark = useDarkTheme()
+  const theme = useTheme()
   const [svg, setSvg] = useState('')
   const [error, setError] = useState('')
 
@@ -208,7 +198,7 @@ export const MermaidDiagram = memo(function MermaidDiagram({ source }: { source:
     setSvg('')
     setError('')
 
-    void renderMermaid(source, dark).then((result) => {
+    void renderMermaid(source, theme).then((result) => {
       if (!cancelled) setSvg(sanitizeMermaidSvg(result.svg))
     }).catch((reason: unknown) => {
       if (cancelled) return
@@ -217,11 +207,11 @@ export const MermaidDiagram = memo(function MermaidDiagram({ source }: { source:
     })
 
     return () => { cancelled = true }
-  }, [dark, source])
+  }, [source, theme.activeTheme.id, theme.effectiveMode])
 
   if (error) {
     return (
-      <div data-mermaid-error role="alert" className="max-h-40 overflow-y-auto rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+      <div data-mermaid-error role="alert" className="max-h-40 overflow-y-auto rounded border border-fw-warning-border bg-fw-warning-surface px-2 py-1.5 text-xs text-fw-warning dark:border-fw-warning-border dark:bg-fw-warning-surface-strong/30 dark:text-fw-warning">
         <strong className="block">Mermaid could not render this diagram.</strong>
         <span className="mt-1 block whitespace-pre-wrap break-words font-mono opacity-80">{error}</span>
       </div>
@@ -229,7 +219,7 @@ export const MermaidDiagram = memo(function MermaidDiagram({ source }: { source:
   }
 
   if (!svg) {
-    return <div data-mermaid-loading aria-busy="true" className="py-4 text-center text-xs text-slate-500 dark:text-slate-400">Rendering diagram…</div>
+    return <div data-mermaid-loading aria-busy="true" className="py-4 text-center text-xs text-fw-text-muted dark:text-fw-text-muted">Rendering diagram…</div>
   }
 
   return (

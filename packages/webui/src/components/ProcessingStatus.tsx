@@ -13,7 +13,7 @@ interface ProcessingStatusProps {
   onContinue?: () => void
 }
 
-const controlButtonClass = 'rounded border border-current px-2 py-0.5 text-[11px] font-medium leading-4 transition-colors hover:bg-black/5 focus:outline-none focus:ring-2 focus:ring-blue-300 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-white/10 dark:focus:ring-blue-700'
+const controlButtonClass = 'rounded border border-current px-2 py-0.5 text-[11px] font-medium leading-4 transition-colors hover:bg-fw-overlay/5 focus:outline-none focus:ring-2 focus:ring-fw-focus-ring disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-fw-surface/10 dark:focus:ring-fw-focus-ring'
 
 const ProcessingStatus = memo(function ProcessingStatus({
   sessionBusy,
@@ -37,23 +37,23 @@ const ProcessingStatus = memo(function ProcessingStatus({
   const isActive = runtimeStateName === 'requesting-model' || runtimeStateName === 'running-tool'
   const tone = runtimeStateName === 'running-tool'
     ? {
-        surface: 'bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800',
-        text: 'text-purple-600 dark:text-purple-300',
-        controls: 'text-purple-700 dark:text-purple-200',
-        dot: 'bg-purple-500 dark:bg-purple-400',
+        surface: 'bg-fw-special-surface dark:bg-fw-special-surface/20 border-fw-special-border dark:border-fw-special-border',
+        text: 'text-fw-special dark:text-fw-special',
+        controls: 'text-fw-special dark:text-fw-special',
+        dot: 'bg-fw-special dark:bg-fw-special',
       }
     : runtimeStateName === 'waiting'
       ? {
-          surface: 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800',
-          text: 'text-amber-700 dark:text-amber-300',
-          controls: 'text-amber-800 dark:text-amber-200',
-          dot: 'bg-amber-500 dark:bg-amber-400',
+          surface: 'bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 border-fw-warning-border dark:border-fw-warning-border',
+          text: 'text-fw-warning dark:text-fw-warning',
+          controls: 'text-fw-warning dark:text-fw-warning',
+          dot: 'bg-fw-warning dark:bg-fw-warning',
         }
       : {
-          surface: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800',
-          text: 'text-blue-600 dark:text-blue-300',
-          controls: 'text-blue-700 dark:text-blue-200',
-          dot: 'bg-blue-500 dark:bg-blue-400',
+          surface: 'bg-fw-accent-surface dark:bg-fw-accent-surface-strong/20 border-fw-accent-border dark:border-fw-accent-border',
+          text: 'text-fw-accent dark:text-fw-accent',
+          controls: 'text-fw-accent dark:text-fw-accent',
+          dot: 'bg-fw-accent dark:bg-fw-accent',
         }
   const queuedContinuation = sessionQueueLength > 0
     ? runtimeStateName === 'running-tool'
@@ -105,13 +105,13 @@ const ProcessingStatus = memo(function ProcessingStatus({
         <div className="flex justify-start mt-4">
           <div className={`${rowWidthClass} overflow-x-hidden`}>
             <div
-              className="inline-flex max-w-full flex-wrap items-center gap-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-2 rounded-lg text-sm text-amber-700 dark:text-amber-300"
+              className="inline-flex max-w-full flex-wrap items-center gap-2 bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 border border-fw-warning-border dark:border-fw-warning-border px-4 py-2 rounded-lg text-sm text-fw-warning dark:text-fw-warning"
               data-processing-runtime-state={turnIncomplete ? 'interrupted' : undefined}
               role={turnIncomplete ? 'status' : undefined}
             >
-              {turnIncomplete && <span className="w-2 h-2 bg-amber-500 dark:bg-amber-400 rounded-full" data-processing-status-dot="static" />}
+              {turnIncomplete && <span className="w-2 h-2 bg-fw-warning dark:bg-fw-warning rounded-full" data-processing-status-dot="static" />}
               <span>{turnIncomplete ? `Turn interrupted${sessionQueueLength > 0 ? ` • ${queuedLabel} pending` : ''}` : `${queuedLabel} pending`}</span>
-              <div className="flex items-center gap-1 text-amber-800 dark:text-amber-200">
+              <div className="flex items-center gap-1 text-fw-warning dark:text-fw-warning">
                 {turnIncomplete && <button type="button" onClick={onContinue} className={controlButtonClass}>Continue</button>}
                 {sessionQueueLength > 0 && <button type="button" onClick={onRunQueued} className={controlButtonClass}>Run queued</button>}
               </div>
@@ -122,11 +122,11 @@ const ProcessingStatus = memo(function ProcessingStatus({
       {loading && (
         <div className="flex justify-start mt-4">
           <div className={`${rowWidthClass} overflow-x-hidden`}>
-            <div className="inline-block max-w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 px-4 py-2 rounded-lg">
+            <div className="inline-block max-w-full bg-fw-surface border border-fw-border px-4 py-2 rounded-lg">
               <div className="flex space-x-2">
-                <div className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                <div className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                <div className="w-2 h-2 bg-fw-text-subtle dark:bg-fw-text-muted rounded-full animate-bounce"></div>
+                <div className="w-2 h-2 bg-fw-text-subtle dark:bg-fw-text-muted rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                <div className="w-2 h-2 bg-fw-text-subtle dark:bg-fw-text-muted rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
               </div>
             </div>
           </div>
