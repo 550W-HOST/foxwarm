@@ -5,6 +5,8 @@ import { formatToolResponsePayload } from '../../packages/shared/dist/toolRespon
 import { appendImageGuidanceText } from '../toolImages';
 import { formatFoxwarmSystemTag, formatSystemPartForModel } from '../utils/promptWrappers';
 
+const MISSING_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
+
 function makeAbortError(message = 'LLM request aborted'): Error & { code: string } {
   const error = new Error(message) as Error & { code: string };
   error.name = 'AbortError';
@@ -40,6 +42,12 @@ export function convertToGeminiFormat(contents: Message[]): any[] {
     const parts: any[] = [];
     const leadingFunctionResponses: any[] = [];
     const imagePartsByToolUseId = new Map<string, MessagePart[]>();
+    const firstFunctionCall = message.role === 'model'
+      ? (message.parts || []).find(part => !!part.functionCall)
+      : undefined;
+    const firstFunctionCallNeedsFallbackSignature = !!firstFunctionCall
+      && !firstFunctionCall.providerMeta?.signature;
+    let suppliedFallbackFunctionCallSignature = false;
 
     if (message.role === 'tool') {
       for (const part of message.parts || []) {
@@ -61,13 +69,27 @@ export function convertToGeminiFormat(contents: Message[]): any[] {
         parts.push(withThoughtSignature({ text: part.text }, part));
       }
       if (part.functionCall) {
-        parts.push(withThoughtSignature({
+        const functionCallPart = withThoughtSignature({
           functionCall: {
             ...(part.functionCall.id ? { id: part.functionCall.id } : {}),
             name: part.functionCall.name,
             args: part.functionCall.args || {},
           },
-        }, part));
+        }, part);
+        // Gemini 3 requires the first function call in every historical model
+        // step to carry a thought signature. Cross-model and legacy Foxwarm
+        // history may legitimately predate that metadata. Google documents
+        // this sentinel specifically for transferring such traces; keep it
+        // attempt-local and never replace a genuine provider signature.
+        if (
+          message.role === 'model'
+          && firstFunctionCallNeedsFallbackSignature
+          && !suppliedFallbackFunctionCallSignature
+        ) {
+          functionCallPart.thoughtSignature = MISSING_THOUGHT_SIGNATURE;
+          suppliedFallbackFunctionCallSignature = true;
+        }
+        parts.push(functionCallPart);
       }
       if (part.functionResponse) {
         const toolUseId = part.functionResponse.tool_use_id || part.toolUseId || 'unknown';

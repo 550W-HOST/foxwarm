@@ -17,6 +17,7 @@ Implements Gemini's native `generateContent` protocol: provider-neutral history 
 
 - User and tool messages become Gemini `user` content; model messages become `model` content. Adjacent equal roles are merged only in the outbound clone.
 - Persisted provider thought signatures are sent as `thoughtSignature` only when the shared concrete-model compatibility filter retained them.
+- When a legacy or cross-model historical function-call step has no retained genuine signature, its first function call receives Google's documented `skip_thought_signature_validator` transfer sentinel in the attempt-local payload. Genuine signatures are never replaced, and later parallel calls remain unsigned as the protocol expects.
 - Function responses retain call IDs and names, carry formatted structured output, and attach matching tool-result images. All responses for a tool batch are serialized before timing markers, interruption text, or images in the immediately following user turn; this satisfies both native Gemini and Claude-backed gateways that preserve Anthropic's strict tool-result adjacency rule.
 - Missing streamed function-call IDs receive deterministic content-derived IDs so Foxwarm can pair later tool responses.
 - Streaming preserves ordered text, thought, function-call, and inline-data parts and retains the last usage metadata and finish reason. Consecutive SSE text fragments of the same semantic kind are coalesced before normalization, so provider transport chunk boundaries never become separate persisted or rendered message parts.

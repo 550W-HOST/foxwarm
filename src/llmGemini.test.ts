@@ -63,7 +63,12 @@ test('requestLlmOnce uses native Gemini streaming endpoint and parses its respon
   const script = `
     const { requestLlmOnce } = require('./lib/llm');
     const request = (effort) => requestLlmOnce({
-      contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+      contents: [
+        { role: 'user', parts: [{ text: 'history' }] },
+        { role: 'model', parts: [{ functionCall: { id: 'old-call', name: 'read', args: { filePath: 'old' } } }] },
+        { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'old-call', name: 'read', response: { output: 'old result' } } }] },
+        { role: 'user', parts: [{ text: 'hello' }] },
+      ],
       systemPrompt: 'system',
       modelEntryOverride: {
         providerKey: 'fixture', providerType: 'gemini', model: 'gemini-3.1-pro-high',
@@ -107,7 +112,10 @@ test('requestLlmOnce uses native Gemini streaming endpoint and parses its respon
     assert.equal(capturedHeaders[0]['x-goog-api-key'], 'test-key');
     assert.equal(capturedHeaders[0].authorization, undefined);
     assert.deepEqual(capturedBodies[0].systemInstruction, { parts: [{ text: 'system' }] });
-    assert.deepEqual(capturedBodies[0].contents, [{ role: 'user', parts: [{ text: 'hello' }] }]);
+    assert.equal(capturedBodies[0].contents[1].parts[0].functionCall.id, 'old-call');
+    assert.equal(capturedBodies[0].contents[1].parts[0].thoughtSignature, 'skip_thought_signature_validator');
+    assert.equal(capturedBodies[0].contents[2].parts[0].functionResponse.id, 'old-call');
+    assert.equal(capturedBodies[0].contents[2].parts[1].text, 'hello');
     assert.equal(capturedBodies[0].generationConfig.maxOutputTokens, 32768);
     assert.equal(capturedBodies[0].output_config, undefined);
     assert.equal(capturedBodies[0].tools[0].functionDeclarations[0].parameters.additionalProperties, undefined);

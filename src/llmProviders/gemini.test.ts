@@ -86,10 +86,25 @@ test('convertToGeminiFormat keeps all function responses ahead of timing and int
   ]);
 
   assert.equal(converted.length, 2);
+  assert.equal(converted[0].parts[0].thoughtSignature, 'skip_thought_signature_validator');
+  assert.equal(converted[0].parts[1].thoughtSignature, undefined);
   assert.deepEqual(converted[1].parts.slice(0, 2).map((part: any) => part.functionResponse?.id), ['call-a', 'call-b']);
   assert.ok(converted[1].parts.slice(2).every((part: any) => !part.functionResponse));
   assert.match(converted[1].parts[2].text, /kind="system"/);
   assert.match(converted[1].parts[3].text, /prevLLMReqTime="1\.0s"/);
+});
+
+test('convertToGeminiFormat never replaces a genuine function-call thought signature', () => {
+  const converted = convertToGeminiFormat([{
+    role: 'model',
+    parts: [
+      { functionCall: { id: 'call-a', name: 'a', args: {} }, providerMeta: { signature: 'genuine' } },
+      { functionCall: { id: 'call-b', name: 'b', args: {} } },
+    ],
+  }]);
+
+  assert.equal(converted[0].parts[0].thoughtSignature, 'genuine');
+  assert.equal(converted[0].parts[1].thoughtSignature, undefined);
 });
 
 test('convertToGeminiFormat merges adjacent provider roles without mutating source', () => {
