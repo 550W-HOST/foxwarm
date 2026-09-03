@@ -58,4 +58,3 @@ export function checkedBuiltin(manifest: ThemeManifestV1): ThemeManifestV1 {
   if (!result.ok) throw new Error(`Invalid built-in theme ${manifest.id}: ${result.errors.join('; ')}`)
   return result.value
 }
-

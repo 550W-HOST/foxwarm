@@ -92,7 +92,7 @@ test('waiting status is amber with one static dot, resume copy, and no Stop acti
     sessionBusy: false,
     sessionQueueLength: 2,
     runtimeState: activeRuntimeState('waiting', {
-      waiting: { waitId: 'children', waitingFor: 'sessions', waitAllSessions: ['a', 'b'], satisfiedSessions: ['a'] },
+      waiting: { waitId: 'children', waitingFor: 'all-sessions', waitAllSessions: ['a', 'b'], satisfiedSessions: ['a'] },
     }),
   })
 
