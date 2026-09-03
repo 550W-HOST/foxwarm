@@ -8,6 +8,7 @@ import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
+import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig } from './config';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
@@ -292,6 +293,7 @@ type ModelStreamProgressSnapshot = {
 };
 
 const MODEL_STREAM_EVENT_THROTTLE_MS = 80;
+const MODEL_STREAM_TOOL_ARGS_THROTTLE_MS = 1_000;
 const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 export const DEFAULT_LLM_MAX_ATTEMPTS = 6;
 // Compatibility alias: maxRetries has always meant total attempts, not retries
@@ -401,6 +403,7 @@ function normalizeModelStreamToolCalls(toolCalls: ModelStreamToolCall[] | undefi
         index: Number.isFinite(toolCall.index) ? toolCall.index : fallbackIndex,
         ...(typeof toolCall.id === 'string' && toolCall.id.trim() ? { id: toolCall.id.trim() } : {}),
         ...(typeof toolCall.name === 'string' && toolCall.name.trim() ? { name: toolCall.name.trim() } : {}),
+        ...(typeof toolCall.arguments === 'string' ? { arguments: toolCall.arguments } : {}),
     }));
 }
 
@@ -414,42 +417,107 @@ function areModelStreamToolCallsEqual(left: ModelStreamToolCall[] = [], right: M
         return !!rightCall
             && leftCall.index === rightCall.index
             && (leftCall.id || '') === (rightCall.id || '')
-            && (leftCall.name || '') === (rightCall.name || '');
+            && (leftCall.name || '') === (rightCall.name || '')
+            && (leftCall.arguments || '') === (rightCall.arguments || '');
     });
 }
 
-function createModelStreamEventEmitter(args: {
+function makeModelStreamTextDelta(previous: string, current: string) {
+    if (previous === current) return undefined;
+    if (current.startsWith(previous)) return { offset: previous.length, text: current.slice(previous.length) };
+    return { offset: 0, text: current };
+}
+
+export function createModelStreamEventEmitter(args: {
     enabled: boolean;
     sessionId?: string;
     iteration: number;
+    llmRequestId: string;
     currentSessionEffects?: CurrentSessionEffects;
+    now?: () => number;
+    setTimer?: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>;
+    clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
 }) {
+    const now = args.now || Date.now;
+    const setTimer = args.setTimer || setTimeout;
+    const clearTimer = args.clearTimer || clearTimeout;
     const streamId = newModelStreamId(args.iteration);
     let latestSnapshot: ModelStreamProgressSnapshot = { reasoning: '', text: '', toolCalls: [] };
+    let emittedSnapshot: ModelStreamProgressSnapshot = { reasoning: '', text: '', toolCalls: [] };
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let hasPendingUpdate = false;
+    let toolArgsTimer: ReturnType<typeof setTimeout> | null = null;
     let lastSentAt = 0;
+    let lastToolArgsSentAt = 0;
+    let sequence = 0;
+    let startedAt = now();
     const notifySessionEvent = (event: import('./types').SessionStreamEvent) => {
         if (!args.sessionId) return;
         if (args.currentSessionEffects) args.currentSessionEffects.notifySessionEvent(args.sessionId, event);
         else sessionManager.notifySessionEvent(args.sessionId, event);
     };
 
-    const notify = () => {
+    const notify = (forceToolArgs = false) => {
         if (!args.enabled || !args.sessionId) {
             return;
         }
-
+        const reasoning = latestSnapshot.reasoning || '';
+        const text = latestSnapshot.text || '';
+        const previousReasoning = emittedSnapshot.reasoning || '';
+        const previousText = emittedSnapshot.text || '';
+        const currentToolCalls = normalizeModelStreamToolCalls(latestSnapshot.toolCalls);
+        const previousToolCalls = normalizeModelStreamToolCalls(emittedSnapshot.toolCalls);
+        const previousByIndex = new Map(previousToolCalls.map(call => [call.index, call]));
+        const toolArgsDue = forceToolArgs || now() - lastToolArgsSentAt >= MODEL_STREAM_TOOL_ARGS_THROTTLE_MS;
+        const toolCallDeltas = currentToolCalls.flatMap(call => {
+            const previous = previousByIndex.get(call.index);
+            const identityChanged = !previous || previous.id !== call.id || previous.name !== call.name;
+            const argumentsDelta = toolArgsDue
+                ? makeModelStreamTextDelta(previous?.arguments || '', call.arguments || '')
+                : undefined;
+            if (!identityChanged && !argumentsDelta) return [];
+            return [{
+                index: call.index,
+                ...(identityChanged && call.id ? { id: call.id } : {}),
+                ...(identityChanged && call.name ? { name: call.name } : {}),
+                ...(argumentsDelta ? { argumentsDelta } : {}),
+            }];
+        });
+        const reasoningDelta = makeModelStreamTextDelta(previousReasoning, reasoning);
+        const textDelta = makeModelStreamTextDelta(previousText, text);
+        if (!reasoningDelta && !textDelta && toolCallDeltas.length === 0) return;
         notifySessionEvent({
             type: 'model-stream-update',
             streamId,
             iteration: args.iteration,
-            reasoning: latestSnapshot.reasoning || '',
-            text: latestSnapshot.text || '',
-            toolCalls: normalizeModelStreamToolCalls(latestSnapshot.toolCalls),
+            streamVersion: 2,
+            sequenceStart: sequence + 1,
+            sequence: ++sequence,
+            startedAt,
+            llmRequestId: args.llmRequestId,
+            ...(reasoningDelta ? { reasoningDelta } : {}),
+            ...(textDelta ? { textDelta } : {}),
+            ...(toolCallDeltas.length ? { toolCallDeltas } : {}),
         });
-        hasPendingUpdate = false;
-        lastSentAt = Date.now();
+        emittedSnapshot = {
+            reasoning,
+            text,
+            toolCalls: currentToolCalls.map(call => ({
+                ...call,
+                arguments: toolArgsDue ? call.arguments : previousByIndex.get(call.index)?.arguments,
+            })),
+        };
+        updateModelStreamDraft(args.sessionId, {
+            streamId,
+            iteration: args.iteration,
+            sequence,
+            startedAt,
+            llmRequestId: args.llmRequestId,
+            reasoning,
+            text,
+            toolCalls: currentToolCalls,
+        });
+        lastSentAt = now();
+        if (toolArgsDue && toolCallDeltas.some(call => call.argumentsDelta)) lastToolArgsSentAt = lastSentAt;
     };
 
     const scheduleNotify = () => {
@@ -457,16 +525,21 @@ function createModelStreamEventEmitter(args: {
             return;
         }
 
-        hasPendingUpdate = true;
         if (timer) {
             return;
         }
 
-        const elapsed = Date.now() - lastSentAt;
+        const elapsed = now() - lastSentAt;
         const delay = Math.max(0, MODEL_STREAM_EVENT_THROTTLE_MS - elapsed);
-        timer = setTimeout(() => {
+        timer = setTimer(() => {
             timer = null;
             notify();
+            const latestCalls = normalizeModelStreamToolCalls(latestSnapshot.toolCalls);
+            const emittedCalls = normalizeModelStreamToolCalls(emittedSnapshot.toolCalls);
+            if (!areModelStreamToolCallsEqual(latestCalls, emittedCalls) && !toolArgsTimer) {
+                const argsDelay = Math.max(0, MODEL_STREAM_TOOL_ARGS_THROTTLE_MS - (now() - lastToolArgsSentAt));
+                toolArgsTimer = setTimer(() => { toolArgsTimer = null; notify(true); }, argsDelay);
+            }
         }, delay);
     };
 
@@ -478,17 +551,29 @@ function createModelStreamEventEmitter(args: {
             }
 
             latestSnapshot = { reasoning: '', text: '', toolCalls: [] };
-            hasPendingUpdate = false;
+            emittedSnapshot = { reasoning: '', text: '', toolCalls: [] };
+            startedAt = now();
             if (timer) {
-                clearTimeout(timer);
+                clearTimer(timer);
                 timer = null;
+            }
+            if (toolArgsTimer) {
+                clearTimer(toolArgsTimer);
+                toolArgsTimer = null;
             }
             notifySessionEvent({
                 type: 'model-stream-reset',
                 streamId,
                 iteration: args.iteration,
+                streamVersion: 2,
+                sequenceStart: sequence + 1,
+                sequence: ++sequence,
+                startedAt,
+                llmRequestId: args.llmRequestId,
             });
-            lastSentAt = Date.now();
+            resetModelStreamDraft(args.sessionId, streamId, args.iteration, sequence, startedAt, args.llmRequestId);
+            lastSentAt = now();
+            lastToolArgsSentAt = lastSentAt;
         },
         emit(snapshot: ModelStreamProgressSnapshot) {
             const nextSnapshot = {
@@ -504,16 +589,34 @@ function createModelStreamEventEmitter(args: {
             }
 
             latestSnapshot = nextSnapshot;
+            if (args.enabled && args.sessionId) {
+                updateModelStreamDraft(args.sessionId, {
+                    streamId,
+                    iteration: args.iteration,
+                    sequence,
+                    startedAt,
+                    llmRequestId: args.llmRequestId,
+                    reasoning: nextSnapshot.reasoning || '',
+                    text: nextSnapshot.text || '',
+                    toolCalls: nextSnapshot.toolCalls || [],
+                });
+            }
             scheduleNotify();
         },
         flush() {
             if (timer) {
-                clearTimeout(timer);
+                clearTimer(timer);
                 timer = null;
             }
-            if (hasPendingUpdate) {
-                notify();
+            if (toolArgsTimer) {
+                clearTimer(toolArgsTimer);
+                toolArgsTimer = null;
             }
+            notify(true);
+        },
+        close() {
+            this.flush();
+            if (args.sessionId) clearModelStreamDraft(args.sessionId, streamId);
         },
     };
 }
@@ -2507,6 +2610,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         enabled: shouldNotifySessionEvents,
         sessionId: options.sessionId,
         iteration,
+        llmRequestId: requestId,
         currentSessionEffects: options.currentSessionEffects,
     });
     let logFiles: LlmInteractionLogFiles | null = null;
@@ -2784,7 +2888,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         }
     } finally {
         options.abortSignal?.removeEventListener('abort', abortFromCaller);
-        modelStreamEmitter.flush();
+        modelStreamEmitter.close();
         if (shouldRegisterAbortController) {
             if (options.currentSessionEffects) options.currentSessionEffects.clearAbortController(options.sessionId!, abortController);
             else sessionManager.clearSessionAbortController(options.sessionId!, abortController);

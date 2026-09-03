@@ -63,6 +63,7 @@ export type OpenAIStreamToolCallSnapshot = {
     index: number;
     id?: string;
     name?: string;
+    arguments?: string;
 };
 
 export type OpenAIStreamProgressSnapshot = {
@@ -733,6 +734,7 @@ export async function collectOpenAIResponsesStream(
                     index: outputIndex,
                     ...(cleanSnapshotString(item.call_id || item.id) ? { id: cleanSnapshotString(item.call_id || item.id) } : {}),
                     ...(cleanSnapshotString(item.name) ? { name: cleanSnapshotString(item.name) } : {}),
+                    ...(typeof item.arguments === 'string' ? { arguments: item.arguments } : {}),
                 }));
 
         const buildProgressSnapshot = (): OpenAIStreamProgressSnapshot => ({
@@ -1128,6 +1130,7 @@ export async function collectOpenAIChatCompletionsStream(
                     index: entry.progressIndex,
                     ...(cleanSnapshotString(toolCall.id) ? { id: cleanSnapshotString(toolCall.id) } : {}),
                     ...(cleanSnapshotString(toolCall.function?.name) ? { name: cleanSnapshotString(toolCall.function?.name) } : {}),
+                    ...(typeof toolCall.function?.arguments === 'string' ? { arguments: toolCall.function.arguments } : {}),
                 };
             });
 

@@ -1,6 +1,6 @@
 # Unit: src-llm
 
-Files: src/llm.ts, src/llmRequestTiming.ts, src/providerImageDedup.ts, src/llm.test.ts, src/llmRequestTiming.test.ts, src/llmRouting.test.ts, src/llmVirtualRouting.test.ts, src/llmVirtualMessageMeta.test.ts, src/providerImageDedup.test.ts, src/parallelToolExecution.test.ts
+Files: src/llm.ts, src/modelStreamDraft.ts, src/llmRequestTiming.ts, src/providerImageDedup.ts, src/llm.test.ts, src/llmRequestTiming.test.ts, src/llmRouting.test.ts, src/llmVirtualRouting.test.ts, src/llmVirtualMessageMeta.test.ts, src/providerImageDedup.test.ts, src/parallelToolExecution.test.ts
 Secondary files: src/llmRequestJournal.ts
 
 ## Purpose
@@ -57,7 +57,7 @@ Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolRe
 - The application-level `llm.maxOutput` limit is sent as `max_output_tokens` to OpenAI Responses and as `max_tokens` to Chat Completions and Anthropic-compatible requests. Provider/model `extraFields` may override it at their existing later merge boundary; the default and canonical configuration contract are [D-config-default-max-output](./src-config.md#d-config-default-max-output).
 - OpenAI Responses and Chat Completions custom function tools explicitly set `strict: false` at their protocol-defined tool locations while preserving each JSON Schema `required` array unchanged. Anthropic continues to receive the same schema through `input_schema`.
 - Canonical history keeps logical queued messages separate. The Anthropic serializer coalesces adjacent same-role entries only in its outbound payload, while OpenAI serializers retain separate message entries. Queue-boundary ownership is [D-pipeline-canonical-queue-item-boundaries](../threads/message-processing-pipeline.md#d-pipeline-canonical-queue-item-boundaries).
-- Streaming progress emits throttled reasoning/text/tool-call snapshots.
+- Streaming progress converts cumulative collector snapshots into version-2 offset deltas. Reasoning/text use the fast throttle; function identity is prompt, raw partial JSON arguments are emitted at most once per second, and completion flushes before the canonical model append. The same emitter maintains a process-local exact-owner cumulative draft for subscription bootstrap and clears it on completion.
 - Retry waits are abortable. Terminal failures move bounded diagnostics to error logs, emit a final retry event, and throw `LlmRequestError`; they do not create fake assistant `Error:` messages. Canonical boundary: [D-llm-request-errors](../modules/llm.md#d-llm-request-errors).
 - A caller may supply an independent `abortSignal` to `chat`/the one-shot request path. Compaction uses this seam with ordinary Session-turn abort registration disabled, so `/stop` and `/stop compact` cannot cancel each other's provider request when both overlap.
 - The historical `maxRetries` option/event field means total attempts; the default is six. Virtual attempts rebuild the complete selected concrete request, and unusable empty/reasoning-only responses retry. Canonical semantics: [model routing](../threads/model-routing.md).

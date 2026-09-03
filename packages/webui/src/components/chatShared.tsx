@@ -209,6 +209,19 @@ export interface ModelStreamToolCall {
   index: number
   id?: string
   name?: string
+  arguments?: string
+}
+
+export interface ModelStreamTextDelta {
+  offset: number
+  text: string
+}
+
+export interface ModelStreamToolCallDelta {
+  index: number
+  id?: string
+  name?: string
+  argumentsDelta?: ModelStreamTextDelta
 }
 
 export interface ContextBlockMessageMeta {
@@ -231,6 +244,14 @@ export interface SessionStreamEvent {
   type: 'model-stream-reset' | 'model-stream-update' | 'toolscript-progress'
   streamId?: string
   iteration?: number
+  streamVersion?: 2
+  sequenceStart?: number
+  sequence?: number
+  startedAt?: number
+  llmRequestId?: string
+  reasoningDelta?: ModelStreamTextDelta
+  textDelta?: ModelStreamTextDelta
+  toolCallDeltas?: ModelStreamToolCallDelta[]
   reasoning?: string
   text?: string
   toolCalls?: ModelStreamToolCall[]

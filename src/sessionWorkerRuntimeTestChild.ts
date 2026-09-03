@@ -26,6 +26,7 @@ import {
 import { SessionWorkerHost } from './sessionWorkerHost';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { createSessionWorkerRuntimeServiceHandler, sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
+import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { tool_set_goal } from './toolsSessionAgent/settings';
 import { tool_wait } from './toolsSessionAgent/interSession';
@@ -172,6 +173,19 @@ async function start(): Promise<void> {
         options.currentSessionEffects.notifySessionEvent(session.id, { type: 'model-stream-update', streamId: 'test-stream', iteration: 0, reasoning: '', text, toolCalls: [] } as any);
       }
       options.currentSessionEffects.notifySessionEvent(session.id, { type: 'model-stream-reset', streamId: 'test-stream', iteration: 0 } as any);
+    }
+    if (process.env.FOXWARM_TEST_STREAM_BOOTSTRAP === '1' && chatCount === 1) {
+      resetModelStreamDraft(session.id, 'bootstrap-stream', 0, 0, Date.now(), 'bootstrap-request');
+      updateModelStreamDraft(session.id, {
+        streamId: 'bootstrap-stream', iteration: 0, sequence: 4,
+        startedAt: Date.now(),
+        llmRequestId: 'bootstrap-request',
+        reasoning: 'quiet reasoning', text: 'quiet accumulated draft',
+        toolCalls: [{ index: 0, id: 'bootstrap-call', name: 'read', arguments: '{"filePath":"quiet"}' }],
+      });
+      await fs.writeFile(path.join(STATE_DIR, `stream-bootstrap-${session.id}`), '1');
+      await new Promise(resolve => setTimeout(resolve, 750));
+      clearModelStreamDraft(session.id, 'bootstrap-stream');
     }
     // Production-shaped ordering regression: requestLlmOnce flushes a final
     // cumulative OpenAI-completions-like frame immediately before chat()

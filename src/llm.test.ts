@@ -4,7 +4,7 @@ import axios from 'axios';
 import { PassThrough } from 'node:stream';
 import path from 'path';
 
-import { createDefaultCurrentSessionEffects, CurrentSessionEffects, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, convertToAnthropicFormat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
+import { createDefaultCurrentSessionEffects, createModelStreamEventEmitter, CurrentSessionEffects, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, convertToAnthropicFormat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
 import { LOGS_DIR, MAX_OUTPUT } from './config';
 import { formatDate } from './logRotation';
 import type { Message, Session } from './types';
@@ -18,11 +18,61 @@ import { LocalSessionTurnHost } from './sessionTurnRunner';
 import * as tools from './tools';
 import * as llmModule from './llm';
 import { nodesManager } from './nodes/manager';
+import { getModelStreamDraft } from './modelStreamDraft';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 test('default maximum provider output is 32768 tokens', () => {
   assert.equal(MAX_OUTPUT, 32768);
+});
+
+test('model stream emitter sends offset deltas and throttles tool arguments until one second or flush', () => {
+  let now = 10_000;
+  let nextTimer = 1;
+  const timers = new Map<number, { at: number; callback: () => void }>();
+  const events: any[] = [];
+  const runDue = () => {
+    while (true) {
+      const due = [...timers.entries()].filter(([, timer]) => timer.at <= now).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!due) return;
+      timers.delete(due[0]);
+      due[1].callback();
+    }
+  };
+  const emitter = createModelStreamEventEmitter({
+    enabled: true,
+    sessionId: 'stream-test',
+    iteration: 2,
+    llmRequestId: 'request-stream-test',
+    now: () => now,
+    setTimer: ((callback: () => void, delay: number) => {
+      const id = nextTimer++;
+      timers.set(id, { at: now + delay, callback });
+      return id as any;
+    }),
+    clearTimer: ((id: any) => { timers.delete(id); }),
+    currentSessionEffects: { notifySessionEvent: (_id: string, event: any) => events.push(event) } as any,
+  });
+  emitter.reset();
+  emitter.emit({ text: 'Hi', toolCalls: [{ index: 0, id: 'call', name: 'read', arguments: '{"file' }] });
+  now += 80;
+  runDue();
+  assert.deepEqual(events.at(-1).textDelta, { offset: 0, text: 'Hi' });
+  assert.equal(events.at(-1).sequenceStart, events.at(-1).sequence);
+  assert.equal(events.at(-1).startedAt, 10_000);
+  assert.equal(events.at(-1).llmRequestId, 'request-stream-test');
+  assert.equal(events.at(-1).toolCallDeltas[0].argumentsDelta, undefined);
+  emitter.emit({ text: 'Hi!', toolCalls: [{ index: 0, id: 'call', name: 'read', arguments: '{"filePath":"x"}' }] });
+  now += 80;
+  runDue();
+  assert.deepEqual(events.at(-1).textDelta, { offset: 2, text: '!' });
+  assert.equal(events.at(-1).toolCallDeltas, undefined);
+  emitter.flush();
+  assert.deepEqual(events.at(-1).toolCallDeltas[0].argumentsDelta, { offset: 0, text: '{"filePath":"x"}' });
+  assert.equal(events.at(-1).streamVersion, 2);
+  assert.equal(getModelStreamDraft('stream-test')?.text, 'Hi!');
+  emitter.close();
+  assert.equal(getModelStreamDraft('stream-test'), null);
 });
 
 test('Anthropic serialization deduplicates repeated ordinary and tool-result images without mutating history', () => {

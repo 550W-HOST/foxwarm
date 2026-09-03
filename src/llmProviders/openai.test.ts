@@ -152,6 +152,7 @@ test('collectOpenAIChatCompletionsStream aggregates streamed tool calls', async 
   assert.equal(response.choices[0].message.tool_calls[0].function.name, 'read');
   assert.equal(response.choices[0].message.tool_calls[0].function.arguments, '{"filePath":"x"}');
   assert.ok(progress.some(snapshot => snapshot.toolCalls?.[0]?.name === 'read'));
+  assert.equal(progress.at(-1)?.toolCalls?.[0]?.arguments, '{"filePath":"x"}');
 });
 
 test('collectOpenAIChatCompletionsStream splits parallel tool calls that reuse index 0', async () => {
@@ -317,6 +318,7 @@ test('collectOpenAIResponsesStream rebuilds streamed output items from SSE delta
   assert.ok(progress.some(snapshot => snapshot.reasoning === 'Thinking done'));
   assert.ok(progress.some(snapshot => snapshot.text === 'Hello'));
   assert.ok(progress.some(snapshot => snapshot.toolCalls?.[0]?.name === 'read'));
+  assert.equal(progress.at(-1)?.toolCalls?.[0]?.arguments, '{"filePath":"x"}');
 });
 
 test('collectOpenAIResponsesStream preserves indexed reasoning summary boundaries over condensed completed output', async () => {

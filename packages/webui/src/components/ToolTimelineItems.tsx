@@ -189,7 +189,9 @@ const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
 
 const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler } = {}): ReactNode => {
   if (options.partial) {
-    return <span className="text-gray-500 dark:text-gray-400">streaming tool call…</span>
+    const argsFormatted = typeof call.args === 'string' ? call.args : formatCompactObjectPreview(call.args)
+    const preview = argsFormatted.length > 200 ? `${argsFormatted.slice(0, 200)}...` : argsFormatted
+    return <span className="truncate break-all text-gray-500 dark:text-gray-400">{preview || 'streaming tool call…'}</span>
   }
 
   if (call.name === 'read') {
@@ -289,7 +291,7 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
 
 const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unified' | 'split', options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler } = {}) => {
   if (options.partial) {
-    return <div className="text-gray-500 dark:text-gray-400">Streaming tool call. Full arguments will appear after the model finishes emitting the call.</div>
+    return <pre className="whitespace-pre-wrap break-all text-xs text-gray-500 dark:text-gray-400">{typeof call.args === 'string' ? call.args : JSON.stringify(call.args, null, 2)}</pre>
   }
 
   if (call.name === 'read') {

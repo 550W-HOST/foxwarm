@@ -162,6 +162,20 @@ export interface ModelStreamToolCall {
   index: number;
   id?: string;
   name?: string;
+  /** Provider-assembled raw JSON text. Transient presentation only. */
+  arguments?: string;
+}
+
+export interface ModelStreamTextDelta {
+  offset: number;
+  text: string;
+}
+
+export interface ModelStreamToolCallDelta {
+  index: number;
+  id?: string;
+  name?: string;
+  argumentsDelta?: ModelStreamTextDelta;
 }
 
 export type ChannelTurnToolStatus = 'running' | 'success' | 'error';
@@ -185,6 +199,19 @@ export interface SessionStreamEvent {
   // model-stream-* fields:
   streamId?: string;
   iteration?: number;
+  /** Version 2 events use offset-addressed deltas instead of cumulative fields. */
+  streamVersion?: 2;
+  /** First raw emitter sequence covered by this event (equal to sequence before Worker coalescing). */
+  sequenceStart?: number;
+  sequence?: number;
+  /** Exact-owner server timestamp for the current reset generation. */
+  startedAt?: number;
+  /** Existing durable outer LLM request identity; transiently binds this stream to its canonical model row. */
+  llmRequestId?: string;
+  reasoningDelta?: ModelStreamTextDelta;
+  textDelta?: ModelStreamTextDelta;
+  toolCallDeltas?: ModelStreamToolCallDelta[];
+  /** Legacy cumulative fields retained for tolerant readers only. */
   reasoning?: string;
   text?: string;
   toolCalls?: ModelStreamToolCall[];

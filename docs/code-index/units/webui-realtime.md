@@ -24,7 +24,7 @@ Owns the authenticated page-scoped WebUI WebSocket and the server-side multiplex
 
 `WebUiRealtimeHub` authenticates the HTTP upgrade, validates bounded subscription snapshots, canonicalizes aliases, and multiplexes existing WebUI payloads over one socket. A client update installs its session/list sets before loading snapshots; live events that arrive during initialization are buffered and emitted after the snapshot. A newer requested revision supersedes an in-flight older snapshot, preventing stale untagged payloads from reaching the browser.
 
-The hub exposes focused broadcast methods for session payloads, bounded list deltas, and catalog invalidation. It preserves first/last presentation-subscriber semantics when combined with legacy SSE clients in `WebUIChannel`. Close, error, send failure, initialization failure, and session deletion all release subscription ownership; a bounded pending-event queue prevents unbounded initialization growth.
+The hub exposes focused broadcast methods for session payloads, bounded list deltas, and catalog invalidation. On a first Worker presentation subscription it awaits activation before loading the exact-owner model draft, closing the no-subscriber-to-snapshot gap. The full draft snapshot is sent before initialization-buffered deltas. It preserves first/last presentation-subscriber semantics when combined with legacy SSE clients in `WebUIChannel`. Close, error, send failure, initialization failure, and session deletion all release subscription ownership; a bounded pending-event queue prevents unbounded initialization growth.
 
 ## Wire protocol
 
@@ -37,6 +37,7 @@ Server messages:
 - `connected` — authenticated physical socket exists;
 - `subscriptions-accepted` — requested/canonical maps are installed for this revision;
 - existing `session-list-delta`, `sessions-updated`, `session-state`, `session-event`, `message`, `typing`, and `session-deleted` payloads, with `sessionId` on session-scoped envelopes;
+- `model-stream-snapshot` — exact-owner cumulative transient draft with stream/iteration/sequence watermark, server `startedAt`, and the existing outer `llmRequestId`, or `draft:null`; following live events carry the same request identity and inclusive sequence coverage ranges so the browser can distinguish Worker coalescing from presentation loss and reconcile exact canonical history rows;
 - `subscriptions-applied` — snapshot plus buffered-live initialization completed;
 - `protocol-error` — invalid subscription or initialization failure; the connection is then failed rather than left partially initialized.
 
