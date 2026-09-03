@@ -102,7 +102,7 @@ const toolHeaderToneClasses: Record<ToolThreadTone, string> = {
 export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, onExpand }: { items: ToolTagItem[]; onExpand: () => void }) {
   return (
     <div
-      className={`group relative pl-2 text-xs cursor-pointer text-fw-text-muted hover:text-fw-text-muted dark:hover:text-fw-text-strong [&_*]:cursor-pointer ${toolSurfaceToneClasses.neutral}`}
+      className={`foxwarm-tool-card foxwarm-tool-tone-neutral group relative pl-2 text-xs cursor-pointer text-fw-text-muted hover:text-fw-text-muted dark:hover:text-fw-text-strong [&_*]:cursor-pointer ${toolSurfaceToneClasses.neutral}`}
       onClick={onExpand}
     >
       <ThreadLineButton
@@ -111,7 +111,7 @@ export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, 
         label="Expand tool group"
         className={toolThreadLineToneClasses.neutral}
       />
-      <div className={`flex items-start gap-2 ${toolHeaderToneClasses.neutral}`}>
+      <div className={`foxwarm-tool-header flex items-start gap-2 ${toolHeaderToneClasses.neutral}`}>
         <ToolTagList items={items} />
       </div>
     </div>

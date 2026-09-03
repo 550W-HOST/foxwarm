@@ -64,6 +64,7 @@ const ModelThreadCard = ({
   return (
     <div
       data-model-thread-card={kind}
+      data-model-thread-tone={tone}
       className={`${semanticPrefix}-card ${semanticPrefix}-card-${tone} relative group min-w-0 max-w-full pl-2 pr-2 text-xs ${surfaceClasses[tone]} ${expanded ? 'pb-1' : ''} ${textClasses[tone]} ${!expanded ? 'cursor-pointer [&_*]:cursor-pointer' : ''}`}
       onClick={!expanded ? () => setExpanded(true) : undefined}
     >

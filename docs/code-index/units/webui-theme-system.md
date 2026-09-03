@@ -1,6 +1,6 @@
 # Unit: WebUI theme system
 
-Files: packages/webui/src/theme/manifest.ts, packages/webui/src/theme/builtins/index.ts, packages/webui/src/theme/builtins/shared.ts, packages/webui/src/theme/builtins/default.ts, packages/webui/src/theme/builtins/550a.ts, packages/webui/src/theme/storage.ts, packages/webui/src/theme/runtime.ts, packages/webui/src/theme/useTheme.ts, packages/webui/src/theme/integrations.ts, packages/webui/src/theme/index.ts, packages/webui/src/components/ThemeManager.tsx, packages/webui/index.html, packages/webui/src/index.css, packages/webui/tailwind.config.js, packages/webui/test/themeSystem.test.mjs, packages/webui/test/themeMarkdownStyles.e2e.mjs
+Files: packages/webui/src/theme/manifest.ts, packages/webui/src/theme/builtins/index.ts, packages/webui/src/theme/builtins/shared.ts, packages/webui/src/theme/builtins/default.ts, packages/webui/src/theme/builtins/550a.ts, packages/webui/src/theme/storage.ts, packages/webui/src/theme/runtime.ts, packages/webui/src/theme/useTheme.ts, packages/webui/src/theme/integrations.ts, packages/webui/src/theme/index.ts, packages/webui/src/components/ThemeManager.tsx, packages/webui/index.html, packages/webui/src/index.css, packages/webui/tailwind.config.js, packages/webui/test/themeSystem.test.mjs, packages/webui/test/themeMarkdownStyles.e2e.mjs, packages/webui/test/threadCardSurfaces.e2e.mjs
 Secondary files: packages/webui/src/main.tsx, packages/webui/src/components/GlobalUiSettingsMenu.tsx, packages/webui/src/components/SetupView.tsx, packages/webui/src/components/TerminalView.tsx, packages/webui/src/components/SimpleCodeEditor.tsx, packages/webui/src/components/SpecialBlock.tsx, docs/webui-themes.md, README.md
 
 ## Purpose
@@ -26,6 +26,7 @@ Defines the portable, browser-local WebUI theme contract, built-in registry, per
 - Validation rejects unknown keys, incomplete variants, non-hex colors, arbitrary CSS/selectors/scripts, URLs, and unbounded string/numeric values. Core text/surface pairs produce contrast warnings.
 - Setup's Appearance tab owns theme family selection and import/export/clone/delete, and places `Auto`, `Light`, and `Dark` directly above the active palette preview. The compact global UI menu exposes the same color-mode selection for quick access but no theme-family/file operations.
 - Semantic `--foxwarm-color-*` variables back `fw-*` Tailwind utilities and non-utility CSS. Components do not branch on a theme ID.
+- Semantic `*Surface` and `*SurfaceStrong` tokens carry the theme's named colors, including any alpha intentionally supplied by the manifest. Standard treatment may apply stable component-owned opacity composition for its established translucent visual grammar. Console treatment consumes named Tool status, Reasoning, and System surface pairs as final colors so a portable console theme is not diluted a second time; neutral console cards use the treatment's panel/hover pair because the manifest intentionally has no `neutralSurfaceStrong` field.
 - `componentTreatment` is a small declarative treatment selector, not arbitrary CSS. The 550A built-in selects `console`; an exported and reimported manifest selecting `console` follows the same rendering path.
 - xterm updates its palette when the runtime theme changes. Monaco redefines and applies its generated theme, including before lazy editor creation. Mermaid receives per-render variables from the active variant.
 - Cross-window `storage` events, system color-mode changes, and local changes converge through the same runtime store and theme-change event.
@@ -40,6 +41,7 @@ Defines the portable, browser-local WebUI theme contract, built-in registry, per
 
 - `themeSystem.test.mjs` covers built-in validation, canonical round trips, strict rejection, legacy migration, bounded custom install/conflict/replace/export/delete, reserved IDs, and portable 550A clone equivalence.
 - `themeMarkdownStyles.e2e.mjs` covers Default and console-treatment Markdown/code pairings.
+- `threadCardSurfaces.e2e.mjs` mounts every thread-card family and verifies raw plus visibly composited body/header colors across Default and 550A light/dark. It protects standard treatment's established opacity contract, console treatment's final-surface contract, full-strength 550A status surfaces, and named Reasoning-token use in an imported console manifest whose Reasoning colors deliberately differ from its generic panel/hover colors.
 - Setup E2E covers Appearance-tab selection, treatment activation, clone/delete, and keyboard tab behavior.
 - Settings-menu E2E asserts that the compact menu contains color mode only.
 - Existing Code overlay, editor, terminal, Mermaid, and component E2Es protect integration surfaces.
@@ -61,3 +63,7 @@ Defines the portable, browser-local WebUI theme contract, built-in registry, per
 ### D-webui-theme-local-ownership
 
 [2026-09-03] Theme packages and the current selection remain browser-local preferences. They are not instance configuration, server data, or Agent state.
+
+### D-webui-theme-final-surfaces
+
+[2026-09-03] Surface composition is treatment-owned. Standard treatment retains its established component opacity layers. Console treatment treats named Tool status, Reasoning, and System surface pairs as final colors because a portable console manifest may already encode intentional translucency; applying the standard opacity layer again would make those cards depend incorrectly on their parent background. Neutral console cards use the bounded treatment-level panel/hover pair rather than adding a manifest field or branching on a theme ID. Console Reasoning must use `reasoningSurface`/`reasoningSurfaceStrong`, not generic panel/hover aliases, so imported themes can choose a distinct reasoning palette.
