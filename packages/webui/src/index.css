@@ -746,8 +746,8 @@ html[data-foxwarm-component-treatment="console"] body::after {
     0deg,
     transparent,
     transparent 2px,
-    color-mix(in srgb, var(--foxwarm-color-canvas-edge) 30%, transparent) 2px,
-    color-mix(in srgb, var(--foxwarm-color-canvas-edge) 30%, transparent) 4px
+    color-mix(in srgb, var(--foxwarm-color-canvas-edge) 6%, transparent) 2px,
+    color-mix(in srgb, var(--foxwarm-color-canvas-edge) 6%, transparent) 4px
   );
 }
 
