@@ -8,6 +8,7 @@ import puppeteer from 'puppeteer-core'
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const componentEntry = new URL('../src/components/TerminalVirtualKeyboard.tsx', import.meta.url).pathname
 const keyboardEntry = new URL('../src/terminalVirtualKeyboard.ts', import.meta.url).pathname
+const themeRuntimeEntry = new URL('../src/theme/runtime.ts', import.meta.url).pathname
 const screenshotDir = process.env.FOXWARM_KEYBOARD_SCREENSHOTS_DIR
 let browser
 let page
@@ -20,6 +21,9 @@ async function buildFixture() {
     import { createRoot } from 'react-dom/client'
     import TerminalVirtualKeyboard, { TerminalKeyboardHeaderControl } from ${JSON.stringify(componentEntry)}
     import { loadTerminalKeyboardMode, TERMINAL_KEYBOARD_STORAGE_KEY } from ${JSON.stringify(keyboardEntry)}
+    import { initializeThemeRuntime } from ${JSON.stringify(themeRuntimeEntry)}
+
+    initializeThemeRuntime()
 
     class FakeTerminal {
       constructor() {

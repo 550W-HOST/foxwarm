@@ -46,12 +46,12 @@ type ExpansionState = {
 const EXPANSION_PREVIEW_LENGTH = 6000
 const CTX_BLOCK_PREFIX_RE = /^\[CTX-BLOCK\s+L(\d+)\s+B#(\d+)\s+raw#(\d+)(?:-#?(\d+))?[^\]]*\]\s*/s
 
-const contextBlockLineToneClasses = 'text-slate-300 hover:text-slate-500 focus-visible:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400 dark:focus-visible:text-slate-400'
-const contextBlockSurfaceClasses = 'my-0.5 bg-slate-100/45 dark:bg-slate-800/20'
-const contextBlockHeaderClasses = '-ml-2 -mr-2 bg-slate-200/80 px-2 py-1 dark:bg-slate-700/25'
-const contextBlockHeaderHoverClasses = 'hover:text-slate-900 dark:hover:text-slate-100'
-const contextBlockTextClasses = 'text-slate-700 dark:text-slate-300'
-const contextBlockBodyClasses = 'prose-slate dark:prose-invert prose-p:text-slate-700 dark:prose-p:text-slate-300 prose-headings:text-slate-800 dark:prose-headings:text-slate-200 prose-strong:text-slate-900 dark:prose-strong:text-white prose-li:text-slate-700 dark:prose-li:text-slate-300'
+const contextBlockLineToneClasses = 'text-fw-text hover:text-fw-text-muted focus-visible:text-fw-text-muted dark:text-fw-text dark:hover:text-fw-text-muted dark:focus-visible:text-fw-text-muted'
+const contextBlockSurfaceClasses = 'my-0.5 bg-fw-neutral-surface/45 dark:bg-fw-surface/20'
+const contextBlockHeaderClasses = '-ml-2 -mr-2 bg-fw-neutral-border/80 px-2 py-1 dark:bg-fw-surface-raised/25'
+const contextBlockHeaderHoverClasses = 'hover:text-fw-text-strong dark:hover:text-fw-text-strong'
+const contextBlockTextClasses = 'text-fw-text dark:text-fw-text'
+const contextBlockBodyClasses = 'prose-slate dark:prose-invert prose-p:text-fw-text dark:prose-p:text-fw-text prose-headings:text-fw-text-strong dark:prose-headings:text-fw-text-strong prose-strong:text-fw-text-strong dark:prose-strong:text-fw-text-inverse prose-li:text-fw-text dark:prose-li:text-fw-text'
 
 const toPositiveInteger = (value: unknown): number | null => {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.trunc(value) : null
@@ -230,7 +230,7 @@ const ContextBlockCard = memo(function ContextBlockCard({
         onClick={expanded ? (e) => { e.stopPropagation(); setExpanded(false) } : undefined}
       >
         <ToolTag name="ctx-block" label="CTX-BLOCK" tone="neutral" className="foxwarm-context-block-tag" />
-        <span ref={headerFade.ref} {...headerFade.overflowFadeProps} className="foxwarm-context-block-preview min-w-0 flex-1 truncate text-[11px] font-medium leading-[18px] text-slate-500 dark:text-slate-400" title={blockMetaLabel}>{blockMetaLabel}</span>
+        <span ref={headerFade.ref} {...headerFade.overflowFadeProps} className="foxwarm-context-block-preview min-w-0 flex-1 truncate text-[11px] font-medium leading-[18px] text-fw-text-muted" title={blockMetaLabel}>{blockMetaLabel}</span>
       </div>
 
       <div className="min-w-0 space-y-2">
@@ -244,18 +244,18 @@ const ContextBlockCard = memo(function ContextBlockCard({
         />
 
         {expanded && expansion.loading && (
-          <div className="py-1 text-xs text-gray-500 dark:text-gray-400">Loading {block.sourceKind === 'block' ? 'child blocks' : 'raw messages'}…</div>
+          <div className="py-1 text-xs text-fw-text-muted">Loading {block.sourceKind === 'block' ? 'child blocks' : 'raw messages'}…</div>
         )}
         {expanded && expansion.error && !expansion.loading && (
-          <div className="py-1 text-xs text-red-600 dark:text-red-400">
+          <div className="py-1 text-xs text-fw-danger dark:text-fw-danger">
             <div>{expansion.error}</div>
-            <button type="button" className="mt-1 rounded border border-red-200 px-2 py-0.5 text-[11px] hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-950/40" onClick={handleRetry}>
+            <button type="button" className="mt-1 rounded border border-fw-danger-border px-2 py-0.5 text-[11px] hover:bg-fw-danger-surface dark:border-fw-danger-border dark:hover:bg-fw-danger-surface-strong/40" onClick={handleRetry}>
               Retry
             </button>
           </div>
         )}
         {expanded && !expansion.loading && !expansion.error && expansion.response && nestedMessages.length === 0 && (
-          <div className="py-1 text-xs text-gray-500 dark:text-gray-400">No {expansionKindLabel(expansion.response.expansionKind)} found for this block.</div>
+          <div className="py-1 text-xs text-fw-text-muted">No {expansionKindLabel(expansion.response.expansionKind)} found for this block.</div>
         )}
         {expanded && !expansion.loading && nestedMessages.length > 0 && renderNestedMessages(nestedMessages, nestedKey, nestedDepth + 1)}
       </div>

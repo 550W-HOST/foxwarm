@@ -31,7 +31,12 @@ await writeFile(entryPath, `
   import { createRoot } from 'react-dom/client'
   import SpecialBlock, { MermaidDiagram, sanitizeMermaidSvg } from ${JSON.stringify(path.join(webuiRoot, 'src/components/SpecialBlock.tsx'))}
   import { renderAssistantMarkdownSegments } from ${JSON.stringify(path.join(webuiRoot, 'src/components/markdownRenderer.ts'))}
+  import { initializeThemeRuntime, setThemeSelection } from ${JSON.stringify(path.join(webuiRoot, 'src/theme/runtime.ts'))}
   import ${JSON.stringify(path.join(webuiRoot, 'src/index.css'))}
+
+  initializeThemeRuntime()
+  setThemeSelection({ colorMode: 'light' })
+  window.__setThemeColorMode = colorMode => setThemeSelection({ colorMode })
 
   const latexRaw = ${JSON.stringify(latexRaw)}
   const mermaidRaw = ${JSON.stringify(mermaidRaw)}
@@ -247,7 +252,7 @@ test('ordinary code and special-block chrome keep their compact spacing and hove
       latexDisplayMarginBottom: getComputedStyle(latexDisplay).marginBottom,
       mermaidHeader: mermaid.querySelector('[data-special-block-header]')?.textContent?.trim(),
       mermaidHasBorderClass: mermaid.classList.contains('border'),
-      mermaidHasBackgroundClass: mermaid.classList.contains('bg-slate-50/60'),
+      mermaidHasBackgroundClass: mermaid.classList.contains('bg-fw-surface-sunken/60'),
       mermaidPaddingTop: getComputedStyle(mermaidRendered).paddingTop,
       mermaidPaddingBottom: getComputedStyle(mermaidRendered).paddingBottom,
       latexControlsOpacity: getComputedStyle(latex.querySelector('[data-special-block-controls]')).opacity,
@@ -330,7 +335,7 @@ test('Mermaid lazy renderer produces bounded strict SVG output', async () => {
 test('Mermaid diagrams re-render readably when the WebUI switches to dark mode', async () => {
   const lightSvg = await page.$eval('#mermaid-layout-fixture [data-mermaid-diagram] svg', element => element.innerHTML)
 
-  await page.evaluate(() => document.documentElement.classList.add('dark'))
+  await page.evaluate(() => window.__setThemeColorMode('dark'))
   await page.waitForFunction(previous => {
     const svg = document.querySelector('#mermaid-layout-fixture [data-mermaid-diagram] svg')
     return svg && svg.innerHTML !== previous

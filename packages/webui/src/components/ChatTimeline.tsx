@@ -185,10 +185,10 @@ const formatDurationSummary = (samples: DurationSample[]): string => {
 
 const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; tone: 'muted' | 'normal' | 'warning' }) => {
   const colorClass = tone === 'warning'
-    ? 'text-orange-600 dark:text-orange-400'
+    ? 'text-fw-warning dark:text-fw-warning'
     : tone === 'muted'
-      ? 'text-slate-400 dark:text-slate-500'
-      : 'text-slate-500 dark:text-slate-400'
+      ? 'text-fw-text-muted dark:text-fw-text-muted'
+      : 'text-fw-text-muted dark:text-fw-text-muted'
 
   return (
     <span className={`flex items-baseline justify-between gap-1 ${colorClass}`}>
@@ -199,7 +199,7 @@ const ModelUsageRow = ({ label, value, tone }: { label: string; value: number; t
 }
 
 const ModelUsageTextRow = ({ label, value }: { label: string; value: string }) => (
-  <span className="flex min-w-0 items-baseline justify-between gap-2 text-slate-500 dark:text-slate-400">
+  <span className="flex min-w-0 items-baseline justify-between gap-2 text-fw-text-muted">
     <span className="shrink-0 text-[10px] uppercase tracking-wide opacity-80">{label}</span>
     <span className="min-w-0 break-all text-right text-[10px] font-semibold leading-snug tabular-nums">{value}</span>
   </span>
@@ -223,7 +223,7 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
       aria-expanded={expanded}
       aria-label={expanded ? 'Hide request usage and timing details' : 'Show request usage and timing details'}
       data-usage-badge
-      className={`${expanded ? 'flex max-w-full flex-col items-stretch gap-1.5 text-left' : `${isMobile ? 'gap-2' : 'gap-1.5'} inline-flex flex-row items-center`} pointer-events-auto rounded-md border border-slate-200 bg-white/85 px-2 py-1 font-mono leading-none shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/85 ${expanded ? 'w-fit' : ''} cursor-pointer appearance-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500`}
+      className={`${expanded ? 'flex max-w-full flex-col items-stretch gap-1.5 text-left' : `${isMobile ? 'gap-2' : 'gap-1.5'} inline-flex flex-row items-center`} pointer-events-auto rounded-md border border-fw-border bg-fw-surface/85 px-2 py-1 font-mono leading-none shadow-sm backdrop-blur dark:border-fw-border dark:bg-fw-canvas/85 ${expanded ? 'w-fit' : ''} cursor-pointer appearance-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fw-focus-ring`}
       title={formatUsageTitle(usage, attribution, callCount)}
       onPointerDown={stopUsageBadgeEvent}
       onClick={(event) => {
@@ -252,12 +252,12 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
           {(betweenRequestsMs !== null || apiDurationMs !== null) ? (
             <span
               data-usage-timing-summary
-              className="inline-flex items-center gap-2 border-l border-slate-200 pl-2 dark:border-slate-700"
+              className="inline-flex items-center gap-2 border-l border-fw-border pl-2"
             >
               {betweenRequestsMs !== null ? (
                 <span
                   data-usage-timing-kind="between"
-                  className="inline-flex items-center gap-1 text-slate-400 dark:text-slate-500"
+                  className="inline-flex items-center gap-1 text-fw-text-subtle"
                   title={`Between requests: ${formatDetailedDuration(betweenRequestsMs)}`}
                 >
                   <Hourglass aria-hidden="true" className="h-2.5 w-2.5 shrink-0" strokeWidth={1.8} />
@@ -267,7 +267,7 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
               {apiDurationMs !== null ? (
                 <span
                   data-usage-timing-kind="api"
-                  className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300"
+                  className="inline-flex items-center gap-1 text-fw-text"
                   title={`API response: ${formatDetailedDuration(apiDurationMs)}`}
                 >
                   <Cloud aria-hidden="true" className="h-2.5 w-2.5 shrink-0" strokeWidth={1.8} />
@@ -383,7 +383,7 @@ const isHeavySystemLikeMessage = (message: Message): boolean => {
 const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser }: { systemText: string; isUser: boolean }) {
   return (
     <pre
-      className={`max-w-full whitespace-pre-wrap break-words font-sans ${isUser ? 'text-white' : 'text-gray-500 dark:text-gray-400'}`}
+      className={`max-w-full whitespace-pre-wrap break-words font-sans ${isUser ? 'text-fw-text-inverse' : 'text-fw-text-muted'}`}
       style={{ lineHeight: '1.3em' }}
     >
       {systemText.split('\n').map((line, lineIdx) => {
@@ -434,7 +434,7 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ text }: { text: 
       {isSystemMessage && (
         <button
           onClick={() => setExpanded(current => !current)}
-          className="text-xs text-blue-200 hover:text-white mt-1 text-left"
+          className="text-xs text-fw-accent hover:text-fw-text-inverse mt-1 text-left"
         >
           {expanded ? '▲ Show less' : '▼ Show more'}
         </button>
@@ -469,10 +469,10 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
     const body = bodyLine?.trim() || renderedText.trim() || messageKind.kind
     return `${messageKind.previewPrefix}${body}`
   }, [allLines, messageKind.kind, messageKind.previewPrefix, renderedText])
-  const surfaceClass = 'bg-blue-50/55 dark:bg-blue-900/10 text-slate-700 dark:text-slate-300'
-  const threadLineClass = 'text-blue-300 hover:text-blue-500 focus-visible:text-blue-500 dark:text-blue-700 dark:hover:text-blue-400 dark:focus-visible:text-blue-400'
-  const headerClass = 'bg-blue-100/80 dark:bg-blue-800/20'
-  const headerHoverClass = 'hover:text-blue-950 dark:hover:text-white'
+  const surfaceClass = 'bg-fw-system-surface/55 dark:bg-fw-system-surface/10 text-fw-system-text'
+  const threadLineClass = 'text-fw-system-accent hover:text-fw-system-accent focus-visible:text-fw-system-accent'
+  const headerClass = 'bg-fw-system-surface-strong/80 dark:bg-fw-system-surface-strong/20'
+  const headerHoverClass = 'hover:text-fw-system-accent'
 
   return (
     <div className="w-full min-w-0">
@@ -503,7 +503,7 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
           )}
         </div>
         {!expanded && interAgentPreview && (
-          <div ref={resultFade.ref} {...resultFade.overflowFadeProps} className="foxwarm-system-message-result-preview mt-1 whitespace-pre-wrap break-all pr-2 text-slate-700 dark:text-slate-300" style={{ ...clampContentStyle(3), opacity: 0.92, ...resultFade.overflowFadeProps.style }}>
+          <div ref={resultFade.ref} {...resultFade.overflowFadeProps} className="foxwarm-system-message-result-preview mt-1 whitespace-pre-wrap break-all pr-2 text-fw-system-text" style={{ ...clampContentStyle(3), opacity: 0.92, ...resultFade.overflowFadeProps.style }}>
             {interAgentPreview}
           </div>
         )}
@@ -558,7 +558,7 @@ const WebSearchCitationLinks = memo(function WebSearchCitationLinks({ annotation
 
   if (citations.length === 0) return null
   return (
-    <div className="my-2 flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-gray-400" onClick={handleMarkdownLinkClick}>
+    <div className="my-2 flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fw-text-muted" onClick={handleMarkdownLinkClick}>
       <span className="font-semibold">Sources:</span>
       {citations.map((citation, index) => (
         <a
@@ -568,7 +568,7 @@ const WebSearchCitationLinks = memo(function WebSearchCitationLinks({ annotation
           target="_blank"
           rel="noopener noreferrer"
           title={citation.title}
-          className="max-w-full truncate text-blue-600 underline hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+          className="max-w-full truncate text-fw-accent underline hover:text-fw-accent dark:text-fw-accent dark:hover:text-fw-accent"
         >
           [{index + 1}] {citation.title}
         </a>
@@ -613,7 +613,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
   const paddingClass = viewMode === 'rendered' ? 'px-2' : 'px-2 py-2'
 
   return (
-    <div className={`foxwarm-assistant-message-card min-w-0 max-w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 ${paddingClass} rounded-lg cursor-text relative group`}>
+    <div className={`foxwarm-assistant-message-card min-w-0 max-w-full bg-fw-assistant-surface text-fw-assistant-text border border-fw-border ${paddingClass} rounded-lg cursor-text relative group`}>
       <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
         <IconToggleButton onClick={() => setViewMode('rendered')} active={viewMode === 'rendered'} title="Rendered (Markdown)">
           <Eye size={12} />
@@ -635,21 +635,21 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
             <MarkdownContent
               key={`markdown-${index}`}
               text={segment.text}
-              className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900 prose-pre:text-gray-900 dark:prose-pre:text-gray-100 prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
+              className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-fw-assistant-code-surface prose-pre:text-fw-assistant-code-text prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
             />
           ) : segment.kind === 'commit' ? (
             <CommitMarkerCard key={`commit-${index}-${segment.target.commitId}`} target={segment.target} onOpen={onOpenCodeCommit} />
           ) : (
-            <pre key={`invalid-commit-${index}`} className="my-2 whitespace-pre-wrap rounded border border-amber-200 bg-amber-50 px-2 py-1.5 font-mono text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200" title="Invalid Foxwarm commit marker">
+            <pre key={`invalid-commit-${index}`} className="my-2 whitespace-pre-wrap rounded border border-fw-warning-border bg-fw-warning-surface px-2 py-1.5 font-mono text-xs text-fw-warning dark:border-fw-warning-border dark:bg-fw-warning-surface-strong/30 dark:text-fw-warning" title="Invalid Foxwarm commit marker">
               {segment.raw}
             </pre>
           ))}
           <WebSearchCitationLinks annotations={annotations} />
         </div>
       ) : viewMode === 'raw' ? (
-        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-gray-900 dark:text-gray-100">{text}</pre>
+        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{text}</pre>
       ) : (
-        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-gray-900 dark:text-gray-100">{jsonText}</pre>
+        <pre className="foxwarm-assistant-message-raw max-w-full whitespace-pre-wrap break-words font-mono text-sm text-fw-text-strong">{jsonText}</pre>
       )}
     </div>
   )
@@ -754,7 +754,7 @@ const MessageRow = memo(function MessageRow({
       <div
         className={`min-w-0 ${widthClass} ${
           !systemLikeMessage && msg.role === 'user'
-            ? 'foxwarm-user-message-bubble bg-blue-500 dark:bg-blue-600 text-white px-4 py-2 rounded-lg'
+            ? 'foxwarm-user-message-bubble bg-fw-user-surface text-fw-user-text px-4 py-2 rounded-lg'
             : ''
         }`}
       >

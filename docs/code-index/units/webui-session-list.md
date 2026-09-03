@@ -12,7 +12,7 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 - `SessionListCore` — default export; renders the fixed search/mode toolbar plus the recursive scrollable session tree with all interactive behaviors
 - `Session` — TypeScript interface describing a session object (exported from `SessionListCore`)
 - `useBoundedSessionList` — normalized server-page/exact/search cache and bounded realtime controller used by App and embedded Sidebar roots
-- `SessionList` — default export; full sidebar/page wrapper around `SessionListCore`, including pass-through of global UI settings controls such as color mode and UI theme style
+- `SessionList` — default export; full sidebar/page wrapper around `SessionListCore`, including pass-through of global UI controls such as color mode
 
 ## Function Index
 
@@ -112,7 +112,7 @@ Renders a hierarchical, interactive session list for the Foxwarm web UI. `Sessio
 
 ## Integration
 
-- `SessionList` is used as the main sidebar/mobile view in the app shell, receiving session data, global UI preference controls (including `uiThemeStyle`), and callbacks from a parent container
+- `SessionList` is used as the main sidebar/mobile view in the app shell, receiving session data, global UI controls, and callbacks from a parent container. Theme-family management is independent and lives in Setup's Appearance tab.
 - Communicates with the backend via `fetch` to `API_BASE_PATH` endpoints (`/sessions/:id`, `/sessions/:id/fork`, `/sessions/:id/promote`)
 - Drag data (`type: 'session'`) integrates with a `@dnd-kit` `DndContext` higher in the component tree for session reparenting
 - `onSelectSession` and `onKeepSession` callbacks connect to the app's routing/tab management

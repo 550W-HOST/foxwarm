@@ -57,8 +57,8 @@ async function mountFixture({ width, height, style = 'default', dark = false }) 
   await page.goto(fixtureUrl, { waitUntil: 'load' })
   await page.evaluate(({ style, dark }) => {
     document.documentElement.classList.toggle('dark', dark)
-    if (style === '550a') document.documentElement.setAttribute('data-foxwarm-ui-style', '550a')
-    else document.documentElement.removeAttribute('data-foxwarm-ui-style')
+    if (style === '550a') document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console')
+    else document.documentElement.removeAttribute('data-foxwarm-component-treatment')
   }, { style, dark })
   await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 7)
 }

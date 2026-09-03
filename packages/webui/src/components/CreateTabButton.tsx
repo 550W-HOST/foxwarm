@@ -41,7 +41,7 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
   }, [open])
 
   const label = 'Terminal'
-  const baseClass = 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
+  const baseClass = 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
   const availableTargets = nodeTargets || [MASTER_NODE_TARGET]
   const selectedTarget = preserveSelectedNodeTarget(availableTargets, nodeId).find(node => node.id === nodeId)
   const selectedAvailability = selectedTarget ? getNodeTargetAvailability(selectedTarget, 'vscode-pty') : { available: false, reason: 'unavailable' }
@@ -89,42 +89,42 @@ export default function CreateTabButton({ defaultNodeId, defaultPath, onCreate, 
       </div>
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-gray-200 bg-white p-3 shadow-xl dark:border-gray-700 dark:bg-gray-800">
-          <div className="text-sm font-semibold text-gray-900 dark:text-white">Create {label.toLowerCase()} tab</div>
+        <div className="absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-fw-border bg-fw-surface p-3 shadow-xl dark:border-fw-border dark:bg-fw-surface">
+          <div className="text-sm font-semibold text-fw-text-strong">Create {label.toLowerCase()} tab</div>
           <div className="mt-3 space-y-3">
             {nodeTargets && <div>
-              <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Node</label>
+              <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-fw-text-muted">Node</label>
               <NodeTargetSelect
                 value={nodeId}
                 nodes={availableTargets}
                 requiredService="vscode-pty"
                 onChange={handleNodeChange}
               />
-              {nodeTargetsError && <div className="mt-1 text-xs text-red-600 dark:text-red-400">{nodeTargetsError}</div>}
+              {nodeTargetsError && <div className="mt-1 text-xs text-fw-danger dark:text-fw-danger">{nodeTargetsError}</div>}
               {!selectedAvailability.available && !nodeTargetsError && (
-                <div className="mt-1 text-xs text-amber-600 dark:text-amber-400">Selected node is {selectedAvailability.reason}.</div>
+                <div className="mt-1 text-xs text-fw-warning dark:text-fw-warning">Selected node is {selectedAvailability.reason}.</div>
               )}
             </div>}
             <div>
-              <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Path</label>
+              <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-fw-text-muted">Path</label>
               <input
                 value={path}
                 onChange={(event) => setPath(event.target.value)}
                 placeholder="/tmp"
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                className="w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 text-sm text-fw-text-strong dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong"
               />
             </div>
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setOpen(false)}
-                className="rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                className="rounded-lg px-3 py-2 text-sm text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover"
               >
                 Cancel
               </button>
               <button
                 onClick={handleCustomCreate}
                 disabled={!customCreateAvailable}
-                className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-lg bg-fw-accent px-3 py-2 text-sm text-fw-text-inverse hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Create tab
               </button>

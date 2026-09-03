@@ -108,8 +108,8 @@ export default function AgentCreationMenu({
         type="button"
         onClick={() => setMenuOpen(open => !open)}
         className={compact
-          ? 'inline-flex items-center justify-center rounded-lg px-2 transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
-          : 'inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white transition'}
+          ? 'inline-flex items-center justify-center rounded-lg px-2 transition-colors bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
+          : 'inline-flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse transition'}
         title="Create agent or session"
         aria-haspopup="menu"
         aria-expanded={menuOpen}
@@ -118,38 +118,38 @@ export default function AgentCreationMenu({
       </button>
 
       {menuOpen && (
-        <div role="menu" className="absolute right-0 top-full z-50 mt-1 w-40 rounded-lg border border-gray-200 bg-white p-1 shadow-lg dark:border-gray-700 dark:bg-gray-800">
-          <button type="button" role="menuitem" onClick={() => openModal('agent')} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700">
+        <div role="menu" className="absolute right-0 top-full z-50 mt-1 w-40 rounded-lg border border-fw-border bg-fw-surface p-1 shadow-lg dark:border-fw-border dark:bg-fw-surface">
+          <button type="button" role="menuitem" onClick={() => openModal('agent')} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-fw-text hover:bg-fw-hover dark:text-fw-text-strong dark:hover:bg-fw-hover">
             <Bot className="h-4 w-4" /> New agent
           </button>
-          <button type="button" role="menuitem" onClick={() => openModal('session')} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700">
+          <button type="button" role="menuitem" onClick={() => openModal('session')} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-fw-text hover:bg-fw-hover dark:text-fw-text-strong dark:hover:bg-fw-hover">
             <MessageSquarePlus className="h-4 w-4" /> New session
           </button>
         </div>
       )}
 
       {mode && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4" role="presentation" onMouseDown={(event) => {
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-fw-overlay/40 p-4" role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget && !loading) setMode(null)
         }}>
-          <form onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="creation-dialog-title" className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-5 shadow-xl dark:border-gray-700 dark:bg-gray-800">
+          <form onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="creation-dialog-title" className="w-full max-w-md rounded-xl border border-fw-border bg-fw-surface p-5 shadow-xl dark:border-fw-border dark:bg-fw-surface">
             <div className="mb-4 flex items-center justify-between gap-3">
-              <h2 id="creation-dialog-title" className="text-lg font-semibold text-gray-900 dark:text-white">{mode === 'agent' ? 'New agent' : 'New session'}</h2>
-              <button type="button" onClick={() => setMode(null)} disabled={loading} className="rounded-md p-1 text-gray-500 hover:bg-gray-100 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-700" aria-label="Close">
+              <h2 id="creation-dialog-title" className="text-lg font-semibold text-fw-text-strong">{mode === 'agent' ? 'New agent' : 'New session'}</h2>
+              <button type="button" onClick={() => setMode(null)} disabled={loading} className="rounded-md p-1 text-fw-text-muted hover:bg-fw-hover disabled:opacity-50 dark:text-fw-text-muted dark:hover:bg-fw-hover" aria-label="Close">
                 <X className="h-5 w-5" />
               </button>
             </div>
 
             {mode === 'agent' ? (
               <div className="space-y-4">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">
+                <label className="block text-sm font-medium text-fw-text-strong">
                   Agent ID
-                  <input ref={element => { firstInputRef.current = element }} value={agentId} onChange={event => setAgentId(event.target.value)} autoComplete="off" placeholder="my-agent" className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-900 dark:text-white" />
-                  <span className="mt-1 block text-xs font-normal text-gray-500 dark:text-gray-400">Letters, numbers, hyphens, and underscores.</span>
+                  <input ref={element => { firstInputRef.current = element }} value={agentId} onChange={event => setAgentId(event.target.value)} autoComplete="off" placeholder="my-agent" className="mt-1 w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-2 focus:ring-fw-focus-ring/20 dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong" />
+                  <span className="mt-1 block text-xs font-normal text-fw-text-muted">Letters, numbers, hyphens, and underscores.</span>
                 </label>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">
+                <label className="block text-sm font-medium text-fw-text-strong">
                   Inherit agent
-                  <select value={inheritAgent} onChange={event => setInheritAgent(event.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white">
+                  <select value={inheritAgent} onChange={event => setInheritAgent(event.target.value)} className="mt-1 w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 text-fw-text-strong outline-none focus:border-fw-accent-border dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong">
                     <option value="">None</option>
                     {agents.map(agent => <option key={agent.id} value={agent.id} disabled={agent.id === agentId.trim()}>{agent.id}</option>)}
                   </select>
@@ -157,24 +157,24 @@ export default function AgentCreationMenu({
               </div>
             ) : (
               <div className="space-y-4">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">
+                <label className="block text-sm font-medium text-fw-text-strong">
                   Agent
-                  <select ref={element => { firstInputRef.current = element }} value={sessionAgent} onChange={event => setSessionAgent(event.target.value)} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 outline-none focus:border-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white">
+                  <select ref={element => { firstInputRef.current = element }} value={sessionAgent} onChange={event => setSessionAgent(event.target.value)} className="mt-1 w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 text-fw-text-strong outline-none focus:border-fw-accent-border dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong">
                     {agents.map(agent => <option key={agent.id} value={agent.id}>{agent.id}</option>)}
                   </select>
                 </label>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">
-                  Session ID <span className="font-normal text-gray-500">(optional)</span>
-                  <input value={sessionId} onChange={event => setSessionId(event.target.value)} autoComplete="off" placeholder={RANDOM_SESSION_ID_PLACEHOLDER} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-900 dark:text-white" />
+                <label className="block text-sm font-medium text-fw-text-strong">
+                  Session ID <span className="font-normal text-fw-text-muted">(optional)</span>
+                  <input value={sessionId} onChange={event => setSessionId(event.target.value)} autoComplete="off" placeholder={RANDOM_SESSION_ID_PLACEHOLDER} className="mt-1 w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-2 focus:ring-fw-focus-ring/20 dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong" />
                 </label>
               </div>
             )}
 
-            {error && <div role="alert" className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">{error}</div>}
+            {error && <div role="alert" className="mt-4 rounded-lg bg-fw-danger-surface px-3 py-2 text-sm text-fw-danger dark:bg-fw-danger-surface-strong/40 dark:text-fw-danger">{error}</div>}
 
             <div className="mt-5 flex justify-end gap-2">
-              <button type="button" onClick={() => setMode(null)} disabled={loading} className="rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-700">Cancel</button>
-              <button type="submit" disabled={loading || (mode === 'session' && agents.length === 0)} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
+              <button type="button" onClick={() => setMode(null)} disabled={loading} className="rounded-lg px-3 py-2 text-sm text-fw-text hover:bg-fw-hover disabled:opacity-50 dark:text-fw-text dark:hover:bg-fw-hover">Cancel</button>
+              <button type="submit" disabled={loading || (mode === 'session' && agents.length === 0)} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-text-inverse hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-50">
                 {loading ? 'Creating…' : 'Create'}
               </button>
             </div>

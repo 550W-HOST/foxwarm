@@ -26,7 +26,7 @@ export default function ReloadAppButton({ className, children }: { className?: s
         setReloading(true)
         void hardReloadApp()
       }}
-      className={className || 'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 disabled:cursor-wait disabled:opacity-70 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'}
+      className={className || 'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-fw-border text-fw-text transition hover:bg-fw-hover hover:text-fw-text-strong disabled:cursor-wait disabled:opacity-70 dark:border-fw-border dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse'}
       title="Reload app and clear service-worker/cache state first"
       aria-label="Reload app"
       disabled={reloading}

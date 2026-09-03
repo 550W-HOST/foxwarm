@@ -41,8 +41,6 @@ async function buildFixtureBundle() {
           React.createElement(GlobalUiSettingsMenu, {
             themeMode,
             onThemeChange(mode) { setThemeMode(mode); setSelectionCount(count => count + 1) },
-            uiThemeStyle: 'default',
-            onUiThemeStyleChange() {},
             sendKeyMode: 'modEnter',
             onSendKeyModeChange() {},
             groupTools: true,
@@ -233,7 +231,7 @@ test('Escape, outside click, and menu-item selection retain their dismissal beha
   const lightButton = await page.evaluateHandle(() => Array.from(document.querySelectorAll('button')).find(button => button.textContent?.trim() === 'light'))
   await lightButton.click()
   await page.waitForSelector('[data-global-ui-settings-menu]', { hidden: true })
-  assert.equal(await page.evaluate(() => window.settingsMenuFixture.selectionCount()), 1)
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_theme_selection_v1')).colorMode), 'light')
 })
 
 test('global Show minimap recovers scrollbar-only mode and normalizes an invalid persisted pair', async () => {
@@ -259,4 +257,12 @@ test('global Show minimap recovers scrollbar-only mode and normalizes an invalid
     localStorage.removeItem('foxwarm.contextScrollbar.showScrollbar')
     localStorage.removeItem('foxwarm.contextScrollbar.showMinimap')
   })
+})
+
+test('global UI settings keeps only the Auto, Light, and Dark color-mode controls', async () => {
+  await mountFixture({ width: 900, height: 760, isMobile: false, hasTouch: false, deviceScaleFactor: 1 })
+  await openMenu()
+  assert.equal(await page.$('select[aria-label="Theme"]'), null)
+  assert.equal(await page.$('button::-p-text(Import)'), null)
+  assert.deepEqual(await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.map(button => button.textContent?.trim()).filter(text => ['auto', 'light', 'dark'].includes(text?.toLowerCase() || '')).map(text => text?.toLowerCase())), ['auto', 'light', 'dark'])
 })

@@ -15,10 +15,6 @@ interface SidebarProps {
   currentSession: string
   currentView: 'session' | 'agents' | 'setup'
   currentSessionRecord?: Session
-  themeMode: 'auto' | 'light' | 'dark'
-  onThemeChange: (mode: 'auto' | 'light' | 'dark') => void
-  uiThemeStyle: 'default' | '550a'
-  onUiThemeStyleChange: (style: 'default' | '550a') => void
   sendKeyMode: 'modEnter' | 'enter'
   onSendKeyModeChange: (mode: 'modEnter' | 'enter') => void
   groupTools: boolean
@@ -61,10 +57,6 @@ export default function Sidebar({
   currentSession,
   currentView,
   currentSessionRecord,
-  themeMode,
-  onThemeChange,
-  uiThemeStyle,
-  onUiThemeStyleChange,
   sendKeyMode,
   onSendKeyModeChange,
   groupTools,
@@ -104,27 +96,23 @@ export default function Sidebar({
   const defaultPath = currentSessionRecord?.cwd || '/'
 
   const agentsBtnClass = currentView === 'agents'
-    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200'
-    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
+    ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent'
+    : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
   return (
-    <div className="h-full bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col">
-      <div className="p-4 border-b border-gray-200 dark:border-gray-700 space-y-3">
+    <div className="h-full bg-fw-surface border-r border-fw-border flex flex-col">
+      <div className="p-4 border-b border-fw-border space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <h1 className="text-xl font-bold text-gray-900 dark:text-white">🦊 Foxwarm</h1>
+          <h1 className="text-xl font-bold text-fw-text-strong">🦊 Foxwarm</h1>
           <div className="flex items-center gap-1">
             <button
               type="button"
               onClick={onToggleCollapsed}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-fw-border bg-fw-surface-sunken text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:border-fw-border dark:bg-fw-surface dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
               title={isPeek ? 'Pin sidebar open' : 'Collapse sidebar'}
             >
               {isPeek ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
             </button>
             <GlobalUiSettingsMenu
-              themeMode={themeMode}
-              onThemeChange={onThemeChange}
-              uiThemeStyle={uiThemeStyle}
-              onUiThemeStyleChange={onUiThemeStyleChange}
               sendKeyMode={sendKeyMode}
               onSendKeyModeChange={onSendKeyModeChange}
               groupTools={groupTools}
@@ -184,7 +172,7 @@ export default function Sidebar({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 border-t border-gray-200 dark:border-gray-700">
+      <div className="flex-1 min-h-0 border-t border-fw-border">
         <SessionListCore
           sessions={sessions}
           currentSession={currentSession}
