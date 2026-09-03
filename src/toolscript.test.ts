@@ -114,7 +114,7 @@ test('run_script executes internal call_tool without surfacing nested tool histo
     assert.equal(response?.hostCallCount, 1);
     assert.equal(response?.lastHostCall?.functionName, 'call_tool');
     assert.equal(response?.lastHostCall?.summaryName, 'search_tools');
-    assert.equal(response?.result?.count, 1);
+    assert.match(response?.result?.output || '', /^Showing 1 of \d+ matching tools\./);
   } finally {
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
@@ -399,7 +399,7 @@ test('run_script supports unified call_tool descriptor shape for builtin tools',
     assert.equal(response?.status, 'completed');
     assert.equal(response?.stdout, 'hello\n');
     assert.deepEqual(response?.executedTools, ['search_tools']);
-    assert.equal(response?.result?.count, 1);
+    assert.match(response?.result?.output || '', /^Showing 1 of \d+ matching tools\./);
   } finally {
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);

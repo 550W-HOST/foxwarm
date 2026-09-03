@@ -14,8 +14,26 @@ import {
   modelFacingDefinitions,
   search_tools,
 } from '../tools';
+import {
+  formatSearchToolsOutput,
+  normalizeSearchToolsLimit,
+  SEARCH_TOOLS_MAX_OUTPUT_CHARS,
+} from './unifiedSearch';
 
-test('search_tools returns structured builtin results with hidden/direct exposure metadata', async () => {
+function searchOutput(result: any): string {
+  assert.deepEqual(Object.keys(result), ['output']);
+  assert.equal(typeof result.output, 'string');
+  return result.output;
+}
+
+function outputToolIds(result: any): string[] {
+  return searchOutput(result).split('\n').slice(1)
+    .filter(line => !line.startsWith('Warnings:') && !line.startsWith('- ') && !line.startsWith('['))
+    .map(line => line.slice(0, line.indexOf('(')))
+    .filter(Boolean);
+}
+
+test('search_tools returns compact text declarations with copyable canonical tool IDs', async () => {
   const mainSession = await sessionManager.getSession('main');
   const result: any = await search_tools({
     query: 'archived messages',
@@ -24,19 +42,9 @@ test('search_tools returns structured builtin results with hidden/direct exposur
     limit: 20,
   });
 
-  assert.equal(typeof result.count, 'number');
-  assert.ok(Array.isArray(result.tools));
-
-  const archivedMessages = result.tools.find((tool: any) => tool.name === 'get_archived_messages');
-  assert.ok(archivedMessages);
-  assert.equal(archivedMessages.source, 'builtin');
-  assert.equal(archivedMessages.toolId, 'builtin:get_archived_messages');
-  assert.equal(archivedMessages.directExposed, false);
-  assert.equal(archivedMessages.hidden, true);
-  assert.deepEqual(
-    archivedMessages.inputSchema,
-    definitions.find(def => def.name === 'get_archived_messages')?.parameters,
-  );
+  const output = searchOutput(result);
+  assert.match(output, /^Showing \d+ of \d+ matching tools\./);
+  assert.match(output, /builtin:get_archived_messages\(\{/);
 
   const builtinReadResult: any = await search_tools({
     query: 'read',
@@ -44,18 +52,13 @@ test('search_tools returns structured builtin results with hidden/direct exposur
     includeSchema: false,
     limit: 20,
   });
-  assert.equal(builtinReadResult.tools.some((tool: any) => tool.name === 'read'), false);
+  assert.equal(searchOutput(builtinReadResult).includes('builtin:read('), false);
 
   mainSession.currentNode = 'master';
   const readResult: any = await search_tools({ query: 'read', sources: ['node'], includeSchema: false }, {
     sessionId: 'main', session: mainSession,
   });
-  const readTool = readResult.tools.find((tool: any) => tool.name === 'read');
-  assert.ok(readTool);
-  assert.equal(readTool.source, 'node');
-  assert.equal(readTool.nodeId, 'master');
-  assert.equal(readTool.toolId, 'node:master/read');
-  assert.equal(Object.prototype.hasOwnProperty.call(readTool, 'inputSchema'), false);
+  assert.match(searchOutput(readResult), /node:master\/read\(\/\* schema omitted \*\/\);/);
 });
 
 test('timer tools are hidden by default but remain reachable through unified search/call', async () => {
@@ -76,10 +79,7 @@ test('timer tools are hidden by default but remain reachable through unified sea
   });
 
   for (const name of ['create_timer', 'list_timers', 'update_timer', 'delete_timer']) {
-    const found = result.tools.find((tool: any) => tool.name === name);
-    assert.ok(found, `${name} should be discoverable`);
-    assert.equal(found.hidden, true);
-    assert.equal(found.directExposed, false);
+    assert.ok(outputToolIds(result).includes(`builtin:${name}`), `${name} should be discoverable`);
   }
 });
 
@@ -108,46 +108,261 @@ test('search_tools multi-word queries rank tools matching more words higher', as
     limit: 200,
   });
 
-  assert.ok(result.tools.length >= 2);
-  const archiveIndex = result.tools.findIndex((tool: any) => tool.name === 'recall');
-  const sessionIndex = result.tools.findIndex((tool: any) => tool.name === 'get_session_messages');
+  const ids = outputToolIds(result);
+  assert.ok(ids.length >= 2);
+  const archiveIndex = ids.indexOf('builtin:recall');
+  const sessionIndex = ids.indexOf('builtin:get_session_messages');
   assert.ok(archiveIndex >= 0, 'recall should match both words');
   assert.ok(sessionIndex >= 0, 'get_session_messages should still match one word');
   assert.ok(archiveIndex < sessionIndex, 'tool matching more query words should rank higher');
 });
 
-test('search_tools includeSchema=true keeps full schema only for the first 10 results', async () => {
+test('search_tools includeSchema=true renders schemas only for the first 10 results', async () => {
   const result: any = await search_tools({
     sources: ['builtin'],
     includeSchema: true,
     limit: 15,
   });
 
-  assert.equal(result.tools.length, 15);
-
-  for (const tool of result.tools.slice(0, 10)) {
-    assert.equal(Object.prototype.hasOwnProperty.call(tool, 'inputSchema'), true);
-  }
-
-  for (const tool of result.tools.slice(10)) {
-    assert.equal(Object.prototype.hasOwnProperty.call(tool, 'inputSchema'), false);
-    assert.equal(typeof tool.toolId, 'string');
-    assert.equal(typeof tool.source, 'string');
-    assert.equal(typeof tool.name, 'string');
-  }
+  const lines = searchOutput(result).split('\n').slice(1);
+  assert.equal(lines.length, 15);
+  assert.equal(lines.slice(0, 10).every(line => !line.includes('schema omitted')), true);
+  assert.equal(lines.slice(10).every(line => line.includes('schema omitted')), true);
 });
 
-test('search_tools includeSchema=false removes schema from all results', async () => {
+test('search_tools includeSchema=false emits short schema-omitted declarations', async () => {
   const result: any = await search_tools({
     sources: ['builtin'],
     includeSchema: false,
     limit: 15,
   });
 
-  assert.equal(result.tools.length, 15);
-  for (const tool of result.tools) {
-    assert.equal(Object.prototype.hasOwnProperty.call(tool, 'inputSchema'), false);
+  const lines = searchOutput(result).split('\n').slice(1);
+  assert.equal(lines.length, 15);
+  assert.equal(lines.every(line => line.includes('schema omitted')), true);
+});
+
+test('search_tools defaults to 5 results and accepts explicit limits 1 and 200', async () => {
+  const defaultResult: any = await search_tools({ sources: ['builtin'], includeSchema: false });
+  assert.match(searchOutput(defaultResult), /^Showing 5 of \d+ matching tools\./);
+
+  const oneResult: any = await search_tools({ sources: ['builtin'], includeSchema: true, limit: 1 });
+  assert.match(searchOutput(oneResult), /^Showing 1 of \d+ matching tools\./);
+  assert.equal(outputToolIds(oneResult).length, 1);
+
+  const broadResult: any = await search_tools({ sources: ['builtin'], includeSchema: false, limit: 200 });
+  const broadHeader = searchOutput(broadResult).split('\n')[0];
+  const match = /^Showing (\d+) of (\d+) matching tools\.$/.exec(broadHeader);
+  assert.ok(match);
+  assert.equal(match[1], match[2]);
+  assert.ok(Number(match[1]) > 5);
+});
+
+test('search_tools formatter covers required/optional, enum, nested, arrays, unions, and unknown schemas', () => {
+  const output = formatSearchToolsOutput([{
+    toolId: 'mcp:demo/complex',
+    description: 'Complex tool',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        requiredArg: { type: 'integer', description: 'Required count' },
+        optionalEnum: { enum: ['a', 'b'] },
+        nested: { type: 'object', properties: { enabled: { type: 'boolean' } }, required: ['enabled'], additionalProperties: false },
+        values: { type: 'array', items: { type: ['string', 'null'] } },
+        choice: { oneOf: [{ const: true }, { type: 'number' }] },
+        mystery: {},
+        metadata: { type: 'object', additionalProperties: { type: 'string' } },
+      },
+      required: ['requiredArg'],
+      additionalProperties: false,
+    },
+  }], 1, [], true);
+
+  assert.match(output, /requiredArg: number \/\* Required count \*\//);
+  assert.match(output, /optionalEnum\?: "a" \| "b"/);
+  assert.match(output, /nested\?: \{ enabled: boolean;/);
+  assert.match(output, /values\?: Array<string \| null>/);
+  assert.match(output, /choice\?: true \| number/);
+  assert.match(output, /mystery\?: unknown/);
+  assert.match(output, /metadata\?: Record<string, string>/);
+});
+
+test('search_tools formatter labels an unconstrained root object as generic args', () => {
+  const output = formatSearchToolsOutput([{
+    toolId: 'node:test/probe',
+    inputSchema: { type: 'object' },
+  }], 1, [], true);
+  assert.match(output, /node:test\/probe\(args: Record<string, unknown>\);/);
+});
+
+test('search_tools formatter escapes and bounds comments and warnings', () => {
+  const unsafeToolName = 'comments\n\0\u001b\u0085\u202e';
+  const output = formatSearchToolsOutput([{
+    source: 'mcp',
+    server: 'demo',
+    name: unsafeToolName,
+    toolId: `mcp:demo/${unsafeToolName}`,
+    description: 'line one\nline two\0\u001b\u0085\u202e */ still comment',
+    inputSchema: { type: 'object', properties: { value: { type: 'string', description: 'property\0\u001b\u0085\u202e */ text' } } },
+  }], 1, ['warning\ntext\0\u001b\u0085\u202e */\nWarnings:\n- forged'], true);
+
+  assert.match(output, /call_tool\(\{ source: "mcp", server: "demo", name: "comments\\u000a\\u0000\\u001b\\u0085\\u202e"/);
+  assert.match(output, /property\\u0000\\u001b\\u0085\\u202e \*\\\/ text/);
+  assert.match(output, /line one\\u000aline two\\u0000\\u001b\\u0085\\u202e \*\\\/ still comment/);
+  assert.match(output, /Warnings:\n- warning\\u000atext\\u0000\\u001b\\u0085\\u202e \*\\\/\\u000aWarnings:\\u000a- forged/);
+  assert.equal(output.split('\n').filter(line => line === 'Warnings:').length, 1);
+  assert.equal(output.includes('\0'), false);
+  assert.equal(output.includes('\u001b'), false);
+  assert.equal(output.includes('\u0085'), false);
+  assert.equal(output.includes('\u202e'), false);
+  const quotedName = /name: ("(?:\\.|[^"\\])*")/.exec(output)?.[1];
+  assert.ok(quotedName);
+  assert.equal(JSON.parse(quotedName), unsafeToolName);
+});
+
+test('search_tools unsafe MCP identities use explicit descriptors that round-trip through call_tool', async () => {
+  const originalCallTool = mcpClient.callTool;
+  const calls: Array<{ server?: string; tool: string }> = [];
+  try {
+    (mcpClient as any).callTool = async (server: string | undefined, tool: string) => {
+      calls.push({ server, tool });
+      return { ok: true };
+    };
+    const output = formatSearchToolsOutput([{
+      source: 'mcp', server: 'a/b', name: 'probe', toolId: 'mcp:a/b/probe', inputSchema: { type: 'object' },
+    }, {
+      source: 'mcp', server: 'demo', name: 'probe\nunsafe', toolId: 'mcp:demo/probe\nunsafe', inputSchema: { type: 'object' },
+    }], 2, [], true);
+
+    assert.match(output, /call_tool\(\{ source: "mcp", server: "a\/b", name: "probe", args:/);
+    assert.match(output, /call_tool\(\{ source: "mcp", server: "demo", name: "probe\\u000aunsafe", args: Record<string, unknown>/);
+    assert.equal(output.includes('args: args:'), false);
+
+    const ctx: any = { sessionId: 'main', session: { agent: 'main' } };
+    await call_tool({ source: 'mcp', server: 'a/b', name: 'probe', args: {} }, ctx);
+    await call_tool({ source: 'mcp', server: 'demo', name: 'probe\nunsafe', args: {} }, ctx);
+    assert.deepEqual(calls, [
+      { server: 'a/b', tool: 'probe' },
+      { server: 'demo', tool: 'probe\nunsafe' },
+    ]);
+  } finally {
+    (mcpClient as any).callTool = originalCallTool;
   }
+});
+
+test('search_tools omits an unsafe identity when no unambiguous structured descriptor is available', () => {
+  const output = formatSearchToolsOutput([{
+    toolId: 'mcp:ambiguous/server/tool',
+    inputSchema: { type: 'object' },
+  }], 1, [], true);
+  assert.match(output, /^Showing 0 of 1 matching tools\./);
+  assert.match(output, /Warnings:\n- 1 matching tool omitted because an unambiguous explicit descriptor was unavailable/);
+});
+
+test('search_tools formatter keeps unsupported object constraints broad and avoids invalid index signatures', () => {
+  const output = formatSearchToolsOutput([{
+    toolId: 'mcp:demo/patterned',
+    inputSchema: { type: 'object', patternProperties: { '^x-': { type: 'string' } }, additionalProperties: false },
+  }, {
+    toolId: 'mcp:demo/mixed',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      additionalProperties: { type: 'number' },
+    },
+  }, {
+    toolId: 'mcp:demo/ref',
+    inputSchema: { $ref: '#/$defs/Input' },
+  }, {
+    toolId: 'mcp:demo/dependent_required',
+    inputSchema: { type: 'object', properties: {}, dependentRequired: { a: ['b'] } },
+  }, {
+    toolId: 'mcp:demo/dependencies',
+    inputSchema: { type: 'object', properties: {}, dependencies: { a: ['b'] } },
+  }, {
+    toolId: 'mcp:demo/property_bounds',
+    inputSchema: { type: 'object', properties: {}, minProperties: 1, maxProperties: 2 },
+  }], 6, [], true);
+
+  assert.match(output, /mcp:demo\/patterned\(args: Record<string, unknown>\);/);
+  assert.match(output, /mcp:demo\/mixed\(\{ name\?: string; \/\* other keys: number \*\/ \}\);/);
+  assert.match(output, /mcp:demo\/ref\(args: unknown\);/);
+  assert.match(output, /mcp:demo\/dependent_required\(args: Record<string, unknown>\);/);
+  assert.match(output, /mcp:demo\/dependencies\(args: Record<string, unknown>\);/);
+  assert.match(output, /mcp:demo\/property_bounds\(args: Record<string, unknown>\);/);
+  assert.equal(output.includes('[key: string]: number'), false);
+});
+
+test('search_tools formatter preserves required keys absent from properties', () => {
+  const output = formatSearchToolsOutput([{
+    toolId: 'mcp:demo/required_typed',
+    inputSchema: { type: 'object', properties: {}, required: ['token'], additionalProperties: { type: 'string' } },
+  }, {
+    toolId: 'mcp:demo/required_unknown',
+    inputSchema: { type: 'object', properties: {}, required: ['token'] },
+  }, {
+    toolId: 'mcp:demo/required_impossible',
+    inputSchema: { type: 'object', properties: {}, required: ['token'], additionalProperties: false },
+  }], 3, [], true);
+
+  assert.match(output, /required_typed\(\{ token: string \/\* required; other-key schema \*\/; \/\* other keys: string \*\/ \}\);/);
+  assert.match(output, /required_unknown\(\{ token: unknown \/\* required; other key \*\/; \/\* other keys: unknown \*\/ \}\);/);
+  assert.match(output, /required_impossible\(never\);/);
+});
+
+test('search_tools formatter quotes special required keys and marks cardinality truncation', () => {
+  const required = ['access-token\nunsafe', ...Array.from({ length: 24 }, (_, index) => `required_${index}`)];
+  const output = formatSearchToolsOutput([{
+    toolId: 'mcp:demo/many_required',
+    inputSchema: { type: 'object', properties: {}, required },
+  }], 1, [], true);
+
+  assert.match(output, /"access-token\\u000aunsafe": unknown \/\* required; other key \*\//);
+  assert.match(output, /\/\* 5 required keys omitted; constraint unknown \*\//);
+  assert.equal(output.includes('required_23: unknown'), false);
+});
+
+test('search_tools formatter widens objects whose required list exceeds the scan bound', () => {
+  const properties = Object.fromEntries(Array.from({ length: 150 }, (_, index) => [`key_${index}`, { type: 'string' }]));
+  const output = formatSearchToolsOutput([{
+    toolId: 'mcp:demo/required_scan_bound',
+    inputSchema: { type: 'object', properties, required: Object.keys(properties), additionalProperties: false },
+  }], 1, [], true);
+
+  assert.match(output, /required_scan_bound\(args: Record<string, unknown> \/\* required constraints omitted \*\/\);/);
+  assert.equal(output.includes('optional properties omitted'), false);
+  assert.equal(output.split('required constraints omitted').length - 1, 1);
+});
+
+test('search_tools formatter applies one global bound with accurate emitted counts and bounded warnings', () => {
+  const tools = Array.from({ length: 200 }, (_, index) => ({
+    toolId: `mcp:server/tool_${index}`,
+    description: `tool ${index} ${'x'.repeat(2_000)}`,
+    inputSchema: { type: 'object', properties: { value: { type: 'string', description: 'y'.repeat(2_000) } } },
+  }));
+  const warnings = Array.from({ length: 25 }, (_, index) => `warning ${index} ${'z'.repeat(2_000)}`);
+  const output = formatSearchToolsOutput(tools, 250, warnings, true);
+  const declarationLines = output.split('\n').filter(line => /^(?:builtin:|mcp:|node:|call_tool\()/.test(line));
+  const headerMatch = /^Showing (\d+) of 250 matching tools\./.exec(output);
+
+  assert.ok(headerMatch);
+  assert.equal(Number(headerMatch[1]), declarationLines.length);
+  assert.ok(declarationLines.length < tools.length);
+  assert.ok(output.length <= SEARCH_TOOLS_MAX_OUTPUT_CHARS);
+  assert.match(output, /selected tools? omitted by the global formatter budget/);
+  assert.match(output, /Warnings:/);
+  assert.match(output, /additional warnings omitted/);
+  assert.equal(output.split('\n').every(line => line.length <= 3_000), true);
+});
+
+test('search_tools limit normalization handles omitted, zero, fractions, non-finite values, and bounds', () => {
+  assert.equal(normalizeSearchToolsLimit(undefined), 5);
+  assert.equal(normalizeSearchToolsLimit(0), 1);
+  assert.equal(normalizeSearchToolsLimit(-10), 1);
+  assert.equal(normalizeSearchToolsLimit(2.9), 2);
+  assert.equal(normalizeSearchToolsLimit(Number.NaN), 5);
+  assert.equal(normalizeSearchToolsLimit(Number.POSITIVE_INFINITY), 5);
+  assert.equal(normalizeSearchToolsLimit(500), 200);
 });
 
 test('call_tool rejects node capabilities as builtin and accepts them through node source', async () => {
@@ -228,8 +443,7 @@ test('call_tool parses argsJson fallback for target tool arguments', async () =>
     { sessionId: 'main', session: sessionManager.getSessionCatalog('main') } as any,
   );
 
-  assert.equal(result.count, 1);
-  assert.equal(result.tools[0].source, 'builtin');
+  assert.match(searchOutput(result), /^Showing 1 of \d+ matching tools\./);
 });
 
 test('call_tool rejects invalid argsJson with a clear error', async () => {
@@ -337,7 +551,7 @@ test('mcp_config can disable an existing server without repeating its connection
   }
 });
 
-test('search_tools and call_tool cover MCP tools with schema-preserving structured results', async () => {
+test('search_tools and call_tool cover MCP tools with schema-preserving text declarations', async () => {
   const originalListServers = mcpClient.listServers;
   const originalListTools = mcpClient.listTools;
   const originalCallTool = mcpClient.callTool;
@@ -387,17 +601,7 @@ test('search_tools and call_tool cover MCP tools with schema-preserving structur
       session: { agent: 'main' },
     } as any);
 
-    assert.equal(searchResult.count, 1);
-    assert.equal(searchResult.tools[0].source, 'mcp');
-    assert.equal(searchResult.tools[0].server, 'github');
-    assert.equal(searchResult.tools[0].toolId, 'mcp:github/search_repos');
-    assert.deepEqual(searchResult.tools[0].inputSchema, {
-      type: 'object',
-      properties: {
-        query: { type: 'string' },
-      },
-      required: ['query'],
-    });
+    assert.match(searchOutput(searchResult), /^Showing 1 of 1 matching tools\.\nmcp:github\/search_repos\(\{ query: string; \/\* other keys: unknown \*\/ \}\);/);
 
     const callResult = await call_tool({
       toolId: 'mcp:github/search_repos',
@@ -449,10 +653,9 @@ test('search_tools keeps MCP results from healthy servers when another MCP serve
       session: { agent: 'main' },
     } as any);
 
-    assert.equal(result.count, 1);
-    assert.equal(result.tools[0].server, 'healthy');
-    assert.equal(result.tools[0].name, 'healthy_tool');
-    assert.ok(result.warnings?.some((warning: string) => /broken/.test(warning) && /missing token/.test(warning)));
+    const output = searchOutput(result);
+    assert.match(output, /mcp:healthy\/healthy_tool/);
+    assert.match(output, /Warnings:\n- MCP server broken: missing token/);
   } finally {
     (mcpClient as any).listServers = originalListServers;
     (mcpClient as any).listTools = originalListTools;
@@ -554,16 +757,7 @@ test('search_tools and call_tool cover remote node tools', async () => {
       includeSchema: true,
     }, { sessionId: 'main', session: sessionManager.getSessionCatalog('main') } as any);
 
-    assert.equal(searchResult.count, 1);
-    assert.equal(searchResult.tools[0].source, 'node');
-    assert.equal(searchResult.tools[0].nodeId, 'android-node');
-    assert.equal(searchResult.tools[0].toolId, 'node:android-node/android_screenshot');
-    assert.deepEqual(searchResult.tools[0].inputSchema, {
-      type: 'object',
-      properties: {
-        inline: { type: 'boolean' },
-      },
-    });
+    assert.match(searchOutput(searchResult), /^Showing 1 of 1 matching tools\.\nnode:android-node\/android_screenshot\(\{ inline\?: boolean; \/\* other keys: unknown \*\/ \}\);/);
 
     const callResult = await call_tool({
       source: 'node',
@@ -591,9 +785,9 @@ test('search_tools and call_tool cover remote node tools', async () => {
       session: { agent: 'main', currentNode: 'android-node' },
     } as any);
 
-    assert.equal(defaultNodeSearchResult.count, 1);
-    assert.equal(defaultNodeSearchResult.tools[0].nodeId, 'android-node');
-    assert.equal(defaultNodeSearchResult.tools.some((tool: any) => tool.nodeId === 'other-node'), false);
+    const defaultNodeOutput = searchOutput(defaultNodeSearchResult);
+    assert.match(defaultNodeOutput, /node:android-node\/android_screenshot/);
+    assert.equal(defaultNodeOutput.includes('node:other-node/'), false);
   } finally {
     (nodesManager as any).listNodesWithTools = originalListNodesWithTools;
     (nodesManager as any).executeTool = originalExecuteTool;
@@ -628,10 +822,9 @@ test('master Node discovery and dynamic calls expose only canonical node-environ
       limit: 200,
     }, { sessionId: sourceId, session: source });
     assert.deepEqual(
-      [...discovered.tools.map((tool: any) => tool.name)].sort(),
+      outputToolIds(discovered).map(id => id.slice('node:master/'.length)).sort(),
       [...NODE_ENVIRONMENT_BUILTIN_NAMES].sort(),
     );
-    assert.equal(discovered.tools.every((tool: any) => tool.toolId === `node:master/${tool.name}`), true);
 
     const byId: any = await call_tool({
       toolId: 'node:master/read',
@@ -735,7 +928,7 @@ test('isolated exact rules align Main-local discovery, direct, unified, ToolScri
     (mcpClient as any).callTool = async (_server: string, tool: string) => ({ tool });
 
     const found: any = await search_tools({ sources: ['builtin', 'node', 'mcp'], limit: 200 }, { sessionId: sourceId, session });
-    const ids = new Set(found.tools.map((tool: any) => tool.toolId));
+    const ids = new Set(outputToolIds(found));
     assert.equal(ids.has('builtin:run_script'), true);
     assert.equal(ids.has('builtin:skill'), false);
     assert.equal(ids.has('builtin:list_agents'), false);
@@ -745,8 +938,8 @@ test('isolated exact rules align Main-local discovery, direct, unified, ToolScri
     assert.equal(ids.has('mcp:demo/probe'), true);
     assert.equal(ids.has('mcp:demo/other'), false);
     const masterFound: any = await search_tools({ sources: ['node'], nodeId: 'master', limit: 20 }, { sessionId: sourceId, session });
-    assert.equal(masterFound.tools.some((tool: any) => tool.toolId === 'node:master/read'), true);
-    assert.equal(masterFound.tools.some((tool: any) => tool.toolId === 'node:master/exec'), false);
+    assert.equal(outputToolIds(masterFound).includes('node:master/read'), true);
+    assert.equal(outputToolIds(masterFound).includes('node:master/exec'), false);
 
     await assert.rejects(() => tools.callTool('exec', { command: 'true' }, { sessionId: sourceId, session }), /tool rule denies/i);
     await assert.rejects(() => call_tool({ source: 'node', name: 'exec', args: { command: 'true' } }, { sessionId: sourceId, session }), /tool rule denies/i);
@@ -782,7 +975,7 @@ test('call_tool is a permission-neutral dispatcher and only its concrete target 
     (nodeExecution as any).executeNodeTool = async () => { effects += 1; return { output: 'allowed' }; };
 
     const found: any = await search_tools({ query: 'call tool', sources: ['builtin'], limit: 200 }, ctx);
-    assert.equal(found.tools.some((tool: any) => tool.toolId === 'builtin:call_tool'), false);
+    assert.equal(outputToolIds(found).includes('builtin:call_tool'), false);
     await assert.rejects(() => call_tool({
       source: 'builtin', name: 'call_tool', args: { source: 'node', name: 'custom_probe', args: {} },
     }, ctx), /dispatcher\/container.*not a concrete builtin capability/i);
@@ -838,7 +1031,13 @@ test('search_tools and call_tool descriptions include usage guidance and example
   assert.match(String(searchDef?.description), /Node results contain environment capabilities/i);
   assert.match(String(searchDef?.description), /example search_tools calls/i);
   assert.match(String(searchDef?.description), /mcp-management skill/i);
+  assert.match(String(searchDef?.description), /limit: 1/);
   assert.match(String((searchDef?.parameters?.properties as any)?.nodeId?.description), /current node/i);
+  assert.match(String((searchDef?.parameters?.properties as any)?.limit?.description), /default: 5.*max: 200/i);
+  assert.equal((searchDef?.parameters?.properties as any)?.limit?.type, 'integer');
+  assert.equal((searchDef?.parameters?.properties as any)?.limit?.minimum, 1);
+  assert.equal((searchDef?.parameters?.properties as any)?.limit?.maximum, 200);
+  assert.match(String((searchDef?.parameters?.properties as any)?.includeSchema?.description), /first 10 results/i);
 
   assert.match(String(callDef?.description), /argsJson.*JSON object string fallback/i);
   assert.match(String(callDef?.description), /must use source=node/i);

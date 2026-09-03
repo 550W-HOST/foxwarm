@@ -259,10 +259,9 @@ test('colon executable Node IDs round-trip through canonical discovery tool IDs'
       nodeId: 'fixture:sandbox',
       includeSchema: false,
     }, ctx);
-    const readTool = discovered.tools.find((tool: any) => tool.name === 'read');
-    assert.equal(readTool.toolId, 'node:fixture:sandbox/read');
+    assert.match(discovered.output, /node:fixture:sandbox\/read\(\/\* schema omitted \*\/\);/);
     const result: any = await tool_call_tool({
-      toolId: readTool.toolId,
+      toolId: 'node:fixture:sandbox/read',
       args: { filePath: 'memfs://fixture:colon/read.txt' },
     }, ctx);
     assert.equal(result, 'fixture-read');

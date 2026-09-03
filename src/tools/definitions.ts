@@ -680,7 +680,7 @@ Example:
         {
             name: 'search_tools',
             defaultInject: true,
-            description: 'Search or list callable tools across builtin, MCP, and node sources. Builtin results contain Foxwarm control/session/management tools; Node results contain environment capabilities such as read/write/edit/apply_patch/exec/browse and node-advertised tools. Prefer this unified catalog before calling long-tail tools via call_tool; load the timer-automation skill before using timer tools and the mcp-management skill before changing MCP server configuration. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falling back to `master` when the session has no selected node rather than listing every node). Example search_tools calls: `{query:"read file", sources:["node"]}` or `{query:"session status", sources:["builtin"]}`.',
+            description: 'Search or list callable tools across builtin, MCP, and node sources. Results are compact text declarations using either a safe canonical tool ID or an explicit call_tool source descriptor that can be copied for invocation. Builtin results contain Foxwarm control/session/management tools; Node results contain environment capabilities such as read/write/edit/apply_patch/exec/browse and node-advertised tools. Prefer this unified catalog before calling long-tail tools via call_tool; load the timer-automation skill before using timer tools and the mcp-management skill before changing MCP server configuration. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falling back to `master` when the session has no selected node rather than listing every node). If you mostly know the tool and only need its schema, use `limit: 1`. Example search_tools calls: `{query:"read file", sources:["node"], limit:1}` or `{query:"session status", sources:["builtin"], limit:1}`.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -692,8 +692,8 @@ Example:
                     },
                     server: { type: 'string', description: 'Optional MCP server filter; if omitted while searching MCP tools, all enabled MCP servers are searched.' },
                     nodeId: { type: 'string', description: 'Optional remote node id filter. For source=`node`, omitted means use the current node instead of listing tools from every node.' },
-                    limit: { type: 'number', description: 'Maximum number of results to return (default: 20, max: 200).' },
-                    includeSchema: { type: 'boolean', description: 'If true (default), include each tool\'s input schema in results.' }
+                    limit: { type: 'integer', minimum: 1, maximum: 200, description: 'Maximum number of results to return (default: 5, max: 200).' },
+                    includeSchema: { type: 'boolean', description: 'If true (default), render input schemas for up to the first 10 results. Later results remain compact catalog summaries.' }
                 }
             }
         },
