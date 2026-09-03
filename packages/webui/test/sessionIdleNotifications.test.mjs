@@ -291,7 +291,7 @@ test('session context menu exposes an accessible once item with a trailing alway
   assert.match(menu, /mr-3 inline-flex shrink-0 items-center gap-1 text-sm/)
   assert.match(menu, /h-3 w-3 items-center justify-center rounded-\[1px\] border-2/)
   assert.match(list, /label: 'Notify on idle'/)
-  assert.match(list, /BellRing size=\{14\} className="text-blue-600 dark:text-blue-300"/)
+  assert.match(list, /BellRing size=\{14\} className="text-fw-accent dark:text-fw-accent"/)
   assert.match(list, /Bell size=\{14\}/)
   assert.match(list, /checked: idleNotificationMode === 'once'/)
   assert.match(list, /trailingControl:/)

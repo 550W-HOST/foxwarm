@@ -16,7 +16,7 @@ export default function NodeTargetSelect({ value, nodes, requiredService, onChan
       value={value}
       onChange={(event) => onChange(event.target.value)}
       disabled={disabled}
-      className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 disabled:bg-gray-50 disabled:text-gray-600 disabled:opacity-100 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 dark:disabled:bg-gray-900 dark:disabled:text-gray-300"
+      className="w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 text-sm text-fw-text-strong disabled:bg-fw-surface-sunken disabled:text-fw-text disabled:opacity-100 dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong dark:disabled:bg-fw-canvas dark:disabled:text-fw-text"
     >
       {options.map((node) => {
         const availability = getNodeTargetAvailability(node, requiredService)

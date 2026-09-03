@@ -137,21 +137,21 @@ export default function ContextMenu({
   return createPortal(
     <div
       ref={menuRef}
-      className="fixed z-[80] min-w-[220px] overflow-hidden rounded-xl border border-gray-200/90 bg-white/95 py-1.5 shadow-2xl ring-1 ring-black/5 backdrop-blur dark:border-gray-700/90 dark:bg-gray-800/95"
+      className="fixed z-[80] min-w-[220px] overflow-hidden rounded-xl border border-fw-border/90 bg-fw-surface/95 py-1.5 shadow-2xl ring-1 ring-fw-focus-ring/5 backdrop-blur dark:border-fw-border/90 dark:bg-fw-surface/95"
       style={position ? { left: `${position.left}px`, top: `${position.top}px` } : { left: 0, top: 0, visibility: 'hidden' }}
       role="menu"
     >
       {visibleEntries.map((entry) => {
         if ('type' in entry) {
-          return <div key={entry.key} className="my-1 border-t border-gray-200/80 dark:border-gray-700/80" />
+          return <div key={entry.key} className="my-1 border-t border-fw-border/80 dark:border-fw-border/80" />
         }
 
         const toneClass = entry.danger
-          ? 'text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20'
-          : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700/70'
+          ? 'text-fw-danger dark:text-fw-danger hover:bg-fw-danger-surface dark:hover:bg-fw-danger-surface-strong/20'
+          : 'text-fw-text-strong hover:bg-fw-hover dark:hover:bg-fw-hover/70'
 
         const itemClass = `flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors ${entry.disabled ? 'cursor-not-allowed opacity-50' : toneClass}`
-        const splitItemClass = `flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2.5 text-left text-sm ${entry.disabled ? 'cursor-not-allowed opacity-50' : entry.danger ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-gray-200'}`
+        const splitItemClass = `flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2.5 text-left text-sm ${entry.disabled ? 'cursor-not-allowed opacity-50' : entry.danger ? 'text-fw-danger dark:text-fw-danger' : 'text-fw-text-strong'}`
 
         const itemButton = (
           <button
@@ -180,7 +180,7 @@ export default function ContextMenu({
         return (
           <div
             key={entry.key}
-            className={`foxwarm-context-menu-split-row flex w-full items-stretch transition-colors ${entry.disabled ? '' : entry.danger ? 'foxwarm-context-menu-split-row-danger' : ''} ${hoveredSplitKey === entry.key ? entry.danger ? 'bg-red-50 dark:bg-red-900/20' : 'bg-gray-100 dark:bg-gray-700/70' : ''}`}
+            className={`foxwarm-context-menu-split-row flex w-full items-stretch transition-colors ${entry.disabled ? '' : entry.danger ? 'foxwarm-context-menu-split-row-danger' : ''} ${hoveredSplitKey === entry.key ? entry.danger ? 'bg-fw-danger-surface dark:bg-fw-danger-surface-strong/20' : 'bg-fw-neutral-surface dark:bg-fw-surface-raised/70' : ''}`}
             data-context-menu-split-row="true"
             data-context-menu-split-row-hovered={hoveredSplitKey === entry.key ? 'true' : 'false'}
             onMouseEnter={() => setHoveredSplitKey(entry.key)}
@@ -198,9 +198,9 @@ export default function ContextMenu({
                 control.onSelect()
                 onClose()
               }}
-              className={`mr-3 inline-flex shrink-0 items-center gap-1 text-sm transition-colors ${control.checked ? 'text-blue-700 dark:text-blue-300' : 'text-gray-700 hover:text-blue-700 dark:text-gray-200 dark:hover:text-blue-300'} ${control.disabled ? 'cursor-not-allowed opacity-50' : ''}`}
+              className={`mr-3 inline-flex shrink-0 items-center gap-1 text-sm transition-colors ${control.checked ? 'text-fw-accent dark:text-fw-accent' : 'text-fw-text hover:text-fw-accent dark:text-fw-text-strong dark:hover:text-fw-accent'} ${control.disabled ? 'cursor-not-allowed opacity-50' : ''}`}
             >
-              <span aria-hidden="true" className={`inline-flex h-3 w-3 items-center justify-center rounded-[1px] border-2 text-[8px] font-bold leading-none ${control.checked ? 'border-blue-600 bg-blue-600 text-white dark:border-blue-400 dark:bg-blue-400 dark:text-gray-950' : 'border-gray-500 bg-white text-transparent dark:border-gray-400 dark:bg-gray-900'}`}>✓</span>
+              <span aria-hidden="true" className={`inline-flex h-3 w-3 items-center justify-center rounded-[1px] border-2 text-[8px] font-bold leading-none ${control.checked ? 'border-fw-accent-border bg-fw-accent text-fw-text-inverse dark:border-fw-accent-border dark:bg-fw-accent dark:text-fw-text-strong' : 'border-fw-border-strong bg-fw-surface text-transparent dark:border-fw-border-strong dark:bg-fw-canvas'}`}>✓</span>
               <span>{control.label}</span>
             </button>
           </div>

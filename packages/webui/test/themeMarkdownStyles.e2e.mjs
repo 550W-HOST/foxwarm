@@ -1,10 +1,27 @@
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
-import { readdir, readFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import * as esbuild from 'esbuild'
 import puppeteer from 'puppeteer-core'
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const assetsDirectory = new URL('../dist/assets/', import.meta.url)
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const tempDir = await mkdtemp(path.join(tmpdir(), 'foxwarm-theme-markdown-test-'))
+const themeBundle = path.join(tempDir, 'theme.mjs')
+await esbuild.build({
+  entryPoints: [path.join(__dirname, '../src/theme/index.ts')],
+  outfile: themeBundle,
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  target: 'node20',
+  logLevel: 'silent',
+})
+const themeSystem = await import(pathToFileURL(themeBundle).href)
 
 let browser
 let page
@@ -30,7 +47,7 @@ const fixtureMarkup = `
       </div>
     </section>
     <section id="assistant-markdown" class="foxwarm-assistant-message-markdown">
-      <div class="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900 prose-pre:text-gray-900 dark:prose-pre:text-gray-100">
+      <div class="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-fw-assistant-code-surface prose-pre:text-fw-assistant-code-text">
         <p>Inline <code>assistant_inline()</code></p>
         <pre><code class="language-js">const assistant = true;</code></pre>
       </div>
@@ -61,14 +78,17 @@ const contrastRatio = (foreground, background) => {
 }
 
 async function applyTheme({ style = 'default', dark = false }) {
-  await page.evaluate(({ style, dark }) => {
+  const manifest = style === '550a' ? themeSystem.THEME_550A : themeSystem.DEFAULT_THEME
+  const variables = themeSystem.themeVariantCssVariables(manifest.variants[dark ? 'dark' : 'light'])
+  await page.evaluate(({ style, dark, variables }) => {
+    for (const [name, value] of Object.entries(variables)) document.documentElement.style.setProperty(name, value)
     document.documentElement.classList.toggle('dark', dark)
     if (style === '550a') {
-      document.documentElement.setAttribute('data-foxwarm-ui-style', '550a')
+      document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console')
     } else {
-      document.documentElement.removeAttribute('data-foxwarm-ui-style')
+      document.documentElement.removeAttribute('data-foxwarm-component-treatment')
     }
-  }, { style, dark })
+  }, { style, dark, variables })
 }
 
 async function readComputedStyles() {
@@ -98,8 +118,8 @@ async function readComputedStyles() {
     const rootStyle = getComputedStyle(document.documentElement)
     return {
       theme: {
-        textBright: rootStyle.getPropertyValue('--foxwarm-550a-text-bright').trim(),
-        input: rootStyle.getPropertyValue('--foxwarm-550a-input').trim(),
+        textBright: rootStyle.getPropertyValue('--foxwarm-console-text-bright').trim(),
+        input: rootStyle.getPropertyValue('--foxwarm-console-input').trim(),
       },
       message: readSection('message-reasoning'),
       processing: readSection('processing-reasoning'),
@@ -138,6 +158,7 @@ before(async () => {
 
 after(async () => {
   await browser?.close()
+  await rm(tempDir, { recursive: true, force: true })
 })
 
 test('550A light pairs fenced-code foreground and background across Markdown surfaces', async () => {

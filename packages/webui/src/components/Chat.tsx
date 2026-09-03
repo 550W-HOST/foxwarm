@@ -1576,7 +1576,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
                 {onOpenCode && (
                   <button
                     onClick={onOpenCode}
-                    className={`inline-flex items-center gap-1 border border-gray-200 px-2 py-2 text-sm text-gray-700 hover:bg-gray-50 sm:px-3 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700 ${onOpenCodeNewWindow ? 'rounded-l-lg' : 'rounded-lg'}`}
+                    className={`inline-flex items-center gap-1 border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover sm:px-3 dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover ${onOpenCodeNewWindow ? 'rounded-l-lg' : 'rounded-lg'}`}
                     title="Open code"
                   >
                     <Code2 className="h-4 w-4" />
@@ -1586,7 +1586,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
                 {onOpenCodeNewWindow && (
                   <button
                     onClick={onOpenCodeNewWindow}
-                    className={`inline-flex items-center justify-center rounded-r-lg border border-gray-200 px-2 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700 ${onOpenCode ? 'border-l-0' : ''}`}
+                    className={`inline-flex items-center justify-center rounded-r-lg border border-fw-border px-2 text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text dark:hover:bg-fw-hover ${onOpenCode ? 'border-l-0' : ''}`}
                     title="Open code in a new browser tab"
                     aria-label="Open code in a new browser tab"
                   >
@@ -1598,7 +1598,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             {onOpenTerminal && (
               <button
                 onClick={onOpenTerminal}
-                className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-3 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover"
                 title="Open terminal"
               >
                 <SquareTerminal className="h-4 w-4" />
@@ -1608,16 +1608,16 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             <div className="relative">
               <button
                 onClick={() => setShowMenu(!showMenu)}
-                className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+                className="rounded-lg p-2 text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
                 title="Session options"
               >
                 <Menu size={20} />
               </button>
               {showMenu && (
-                <div className="absolute right-0 mt-2 w-56 rounded-lg border border-gray-200 bg-white text-gray-900 shadow-lg z-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+                <div className="absolute right-0 mt-2 w-56 rounded-lg border border-fw-border bg-fw-surface text-fw-text-strong shadow-lg z-50 dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
                   <button
                     onClick={handleOpenDebugInfo}
-                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
+                    className="w-full px-4 py-2 text-left text-sm hover:bg-fw-hover dark:hover:bg-fw-hover"
                   >
                     debug info
                   </button>
@@ -1630,9 +1630,9 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
       {connectionState !== 'connected' && (
         <div className={`sticky top-0 z-20 px-4 py-2 text-sm ${
-          connectionState === 'connecting' ? 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-300' :
-          connectionState === 'reconnecting' ? 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-300' :
-          'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
+          connectionState === 'connecting' ? 'bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 text-fw-warning dark:text-fw-warning' :
+          connectionState === 'reconnecting' ? 'bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 text-fw-warning dark:text-fw-warning' :
+          'bg-fw-danger-surface dark:bg-fw-danger-surface-strong/20 text-fw-danger dark:text-fw-danger'
         }`}>
           {connectionState === 'connecting' && 'Connecting...'}
           {connectionState === 'reconnecting' && 'Reconnecting...'}
@@ -1657,7 +1657,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           )}
           <div ref={messagesContentRef} className="foxwarm-chat-messages-content min-w-0 max-w-full">
             {hiddenMessageCount > 0 && !showFullTimeline && (
-              <div className="mb-3 rounded-lg border border-gray-200 bg-white/80 px-3 py-2 text-xs text-gray-500 shadow-sm dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-300">
+              <div className="mb-3 rounded-lg border border-fw-border bg-fw-surface/80 px-3 py-2 text-xs text-fw-text-muted shadow-sm dark:border-fw-border dark:bg-fw-surface/80 dark:text-fw-text">
                 Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
               </div>
             )}
@@ -1688,7 +1688,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         {showScrollTopButton && (
           <button
             onClick={scrollToTop}
-            className="absolute right-4 top-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg transition-all hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+            className="absolute right-4 top-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-text-inverse shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
             aria-label="Scroll to top"
           >
             <svg className="h-[18px] w-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1700,7 +1700,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         {showScrollButton && (
           <button
             onClick={scrollToBottom}
-            className="absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg transition-all hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+            className="absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-text-inverse shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
             style={{ bottom: 'calc(var(--chat-composer-offset, 224px) + 1rem)' }}
             aria-label="Scroll to bottom"
           >

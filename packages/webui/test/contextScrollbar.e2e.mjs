@@ -20,6 +20,12 @@ async function buildFixtureBundle() {
     import React from 'react'
     import { createRoot } from 'react-dom/client'
     import Chat from ${JSON.stringify(chatEntry)}
+    import { initializeThemeRuntime, setThemeSelection } from './src/theme/runtime'
+    initializeThemeRuntime()
+    window.setFixtureTheme = (theme) => setThemeSelection({
+      themeId: theme === '550a' ? 'foxwarm.550a' : 'foxwarm.default',
+      colorMode: theme === 'dark' ? 'dark' : 'light',
+    })
     const allMessages = Array.from({ length: 1200 }, (_, index) => ({
       role: index === 600 ? 'user' : index === 1198 || index === 1199 ? 'model' : index === 1197 ? 'tool' : index % 4 === 0 ? 'user' : index % 4 === 1 ? 'model' : 'tool',
       parts: index === 600 ? [{ system: '<foxwarm-system kind="time" />' }] : index === 1198 ? [{ thinking: 'persisted reasoning '.repeat(6) }, { text: 'model card content '.repeat(8) }] : index === 1199 ? [{ text: 'model card content '.repeat(8) }] : index === 1197 ? [{ functionResponse: { tool_use_id: 'orphan-error', name: 'edit', response: { error: 'failed' } } }] : index % 4 === 1 ? [{ functionCall: { id: 'call-' + index, name: 'read', args: { filePath: '/tmp/' + index } } }] : index % 4 === 2 ? [{ functionResponse: { tool_use_id: 'call-' + (index - 1), name: 'read', response: { output: 'ok ' + index } } }] : [{ text: 'committed message ' + index + ' content '.repeat(8) }],
@@ -207,7 +213,7 @@ test('overview dims as a whole at rest, strengthens its thumb on hover, and keep
   await page.focus('.foxwarm-context-scrollbar')
   await new Promise(resolve => setTimeout(resolve, 150))
   assert.equal(await page.$eval('.foxwarm-context-scrollbar-shell', shell => getComputedStyle(shell).opacity), '1', 'keyboard-visible focus retains an accessible full-opacity state')
-  await page.evaluate(() => document.documentElement.classList.add('dark'))
+  await page.evaluate(() => window.setFixtureTheme('dark'))
   await page.mouse.move(1, 1)
   await new Promise(resolve => setTimeout(resolve, 150))
   assert.equal(await page.$eval('.foxwarm-context-scrollbar-viewport', element => getComputedStyle(element).backgroundColor), 'rgba(255, 255, 255, 0.38)', 'dark color mode keeps the approved white resting thumb')
@@ -357,10 +363,7 @@ test('model-content bars and legend swatch use the assistant card surface in eve
   await mount(1000, 1000, 720, false, true)
   for (const theme of ['light', 'dark', '550a']) {
     const colors = await page.evaluate((theme) => {
-      const html = document.documentElement
-      html.classList.toggle('dark', theme === 'dark')
-      if (theme === '550a') html.setAttribute('data-foxwarm-ui-style', '550a')
-      else html.removeAttribute('data-foxwarm-ui-style')
+      window.setFixtureTheme(theme)
       const card = document.querySelector('.foxwarm-assistant-message-card')
       const segment = document.querySelector('.foxwarm-context-scrollbar-segment-model-content')
       const swatch = document.querySelector('.foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-model')

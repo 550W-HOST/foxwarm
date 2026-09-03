@@ -19,6 +19,13 @@ async function buildFixtureBundle() {
     import React from 'react'
     import { createRoot } from 'react-dom/client'
     import { InterleavedToolGroup, ToolCallsBlock } from ${JSON.stringify(toolEntry)}
+    import { initializeThemeRuntime, setThemeSelection } from './src/theme/runtime'
+
+    initializeThemeRuntime()
+    window.setFixtureTheme = (style, dark) => setThemeSelection({
+      themeId: style === '550a' ? 'foxwarm.550a' : 'foxwarm.default',
+      colorMode: dark ? 'dark' : 'light',
+    })
 
     const longPath = '/workspace/' + 'nested-directory/'.repeat(18) + 'tool-header.tsx'
     const longCommand = 'printf ' + 'long-command-argument '.repeat(45)
@@ -72,9 +79,7 @@ async function mountFixture({ width, height, style = 'default', dark = false }) 
   await page.setViewport({ width, height, isMobile: width < 768, hasTouch: width < 768, deviceScaleFactor: 1 })
   await page.goto(fixtureUrl, { waitUntil: 'load' })
   await page.evaluate(({ style, dark }) => {
-    document.documentElement.classList.toggle('dark', dark)
-    if (style === '550a') document.documentElement.setAttribute('data-foxwarm-ui-style', '550a')
-    else document.documentElement.removeAttribute('data-foxwarm-ui-style')
+    window.setFixtureTheme(style, dark)
   }, { style, dark })
   await page.waitForFunction(() => document.querySelectorAll('.foxwarm-tool-card').length === 6)
 }

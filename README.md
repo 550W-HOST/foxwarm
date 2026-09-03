@@ -217,11 +217,12 @@ After logging into WebUI, the OOBE page cannot be closed until models are config
 
 OOBE/Setup supports:
 
-1. **Models** — creates `state/models.yaml`; includes a **Test model** button that sends `Please reply ok` without writing conversation history
+1. **Models** — edits and validates `state/models.yaml` as raw YAML
 2. **Channels** — edits `state/config.yaml` and hot-reloads managed channels
 3. **Weixin login** — starts QR login in WebUI, shows the QR image or pairing link when the upstream returns a displayable value, saves the resulting token into channel config, and hot-reloads channels
+4. **Appearance** — selects a built-in WebUI theme or imports, exports, clones, and deletes portable browser-local themes
 
-You can later return to the same page from the WebUI setup/settings button.
+You can later return to the same page from the WebUI setup/settings button. See [WebUI Themes](docs/webui-themes.md) for the portable theme format and safety model.
 
 ## Configuration
 
@@ -631,6 +632,7 @@ foxwarm/
 - [Vector Memory](docs/vector-memory.md)
 - [Development](docs/development.md)
 - [Multiprocess Session Workers](docs/multiprocess-session-workers.md)
+- [WebUI Themes](docs/webui-themes.md)
 - [ToolScript examples](examples/toolscript/README.md)
 
 ## Development

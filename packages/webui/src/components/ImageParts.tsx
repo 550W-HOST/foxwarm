@@ -18,11 +18,11 @@ function ImageItem({ part, label }: { part: MessagePart; label: string }) {
       : null
 
   if (!src || failed) {
-    return <div className="text-xs text-gray-500 dark:text-gray-400">Image unavailable</div>
+    return <div className="text-xs text-fw-text-muted">Image unavailable</div>
   }
   if (!SAFE_RASTER_MIME_TYPES.has(mimeType)) {
     return (
-      <a className="text-xs text-blue-600 dark:text-blue-400 underline" href={src} target="_blank" rel="noopener noreferrer">
+      <a className="text-xs text-fw-accent dark:text-fw-accent underline" href={src} target="_blank" rel="noopener noreferrer">
         Download image attachment
       </a>
     )
@@ -35,9 +35,9 @@ function ImageItem({ part, label }: { part: MessagePart; label: string }) {
         alt={label}
         loading="lazy"
         onError={() => setFailed(true)}
-        className="max-w-[300px] max-h-[200px] rounded-lg border border-gray-200 dark:border-gray-600 hover:opacity-90 transition"
+        className="max-w-[300px] max-h-[200px] rounded-lg border border-fw-border-strong hover:opacity-90 transition"
       />
-      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition rounded-lg pointer-events-none" />
+      <div className="absolute inset-0 bg-fw-overlay/0 group-hover:bg-fw-overlay/10 transition rounded-lg pointer-events-none" />
     </div>
   )
 }

@@ -10,7 +10,7 @@ const WebSearchCard = memo(function WebSearchCard({ action }: { action: WebSearc
       return (
         <div className="foxwarm-web-search-body min-w-0 max-w-full break-all text-[13px] leading-5">
           <span className="font-semibold">Open Page:</span>{' '}
-          <a href={action.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
+          <a href={action.url} target="_blank" rel="noopener noreferrer" className="text-fw-accent underline hover:text-fw-accent dark:text-fw-accent dark:hover:text-fw-accent">
             {action.url}
           </a>
         </div>

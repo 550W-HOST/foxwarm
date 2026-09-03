@@ -52,8 +52,8 @@ async function installFixture({ width, height, style, dark }) {
   await page.addStyleTag({ content: css })
   await page.evaluate(({ style, dark }) => {
     document.documentElement.classList.toggle('dark', dark)
-    if (style === '550a') document.documentElement.setAttribute('data-foxwarm-ui-style', '550a')
-    else document.documentElement.removeAttribute('data-foxwarm-ui-style')
+    if (style === '550a') document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console')
+    else document.documentElement.removeAttribute('data-foxwarm-component-treatment')
   }, { style, dark })
 }
 

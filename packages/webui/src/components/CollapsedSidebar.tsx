@@ -31,13 +31,13 @@ export default function CollapsedSidebar({
     .filter((s) => (s.pinned || !s.parentSessionId) && !s.archived)
 
   return (
-    <div className="h-full w-12 flex flex-col items-center bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
+    <div className="h-full w-12 flex flex-col items-center bg-fw-surface border-r border-fw-border">
       {/* Header */}
-      <div className="flex flex-col items-center gap-2 py-3 border-b border-gray-200 dark:border-gray-700 w-full">
+      <div className="flex flex-col items-center gap-2 py-3 border-b border-fw-border w-full">
         <button
           type="button"
           onClick={onToggleCollapsed}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white transition"
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse transition"
           title="Expand sidebar"
         >
           <PanelLeftOpen className="h-4 w-4" />
@@ -45,7 +45,7 @@ export default function CollapsedSidebar({
         <button
           type="button"
           onClick={onCreateSession}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white transition"
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse transition"
           title="New session"
         >
           <Plus className="h-4 w-4" />
@@ -62,10 +62,10 @@ export default function CollapsedSidebar({
           const showRuntimeIndicator = activeRuntime || runtimeState === 'waiting'
           const isUnread = unreadSessionIds.has(session.id)
           const indicatorColor = runtimeState === 'running-tool'
-            ? 'bg-purple-500'
+            ? 'bg-fw-special'
             : runtimeState === 'waiting'
-              ? 'bg-amber-500'
-              : 'bg-blue-500'
+              ? 'bg-fw-warning'
+              : 'bg-fw-accent'
           return (
             <button
               key={session.id}
@@ -75,15 +75,15 @@ export default function CollapsedSidebar({
               aria-label={`${session.displayName || session.id}${isUnread ? ', Unread idle completion' : ''}`}
               className={`relative flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold transition shrink-0 ${
                 isActive
-                  ? 'bg-blue-100 text-blue-700 ring-1 ring-blue-300 dark:bg-blue-900/40 dark:text-blue-200 dark:ring-blue-700'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-300 dark:hover:bg-gray-600'
+                  ? 'bg-fw-accent-surface text-fw-accent ring-1 ring-fw-focus-ring dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent dark:ring-fw-focus-ring'
+                  : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text dark:hover:bg-fw-hover'
               }`}
             >
               {initial}
               {showRuntimeIndicator && (
-                <span aria-hidden="true" className={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-white dark:ring-gray-800 ${indicatorColor}`} />
+                <span aria-hidden="true" className={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-fw-focus-ring dark:ring-fw-focus-ring ${indicatorColor}`} />
               )}
-              {isUnread && <span aria-hidden="true" className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-blue-500 ring-1 ring-white dark:ring-gray-800" />}
+              {isUnread && <span aria-hidden="true" className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-fw-accent ring-1 ring-fw-focus-ring dark:ring-fw-focus-ring" />}
             </button>
           )
         })}

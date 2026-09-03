@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { loadYamlMonacoSupport } from '../yamlMonacoSupport'
+import { monacoThemeFromSnapshot } from '../theme/integrations'
+import { getThemeSnapshot, THEME_CHANGED_EVENT } from '../theme/runtime'
 
 interface SimpleCodeEditorProps {
   value: string
@@ -13,7 +15,12 @@ interface SimpleCodeEditorProps {
   ariaLabel?: string
 }
 
-const currentTheme = () => document.documentElement.classList.contains('dark') ? 'vs-dark' : 'vs'
+const MONACO_THEME_ID = 'foxwarm-active'
+
+const applyMonacoTheme = (monaco: any) => {
+  monaco.editor.defineTheme(MONACO_THEME_ID, monacoThemeFromSnapshot(getThemeSnapshot()))
+  monaco.editor.setTheme(MONACO_THEME_ID)
+}
 
 export default function SimpleCodeEditor({
   value,
@@ -47,7 +54,7 @@ export default function SimpleCodeEditor({
     let disposed = false
     let changeDisposable: { dispose: () => void } | null = null
     let markerDisposable: { dispose: () => void } | null = null
-    let themeObserver: MutationObserver | null = null
+    let removeThemeListener: (() => void) | null = null
     let activeModelUri = ''
     let inputArea: HTMLTextAreaElement | null = null
     let repairReverseSelectionInput: ((event: InputEvent) => void) | null = null
@@ -64,6 +71,7 @@ export default function SimpleCodeEditor({
       }
       if (disposed || !containerRef.current) return
       const monaco = support.monaco
+      applyMonacoTheme(monaco)
       const uri = modelUri ? monaco.Uri.parse(modelUri) : undefined
       activeModelUri = uri?.toString() || ''
       const model = monaco.editor.createModel(valueRef.current || placeholderRef.current || '', language, uri)
@@ -76,7 +84,7 @@ export default function SimpleCodeEditor({
         readOnly,
         scrollBeyondLastLine: false,
         tabSize: 2,
-        theme: currentTheme(),
+        theme: MONACO_THEME_ID,
         wordWrap: 'on',
       })
 
@@ -119,10 +127,9 @@ export default function SimpleCodeEditor({
         onChangeRef.current(nextValue)
       })
 
-      themeObserver = new MutationObserver(() => {
-        monaco.editor.setTheme(currentTheme())
-      })
-      themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+      const syncTheme = () => applyMonacoTheme(monaco)
+      window.addEventListener(THEME_CHANGED_EVENT, syncTheme)
+      removeThemeListener = () => window.removeEventListener(THEME_CHANGED_EVENT, syncTheme)
 
       monacoRef.current = monaco
       editorRef.current = editor
@@ -135,7 +142,7 @@ export default function SimpleCodeEditor({
 
     return () => {
       disposed = true
-      themeObserver?.disconnect()
+      removeThemeListener?.()
       markerDisposable?.dispose()
       changeDisposable?.dispose()
       if (inputArea && repairReverseSelectionInput) {
@@ -190,7 +197,7 @@ export default function SimpleCodeEditor({
     return (
       <div
         ref={wrapperRef}
-        className="flex overflow-hidden border border-amber-300 bg-white dark:border-amber-700 dark:bg-gray-950"
+        className="flex overflow-hidden border border-fw-warning-border bg-fw-surface dark:border-fw-warning-border dark:bg-fw-canvas-edge"
         style={{ height: typeof height === 'number' ? `${height}px` : height }}
         data-monaco-model-uri={modelUri}
         data-editor-ready="true"
@@ -198,7 +205,7 @@ export default function SimpleCodeEditor({
         data-marker-count="0"
       >
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+          <div className="border-b border-fw-warning-border bg-fw-warning-surface px-3 py-1.5 text-xs text-fw-warning dark:border-fw-warning-border dark:bg-fw-warning-surface-strong/40 dark:text-fw-warning">
             Advanced editor features are unavailable. You can still edit and save this YAML.
           </div>
           <textarea
@@ -208,7 +215,7 @@ export default function SimpleCodeEditor({
             readOnly={readOnly}
             placeholder={placeholder}
             aria-label={ariaLabel}
-            className="min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-[13px] leading-5 text-gray-900 outline-none dark:text-gray-100"
+            className="min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-[13px] leading-5 text-fw-text-strong outline-none dark:text-fw-text-strong"
             spellCheck={false}
           />
         </div>
@@ -219,7 +226,7 @@ export default function SimpleCodeEditor({
   return (
     <div
       ref={wrapperRef}
-      className="overflow-hidden border border-gray-300 bg-white dark:border-gray-700 dark:bg-gray-950"
+      className="overflow-hidden border border-fw-border-strong bg-fw-surface dark:border-fw-border dark:bg-fw-canvas-edge"
       style={{ height: typeof height === 'number' ? `${height}px` : height }}
       data-monaco-model-uri={modelUri}
       data-editor-ready="false"
