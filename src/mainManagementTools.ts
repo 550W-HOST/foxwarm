@@ -14,6 +14,8 @@ import {
   ValidateWaitSessionsResponse,
   ArmWaitLivenessRequest,
   ArmWaitLivenessResponse,
+  ValidateWaitExecIdsRequest,
+  ValidateWaitExecIdsResponse,
   mainManagementToolServiceDescriptor,
 } from './mainManagementToolService';
 import type { SessionWorkerStore } from './sessionWorkerStore';
@@ -127,6 +129,10 @@ export async function validateMainWaitSessions(request: ValidateWaitSessionsRequ
 
 export async function armMainWaitLiveness(request: ArmWaitLivenessRequest): Promise<ArmWaitLivenessResponse> {
   return await (await getClient()).call('armWaitLiveness', request);
+}
+
+export async function validateMainWaitExecIds(request: ValidateWaitExecIdsRequest): Promise<ValidateWaitExecIdsResponse> {
+  return await (await getClient()).call('validateWaitExecIds', request);
 }
 
 export const tool_send_to_session = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('send_to_session', args, ctx);

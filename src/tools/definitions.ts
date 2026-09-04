@@ -1,6 +1,8 @@
 import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from '../../packages/shared/dist/persistentExec';
 import { COMPACT_PLAN_TOOL_DEFINITION } from '../session/compactPlan';
 import { MAX_AGENT_TOOL_RULES, MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES } from '../permissions';
+import { HANDOFF_CONFIRMATION_ENABLED } from '../config';
+import { addHandoffConfirmationSchema } from '../toolCallControls';
 
 const TOOL_RULES_SCHEMA = {
     type: 'array',
@@ -51,7 +53,7 @@ const FORCE_MODEL_SCHEMA = {
     },
 };
 
-export const definitions = [
+const baseDefinitions = [
         {
             name: 'read',
             defaultInject: true,
@@ -272,7 +274,7 @@ Example:
                     message: { type: 'string', description: 'Optional initial message to send to the child session immediately after creation' },
                     afterSend: { type: 'string', enum: ['continue', 'finish', 'wait'], description: 'Behavior after a successful initial message send: continue this turn (default), finish this turn idle without waiting, or finish and wait for new activity expected from the child. The wait mode requires a non-empty message and does not filter other wake activity.' },
                     node: { type: 'string', description: 'Optional node to bind this session (sets currentNode)' },
-                    forceModel: FORCE_MODEL_SCHEMA
+                    forceModel: FORCE_MODEL_SCHEMA,
                 },
                 required: ['suffix']
             }
@@ -286,7 +288,7 @@ Example:
                 properties: {
                     sessionId: { type: 'string', description: 'Target session ID, or `<main>` for this agent\'s main session, or `<parent>` for this session\'s parent session.' },
                     message: { type: 'string', description: 'Message to send' },
-                    afterSend: { type: 'string', enum: ['continue', 'finish', 'wait'], description: 'Behavior after a successful send: continue this turn (default), finish this turn idle without waiting, or finish and wait for new activity expected from the target. Use finish for final completion reports. Wait is non-filtering and does not wait for task completion.' }
+                    afterSend: { type: 'string', enum: ['continue', 'finish', 'wait'], description: 'Behavior after a successful send: continue this turn (default), finish this turn idle without waiting, or finish and wait for new activity expected from the target. Use finish for final completion reports. Wait is non-filtering and does not wait for task completion.' },
                 },
                 required: ['sessionId', 'message']
             }
@@ -474,11 +476,11 @@ Example:
         {
             name: 'set_goal',
             defaultInject: true,
-            description: 'Set or clear the long-term goal reminder for the current session. The goal is preserved across session compaction so the session can retain its long-horizon objective even when older context is summarized.',
+            description: 'Set or clear a long-term goal reminder for the current session. Use this only when the current session itself expects to perform many tool calls or long-running work for this task and may be compacted before completion. Do not use it for short tasks, tasks requiring only a few tool calls, or when most work will be delegated to child sessions. It affects only the current session and does not set goals for child sessions. The goal is preserved across this session\'s compaction.',
             parameters: {
                 type: 'object',
                 properties: {
-                    goal: { type: 'string', description: 'Goal text. Use empty string to clear.' },
+                    goal: { type: 'string', description: 'Long-horizon objective for this current session. Use empty string to clear.' },
                     remindEvery: { type: 'number', description: 'Optional. Remind after this many later non-reminder session messages. If omitted, reuse the current goal setting or default to 20.' },
                     clear: { type: 'boolean', description: 'If true, clear the current session goal reminder.' }
                 }
@@ -680,7 +682,7 @@ Example:
         {
             name: 'search_tools',
             defaultInject: true,
-            description: 'Search or list callable tools across builtin, MCP, and node sources. Builtin results contain Foxwarm control/session/management tools; Node results contain environment capabilities such as read/write/edit/apply_patch/exec/browse and node-advertised tools. Prefer this unified catalog before calling long-tail tools via call_tool; load the timer-automation skill before using timer tools and the mcp-management skill before changing MCP server configuration. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falling back to `master` when the session has no selected node rather than listing every node). Example search_tools calls: `{query:"read file", sources:["node"]}` or `{query:"session status", sources:["builtin"]}`.',
+            description: 'Search or list callable tools across builtin, MCP, and node sources. Results are compact text declarations using either a safe canonical tool ID or an explicit call_tool source descriptor that can be copied for invocation. Builtin results contain Foxwarm control/session/management tools; Node results contain environment capabilities such as read/write/edit/apply_patch/exec/browse and node-advertised tools. Prefer this unified catalog before calling long-tail tools via call_tool; load the timer-automation skill before using timer tools and the mcp-management skill before changing MCP server configuration. Query text supports multi-word matching and ranks tools that match more of the words higher. For source=`node`, omitting nodeId searches only the current node (falling back to `master` when the session has no selected node rather than listing every node). If you mostly know the tool and only need its schema, use `limit: 1`. Example search_tools calls: `{query:"read file", sources:["node"], limit:1}` or `{query:"session status", sources:["builtin"], limit:1}`.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -692,8 +694,8 @@ Example:
                     },
                     server: { type: 'string', description: 'Optional MCP server filter; if omitted while searching MCP tools, all enabled MCP servers are searched.' },
                     nodeId: { type: 'string', description: 'Optional remote node id filter. For source=`node`, omitted means use the current node instead of listing tools from every node.' },
-                    limit: { type: 'number', description: 'Maximum number of results to return (default: 20, max: 200).' },
-                    includeSchema: { type: 'boolean', description: 'If true (default), include each tool\'s input schema in results.' }
+                    limit: { type: 'integer', minimum: 1, maximum: 200, description: 'Maximum number of results to return (default: 5, max: 200).' },
+                    includeSchema: { type: 'boolean', description: 'If true (default), render input schemas for up to the first 10 results. Later results remain compact catalog summaries.' }
                 }
             }
         },
@@ -952,5 +954,11 @@ Example:
                 }
             }
         }
-    ];
+];
+
+export function buildToolDefinitions(handoffConfirmationEnabled: boolean) {
+    return baseDefinitions.map(definition => addHandoffConfirmationSchema(definition, handoffConfirmationEnabled));
+}
+
+export const definitions = buildToolDefinitions(HANDOFF_CONFIRMATION_ENABLED);
 

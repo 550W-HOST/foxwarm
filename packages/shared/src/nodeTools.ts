@@ -20,6 +20,8 @@ export interface NodeToolContext {
   runtimeNodeId?: string;
   backgroundExecId?: string;
   completionCapability?: string;
+  onExecStarted?: () => void;
+  registerBackgroundExec?: (metadata: Required<Pick<NodeSessionEventMetadata, 'execId' | 'completionCapability'>>) => Promise<void>;
   fileOperations?: FileOperations;
   /** Resolve a model-visible path in the target Node namespace. */
   resolveFilePath?: (filePath: string) => string;
@@ -242,6 +244,7 @@ export async function exec(args: ToolArgs, ctx: NodeToolContext = {}) {
     cwd: args.cwd,
     sessionCwd: ctx.session?.cwd,
     completionCapability: ctx.completionCapability,
+    onProcessStarted: ctx.onExecStarted,
   });
   const status = await manager.waitForExecCompletion(entry.id, timeoutSeconds * 1000);
   if (status) {
@@ -250,6 +253,9 @@ export async function exec(args: ToolArgs, ctx: NodeToolContext = {}) {
     } finally {
       await manager.finalizeForegroundExec(entry.id);
     }
+  }
+  if (ctx.registerBackgroundExec && entry.completionCapability) {
+    await ctx.registerBackgroundExec({ execId: entry.id, completionCapability: entry.completionCapability });
   }
   await manager.markExecForBackgroundNotification(entry.id);
   return await manager.buildBackgroundTimeoutResult(entry, timeoutSeconds, resolvedTimeout.warning);

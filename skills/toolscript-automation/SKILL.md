@@ -135,10 +135,23 @@ Common shapes:
 | `exec` | string containing command output and any timeout/truncation notice |
 | `write` / `edit` | success string; failure raises an exception |
 | `apply_patch` | string summarizing changed files |
-| `search_tools` | dictionary containing `count`, `totalMatched`, and `tools` |
+| `search_tools` | dictionary containing one `output` string with bounded declarations, counts, and warnings |
 | `request_model_without_context` | dictionary containing `text` |
 
 Use `search_tools` in the normal agent loop before scripting an unfamiliar tool. Tool discovery describes inputs; it does not guarantee a uniform output schema.
+
+When discovery belongs inside a script, consume the text directly rather than expecting a structured tool array:
+
+```python
+def main(args):
+    catalog = call_tool("search_tools", {
+        "query": args["query"],
+        "sources": ["builtin"],
+        "limit": 5,
+    })
+    print(catalog["output"])
+    return {"catalog": catalog["output"]}
+```
 
 Nested relative file paths and `exec.cwd` values resolve from the owner session's working directory. They do not resolve from the ToolScript file's directory. Pass explicit paths through `args` when the session working directory is not guaranteed.
 

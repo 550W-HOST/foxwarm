@@ -209,6 +209,19 @@ export interface ModelStreamToolCall {
   index: number
   id?: string
   name?: string
+  arguments?: string
+}
+
+export interface ModelStreamTextDelta {
+  offset: number
+  text: string
+}
+
+export interface ModelStreamToolCallDelta {
+  index: number
+  id?: string
+  name?: string
+  argumentsDelta?: ModelStreamTextDelta
 }
 
 export interface ContextBlockMessageMeta {
@@ -231,6 +244,14 @@ export interface SessionStreamEvent {
   type: 'model-stream-reset' | 'model-stream-update' | 'toolscript-progress'
   streamId?: string
   iteration?: number
+  streamVersion?: 2
+  sequenceStart?: number
+  sequence?: number
+  startedAt?: number
+  llmRequestId?: string
+  reasoningDelta?: ModelStreamTextDelta
+  textDelta?: ModelStreamTextDelta
+  toolCallDeltas?: ModelStreamToolCallDelta[]
   reasoning?: string
   text?: string
   toolCalls?: ModelStreamToolCall[]
@@ -767,7 +788,7 @@ export const ToolTag = ({ name, label = name, tone = 'neutral', className = '', 
   const Icon = getToolIcon(resolvedIconName, iconName?.startsWith('system-') ? Bell : Wrench)
 
   return (
-    <span className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
+    <span data-tool-tag-tone={tone} className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
       <Icon size={12} />
       <span>{label}</span>
     </span>

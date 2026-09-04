@@ -5,6 +5,13 @@ _NODE_ID_RE = r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}"
 _PROVIDER_ID_RE = r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
 _SAFE_NAME_RE = r"[A-Za-z0-9_-]+"
 _EXPECTED_NODE_TOOLS = ["read", "write", "edit", "apply_patch", "exec"]
+_HANDOFF_CONFIRMATION_PREFIX = "Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?"
+_HANDOFF_REVIEW_PLACEHOLDER = "<replace this with your own non-empty review; do not copy this placeholder verbatim>"
+_HANDOFF_CONFIRMATION_SUFFIX = "I have completed the check, found no issue, and confirm this inter-agent handoff should proceed."
+
+
+def _handoff_confirmation(review):
+    return f"{_HANDOFF_CONFIRMATION_PREFIX}\n{review}\n{_HANDOFF_CONFIRMATION_SUFFIX}"
 
 
 def _required_text(args, key):
@@ -307,7 +314,12 @@ def _handoff_message(node_id, task, worktree_path=None):
     lines.extend([
         "",
         "When finished, report exactly to the parent with:",
-        'send_to_session({sessionId: "<parent>", message: "...", waitAfterHandoff: true})',
+        'send_to_session({sessionId: "<parent>", message: "...", afterSend: "finish", confirmation: "'
+        + _HANDOFF_CONFIRMATION_PREFIX
+        + '\\n' + _HANDOFF_REVIEW_PLACEHOLDER + '\\n'
+        + _HANDOFF_CONFIRMATION_SUFFIX
+        + '"})',
+        "When the current tool schema requires confirmation, it must be the final argument property; replace the placeholder with your own review and do not copy it verbatim. When the schema omits confirmation, the property may be omitted; the shown form remains accepted in both modes.",
         "The report must include changed files and a diff summary, validation commands/results, blockers or unresolved questions, and whether working-tree changes remain. Do not assume or claim that a commit exists.",
     ])
     return "\n".join(lines)
@@ -574,9 +586,12 @@ def main(args):
         }
 
     try:
+        send_confirmation = _handoff_confirmation(
+            "I checked that this isolated-worker assignment is necessary, accurately targets the created session, contains the complete scoped brief, and follows the parent-child communication rules."
+        )
         call_tool({
             "toolId": "builtin:send_to_session",
-            "args": {"sessionId": session_id, "message": handoff},
+            "args": {"sessionId": session_id, "message": handoff, "confirmation": send_confirmation},
         })
         completed.append("send_to_session")
     except Exception as error:

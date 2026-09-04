@@ -64,7 +64,7 @@ function makeHub(options: { authorized?: boolean; stateGate?: Promise<void> } = 
       sessions: requestedIds.filter(id => id !== 'missing').map(id => ({ id: id === 'alias' ? 'agent/main' : id })),
       deletedIds: requestedIds.filter(id => id === 'missing'),
     }),
-    onSessionSubscriptionChanged: sessionId => subscriptionChanges.push(sessionId),
+    onSessionSubscriptionChanged: sessionId => { subscriptionChanges.push(sessionId); },
     keepaliveIntervalMs: 60_000,
   });
   return { hub, subscriptionChanges };
@@ -147,6 +147,33 @@ test('WebUiRealtimeHub buffers live events behind the subscription snapshot', as
     { type: 'message', message: { text: 'live' }, sessionId: 'agent/main' },
     { type: 'subscriptions-applied', revision: 1 },
   ]);
+});
+
+test('WebUiRealtimeHub sends the owner draft snapshot before buffered deltas', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const hub = new WebUiRealtimeHub({
+    checkToken: () => true,
+    resolveIds: ids => ({ canonicalIds: ids, missingIds: [], requestedToCanonical: Object.fromEntries(ids.map(id => [id, id])) }),
+    loadSessionState: async sessionId => ({ type: 'session-state', sessionId, session: { id: sessionId } }),
+    loadModelStreamSnapshot: async sessionId => {
+      await gate;
+      return { type: 'model-stream-snapshot', sessionId, draft: { streamId: 's', iteration: 1, sequence: 2, text: 'hello', reasoning: '', toolCalls: [] } };
+    },
+    loadSessionList: async () => ({ type: 'session-list-delta', sessions: [], deletedIds: [] }),
+  });
+  const socket = new FakeSocket();
+  await hub.handleConnection(socket as any, {} as http.IncomingMessage);
+  socket.receive({ type: 'set-subscriptions', revision: 1, sessionListActive: false, sessionListIds: [], sessionIds: ['agent/main'] });
+  await flush();
+  hub.broadcastSession('agent/main', { type: 'session-event', event: { type: 'model-stream-update', streamVersion: 2, streamId: 's', sequence: 2, textDelta: { offset: 3, text: 'lo' } } });
+  hub.broadcastSession('agent/main', { type: 'session-event', event: { type: 'model-stream-update', streamVersion: 2, streamId: 's', sequence: 3, textDelta: { offset: 5, text: '!' } } });
+  release();
+  await flush();
+  const snapshotIndex = socket.sent.findIndex(message => message.type === 'model-stream-snapshot');
+  const deltaIndex = socket.sent.findIndex(message => message.type === 'session-event');
+  assert.ok(snapshotIndex >= 0 && snapshotIndex < deltaIndex);
+  assert.deepEqual(socket.sent.filter(message => message.type === 'session-event').map(message => (message.event as any).sequence), [2, 3]);
 });
 
 test('WebUiRealtimeHub discards a superseded async subscription snapshot', async () => {

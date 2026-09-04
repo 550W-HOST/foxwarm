@@ -68,6 +68,7 @@ Self-test file (`goalReminderSelfTest.ts`):
 
 ## Behavior
 
+- The model-facing `set_goal` guidance reserves the tool for substantial or long-running work performed by the current session when compaction may occur before completion. It explicitly excludes short/few-tool tasks and work mostly delegated to child sessions.
 - Goal state is stored on `session.goalState` with goal text, interval, anchor seq, and timestamps.
 - `maybeBuildGoalReminderMessage` fires an interval reminder when the count of non-reminder messages since the last anchor reaches `remindEvery`. The router evaluates and appends it immediately before a real provider request, after queued input or a preceding tool result is canonical history.
 - The interval builder mutates `state.anchorSeq` as a side effect to track the last reminder point.
@@ -79,6 +80,7 @@ Self-test file (`goalReminderSelfTest.ts`):
 - `MessageRouter` owns interval evaluation at its pre-provider safe point and direct history append; `sessionManager` history append does not queue or synthesize goal work.
 - Compact completion writes its separately tagged goal context through the history subsystem.
 - `setSessionGoal` / `clearSessionGoal` are invoked by the `set_goal` tool in `toolsSessionAgent`.
+- `set_goal` affects only its current session; it does not propagate goal state to child sessions.
 - Interacts with session persistence via `sessionManager` (saving goalState alongside history).
 - Relies on `childSessionReminder`'s no-action signal detection to suppress reminders when the model signals inactivity.
 - The self-test exercises the full integration path through the public `MessageRouter.processSessionQueue` owned-entry path.

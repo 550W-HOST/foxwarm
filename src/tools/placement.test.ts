@@ -86,5 +86,5 @@ test('delete_file is absent from runtime exports and unified builtin discovery',
     includeSchema: true,
     limit: 200,
   });
-  assert.equal(result.tools.some((tool: any) => tool.name === 'delete_file'), false);
+  assert.equal(result.output.includes('builtin:delete_file('), false);
 });

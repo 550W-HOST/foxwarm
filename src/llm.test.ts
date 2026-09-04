@@ -4,7 +4,7 @@ import axios from 'axios';
 import { PassThrough } from 'node:stream';
 import path from 'path';
 
-import { createDefaultCurrentSessionEffects, CurrentSessionEffects, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
+import { createDefaultCurrentSessionEffects, createModelStreamEventEmitter, CurrentSessionEffects, DEFAULT_LLM_MAX_RETRIES, LlmRequestError, chat, convertToAnthropicFormat, ensurePromptCacheKey, getLlmRetryDelayMs, redactProviderImagesForLog, requestLlmOnce, sanitizeProviderRequestPayload } from './llm';
 import { LOGS_DIR, MAX_OUTPUT } from './config';
 import { formatDate } from './logRotation';
 import type { Message, Session } from './types';
@@ -18,11 +18,116 @@ import { LocalSessionTurnHost } from './sessionTurnRunner';
 import * as tools from './tools';
 import * as llmModule from './llm';
 import { nodesManager } from './nodes/manager';
+import { getModelStreamDraft } from './modelStreamDraft';
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 test('default maximum provider output is 32768 tokens', () => {
   assert.equal(MAX_OUTPUT, 32768);
+});
+
+test('model stream emitter sends offset deltas and throttles tool arguments until one second or flush', () => {
+  let now = 10_000;
+  let nextTimer = 1;
+  const timers = new Map<number, { at: number; callback: () => void }>();
+  const events: any[] = [];
+  const runDue = () => {
+    while (true) {
+      const due = [...timers.entries()].filter(([, timer]) => timer.at <= now).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!due) return;
+      timers.delete(due[0]);
+      due[1].callback();
+    }
+  };
+  const emitter = createModelStreamEventEmitter({
+    enabled: true,
+    sessionId: 'stream-test',
+    iteration: 2,
+    llmRequestId: 'request-stream-test',
+    now: () => now,
+    setTimer: ((callback: () => void, delay: number) => {
+      const id = nextTimer++;
+      timers.set(id, { at: now + delay, callback });
+      return id as any;
+    }),
+    clearTimer: ((id: any) => { timers.delete(id); }),
+    currentSessionEffects: { notifySessionEvent: (_id: string, event: any) => events.push(event) } as any,
+  });
+  emitter.reset();
+  emitter.emit({ text: 'Hi', toolCalls: [{ index: 0, id: 'call', name: 'read', arguments: '{"file' }] });
+  now += 80;
+  runDue();
+  assert.deepEqual(events.at(-1).textDelta, { offset: 0, text: 'Hi' });
+  assert.equal(events.at(-1).sequenceStart, events.at(-1).sequence);
+  assert.equal(events.at(-1).startedAt, 10_000);
+  assert.equal(events.at(-1).llmRequestId, 'request-stream-test');
+  assert.equal(events.at(-1).toolCallDeltas[0].argumentsDelta, undefined);
+  emitter.emit({ text: 'Hi!', toolCalls: [{ index: 0, id: 'call', name: 'read', arguments: '{"filePath":"x"}' }] });
+  now += 80;
+  runDue();
+  assert.deepEqual(events.at(-1).textDelta, { offset: 2, text: '!' });
+  assert.equal(events.at(-1).toolCallDeltas, undefined);
+  emitter.flush();
+  assert.deepEqual(events.at(-1).toolCallDeltas[0].argumentsDelta, { offset: 0, text: '{"filePath":"x"}' });
+  assert.equal(events.at(-1).streamVersion, 2);
+  assert.equal(getModelStreamDraft('stream-test')?.text, 'Hi!');
+  emitter.close();
+  assert.equal(getModelStreamDraft('stream-test'), null);
+});
+
+test('Anthropic serialization deduplicates repeated ordinary and tool-result images without mutating history', () => {
+  const data = Buffer.from('anthropic-provider-dedup').toString('base64');
+  const history: Message[] = [
+    {
+      role: 'user',
+      parts: [{ text: '<foxwarm-image name="source.png" node="master" path="/tmp/source.png" />', inlineData: { mimeType: 'image/png', data } }],
+    },
+    {
+      role: 'tool',
+      parts: [
+        {
+          toolUseId: 'call_image',
+          inlineData: { mimeType: 'image/png', data },
+          imageMeta: { imageId: 'tool-copy', mimeType: 'image/png', width: 4, height: 5 },
+        },
+        { functionResponse: { tool_use_id: 'call_image', name: 'capture', response: { output: 'done' } } },
+      ],
+    },
+    { role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data } }] },
+  ];
+  const snapshot = structuredClone(history);
+
+  const messages = convertToAnthropicFormat(history, { baseUrl: 'https://anthropic.test' } as any);
+  const serialized = JSON.stringify(messages);
+  assert.equal(serialized.match(/"type":"image"/g)?.length, 1);
+  assert.match(serialized, /id=tool-copy/);
+  assert.match(serialized, /deduplicated=true; identical image bytes were present earlier/);
+  assert.match(serialized, /\[IMAGE: deduplicated=true\] Identical image bytes were present earlier/);
+  assert.deepEqual(history, snapshot);
+});
+
+test('Anthropic repeated tool results mark later suppressed image bytes as deduplicated', () => {
+  const data = Buffer.from('anthropic-repeated-tool-result').toString('base64');
+  const history: Message[] = [{
+    role: 'tool',
+    parts: [
+      { functionResponse: { tool_use_id: 'call_repeat', name: 'capture', response: { output: 'first' } } },
+      {
+        toolUseId: 'call_repeat',
+        inlineData: { mimeType: 'image/png', data },
+        imageMeta: { imageId: 'repeat-image', mimeType: 'image/png', width: 2, height: 2 },
+      },
+      { functionResponse: { tool_use_id: 'call_repeat', name: 'capture', response: { output: 'second' } } },
+    ],
+  }];
+
+  const messages = convertToAnthropicFormat(history, { baseUrl: 'https://anthropic.test' } as any);
+  const serialized = JSON.stringify(messages);
+  assert.equal(serialized.match(/"type":"image"/g)?.length, 1);
+  assert.equal(serialized.match(/id=repeat-image/g)?.length, 2);
+  assert.equal(serialized.match(/deduplicated=true/g)?.length, 1);
+  assert.match(serialized, /first/);
+  assert.match(serialized, /second/);
 });
 
 function makeChatCompletionStream(text = 'ok', usage: Record<string, unknown> = {
@@ -34,6 +139,39 @@ function makeChatCompletionStream(text = 'ok', usage: Record<string, unknown> = 
   process.nextTick(() => {
     stream.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: 'assistant', content: text }, finish_reason: 'stop' }] })}\n\n`);
     stream.write(`data: ${JSON.stringify({ choices: [], usage })}\n\n`);
+    stream.write('data: [DONE]\n\n');
+    stream.end();
+  });
+  return stream;
+}
+
+function makeChatReasoningToolCallStream(reasoningFields: Record<string, string>): PassThrough {
+  const stream = new PassThrough();
+  process.nextTick(() => {
+    stream.write(`data: ${JSON.stringify({
+      choices: [{
+        index: 0,
+        delta: {
+          role: 'assistant',
+          ...reasoningFields,
+          tool_calls: [{
+            index: 0,
+            id: 'call_reasoning_round_trip',
+            type: 'function',
+            function: { name: 'read', arguments: '{"filePath":"README.md"}' },
+          }],
+        },
+        finish_reason: 'tool_calls',
+      }],
+    })}\n\n`);
+    stream.write(`data: ${JSON.stringify({
+      choices: [],
+      usage: {
+        prompt_tokens: 4,
+        completion_tokens: 3,
+        prompt_tokens_details: { cached_tokens: 0 },
+      },
+    })}\n\n`);
     stream.write('data: [DONE]\n\n');
     stream.end();
   });
@@ -1453,6 +1591,133 @@ test('executeTools without effects rejects a missing source without creating it'
   assert.equal(sessionManager.getAllSessions().has(missingId), false);
 });
 
+test('OpenAI Chat Completions canonical parsing accepts compatible reasoning fields with established precedence', async t => {
+  const originalPost = axios.post;
+  const model = {
+    providerKey: 'fixture',
+    providerType: 'openai-completions',
+    baseUrl: 'https://fixture.example',
+    apiKey: '',
+    model: 'reasoning-model',
+    extraFields: {},
+    extraHeaders: {},
+  } as any;
+
+  const parse = async (reasoningFields: Record<string, string>) => {
+    (axios as any).post = async () => ({
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: makeChatReasoningToolCallStream(reasoningFields),
+    });
+    return requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'inspect the repository' }] }],
+      systemPrompt: '',
+      modelEntryOverride: model,
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+  };
+
+  try {
+    await t.test('uses the aggregate message.reasoning fallback with a streamed tool call', async () => {
+      const result = await parse({ reasoning: 'Reasoning fallback' });
+      assert.deepEqual(result.allParts?.filter(part => part.thinking || part.functionCall), [
+        { thinking: 'Reasoning fallback' },
+        {
+          functionCall: {
+            id: 'call_reasoning_round_trip',
+            name: 'read',
+            args: { filePath: 'README.md' },
+            rawArgsText: '{"filePath":"README.md"}',
+          },
+        },
+      ]);
+    });
+
+    await t.test('preserves the established message.reasoning_content field', async () => {
+      const result = await parse({ reasoning_content: 'Established reasoning content' });
+      assert.equal(result.allParts?.find(part => part.thinking)?.thinking, 'Established reasoning content');
+    });
+
+    await t.test('prefers reasoning_content when both aggregate fields are non-empty', async () => {
+      const result = await parse({
+        reasoning_content: 'Established reasoning content',
+        reasoning: 'Compatible reasoning fallback',
+      });
+      assert.deepEqual(result.allParts?.filter(part => part.thinking), [
+        { thinking: 'Established reasoning content' },
+      ]);
+    });
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('chat round-trips streamed reasoning through canonical thinking and the existing reasoning_content request field', async () => {
+  const originalPost = axios.post;
+  const session = createOpenAITestSession('chat_reasoning_round_trip_session');
+  const requestBodies: any[] = [];
+  let requestIndex = 0;
+
+  (axios as any).post = async (_url: string, data: any) => {
+    requestBodies.push(data);
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: requestIndex++ === 0
+        ? makeChatReasoningToolCallStream({ reasoning: 'Inspect the repository before editing.' })
+        : makeChatCompletionStream('continued'),
+    };
+  };
+
+  try {
+    const firstResult = await chat([{ text: 'call a tool' }], session, 0, {
+      appendMessage: async (message: Message) => {
+        session.history.push(message);
+      },
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+    assert.equal(firstResult.toolCalls?.[0]?.id, 'call_reasoning_round_trip');
+    assert.equal(
+      session.history.find(message => message.role === 'model')?.parts.find(part => part.thinking)?.thinking,
+      'Inspect the repository before editing.',
+    );
+
+    session.history.push({
+      role: 'tool',
+      parts: [{
+        functionResponse: {
+          tool_use_id: 'call_reasoning_round_trip',
+          name: 'read',
+          response: { output: 'repository contents' },
+        },
+      }],
+    });
+    await chat(null, session, 1, {
+      appendMessage: async (message: Message) => {
+        session.history.push(message);
+      },
+      toolDefinitions: [],
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    const priorAssistant = requestBodies[1].messages.find((message: any) =>
+      message.role === 'assistant'
+      && message.tool_calls?.[0]?.id === 'call_reasoning_round_trip',
+    );
+    assert.equal(priorAssistant.reasoning_content, 'Inspect the repository before editing.');
+    assert.equal('reasoning' in priorAssistant, false);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('chat persists streamed provider-specific fields and only the same concrete model receives them later', async () => {
   const originalPost = axios.post;
   const session = createOpenAITestSession('provider_specific_fields_round_trip_session');
@@ -1992,6 +2257,57 @@ test('chat journals only historical concrete model provenance and strips all __m
       assert.equal(JSON.stringify(reconstructed.messages[0]).includes('reasoningTokens'), false);
       assert.equal(JSON.stringify(reconstructed.messages[0]).includes('virtualModelKey'), false);
     }
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('requestLlmOnce scrubs reserved provider image helper keys before journal and wire serialization', async () => {
+  const originalPost = axios.post;
+  let capturedBody: any = null;
+  const identityValue = 'forged-provider-image-identity-value';
+  const deduplicatedValue = 'forged-provider-image-deduplicated-value';
+  const contents: Message[] = [{
+    role: 'user',
+    parts: [{
+      text: 'direct inline request',
+      inlineData: { mimeType: 'image/png', data: Buffer.from('direct-inline-image').toString('base64') },
+      __providerImageIdentity: identityValue,
+      __providerImageDeduplicated: deduplicatedValue,
+    }],
+  }];
+  const snapshot = structuredClone(contents);
+
+  (axios as any).post = async (_url: string, body: any) => {
+    capturedBody = body;
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatCompletionStream('journal scrub ok') };
+  };
+
+  try {
+    const result = await requestLlmOnce({
+      contents,
+      systemPrompt: '',
+      model: 'fixture/chat',
+      modelEntryOverride: {
+        providerKey: 'fixture', providerType: 'openai-completions', baseUrl: 'https://fixture.example', apiKey: '', model: 'chat', extraFields: {}, extraHeaders: {},
+      } as any,
+      toolDefinitions: [],
+      maxRetries: 1,
+      notifySessionEvents: false,
+      registerAbortController: false,
+    });
+
+    const wire = JSON.stringify(capturedBody);
+    assert.equal(wire.includes('__providerImage'), false);
+    assert.equal(wire.includes(identityValue), false);
+    assert.equal(wire.includes(deduplicatedValue), false);
+    const reconstructed = await reconstructLlmRequest(result.llmRequestId!);
+    assert.equal(reconstructed.completeness, 'complete');
+    const journal = JSON.stringify(reconstructed);
+    assert.equal(journal.includes('__providerImage'), false);
+    assert.equal(journal.includes(identityValue), false);
+    assert.equal(journal.includes(deduplicatedValue), false);
+    assert.deepEqual(contents, snapshot, 'request-local scrub must not mutate caller input');
   } finally {
     (axios as any).post = originalPost;
   }

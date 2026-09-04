@@ -102,7 +102,7 @@ const toolHeaderToneClasses: Record<ToolThreadTone, string> = {
 export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, onExpand }: { items: ToolTagItem[]; onExpand: () => void }) {
   return (
     <div
-      className={`group relative pl-2 text-xs cursor-pointer text-fw-text-muted hover:text-fw-text-muted dark:hover:text-fw-text-strong [&_*]:cursor-pointer ${toolSurfaceToneClasses.neutral}`}
+      className={`foxwarm-tool-card foxwarm-tool-tone-neutral group relative pl-2 text-xs cursor-pointer text-fw-text-muted hover:text-fw-text-muted dark:hover:text-fw-text-strong [&_*]:cursor-pointer ${toolSurfaceToneClasses.neutral}`}
       onClick={onExpand}
     >
       <ThreadLineButton
@@ -111,7 +111,7 @@ export const ToolGroupSummaryCard = memo(function ToolGroupSummaryCard({ items, 
         label="Expand tool group"
         className={toolThreadLineToneClasses.neutral}
       />
-      <div className={`flex items-start gap-2 ${toolHeaderToneClasses.neutral}`}>
+      <div className={`foxwarm-tool-header flex items-start gap-2 ${toolHeaderToneClasses.neutral}`}>
         <ToolTagList items={items} />
       </div>
     </div>
@@ -189,7 +189,9 @@ const hasLegacyDiffPayload = (call: FunctionCall): boolean => (
 
 const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler } = {}): ReactNode => {
   if (options.partial) {
-    return <span className="text-fw-text-muted">streaming tool call…</span>
+    const argsFormatted = typeof call.args === 'string' ? call.args : formatCompactObjectPreview(call.args)
+    const preview = argsFormatted.length > 200 ? `${argsFormatted.slice(0, 200)}...` : argsFormatted
+    return <span className="truncate break-all text-fw-text-muted">{preview || 'streaming tool call…'}</span>
   }
 
   if (call.name === 'read') {
@@ -289,7 +291,7 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
 
 const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unified' | 'split', options: { partial?: boolean; onOpenCodeFile?: OpenCodeFileHandler } = {}) => {
   if (options.partial) {
-    return <div className="text-fw-text-muted">Streaming tool call. Full arguments will appear after the model finishes emitting the call.</div>
+    return <pre className="whitespace-pre-wrap break-all text-xs text-fw-text-muted">{typeof call.args === 'string' ? call.args : JSON.stringify(call.args, null, 2)}</pre>
   }
 
   if (call.name === 'read') {

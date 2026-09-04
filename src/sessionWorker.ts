@@ -16,7 +16,7 @@ import { SessionWorkerStore } from './sessionWorkerStore';
 import * as vector from './vector';
 import { initializeSessionWorkerPresentation, publishPresentationMessage, publishPresentationModelStream, shutdownSessionWorkerPresentation } from './sessionWorkerPresentation';
 import { initializeSessionWorkerPublication, publishCommitted, shutdownSessionWorkerPublication } from './sessionWorkerPublication';
-import { deliverCommittedFinal, deliverIntermediateText, initializeSessionTurnDelivery, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
+import { deliverCommittedFinal, deliverIntermediateText, finishChannelProgress, initializeSessionTurnDelivery, reportChannelProgress, shutdownSessionTurnDelivery } from './sessionTurnDelivery';
 import { shutdownToolScriptRuntime } from './toolscript';
 import { VECTOR_ENABLED } from './config';
 import * as agentMetadata from './session/agentMetadata';
@@ -46,8 +46,10 @@ async function start(): Promise<void> {
   const host = new SessionWorkerHost(identity, store, {
     catalogStub,
     publishCommitted: projection => publishCommitted(identity, projection),
-    deliverIntermediateText: (source, text) => deliverIntermediateText({ sourceSessionId: sessionId, source, text }).then(() => {}),
-    deliverCommittedFinal: (source, text, outcome) => deliverCommittedFinal({ sourceSessionId: sessionId, source, text, outcome }).then(() => {}),
+    deliverIntermediateText: (source, text, turnId) => deliverIntermediateText({ sourceSessionId: sessionId, source, text, ...(turnId ? { turnId } : {}) }).then(() => {}),
+    deliverCommittedFinal: (source, text, outcome, turnId) => deliverCommittedFinal({ sourceSessionId: sessionId, source, text, outcome, ...(turnId ? { turnId } : {}) }).then(() => {}),
+    reportChannelProgress: (turnId, source, progress) => reportChannelProgress({ sourceSessionId: sessionId, turnId, ...(source ? { source } : {}), progress }),
+    finishChannelProgress: turnId => finishChannelProgress({ sourceSessionId: sessionId, turnId }),
     publishPresentationMessage: message => publishPresentationMessage(identity, message),
     publishPresentationStream: event => publishPresentationModelStream(identity, event),
   });

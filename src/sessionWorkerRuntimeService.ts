@@ -6,6 +6,7 @@ import type { CompactionRequest, QueueSource } from './types';
 import type { CompactCancellationResult, ToolNoiseCompactionResult } from './session/history';
 import { normalizeSessionTurnDeliverySource } from './sessionTurnDelivery';
 import { MODEL_EFFORTS, type ModelEffort } from './config';
+import type { ModelStreamDraftSnapshot } from './modelStreamDraft';
 
 export type SessionWorkerIdleStatus = { busy: boolean; queueLength: number; runningExecCount: number };
 export type SessionWorkerInterruptResult = { stopping: boolean; abortedInFlight: boolean };
@@ -61,7 +62,7 @@ export type SessionWorkerBtwResult = {
   projection: SessionWorkerProjection;
 };
 
-export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 13, {
+export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 14, {
   loadProjection: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
   retry: rpcMethod<{ source?: QueueSource }, SessionWorkerProjection>(),
@@ -80,6 +81,7 @@ export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-w
   idleStatus: rpcMethod<Record<string, never>, SessionWorkerIdleStatus>(),
   interrupt: rpcMethod<Record<string, never>, SessionWorkerInterruptResult>(),
   setPresentationSubscription: rpcMethod<{ active: boolean }, { active: boolean }>(),
+  loadModelStreamDraft: rpcMethod<Record<string, never>, ModelStreamDraftSnapshot | null>(),
 });
 
 export function createSessionWorkerRuntimeServiceHandler(
@@ -136,6 +138,13 @@ export function createSessionWorkerRuntimeServiceHandler(
       }
       host.setPresentationSubscription(input.active);
       return { active: input.active };
+    },
+    async loadModelStreamDraft(input) {
+      gate.assertActive();
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 0) {
+        throw new RpcError('SESSION_WORKER_STREAM_DRAFT_INVALID', 'loadModelStreamDraft takes an empty request object.');
+      }
+      return host.loadModelStreamDraft();
     },
     async updateSettings(input) {
       gate.assertActive();

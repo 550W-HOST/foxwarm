@@ -22,6 +22,12 @@ import {
   send_to_session,
 } from './tools';
 import { tool_run_script } from './toolscript';
+import {
+  INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX,
+  INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX,
+} from './toolCallControls';
+
+const TEST_HANDOFF_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThe test handoff is necessary, accurate, self-contained, scoped, and compliant with communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -135,12 +141,13 @@ test('direct and unified send_to_session share delivery and afterSend control se
       sessionId: targetId,
       message: 'direct management delivery',
       afterSend: 'wait',
+      confirmation: TEST_HANDOFF_CONFIRMATION,
     }, { sessionId: sourceId, session: source });
     assert.equal(direct.__toolPostAction?.waitForReply, true);
 
     const unified: any = await call_tool({
       toolId: 'builtin:send_to_session',
-      args: { sessionId: targetId, message: 'unified management delivery' },
+      args: { sessionId: targetId, message: 'unified management delivery', confirmation: TEST_HANDOFF_CONFIRMATION },
     }, { sessionId: sourceId, session: source });
     assert.match(String(unified?.output ?? unified), /Message sent to session/);
 

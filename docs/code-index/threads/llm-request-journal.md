@@ -20,7 +20,7 @@ The journal uses `state/llm-request-journal.sqlite` as its sole runtime authorit
 
 ## Request flow
 
-1. `requestLlmOnce` repairs canonical tool-call adjacency before provider hydration.
+1. `requestLlmOnce` repairs canonical tool-call adjacency and strips unsupported legacy provider-image helper keys from its structured-cloned input before provider hydration. Caller input remains unchanged.
 2. It content-addresses the system prompt, exact tool schema, and canonical internal messages. Normal chat history includes only the narrow historical concrete `modelId` provenance needed to reconstruct attempt-specific reasoning compatibility decisions; unrelated `__meta` remains excluded.
 3. It durably appends the request manifest before any provider send.
 4. Each concrete retry/failover attempt appends its start record before `axios.post`.

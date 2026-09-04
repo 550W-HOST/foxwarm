@@ -504,6 +504,13 @@ export class SessionWorkerSupervisor {
     }
   }
 
+  async loadModelStreamDraft(sessionId: string) {
+    const entry = this.entries.get(sessionId);
+    if (!entry?.ready) return null;
+    const runtime = new RpcClient(sessionWorkerRuntimeServiceDescriptor, entry.transport);
+    return runtime.call('loadModelStreamDraft', {});
+  }
+
   touch(sessionId: string): void { const entry = this.entries.get(sessionId); if (entry?.ready) this.touchEntry(entry); }
 
   async stopWorker(sessionId: string, timeoutMs = 10_000): Promise<boolean> {

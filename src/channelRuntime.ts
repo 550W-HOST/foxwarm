@@ -7,6 +7,7 @@ import { TelegramChannel } from './channels/telegramChannel';
 import { MatrixChannel } from './channels/matrixChannel';
 import { isWeWorkChannelConfigReady, WeWorkWebhookChannel } from './channels/weworkChannel';
 import * as sessionManager from './sessionManager';
+import { resetChannelTurnProgress } from './session/channels';
 
 export type ChannelRuntimeStatus = {
   channelId: string;
@@ -286,6 +287,7 @@ async function stopRegisteredChannel(channelId: string): Promise<boolean> {
 }
 
 export async function reloadManagedChannels(): Promise<{ stopped: string[]; started: string[]; statuses: ChannelRuntimeStatus[] }> {
+  resetChannelTurnProgress();
   const previousIds = new Set<string>([
     ...managedFactories.keys(),
     ...listRegisteredChannels()

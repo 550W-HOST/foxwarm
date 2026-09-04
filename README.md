@@ -255,6 +255,7 @@ vector:
 vectorMaintenance:
   enabled: true
   retentionHours: 24
+handoffConfirmation: false
 ```
 
 `llm.compactKeepPercent` controls the fraction of recent rendered history kept
@@ -275,8 +276,15 @@ still read when top-level `vector` is absent, but new configuration should use
 `vector.baseUrl`. Optional `vector.lexicalIndex: true` enables a dark,
 exact-Vector-owner derived lexical indexing lane; it defaults off and is not
 consumed by recall unless `vector.hybridSearch: true` is also set. Hybrid search
-requires the lexical index and remains disabled by default. Vector, worker placement, and maintenance settings are read
+requires the lexical index and remains disabled by default. Vector, worker placement, maintenance, and handoff-confirmation settings are read
 at process startup.
+
+`handoffConfirmation` defaults to `false`. When set to `true`,
+`send_to_session` and `create_child_session` require the structured confirmation
+shown by their current tool schemas, including an original non-placeholder
+review and final-property placement. This setting affects only inter-agent
+handoff confirmation; model tool-call cancellation controls remain available in
+both modes. Changing it requires a restart.
 
 When explicitly enabled, the lexical derivative follows committed Session rename/fork boundaries and rebuilds incompatible derived schemas through a restart-resumable shadow SQLite file. These operations are best-effort derived maintenance: they do not make Archive commits or dense Vector availability depend on lexical health.
 
@@ -321,6 +329,25 @@ Provider notes:
 - `openai` and `openai-responses` use `/responses`
 - `anthropic` uses Anthropic-compatible requests
 - OpenAI-compatible local gateways can be configured by changing `baseUrl` and model ids. `apiKey` may be left empty if your gateway does not require one.
+
+Some Chat Completions-compatible providers return assistant thinking as
+`reasoning_content` but require that history to be replayed under `reasoning`.
+Configure that request dialect explicitly when needed; omission keeps the
+standard Foxwarm `reasoning_content` behavior:
+
+```yaml
+providers:
+  compatible-chat:
+    providerType: openai-completions
+    historyReasoningField: reasoning
+    models:
+      - compatible-model
+```
+
+`historyReasoningField` accepts only `reasoning_content` or `reasoning`, and is
+valid only for concrete `openai-completions` providers. A model object may
+override its provider value when models behind one endpoint use different
+dialects.
 
 Provider and model entries can declare first-class effort capabilities and a
 default. When omitted, all six levels are allowed and `high` is the default:
@@ -401,10 +428,21 @@ channels:
     type: telegram
     enabled: true
     botToken: "123456:telegram-token"
+    # Optional best-effort ordinary-text tool progress for this channel instance.
+    # Omit it or set it to false to disable. Valid interval: 30000–1800000 ms.
+    channelProgress:
+      intervalMs: 60000
     mainAttachUser: "your-telegram-user-id"
     allowedUsers:
       - "your-telegram-user-id"
 ```
+
+`channelProgress` is common to managed ordinary-text channels. It reports only
+bounded top-level tool names/counts in transient messages; it never stores
+progress in Session history or archives. Each attached channel target keeps an
+independent timer and report baseline. WebUI is excluded, and an active WeWork
+stream card continues to use its native progress instead of receiving a
+duplicate text fallback.
 
 Example Weixin channel:
 

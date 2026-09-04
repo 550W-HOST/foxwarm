@@ -211,6 +211,49 @@ test('failover uses outer attempts A x5 then rebuilds a clean Anthropic request 
   }
 });
 
+test('virtual physical attempts make independent inline image dedup decisions', async () => {
+  const originalPost = axios.post;
+  const calls: Array<{ url: string; body: any; headers: any }> = [];
+  (axios as any).post = async (url: string, body: any, config: any) => {
+    calls.push({ url, body, headers: config.headers });
+    if (calls.length === 1) throw new Error('switch leaf after first physical attempt');
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: { content: [{ type: 'text', text: 'ok' }] },
+    };
+  };
+
+  const data = Buffer.from('virtual-attempt-image').toString('base64');
+  const request = {
+    ...baseRequest('fastFallback', 2),
+    contents: [{
+      role: 'user' as const,
+      parts: [
+        { inlineData: { mimeType: 'image/png', data } },
+        { inlineData: { mimeType: 'image/png', data } },
+      ],
+    }],
+  };
+  const snapshot = structuredClone(request.contents);
+
+  try {
+    await withImmediateRetryTimers(() => requestLlmOnce(request));
+    assert.equal(calls.length, 2);
+    const chatBody = calls[0].body;
+    assert.equal(JSON.stringify(chatBody).match(/data:image\/png;base64,/g)?.length, 1);
+    assert.match(JSON.stringify(chatBody), /deduplicated=true/);
+
+    const anthropicBody = JSON.parse(zlib.gunzipSync(calls[1].body).toString('utf8'));
+    assert.equal(JSON.stringify(anthropicBody).match(/"type":"image"/g)?.length, 1);
+    assert.match(JSON.stringify(anthropicBody), /deduplicated=true/);
+    assert.deepEqual(request.contents, snapshot);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
 test('virtual attempts with unset effort use each concrete leaf default independently', async () => {
   const config = loadModelsConfigFromObject({
     default: 'route',
@@ -304,6 +347,90 @@ test('virtual failover re-filters historical reasoning for each concrete attempt
     assert.equal(secondSerialized.includes('leaf A encrypted'), false);
     assert.equal(secondSerialized.includes('leaf A signature'), false);
     assert.equal(secondSerialized.includes('__meta'), false);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('each Chat Completions concrete attempt uses its resolved history reasoning field', async () => {
+  const config = loadModelsConfigFromObject({
+    default: 'route',
+    providers: {
+      compatible: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://compatible.test/v1',
+        historyReasoningField: 'reasoning',
+        models: ['model-a'],
+      },
+      standard: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://standard.test/v1',
+        models: ['model-b'],
+      },
+      route: {
+        providerType: 'failover',
+        targets: ['compatible/model-a', 'standard/model-b'],
+        failureThreshold: 1,
+      },
+    },
+  });
+  const calls: Array<{ url: string; body: any }> = [];
+  const originalPost = axios.post;
+  (axios as any).post = async (url: string, body: any) => {
+    calls.push({ url, body });
+    if (calls.length === 1) throw new Error('force second leaf');
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatStream('ok') };
+  };
+
+  try {
+    await withImmediateRetryTimers(() => requestLlmOnce({
+      ...baseRequest('route', 2),
+      modelsConfigOverride: config,
+      contents: [
+        { role: 'model' as const, parts: [{ thinking: 'legacy reasoning' }, { text: 'answer' }] },
+        { role: 'user' as const, parts: [{ text: 'continue' }] },
+      ],
+    }));
+    assert.equal(calls[0].body.messages[0].reasoning, 'legacy reasoning');
+    assert.equal('reasoning_content' in calls[0].body.messages[0], false);
+    assert.equal(calls[1].body.messages[0].reasoning_content, 'legacy reasoning');
+    assert.equal('reasoning' in calls[1].body.messages[0], false);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('the current concrete config controls serialization when the canonical model id is unchanged', async () => {
+  const configFor = (historyReasoningField?: 'reasoning_content' | 'reasoning') => loadModelsConfigFromObject({
+    default: 'chat',
+    providers: {
+      chat: {
+        providerType: 'openai-completions',
+        baseUrl: 'https://same-model.test/v1',
+        ...(historyReasoningField ? { historyReasoningField } : {}),
+        models: ['model'],
+      },
+    },
+  });
+  const calls: any[] = [];
+  const originalPost = axios.post;
+  (axios as any).post = async (_url: string, body: any) => {
+    calls.push(body);
+    return { status: 200, statusText: 'OK', headers: {}, data: makeChatStream('ok') };
+  };
+  const contents = [{
+    role: 'model' as const,
+    parts: [{ thinking: 'same-model reasoning' }, { text: 'answer' }],
+    __meta: { modelId: 'chat/model' },
+  }, { role: 'user' as const, parts: [{ text: 'continue' }] }];
+
+  try {
+    await requestLlmOnce({ ...baseRequest('chat', 1), contents, modelsConfigOverride: configFor('reasoning') });
+    await requestLlmOnce({ ...baseRequest('chat', 1), contents, modelsConfigOverride: configFor() });
+    assert.equal(calls[0].messages[0].reasoning, 'same-model reasoning');
+    assert.equal('reasoning_content' in calls[0].messages[0], false);
+    assert.equal(calls[1].messages[0].reasoning_content, 'same-model reasoning');
+    assert.equal('reasoning' in calls[1].messages[0], false);
   } finally {
     (axios as any).post = originalPost;
   }

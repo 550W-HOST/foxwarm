@@ -304,7 +304,7 @@ test('worker node topology select and compound copy use fixed facade with exact 
   const ctx: any = { sessionId: session.id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => { persists += 1; } };
   try {
     assert.match(String(await callTool('node', { action: 'list' }, ctx)), /master/);
-    assert.equal((await tool_search_tools({ sources: ['node'], query: 'read' }, ctx)).tools[0].name, 'read');
+    assert.match((await tool_search_tools({ sources: ['node'], query: 'read' }, ctx)).output, /node:master\/read\(/);
     assert.match(String(await callTool('node', { action: 'select', nodeId: 'remote-a' }, ctx)), /remote\/default/);
     assert.equal(session.currentNode, 'remote-a'); assert.equal(session.cwd, undefined); assert.equal(persists, 1);
 

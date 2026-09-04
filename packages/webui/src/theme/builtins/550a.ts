@@ -100,4 +100,3 @@ export const THEME_550A = checkedBuiltin({
   author: 'Foxwarm',
   variants: { light: consoleLight, dark: consoleDark },
 })
-

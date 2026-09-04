@@ -20,6 +20,7 @@ import type { SessionWorkerStore } from './sessionWorkerStore';
 import type { Session } from './types';
 import type { SessionRuntimeHistoryDto } from './sessionRuntimeService';
 import { armWaitLivenessDiagnostic, initializeWaitLivenessDiagnostics } from './waitLiveness';
+import { hasRemoteExecLivenessClaim } from './nodes/remoteExecLiveness';
 
 export const MAIN_MANAGEMENT_TOOL_OPERATIONS = [
   'send_to_session',
@@ -57,12 +58,15 @@ export type ValidateWaitSessionsRequest = { sourceSessionId: string; sessionIds:
 export type ValidateWaitSessionsResponse = { sessionIds: string[] };
 export type ArmWaitLivenessRequest = { sourceSessionId: string; waitId: string };
 export type ArmWaitLivenessResponse = { armed: true };
+export type ValidateWaitExecIdsRequest = { sourceSessionId: string; execIds: string[] };
+export type ValidateWaitExecIdsResponse = { activeExecIds: string[] };
 
-export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 7, {
+export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 8, {
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),
   scheduleWaitTimeout: rpcMethod<ScheduleWaitTimeoutRequest, ScheduleWaitTimeoutResponse>(),
   validateWaitSessions: rpcMethod<ValidateWaitSessionsRequest, ValidateWaitSessionsResponse>(),
   armWaitLiveness: rpcMethod<ArmWaitLivenessRequest, ArmWaitLivenessResponse>(),
+  validateWaitExecIds: rpcMethod<ValidateWaitExecIdsRequest, ValidateWaitExecIdsResponse>(),
 });
 
 const allowedOperations = new Set<string>(MAIN_MANAGEMENT_TOOL_OPERATIONS);
@@ -298,6 +302,22 @@ export function createMainManagementToolServiceHandler(options: {
       assertExpectedSource(sourceSessionId);
       armWaitLivenessDiagnostic(sourceSessionId, input.waitId);
       return { armed: true };
+    },
+    async validateWaitExecIds(input) {
+      if (!input || typeof input !== 'object' || Array.isArray(input)
+        || Object.keys(input).length !== 2
+        || typeof input.sourceSessionId !== 'string'
+        || !Array.isArray(input.execIds) || input.execIds.length < 1 || input.execIds.length > 64
+        || input.execIds.some(id => typeof id !== 'string' || !id.trim() || id.length > 256)) {
+        throw new RpcError('MAIN_MANAGEMENT_INVALID_WAIT_EXECS', 'validateWaitExecIds requires sourceSessionId and 1-64 bounded non-empty execIds.');
+      }
+      const sourceSessionId = normalizeSourceSessionId(input.sourceSessionId);
+      assertExpectedSource(sourceSessionId);
+      const source = sessionManager.getAllSessions().get(sourceSessionId);
+      if (!source) throw new RpcError('MAIN_MANAGEMENT_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
+      const agentName = source.agent || 'main';
+      const sessionIdentityIds = [source.id, ...(source.aliases || [])];
+      return { activeExecIds: input.execIds.filter(execId => hasRemoteExecLivenessClaim(sessionIdentityIds, agentName, execId)) };
     },
   };
 }

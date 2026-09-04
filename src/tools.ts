@@ -58,6 +58,7 @@ import { resolveMemorySearchOptions } from './tools/vectorTools';
 import { tool_search_tools, tool_call_tool } from './tools/unifiedSearch';
 import { executeResolvedTool, initializeResolvedToolRuntime, resolveDirectTool } from './tools/resolvedTools';
 import { definitions } from './tools/definitions';
+import { addToolCancellationSchema } from './toolCallControls';
 
 export {
     BUILTIN_TOOL_PLACEMENTS,
@@ -187,7 +188,9 @@ export const node_pair_list = tool_node_pair_list;
 
 // Re-export definitions and model-facing subset
 export { definitions };
-export const modelFacingDefinitions = definitions.filter(def => isToolDirectlyExposedToModel(def.name));
+export const modelFacingDefinitions = definitions
+    .filter(def => isToolDirectlyExposedToModel(def.name))
+    .map(addToolCancellationSchema);
 
 // Re-export utilities used by other modules
 export { resolveMemorySearchOptions };

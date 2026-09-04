@@ -1,7 +1,8 @@
 import { ChannelFile, ChannelSendFileOptions, getChannelInstance } from '../channel';
+import { channelProgressCoordinator, type ChannelProgressTarget } from '../channelProgress';
 import { logger } from '../common';
-import { CHANNELS_FILE } from '../config';
-import { Session, SessionBroadcast } from '../types';
+import { CHANNELS_FILE, getChannelConfigById, normalizeChannelProgressInterval, readAppConfigFile } from '../config';
+import { ChannelTurnProgress, QueueSource, Session, SessionBroadcast } from '../types';
 import { DiskJsonData } from '../utils/diskJsonData';
 import { parseFoxwarmOpeningTag } from '../utils/promptWrappers';
 
@@ -224,6 +225,70 @@ export async function sendToChannelTargetId(channelTargetId: string, message: st
   await channel.sendMessage(conversationId, message);
 }
 
+function getProgressIntervalMs(channelInstanceId: string): number | undefined {
+  const configured = getChannelConfigById(channelInstanceId, readAppConfigFile())?.config.channelProgress;
+  try { return normalizeChannelProgressInterval(configured); }
+  catch (error) {
+    logger.warn({ err: error, channelInstanceId }, 'Ignoring invalid channel progress config');
+    return undefined;
+  }
+}
+
+function sourceDeliveryOptions(source: QueueSource | undefined, target: { channelId: string; conversationId: string }): any {
+  if (!source || (source.channelId || source.platform) !== target.channelId
+    || (source.conversationId || source.channelUserId) !== target.conversationId) return undefined;
+  return source.qqbotMessageId ? {
+    qqbotMessageId: source.qqbotMessageId,
+    qqbotChannelId: target.channelId,
+    qqbotConversationId: target.conversationId,
+  } : undefined;
+}
+
+function getChannelProgressTargets(sessionId: string, source?: QueueSource): ChannelProgressTarget[] {
+  const attached = getChannelsBySession(sessionId);
+  const sourceTarget = source ? {
+    channelId: source.channelId || source.platform,
+    conversationId: source.conversationId || source.channelUserId,
+  } : undefined;
+  if (sourceTarget && !attached.some(target => target.channelId === sourceTarget.channelId && target.conversationId === sourceTarget.conversationId)) {
+    attached.push(sourceTarget);
+  }
+  return attached.flatMap(target => {
+    const intervalMs = getProgressIntervalMs(target.channelId);
+    const channel = getChannelInstance(target.channelId);
+    if (!intervalMs || !channel || channel.platform === 'webui') return [];
+    if (source?.weworkStreamId && target.channelId === (source.channelId || source.platform)
+      && target.conversationId === (source.conversationId || source.channelUserId)) return [];
+    if (getChannelConfig(target.channelId, target.conversationId)?.mode === 'send-only') return [];
+    const deliveryOptions = sourceDeliveryOptions(source, target);
+    return [{
+      channelInstanceId: target.channelId,
+      conversationId: target.conversationId,
+      intervalMs,
+      send: (text: string) => channel.sendMessage(target.conversationId, text, deliveryOptions),
+    }];
+  });
+}
+
+export function reportChannelTurnProgress(sessionId: string, turnId: string, source: QueueSource | undefined, progress: ChannelTurnProgress): void {
+  channelProgressCoordinator.report(turnId, getChannelProgressTargets(sessionId, source), progress);
+}
+
+export async function finishChannelTurnProgress(turnId: string): Promise<void> {
+  await channelProgressCoordinator.finish(turnId);
+}
+
+export function resetChannelTurnProgress(): void {
+  channelProgressCoordinator.reset();
+}
+
+export function decorateChannelProgressText(target: { channelId: string; conversationId: string }, text: string, options: any): string {
+  return channelProgressCoordinator.decorate(options?.channelProgressTurnId, {
+    channelInstanceId: target.channelId,
+    conversationId: target.conversationId,
+  }, text);
+}
+
 export async function sendFileToChannelTargetId(channelTargetId: string, file: ChannelFile, options?: ChannelSendFileOptions): Promise<void> {
   const { channelInstanceId, conversationId } = parseChannelTargetId(channelTargetId);
   const channel = getChannelInstance(channelInstanceId);
@@ -426,7 +491,8 @@ export function createSessionBroadcast(sessionId: string): SessionBroadcast {
       const channel = getChannelInstance(channelInfo.channelId);
       if (channel) {
         logger.debug({ channelId: channelInfo.channelId, conversationId: channelInfo.conversationId }, 'Calling channel.sendMessage');
-        channel.sendMessage(channelInfo.conversationId, text, options)?.catch((e: any) => {
+        const deliveredText = decorateChannelProgressText(channelInfo, text, options);
+        channel.sendMessage(channelInfo.conversationId, deliveredText, options)?.catch((e: any) => {
           logger.error({ err: e, channelId: channelInfo.channelId, conversationId: channelInfo.conversationId }, 'Failed to broadcast message');
         });
       } else {
@@ -452,7 +518,11 @@ export async function deliverCommittedFinalToAttachments(
     const channel = getChannelInstance(target.channelId);
     if (!channel) continue;
     result.attempted += 1;
-    try { await channel.sendMessage(target.conversationId, text, options); result.delivered += 1; }
+    try {
+      const deliveredText = decorateChannelProgressText(target, text, options);
+      await channel.sendMessage(target.conversationId, deliveredText, options);
+      result.delivered += 1;
+    }
     catch (error: any) { result.failures.push(`${target.channelId}:${target.conversationId}: ${error?.message || error}`); }
   }
   return result;

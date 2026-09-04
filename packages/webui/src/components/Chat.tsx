@@ -8,7 +8,8 @@ import ContextScrollbar from './ContextScrollbar'
 import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
 import ProcessingStatus from './ProcessingStatus'
-import type { Message, MessagePart, ModelStreamToolCall, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
+import type { Message, MessagePart, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
+import { applyModelStreamEvent, applyModelStreamSnapshot, parseStreamingToolArguments, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel, type StreamingAssistantDraft } from '../streamingAssistantDraft'
 import SessionDebugModal from './SessionDebugModal'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
@@ -161,27 +162,13 @@ type SessionListRecord = {
   isolated?: boolean
 }
 
-type StreamingAssistantDraft = {
-  streamId: string
-  iteration?: number
-  reasoning: string
-  text: string
-  toolCalls: ModelStreamToolCall[]
-}
-
-const normalizeStreamingToolCalls = (toolCalls: ModelStreamToolCall[] | undefined): ModelStreamToolCall[] => {
-  if (!Array.isArray(toolCalls)) return []
-  return toolCalls.map((toolCall, fallbackIndex) => ({
-    index: Number.isFinite(toolCall.index) ? toolCall.index : fallbackIndex,
-    ...(typeof toolCall.id === 'string' && toolCall.id.trim() ? { id: toolCall.id.trim() } : {}),
-    ...(typeof toolCall.name === 'string' && toolCall.name.trim() ? { name: toolCall.name.trim() } : {}),
-  }))
-}
-
 const buildStreamingAssistantMessage = (draft: StreamingAssistantDraft | null): Message | null => {
   if (!draft) return null
 
   const parts: MessagePart[] = []
+  if (draft.incompletePrefix) {
+    parts.push({ system: 'Live stream joined after generation began; earlier content is unavailable.' })
+  }
   if (draft.reasoning.trim()) {
     parts.push({ thinking: draft.reasoning })
   }
@@ -193,7 +180,7 @@ const buildStreamingAssistantMessage = (draft: StreamingAssistantDraft | null): 
       functionCall: {
         id: toolCall.id || `stream-${draft.streamId}-${toolCall.index}`,
         name: toolCall.name || 'tool call',
-        args: {},
+        args: toolCall.displayArgs ?? parseStreamingToolArguments(toolCall.arguments),
       },
     })
   }
@@ -228,6 +215,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const [showMenu, setShowMenu] = useState(false)
   const [showDebugInfo, setShowDebugInfo] = useState(false)
   const [streamingAssistantDraft, setStreamingAssistantDraft] = useState<StreamingAssistantDraft | null>(null)
+  const streamingAssistantDraftRef = useRef<StreamingAssistantDraft | null>(null)
+  const clearStreamingAssistantDraft = useCallback(() => {
+    streamingAssistantDraftRef.current = null
+    setStreamingAssistantDraft(null)
+  }, [])
   const [toolScriptProgress, setToolScriptProgress] = useState<Record<string, ToolScriptSubCall[]>>({})
   const [asrAvailable, setAsrAvailable] = useState(false)
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
@@ -286,7 +278,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   useEffect(() => {
     setMessages([])
     setHistoryLoaded(false)
-    setStreamingAssistantDraft(null)
+    clearStreamingAssistantDraft()
     setToolScriptProgress({})
     setQueuedMessages([])
     setSessionRecord(null)
@@ -311,7 +303,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     setPersistentMemorySnapshot('')
     pendingContextScrollbarNavigationRef.current = null
     pendingScrollToTrueTopRef.current = false
-  }, [sessionId])
+  }, [clearStreamingAssistantDraft, sessionId])
 
   useEffect(() => {
     sessionBusyRef.current = sessionBusy
@@ -376,9 +368,9 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
   useEffect(() => {
     if (!sessionBusy) {
-      setStreamingAssistantDraft(null)
+      clearStreamingAssistantDraft()
     }
-  }, [sessionBusy])
+  }, [clearStreamingAssistantDraft, sessionBusy])
 
   useEffect(() => {
     const handleResize = () => {
@@ -714,6 +706,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     const eventVersionAtStart = historyEventVersionRef.current
     const stateEventVersionAtStart = historyStateEventVersionRef.current
     const modelStreamEventVersionAtStart = historyModelStreamEventVersionRef.current
+    const modelStreamDraftAtStart = streamingAssistantDraftRef.current
     const controller = new AbortController()
     historyAbortControllerRef.current = controller
 
@@ -775,7 +768,12 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           if (!hasNewerStreamState && typeof data.queueLength === 'number') {
             setSessionQueueLength(data.queueLength)
           }
-          if (!hasNewerModelStream) setStreamingAssistantDraft(null)
+          if (shouldClearDraftAfterHistory({
+            draftAtRequestStart: modelStreamDraftAtStart,
+            currentDraft: streamingAssistantDraftRef.current,
+            hasNewerStreamEvent: hasNewerModelStream,
+            snapshotMessages,
+          })) clearStreamingAssistantDraft()
           const lastMsg = snapshotMessages[snapshotMessages.length - 1]
           if (lastMsg?.__meta?.timestamp) {
             lastKnownTimestampRef.current = Math.max(lastKnownTimestampRef.current, lastMsg.__meta.timestamp)
@@ -805,7 +803,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       void fetchHistory()
     })
     return requestPromise
-  }, [applySessionState, sessionId])
+  }, [applySessionState, clearStreamingAssistantDraft, sessionId])
 
   const scheduleHistoryRefresh = useCallback((delay = 100) => {
     if (historyRefreshTimeoutRef.current !== null) {
@@ -874,7 +872,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           setQueuedMessages([])
           setMessages([])
           setPersistentMemorySnapshot('')
-          setStreamingAssistantDraft(null)
+          clearStreamingAssistantDraft()
           setHistoryLoaded(true)
           lastKnownTimestampRef.current = 0
           sessionBusyRef.current = false
@@ -887,29 +885,26 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           return
         }
 
+        if (data.type === 'model-stream-snapshot') {
+          historyModelStreamEventVersionRef.current += 1
+          const next = applyModelStreamSnapshot(data.draft || null)
+          streamingAssistantDraftRef.current = next
+          setStreamingAssistantDraft(next)
+          return
+        }
+
         if (data.type === 'session-event') {
           const sessionEvent = data.event as SessionStreamEvent
           if (sessionEvent.type === 'model-stream-reset') {
             historyModelStreamEventVersionRef.current += 1
-            setStreamingAssistantDraft({
-              streamId: sessionEvent.streamId || `stream-${sessionEvent.iteration ?? 'current'}`,
-              iteration: sessionEvent.iteration,
-              reasoning: '',
-              text: '',
-              toolCalls: [],
-            })
+            const next = applyModelStreamEvent(streamingAssistantDraftRef.current, sessionEvent)
+            streamingAssistantDraftRef.current = next
+            setStreamingAssistantDraft(next)
           } else if (sessionEvent.type === 'model-stream-update') {
             historyModelStreamEventVersionRef.current += 1
-            const streamId = sessionEvent.streamId || `stream-${sessionEvent.iteration ?? 'current'}`
-            setStreamingAssistantDraft(prev => ({
-              streamId,
-              iteration: sessionEvent.iteration ?? prev?.iteration,
-              reasoning: sessionEvent.reasoning ?? (prev?.streamId === streamId ? prev.reasoning : ''),
-              text: sessionEvent.text ?? (prev?.streamId === streamId ? prev.text : ''),
-              toolCalls: sessionEvent.toolCalls !== undefined
-                ? normalizeStreamingToolCalls(sessionEvent.toolCalls)
-                : (prev?.streamId === streamId ? prev.toolCalls : []),
-            }))
+            const next = applyModelStreamEvent(streamingAssistantDraftRef.current, sessionEvent)
+            streamingAssistantDraftRef.current = next
+            setStreamingAssistantDraft(next)
           } else if (sessionEvent.type === 'toolscript-progress' && sessionEvent.toolUseId) {
             setToolScriptProgress(prev => ({
               ...prev,
@@ -925,7 +920,9 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           const isUpdateExisting = data.message.__meta?.updateExisting
 
           if (data.message.role === 'model') {
-            setStreamingAssistantDraft(null)
+            if (shouldClearDraftForCommittedModel(streamingAssistantDraftRef.current, data.message.__meta?.timestamp)) {
+              clearStreamingAssistantDraft()
+            }
           }
 
           if (sessionQueueLengthRef.current > 0 || queuedMessagesRef.current.length > 0) {
@@ -980,7 +977,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       },
     })
     return unsubscribe
-  }, [applySessionState, fetchHistory, scheduleHistoryRefresh, sessionId])
+  }, [applySessionState, clearStreamingAssistantDraft, fetchHistory, scheduleHistoryRefresh, sessionId])
 
   const updateSessionModel = useCallback(async (model: string | null) => {
     setModelBusy(true)
@@ -1258,7 +1255,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     if (sessionMissing || (!text.trim() && attachments.length === 0) || loading) return false
 
     setLoading(true)
-    setStreamingAssistantDraft(null)
+    clearStreamingAssistantDraft()
 
     const userMessage = text.trim()
     const isSlashCommand = /^\/[a-zA-Z_\-.]+(?:\s+.*)?$/s.test(userMessage)
@@ -1359,7 +1356,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
     setLoading(false)
     return true
-  }, [loading, scheduleHistoryRefresh, sessionId, sessionMissing])
+  }, [clearStreamingAssistantDraft, loading, scheduleHistoryRefresh, sessionId, sessionMissing])
 
   const sendSessionCommand = useCallback(async (command: string) => {
     if (sessionMissing) return

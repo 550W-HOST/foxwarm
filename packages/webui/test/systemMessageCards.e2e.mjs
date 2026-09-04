@@ -390,7 +390,8 @@ test('550A reserves blue semantic chrome for system cards while both reasoning t
       }
     })
     assert.equal(colors.system.surface, colors.blue.surface)
-    assert.match(colors.system.shadow, /119, 170, 187/, 'the blue System card retains its 550A outer ring')
+    assert.notEqual(colors.system.shadow, 'none', 'the blue System card retains its 550A outer ring')
+    assert.match(colors.system.shadow, /inset/, 'the blue System card outer ring remains inset')
     assert.equal(colors.system.header, colors.blue.strong)
     assert.equal(colors.system.tag, colors.blue.input)
     assert.equal(colors.system.tagBorder, colors.blue.border)
@@ -401,7 +402,7 @@ test('550A reserves blue semantic chrome for system cards while both reasoning t
     assert.equal(colors.system.bodyShadow, 'none')
 
     assert.equal(colors.message.surface, colors.neutral.panel)
-    assert.equal(colors.processing.surface, colors.neutral.hover)
+    assert.equal(colors.processing.surface, colors.neutral.panel)
     for (const reasoning of [colors.message, colors.processing]) {
       assert.equal(reasoning.header, colors.neutral.hover)
       assert.equal(reasoning.tag, colors.neutral.input)

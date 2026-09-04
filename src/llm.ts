@@ -8,7 +8,8 @@ import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
-import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig } from './config';
+import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
+import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, HANDOFF_CONFIRMATION_ENABLED } from './config';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
@@ -28,10 +29,18 @@ import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 import { formatFoxwarmSystemTag, formatSystemPartForModel, isFoxwarmMetadataLine } from './utils/promptWrappers';
 import { formatLocalTimestamp } from './utils/localTime';
 import { appendImageGuidanceText, normalizeToolResultImages } from './toolImages';
-import { hydrateMessagesForProvider } from './imageBlobs';
+import { hydrateMessagesForProvider, stripReservedProviderImageHelperFields } from './imageBlobs';
+import { deduplicateProviderRequestImages } from './providerImageDedup';
 import { guardToolOutputForModel } from './toolOutputGuard';
 import { sanitizeLoneSurrogatesInPayload, truncateUnicodeSafeWithEllipsis } from './utils/unicode';
 import { isModelVisibleMessage } from './session/messageVisibility';
+import {
+    getToolCancellationArgumentError,
+    isSingleToolCancellationRequested,
+    isWholeBatchCancellationRequested,
+    stripToolCancellationArguments,
+    validateInterAgentHandoffConfirmationForMode,
+} from './toolCallControls';
 import {
     beginVirtualRoutingRequest,
     clearVirtualRoutingState,
@@ -291,6 +300,7 @@ type ModelStreamProgressSnapshot = {
 };
 
 const MODEL_STREAM_EVENT_THROTTLE_MS = 80;
+const MODEL_STREAM_TOOL_ARGS_THROTTLE_MS = 1_000;
 const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 export const DEFAULT_LLM_MAX_ATTEMPTS = 6;
 // Compatibility alias: maxRetries has always meant total attempts, not retries
@@ -400,6 +410,7 @@ function normalizeModelStreamToolCalls(toolCalls: ModelStreamToolCall[] | undefi
         index: Number.isFinite(toolCall.index) ? toolCall.index : fallbackIndex,
         ...(typeof toolCall.id === 'string' && toolCall.id.trim() ? { id: toolCall.id.trim() } : {}),
         ...(typeof toolCall.name === 'string' && toolCall.name.trim() ? { name: toolCall.name.trim() } : {}),
+        ...(typeof toolCall.arguments === 'string' ? { arguments: toolCall.arguments } : {}),
     }));
 }
 
@@ -413,42 +424,107 @@ function areModelStreamToolCallsEqual(left: ModelStreamToolCall[] = [], right: M
         return !!rightCall
             && leftCall.index === rightCall.index
             && (leftCall.id || '') === (rightCall.id || '')
-            && (leftCall.name || '') === (rightCall.name || '');
+            && (leftCall.name || '') === (rightCall.name || '')
+            && (leftCall.arguments || '') === (rightCall.arguments || '');
     });
 }
 
-function createModelStreamEventEmitter(args: {
+function makeModelStreamTextDelta(previous: string, current: string) {
+    if (previous === current) return undefined;
+    if (current.startsWith(previous)) return { offset: previous.length, text: current.slice(previous.length) };
+    return { offset: 0, text: current };
+}
+
+export function createModelStreamEventEmitter(args: {
     enabled: boolean;
     sessionId?: string;
     iteration: number;
+    llmRequestId: string;
     currentSessionEffects?: CurrentSessionEffects;
+    now?: () => number;
+    setTimer?: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>;
+    clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
 }) {
+    const now = args.now || Date.now;
+    const setTimer = args.setTimer || setTimeout;
+    const clearTimer = args.clearTimer || clearTimeout;
     const streamId = newModelStreamId(args.iteration);
     let latestSnapshot: ModelStreamProgressSnapshot = { reasoning: '', text: '', toolCalls: [] };
+    let emittedSnapshot: ModelStreamProgressSnapshot = { reasoning: '', text: '', toolCalls: [] };
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let hasPendingUpdate = false;
+    let toolArgsTimer: ReturnType<typeof setTimeout> | null = null;
     let lastSentAt = 0;
+    let lastToolArgsSentAt = 0;
+    let sequence = 0;
+    let startedAt = now();
     const notifySessionEvent = (event: import('./types').SessionStreamEvent) => {
         if (!args.sessionId) return;
         if (args.currentSessionEffects) args.currentSessionEffects.notifySessionEvent(args.sessionId, event);
         else sessionManager.notifySessionEvent(args.sessionId, event);
     };
 
-    const notify = () => {
+    const notify = (forceToolArgs = false) => {
         if (!args.enabled || !args.sessionId) {
             return;
         }
-
+        const reasoning = latestSnapshot.reasoning || '';
+        const text = latestSnapshot.text || '';
+        const previousReasoning = emittedSnapshot.reasoning || '';
+        const previousText = emittedSnapshot.text || '';
+        const currentToolCalls = normalizeModelStreamToolCalls(latestSnapshot.toolCalls);
+        const previousToolCalls = normalizeModelStreamToolCalls(emittedSnapshot.toolCalls);
+        const previousByIndex = new Map(previousToolCalls.map(call => [call.index, call]));
+        const toolArgsDue = forceToolArgs || now() - lastToolArgsSentAt >= MODEL_STREAM_TOOL_ARGS_THROTTLE_MS;
+        const toolCallDeltas = currentToolCalls.flatMap(call => {
+            const previous = previousByIndex.get(call.index);
+            const identityChanged = !previous || previous.id !== call.id || previous.name !== call.name;
+            const argumentsDelta = toolArgsDue
+                ? makeModelStreamTextDelta(previous?.arguments || '', call.arguments || '')
+                : undefined;
+            if (!identityChanged && !argumentsDelta) return [];
+            return [{
+                index: call.index,
+                ...(identityChanged && call.id ? { id: call.id } : {}),
+                ...(identityChanged && call.name ? { name: call.name } : {}),
+                ...(argumentsDelta ? { argumentsDelta } : {}),
+            }];
+        });
+        const reasoningDelta = makeModelStreamTextDelta(previousReasoning, reasoning);
+        const textDelta = makeModelStreamTextDelta(previousText, text);
+        if (!reasoningDelta && !textDelta && toolCallDeltas.length === 0) return;
         notifySessionEvent({
             type: 'model-stream-update',
             streamId,
             iteration: args.iteration,
-            reasoning: latestSnapshot.reasoning || '',
-            text: latestSnapshot.text || '',
-            toolCalls: normalizeModelStreamToolCalls(latestSnapshot.toolCalls),
+            streamVersion: 2,
+            sequenceStart: sequence + 1,
+            sequence: ++sequence,
+            startedAt,
+            llmRequestId: args.llmRequestId,
+            ...(reasoningDelta ? { reasoningDelta } : {}),
+            ...(textDelta ? { textDelta } : {}),
+            ...(toolCallDeltas.length ? { toolCallDeltas } : {}),
         });
-        hasPendingUpdate = false;
-        lastSentAt = Date.now();
+        emittedSnapshot = {
+            reasoning,
+            text,
+            toolCalls: currentToolCalls.map(call => ({
+                ...call,
+                arguments: toolArgsDue ? call.arguments : previousByIndex.get(call.index)?.arguments,
+            })),
+        };
+        updateModelStreamDraft(args.sessionId, {
+            streamId,
+            iteration: args.iteration,
+            sequence,
+            startedAt,
+            llmRequestId: args.llmRequestId,
+            reasoning,
+            text,
+            toolCalls: currentToolCalls,
+        });
+        lastSentAt = now();
+        if (toolArgsDue && toolCallDeltas.some(call => call.argumentsDelta)) lastToolArgsSentAt = lastSentAt;
     };
 
     const scheduleNotify = () => {
@@ -456,16 +532,21 @@ function createModelStreamEventEmitter(args: {
             return;
         }
 
-        hasPendingUpdate = true;
         if (timer) {
             return;
         }
 
-        const elapsed = Date.now() - lastSentAt;
+        const elapsed = now() - lastSentAt;
         const delay = Math.max(0, MODEL_STREAM_EVENT_THROTTLE_MS - elapsed);
-        timer = setTimeout(() => {
+        timer = setTimer(() => {
             timer = null;
             notify();
+            const latestCalls = normalizeModelStreamToolCalls(latestSnapshot.toolCalls);
+            const emittedCalls = normalizeModelStreamToolCalls(emittedSnapshot.toolCalls);
+            if (!areModelStreamToolCallsEqual(latestCalls, emittedCalls) && !toolArgsTimer) {
+                const argsDelay = Math.max(0, MODEL_STREAM_TOOL_ARGS_THROTTLE_MS - (now() - lastToolArgsSentAt));
+                toolArgsTimer = setTimer(() => { toolArgsTimer = null; notify(true); }, argsDelay);
+            }
         }, delay);
     };
 
@@ -477,17 +558,29 @@ function createModelStreamEventEmitter(args: {
             }
 
             latestSnapshot = { reasoning: '', text: '', toolCalls: [] };
-            hasPendingUpdate = false;
+            emittedSnapshot = { reasoning: '', text: '', toolCalls: [] };
+            startedAt = now();
             if (timer) {
-                clearTimeout(timer);
+                clearTimer(timer);
                 timer = null;
+            }
+            if (toolArgsTimer) {
+                clearTimer(toolArgsTimer);
+                toolArgsTimer = null;
             }
             notifySessionEvent({
                 type: 'model-stream-reset',
                 streamId,
                 iteration: args.iteration,
+                streamVersion: 2,
+                sequenceStart: sequence + 1,
+                sequence: ++sequence,
+                startedAt,
+                llmRequestId: args.llmRequestId,
             });
-            lastSentAt = Date.now();
+            resetModelStreamDraft(args.sessionId, streamId, args.iteration, sequence, startedAt, args.llmRequestId);
+            lastSentAt = now();
+            lastToolArgsSentAt = lastSentAt;
         },
         emit(snapshot: ModelStreamProgressSnapshot) {
             const nextSnapshot = {
@@ -503,16 +596,34 @@ function createModelStreamEventEmitter(args: {
             }
 
             latestSnapshot = nextSnapshot;
+            if (args.enabled && args.sessionId) {
+                updateModelStreamDraft(args.sessionId, {
+                    streamId,
+                    iteration: args.iteration,
+                    sequence,
+                    startedAt,
+                    llmRequestId: args.llmRequestId,
+                    reasoning: nextSnapshot.reasoning || '',
+                    text: nextSnapshot.text || '',
+                    toolCalls: nextSnapshot.toolCalls || [],
+                });
+            }
             scheduleNotify();
         },
         flush() {
             if (timer) {
-                clearTimeout(timer);
+                clearTimer(timer);
                 timer = null;
             }
-            if (hasPendingUpdate) {
-                notify();
+            if (toolArgsTimer) {
+                clearTimer(toolArgsTimer);
+                toolArgsTimer = null;
             }
+            notify(true);
+        },
+        close() {
+            this.flush();
+            if (args.sessionId) clearModelStreamDraft(args.sessionId, streamId);
         },
     };
 }
@@ -1143,7 +1254,10 @@ function prepareHistoryForConcreteModel(contents: Message[], destinationModelId:
  * Internal format: { role: 'user'|'model'|'tool', parts: [{ text, functionCall, functionResponse }] }
  * Anthropic format: { role: 'user'|'assistant'|'user', content: string | array }
  */
-function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry): AnthropicMessage[] {
+export function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry): AnthropicMessage[] {
+    const preparedImages = deduplicateProviderRequestImages(contents, 'anthropic');
+    contents = preparedImages.messages;
+    const isDeduplicated = preparedImages.isDeduplicated;
     const anthropicMessages: AnthropicMessage[] = [];
 
     const asContentBlocks = (value: any): AnthropicContentBlock[] => {
@@ -1169,9 +1283,10 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
 
         let content = [];
         const imagePartsByToolUseId = new Map<string, MessagePart[]>();
+        const emittedToolImageIds = new Set<string>();
         if (msg.role === 'tool') {
             for (const part of msg.parts || []) {
-                if (!part.inlineData || !part.toolUseId) {
+                if ((!part.inlineData && !isDeduplicated(part)) || !part.toolUseId) {
                     continue;
                 }
                 const grouped = imagePartsByToolUseId.get(part.toolUseId) || [];
@@ -1212,9 +1327,18 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
             if (part.functionResponse) {
                 const resp = part.functionResponse.response || {};
                 const toolUseId = part.functionResponse.tool_use_id || part.toolUseId || 'unknown';
-                const outputText = appendImageGuidanceText(imagePartsByToolUseId.get(toolUseId) || [], formatToolResponsePayload(resp));
                 const timingPrefix = formatPreviousLlmRequestPrefix(part);
-                const images = imagePartsByToolUseId.get(toolUseId) || [];
+                const repeatedToolImages = emittedToolImageIds.has(toolUseId);
+                const associatedImages = imagePartsByToolUseId.get(toolUseId) || [];
+                const outputText = appendImageGuidanceText(
+                    associatedImages,
+                    formatToolResponsePayload(resp),
+                    repeatedToolImages ? () => true : isDeduplicated,
+                );
+                const images = repeatedToolImages
+                    ? []
+                    : associatedImages;
+                emittedToolImageIds.add(toolUseId);
                 const toolResult: any = {
                     type: 'tool_result',
                     tool_use_id: toolUseId,
@@ -1224,7 +1348,7 @@ function convertToAnthropicFormat(contents: Message[], config: ModelConfigEntry)
                     toolResult.content = [
                         ...(timingPrefix ? [{ type: 'text', text: timingPrefix }] : []),
                         ...(outputText ? [{ type: 'text', text: outputText }] : []),
-                        ...images.map(image => ({
+                        ...images.filter(image => !!image.inlineData).map(image => ({
                             type: 'image',
                             source: {
                                 type: 'base64',
@@ -1384,19 +1508,22 @@ async function prepareToolCall(
     session: Session,
     snapshot?: ToolExecutionSnapshot,
     notifyStart = true,
+    presetResult?: any,
 ): Promise<PreparedToolCall> {
     const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const argsPreview = buildToolArgsPreview(call);
     const sessionId = session.id;
     let placementError: any;
     let resolved: ResolvedTool | undefined;
-    try {
-        if (call.argsParseError) tools.assertToolAvailableForPlacement(call.name, call.args || {}, toolContext);
-        else resolved = await resolveDirectTool(call.name, call.args || {}, toolContext, snapshot);
-    } catch (error) { placementError = error; }
+    if (presetResult === undefined) {
+        try {
+            if (call.argsParseError) tools.assertToolAvailableForPlacement(call.name, call.args || {}, toolContext);
+            else resolved = await resolveDirectTool(call.name, call.args || {}, toolContext, snapshot);
+        } catch (error) { placementError = error; }
+    }
     const toolArgs = resolved?.args || { ...(call.args || {}) };
     const executionNode = resolved?.executionNode || snapshot?.currentNode || session.currentNode || 'master';
-    if (notifyStart && !placementError) {
+    if (notifyStart && !placementError && presetResult === undefined) {
         logger.info({ tool: call.name, args: argsPreview }, 'Executing tool');
         if (toolContext.broadcast && session.verbose) {
             toolContext.broadcast(`🛠 *[${call.name}]*: \`${argsPreview}\``, { excludePlatforms: ['webui'] });
@@ -1421,10 +1548,56 @@ async function prepareToolCall(
         toolArgs,
         sessionId,
         executionNode,
-        result: call.argsParseError ? buildInvalidToolArgsResult(call) : undefined,
+        result: presetResult !== undefined ? presetResult : (call.argsParseError ? buildInvalidToolArgsResult(call) : undefined),
         sessionSnapshot: resolved?.routingSnapshot,
         placementError,
     };
+}
+
+function buildCanceledToolResult(): { canceled: true; message: string } {
+    return { canceled: true, message: 'Tool call canceled before execution.' };
+}
+
+function buildToolControlArgumentError(message: string): { error: { type: string; message: string } } {
+    return { error: { type: 'invalid_tool_control_argument', message } };
+}
+
+function buildHandoffConfirmationError(error: any): { error: { type: string; message: string } } {
+    return {
+        error: {
+            type: 'invalid_inter_agent_handoff_confirmation',
+            message: error?.message || String(error),
+        },
+    };
+}
+
+type PlannedToolCall = {
+    call: FunctionCall;
+    presetResult?: any;
+};
+
+function planToolCalls(functionCalls: FunctionCall[]): PlannedToolCall[] {
+    if (isWholeBatchCancellationRequested(functionCalls)) {
+        return functionCalls.map(call => ({
+            call: { ...call, args: stripToolCancellationArguments(call.args) },
+            presetResult: buildCanceledToolResult(),
+        }));
+    }
+
+    return functionCalls.map(call => {
+        const executionCall = { ...call, args: stripToolCancellationArguments(call.args) };
+        const controlError = getToolCancellationArgumentError(call);
+        if (controlError) return { call: executionCall, presetResult: buildToolControlArgumentError(controlError) };
+        if (isSingleToolCancellationRequested(call)) return { call: executionCall, presetResult: buildCanceledToolResult() };
+        if (!call.argsParseError && (call.name === 'send_to_session' || call.name === 'create_child_session')) {
+            try {
+                validateInterAgentHandoffConfirmationForMode(executionCall.args, HANDOFF_CONFIRMATION_ENABLED);
+            } catch (error) {
+                return { call: executionCall, presetResult: buildHandoffConfirmationError(error) };
+            }
+        }
+        return { call: executionCall };
+    });
 }
 
 async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any): Promise<ExecutedToolCall> {
@@ -1440,7 +1613,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
 
     try {
         if (prepared.placementError) throw prepared.placementError;
-        if (!result?.error && prepared.resolved) {
+        if (result === undefined && prepared.resolved) {
             const runtimeContext = { ...toolContext, toolUseId: prepared.toolId };
             const localToolContext = prepared.sessionSnapshot
                 ? {
@@ -1450,7 +1623,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
                 }
                 : runtimeContext;
             result = normalizeExecutedToolResult(await executeResolvedTool(prepared.resolved, localToolContext));
-        } else if (!result?.error) {
+        } else if (result === undefined) {
             result = { error: `Unknown tool: ${prepared.call.name}` };
         }
 
@@ -1613,40 +1786,48 @@ export async function executeTools(
         sessionPlacement: options?.currentSessionEffects?.placement || 'local',
         ...(options?.currentSessionEffects?.execRuntime ? { execRuntime: options.currentSessionEffects.execRuntime } : {}),
     };
+    const plannedCalls = planToolCalls(functionCalls);
     const executions: ExecutedToolCall[] = [];
     let cursor = 0;
 
-    while (cursor < functionCalls.length) {
+    while (cursor < plannedCalls.length) {
         if (session?.stopping) {
-            for (; cursor < functionCalls.length; cursor++) {
-                const prepared = await prepareToolCall(functionCalls[cursor], cursor, functionCalls.length, toolContext, session, undefined, false);
-                executions.push(buildSkippedToolCall(prepared));
+            for (; cursor < plannedCalls.length; cursor++) {
+                const planned = plannedCalls[cursor];
+                const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, false, planned.presetResult);
+                executions.push(planned.presetResult !== undefined
+                    ? await runPreparedToolCall(prepared, toolContext)
+                    : buildSkippedToolCall(prepared));
             }
             break;
         }
 
-        if (functionCalls[cursor].name !== 'exec') {
-            const prepared = await prepareToolCall(functionCalls[cursor], cursor, functionCalls.length, toolContext, session);
+        if (plannedCalls[cursor].call.name !== 'exec') {
+            const planned = plannedCalls[cursor];
+            const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, true, planned.presetResult);
             executions.push(await runPreparedToolCall(prepared, toolContext));
             cursor++;
             continue;
         }
 
         const segmentStart = cursor;
-        while (cursor < functionCalls.length && functionCalls[cursor].name === 'exec') cursor++;
+        while (cursor < plannedCalls.length && plannedCalls[cursor].call.name === 'exec') cursor++;
         const snapshot: ToolExecutionSnapshot = {
             currentNode: sourceSession.currentNode || 'master',
             cwd: typeof sourceSession.cwd === 'string' ? sourceSession.cwd : undefined,
         };
         const preparedSegment: PreparedToolCall[] = [];
         for (let index = segmentStart; index < cursor; index++) {
+            const planned = plannedCalls[index];
             preparedSegment.push(await prepareToolCall(
-                functionCalls[index],
+                planned.call,
                 index,
-                functionCalls.length,
+                plannedCalls.length,
                 toolContext,
                 session,
                 snapshot,
+                true,
+                planned.presetResult,
             ));
         }
         const settled = await runBoundedToolCalls(preparedSegment, toolContext);
@@ -2130,7 +2311,11 @@ function buildConcreteRequestPlan(options: {
             stream: true,
         };
     } else if (useOpenAIChatCompletionsApi) {
-        messages = convertToOpenAIFormatProvider(providerContents, modelId);
+        messages = convertToOpenAIFormatProvider(
+            providerContents,
+            modelId,
+            modelEntry.historyReasoningField || 'reasoning_content',
+        );
         url = `${baseUrl}/chat/completions`;
         headers = {
             'Content-Type': 'application/json',
@@ -2308,9 +2493,11 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
                 sourceModelId: plan.modelId,
             };
         }
-        if (message?.reasoning_content) {
-            logger.info({ reasoningLength: message.reasoning_content.length }, 'Received reasoning content from OpenAI');
-            allParts.push({ thinking: message.reasoning_content });
+        const reasoningContent = message?.reasoning_content
+            || (typeof message?.reasoning === 'string' ? message.reasoning : undefined);
+        if (reasoningContent) {
+            logger.info({ reasoningLength: reasoningContent.length }, 'Received reasoning content from OpenAI');
+            allParts.push({ thinking: reasoningContent });
         }
         if (typeof message?.content === 'string') {
             responseText = message.content;
@@ -2413,7 +2600,9 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
     // Repair the provider-neutral source form first. This exact canonical
     // array is journaled before clone-only provider hydration, so durable
     // session image references are never expanded into provider base64 here.
-    const canonicalContents = fixToolCalls(structuredClone(options.contents || []));
+    const canonicalContents = stripReservedProviderImageHelperFields(
+        fixToolCalls(structuredClone(options.contents || [])),
+    );
     const fixedContents = await hydrateMessagesForProvider(canonicalContents);
     const resolvedModel = options.modelsConfigOverride
         ? (() => {
@@ -2485,6 +2674,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         enabled: shouldNotifySessionEvents,
         sessionId: options.sessionId,
         iteration,
+        llmRequestId: requestId,
         currentSessionEffects: options.currentSessionEffects,
     });
     let logFiles: LlmInteractionLogFiles | null = null;
@@ -2762,7 +2952,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         }
     } finally {
         options.abortSignal?.removeEventListener('abort', abortFromCaller);
-        modelStreamEmitter.flush();
+        modelStreamEmitter.close();
         if (shouldRegisterAbortController) {
             if (options.currentSessionEffects) options.currentSessionEffects.clearAbortController(options.sessionId!, abortController);
             else sessionManager.clearSessionAbortController(options.sessionId!, abortController);

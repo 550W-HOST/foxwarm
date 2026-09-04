@@ -16,7 +16,7 @@ The skill does not create, clone, move, clean, commit, or delete a Git worktree.
 
 ## Choose the right mechanism
 
-- **Remote execution only:** `create_child_session({"node":"node-id", ...})` sets that session's `currentNode`. It does not make the session isolated.
+- **Remote execution only:** `create_child_session({"suffix":"worker","node":"node-id","confirmation":"Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?\n<replace this with your own non-empty review; do not copy this placeholder verbatim>\nI have completed the check, found no issue, and confirm this inter-agent handoff should proceed."})` sets that session's `currentNode`. When the current tool schema requires `confirmation`, keep it last and replace the placeholder; when the property is absent from the schema, it may be omitted. This does not make the session isolated.
 - **Risk containment:** create a separate agent with `isolatedNode`, then create a session under that agent with the current coordinator as its explicit parent.
 - **Docker worktree containment:** provider-backed mode can ensure the configured `docker-worktree` Node around an existing allowlisted worktree. The provider mounts Git metadata read-only and exposes ordinary `read`, `write`, `edit`, `apply_patch`, and `exec` capabilities.
 - **VM-grade security or exclusivity:** not provided by this workflow. Agent binding does not reserve a Node, and Docker worktree containment is explicitly not a VM security boundary.
@@ -112,7 +112,7 @@ After reviewing the dry-run plan, repeat with `dryRun:false`. The script perform
 3. fail-closed validation of the ensure and inspect results;
 4. `create_agent({agentName,isolatedNode:nodeId,createMainSession:false})`;
 5. `create_session({agentName,sessionName,parentSessionId:<current>})`;
-6. `send_to_session(...)` with the complete worker brief.
+6. `send_to_session(...)` with the complete worker brief. This bundled workflow always supplies a valid final structured `confirmation`, which is accepted whether or not the deployment requires it.
 
 The inspect result must be an exact ready `sandbox` / `docker-worktree` descriptor owned by the requested provider, with exact default cwd, exact worktree path, exact network mode, running status, and the canonical five development tools. Any mismatch stops before agent creation.
 
@@ -127,7 +127,7 @@ The initial message is intentionally more complete than the raw task. It contain
 - no Node selection/lifecycle or child-session actions;
 - no commit/push/restart/deploy unless the verbatim task explicitly requires that exact action;
 - the Docker provider's Git-metadata-read-only caveat;
-- an exact report instruction using `send_to_session({sessionId:"<parent>",...,waitAfterHandoff:true})`;
+- an exact final-report instruction using `send_to_session({sessionId:"<parent>",message:"...",afterSend:"finish",confirmation:"Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?\n<replace this with your own non-empty review; do not copy this placeholder verbatim>\nI have completed the check, found no issue, and confirm this inter-agent handoff should proceed."})`, with `confirmation` last;
 - required report fields: changed files/diff, validation, blockers, unresolved questions, and remaining working-tree changes, without assuming a commit exists.
 
 Do not add parent-only scheduling, autonomy, phase progression, or “ask the user” instructions to the worker brief.

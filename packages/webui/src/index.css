@@ -746,8 +746,8 @@ html[data-foxwarm-component-treatment="console"] body::after {
     0deg,
     transparent,
     transparent 2px,
-    color-mix(in srgb, var(--foxwarm-color-canvas-edge) 30%, transparent) 2px,
-    color-mix(in srgb, var(--foxwarm-color-canvas-edge) 30%, transparent) 4px
+    color-mix(in srgb, var(--foxwarm-color-canvas-edge) 6%, transparent) 2px,
+    color-mix(in srgb, var(--foxwarm-color-canvas-edge) 6%, transparent) 4px
   );
 }
 
@@ -835,14 +835,82 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-chat-messages {
 
 /* Semantic fw-* utilities now consume manifest colors directly. */
 
-html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card.foxwarm-reasoning-card {
+html:not([data-foxwarm-component-treatment="console"]) [data-tool-tag-tone="system"] {
+  border-color: var(--foxwarm-color-info-border);
+  color: color-mix(
+    in srgb,
+    var(--foxwarm-color-info) 30%,
+    var(--foxwarm-color-system-text)
+  );
+}
+
+/* Console treatment consumes named card surfaces as final colors. */
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-neutral,
+html[data-foxwarm-component-treatment="console"] .foxwarm-context-block-card {
   background-color: var(--foxwarm-console-panel) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-neutral .foxwarm-tool-header,
+html[data-foxwarm-component-treatment="console"] .foxwarm-context-block-card > .foxwarm-context-block-header {
+  background-color: var(--foxwarm-console-hover) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-success {
+  background-color: var(--foxwarm-color-success-surface);
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-success .foxwarm-tool-header {
+  background-color: var(--foxwarm-color-success-surface-strong);
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-error {
+  background-color: var(--foxwarm-color-danger-surface);
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-error .foxwarm-tool-header {
+  background-color: var(--foxwarm-color-danger-surface-strong);
+}
+
+html[data-foxwarm-component-treatment="console"] [data-model-thread-card] {
+  background-color: var(--foxwarm-color-reasoning-surface);
+}
+
+html[data-foxwarm-component-treatment="console"] [data-model-thread-card] > :is(.foxwarm-reasoning-header, .foxwarm-web-search-header) {
+  background-color: var(--foxwarm-color-reasoning-surface-strong);
+}
+
+html[data-foxwarm-component-treatment="console"] [data-tool-tag-tone="neutral"] {
+  background-color: var(--foxwarm-console-input) !important;
+  border-color: var(--foxwarm-console-border-panel) !important;
+  color: var(--foxwarm-console-text) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] [data-tool-tag-tone="success"] {
+  background-color: var(--foxwarm-color-success-surface) !important;
+  border-color: var(--foxwarm-color-success-border) !important;
+  color: var(--foxwarm-color-success) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] [data-tool-tag-tone="error"] {
+  background-color: var(--foxwarm-color-danger-surface) !important;
+  border-color: var(--foxwarm-color-danger-border) !important;
+  color: var(--foxwarm-color-danger) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] [data-tool-tag-tone="system"] {
+  background-color: var(--foxwarm-console-input) !important;
+  border-color: var(--foxwarm-color-system-border) !important;
+  color: var(--foxwarm-color-system-accent) !important;
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card.foxwarm-reasoning-card {
+  background-color: var(--foxwarm-color-reasoning-surface) !important;
   color: var(--foxwarm-console-text) !important;
   box-shadow: inset 0 0 0 1px var(--foxwarm-console-border) !important;
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card.foxwarm-reasoning-card-processing {
-  background-color: var(--foxwarm-console-hover) !important;
+  background-color: var(--foxwarm-color-reasoning-surface) !important;
   box-shadow: inset 0 0 0 1px var(--foxwarm-console-border-panel) !important;
 }
 
@@ -855,7 +923,7 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card .foxwar
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-card .foxwarm-reasoning-header {
-  background-color: var(--foxwarm-console-hover) !important;
+  background-color: var(--foxwarm-color-reasoning-surface-strong) !important;
   color: var(--foxwarm-console-text) !important;
   box-shadow: inset 0 1px 0 var(--foxwarm-console-border-panel), inset 0 -1px 0 var(--foxwarm-console-border-panel) !important;
   text-shadow: none;

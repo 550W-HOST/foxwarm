@@ -18,6 +18,9 @@ import { readSessionHistorySnapshot } from './session/metadataStore';
 import { initArchiveStore } from './session/archiveStore';
 import { appendMessagesToArchive, readArchiveMessagesBySeqRange } from './session/archive';
 import { COMPACT_PLAN_TOOL_NAME } from './session/compactPlan';
+import { INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from './toolCallControls';
+
+const TEST_HANDOFF_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThe worker test handoff is necessary, accurate, self-contained, scoped, and compliant with communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
 import {
   createSessionWorkerControlServiceHandler,
   SessionWorkerActivationGate,
@@ -26,6 +29,7 @@ import {
 import { SessionWorkerHost } from './sessionWorkerHost';
 import { readSessionWorkerProcessIdentity } from './sessionWorkerProcessIdentity';
 import { createSessionWorkerRuntimeServiceHandler, sessionWorkerRuntimeServiceDescriptor } from './sessionWorkerRuntimeService';
+import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { tool_set_goal } from './toolsSessionAgent/settings';
 import { tool_wait } from './toolsSessionAgent/interSession';
@@ -141,11 +145,11 @@ async function start(): Promise<void> {
       return { toolCalls: configuredMainTools };
     }
     if (crossSession.includes('create-child') && chatCount === 1 && !session.id.endsWith('_mp-child')) {
-      return { toolCalls: [{ name: 'create_child_session', args: { suffix: 'mp-child', message: 'hello child', afterSend: 'wait' } }] };
+      return { toolCalls: [{ name: 'create_child_session', args: { suffix: 'mp-child', message: 'hello child', afterSend: 'wait', confirmation: TEST_HANDOFF_CONFIRMATION } }] };
     }
     if (crossSession.includes('reply') && chatCount === 1 && session.id.endsWith('_mp-child') && !session.id.endsWith('_mp-child_mp-child')) {
       const parentId = session.id.slice(0, -'_mp-child'.length);
-      return { toolCalls: [{ name: 'send_to_session', args: { sessionId: parentId, message: 'child reply to parent' } }] };
+      return { toolCalls: [{ name: 'send_to_session', args: { sessionId: parentId, message: 'child reply to parent', confirmation: TEST_HANDOFF_CONFIRMATION } }] };
     }
     if (crossSession.includes('query') && chatCount === 3 && !session.id.endsWith('_mp-child')) {
       const listOut = await executeMainManagementTool('session_list', {}, { sessionId: session.id });
@@ -172,6 +176,19 @@ async function start(): Promise<void> {
         options.currentSessionEffects.notifySessionEvent(session.id, { type: 'model-stream-update', streamId: 'test-stream', iteration: 0, reasoning: '', text, toolCalls: [] } as any);
       }
       options.currentSessionEffects.notifySessionEvent(session.id, { type: 'model-stream-reset', streamId: 'test-stream', iteration: 0 } as any);
+    }
+    if (process.env.FOXWARM_TEST_STREAM_BOOTSTRAP === '1' && chatCount === 1) {
+      resetModelStreamDraft(session.id, 'bootstrap-stream', 0, 0, Date.now(), 'bootstrap-request');
+      updateModelStreamDraft(session.id, {
+        streamId: 'bootstrap-stream', iteration: 0, sequence: 4,
+        startedAt: Date.now(),
+        llmRequestId: 'bootstrap-request',
+        reasoning: 'quiet reasoning', text: 'quiet accumulated draft',
+        toolCalls: [{ index: 0, id: 'bootstrap-call', name: 'read', arguments: '{"filePath":"quiet"}' }],
+      });
+      await fs.writeFile(path.join(STATE_DIR, `stream-bootstrap-${session.id}`), '1');
+      await new Promise(resolve => setTimeout(resolve, 750));
+      clearModelStreamDraft(session.id, 'bootstrap-stream');
     }
     // Production-shaped ordering regression: requestLlmOnce flushes a final
     // cumulative OpenAI-completions-like frame immediately before chat()
