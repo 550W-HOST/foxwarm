@@ -835,6 +835,15 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-chat-messages {
 
 /* Semantic fw-* utilities now consume manifest colors directly. */
 
+html:not([data-foxwarm-component-treatment="console"]) [data-tool-tag-tone="system"] {
+  border-color: var(--foxwarm-color-info-border);
+  color: color-mix(
+    in srgb,
+    var(--foxwarm-color-info) 30%,
+    var(--foxwarm-color-system-text)
+  );
+}
+
 /* Console treatment consumes named card surfaces as final colors. */
 html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-neutral,
 html[data-foxwarm-component-treatment="console"] .foxwarm-context-block-card {

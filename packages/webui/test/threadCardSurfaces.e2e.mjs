@@ -28,7 +28,7 @@ async function buildFixtureBundle() {
     import WebSearchCard from ${JSON.stringify(webSearchEntry)}
     import ContextBlockCard from ${JSON.stringify(contextEntry)}
     import { InterleavedToolGroup, ToolCallsBlock, ToolGroupSummaryCard } from ${JSON.stringify(toolEntry)}
-    import { initializeThemeRuntime, installTheme, setThemeSelection, THEME_550A } from ${JSON.stringify(themeEntry)}
+    import { DEFAULT_THEME, initializeThemeRuntime, installTheme, setThemeSelection, THEME_550A } from ${JSON.stringify(themeEntry)}
 
     const params = new URLSearchParams(location.search)
     const requestedTheme = params.get('theme') || 'foxwarm.default'
@@ -64,6 +64,30 @@ async function buildFixtureBundle() {
         variants: {
           light: withDistinctSemantics(THEME_550A.variants.light),
           dark: withDistinctSemantics(THEME_550A.variants.dark),
+        },
+      }
+      const installed = installTheme(JSON.stringify(clone), { replace: true })
+      if (!installed.ok) throw new Error(installed.error)
+      themeId = clone.id
+    } else if (requestedTheme === 'imported-standard') {
+      const withDistinctSystemTagSemantics = (variant, dark) => ({
+        ...variant,
+        colors: {
+          ...variant.colors,
+          info: dark ? '#bfdbfe' : '#1d4ed8',
+          infoBorder: dark ? '#60a5fa' : '#93c5fd',
+          systemText: dark ? '#e0f2fe' : '#172554',
+          systemAccent: '#f97316',
+          systemBorder: '#22c55e',
+        },
+      })
+      const clone = {
+        ...DEFAULT_THEME,
+        id: 'fixture.standard-clone',
+        name: 'Fixture standard clone',
+        variants: {
+          light: withDistinctSystemTagSemantics(DEFAULT_THEME.variants.light, false),
+          dark: withDistinctSystemTagSemantics(DEFAULT_THEME.variants.dark, true),
         },
       }
       const installed = installTheme(JSON.stringify(clone), { replace: true })
@@ -235,6 +259,7 @@ async function readTags() {
     const backgroundVar = (name) => normalize(`var(${name})`, 'background-color')
     const borderVar = (name) => normalize(`var(${name})`, 'border-color')
     const opacity = (name, percentage) => normalize(`color-mix(in srgb, var(${name}) ${percentage}%, transparent)`, 'background-color')
+    const standardSystemForeground = normalize('color-mix(in srgb, var(--foxwarm-color-info) 30%, var(--foxwarm-color-system-text))', 'color')
     const parseColor = (value) => {
       const normalized = normalize(value, 'color')
       const rgb = normalized.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/)
@@ -258,6 +283,16 @@ async function readTags() {
       for (let index = layers.length - 1; index >= 0; index -= 1) result = composite(layers[index], result)
       return result.rgb
     }
+    const luminance = (rgb) => rgb.map(channel => {
+      const normalized = channel / 255
+      return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4
+    }).reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0)
+    const contrast = (foreground, background) => {
+      const visibleForeground = composite(parseColor(foreground), { rgb: background, alpha: 1 }).rgb
+      const foregroundLuminance = luminance(visibleForeground)
+      const backgroundLuminance = luminance(background)
+      return (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05)
+    }
     const sample = (selector) => {
       const tag = document.querySelector(selector)
       const style = getComputedStyle(tag)
@@ -267,6 +302,7 @@ async function readTags() {
         color: style.color,
         visible: visibleBackground(tag),
         parentVisible: visibleBackground(tag.parentElement),
+        contrast: contrast(style.color, visibleBackground(tag)),
       }
     }
     const consoleTreatment = document.documentElement.dataset.foxwarmComponentTreatment === 'console'
@@ -280,10 +316,17 @@ async function readTags() {
       neutral: { background: dark ? opacity('--foxwarm-color-canvas', 60) : backgroundVar('--foxwarm-color-neutral-surface'), border: borderVar('--foxwarm-color-border-strong'), color: colorVar('--foxwarm-color-text') },
       success: { background: dark ? opacity('--foxwarm-color-success-surface-strong', 20) : backgroundVar('--foxwarm-color-success-surface'), border: borderVar('--foxwarm-color-success-border'), color: colorVar('--foxwarm-color-success') },
       error: { background: dark ? opacity('--foxwarm-color-danger-surface-strong', 20) : backgroundVar('--foxwarm-color-danger-surface'), border: borderVar('--foxwarm-color-danger-border'), color: colorVar('--foxwarm-color-danger') },
-      system: { background: dark ? opacity('--foxwarm-color-system-surface', 20) : backgroundVar('--foxwarm-color-system-surface-strong'), border: borderVar('--foxwarm-color-system-border'), color: colorVar('--foxwarm-color-system-accent') },
+      system: { background: dark ? opacity('--foxwarm-color-system-surface', 20) : backgroundVar('--foxwarm-color-system-surface-strong'), border: borderVar('--foxwarm-color-info-border'), color: standardSystemForeground },
     }
     return {
       expected,
+      systemSemantics: {
+        accent: colorVar('--foxwarm-color-system-accent'),
+        border: borderVar('--foxwarm-color-system-border'),
+        infoBorder: borderVar('--foxwarm-color-info-border'),
+        derivedForeground: standardSystemForeground,
+      },
+      lowAlphaContrastProbe: contrast('rgba(0, 0, 0, 0.05)', [255, 255, 255]),
       real: {
         neutral: sample('#tool-neutral .foxwarm-tool-tag'),
         success: sample('#tool-success .foxwarm-tool-tag'),
@@ -347,6 +390,7 @@ test('standard cards retain component opacity while console cards consume final 
     }
 
     const tags = await readTags()
+    assert.ok(tags.lowAlphaContrastProbe > 1 && tags.lowAlphaContrastProbe < 1.2, `contrast helper composites low-alpha foregrounds instead of treating them as opaque (${tags.lowAlphaContrastProbe.toFixed(2)}:1)`)
     const expectedTone = {
       neutral: 'neutral',
       success: 'success',
@@ -377,6 +421,13 @@ test('standard cards retain component opacity while console cards consume final 
         `${JSON.stringify(fixture)} Tool Group ${tone} tag uses the shared tone rule`,
       )
     }
+    if (fixture.theme === 'foxwarm.default') {
+      assert.notEqual(tags.real.system.color, tags.systemSemantics.accent, 'standard System tag no longer reuses the low-emphasis thread-line accent')
+      assert.equal(tags.real.system.border, tags.systemSemantics.infoBorder)
+      assert.ok(tags.real.system.contrast >= 4.5, `${JSON.stringify(fixture)} System Event tag text contrast is readable (${tags.real.system.contrast.toFixed(2)}:1)`)
+      assert.ok(tags.group.system.contrast >= 4.5, `${JSON.stringify(fixture)} Tool Group system tag text contrast is readable (${tags.group.system.contrast.toFixed(2)}:1)`)
+      if (fixture.mode === 'light') assert.equal(tags.real.system.background, 'rgb(219, 234, 254)', 'Default light keeps the old System tag background')
+    }
   }
 })
 
@@ -397,6 +448,28 @@ test('an imported console theme honors distinct named reasoning surfaces', async
       { background: tag.background, border: tag.border, color: tag.color },
       tags.expected[tone],
       `imported console Tool Group ${tone} tag uses final semantic/input colors`,
+    )
+  }
+})
+
+test('an imported standard theme derives System tag chrome from its own semantic tokens', async () => {
+  for (const mode of ['light', 'dark']) {
+    await page.goto(`${fixtureUrl}?theme=imported-standard&mode=${mode}`, { waitUntil: 'load' })
+    await page.waitForSelector('#system .foxwarm-system-message-tag')
+    const tags = await readTags()
+    assert.notEqual(tags.systemSemantics.derivedForeground, tags.systemSemantics.accent)
+    assert.notEqual(tags.systemSemantics.infoBorder, tags.systemSemantics.border)
+    for (const tag of [tags.real.system, tags.group.system]) {
+      assert.deepEqual(
+        { background: tag.background, border: tag.border, color: tag.color },
+        tags.expected.system,
+        `imported standard ${mode} System tag derives from info/system semantics`,
+      )
+    }
+    assert.deepEqual(
+      { background: tags.real.reasoning.background, border: tags.real.reasoning.border, color: tags.real.reasoning.color },
+      tags.expected.neutral,
+      `imported standard ${mode} Reasoning remains neutral`,
     )
   }
 })

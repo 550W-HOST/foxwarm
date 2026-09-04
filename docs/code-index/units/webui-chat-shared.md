@@ -89,6 +89,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - The `send_to_session` tool tag uses the same `MessagesSquare` icon as the inter-agent system tag, while unrelated inter-session tool icon mappings remain unchanged.
 - `THREAD_CARD_HEADER_ROW_CLASS` and `THREAD_CARD_HEADER_PREVIEW_CLASS` keep collapsed Tool, Reasoning, System, and CTX-BLOCK headers on the same 18px vertical rhythm while retaining each card's own tone and content styling.
 - Shared thread-card geometry is independent from surface allocation: component hooks and `data-model-thread-tone` expose the semantic body/header family, while the selected component treatment owns raw surface composition without changing the shared 18px header rhythm.
+- Standard `system` ToolTags keep their established system background and derive the compact-label foreground from `info` plus `systemText`, with `infoBorder` for semantic blue separation. This restores the built-in Default tag's readable direction; custom manifests determine the resulting contrast from their own tokens and retain the existing advisory validation-warning contract. The low-emphasis `systemAccent` remains appropriate for thread lines and is not reused for Default's 10px standard tag text. Console treatment continues to override the same tone hook with its input/system-border/system-accent grammar.
 
 ## Integration
 
