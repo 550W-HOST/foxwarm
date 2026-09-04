@@ -788,7 +788,7 @@ export const ToolTag = ({ name, label = name, tone = 'neutral', className = '', 
   const Icon = getToolIcon(resolvedIconName, iconName?.startsWith('system-') ? Bell : Wrench)
 
   return (
-    <span className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
+    <span data-tool-tag-tone={tone} className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
       <Icon size={12} />
       <span>{label}</span>
     </span>

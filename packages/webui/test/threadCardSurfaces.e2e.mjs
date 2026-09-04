@@ -27,7 +27,7 @@ async function buildFixtureBundle() {
     import ReasoningCard from ${JSON.stringify(reasoningEntry)}
     import WebSearchCard from ${JSON.stringify(webSearchEntry)}
     import ContextBlockCard from ${JSON.stringify(contextEntry)}
-    import { InterleavedToolGroup, ToolCallsBlock } from ${JSON.stringify(toolEntry)}
+    import { InterleavedToolGroup, ToolCallsBlock, ToolGroupSummaryCard } from ${JSON.stringify(toolEntry)}
     import { initializeThemeRuntime, installTheme, setThemeSelection, THEME_550A } from ${JSON.stringify(themeEntry)}
 
     const params = new URLSearchParams(location.search)
@@ -36,10 +36,23 @@ async function buildFixtureBundle() {
     initializeThemeRuntime()
     let themeId = requestedTheme
     if (requestedTheme === 'imported-console') {
-      const withDistinctReasoning = (variant) => ({
+      const withDistinctSemantics = (variant) => ({
         ...variant,
         colors: {
           ...variant.colors,
+          input: '#09131d',
+          border: '#31506a',
+          text: '#aaccee',
+          success: '#66cc77',
+          successSurface: '#0c2a14',
+          successSurfaceStrong: '#18452a',
+          successBorder: '#2e6b42',
+          danger: '#dd8855',
+          dangerSurface: '#422014',
+          dangerSurfaceStrong: '#69351f',
+          dangerBorder: '#8a4e32',
+          systemAccent: '#77ccee',
+          systemBorder: '#315b72',
           reasoningSurface: '#10243a',
           reasoningSurfaceStrong: '#274f73',
         },
@@ -49,8 +62,8 @@ async function buildFixtureBundle() {
         id: 'fixture.console-clone',
         name: 'Fixture console clone',
         variants: {
-          light: withDistinctReasoning(THEME_550A.variants.light),
-          dark: withDistinctReasoning(THEME_550A.variants.dark),
+          light: withDistinctSemantics(THEME_550A.variants.light),
+          dark: withDistinctSemantics(THEME_550A.variants.dark),
         },
       }
       const installed = installTheme(JSON.stringify(clone), { replace: true })
@@ -68,6 +81,12 @@ async function buildFixtureBundle() {
     createRoot(document.getElementById('tool-neutral')).render(React.createElement(ToolCallsBlock, { msg: neutralCall }))
     createRoot(document.getElementById('tool-success')).render(React.createElement(InterleavedToolGroup, { msg: successCall, nextMsg: successResponse, messageKeyPrefix: 'success' }))
     createRoot(document.getElementById('tool-error')).render(React.createElement(InterleavedToolGroup, { msg: errorCall, nextMsg: errorResponse, messageKeyPrefix: 'error' }))
+    createRoot(document.getElementById('tool-group')).render(React.createElement(ToolGroupSummaryCard, { items: [
+      { name: 'read', label: 'neutral', tone: 'neutral' },
+      { name: 'exec', label: 'success', tone: 'success' },
+      { name: 'exec', label: 'error', tone: 'error' },
+      { name: 'system', label: 'system', tone: 'system' },
+    ], onExpand: () => {} }))
     createRoot(document.getElementById('reasoning-message')).render(React.createElement(ReasoningCard, { thinking: 'completed reasoning', tone: 'message', defaultExpanded: false }))
     createRoot(document.getElementById('reasoning-processing')).render(React.createElement(ReasoningCard, { thinking: 'active reasoning', tone: 'processing', defaultExpanded: false }))
     createRoot(document.getElementById('web-search')).render(React.createElement(WebSearchCard, { action: { type: 'search', query: 'surface query', queries: ['surface query'] } }))
@@ -202,6 +221,84 @@ async function readSurfaces() {
   })
 }
 
+async function readTags() {
+  return page.evaluate(() => {
+    const normalize = (value, property) => {
+      const probe = document.createElement('div')
+      probe.style.setProperty(property, value)
+      document.body.appendChild(probe)
+      const result = getComputedStyle(probe).getPropertyValue(property)
+      probe.remove()
+      return result
+    }
+    const colorVar = (name) => normalize(`var(${name})`, 'color')
+    const backgroundVar = (name) => normalize(`var(${name})`, 'background-color')
+    const borderVar = (name) => normalize(`var(${name})`, 'border-color')
+    const opacity = (name, percentage) => normalize(`color-mix(in srgb, var(${name}) ${percentage}%, transparent)`, 'background-color')
+    const parseColor = (value) => {
+      const normalized = normalize(value, 'color')
+      const rgb = normalized.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/)
+      if (rgb) return { rgb: rgb.slice(1, 4).map(Number), alpha: rgb[4] === undefined ? 1 : Number(rgb[4]) }
+      const srgb = normalized.match(/^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?\)$/)
+      if (srgb) return { rgb: srgb.slice(1, 4).map(channel => Math.round(Number(channel) * 255)), alpha: srgb[4] === undefined ? 1 : Number(srgb[4]) }
+      throw new Error(`Unsupported computed color: ${normalized}`)
+    }
+    const composite = (foreground, background) => ({
+      rgb: foreground.rgb.map((channel, index) => Math.round(channel * foreground.alpha + background.rgb[index] * (1 - foreground.alpha))),
+      alpha: 1,
+    })
+    const visibleBackground = (element) => {
+      const layers = []
+      let current = element
+      while (current) {
+        layers.push(parseColor(getComputedStyle(current).backgroundColor))
+        current = current.parentElement
+      }
+      let result = { rgb: [255, 255, 255], alpha: 1 }
+      for (let index = layers.length - 1; index >= 0; index -= 1) result = composite(layers[index], result)
+      return result.rgb
+    }
+    const sample = (selector) => {
+      const tag = document.querySelector(selector)
+      const style = getComputedStyle(tag)
+      return {
+        background: style.backgroundColor,
+        border: style.borderColor,
+        color: style.color,
+        visible: visibleBackground(tag),
+        parentVisible: visibleBackground(tag.parentElement),
+      }
+    }
+    const consoleTreatment = document.documentElement.dataset.foxwarmComponentTreatment === 'console'
+    const dark = document.documentElement.classList.contains('dark')
+    const expected = consoleTreatment ? {
+      neutral: { background: backgroundVar('--foxwarm-color-input'), border: borderVar('--foxwarm-color-border'), color: colorVar('--foxwarm-color-text') },
+      success: { background: backgroundVar('--foxwarm-color-success-surface'), border: borderVar('--foxwarm-color-success-border'), color: colorVar('--foxwarm-color-success') },
+      error: { background: backgroundVar('--foxwarm-color-danger-surface'), border: borderVar('--foxwarm-color-danger-border'), color: colorVar('--foxwarm-color-danger') },
+      system: { background: backgroundVar('--foxwarm-color-input'), border: borderVar('--foxwarm-color-system-border'), color: colorVar('--foxwarm-color-system-accent') },
+    } : {
+      neutral: { background: dark ? opacity('--foxwarm-color-canvas', 60) : backgroundVar('--foxwarm-color-neutral-surface'), border: borderVar('--foxwarm-color-border-strong'), color: colorVar('--foxwarm-color-text') },
+      success: { background: dark ? opacity('--foxwarm-color-success-surface-strong', 20) : backgroundVar('--foxwarm-color-success-surface'), border: borderVar('--foxwarm-color-success-border'), color: colorVar('--foxwarm-color-success') },
+      error: { background: dark ? opacity('--foxwarm-color-danger-surface-strong', 20) : backgroundVar('--foxwarm-color-danger-surface'), border: borderVar('--foxwarm-color-danger-border'), color: colorVar('--foxwarm-color-danger') },
+      system: { background: dark ? opacity('--foxwarm-color-system-surface', 20) : backgroundVar('--foxwarm-color-system-surface-strong'), border: borderVar('--foxwarm-color-system-border'), color: colorVar('--foxwarm-color-system-accent') },
+    }
+    return {
+      expected,
+      real: {
+        neutral: sample('#tool-neutral .foxwarm-tool-tag'),
+        success: sample('#tool-success .foxwarm-tool-tag'),
+        error: sample('#tool-error .foxwarm-tool-tag'),
+        context: sample('#context .foxwarm-context-block-tag'),
+        reasoning: sample('#reasoning-message .foxwarm-reasoning-tag'),
+        webSearch: sample('#web-search .foxwarm-web-search-tag'),
+        system: sample('#system .foxwarm-system-message-tag'),
+      },
+      group: Object.fromEntries([...document.querySelectorAll('#tool-group [data-tool-tag-tone]')].map(tag => [tag.dataset.toolTagTone, sample(`#tool-group [data-tool-tag-tone="${tag.dataset.toolTagTone}"]`)])),
+      groupHasToolSpecificClass: !!document.querySelector('#tool-group .foxwarm-tool-tag'),
+    }
+  })
+}
+
 before(async () => {
   const assetNames = await readdir(assetsDirectory)
   const cssAsset = assetNames.find(name => /^index-.*\.css$/.test(name))
@@ -210,7 +307,7 @@ before(async () => {
   const bundle = await buildFixtureBundle()
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0}main{padding:16px}.fixture{width:760px;max-width:100%;margin-bottom:8px}</style></head><body><main>${['tool-neutral', 'tool-success', 'tool-error', 'reasoning-message', 'reasoning-processing', 'web-search', 'system', 'context'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0}main{padding:16px}.fixture{width:760px;max-width:100%;margin-bottom:8px}</style></head><body><main>${['tool-neutral', 'tool-success', 'tool-error', 'tool-group', 'reasoning-message', 'reasoning-processing', 'web-search', 'system', 'context'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -248,6 +345,38 @@ test('standard cards retain component opacity while console cards consume final 
       assert.equal(result.pairs.toolSuccess.body, 'rgb(10, 31, 10)')
       assert.equal(result.pairs.toolSuccess.header, 'rgb(18, 50, 18)')
     }
+
+    const tags = await readTags()
+    const expectedTone = {
+      neutral: 'neutral',
+      success: 'success',
+      error: 'error',
+      context: 'neutral',
+      reasoning: 'neutral',
+      webSearch: 'neutral',
+      system: 'system',
+    }
+    for (const [name, tag] of Object.entries(tags.real)) {
+      const expected = tags.expected[expectedTone[name]]
+      assert.deepEqual(
+        { background: tag.background, border: tag.border, color: tag.color },
+        expected,
+        `${JSON.stringify(fixture)} ${name} tag keeps its treatment-specific declaration`,
+      )
+      assert.equal(tag.visible.length, 3)
+      if (fixture.theme === 'foxwarm.550a') {
+        const visibleDelta = Math.max(...tag.visible.map((channel, index) => Math.abs(channel - tag.parentVisible[index])))
+        assert.ok(visibleDelta >= 3, `${JSON.stringify(fixture)} ${name} tag remains visibly distinct after alpha composition (delta ${visibleDelta})`)
+      }
+    }
+    assert.equal(tags.groupHasToolSpecificClass, false, 'Tool Group tags exercise the shared tone hook without foxwarm-tool-tag')
+    for (const [tone, tag] of Object.entries(tags.group)) {
+      assert.deepEqual(
+        { background: tag.background, border: tag.border, color: tag.color },
+        tags.expected[tone],
+        `${JSON.stringify(fixture)} Tool Group ${tone} tag uses the shared tone rule`,
+      )
+    }
   }
 })
 
@@ -261,5 +390,13 @@ test('an imported console theme honors distinct named reasoning surfaces', async
   for (const family of ['reasoningMessage', 'reasoningProcessing', 'webSearch']) {
     assert.equal(imported.pairs[family].body, imported.semantic.reasoningSurface)
     assert.equal(imported.pairs[family].header, imported.semantic.reasoningSurfaceStrong)
+  }
+  const tags = await readTags()
+  for (const [tone, tag] of Object.entries(tags.group)) {
+    assert.deepEqual(
+      { background: tag.background, border: tag.border, color: tag.color },
+      tags.expected[tone],
+      `imported console Tool Group ${tone} tag uses final semantic/input colors`,
+    )
   }
 })

@@ -41,7 +41,7 @@ Defines the portable, browser-local WebUI theme contract, built-in registry, per
 
 - `themeSystem.test.mjs` covers built-in validation, canonical round trips, strict rejection, legacy migration, bounded custom install/conflict/replace/export/delete, reserved IDs, and portable 550A clone equivalence.
 - `themeMarkdownStyles.e2e.mjs` covers Default and console-treatment Markdown/code pairings.
-- `threadCardSurfaces.e2e.mjs` mounts every thread-card family and verifies raw plus visibly composited body/header colors across Default and 550A light/dark. It protects standard treatment's established opacity contract, console treatment's final-surface contract, full-strength 550A status surfaces, and named Reasoning-token use in an imported console manifest whose Reasoning colors deliberately differ from its generic panel/hover colors.
+- `threadCardSurfaces.e2e.mjs` mounts every thread-card family and verifies raw plus visibly composited body/header and ToolTag colors across Default and 550A light/dark. It protects standard treatment's established opacity contract, console treatment's final-surface contract, full-strength 550A status surfaces/tags, Tool Group tone hooks, and named Reasoning-token use in an imported console manifest whose Reasoning colors deliberately differ from its generic panel/hover colors.
 - Setup E2E covers Appearance-tab selection, treatment activation, clone/delete, and keyboard tab behavior.
 - Settings-menu E2E asserts that the compact menu contains color mode only.
 - Existing Code overlay, editor, terminal, Mermaid, and component E2Es protect integration surfaces.
@@ -67,3 +67,5 @@ Defines the portable, browser-local WebUI theme contract, built-in registry, per
 ### D-webui-theme-final-surfaces
 
 [2026-09-03] Surface composition is treatment-owned. Standard treatment retains its established component opacity layers. Console treatment treats named Tool status, Reasoning, and System surface pairs as final colors because a portable console manifest may already encode intentional translucency; applying the standard opacity layer again would make those cards depend incorrectly on their parent background. Neutral console cards use the bounded treatment-level panel/hover pair rather than adding a manifest field or branching on a theme ID. Console Reasoning must use `reasoningSurface`/`reasoningSurfaceStrong`, not generic panel/hover aliases, so imported themes can choose a distinct reasoning palette.
+
+[2026-09-04] ToolTag composition follows the same treatment boundary. Standard keeps its established tone classes. Console tags consume final tone surfaces: neutral and system use the console input surface with their semantic border/text allocation, while success/error use their complete semantic surface, border, and text colors. The rule keys on `data-tool-tag-tone`, not a theme ID or a component-specific class, so Tool Group and specialized timeline tags cannot bypass it.
