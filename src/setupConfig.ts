@@ -9,6 +9,7 @@ import {
   ProviderModelListItem,
   loadModelsConfigFromObject,
   normalizeDbWorkersEnabled,
+  normalizeHandoffConfirmationEnabled,
   normalizeCompactionConfig,
   normalizeChannelProgressInterval,
   normalizeNodeProvidersConfig,
@@ -100,6 +101,7 @@ export function validateAppConfigYaml(rawYaml: string): AppConfig {
   normalizeCompactionConfig(config.llm);
   normalizeVectorConfig(config.vector, config.llm?.ollamaBaseUrl);
   normalizeVectorMaintenanceConfig(config.vectorMaintenance);
+  normalizeHandoffConfirmationEnabled(config.handoffConfirmation);
   return config;
 }
 

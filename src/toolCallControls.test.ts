@@ -5,14 +5,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { executeTools } from './llm';
 import * as sessionManager from './sessionManager';
-import { call_tool, modelFacingDefinitions } from './tools';
+import { call_tool } from './tools';
+import { buildToolDefinitions } from './tools/definitions';
 import { tool_create_child_session, tool_send_to_session } from './toolsSessionAgent/interSession';
 import { tool_run_script } from './toolscript';
 import {
   INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX,
   INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER,
   INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX,
+  addToolCancellationSchema,
   validateInterAgentHandoffConfirmation,
+  validateInterAgentHandoffConfirmationForMode,
 } from './toolCallControls';
 import type { FunctionCall, Session } from './types';
 
@@ -39,7 +42,8 @@ async function makeSession(id: string, cwd?: string): Promise<Session> {
   return session;
 }
 
-test('ordinary model-facing schemas append cancellation controls and keep handoff confirmation before them', () => {
+test('default model-facing schemas omit handoff confirmation while always appending cancellation controls', () => {
+  const modelFacingDefinitions = buildToolDefinitions(false).map(addToolCancellationSchema);
   const compact = modelFacingDefinitions.find(definition => definition.name === 'submit_compact_plan')!;
   assert.equal(compact.parameters.properties.__cancelTool, undefined);
   assert.equal(compact.parameters.properties.__cancelAllToolsThisTurn, undefined);
@@ -53,8 +57,18 @@ test('ordinary model-facing schemas append cancellation controls and keep handof
 
   for (const name of ['create_child_session', 'send_to_session']) {
     const definition = modelFacingDefinitions.find(item => item.name === name)!;
+    assert.equal(definition.parameters.properties.confirmation, undefined);
+    assert.equal(definition.parameters.required?.includes('confirmation'), false);
+  }
+});
+
+test('enabled model-facing schemas require confirmation before unconditional cancellation controls', () => {
+  const enabled = buildToolDefinitions(true).map(addToolCancellationSchema);
+  for (const name of ['create_child_session', 'send_to_session']) {
+    const definition = enabled.find(item => item.name === name)!;
     const keys = Object.keys(definition.parameters.properties);
     assert.equal(keys.at(-3), 'confirmation');
+    assert.deepEqual(keys.slice(-2), ['__cancelTool', '__cancelAllToolsThisTurn']);
     assert(definition.parameters.required?.includes('confirmation'));
     assert.match(String(definition.parameters.properties.confirmation.description), /do not copy this placeholder verbatim/);
   }
@@ -124,7 +138,7 @@ test('wrong reserved control values fail only that call while siblings still exe
   }
 });
 
-test('handoff preflight errors skip only that call while a sibling still executes', async () => {
+test('a valid handoff reaches ordinary execution while a sibling still executes', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-confirm-invalid-'));
   const marker = path.join(root, 'sibling');
   const sessionId = unique('confirm_invalid');
@@ -132,12 +146,12 @@ test('handoff preflight errors skip only that call while a sibling still execute
   const starts: string[] = [];
   try {
     const result = await executeTools([
-      { id: 'invalid-handoff', name: 'send_to_session', args: { sessionId: 'missing', message: 'no confirmation' } },
+      { id: 'handoff', name: 'send_to_session', args: { sessionId: 'missing', message: 'confirmed', confirmation: confirmation() } },
       { id: 'sibling', name: 'exec', args: { command: `touch ${JSON.stringify(marker)}` } },
     ], { sessionId, session, onToolStart: ({ name }: any) => starts.push(name) }, session);
-    assert.equal(responses(result)[0].error.type, 'invalid_inter_agent_handoff_confirmation');
+    assert.match(String(responses(result)[0].error), /not found/i);
     assert.equal(await fs.pathExists(marker), true);
-    assert.deepEqual(starts, ['exec']);
+    assert.deepEqual(starts, ['send_to_session', 'exec']);
   } finally {
     await sessionManager.deleteSession(sessionId).catch(() => false);
     await fs.remove(root);
@@ -171,20 +185,20 @@ test('handoff confirmation validates exact framing, non-empty review, and final-
   assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n \n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /non-empty/);
   assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /replace the documented placeholder/);
   assert.throws(() => validateInterAgentHandoffConfirmation({ confirmation: confirmation(), sessionId: 'target', message: 'hello' }), /final argument property/);
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmationForMode({ sessionId: 'target', message: 'hello' }, false));
+  assert.throws(() => validateInterAgentHandoffConfirmationForMode({ sessionId: 'target', message: 'hello' }, true), /prefix and suffix/);
 });
 
-test('direct handoff handlers require confirmation, including child creation without a message', async () => {
+test('direct handoff handlers accept valid confirmation, including child creation without a message', async () => {
   const parentId = unique('confirm_parent');
   const targetId = unique('confirm_target');
   const parent = await makeSession(parentId);
   await makeSession(targetId);
   let childId: string | undefined;
   try {
-    await assert.rejects(() => tool_send_to_session({ sessionId: targetId, message: 'hello' }, { sessionId: parentId, session: parent }), /prefix and suffix/);
     const sendResult: any = await tool_send_to_session({ sessionId: targetId, message: 'hello', confirmation: confirmation() }, { sessionId: parentId, session: parent });
     assert.match(typeof sendResult === 'string' ? sendResult : sendResult.output, /Message sent/);
 
-    await assert.rejects(() => tool_create_child_session({ suffix: 'missing' }, { sessionId: parentId, session: parent }), /prefix and suffix/);
     const createResult: any = await tool_create_child_session({ suffix: 'confirmed', confirmation: confirmation() }, { sessionId: parentId, session: parent });
     const output = typeof createResult === 'string' ? createResult : createResult.output;
     childId = output.match(/`([^`]+)`/)?.[1];
@@ -212,18 +226,12 @@ test('a canceled handoff bypasses confirmation checks and still produces a paire
   }
 });
 
-test('unified and ToolScript handoffs reuse the direct confirmation guard', async () => {
+test('unified and ToolScript handoffs accept valid confirmation', async () => {
   const sourceId = unique('confirm_nested_source');
   const targetId = unique('confirm_nested_target');
   const source = await makeSession(sourceId);
   await makeSession(targetId);
   try {
-    await assert.rejects(() => call_tool({
-      source: 'builtin',
-      name: 'send_to_session',
-      args: { sessionId: targetId, message: 'missing confirmation' },
-    }, { sessionId: sourceId, session: source }), /prefix and suffix/);
-
     const unified: any = await call_tool({
       source: 'builtin',
       name: 'send_to_session',
@@ -236,12 +244,6 @@ test('unified and ToolScript handoffs reuse the direct confirmation guard', asyn
       name: 'send_to_session',
       args: { sessionId: targetId, message: 'nested control is concrete payload', __cancelTool: true, confirmation: confirmation() },
     }, { sessionId: sourceId, session: source }), /unsupported argument.*__cancelTool/);
-
-    const missing = await tool_run_script({
-      code: `def main(args):\n    return call_tool(source="builtin", name="send_to_session", args={"sessionId":${JSON.stringify(targetId)},"message":"missing script confirmation"})`,
-    }, { sessionId: sourceId, session: source });
-    assert.equal(missing.status, 'failed');
-    assert.match(String(missing.error), /prefix and suffix/);
 
     const confirmed = await tool_run_script({
       code: `def main(args):\n    return call_tool(source="builtin", name="send_to_session", args={"sessionId":${JSON.stringify(targetId)},"message":"confirmed script","confirmation":${JSON.stringify(confirmation())}})`,

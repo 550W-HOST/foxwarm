@@ -61,7 +61,7 @@ For `units/{unitName}.md`, cover:
 
 ## Final report format
 
-Send this to the parent with `send_to_session`. Use `afterSend:"finish"` and the required final `confirmation` argument exactly as described by the tool schema: fixed prefix, your own non-empty review, and fixed suffix. Replace any placeholder rather than copying it verbatim.
+Send this to the parent with `send_to_session` and use `afterSend:"finish"`. When the current tool schema requires `confirmation`, use the final argument exactly as described there: fixed prefix, your own non-empty review, and fixed suffix. Replace any placeholder rather than copying it verbatim. When the schema omits `confirmation`, that property may be omitted.
 
 ```text
 ## Completed

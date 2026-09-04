@@ -21,11 +21,12 @@ import { armMainWaitLiveness, scheduleMainWaitTimeout, validateMainWaitExecIds, 
 import { logger } from '../common';
 import { requireNotIsolated, checkChannelPermission, checkSendFilePermission } from '../isolatedCheck';
 import { COMPACT_PLAN_TOOL_NAME } from '../session/compactPlan';
-import { validateInterAgentHandoffConfirmation } from '../toolCallControls';
+import { HANDOFF_CONFIRMATION_ENABLED } from '../config';
+import { validateInterAgentHandoffConfirmationForMode } from '../toolCallControls';
 
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_child_session');
-  validateInterAgentHandoffConfirmation(args);
+  validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED);
   const normalizedArgs = normalizeCreateChildSessionArgs(args);
   const { suffix, fork = false, message, node } = normalizedArgs;
   const afterSend = normalizeAfterSendBehavior(normalizedArgs, 'create_child_session');
@@ -66,7 +67,7 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
 }
 
 export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
-  validateInterAgentHandoffConfirmation(args);
+  validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED);
   const unknownKeys = Object.keys(args || {}).filter(key => !['sessionId', 'message', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'confirmation'].includes(key));
   if (unknownKeys.length) throw new Error(`send_to_session received unsupported argument${unknownKeys.length === 1 ? '' : 's'}: ${unknownKeys.join(', ')}.`);
   const { sessionId, message } = args;

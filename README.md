@@ -255,6 +255,7 @@ vector:
 vectorMaintenance:
   enabled: true
   retentionHours: 24
+handoffConfirmation: false
 ```
 
 `llm.compactKeepPercent` controls the fraction of recent rendered history kept
@@ -275,8 +276,15 @@ still read when top-level `vector` is absent, but new configuration should use
 `vector.baseUrl`. Optional `vector.lexicalIndex: true` enables a dark,
 exact-Vector-owner derived lexical indexing lane; it defaults off and is not
 consumed by recall unless `vector.hybridSearch: true` is also set. Hybrid search
-requires the lexical index and remains disabled by default. Vector, worker placement, and maintenance settings are read
+requires the lexical index and remains disabled by default. Vector, worker placement, maintenance, and handoff-confirmation settings are read
 at process startup.
+
+`handoffConfirmation` defaults to `false`. When set to `true`,
+`send_to_session` and `create_child_session` require the structured confirmation
+shown by their current tool schemas, including an original non-placeholder
+review and final-property placement. This setting affects only inter-agent
+handoff confirmation; model tool-call cancellation controls remain available in
+both modes. Changing it requires a restart.
 
 When explicitly enabled, the lexical derivative follows committed Session rename/fork boundaries and rebuilds incompatible derived schemas through a restart-resumable shadow SQLite file. These operations are best-effort derived maintenance: they do not make Archive commits or dense Vector availability depend on lexical health.
 

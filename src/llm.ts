@@ -9,7 +9,7 @@ import * as tools from './tools';
 import { logger } from './common';
 import { MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, FunctionCall, TokenUsage, ToolDefinition, ModelStreamToolCall } from './types';
 import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
-import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig } from './config';
+import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getAgentMemoryDir, MAIN_AGENT_MEMORY_DIR, getAgentDir, AGENTS_SYSTEM_PROMPT_PATH, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, HANDOFF_CONFIRMATION_ENABLED } from './config';
 import * as sessionManager from './sessionManager';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { listSkills } from './skills';
@@ -39,7 +39,7 @@ import {
     isSingleToolCancellationRequested,
     isWholeBatchCancellationRequested,
     stripToolCancellationArguments,
-    validateInterAgentHandoffConfirmation,
+    validateInterAgentHandoffConfirmationForMode,
 } from './toolCallControls';
 import {
     beginVirtualRoutingRequest,
@@ -1591,7 +1591,7 @@ function planToolCalls(functionCalls: FunctionCall[]): PlannedToolCall[] {
         if (isSingleToolCancellationRequested(call)) return { call: executionCall, presetResult: buildCanceledToolResult() };
         if (!call.argsParseError && (call.name === 'send_to_session' || call.name === 'create_child_session')) {
             try {
-                validateInterAgentHandoffConfirmation(executionCall.args);
+                validateInterAgentHandoffConfirmationForMode(executionCall.args, HANDOFF_CONFIRMATION_ENABLED);
             } catch (error) {
                 return { call: executionCall, presetResult: buildHandoffConfirmationError(error) };
             }

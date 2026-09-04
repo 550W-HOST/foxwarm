@@ -165,6 +165,7 @@ test('search_tools formatter covers required/optional, enum, nested, arrays, uni
     inputSchema: {
       type: 'object',
       properties: {
+        optionalFirst: { type: 'string' },
         requiredArg: { type: 'integer', description: 'Required count' },
         optionalEnum: { enum: ['a', 'b'] },
         nested: { type: 'object', properties: { enabled: { type: 'boolean' } }, required: ['enabled'], additionalProperties: false },
@@ -179,6 +180,7 @@ test('search_tools formatter covers required/optional, enum, nested, arrays, uni
   }], 1, [], true);
 
   assert.match(output, /requiredArg: number \/\* Required count \*\//);
+  assert.ok(output.indexOf('optionalFirst?: string') < output.indexOf('requiredArg: number'));
   assert.match(output, /optionalEnum\?: "a" \| "b"/);
   assert.match(output, /nested\?: \{ enabled: boolean;/);
   assert.match(output, /values\?: Array<string \| null>/);

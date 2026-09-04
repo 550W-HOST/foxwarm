@@ -13,6 +13,34 @@ const CANCEL_PROPERTY_SCHEMA = {
   enum: [true],
 };
 
+const HANDOFF_TOOL_NAMES = new Set(['send_to_session', 'create_child_session']);
+
+export function addHandoffConfirmationSchema(definition: ToolDefinition, enabled: boolean): ToolDefinition {
+  if (!HANDOFF_TOOL_NAMES.has(definition.name)) return definition;
+  const parameters = definition.parameters;
+  const properties = { ...(parameters.properties || {}) };
+  delete properties.confirmation;
+  const required = (parameters.required || []).filter(key => key !== 'confirmation');
+  if (enabled) {
+    properties.confirmation = {
+      type: 'string',
+      description: `Required final argument property. Use exactly: ${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`,
+    };
+    required.push('confirmation');
+  }
+  return {
+    ...definition,
+    description: enabled
+      ? `${definition.description} Every call${definition.name === 'create_child_session' ? ', including creation without an initial message,' : ''} requires the structured inter-agent handoff confirmation.`
+      : definition.description,
+    parameters: {
+      ...parameters,
+      properties,
+      ...(required.length ? { required } : { required: undefined }),
+    },
+  };
+}
+
 export function addToolCancellationSchema(definition: ToolDefinition): ToolDefinition {
   if (definition.name === COMPACT_PLAN_TOOL_NAME) return definition;
   const parameters = definition.parameters;
@@ -77,4 +105,8 @@ export function validateInterAgentHandoffConfirmation(args: Record<string, any>)
   if (Object.keys(args).at(-1) !== 'confirmation') {
     throw new Error('Inter-agent handoff confirmation must be the final argument property.');
   }
+}
+
+export function validateInterAgentHandoffConfirmationForMode(args: Record<string, any>, enabled: boolean): void {
+  if (enabled) validateInterAgentHandoffConfirmation(args);
 }

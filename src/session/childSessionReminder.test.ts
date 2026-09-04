@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   NO_ACTION_MARKER,
-  buildChildCompletionInstruction,
-  buildChildReminder,
+  buildChildCompletionInstructionForMode,
+  buildChildReminderForMode,
   isModelNoActionSignal,
   isNoActionSignalText,
   partsContainNoActionSignal,
@@ -31,18 +31,16 @@ test('only model messages suppress child reminder via no-action signal', () => {
 });
 
 test('child instructions and reminders distinguish final reports from reply waits', () => {
-  const completion = buildChildCompletionInstruction('parent/main');
-  const reminder = buildChildReminder('parent/main');
+  const completion = buildChildCompletionInstructionForMode('parent/main', false);
+  const reminder = buildChildReminderForMode('parent/main', false);
 
   assert.match(reminder, /^<foxwarm-system kind="child-reminder" event="missing-handoff" parentSessionId="parent\/main">\nReminder:[\s\S]*\n<\/foxwarm-system>$/);
   assert.match(completion, /\[NO_ACTION\]/);
   assert.match(reminder, /\[NO_ACTION\]/);
   assert.match(completion, /afterSend: "finish"/);
   assert.match(reminder, /afterSend: "finish"/);
-  assert.match(completion, /replace the placeholder with your own review rather than copying it/);
-  assert.match(reminder, /replace the placeholder with your own review rather than copying it/);
-  assert.match(completion, /confirmation must be the final argument property/);
-  assert.match(reminder, /confirmation must be the final argument property/);
+  assert.doesNotMatch(completion, /confirmation/);
+  assert.doesNotMatch(reminder, /confirmation/);
   assert.match(completion, /ends the turn idle without creating a wait/);
   assert.match(reminder, /becomes idle/);
   assert.match(completion, /afterSend: "wait" only when you genuinely require a later reply/);
@@ -56,4 +54,18 @@ test('child instructions and reminders distinguish final reports from reply wait
   assert.doesNotMatch(completion, /noFurtherAssistantReply/);
   assert.doesNotMatch(reminder, /noFurtherAssistantReply/);
   assert.doesNotMatch(reminder, /reply "NO_ACTION"/);
+});
+
+test('child instructions include confirmation guidance only when enabled', () => {
+  const disabled = buildChildCompletionInstructionForMode('parent/main', false);
+  const enabled = buildChildCompletionInstructionForMode('parent/main', true);
+  const disabledReminder = buildChildReminderForMode('parent/main', false);
+  const enabledReminder = buildChildReminderForMode('parent/main', true);
+
+  assert.doesNotMatch(disabled, /confirmation/);
+  assert.doesNotMatch(disabledReminder, /confirmation/);
+  for (const text of [enabled, enabledReminder]) {
+    assert.match(text, /replace the placeholder with your own review rather than copying it/);
+    assert.match(text, /confirmation must be the final argument property/);
+  }
 });

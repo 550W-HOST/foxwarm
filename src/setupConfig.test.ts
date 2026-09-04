@@ -5,7 +5,18 @@ import path from 'path';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
 import { buildModelsConfigFromSetupForm, validateAppConfigYaml, writeAppConfigWithChannels, writeRawAppConfig, writeRawModelsConfig } from './setupConfig';
-import { loadModelsConfigFromObject, normalizeNodeProvidersConfig } from './config';
+import { loadModelsConfigFromObject, normalizeHandoffConfirmationEnabled, normalizeNodeProvidersConfig } from './config';
+
+test('handoff confirmation config defaults off and accepts only booleans', () => {
+  assert.equal(normalizeHandoffConfirmationEnabled(undefined), false);
+  assert.equal(normalizeHandoffConfirmationEnabled(false), false);
+  assert.equal(normalizeHandoffConfirmationEnabled(true), true);
+  assert.throws(() => normalizeHandoffConfirmationEnabled('true'), /handoffConfirmation.*boolean/);
+  assert.equal(validateAppConfigYaml('').handoffConfirmation, undefined);
+  assert.equal(validateAppConfigYaml('handoffConfirmation: false\n').handoffConfirmation, false);
+  assert.equal(validateAppConfigYaml('handoffConfirmation: true\n').handoffConfirmation, true);
+  assert.throws(() => validateAppConfigYaml('handoffConfirmation: yes\n'), /handoffConfirmation.*boolean/);
+});
 
 test('raw models setup save writes the provided YAML text exactly', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-setup-models-'));

@@ -530,12 +530,19 @@ export function normalizeVectorMaintenanceConfig(value: unknown): NormalizedVect
   };
 }
 
+export function normalizeHandoffConfirmationEnabled(value: unknown): boolean {
+  if (value === undefined || value === false) return false;
+  if (value === true) return true;
+  throw new Error('app config `handoffConfirmation` must be a boolean.');
+}
+
 export type AppConfig = {
   nodeProviders?: NodeProvidersConfig;
   vector?: VectorConfig;
   sessionWorkers?: SessionWorkersConfig;
   dbWorkers?: boolean;
   vectorMaintenance?: VectorMaintenanceConfig;
+  handoffConfirmation?: boolean;
   bot?: {
     name?: string;
     enableWebUI?: boolean;
@@ -720,6 +727,7 @@ export const SESSION_WORKERS_ENABLED = SESSION_WORKERS_CONFIG.enabled;
 export const SESSION_WORKER_IDLE_SECONDS = SESSION_WORKERS_CONFIG.idleSeconds;
 export const DB_WORKERS_ENABLED = normalizeDbWorkersEnabled(APP_CONFIG.dbWorkers);
 export const VECTOR_MAINTENANCE_CONFIG = normalizeVectorMaintenanceConfig(APP_CONFIG.vectorMaintenance);
+export const HANDOFF_CONFIRMATION_ENABLED = normalizeHandoffConfirmationEnabled(APP_CONFIG.handoffConfirmation);
 export const BOT_NAME = APP_CONFIG.bot?.name || 'foxwarm';
 export const ENABLE_TUI = APP_CONFIG.bot?.enableTUI === true || process.argv.includes('--tui');
 export const TELEGRAM_CONFIG: TelegramConfig = (getDefaultChannelConfigByType<TelegramConfig>('telegram', APP_CONFIG)?.config || {}) as TelegramConfig;

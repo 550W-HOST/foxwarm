@@ -84,7 +84,7 @@ send_to_session({
 - `afterSend` 控制初始消息成功发送后的行为：`continue` 继续当前回合（默认），`finish` 结束并进入 idle，`wait` 结束并等待 child 后续活动；`wait` 需要非空 `message`
 - `node` 可让 child session 绑定到特定 node
 - 只有明确需要覆盖继承/default 行为时才传 `forceModel`；`forceModel: {}` 等同于不覆盖
-- `confirmation` 必须严格使用工具 schema 指定的前缀、你自己写的非空 review、后缀，并且是参数对象的最后一个属性；不要原样复制 placeholder
+- `handoffConfirmation: true` 时，`confirmation` 必须严格使用工具 schema 指定的前缀、你自己写的非空 review、后缀，并且是参数对象的最后一个属性；不要原样复制 placeholder。默认 `false` 时该属性可省略；以上带 confirmation 的示例在两种模式下均可调用
 
 ### `send_to_session`
 
@@ -98,7 +98,7 @@ send_to_session({
 ```
 
 用于跨 session 协作、测试交接、结果回报等。
-`confirmation` 的格式与末位属性要求和 `create_child_session` 相同。
+`handoffConfirmation: true` 时，`confirmation` 的格式与末位属性要求和 `create_child_session` 相同；默认 `false` 时可省略。
 
 Child 完成任务并向 Parent 发送最终报告时，应使用 `finish`：
 

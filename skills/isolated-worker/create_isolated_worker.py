@@ -319,7 +319,7 @@ def _handoff_message(node_id, task, worktree_path=None):
         + '\\n' + _HANDOFF_REVIEW_PLACEHOLDER + '\\n'
         + _HANDOFF_CONFIRMATION_SUFFIX
         + '"})',
-        "The confirmation must be the final argument property. Replace the placeholder with your own review; do not copy it verbatim.",
+        "When the current tool schema requires confirmation, it must be the final argument property; replace the placeholder with your own review and do not copy it verbatim. When the schema omits confirmation, the property may be omitted; the shown form remains accepted in both modes.",
         "The report must include changed files and a diff summary, validation commands/results, blockers or unresolved questions, and whether working-tree changes remain. Do not assume or claim that a commit exists.",
     ])
     return "\n".join(lines)

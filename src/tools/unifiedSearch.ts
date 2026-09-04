@@ -152,11 +152,14 @@ function schemaType(schema: unknown, depth = 0): string {
             const otherKeyType = value.additionalProperties && typeof value.additionalProperties === 'object'
                 ? schemaType(value.additionalProperties, depth + 1)
                 : 'unknown';
-            const entries: Array<{ name: string; schema: unknown; undeclaredRequired?: boolean }> = [
-                ...declaredRequired.map(([name, propertySchema]) => ({ name, schema: propertySchema })),
-                ...undeclaredRequired.map(name => ({ name, schema: value.additionalProperties && typeof value.additionalProperties === 'object' ? value.additionalProperties : {}, undeclaredRequired: true })),
-                ...optionalProperties.map(([name, propertySchema]) => ({ name, schema: propertySchema })),
-            ];
+            const preserveDeclaredOrder = properties.length <= SEARCH_TOOLS_MAX_PROPERTIES && undeclaredRequired.length === 0;
+            const entries: Array<{ name: string; schema: unknown; undeclaredRequired?: boolean }> = preserveDeclaredOrder
+                ? properties.map(([name, propertySchema]) => ({ name, schema: propertySchema }))
+                : [
+                    ...declaredRequired.map(([name, propertySchema]) => ({ name, schema: propertySchema })),
+                    ...undeclaredRequired.map(name => ({ name, schema: value.additionalProperties && typeof value.additionalProperties === 'object' ? value.additionalProperties : {}, undeclaredRequired: true })),
+                    ...optionalProperties.map(([name, propertySchema]) => ({ name, schema: propertySchema })),
+                ];
             const shownEntries = entries.slice(0, SEARCH_TOOLS_MAX_PROPERTIES);
             const parts = shownEntries.map(({ name, schema: propertySchema, undeclaredRequired: requiredFromOtherKey }) => {
                 const property = propertySchema && typeof propertySchema === 'object' && !Array.isArray(propertySchema)

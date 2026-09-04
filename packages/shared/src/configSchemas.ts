@@ -401,6 +401,11 @@ export const APP_CONFIG_SCHEMA = {
       type: 'boolean',
       description: 'Run the LanceDB/vector owner in a child process. Defaults to true and requires restart.',
     },
+    handoffConfirmation: {
+      type: 'boolean',
+      default: false,
+      description: 'Require structured confirmation for send_to_session and create_child_session. Defaults to false and requires restart.',
+    },
     vectorMaintenance: {
       oneOf: [
         { type: 'boolean' },
