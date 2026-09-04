@@ -35,6 +35,13 @@ import { guardToolOutputForModel } from './toolOutputGuard';
 import { sanitizeLoneSurrogatesInPayload, truncateUnicodeSafeWithEllipsis } from './utils/unicode';
 import { isModelVisibleMessage } from './session/messageVisibility';
 import {
+    getToolCancellationArgumentError,
+    isSingleToolCancellationRequested,
+    isWholeBatchCancellationRequested,
+    stripToolCancellationArguments,
+    validateInterAgentHandoffConfirmation,
+} from './toolCallControls';
+import {
     beginVirtualRoutingRequest,
     clearVirtualRoutingState,
     recordVirtualTargetFailure,
@@ -1501,19 +1508,22 @@ async function prepareToolCall(
     session: Session,
     snapshot?: ToolExecutionSnapshot,
     notifyStart = true,
+    presetResult?: any,
 ): Promise<PreparedToolCall> {
     const toolId = call.id || `tool_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const argsPreview = buildToolArgsPreview(call);
     const sessionId = session.id;
     let placementError: any;
     let resolved: ResolvedTool | undefined;
-    try {
-        if (call.argsParseError) tools.assertToolAvailableForPlacement(call.name, call.args || {}, toolContext);
-        else resolved = await resolveDirectTool(call.name, call.args || {}, toolContext, snapshot);
-    } catch (error) { placementError = error; }
+    if (presetResult === undefined) {
+        try {
+            if (call.argsParseError) tools.assertToolAvailableForPlacement(call.name, call.args || {}, toolContext);
+            else resolved = await resolveDirectTool(call.name, call.args || {}, toolContext, snapshot);
+        } catch (error) { placementError = error; }
+    }
     const toolArgs = resolved?.args || { ...(call.args || {}) };
     const executionNode = resolved?.executionNode || snapshot?.currentNode || session.currentNode || 'master';
-    if (notifyStart && !placementError) {
+    if (notifyStart && !placementError && presetResult === undefined) {
         logger.info({ tool: call.name, args: argsPreview }, 'Executing tool');
         if (toolContext.broadcast && session.verbose) {
             toolContext.broadcast(`🛠 *[${call.name}]*: \`${argsPreview}\``, { excludePlatforms: ['webui'] });
@@ -1538,10 +1548,56 @@ async function prepareToolCall(
         toolArgs,
         sessionId,
         executionNode,
-        result: call.argsParseError ? buildInvalidToolArgsResult(call) : undefined,
+        result: presetResult !== undefined ? presetResult : (call.argsParseError ? buildInvalidToolArgsResult(call) : undefined),
         sessionSnapshot: resolved?.routingSnapshot,
         placementError,
     };
+}
+
+function buildCanceledToolResult(): { canceled: true; message: string } {
+    return { canceled: true, message: 'Tool call canceled before execution.' };
+}
+
+function buildToolControlArgumentError(message: string): { error: { type: string; message: string } } {
+    return { error: { type: 'invalid_tool_control_argument', message } };
+}
+
+function buildHandoffConfirmationError(error: any): { error: { type: string; message: string } } {
+    return {
+        error: {
+            type: 'invalid_inter_agent_handoff_confirmation',
+            message: error?.message || String(error),
+        },
+    };
+}
+
+type PlannedToolCall = {
+    call: FunctionCall;
+    presetResult?: any;
+};
+
+function planToolCalls(functionCalls: FunctionCall[]): PlannedToolCall[] {
+    if (isWholeBatchCancellationRequested(functionCalls)) {
+        return functionCalls.map(call => ({
+            call: { ...call, args: stripToolCancellationArguments(call.args) },
+            presetResult: buildCanceledToolResult(),
+        }));
+    }
+
+    return functionCalls.map(call => {
+        const executionCall = { ...call, args: stripToolCancellationArguments(call.args) };
+        const controlError = getToolCancellationArgumentError(call);
+        if (controlError) return { call: executionCall, presetResult: buildToolControlArgumentError(controlError) };
+        if (isSingleToolCancellationRequested(call)) return { call: executionCall, presetResult: buildCanceledToolResult() };
+        if (!call.argsParseError && (call.name === 'send_to_session' || call.name === 'create_child_session')) {
+            try {
+                validateInterAgentHandoffConfirmation(executionCall.args);
+            } catch (error) {
+                return { call: executionCall, presetResult: buildHandoffConfirmationError(error) };
+            }
+        }
+        return { call: executionCall };
+    });
 }
 
 async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any): Promise<ExecutedToolCall> {
@@ -1557,7 +1613,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
 
     try {
         if (prepared.placementError) throw prepared.placementError;
-        if (!result?.error && prepared.resolved) {
+        if (result === undefined && prepared.resolved) {
             const runtimeContext = { ...toolContext, toolUseId: prepared.toolId };
             const localToolContext = prepared.sessionSnapshot
                 ? {
@@ -1567,7 +1623,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
                 }
                 : runtimeContext;
             result = normalizeExecutedToolResult(await executeResolvedTool(prepared.resolved, localToolContext));
-        } else if (!result?.error) {
+        } else if (result === undefined) {
             result = { error: `Unknown tool: ${prepared.call.name}` };
         }
 
@@ -1730,40 +1786,48 @@ export async function executeTools(
         sessionPlacement: options?.currentSessionEffects?.placement || 'local',
         ...(options?.currentSessionEffects?.execRuntime ? { execRuntime: options.currentSessionEffects.execRuntime } : {}),
     };
+    const plannedCalls = planToolCalls(functionCalls);
     const executions: ExecutedToolCall[] = [];
     let cursor = 0;
 
-    while (cursor < functionCalls.length) {
+    while (cursor < plannedCalls.length) {
         if (session?.stopping) {
-            for (; cursor < functionCalls.length; cursor++) {
-                const prepared = await prepareToolCall(functionCalls[cursor], cursor, functionCalls.length, toolContext, session, undefined, false);
-                executions.push(buildSkippedToolCall(prepared));
+            for (; cursor < plannedCalls.length; cursor++) {
+                const planned = plannedCalls[cursor];
+                const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, false, planned.presetResult);
+                executions.push(planned.presetResult !== undefined
+                    ? await runPreparedToolCall(prepared, toolContext)
+                    : buildSkippedToolCall(prepared));
             }
             break;
         }
 
-        if (functionCalls[cursor].name !== 'exec') {
-            const prepared = await prepareToolCall(functionCalls[cursor], cursor, functionCalls.length, toolContext, session);
+        if (plannedCalls[cursor].call.name !== 'exec') {
+            const planned = plannedCalls[cursor];
+            const prepared = await prepareToolCall(planned.call, cursor, plannedCalls.length, toolContext, session, undefined, true, planned.presetResult);
             executions.push(await runPreparedToolCall(prepared, toolContext));
             cursor++;
             continue;
         }
 
         const segmentStart = cursor;
-        while (cursor < functionCalls.length && functionCalls[cursor].name === 'exec') cursor++;
+        while (cursor < plannedCalls.length && plannedCalls[cursor].call.name === 'exec') cursor++;
         const snapshot: ToolExecutionSnapshot = {
             currentNode: sourceSession.currentNode || 'master',
             cwd: typeof sourceSession.cwd === 'string' ? sourceSession.cwd : undefined,
         };
         const preparedSegment: PreparedToolCall[] = [];
         for (let index = segmentStart; index < cursor; index++) {
+            const planned = plannedCalls[index];
             preparedSegment.push(await prepareToolCall(
-                functionCalls[index],
+                planned.call,
                 index,
-                functionCalls.length,
+                plannedCalls.length,
                 toolContext,
                 session,
                 snapshot,
+                true,
+                planned.presetResult,
             ));
         }
         const settled = await runBoundedToolCalls(preparedSegment, toolContext);

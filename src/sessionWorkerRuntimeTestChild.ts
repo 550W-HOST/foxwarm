@@ -18,6 +18,9 @@ import { readSessionHistorySnapshot } from './session/metadataStore';
 import { initArchiveStore } from './session/archiveStore';
 import { appendMessagesToArchive, readArchiveMessagesBySeqRange } from './session/archive';
 import { COMPACT_PLAN_TOOL_NAME } from './session/compactPlan';
+import { INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from './toolCallControls';
+
+const TEST_HANDOFF_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThe worker test handoff is necessary, accurate, self-contained, scoped, and compliant with communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
 import {
   createSessionWorkerControlServiceHandler,
   SessionWorkerActivationGate,
@@ -142,11 +145,11 @@ async function start(): Promise<void> {
       return { toolCalls: configuredMainTools };
     }
     if (crossSession.includes('create-child') && chatCount === 1 && !session.id.endsWith('_mp-child')) {
-      return { toolCalls: [{ name: 'create_child_session', args: { suffix: 'mp-child', message: 'hello child', afterSend: 'wait' } }] };
+      return { toolCalls: [{ name: 'create_child_session', args: { suffix: 'mp-child', message: 'hello child', afterSend: 'wait', confirmation: TEST_HANDOFF_CONFIRMATION } }] };
     }
     if (crossSession.includes('reply') && chatCount === 1 && session.id.endsWith('_mp-child') && !session.id.endsWith('_mp-child_mp-child')) {
       const parentId = session.id.slice(0, -'_mp-child'.length);
-      return { toolCalls: [{ name: 'send_to_session', args: { sessionId: parentId, message: 'child reply to parent' } }] };
+      return { toolCalls: [{ name: 'send_to_session', args: { sessionId: parentId, message: 'child reply to parent', confirmation: TEST_HANDOFF_CONFIRMATION } }] };
     }
     if (crossSession.includes('query') && chatCount === 3 && !session.id.endsWith('_mp-child')) {
       const listOut = await executeMainManagementTool('session_list', {}, { sessionId: session.id });

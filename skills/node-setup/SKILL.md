@@ -98,7 +98,7 @@ So the relationship is:
 
 Do not confuse these three controls:
 
-- `create_child_session({ node: "..." })` changes a session's `currentNode` for
+- `create_child_session({ suffix: "worker", node: "node-id", confirmation: "Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?\n<replace this with your own non-empty review; do not copy this placeholder verbatim>\nI have completed the check, found no issue, and confirm this inter-agent handoff should proceed." })` changes a session's `currentNode` for
   ordinary remote execution; it does **not** isolate that session
 - `isolatedNode` is agent-level metadata; every session in that agent inherits
   the same isolation boundary and bound node

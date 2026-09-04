@@ -5,6 +5,9 @@ from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "create_isolated_worker.py"
 EXPECTED_TOOLS = ["read", "write", "edit", "apply_patch", "exec"]
+HANDOFF_CONFIRMATION_PREFIX = "Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?"
+HANDOFF_REVIEW_PLACEHOLDER = "<replace this with your own non-empty review; do not copy this placeholder verbatim>"
+HANDOFF_CONFIRMATION_SUFFIX = "I have completed the check, found no issue, and confirm this inter-agent handoff should proceed."
 
 
 def load_main(tool_mock):
@@ -348,7 +351,14 @@ class CreateIsolatedWorkerTests(unittest.TestCase):
         self.assertEqual(mock.calls[5][1]["inherit"], "base-agent")
         self.assertEqual(mock.calls[6][1]["parentSessionId"], "main")
 
-        handoff = mock.calls[7][1]["message"]
+        send_args = mock.calls[7][1]
+        self.assertEqual(list(send_args.keys())[-1], "confirmation")
+        confirmation_lines = send_args["confirmation"].split("\n")
+        self.assertEqual(confirmation_lines[0], HANDOFF_CONFIRMATION_PREFIX)
+        self.assertTrue(confirmation_lines[1].strip())
+        self.assertEqual(confirmation_lines[-1], HANDOFF_CONFIRMATION_SUFFIX)
+
+        handoff = send_args["message"]
         self.assertIn("Assigned Node: `sandbox.dev:1`", handoff)
         self.assertIn("Assigned canonical worktree: `/srv/worktrees/project`", handoff)
         self.assertIn("Implement the requested change.\nPreserve this line exactly.", handoff)
@@ -357,7 +367,11 @@ class CreateIsolatedWorkerTests(unittest.TestCase):
         self.assertIn("Do not create child sessions", handoff)
         self.assertIn("Do not commit, push, restart, or deploy unless", handoff)
         self.assertIn("Git metadata is mounted read-only", handoff)
-        self.assertIn('send_to_session({sessionId: "<parent>", message: "...", waitAfterHandoff: true})', handoff)
+        self.assertIn('send_to_session({sessionId: "<parent>", message: "...", afterSend: "finish", confirmation: "', handoff)
+        self.assertIn(HANDOFF_CONFIRMATION_PREFIX, handoff)
+        self.assertIn(HANDOFF_CONFIRMATION_SUFFIX, handoff)
+        self.assertIn(HANDOFF_REVIEW_PLACEHOLDER, handoff)
+        self.assertIn("confirmation must be the final argument property", handoff)
         self.assertIn("changed files and a diff summary", handoff)
         self.assertIn("validation commands/results", handoff)
         self.assertIn("blockers or unresolved questions", handoff)

@@ -39,6 +39,10 @@ test('child instructions and reminders distinguish final reports from reply wait
   assert.match(reminder, /\[NO_ACTION\]/);
   assert.match(completion, /afterSend: "finish"/);
   assert.match(reminder, /afterSend: "finish"/);
+  assert.match(completion, /replace the placeholder with your own review rather than copying it/);
+  assert.match(reminder, /replace the placeholder with your own review rather than copying it/);
+  assert.match(completion, /confirmation must be the final argument property/);
+  assert.match(reminder, /confirmation must be the final argument property/);
   assert.match(completion, /ends the turn idle without creating a wait/);
   assert.match(reminder, /becomes idle/);
   assert.match(completion, /afterSend: "wait" only when you genuinely require a later reply/);

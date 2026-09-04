@@ -3,9 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import * as sessionManager from '../sessionManager';
 import { getAgentDir, loadModelsConfigFromObject, resolveModelConfig } from '../config';
-import { tool_create_child_session, tool_create_session, tool_set_session_child_model } from '../toolsSessionAgent';
+import { tool_create_child_session as rawToolCreateChildSession, tool_create_session, tool_set_session_child_model } from '../toolsSessionAgent';
 import { Session } from '../types';
 import { buildSessionModelEffortPresentation } from '../session/modelEffortPresentation';
+import { INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from '../toolCallControls';
+
+const TEST_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nThis test child creation was checked for necessity, accuracy, self-containment, scope, and communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
+const tool_create_child_session: typeof rawToolCreateChildSession = (args, ctx) => rawToolCreateChildSession({ ...args, confirmation: TEST_CONFIRMATION }, ctx);
 
 const PROMPT_CACHE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -443,7 +447,7 @@ test('forked child sessions append inherited tool responses as tool-role message
       {
         role: 'model',
         parts: [
-          { functionCall: { id: 'call_create_child', name: 'create_child_session', args: { suffix: 'forked' } } },
+          { functionCall: { id: 'call_create_child', name: 'create_child_session', args: { suffix: 'forked', confirmation: TEST_CONFIRMATION } } },
           { functionCall: { id: 'call_other', name: 'read', args: { filePath: 'MEMORY.md' } } },
         ],
       },

@@ -4,8 +4,19 @@ import * as llm from '../llm';
 import { MessageRouter } from '../messageRouter';
 import * as sessionManager from '../sessionManager';
 import { definitions } from '../tools';
-import { tool_create_child_session, tool_send_to_session } from '../toolsSessionAgent';
+import {
+  tool_create_child_session as rawToolCreateChildSession,
+  tool_send_to_session as rawToolSendToSession,
+} from '../toolsSessionAgent';
 import type { MessagePart, Session } from '../types';
+import {
+  INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX,
+  INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX,
+} from '../toolCallControls';
+
+const TEST_CONFIRMATION = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nFocused regression test reviewed this handoff for necessity, accuracy, self-containment, scope, and communication rules.\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
+const tool_send_to_session: typeof rawToolSendToSession = (args, ctx) => rawToolSendToSession({ ...args, confirmation: TEST_CONFIRMATION }, ctx);
+const tool_create_child_session: typeof rawToolCreateChildSession = (args, ctx) => rawToolCreateChildSession({ ...args, confirmation: TEST_CONFIRMATION }, ctx);
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -186,7 +197,7 @@ test('router appends every result, arms flagged activity wait despite a sibling 
   (llm as any).chat = async (parts: MessagePart[] | null, active: Session) => {
     calls++;
     await appendStubUser(active, parts);
-    const sendCall = { id: 'flagged-send', name: 'send_to_session', args: { sessionId: targetId, message: 'work', afterSend: 'wait' } };
+    const sendCall = { id: 'flagged-send', name: 'send_to_session', args: { sessionId: targetId, message: 'work', afterSend: 'wait', confirmation: TEST_CONFIRMATION } };
     const errorCall = { id: 'sibling-error', name: 'read', args: { filePath: `/missing-handoff-${Date.now()}` } };
     await appendStubModel(active, [{ functionCall: sendCall }, { functionCall: errorCall }]);
     return { text: '', toolCalls: [sendCall, errorCall] };
@@ -223,7 +234,7 @@ test('completed child report finishes idle without arming a wait or another LLM 
   (llm as any).chat = async (parts: MessagePart[] | null, active: Session) => {
     calls++;
     await appendStubUser(active, parts);
-    const report = { id: 'final-report', name: 'send_to_session', args: { sessionId: parentId, message: 'done', afterSend: 'finish' } };
+    const report = { id: 'final-report', name: 'send_to_session', args: { sessionId: parentId, message: 'done', afterSend: 'finish', confirmation: TEST_CONFIRMATION } };
     await appendStubModel(active, [{ functionCall: report }]);
     return { text: '', toolCalls: [report] };
   };
@@ -257,7 +268,7 @@ test('afterSend finish remains terminal after a sibling error and appends the co
   (llm as any).chat = async (parts: MessagePart[] | null, active: Session) => {
     calls++;
     await appendStubUser(active, parts);
-    const finishCall = { id: 'finish-send', name: 'send_to_session', args: { sessionId: targetId, message: 'done', afterSend: 'finish' } };
+    const finishCall = { id: 'finish-send', name: 'send_to_session', args: { sessionId: targetId, message: 'done', afterSend: 'finish', confirmation: TEST_CONFIRMATION } };
     const errorCall = { id: 'finish-sibling-error', name: 'read', args: { filePath: `/missing-finish-${Date.now()}` } };
     await appendStubModel(active, [{ functionCall: finishCall }, { functionCall: errorCall }]);
     return { text: '', toolCalls: [finishCall, errorCall] };
@@ -306,7 +317,7 @@ test('fast reply queued before wait arm wakes immediately after the flagged hand
     calls++;
     await appendStubUser(active, parts);
     if (calls === 1) {
-      const call = { id: 'fast-send', name: 'send_to_session', args: { sessionId: targetId, message: 'work', afterSend: 'wait' } };
+      const call = { id: 'fast-send', name: 'send_to_session', args: { sessionId: targetId, message: 'work', afterSend: 'wait', confirmation: TEST_CONFIRMATION } };
       await appendStubModel(active, [{ functionCall: call }]);
       return { text: '', toolCalls: [call] };
     }
@@ -347,10 +358,10 @@ test('handoff wait aggregates only successful flagged resolved targets across mi
     calls++;
     await appendStubUser(active, parts);
     const toolCalls = [
-      { id: 'ordinary-first', name: 'send_to_session', args: { sessionId: ordinaryId, message: 'ordinary' } },
-      { id: 'flagged-send', name: 'send_to_session', args: { sessionId: flaggedId, message: 'flagged', afterSend: 'wait' } },
-      { id: 'flagged-create', name: 'create_child_session', args: { suffix: 'worker', message: 'created flagged', afterSend: 'wait' } },
-      { id: 'failed-flagged', name: 'send_to_session', args: { sessionId: makeId('missing'), message: 'fails', afterSend: 'wait' } },
+      { id: 'ordinary-first', name: 'send_to_session', args: { sessionId: ordinaryId, message: 'ordinary', confirmation: TEST_CONFIRMATION } },
+      { id: 'flagged-send', name: 'send_to_session', args: { sessionId: flaggedId, message: 'flagged', afterSend: 'wait', confirmation: TEST_CONFIRMATION } },
+      { id: 'flagged-create', name: 'create_child_session', args: { suffix: 'worker', message: 'created flagged', afterSend: 'wait', confirmation: TEST_CONFIRMATION } },
+      { id: 'failed-flagged', name: 'send_to_session', args: { sessionId: makeId('missing'), message: 'fails', afterSend: 'wait', confirmation: TEST_CONFIRMATION } },
     ];
     await appendStubModel(active, toolCalls.map(functionCall => ({ functionCall })));
     return { text: '', toolCalls };
