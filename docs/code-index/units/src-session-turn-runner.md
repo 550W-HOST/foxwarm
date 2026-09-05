@@ -40,6 +40,7 @@ Retry notices are coalesced only for presentation within one `llm.chat` request:
 ## Invariants
 
 - One runner owns a session turn at a time; claim persistence completes before any provider/history/tool work begins.
+- The ephemeral per-`runSessionTurn` turn ID also fences ordinary-text presentation progress. Top-level tool start/finish facts are reported through the placement host, and the turn `finally` always requests best-effort flush/cancellation without changing semantic history.
 - Ordinary queued continuation is iterative under one reentry guard and one busy claim/release; `runSessionTurn` never recursively invokes later queued turns.
 - Each source-incompatible queued turn is a separate outer action with a fresh `${TURN_ID}`, even when it shares the same owned busy window.
 - Queue items retain individual canonical history boundaries even when a compatible batch shares one provider request.

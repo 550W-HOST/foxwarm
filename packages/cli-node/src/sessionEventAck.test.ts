@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { NodeClient } from './client';
-import { setNodeToolSessionEventDispatcher } from '../../shared/dist/nodeTools';
+import { nodeTools, setNodeToolSessionEventDispatcher } from '../../shared/dist/nodeTools';
 
 async function clientWithResponder(responder: (request: any) => any) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-session-event-ack-'));
@@ -75,6 +75,69 @@ test('remote session event rejects immediately when the connection closes before
     (client as any).rejectPendingRequests(new Error('socket closed'));
     await assert.rejects(delivery, /socket closed/);
   } finally {
+    setNodeToolSessionEventDispatcher(undefined);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('remote exec background registration is sent before the ordinary tool response', async () => {
+  const { client, sent, root } = await clientWithResponder(() => ({ type: 'unrelated' }));
+  const originalExec = (nodeTools as any).exec;
+  (nodeTools as any).exec = async (_args: any, ctx: any) => {
+    await ctx.registerBackgroundExec({ execId: 'steady-ibis', completionCapability: 'signed-capability' });
+    return { output: 'background result' };
+  };
+  try {
+    await (client as any).handleToolCall({
+      callId: 'call-1', tool: 'exec', args: { command: 'sleep 60' }, sessionId: 'session-a', agentName: 'main',
+      backgroundExecId: 'steady-ibis', completionCapability: 'signed-capability',
+    });
+    assert.deepEqual(sent.map(message => message.type), ['remote_exec_background', 'tool_call_response']);
+    assert.deepEqual(sent[0], {
+      type: 'remote_exec_background', sessionId: 'session-a', execId: 'steady-ibis', completionCapability: 'signed-capability',
+    });
+  } finally {
+    (nodeTools as any).exec = originalExec;
+    setNodeToolSessionEventDispatcher(undefined);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('remote exec pre-start rejection preserves the existing error payload and reports classification separately', async () => {
+  const { client, sent, root } = await clientWithResponder(() => ({ type: 'unrelated' }));
+  (client as any).toolCallInterceptor = async () => false;
+  try {
+    await (client as any).handleToolCall({
+      callId: 'call-rejected', tool: 'exec', args: { command: 'sleep 60' }, sessionId: 'session-a', agentName: 'main',
+      backgroundExecId: 'steady-ibis', completionCapability: 'signed-capability',
+    });
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].type, 'tool_call_error');
+    assert.equal(sent[0].error, 'Tool execution rejected by user on interactive node');
+    assert.equal(sent[0].execStarted, false);
+  } finally {
+    setNodeToolSessionEventDispatcher(undefined);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('remote exec post-launch failure reports outcome ambiguity without changing the error payload', async () => {
+  const { client, sent, root } = await clientWithResponder(() => ({ type: 'unrelated' }));
+  const originalExec = (nodeTools as any).exec;
+  (nodeTools as any).exec = async (_args: any, ctx: any) => {
+    ctx.onExecStarted();
+    throw new Error('registry persistence failed');
+  };
+  try {
+    await (client as any).handleToolCall({
+      callId: 'call-ambiguous', tool: 'exec', args: { command: 'sleep 60' }, sessionId: 'session-a', agentName: 'main',
+      backgroundExecId: 'steady-ibis', completionCapability: 'signed-capability',
+    });
+    assert.equal(sent.length, 1);
+    assert.deepEqual(sent[0].error, { message: 'registry persistence failed' });
+    assert.equal(sent[0].execStarted, true);
+  } finally {
+    (nodeTools as any).exec = originalExec;
     setNodeToolSessionEventDispatcher(undefined);
     await fs.rm(root, { recursive: true, force: true });
   }

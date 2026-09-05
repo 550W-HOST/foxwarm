@@ -307,12 +307,21 @@ test('node write edit and patch compose the injected file primitives without cha
 
 test('node exec expands cwd ~ on the executing node', async () => {
   const agentName = uniqueAgent('node_exec_home');
+  const registrations: any[] = [];
+  let started = 0;
   try {
     const result = await exec(
       { command: 'pwd', cwd: '~', timeout: 5 },
-      { sessionId: 'shared-node-test-home', session: { agent: agentName, currentNode: 'test-node' }, runtimeNodeId: 'test-node' },
+      {
+        sessionId: 'shared-node-test-home', session: { agent: agentName, currentNode: 'test-node' }, runtimeNodeId: 'test-node',
+        backgroundExecId: 'foreground-otter', completionCapability: 'foreground-capability',
+        onExecStarted: () => { started += 1; },
+        registerBackgroundExec: async metadata => { registrations.push(metadata); },
+      },
     );
     assert.match(String(result), new RegExp(`^${os.homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n---\nExit code: 0`));
+    assert.deepEqual(registrations, []);
+    assert.equal(started, 1);
   } finally {
     await cleanupAgent(agentName);
   }
@@ -390,6 +399,8 @@ test('node exec uses the process-wide acknowledged dispatcher with durable compl
   const execId = `quiet-otter`;
   const completionCapability = 'test-completion-capability';
   const events: any[] = [];
+  const registrations: any[] = [];
+  let started = 0;
   const { setNodeToolSessionEventDispatcher } = await import('./nodeTools');
   setNodeToolSessionEventDispatcher(async (sessionId, message, type, metadata) => {
     events.push({ sessionId, message, type, metadata });
@@ -403,8 +414,13 @@ test('node exec uses the process-wide acknowledged dispatcher with durable compl
         runtimeNodeId: 'test-node',
         backgroundExecId: execId,
         completionCapability,
+        onExecStarted: () => { started += 1; },
+        registerBackgroundExec: async metadata => { registrations.push(metadata); },
       },
     );
+
+    assert.deepEqual(registrations, [{ execId, completionCapability }]);
+    assert.equal(started, 1);
 
     const deadline = Date.now() + 9000;
     while (Date.now() < deadline && events.length === 0) await new Promise(resolve => setTimeout(resolve, 250));

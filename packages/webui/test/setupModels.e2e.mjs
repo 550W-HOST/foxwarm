@@ -410,7 +410,7 @@ after(async () => {
   preview?.kill('SIGTERM')
 })
 
-test('Setup uses accessible Models and Config tabs with status icons and product copy', async () => {
+test('Setup uses accessible Models, Config, and Appearance tabs with status icons and product copy', async () => {
   const bodyText = await page.$eval('body', (body) => body.textContent || '')
   assert.equal(bodyText.includes('Test selected provider'), false)
   assert.equal(bodyText.includes('Provider 1'), false)
@@ -429,6 +429,7 @@ test('Setup uses accessible Models and Config tabs with status icons and product
   assert.deepEqual(tabs, [
     { tab: 'models', selected: 'true', status: 'complete' },
     { tab: 'config', selected: 'false', status: null },
+    { tab: 'appearance', selected: 'false', status: null },
   ])
   assert.deepEqual(await page.$$eval('[data-monaco-model-uri]', (elements) => elements.map((element) => element.getAttribute('data-monaco-model-uri'))), [
     'inmemory://foxwarm/setup/foxwarm-models.yaml',
@@ -436,6 +437,7 @@ test('Setup uses accessible Models and Config tabs with status icons and product
   ])
   assert.equal(await page.$eval('[data-setup-section="models"]', (panel) => panel.hidden), false)
   assert.equal(await page.$eval('[data-setup-section="config"]', (panel) => panel.hidden), true)
+  assert.equal(await page.$eval('[data-setup-section="appearance"]', (panel) => panel.hidden), true)
 
   await page.focus('[data-setup-tab="models"]')
   await page.keyboard.press('ArrowRight')
@@ -456,6 +458,35 @@ test('Setup uses accessible Models and Config tabs with status icons and product
   await page.waitForFunction(() => document.body.textContent?.includes('Connected as weixin-e2e-user. Channel config saved and reloaded.'))
 
   await page.focus('[data-setup-tab="config"]')
+  await page.keyboard.press('ArrowRight')
+  await page.waitForSelector('[data-setup-tab="appearance"][aria-selected="true"]')
+  assert.equal(await page.$eval('[data-theme-manager]', element => element.textContent?.includes('WebUI theme')), true)
+  assert.equal(await page.$$eval('[data-theme-color-mode]', buttons => buttons.length), 3)
+  await page.click('[data-theme-color-mode="dark"]')
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-theme-mode') === 'dark')
+  await page.click('[data-theme-color-mode="auto"]')
+  await page.waitForSelector('[data-theme-color-mode="auto"][aria-pressed="true"]')
+  await page.click('[data-theme-color-mode="light"]')
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-theme-mode') === 'light')
+  await page.click('button[data-theme-option="foxwarm.550a"]')
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-component-treatment') === 'console')
+  const builtinConsoleTokens = await page.evaluate(() => ['--foxwarm-color-canvas', '--foxwarm-color-accent', '--foxwarm-ui-font-family'].map(name => getComputedStyle(document.documentElement).getPropertyValue(name).trim()))
+  await page.$eval('[data-theme-manager]', manager => Array.from(manager.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Clone')?.click())
+  await page.click('input[aria-label="Cloned theme ID"]', { clickCount: 3 })
+  await page.type('input[aria-label="Cloned theme ID"]', 'custom.setup-e2e')
+  await page.$eval('[data-theme-manager]', manager => Array.from(manager.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Create theme')?.click())
+  await page.waitForSelector('button[data-theme-option="custom.setup-e2e"][aria-pressed="true"]')
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_custom_themes_v1')).themes[0].id), 'custom.setup-e2e')
+  assert.equal(await page.evaluate(() => document.documentElement.getAttribute('data-foxwarm-component-treatment')), 'console')
+  assert.deepEqual(await page.evaluate(() => ['--foxwarm-color-canvas', '--foxwarm-color-accent', '--foxwarm-ui-font-family'].map(name => getComputedStyle(document.documentElement).getPropertyValue(name).trim())), builtinConsoleTokens)
+  const deleteDialog = new Promise(resolve => page.once('dialog', async dialog => { await dialog.accept(); resolve() }))
+  await page.$eval('[data-theme-manager]', manager => Array.from(manager.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Delete')?.click())
+  await deleteDialog
+  await page.waitForFunction(() => !document.querySelector('button[data-theme-option="custom.setup-e2e"]'))
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_theme_selection_v1')).themeId), 'foxwarm.default')
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-component-treatment') === 'standard')
+
+  await page.focus('[data-setup-tab="appearance"]')
   await page.keyboard.press('Home')
   await page.waitForSelector('[data-setup-tab="models"][aria-selected="true"]')
   await page.waitForSelector('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"][data-editor-ready="true"]', { timeout: 15_000 })
@@ -1287,11 +1318,11 @@ test('desktop model popup keeps stable 600/100/100 geometry across scroll and cu
     })
     assert.equal(hoverRegions.currentTag, 'BUTTON')
     assert.deepEqual(hoverRegions.currentColumns, ['model', 'current'])
-    assert.match(hoverRegions.currentClasses, /hover:bg-blue-50/)
+    assert.match(hoverRegions.currentClasses, /hover:bg-fw-accent-surface/)
     assert.equal(hoverRegions.childTag, 'BUTTON')
-    assert.match(hoverRegions.childClasses, /hover:bg-purple-50/)
+    assert.match(hoverRegions.childClasses, /hover:bg-fw-special-surface/)
     await desktopPage.click('button[title="leaf/model-a"]')
-    await desktopPage.waitForFunction(() => document.querySelector('button[title="leaf/model-a"]')?.className.includes('text-blue-700'))
+    await desktopPage.waitForFunction(() => document.querySelector('button[title="leaf/model-a"]')?.className.includes('text-fw-accent'))
     const after = await readGeometry()
     assert.deepEqual(after, before)
   } finally {
@@ -1304,7 +1335,9 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
   await attachRequestMocks(normalPage)
   try {
     await normalPage.evaluateOnNewDocument(() => {
-      try { localStorage.setItem('foxwarm_ui_theme_style_v1', '550a') } catch {}
+      try {
+        localStorage.setItem('foxwarm_theme_selection_v1', JSON.stringify({ version: 1, themeId: 'foxwarm.550a', colorMode: 'auto' }))
+      } catch {}
     })
     await normalPage.goto(`${baseUrl}/normal/#session/model-filter-normal`, { waitUntil: 'networkidle2' })
     const modelButton = await normalPage.waitForSelector('button[aria-haspopup="dialog"]', { timeout: 15_000 })
@@ -1327,7 +1360,7 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
         return { left: rect.left, right: rect.right }
       })
       return {
-        theme: document.documentElement.getAttribute('data-foxwarm-ui-style'),
+        treatment: document.documentElement.getAttribute('data-foxwarm-component-treatment'),
         popupWidth: popup.getBoundingClientRect().width,
         headerContainsCurrent: !!header?.contains(current),
         headerContainsChild: !!header?.contains(child),
@@ -1340,7 +1373,7 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
         childLabel: child?.selectedOptions[0]?.label || '',
         filterBorderColor: getComputedStyle(popup.querySelector('input[aria-label="Filter models"]')).borderColor,
         filterBoxShadow: getComputedStyle(popup.querySelector('input[aria-label="Filter models"]')).boxShadow,
-        themeAccentDim: getComputedStyle(document.documentElement).getPropertyValue('--foxwarm-550a-accent-dim').trim(),
+        themeAccentDim: getComputedStyle(document.documentElement).getPropertyValue('--foxwarm-console-accent-dim').trim(),
         aligned: footerColumns.length === 3 && footerColumns.every((column, index) => (
           Math.abs(column.left - headerColumns[index].left) <= 1
           && Math.abs(column.right - headerColumns[index].right) <= 1
@@ -1349,7 +1382,7 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
         )),
       }
     })
-    assert.equal(themeLayout.theme, '550a')
+    assert.equal(themeLayout.treatment, 'console')
     assert.ok(Math.abs(themeLayout.popupWidth - 600) <= 1)
     assert.equal(themeLayout.headerContainsCurrent, false)
     assert.equal(themeLayout.headerContainsChild, false)

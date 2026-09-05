@@ -1,6 +1,6 @@
 # Unit: CLI node client
 
-Files: packages/cli-node/src/client.ts, packages/cli-node/src/nodeProtocolCompatibility.test.ts, packages/cli-node/src/nodePtyService.ts, packages/cli-node/src/nodePtyService.test.ts, packages/cli-node/scripts/build-bundle.js, packages/cli-node-runtime/package.json, packages/cli-node-runtime/package-lock.json
+Files: packages/cli-node/src/client.ts, packages/cli-node/src/nodeProtocolCompatibility.test.ts, packages/cli-node/src/sessionEventAck.test.ts, packages/cli-node/src/nodePtyService.ts, packages/cli-node/src/nodePtyService.test.ts, packages/cli-node/scripts/build-bundle.js, packages/cli-node-runtime/package.json, packages/cli-node-runtime/package-lock.json
 
 ## Purpose
 
@@ -42,7 +42,7 @@ Implements the full remote Node.js client: pairing/authenticated WebSocket conne
 - Authentication failure clears local credentials and returns to pairing behavior.
 - Client heartbeat sends WebSocket ping frames every 30 seconds, expects pong within 10 seconds, and reconnects after a 5-second delay.
 - Model tool calls resolve against shared `nodeTools`, explicitly use the shared native file-operations backend in the CLI process, and may be rejected/timed out by `toolCallInterceptor`.
-- The client installs one process-wide shared-tool completion dispatcher before exec-manager recovery. After the first authenticated registration it discovers and initializes persisted exec registries, so a restart does not require another exec call to resume delivery. Session events use correlated requests and resolve only after Master acceptance; rejection, disconnect, or missing ACK rejects delivery so persistent background exec reconciliation retains and retries the entry.
+- The client advertises optional `remoteExecBackgroundRegistration` support, installs one process-wide shared-tool completion dispatcher before exec-manager recovery, and initializes persisted exec registries after authenticated registration. A newly timed-out exec sends the structured `remote_exec_background` notice before its ordinary tool response; old Masters ignore the unknown capability/message, while current Masters authenticate it against an exact pre-dispatch reservation. Current tool errors include optional `execStarted` classification from the shared start hook, so Main can release definite pre-start reservations while treating absent/ambiguous old-peer errors conservatively. Session completion events use correlated requests and resolve only after Master acceptance; rejection, disconnect, or missing ACK rejects delivery so persistent background exec reconciliation retains and retries the entry.
 - Current shared tool image results use structured inline data; old node result reading exists only at the master ingress under [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
 - File transfer uses shared node file-transfer helpers.
 - `node_service_request`, `node_service_command`, and `node_service_event` are separate from model-tool interception.

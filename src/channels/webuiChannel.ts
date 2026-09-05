@@ -730,6 +730,7 @@ export interface WebUIChannelOptions {
   token: string;
   enableWebUI?: boolean;
   enableTrigger?: boolean;
+  loadModelStreamSnapshot?: (sessionId: string) => Promise<unknown>;
 }
 
 function buildChildrenMap(allSessions: Map<string, any>): Map<string, string[]> {
@@ -906,13 +907,14 @@ export class WebUIChannel implements Channel {
   private token: string;
   private enableWebUI: boolean;
   private enableTrigger: boolean;
+  private loadModelStreamSnapshot?: (sessionId: string) => Promise<unknown>;
   private sseClients: Map<string, express.Response[]> = new Map(); // sessionId -> clients
   private realtimeHub?: WebUiRealtimeHub;
   private presentationSubscriberSessions = new Set<string>();
-  private presentationSubscriptionListener?: (sessionId: string, active: boolean) => void;
+  private presentationSubscriptionListener?: (sessionId: string, active: boolean) => void | Promise<void>;
 
   /** Main→worker transient presentation subscription bridge (Session-worker placement). */
-  setPresentationSubscriptionListener(listener: ((sessionId: string, active: boolean) => void) | undefined): void {
+  setPresentationSubscriptionListener(listener: ((sessionId: string, active: boolean) => void | Promise<void>) | undefined): void {
     this.presentationSubscriptionListener = listener;
   }
 
@@ -928,13 +930,13 @@ export class WebUIChannel implements Channel {
   }>();
   private globalSseInvalidationEventId = 0;
 
-  private refreshPresentationSubscription(sessionId: string): void {
+  private async refreshPresentationSubscription(sessionId: string): Promise<void> {
     const active = this.hasPresentationSubscribers(sessionId);
     const wasActive = this.presentationSubscriberSessions.has(sessionId);
     if (active === wasActive) return;
     if (active) this.presentationSubscriberSessions.add(sessionId);
     else this.presentationSubscriberSessions.delete(sessionId);
-    this.presentationSubscriptionListener?.(sessionId, active);
+    await this.presentationSubscriptionListener?.(sessionId, active);
   }
 
   private async streamPathDownload(resolvedPath: string, res: express.Response): Promise<void> {
@@ -966,6 +968,7 @@ export class WebUIChannel implements Channel {
     this.token = options.token;
     this.enableWebUI = options.enableWebUI !== false;
     this.enableTrigger = options.enableTrigger !== false;
+    this.loadModelStreamSnapshot = options.loadModelStreamSnapshot;
     
     // Add routes to HTTP server
     this.setupRoutes();
@@ -1015,6 +1018,11 @@ export class WebUIChannel implements Channel {
           ? { type: 'session-state', sessionId, session: buildWebUiSessionState(session) }
           : { type: 'session-deleted', sessionId };
       },
+      loadModelStreamSnapshot: async sessionId => ({
+        type: 'model-stream-snapshot',
+        sessionId,
+        draft: await this.loadModelStreamSnapshot?.(sessionId) || null,
+      }),
       loadSessionList: async requestedIds => {
         const sessions: any[] = [];
         const deletedIds: string[] = [];

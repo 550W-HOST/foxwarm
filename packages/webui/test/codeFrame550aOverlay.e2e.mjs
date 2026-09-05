@@ -23,7 +23,7 @@ before(async () => {
 
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html data-foxwarm-ui-style="550a"><head><style>${css}</style></head><body><main style="position:fixed;inset:0;background:#111"></main><iframe data-foxwarm-vscode-web-frame="true" style="position:fixed;inset:20px;z-index:35;background:#fff" title="Code"></iframe></body></html>`)
+    response.end(`<!doctype html><html data-foxwarm-component-treatment="console"><head><style>${css}</style></head><body><main style="position:fixed;inset:0;background:#111"></main><iframe data-foxwarm-vscode-web-frame="true" style="position:fixed;inset:20px;z-index:35;background:#fff" title="Code"></iframe></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`

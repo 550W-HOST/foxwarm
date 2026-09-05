@@ -4,7 +4,6 @@ import type { NormalizedExecutableNodeProviderConfig } from '../config';
 import {
   NodeProviderError,
   type NodeAvailability,
-  type NodeDescriptor,
   type NodeProviderDescriptor,
   type NodeLifecycleNodeRequest,
   type NodeLifecycleProviderRequest,

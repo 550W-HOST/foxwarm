@@ -298,7 +298,7 @@ export type ForcedSessionModelEffort = {
 };
 
 const CREATE_CHILD_SESSION_KEYS = new Set([
-  'suffix', 'fork', 'message', 'node', 'forceModel', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff',
+  'suffix', 'fork', 'message', 'node', 'forceModel', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'confirmation',
 ]);
 const CREATE_SESSION_KEYS = new Set([
   'agentName', 'sessionName', 'displayName', 'parentSessionId', 'forceModel', 'systemPromptFiles',
@@ -368,7 +368,7 @@ export function normalizeCreateChildSessionArgs(
   normalizeForceModel(args, 'create_child_session', makeError);
   const unknownKey = Object.keys(args).find(key => !CREATE_CHILD_SESSION_KEYS.has(key));
   if (unknownKey) {
-    throw makeError(`create_child_session accepts only suffix, fork, message, node, forceModel, and afterSend; unknown key: ${unknownKey}.`);
+    throw makeError(`create_child_session accepts only suffix, fork, message, node, forceModel, afterSend, and confirmation; unknown key: ${unknownKey}.`);
   }
   if (typeof args.suffix !== 'string' || !args.suffix.trim()) {
     throw makeError('create_child_session requires a non-empty suffix.');

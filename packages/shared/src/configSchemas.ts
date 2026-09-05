@@ -91,6 +91,10 @@ const modelEffortConfig = {
 const modelOverrideProperties = {
   contextLimit: { type: 'integer', minimum: 1, description: 'Context window size in tokens.' },
   effort: modelEffortConfig,
+  historyReasoningField: {
+    enum: ['reasoning_content', 'reasoning'],
+    description: 'Assistant-history reasoning field used by this Chat Completions provider/model. Defaults to reasoning_content.',
+  },
   extraFields: { type: 'object', additionalProperties: true, description: 'Provider-specific request fields.' },
   extraHeaders: { type: 'object', additionalProperties: true, description: 'Provider-specific HTTP headers. Values are passed through to the canonical backend loader.' },
   webSearch: openaiWebSearchConfig,
@@ -109,6 +113,14 @@ const modelItem = {
       },
     },
   ],
+}
+
+const modelListContainsHistoryReasoningField = {
+  type: 'array',
+  contains: {
+    type: 'object',
+    required: ['historyReasoningField'],
+  },
 }
 
 const providerObjectEntry = {
@@ -130,6 +142,7 @@ const providerObjectEntry = {
     },
     contextLimit: modelOverrideProperties.contextLimit,
     effort: modelEffortConfig,
+    historyReasoningField: modelOverrideProperties.historyReasoningField,
     asyncCompact: { type: 'boolean', description: 'Whether background compaction may use this provider.' },
     requestCompression: { enum: ['gzip', 'br'], description: 'Optional request-body compression.' },
     extraFields: modelOverrideProperties.extraFields,
@@ -145,7 +158,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'asyncCompact', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'historyReasoningField', 'asyncCompact', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -153,13 +166,25 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'asyncCompact'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'historyReasoningField', 'asyncCompact'].map((field) => ({ required: [field] })) },
       },
     },
     {
       if: { not: { anyOf: [effectiveProviderTypeIs('session-hash'), effectiveProviderTypeIs('failover')] } },
       then: {
         not: { anyOf: ['targets', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+      },
+    },
+    {
+      if: { not: effectiveProviderTypeIs('openai-completions') },
+      then: {
+        not: {
+          anyOf: [
+            { required: ['historyReasoningField'] },
+            { required: ['models'], properties: { models: modelListContainsHistoryReasoningField } },
+            { required: ['model'], properties: { model: modelListContainsHistoryReasoningField } },
+          ],
+        },
       },
     },
   ],
@@ -225,6 +250,20 @@ const channelEntry = {
       description: 'Known managed channel type or a custom channel type.',
     },
     enabled: { type: 'boolean' },
+    channelProgress: {
+      oneOf: [
+        { const: false },
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['intervalMs'],
+          properties: {
+            intervalMs: { type: 'integer', minimum: 30000, maximum: 1800000 },
+          },
+        },
+      ],
+      description: 'Best-effort ordinary-text tool progress. Omission or false disables it.',
+    },
     appId: { type: 'string' },
     clientSecret: { type: 'string' },
     requireMention: { type: 'boolean', description: 'Require @mention in QQ groups; defaults to true.' },
@@ -362,6 +401,11 @@ export const APP_CONFIG_SCHEMA = {
     dbWorkers: {
       type: 'boolean',
       description: 'Run the LanceDB/vector owner in a child process. Defaults to true and requires restart.',
+    },
+    handoffConfirmation: {
+      type: 'boolean',
+      default: false,
+      description: 'Require structured confirmation for send_to_session and create_child_session. Defaults to false and requires restart.',
     },
     vectorMaintenance: {
       oneOf: [

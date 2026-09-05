@@ -42,6 +42,37 @@ test('collectOpenAIChatCompletionsStream aggregates streamed text and usage', as
   assert.ok(progress.some(snapshot => snapshot.text === 'Hello'));
 });
 
+test('collectOpenAIChatCompletionsStream aggregates reasoning compatibility deltas with tool calls', async () => {
+  const stream = makeStream([
+    {
+      choices: [{
+        index: 0,
+        delta: {
+          role: 'assistant',
+          reasoning: 'Inspect the repository first.',
+          tool_calls: [{
+            index: 0,
+            id: 'call_reasoning',
+            type: 'function',
+            function: { name: 'read', arguments: '{"filePath":"README.md"}' },
+          }],
+        },
+        finish_reason: 'tool_calls',
+      }],
+    },
+    '[DONE]',
+  ]);
+
+  const progress: any[] = [];
+  const response = await collectOpenAIChatCompletionsStream(stream, new AbortController().signal, {
+    onProgress: snapshot => progress.push(structuredClone(snapshot)),
+  });
+
+  assert.equal(response.choices[0].message.reasoning, 'Inspect the repository first.');
+  assert.equal(response.choices[0].message.tool_calls[0].id, 'call_reasoning');
+  assert.ok(progress.some(snapshot => snapshot.reasoning === 'Inspect the repository first.'));
+});
+
 test('collectOpenAIChatCompletionsStream captures delta provider_specific_fields', async () => {
   const stream = makeStream([
     {
@@ -121,6 +152,7 @@ test('collectOpenAIChatCompletionsStream aggregates streamed tool calls', async 
   assert.equal(response.choices[0].message.tool_calls[0].function.name, 'read');
   assert.equal(response.choices[0].message.tool_calls[0].function.arguments, '{"filePath":"x"}');
   assert.ok(progress.some(snapshot => snapshot.toolCalls?.[0]?.name === 'read'));
+  assert.equal(progress.at(-1)?.toolCalls?.[0]?.arguments, '{"filePath":"x"}');
 });
 
 test('collectOpenAIChatCompletionsStream splits parallel tool calls that reuse index 0', async () => {
@@ -286,6 +318,7 @@ test('collectOpenAIResponsesStream rebuilds streamed output items from SSE delta
   assert.ok(progress.some(snapshot => snapshot.reasoning === 'Thinking done'));
   assert.ok(progress.some(snapshot => snapshot.text === 'Hello'));
   assert.ok(progress.some(snapshot => snapshot.toolCalls?.[0]?.name === 'read'));
+  assert.equal(progress.at(-1)?.toolCalls?.[0]?.arguments, '{"filePath":"x"}');
 });
 
 test('collectOpenAIResponsesStream preserves indexed reasoning summary boundaries over condensed completed output', async () => {
@@ -801,6 +834,219 @@ test('OpenAI tool serializers prepend one persisted LLM timing marker before ima
   assert.equal(firstResponse.output.filter((part: any) => String(part.text || '').includes('prevLLMReqTime')).length, 1);
 });
 
+test('OpenAI serializers send repeated image bytes once and preserve later model-visible placeholders', () => {
+  const data = Buffer.from('provider-dedup-image').toString('base64');
+  const history: Message[] = [
+    {
+      role: 'user',
+      parts: [{ text: '<foxwarm-image name="first.png" node="master" path="/tmp/first.png" />', inlineData: { mimeType: 'image/png', data } }],
+    },
+    {
+      role: 'user',
+      parts: [
+        { text: '<foxwarm-image name="later.png" node="master" path="/tmp/later.png" />' },
+        { inlineData: { mimeType: 'image/png', data } },
+      ],
+    },
+  ];
+  const snapshot = structuredClone(history);
+
+  const chat = convertToOpenAIFormat(history);
+  const chatJson = JSON.stringify(chat);
+  assert.equal(chatJson.match(/data:image\/png;base64,/g)?.length, 1);
+  assert.match(chatJson, /foxwarm-image[^>]+deduplicated=\\"true\\"/);
+
+  const responses = convertToOpenAIResponsesFormat(history);
+  const responsesJson = JSON.stringify(responses);
+  assert.equal(responsesJson.match(/data:image\/png;base64,/g)?.length, 1);
+  assert.match(responsesJson, /foxwarm-image[^>]+deduplicated=\\"true\\"/);
+  assert.deepEqual(history, snapshot);
+});
+
+test('OpenAI tool serializers keep deduplicated tool image guidance and omit repeated bytes', () => {
+  const data = Buffer.from('provider-tool-dedup-image').toString('base64');
+  const history: Message[] = [
+    { role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data }, imageMeta: { imageId: 'source', mimeType: 'image/png' } }] },
+    {
+      role: 'tool',
+      parts: [
+        {
+          toolUseId: 'call_image',
+          inlineData: { mimeType: 'image/png', data },
+          imageMeta: { imageId: 'tool-copy', mimeType: 'image/png', width: 2, height: 3 },
+        },
+        { functionResponse: { tool_use_id: 'call_image', name: 'capture', response: { output: 'done' } } },
+      ],
+    },
+  ];
+
+  const chat = convertToOpenAIFormat(history);
+  const chatTool = chat.find(item => item.tool_call_id === 'call_image');
+  assert.equal(JSON.stringify(chatTool).includes('data:image/png;base64,'), false);
+  assert.match(JSON.stringify(chatTool), /deduplicated=true; identical image bytes were present earlier/);
+  assert.match(JSON.stringify(chatTool), /id=tool-copy/);
+
+  const responses = convertToOpenAIResponsesFormat(history);
+  const responseTool = responses.find(item => item.call_id === 'call_image');
+  assert.equal(JSON.stringify(responseTool).includes('data:image/png;base64,'), false);
+  assert.match(JSON.stringify(responseTool), /deduplicated=true; identical image bytes were present earlier/);
+  assert.match(JSON.stringify(responseTool), /id=tool-copy/);
+});
+
+test('OpenAI tool serializers keep fallback guidance for deduplicated legacy images without tool ids', () => {
+  const data = Buffer.from('legacy-tool-image-without-id').toString('base64');
+  const history: Message[] = [
+    { role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data } }] },
+    {
+      role: 'tool',
+      parts: [
+        { inlineData: { mimeType: 'image/png', data }, imageMeta: { imageId: 'legacy-copy', mimeType: 'image/png' } },
+        { functionResponse: { tool_use_id: 'call_legacy', name: 'legacy', response: { output: 'done' } } },
+      ],
+    },
+  ];
+
+  for (const output of [convertToOpenAIFormat(history), convertToOpenAIResponsesFormat(history)]) {
+    const serialized = JSON.stringify(output);
+    assert.equal(serialized.match(/data:image\/png;base64,/g)?.length, 1);
+    assert.match(serialized, /id=legacy-copy/);
+    assert.match(serialized, /deduplicated=true; identical image bytes were present earlier/);
+  }
+});
+
+test('OpenAI tool serializers associate canonical response-then-image dedup guidance order-independently', () => {
+  const data = Buffer.from('canonical-response-then-image').toString('base64');
+  const history: Message[] = [
+    { role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data } }] },
+    {
+      role: 'tool',
+      parts: [
+        { functionResponse: { tool_use_id: 'call_after', name: 'capture', response: { output: 'done' } } },
+        {
+          toolUseId: 'call_after',
+          inlineData: { mimeType: 'image/png', data },
+          imageMeta: { imageId: 'after-image', mimeType: 'image/png', width: 3, height: 4 },
+        },
+      ],
+    },
+  ];
+
+  const chatTool = convertToOpenAIFormat(history).find(item => item.tool_call_id === 'call_after');
+  assert.equal(JSON.stringify(chatTool).includes('data:image/png;base64,'), false);
+  assert.match(JSON.stringify(chatTool), /id=after-image/);
+  assert.match(JSON.stringify(chatTool), /deduplicated=true; identical image bytes were present earlier/);
+
+  const responsesTool = convertToOpenAIResponsesFormat(history).find(item => item.call_id === 'call_after');
+  assert.equal(JSON.stringify(responsesTool).includes('data:image/png;base64,'), false);
+  assert.match(JSON.stringify(responsesTool), /id=after-image/);
+  assert.match(JSON.stringify(responsesTool), /deduplicated=true; identical image bytes were present earlier/);
+});
+
+test('OpenAI tool serializers preserve deduplicated orphan tool IDs with bounded guidance', () => {
+  const data = Buffer.from('orphan-deduplicated-image').toString('base64');
+  const unique = Buffer.from('orphan-unique-image').toString('base64');
+  const history: Message[] = [
+    { role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data } }] },
+    {
+      role: 'tool',
+      parts: [
+        { toolUseId: 'call_duplicate', inlineData: { mimeType: 'image/png', data }, imageMeta: { imageId: 'duplicate-orphan', mimeType: 'image/png' } },
+        { toolUseId: 'call_unique', inlineData: { mimeType: 'image/png', data: unique }, imageMeta: { imageId: 'unique-orphan', mimeType: 'image/png' } },
+      ],
+    },
+  ];
+
+  const chat = convertToOpenAIFormat(history);
+  const duplicateChat = chat.find(item => item.tool_call_id === 'call_duplicate');
+  const uniqueChat = chat.find(item => item.tool_call_id === 'call_unique');
+  assert.match(JSON.stringify(duplicateChat), /id=duplicate-orphan/);
+  assert.match(JSON.stringify(duplicateChat), /deduplicated=true/);
+  assert.equal(JSON.stringify(duplicateChat).includes('base64,'), false);
+  assert.equal(JSON.stringify(uniqueChat).includes(`base64,${unique}`), true);
+
+  const responses = convertToOpenAIResponsesFormat(history);
+  const duplicateResponses = responses.find(item => item.call_id === 'call_duplicate');
+  const uniqueResponses = responses.find(item => item.call_id === 'call_unique');
+  assert.match(JSON.stringify(duplicateResponses), /id=duplicate-orphan/);
+  assert.match(JSON.stringify(duplicateResponses), /deduplicated=true/);
+  assert.equal(JSON.stringify(duplicateResponses).includes('base64,'), false);
+  assert.equal(JSON.stringify(uniqueResponses).includes(`base64,${unique}`), true);
+});
+
+test('OpenAI repeated tool IDs associate deduplicated guidance with exactly one nearest response occurrence', () => {
+  const data = Buffer.from('repeated-id-association').toString('base64');
+  const response = (output: string): Message['parts'][number] => ({
+    functionResponse: { tool_use_id: 'call_same', name: 'capture', response: { output } },
+  });
+  const imagePart = (): Message['parts'][number] => ({
+    toolUseId: 'call_same',
+    inlineData: { mimeType: 'image/png', data },
+    imageMeta: { imageId: 'same-image', mimeType: 'image/png' },
+  });
+  const cases = [
+    { name: 'response-image-response', parts: [response('first'), imagePart(), response('second')], guidanceTextIndex: 0 },
+    { name: 'image-response-response', parts: [imagePart(), response('first'), response('second')], guidanceTextIndex: 0 },
+    { name: 'response-response-image', parts: [response('first'), response('second'), imagePart()], guidanceTextIndex: 1 },
+  ];
+
+  for (const item of cases) {
+    const history: Message[] = [
+      { role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data } }] },
+      { role: 'tool', parts: item.parts },
+    ];
+    const chatTool = convertToOpenAIFormat(history).find(entry => entry.tool_call_id === 'call_same');
+    const chatTexts = (Array.isArray(chatTool.content) ? chatTool.content : [{ text: chatTool.content }])
+      .filter((entry: any) => entry.type === 'text' || typeof entry.text === 'string')
+      .map((entry: any) => entry.text);
+    assert.equal(chatTexts.filter((text: string) => text.includes('id=same-image')).length, 1, `${item.name} Chat guidance count`);
+    assert.match(chatTexts[item.guidanceTextIndex], /id=same-image/);
+    assert.equal(JSON.stringify(chatTool).includes('base64,'), false);
+
+    const responsesTool = convertToOpenAIResponsesFormat(history).find(entry => entry.call_id === 'call_same');
+    const responseTexts = (Array.isArray(responsesTool.output) ? responsesTool.output : [{ text: responsesTool.output }])
+      .filter((entry: any) => entry.type === 'input_text' || typeof entry.text === 'string')
+      .map((entry: any) => entry.text);
+    assert.equal(responseTexts.filter((text: string) => text.includes('id=same-image')).length, 1, `${item.name} Responses guidance count`);
+    assert.match(responseTexts[item.guidanceTextIndex], /id=same-image/);
+    assert.equal(JSON.stringify(responsesTool).includes('base64,'), false);
+  }
+});
+
+test('OpenAI occurrence association isolates distinct tool IDs in mixed repeated shapes', () => {
+  const dataA = Buffer.from('mixed-tool-a').toString('base64');
+  const dataB = Buffer.from('mixed-tool-b').toString('base64');
+  const history: Message[] = [
+    { role: 'user', parts: [
+      { inlineData: { mimeType: 'image/png', data: dataA } },
+      { inlineData: { mimeType: 'image/png', data: dataB } },
+    ] },
+    { role: 'tool', parts: [
+      { functionResponse: { tool_use_id: 'call_a', name: 'a', response: { output: 'a-first' } } },
+      { toolUseId: 'call_a', inlineData: { mimeType: 'image/png', data: dataA }, imageMeta: { imageId: 'image-a', mimeType: 'image/png' } },
+      { toolUseId: 'call_b', inlineData: { mimeType: 'image/png', data: dataB }, imageMeta: { imageId: 'image-b', mimeType: 'image/png' } },
+      { functionResponse: { tool_use_id: 'call_b', name: 'b', response: { output: 'b-only' } } },
+      { functionResponse: { tool_use_id: 'call_a', name: 'a', response: { output: 'a-second' } } },
+    ] },
+  ];
+
+  for (const output of [convertToOpenAIFormat(history), convertToOpenAIResponsesFormat(history)]) {
+    const serialized = JSON.stringify(output);
+    assert.equal(serialized.match(/id=image-a/g)?.length, 1);
+    assert.equal(serialized.match(/id=image-b/g)?.length, 1);
+    assert.equal(serialized.match(/deduplicated=true/g)?.length, 2);
+  }
+});
+
+test('Responses dropped assistant image does not prevent a later user image from being serialized', () => {
+  const data = Buffer.from('responses-dropped-assistant-image').toString('base64');
+  const responses = convertToOpenAIResponsesFormat([
+    { role: 'model', parts: [{ inlineData: { mimeType: 'image/png', data } }] },
+    { role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data } }] },
+  ]);
+  assert.equal(JSON.stringify(responses).match(/data:image\/png;base64,/g)?.length, 1);
+  assert.equal(JSON.stringify(responses).includes('deduplicated=true'), false);
+});
+
 test('convertToOpenAIFormat echoes assistant providerSpecificFields only to the source concrete model', () => {
   const history: Message[] = [
     { role: 'user', parts: [{ text: 'hi' }] },
@@ -822,4 +1068,30 @@ test('convertToOpenAIFormat echoes assistant providerSpecificFields only to the 
 
   const otherModelChat = convertToOpenAIFormat(history, 'provider/model-b');
   assert.equal('provider_specific_fields' in otherModelChat[1], false);
+});
+
+test('convertToOpenAIFormat selects exactly one configured assistant history reasoning key', () => {
+  const history: Message[] = [{
+    role: 'model',
+    parts: [
+      { thinking: 'historical reasoning' },
+      { text: 'visible answer' },
+      { functionCall: { id: 'call_1', name: 'read', args: { filePath: 'x' } } },
+    ],
+    providerMeta: {
+      providerSpecificFields: { reasoning_signature: 'sig-xyz' },
+      sourceModelId: 'provider/model-a',
+    },
+  }];
+
+  const standard = convertToOpenAIFormat(history, 'provider/model-a');
+  assert.equal(standard[0].reasoning_content, 'historical reasoning');
+  assert.equal('reasoning' in standard[0], false);
+
+  const compatible = convertToOpenAIFormat(history, 'provider/model-a', 'reasoning');
+  assert.equal(compatible[0].reasoning, 'historical reasoning');
+  assert.equal('reasoning_content' in compatible[0], false);
+  assert.equal(compatible[0].content, 'visible answer');
+  assert.equal(compatible[0].tool_calls[0].id, 'call_1');
+  assert.deepEqual(compatible[0].provider_specific_fields, { reasoning_signature: 'sig-xyz' });
 });

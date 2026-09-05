@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { StringDecoder } from 'string_decoder';
 import type { Message, MessagePart } from '../types';
+import { deduplicateProviderRequestImages } from '../providerImageDedup';
 import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
 import { appendImageGuidanceText } from '../toolImages';
 import { formatFoxwarmSystemTag, formatSystemPartForModel } from '../utils/promptWrappers';
@@ -35,6 +36,9 @@ function normalizeFunctionResponse(value: unknown): Record<string, any> {
 
 /** Convert Foxwarm's provider-neutral history into Gemini generateContent contents. */
 export function convertToGeminiFormat(contents: Message[]): any[] {
+  const preparedImages = deduplicateProviderRequestImages(contents, 'gemini');
+  contents = preparedImages.messages;
+  const isDeduplicated = preparedImages.isDeduplicated;
   const result: any[] = [];
 
   for (const message of contents) {
@@ -51,7 +55,7 @@ export function convertToGeminiFormat(contents: Message[]): any[] {
 
     if (message.role === 'tool') {
       for (const part of message.parts || []) {
-        if (!part.inlineData || !part.toolUseId) continue;
+        if ((!part.inlineData && !isDeduplicated(part)) || !part.toolUseId) continue;
         const grouped = imagePartsByToolUseId.get(part.toolUseId) || [];
         grouped.push(part);
         imagePartsByToolUseId.set(part.toolUseId, grouped);
@@ -95,7 +99,11 @@ export function convertToGeminiFormat(contents: Message[]): any[] {
         const toolUseId = part.functionResponse.tool_use_id || part.toolUseId || 'unknown';
         const images = imagePartsByToolUseId.get(toolUseId) || [];
         const timingPrefix = formatPreviousLlmRequestPrefix(part);
-        const responseText = appendImageGuidanceText(images, formatToolResponsePayload(part.functionResponse.response || {}));
+        const responseText = appendImageGuidanceText(
+          images,
+          formatToolResponsePayload(part.functionResponse.response || {}),
+          isDeduplicated,
+        );
         // Native Gemini accepts function responses among ordinary user parts,
         // but Claude-backed Gemini gateways preserve Anthropic's stronger
         // requirement: every response for the preceding function calls must
@@ -108,7 +116,7 @@ export function convertToGeminiFormat(contents: Message[]): any[] {
           },
         });
         if (timingPrefix) parts.push({ text: timingPrefix });
-        for (const image of images) {
+        for (const image of images.filter(image => !!image.inlineData)) {
           parts.push({
             inlineData: {
               mimeType: image.inlineData!.mimeType || image.inlineData!.mime_type || 'image/jpeg',

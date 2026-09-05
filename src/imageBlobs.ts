@@ -241,6 +241,33 @@ function hasNestedToolImages(part: MessagePart): boolean {
     && response.inlineDataItems.some((item: any) => !!normalizeNestedToolImage(item));
 }
 
+function stripProviderImageHelperFields(part: MessagePart): { part: MessagePart; changed: boolean } {
+  const hasIdentity = Object.prototype.hasOwnProperty.call(part, '__providerImageIdentity');
+  const hasDeduplicated = Object.prototype.hasOwnProperty.call(part, '__providerImageDeduplicated');
+  if (!hasIdentity && !hasDeduplicated) return { part, changed: false };
+  const {
+    __providerImageIdentity: _providerImageIdentity,
+    __providerImageDeduplicated: _providerImageDeduplicated,
+    ...clean
+  } = part;
+  return { part: clean, changed: true };
+}
+
+export function stripReservedProviderImageHelperFields(messages: Message[]): Message[] {
+  let changed = false;
+  const stripped = messages.map(message => {
+    let messageChanged = false;
+    const parts = message.parts.map(part => {
+      const result = stripProviderImageHelperFields(part);
+      messageChanged ||= result.changed;
+      return result.part;
+    });
+    changed ||= messageChanged;
+    return messageChanged ? { ...message, parts } : message;
+  });
+  return changed ? stripped : messages;
+}
+
 function extractNestedToolImages(part: MessagePart): { part: MessagePart; imageParts: MessagePart[] } | null {
   const functionResponse = part.functionResponse;
   const response = functionResponse?.response;
@@ -351,6 +378,8 @@ export async function readImageRef(ref: InlineDataRef): Promise<Buffer> {
 }
 
 async function externalizePart(message: Message, part: MessagePart, partIndex: number): Promise<{ part: MessagePart; changed: boolean }> {
+  const stripped = stripProviderImageHelperFields(part);
+  part = stripped.part;
   if (part.inlineData?.data) {
     const imageId = buildImageId(message, part, partIndex);
     const mimeType = normalizeMimeType(part.inlineData.mimeType || part.inlineData.mime_type);
@@ -398,7 +427,7 @@ async function externalizePart(message: Message, part: MessagePart, partIndex: n
     };
   }
 
-  return { part, changed: false };
+  return { part, changed: stripped.changed };
 }
 
 export async function externalizeMessageImages(message: Message): Promise<{ message: Message; changed: boolean }> {
@@ -406,6 +435,8 @@ export async function externalizeMessageImages(message: Message): Promise<{ mess
     !!part.inlineData?.data
     || !!(part.inlineDataRef?.path && !part.inlineDataRef.blobId)
     || hasNestedToolImages(part)
+    || Object.prototype.hasOwnProperty.call(part, '__providerImageIdentity')
+    || Object.prototype.hasOwnProperty.call(part, '__providerImageDeduplicated')
   ));
   if (!needsWork) return { message, changed: false };
 
@@ -481,8 +512,9 @@ export async function hydrateMessagesForProvider(messages: Message[]): Promise<M
         const providerImage = PROVIDER_NORMALIZED_HEIF_MIME_TYPES.has(declaredMimeType)
           ? await normalizeHeifForProvider(buffer, part.inlineDataRef.imageId)
           : { buffer, mimeType: declaredMimeType };
+        const stripped = stripProviderImageHelperFields(part).part;
         parts.push({
-          ...part,
+          ...stripped,
           inlineData: { data: providerImage.buffer.toString('base64'), mimeType: providerImage.mimeType },
         });
         changed = true;

@@ -1,7 +1,7 @@
 # Unit: src-main-management-tools
 
 Files: src/mainManagementToolService.ts, src/mainManagementTools.ts, src/mainManagementTools.test.ts, src/mainManagementWaitTimeout.test.ts, src/sessionWorkerCrossSession.test.ts
-Secondary files: src/tools.ts, src/tools/toolsChannelNaming.test.ts, src/timers.test.ts, src/toolscript.test.ts
+Secondary files: src/tools.ts, src/tools/toolsChannelNaming.test.ts, src/timers.test.ts, src/toolscript.test.ts, src/modelEffortProtocolVersions.test.ts
 
 ## Purpose
 
@@ -9,7 +9,7 @@ Provides the versioned RPC boundary for a closed first set of tools whose mutabl
 
 ## Key exports
 
-- `mainManagementToolServiceDescriptor` — version 6 descriptor with closed `execute` and separate internal `scheduleWaitTimeout` methods.
+- `mainManagementToolServiceDescriptor` — version 8 descriptor with closed `execute` plus internal wait timeout, target-validation, liveness-diagnostic, and remote-exec-validation methods.
 - `MAIN_MANAGEMENT_TOOL_OPERATIONS` — exact 20-operation allowlist: messaging, agent listing, timer CRUD, child creation, session catalog/display/message reads, archive/recall reads, agent/session creation/deletion, and node bootstrap/pairing.
 - `createMainManagementToolServiceHandler()` — validates source identity and operation, optionally fences a reverse handler to one expected worker source before any lookup/mutation, then invokes the existing authoritative raw handler. When bound with an expected generation/incarnation and the worker store, it also rejects stale worker generations retryably before any operation runs.
 - `initializeMainManagementTools()` / `shutdownMainManagementTools()` — placement-injectable local or child-reverse client lifecycle and one-way terminal graceful drain.
@@ -22,7 +22,7 @@ Provides the versioned RPC boundary for a closed first set of tools whose mutabl
 
 Requests contain only `sourceSessionId`, an allowlisted operation, and cloneable tool args. Responses contain the existing structured handler result, including tool-loop control metadata. The local transport structured-clones request, response, and handler errors.
 
-The fixed non-model wait methods validate declared Session targets through Main-owned catalog/topology, schedule the existing internal timeout from `{ sourceSessionId, waitId, timeoutSeconds }`, and arm the bounded wait-liveness grace check from `{ sourceSessionId, waitId }`. Requests and responses are closed DTOs; no live Session, queue, callback, or arbitrary operation crosses the reverse RPC.
+The fixed non-model wait methods validate declared Session targets through Main-owned catalog/topology, schedule the existing internal timeout from `{ sourceSessionId, waitId, timeoutSeconds }`, arm the bounded wait-liveness grace check from `{ sourceSessionId, waitId }`, and validate unresolved exact exec IDs against active records in Main's authenticated remote-exec registry using the source canonical ID, bounded aliases, and current Agent. Requests and responses are closed DTOs; no live Session, queue, PID, process state, callback, or arbitrary operation crosses the reverse RPC.
 
 The handler rejects missing/deleted source sessions before dispatch and caps serialized args at 64 KiB. Operations needing source settings or permissions receive one detached read-only authority loaded inside Main plus a process-local read marker; vector scope resolution trusts that detached source without hydrating or persisting the catalog stub. Other operations reconstruct only `{ sessionId }`, except `send_to_session`, which also receives one internal result-metadata request so a successful reverse call can return its exact resolved target to the Worker turn owner. Isolation, relation, channel, target-session, and timer-scope checks remain in the existing raw handlers.
 

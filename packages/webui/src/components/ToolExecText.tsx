@@ -75,11 +75,11 @@ export const ExecCommandText = memo(function ExecCommandText({ command, heredocB
   return (
     <>
       {segments.map((segment, idx) => segment.heredocBody && heredocBodyBlock ? (
-        <div key={`${segment.filePath}-${idx}`} className="bg-sky-50/80 px-2 py-1 dark:bg-sky-900/20">
+        <div key={`${segment.filePath}-${idx}`} className="bg-fw-info-surface/80 px-2 py-1 dark:bg-fw-info-surface-strong/20">
           <SyntaxHighlightedText text={segment.text} filePath={segment.filePath} />
         </div>
       ) : segment.heredocBody ? (
-        <span key={`${segment.filePath}-${idx}`} className="bg-sky-50/80 px-0.5 dark:bg-sky-900/20">
+        <span key={`${segment.filePath}-${idx}`} className="bg-fw-info-surface/80 px-0.5 dark:bg-fw-info-surface-strong/20">
           <SyntaxHighlightedText text={segment.text} filePath={segment.filePath} />
         </span>
       ) : (

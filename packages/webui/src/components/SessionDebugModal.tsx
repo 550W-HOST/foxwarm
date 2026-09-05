@@ -195,57 +195,57 @@ export default function SessionDebugModal({ source, onClose }: SessionDebugModal
   if (sessionChanged) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={handleClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-fw-overlay/50 p-4" onClick={handleClose}>
       <div
-        className="flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900"
+        className="flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-2xl dark:border-fw-border dark:bg-fw-canvas"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+        <div className="flex items-center justify-between border-b border-fw-border px-4 py-3 dark:border-fw-border">
           <div>
-            <div className="text-sm font-semibold text-gray-900 dark:text-white">debug info</div>
-            <div className="text-xs text-gray-500 dark:text-gray-400">Explicit session internal/debug JSON snapshot</div>
+            <div className="text-sm font-semibold text-fw-text-strong">debug info</div>
+            <div className="text-xs text-fw-text-muted">Explicit session internal/debug JSON snapshot</div>
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={captureSnapshot}
-              className="rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+              className="rounded border border-fw-border px-3 py-1.5 text-xs text-fw-text hover:bg-fw-hover dark:border-fw-border dark:text-fw-text dark:hover:bg-fw-hover"
             >
               refresh
             </button>
             <button
               onClick={handleCopy}
               disabled={!snapshotText || loading}
-              className="inline-flex items-center gap-1 rounded border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+              className="inline-flex items-center gap-1 rounded border border-fw-border px-3 py-1.5 text-xs text-fw-text hover:bg-fw-hover disabled:cursor-not-allowed disabled:opacity-50 dark:border-fw-border dark:text-fw-text dark:hover:bg-fw-hover"
             >
               {copied ? <Check size={13} /> : <Copy size={13} />}
               {copied ? 'copied' : 'copy'}
             </button>
             <button
               onClick={handleClose}
-              className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+              className="rounded p-1 text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-strong"
               title="Close"
             >
               <X size={18} />
             </button>
           </div>
         </div>
-        <div className="flex-1 overflow-auto bg-gray-50 dark:bg-gray-950">
-          <div className="border-b border-gray-200 px-4 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
+        <div className="flex-1 overflow-auto bg-fw-surface-sunken dark:bg-fw-canvas-edge">
+          <div className="border-b border-fw-border px-4 py-2 text-xs text-fw-text-muted dark:border-fw-border-muted dark:text-fw-text-muted">
             {resolvedSessionFilePath
               ? `session file: ${resolvedSessionFilePath}`
               : 'session file: unavailable from current WebUI runtime paths'}
           </div>
           {error && (
-            <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
+            <div className="border-b border-fw-danger-border bg-fw-danger-surface px-4 py-2 text-xs text-fw-danger dark:border-fw-danger-border/50 dark:bg-fw-danger-surface-strong/40 dark:text-fw-danger">
               {error}
             </div>
           )}
           {loading && (
-            <div className="border-b border-blue-200 bg-blue-50 px-4 py-2 text-xs text-blue-700 dark:border-blue-900/50 dark:bg-blue-950/40 dark:text-blue-300">
+            <div className="border-b border-fw-accent-border bg-fw-accent-surface px-4 py-2 text-xs text-fw-accent dark:border-fw-accent-border/50 dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent">
               Refreshing debug info...
             </div>
           )}
-          <pre data-debug-info-json="true" className="min-h-full whitespace-pre-wrap break-words p-4 font-mono text-xs leading-5 text-gray-900 dark:text-gray-100">{snapshotText}</pre>
+          <pre data-debug-info-json="true" className="min-h-full whitespace-pre-wrap break-words p-4 font-mono text-xs leading-5 text-fw-text-strong">{snapshotText}</pre>
         </div>
       </div>
     </div>

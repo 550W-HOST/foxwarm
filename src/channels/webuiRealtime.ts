@@ -24,8 +24,9 @@ export type WebUiRealtimeDependencies = {
   checkToken: (req: http.IncomingMessage) => boolean;
   resolveIds: (ids: string[]) => ResolvedRealtimeIds;
   loadSessionState: (canonicalSessionId: string) => Promise<WebUiRealtimeEnvelope>;
+  loadModelStreamSnapshot?: (canonicalSessionId: string) => Promise<WebUiRealtimeEnvelope>;
   loadSessionList: (requestedIds: string[]) => Promise<WebUiRealtimeEnvelope>;
-  onSessionSubscriptionChanged?: (canonicalSessionId: string) => void;
+  onSessionSubscriptionChanged?: (canonicalSessionId: string) => void | Promise<void>;
   keepaliveIntervalMs?: number;
 };
 
@@ -189,7 +190,7 @@ export class WebUiRealtimeHub {
     client.sessionIds = new Set(resolvedSessions.canonicalIds);
     client.initializing = true;
     if (!carriesSupersededInitialization) client.pending = [];
-    this.notifyChangedSessionSubscriptions(previousSessionIds, client.sessionIds);
+    await this.notifyChangedSessionSubscriptions(previousSessionIds, client.sessionIds);
     this.safeSend(client, {
       type: 'subscriptions-accepted',
       revision: message.revision,
@@ -198,11 +199,14 @@ export class WebUiRealtimeHub {
     });
 
     const revision = message.revision;
-    const [listSnapshot, sessionSnapshots] = await Promise.all([
+    const [listSnapshot, sessionSnapshots, streamSnapshots] = await Promise.all([
       message.sessionListActive
         ? this.dependencies.loadSessionList(message.sessionListIds)
         : Promise.resolve<WebUiRealtimeEnvelope | null>(null),
       Promise.all(resolvedSessions.canonicalIds.map(sessionId => this.dependencies.loadSessionState(sessionId))),
+      this.dependencies.loadModelStreamSnapshot
+        ? Promise.all(resolvedSessions.canonicalIds.map(sessionId => this.dependencies.loadModelStreamSnapshot!(sessionId)))
+        : Promise.resolve([]),
     ]);
     if (client.closed || client.revision !== revision || client.requestedRevision !== revision) {
       return;
@@ -213,6 +217,7 @@ export class WebUiRealtimeHub {
       this.safeSend(client, { type: 'session-deleted', sessionId: missingId });
     }
     for (const snapshot of sessionSnapshots) this.safeSend(client, snapshot);
+    for (const snapshot of streamSnapshots) this.safeSend(client, snapshot);
     client.initializing = false;
     const pending = client.pending;
     client.pending = [];
@@ -273,18 +278,18 @@ export class WebUiRealtimeHub {
     this.clients.delete(client);
     const previousSessionIds = client.sessionIds;
     client.sessionIds = new Set();
-    this.notifyChangedSessionSubscriptions(previousSessionIds, client.sessionIds);
+    void this.notifyChangedSessionSubscriptions(previousSessionIds, client.sessionIds);
   }
 
   private removeSessionSubscription(client: WebUiRealtimeClient, sessionId: string): void {
     if (!client.sessionIds.delete(sessionId)) return;
-    this.dependencies.onSessionSubscriptionChanged?.(sessionId);
+    void this.dependencies.onSessionSubscriptionChanged?.(sessionId);
   }
 
-  private notifyChangedSessionSubscriptions(previous: Set<string>, next: Set<string>): void {
+  private async notifyChangedSessionSubscriptions(previous: Set<string>, next: Set<string>): Promise<void> {
     const changed = new Set<string>();
     for (const sessionId of previous) if (!next.has(sessionId)) changed.add(sessionId);
     for (const sessionId of next) if (!previous.has(sessionId)) changed.add(sessionId);
-    for (const sessionId of changed) this.dependencies.onSessionSubscriptionChanged?.(sessionId);
+    await Promise.all([...changed].map(sessionId => this.dependencies.onSessionSubscriptionChanged?.(sessionId)));
   }
 }

@@ -209,6 +209,19 @@ export interface ModelStreamToolCall {
   index: number
   id?: string
   name?: string
+  arguments?: string
+}
+
+export interface ModelStreamTextDelta {
+  offset: number
+  text: string
+}
+
+export interface ModelStreamToolCallDelta {
+  index: number
+  id?: string
+  name?: string
+  argumentsDelta?: ModelStreamTextDelta
 }
 
 export interface ContextBlockMessageMeta {
@@ -231,6 +244,14 @@ export interface SessionStreamEvent {
   type: 'model-stream-reset' | 'model-stream-update' | 'toolscript-progress'
   streamId?: string
   iteration?: number
+  streamVersion?: 2
+  sequenceStart?: number
+  sequence?: number
+  startedAt?: number
+  llmRequestId?: string
+  reasoningDelta?: ModelStreamTextDelta
+  textDelta?: ModelStreamTextDelta
+  toolCallDeltas?: ModelStreamToolCallDelta[]
   reasoning?: string
   text?: string
   toolCalls?: ModelStreamToolCall[]
@@ -300,7 +321,8 @@ export const IconToggleButton = ({ active, title, onClick, children }: { active:
   <button
     onClick={onClick}
     title={title}
-    className={`p-0.5 rounded ${active ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600'}`}
+    data-active={active}
+    className={`p-0.5 rounded ${active ? 'bg-fw-accent text-fw-text-inverse' : 'bg-fw-neutral-border dark:bg-fw-surface-raised text-fw-text-muted hover:bg-fw-border-strong dark:hover:bg-fw-hover'}`}
   >
     {children}
   </button>
@@ -310,7 +332,8 @@ export const MiniToggleButton = ({ active, title, onClick, children }: { active:
   <button
     onClick={onClick}
     title={title}
-    className={`px-1.5 py-0.5 text-[10px] rounded ${active ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600'}`}
+    data-active={active}
+    className={`px-1.5 py-0.5 text-[10px] rounded ${active ? 'bg-fw-accent text-fw-text-inverse' : 'bg-fw-neutral-border dark:bg-fw-surface-raised text-fw-text-muted hover:bg-fw-border-strong dark:hover:bg-fw-hover'}`}
   >
     {children}
   </button>
@@ -754,10 +777,10 @@ export interface ToolTagItem {
 }
 
 const toolTagToneClasses: Record<ToolTagTone, string> = {
-  neutral: 'border-slate-300 bg-slate-100 text-slate-700 dark:border-gray-600 dark:bg-gray-900/60 dark:text-gray-300',
-  success: 'border-green-300 bg-green-100 text-green-800 dark:border-green-800 dark:bg-green-900/20 dark:text-green-300',
-  error: 'border-red-300 bg-red-100 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300',
-  system: 'border-blue-300 bg-blue-100 text-blue-800 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300',
+  neutral: 'border-fw-border-strong bg-fw-neutral-surface text-fw-text dark:border-fw-border-strong dark:bg-fw-canvas/60 dark:text-fw-text',
+  success: 'border-fw-success-border bg-fw-success-surface text-fw-success dark:border-fw-success-border dark:bg-fw-success-surface-strong/20 dark:text-fw-success',
+  error: 'border-fw-danger-border bg-fw-danger-surface text-fw-danger dark:border-fw-danger-border dark:bg-fw-danger-surface-strong/20 dark:text-fw-danger',
+  system: 'border-fw-system-border bg-fw-system-surface-strong text-fw-system-accent dark:bg-fw-system-surface/20',
 }
 
 export const ToolTag = ({ name, label = name, tone = 'neutral', className = '', iconName }: { name: string; label?: string; tone?: ToolTagTone; className?: string; iconName?: string }) => {
@@ -765,7 +788,7 @@ export const ToolTag = ({ name, label = name, tone = 'neutral', className = '', 
   const Icon = getToolIcon(resolvedIconName, iconName?.startsWith('system-') ? Bell : Wrench)
 
   return (
-    <span className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
+    <span data-tool-tag-tone={tone} className={`inline-flex h-[18px] items-center gap-1 rounded-md border px-1.5 text-[10px] font-semibold uppercase tracking-wide leading-none align-middle ${toolTagToneClasses[tone]} ${className}`.trim()}>
       <Icon size={12} />
       <span>{label}</span>
     </span>
@@ -785,7 +808,7 @@ export const ToolTagList = ({ items }: { items: ToolTagItem[] }) => (
 export const SessionHashLink = ({ sessionId, className = '' }: { sessionId: string; className?: string }) => (
   <a
     href={`#session/${encodeURIComponent(sessionId)}`}
-    className={`foxwarm-session-hash-link font-mono underline decoration-dotted underline-offset-2 hover:text-blue-600 dark:hover:text-blue-300 ${className}`.trim()}
+    className={`foxwarm-session-hash-link font-mono underline decoration-dotted underline-offset-2 hover:text-fw-accent dark:hover:text-fw-accent ${className}`.trim()}
     title={`Open session ${sessionId}`}
   >
     {sessionId}

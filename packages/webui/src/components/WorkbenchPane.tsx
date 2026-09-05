@@ -38,7 +38,7 @@ function ToolbarButton({ title, disabled, onClick, children }: { title: string; 
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-600 transition hover:bg-gray-50 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-fw-border bg-fw-surface text-fw-text transition hover:bg-fw-hover hover:text-fw-text-strong disabled:cursor-not-allowed disabled:opacity-40 dark:border-fw-border dark:bg-fw-surface dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
       title={title}
     >
       {children}
@@ -70,7 +70,7 @@ export default function WorkbenchPane({
   const { active } = useDndContext()
   const dragActive = !!active
   const containerChromeClass = emphasizeFocus
-    ? (focused ? 'border-blue-300 shadow-[0_0_0_1px_rgba(59,130,246,0.25)] dark:border-blue-500/60' : 'border-gray-200 dark:border-gray-700')
+    ? (focused ? 'border-fw-accent-border ring-1 ring-fw-accent/25 dark:border-fw-accent-border/60' : 'border-fw-border')
     : 'border-transparent shadow-none'
 
   return (
@@ -105,7 +105,7 @@ export default function WorkbenchPane({
         onCloseAllTabs={onCloseAllTabs}
       />
 
-      <div className="min-h-0 flex-1 overflow-hidden bg-gray-100 dark:bg-gray-900">
+      <div className="min-h-0 flex-1 overflow-hidden bg-fw-canvas">
         {content}
       </div>
 
@@ -115,25 +115,25 @@ export default function WorkbenchPane({
             id={`pane-center:${paneId}`}
             data={{ type: 'pane-center', paneId }}
             className="absolute inset-3 rounded-xl border-2 border-transparent bg-transparent transition"
-            activeClassName="border-blue-400/70 bg-blue-500/10 dark:border-blue-500/60 dark:bg-blue-500/10"
+            activeClassName="border-fw-accent-border/70 bg-fw-accent/10 dark:border-fw-accent-border/60 dark:bg-fw-accent/10"
           />
           <PaneDropZone
             id={`pane-edge:${paneId}:left`}
             data={{ type: 'pane-edge', paneId, edge: 'left' }}
             className="absolute inset-y-0 left-0 w-14 rounded-l-xl border-2 border-transparent"
-            activeClassName="border-blue-400/70 bg-blue-500/10 dark:border-blue-500/60 dark:bg-blue-500/10"
+            activeClassName="border-fw-accent-border/70 bg-fw-accent/10 dark:border-fw-accent-border/60 dark:bg-fw-accent/10"
           />
           <PaneDropZone
             id={`pane-edge:${paneId}:right`}
             data={{ type: 'pane-edge', paneId, edge: 'right' }}
             className="absolute inset-y-0 right-0 w-14 rounded-r-xl border-2 border-transparent"
-            activeClassName="border-blue-400/70 bg-blue-500/10 dark:border-blue-500/60 dark:bg-blue-500/10"
+            activeClassName="border-fw-accent-border/70 bg-fw-accent/10 dark:border-fw-accent-border/60 dark:bg-fw-accent/10"
           />
           <PaneDropZone
             id={`pane-edge:${paneId}:bottom`}
             data={{ type: 'pane-edge', paneId, edge: 'bottom' }}
             className="absolute inset-x-0 bottom-0 h-12 rounded-b-xl border-2 border-transparent"
-            activeClassName="border-blue-400/70 bg-blue-500/10 dark:border-blue-500/60 dark:bg-blue-500/10"
+            activeClassName="border-fw-accent-border/70 bg-fw-accent/10 dark:border-fw-accent-border/60 dark:bg-fw-accent/10"
           />
         </div>
       )}

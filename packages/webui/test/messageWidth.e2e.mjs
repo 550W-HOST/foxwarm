@@ -63,7 +63,7 @@ async function mountFixture({ width, height, style = 'default', dark = false }) 
   await page.goto(fixtureUrl, { waitUntil: 'load' })
   await page.evaluate(({ style, dark }) => {
     document.documentElement.classList.toggle('dark', dark)
-    if (style === '550a') document.documentElement.setAttribute('data-foxwarm-ui-style', '550a')
+    if (style === '550a') document.documentElement.setAttribute('data-foxwarm-component-treatment', 'console')
   }, { style, dark })
   await page.waitForFunction(() => document.querySelectorAll('.foxwarm-chat-timeline').length === 10)
 }

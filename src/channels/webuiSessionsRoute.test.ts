@@ -548,7 +548,11 @@ test('WebUI history route returns queued preview messages separately from commit
   session.agent = 'main';
   session.history = [{
     role: 'model',
-    parts: [{ text: 'committed answer' }, { inlineData: { data: imageBuffer.toString('base64'), mimeType: 'image/png' } }],
+    parts: [{ text: 'committed answer' }, {
+      inlineData: { data: imageBuffer.toString('base64'), mimeType: 'image/png' },
+      __providerImageIdentity: { mimeType: 'image/png', sha256: 'f'.repeat(64) },
+      __providerImageDeduplicated: true,
+    }],
     __meta: { timestamp: Date.now(), seq: 1 },
   }];
   session.persistentMemorySnapshot = 'persisted system snapshot';
@@ -581,7 +585,11 @@ test('WebUI history route returns queued preview messages separately from commit
       source: {
         platform: 'webui', channelId: 'webui', channelType: 'webui', channelUserId: sessionId, conversationId: sessionId,
       },
-      parts: [{ inlineData: { data: imageBuffer.toString('base64'), mimeType: 'image/png' } }],
+      parts: [{
+        inlineData: { data: imageBuffer.toString('base64'), mimeType: 'image/png' },
+        __providerImageIdentity: 'stale',
+        __providerImageDeduplicated: 'stale',
+      }],
     },
     { type: 'compact-commit' },
   ];
@@ -632,6 +640,7 @@ test('WebUI history route returns queued preview messages separately from commit
     assert.match(payload.messages[0].parts[1].inlineDataRef.apiPath, /^\/blobs\//);
     blobId = payload.messages[0].parts[1].inlineDataRef.blobId;
     assert.equal(JSON.stringify(payload).includes(imageBuffer.toString('base64')), false);
+    assert.equal(JSON.stringify(payload).includes('__providerImage'), false);
     assert.equal(payload.persistentMemorySnapshot, 'persisted system snapshot');
     assert.equal(payload.queuedMessages.length, 3);
     assert.equal(payload.queuedPreviewOmittedCount, 1);
@@ -653,8 +662,10 @@ test('WebUI history route returns queued preview messages separately from commit
     assert.match(payload.queuedMessages[2].parts[0].text, /image\/png attachment preview omitted/);
     const persisted = await readSessionHistorySnapshot(sessionId);
     assert.equal(JSON.stringify(persisted).includes(imageBuffer.toString('base64')), false);
+    assert.equal(JSON.stringify(persisted).includes('__providerImage'), false);
     const metadata = await loadSessionsMetadataSnapshot();
     assert.equal(JSON.stringify((metadata.data as any).sessions[sessionId]?.queue || []).includes(imageBuffer.toString('base64')), false);
+    assert.equal(JSON.stringify((metadata.data as any).sessions[sessionId]?.queue || []).includes('__providerImage'), false);
 
     const unauthorizedBlob = await fetch(`http://127.0.0.1:${port}/api${payload.messages[0].parts[1].inlineDataRef.apiPath}`);
     assert.equal(unauthorizedBlob.status, 401);

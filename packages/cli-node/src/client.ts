@@ -199,9 +199,10 @@ export class NodeClient {
     else logger.warn({ runtimeDir: ptyLoad.runtimeDir, err: ptyLoad.error }, 'Remote PTY service unavailable; continuing without vscode-pty capability');
   }
 
-  private getNodeCapabilities(): typeof CLI_NODE_CAPABILITIES | { tools: typeof CLI_NODE_CAPABILITIES.tools; services: Record<string, number> } {
+  private getNodeCapabilities() {
     return {
       ...CLI_NODE_CAPABILITIES,
+      features: { remoteExecBackgroundRegistration: true },
       services: {
         ...CLI_NODE_CAPABILITIES.services,
         ...(this.nodePtyService ? { 'vscode-pty': 1 } : {}),
@@ -718,6 +719,7 @@ export class NodeClient {
     const agentName = typeof message.agentName === 'string' && message.agentName.trim().length > 0
       ? message.agentName
       : 'main';
+    let execStarted = false;
 
     logger.info({ callId, tool }, 'Executing tool');
 
@@ -734,6 +736,7 @@ export class NodeClient {
             type: 'tool_call_error',
             callId,
             error: errorMsg,
+            execStarted: false,
           });
           return;
         }
@@ -755,6 +758,15 @@ export class NodeClient {
         runtimeNodeId: this.connectedNodeId || this.requestedName,
         backgroundExecId: typeof message.backgroundExecId === 'string' ? message.backgroundExecId : undefined,
         completionCapability: typeof message.completionCapability === 'string' ? message.completionCapability : undefined,
+        onExecStarted: () => { execStarted = true; },
+        registerBackgroundExec: async (metadata: { execId: string; completionCapability: string }) => {
+          this.send({
+            type: 'remote_exec_background',
+            sessionId,
+            execId: metadata.execId,
+            completionCapability: metadata.completionCapability,
+          });
+        },
         fileOperations: nativeFileOperations,
         broadcast: async (text: string) => {
           this.send({
@@ -784,7 +796,11 @@ export class NodeClient {
       this.send({
         type: 'tool_call_error',
         callId,
-        error: { message: e.message || String(e), ...(typeof e.code === 'string' ? { code: e.code } : {}) }
+        error: {
+          message: e.message || String(e),
+          ...(typeof e.code === 'string' ? { code: e.code } : {}),
+        },
+        ...(tool === 'exec' ? { execStarted } : {}),
       });
     }
   }

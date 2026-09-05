@@ -20,6 +20,7 @@ import { applyQueuedItemToWaitState, appendSessionMessagesForSession, buildManua
 import { clearActiveSessionRuntimeState, setActiveSessionRuntimeState, setSessionRuntimeStateUpdateCallback } from './sessionRuntimeState';
 import { LocalSessionTurnHost, SessionTurnRunner, type SessionTurnHost } from './sessionTurnRunner';
 import type { SessionTurnFinalKind } from './sessionTurnDelivery';
+import type { ChannelTurnProgress } from './types';
 import {
   buildSessionWorkerProjection,
   SessionWorkerPersistence,
@@ -32,6 +33,50 @@ import { isQueueItem, type CompactionRequest, type Message, type QueueItem, type
 import { applyAcceptedExternalEventReceiptPlan, planAcceptedExternalEventReceipt } from './session/externalEventReceipts';
 import { buildTimestampedSystemMessageParts } from './utils/systemMessageParts';
 import type { SessionWorkerBtwResult, SessionWorkerCatalogFieldsPatch, SessionWorkerDequeueResult, SessionWorkerHistoryMutationResult, SessionWorkerSettings, SessionWorkerSettingsPatch, SessionWorkerSettingsResult, SessionWorkerToolNoiseCompactionResult } from './sessionWorkerRuntimeService';
+import { getModelStreamDraft } from './modelStreamDraft';
+
+function mergeTextDelta(left: any, right: any): any {
+  if (!left) return right ? { ...right } : undefined;
+  if (!right) return { ...left };
+  if (right.offset < left.offset) return { ...right };
+  const relative = right.offset - left.offset;
+  return { offset: left.offset, text: `${left.text.slice(0, relative)}${right.text}` };
+}
+
+/** Merge offset-addressed transient deltas without losing bytes in a Worker coalescing window. */
+export function mergeModelStreamDeltaEvents(left: SessionStreamEvent | undefined, right: SessionStreamEvent): SessionStreamEvent {
+  if (!left || left.streamVersion !== 2 || right.streamVersion !== 2) return JSON.parse(JSON.stringify(right));
+  const calls = new Map<number, any>();
+  for (const call of left.toolCallDeltas || []) calls.set(call.index, { ...call, argumentsDelta: call.argumentsDelta ? { ...call.argumentsDelta } : undefined });
+  for (const call of right.toolCallDeltas || []) {
+    const previous = calls.get(call.index);
+    calls.set(call.index, {
+      index: call.index,
+      ...(previous?.id ? { id: previous.id } : {}),
+      ...(previous?.name ? { name: previous.name } : {}),
+      ...(call.id ? { id: call.id } : {}),
+      ...(call.name ? { name: call.name } : {}),
+      ...(mergeTextDelta(previous?.argumentsDelta, call.argumentsDelta)
+        ? { argumentsDelta: mergeTextDelta(previous?.argumentsDelta, call.argumentsDelta) }
+        : {}),
+    });
+  }
+  const reasoningDelta = mergeTextDelta(left.reasoningDelta, right.reasoningDelta);
+  const textDelta = mergeTextDelta(left.textDelta, right.textDelta);
+  return {
+    type: 'model-stream-update',
+    streamId: right.streamId || left.streamId,
+    iteration: right.iteration ?? left.iteration,
+    streamVersion: 2,
+    sequenceStart: left.sequenceStart ?? left.sequence,
+    sequence: right.sequence,
+    startedAt: right.startedAt ?? left.startedAt,
+    llmRequestId: right.llmRequestId ?? left.llmRequestId,
+    ...(reasoningDelta ? { reasoningDelta } : {}),
+    ...(textDelta ? { textDelta } : {}),
+    ...(calls.size ? { toolCallDeltas: [...calls.values()] } : {}),
+  };
+}
 
 export type SessionWorkerHostDependencies = {
   catalogStub?: Partial<Pick<Session, 'agent' | 'aliases' | 'parentSessionId' | 'displayName'>>;
@@ -39,8 +84,10 @@ export type SessionWorkerHostDependencies = {
   initialize?: () => Promise<void>;
   createTurnHost?: (effects: CurrentSessionTurnEffects, session: Session) => SessionTurnHost;
   publishCommitted?: (projection: SessionWorkerProjection) => Promise<void>;
-  deliverIntermediateText?: (source: QueueSource, text: string) => Promise<void>;
-  deliverCommittedFinal?: (source: NonNullable<QueueItem['source']>, text: string, outcome: SessionTurnFinalKind) => Promise<void>;
+  deliverIntermediateText?: (source: QueueSource, text: string, turnId?: string) => Promise<void>;
+  deliverCommittedFinal?: (source: NonNullable<QueueItem['source']>, text: string, outcome: SessionTurnFinalKind, turnId?: string) => Promise<void>;
+  reportChannelProgress?: (turnId: string, source: QueueSource | undefined, progress: ChannelTurnProgress) => Promise<void>;
+  finishChannelProgress?: (turnId: string) => Promise<void>;
   /** Transient presentation channel: appended-message copies for the WebUI fan-out. */
   publishPresentationMessage?: (message: Message) => Promise<void>;
   /** Transient presentation channel: model-stream events for the WebUI fan-out. */
@@ -539,6 +586,8 @@ export class SessionWorkerHost {
     }
   }
 
+  loadModelStreamDraft() { return getModelStreamDraft(this.identity.sessionId); }
+
   private forwardPresentation(send: () => Promise<void>): void {
     const task = this.presentationTail.then(async () => {
       try {
@@ -581,11 +630,11 @@ export class SessionWorkerHost {
       return;
     }
     if (event.type !== 'model-stream-update') return;
-    // Coalesce per streamId: frames carry cumulative snapshots and WebUI
-    // replaces the draft wholesale, so keeping the latest frame per 500ms
-    // window loses nothing.
+    // Coalesce per streamId. Version 2 carries offset-addressed deltas, so the
+    // whole 500ms window is composed rather than retaining only its last frame.
+    // Legacy cumulative frames continue to use latest-wins compatibility.
     const streamId = (event as any).streamId || 'current';
-    this.coalescedStreamEvents.set(streamId, JSON.parse(JSON.stringify(event)) as SessionStreamEvent);
+    this.coalescedStreamEvents.set(streamId, mergeModelStreamDeltaEvents(this.coalescedStreamEvents.get(streamId), event));
     if (!this.streamCoalesceTimer) {
       this.streamCoalesceTimer = setTimeout(() => {
         this.streamCoalesceTimer = undefined;
@@ -695,15 +744,27 @@ export class SessionWorkerHost {
           await this.ingestPendingMailbox(4096);
         },
         ...(this.dependencies.deliverCommittedFinal ? {
-          deliverCommittedFinal: async (_session, source, text, outcome) => {
-            try { await this.dependencies.deliverCommittedFinal!(source, text, outcome); }
+          deliverCommittedFinal: async (_session, source, text, outcome, turnId) => {
+            try { await this.dependencies.deliverCommittedFinal!(source, text, outcome, turnId); }
             catch (error) { logger.error({ err: error, sessionId: owner.id, outcome }, 'Committed final reverse delivery failed'); }
           },
         } : {}),
         ...(this.dependencies.deliverIntermediateText ? {
-          deliverIntermediateText: async (_session, source, text) => {
-            try { await this.dependencies.deliverIntermediateText!(source, text); }
+          deliverIntermediateText: async (_session, source, text, turnId) => {
+            try { await this.dependencies.deliverIntermediateText!(source, text, turnId); }
             catch (error) { logger.error({ err: error, sessionId: owner.id }, 'Intermediate Worker channel delivery failed'); }
+          },
+        } : {}),
+        ...(this.dependencies.reportChannelProgress ? {
+          reportChannelProgress: async (_session, turnId, source, progress) => {
+            try { await this.dependencies.reportChannelProgress!(turnId, source, progress); }
+            catch (error) { logger.error({ err: error, sessionId: owner.id, turnId }, 'Worker channel progress delivery failed'); }
+          },
+        } : {}),
+        ...(this.dependencies.finishChannelProgress ? {
+          finishChannelProgress: async (_session, turnId) => {
+            try { await this.dependencies.finishChannelProgress!(turnId); }
+            catch (error) { logger.error({ err: error, sessionId: owner.id, turnId }, 'Worker channel progress cleanup failed'); }
           },
         } : {}),
       },

@@ -4,6 +4,7 @@ import * as sessionManager from '../sessionManager';
 import { MAX_ACCEPTED_EXTERNAL_EVENT_IDS } from '../session/externalEventReceipts';
 import { nodesManager } from './manager';
 import { issueRemoteExecCompletionCapability, setNodeEventCapabilitySecretForTests } from './sessionEventCapability';
+import { activateRemoteExecLivenessClaim, hasRemoteExecLivenessClaim, reserveRemoteExecIdentity, resetRemoteExecLivenessClaimsForTests } from './remoteExecLiveness';
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -93,6 +94,16 @@ test('authorized remote exec completion survives a different current node and is
       completionCapability,
       eventTimestamp: 1_700_000_000_000,
     };
+    assert.equal(reserveRemoteExecIdentity({
+      authenticatedNodeId: remoteNodeId,
+      canonicalSessionId: sessionId,
+      sessionIdentityIds: [sessionId],
+      agentName: session.agent || 'main',
+      execId,
+      completionCapability,
+    }), true);
+    activateRemoteExecLivenessClaim({ authenticatedNodeId: remoteNodeId, originalSessionId: sessionId, execId, completionCapability });
+    assert.equal(hasRemoteExecLivenessClaim([sessionId], session.agent || 'main', execId), true);
     await Promise.all([
       nodesManager.handleSessionEvent(remoteNodeId, sessionId, 'remote complete', 'background', metadata),
       nodesManager.handleSessionEvent(remoteNodeId, sessionId, 'remote complete', 'background', metadata),
@@ -101,6 +112,7 @@ test('authorized remote exec completion survives a different current node and is
     const updated = await sessionManager.getSession(sessionId);
     assert.equal(updated.currentNode, 'master');
     assert.equal(updated.queue.filter(item => item.externalEventId === metadata.eventId).length, 1);
+    assert.equal(hasRemoteExecLivenessClaim([sessionId], session.agent || 'main', execId), false);
     assert.deepEqual(updated.meta.acceptedExternalEventIds, ['legacy', metadata.eventId]);
 
     const laterEventIds: string[] = [];
@@ -134,6 +146,7 @@ test('authorized remote exec completion survives a different current node and is
       /invalid remote exec completion capability/,
     );
   } finally {
+    resetRemoteExecLivenessClaimsForTests();
     setNodeEventCapabilitySecretForTests();
   }
 });

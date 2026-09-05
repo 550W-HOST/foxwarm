@@ -14,6 +14,13 @@ import { isReservedNodeId } from './registry';
 import { adaptLegacyRemoteNodeToolResult } from './legacyToolResultCompatibility';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from '../tools/placement';
 import { issueRemoteExecCompletionCapability, verifyRemoteExecCompletionCapability } from './sessionEventCapability';
+import {
+  activateRemoteExecLivenessClaim,
+  clearRemoteExecLivenessClaim,
+  markRemoteExecOutcomeUnknown,
+  releaseRemoteExecReservation,
+  reserveRemoteExecIdentity,
+} from './remoteExecLiveness';
 import { generatePersistentExecPetname } from '../../packages/shared/dist/persistentExec';
 import { PERSISTENT_EXEC_ID_COLLISION_CODE } from '../../packages/shared/dist/persistentExec';
 import {
@@ -32,6 +39,7 @@ interface ToolDefinition {
 interface NodeCapabilities {
   tools: ToolDefinition[];
   services?: Record<string, number>;
+  features?: { remoteExecBackgroundRegistration?: boolean };
 }
 
 interface Node {
@@ -59,6 +67,12 @@ interface ToolCall {
   args: Record<string, any>;
   sessionId: string;
   node: string;
+  remoteExec?: {
+    originalSessionId: string;
+    execId: string;
+    completionCapability: string;
+    supportsBackgroundRegistration: boolean;
+  };
   resolve: (result: any) => void;
   reject: (error: unknown) => void;
 }
@@ -76,6 +90,22 @@ function exactRemoteErrorMessage(error: unknown): string | undefined {
 
 function legacyPersistentExecCollisionMessage(execId: string): string {
   return `Persistent exec \`${execId}\` already exists.`;
+}
+
+function remoteErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object' || Array.isArray(error)) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(error, 'code');
+  return descriptor && 'value' in descriptor && typeof descriptor.value === 'string'
+    ? descriptor.value
+    : undefined;
+}
+
+function remoteExecStarted(error: unknown): boolean | undefined {
+  if (!error || typeof error !== 'object' || Array.isArray(error)) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(error, 'execStarted');
+  return descriptor && 'value' in descriptor && typeof descriptor.value === 'boolean'
+    ? descriptor.value
+    : undefined;
 }
 
 interface PendingFileTransfer<T = any> {
@@ -329,6 +359,14 @@ export class NodesManager {
     for (const [callId, call] of this.toolCalls.entries()) {
       if (call.node !== nodeId) continue;
       this.toolCalls.delete(callId);
+      if (call.remoteExec) {
+        markRemoteExecOutcomeUnknown({
+          authenticatedNodeId: call.node,
+          originalSessionId: call.remoteExec.originalSessionId,
+          execId: call.remoteExec.execId,
+          completionCapability: call.remoteExec.completionCapability,
+        });
+      }
       call.reject(reason);
     }
 
@@ -554,14 +592,22 @@ export class NodesManager {
       return await this.executeToolLocally(toolName, args, sessionId);
     }
     
-    const executeRemoteOnce = (backgroundExecId?: string): Promise<any> => new Promise((resolve, reject) => {
+    const sourceSessionId = session.id;
+    const sourceIdentityIds = [sourceSessionId, ...(session.aliases || [])];
+    const executeRemoteOnce = (remoteExec?: {
+      originalSessionId: string;
+      execId: string;
+      completionCapability: string;
+      supportsBackgroundRegistration: boolean;
+    }): Promise<any> => new Promise((resolve, reject) => {
       const callId = `call_${Date.now()}_${crypto.randomBytes(4).toString('hex').substring(0, 8)}`;
       const toolCall: ToolCall = {
         id: callId,
         name: toolName,
         args,
-        sessionId,
+        sessionId: sourceSessionId,
         node: nodeId,
+        remoteExec,
         resolve,
         reject
       };
@@ -576,26 +622,44 @@ export class NodesManager {
       const routedCwd = routingSnapshot ? routingSnapshot.cwd : session.cwd;
       const shouldSendCwd = routedCurrentNode === nodeId && typeof routedCwd === 'string';
       const timeoutMs = 62000;
-      const completionCapability = backgroundExecId
-        ? issueRemoteExecCompletionCapability(nodeId, sessionId, backgroundExecId)
-        : undefined;
-
-      node.ws!.send(JSON.stringify({
-        type: 'tool_call',
-        callId: callId,
-        tool: toolName,
-        args: args,
-        sessionId,
-        agentName: session.agent || 'main',
-        timeoutMs,
-        ...(backgroundExecId ? { backgroundExecId, completionCapability } : {}),
-        ...(shouldSendCwd ? { sessionCwd: routedCwd } : {}),
-      }));
+      try {
+        node.ws!.send(JSON.stringify({
+          type: 'tool_call',
+          callId: callId,
+          tool: toolName,
+          args: args,
+          sessionId: sourceSessionId,
+          agentName: session.agent || 'main',
+          timeoutMs,
+          ...(remoteExec ? { backgroundExecId: remoteExec.execId, completionCapability: remoteExec.completionCapability } : {}),
+          ...(shouldSendCwd ? { sessionCwd: routedCwd } : {}),
+        }));
+      } catch (error) {
+        this.toolCalls.delete(callId);
+        if (remoteExec) {
+          releaseRemoteExecReservation({
+            authenticatedNodeId: nodeId,
+            originalSessionId: remoteExec.originalSessionId,
+            execId: remoteExec.execId,
+            completionCapability: remoteExec.completionCapability,
+          });
+        }
+        reject(error);
+        return;
+      }
       
       // Set timeout
       const timeout = setTimeout(() => {
         if (this.toolCalls.has(callId)) {
           this.toolCalls.delete(callId);
+          if (remoteExec) {
+            markRemoteExecOutcomeUnknown({
+              authenticatedNodeId: nodeId,
+              originalSessionId: remoteExec.originalSessionId,
+              execId: remoteExec.execId,
+              completionCapability: remoteExec.completionCapability,
+            });
+          }
           reject(`Tool call \`${callId}\` timed out`);
         }
       }, timeoutMs);
@@ -603,16 +667,45 @@ export class NodesManager {
     });
     if (toolName !== 'exec') return await executeRemoteOnce();
     const maxAttempts = this.runtimeOptions.remoteExecCollisionAttempts || 16;
+    const reserveIdentity = (execId: string) => {
+      const completionCapability = issueRemoteExecCompletionCapability(nodeId, sourceSessionId, execId);
+      const reserved = reserveRemoteExecIdentity({
+        authenticatedNodeId: nodeId,
+        canonicalSessionId: sourceSessionId,
+        sessionIdentityIds: sourceIdentityIds,
+        agentName: session.agent || 'main',
+        execId,
+        completionCapability,
+      });
+      return reserved ? {
+        originalSessionId: sourceSessionId,
+        execId,
+        completionCapability,
+        supportsBackgroundRegistration: node.capabilities?.features?.remoteExecBackgroundRegistration === true,
+      } : undefined;
+    };
     if (node.protocolCompatibility?.negotiated === 1) {
-      const currentExecId = this.runtimeOptions.generateExecId?.() || generatePersistentExecPetname();
-      try { return await executeRemoteOnce(currentExecId); }
-      catch (error) {
-        if (exactRemoteErrorMessage(error) !== LEGACY_PERSISTENT_EXEC_INVALID_ID_ERROR) throw error;
+      let requiresLegacyPrefix = false;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const currentExecId = this.runtimeOptions.generateExecId?.() || generatePersistentExecPetname();
+        const remoteExec = reserveIdentity(currentExecId);
+        if (!remoteExec) continue;
+        try { return await executeRemoteOnce(remoteExec); }
+        catch (error) {
+          if (exactRemoteErrorMessage(error) !== LEGACY_PERSISTENT_EXEC_INVALID_ID_ERROR) throw error;
+          requiresLegacyPrefix = true;
+          break;
+        }
+      }
+      if (!requiresLegacyPrefix) {
+        throw new Error(`Remote persistent exec ID allocation exhausted after ${maxAttempts} Main-reservation collision retries.`);
       }
 
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const legacyExecId = `exec_${this.runtimeOptions.generateExecId?.() || generatePersistentExecPetname()}`;
-        try { return await executeRemoteOnce(legacyExecId); }
+        const remoteExec = reserveIdentity(legacyExecId);
+        if (!remoteExec) continue;
+        try { return await executeRemoteOnce(remoteExec); }
         catch (error) {
           if (exactRemoteErrorMessage(error) !== legacyPersistentExecCollisionMessage(legacyExecId)) throw error;
         }
@@ -621,7 +714,9 @@ export class NodesManager {
     }
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const backgroundExecId = this.runtimeOptions.generateExecId?.() || generatePersistentExecPetname();
-      try { return await executeRemoteOnce(backgroundExecId); }
+      const remoteExec = reserveIdentity(backgroundExecId);
+      if (!remoteExec) continue;
+      try { return await executeRemoteOnce(remoteExec); }
       catch (error: any) {
         if (error?.code !== PERSISTENT_EXEC_ID_COLLISION_CODE) throw error;
       }
@@ -636,6 +731,19 @@ export class NodesManager {
     const call = this.toolCalls.get(callId);
     if (call) {
       this.toolCalls.delete(callId);
+      if (call.remoteExec) {
+        const identity = {
+          authenticatedNodeId: call.node,
+          originalSessionId: call.remoteExec.originalSessionId,
+          execId: call.remoteExec.execId,
+          completionCapability: call.remoteExec.completionCapability,
+        };
+        if (call.remoteExec.supportsBackgroundRegistration) {
+          releaseRemoteExecReservation(identity);
+        } else {
+          markRemoteExecOutcomeUnknown(identity);
+        }
+      }
       call.resolve(adaptLegacyRemoteNodeToolResult(result));
       logger.info({ callId, tool: call.name }, 'Tool response received');
     } else {
@@ -646,10 +754,26 @@ export class NodesManager {
   /**
    * Handle tool error from node
    */
-  handleToolError(callId: string, error: unknown): void {
+  handleToolError(callId: string, error: unknown, reportedExecStarted?: boolean): void {
     const call = this.toolCalls.get(callId);
     if (call) {
       this.toolCalls.delete(callId);
+      if (call.remoteExec) {
+        const identity = {
+          authenticatedNodeId: call.node,
+          originalSessionId: call.remoteExec.originalSessionId,
+          execId: call.remoteExec.execId,
+          completionCapability: call.remoteExec.completionCapability,
+        };
+        const started = reportedExecStarted ?? remoteExecStarted(error);
+        const isDefinitePreStart = started === false || (started === undefined && (
+          remoteErrorCode(error) === PERSISTENT_EXEC_ID_COLLISION_CODE
+          || exactRemoteErrorMessage(error) === LEGACY_PERSISTENT_EXEC_INVALID_ID_ERROR
+          || exactRemoteErrorMessage(error) === legacyPersistentExecCollisionMessage(call.remoteExec.execId)
+        ));
+        if (isDefinitePreStart) releaseRemoteExecReservation(identity);
+        else markRemoteExecOutcomeUnknown(identity);
+      }
       call.reject(error);
       logger.warn({ callId, tool: call.name, error }, 'Tool error received');
     } else {
@@ -908,6 +1032,9 @@ export class NodesManager {
         || !verifyRemoteExecCompletionCapability(metadata.completionCapability, { nodeId, sessionId, execId: metadata.execId })) {
         throw new Error(`Node "${nodeId}" supplied an invalid remote exec completion capability for session "${sessionId}".`);
       }
+      if (!sessionManager.getSessionCatalog(sessionId)) {
+        throw new Error(`Remote exec completion target session "${sessionId}" was not found.`);
+      }
     } else {
       await this.assertNodeOwnsSessionForEvent(nodeId, sessionId);
     }
@@ -919,7 +1046,33 @@ export class NodesManager {
       Number.isFinite(metadata.eventTimestamp) ? metadata.eventTimestamp : undefined,
       metadata.execId,
     );
+    if (metadata.execId && metadata.completionCapability) {
+      clearRemoteExecLivenessClaim({
+        authenticatedNodeId: nodeId,
+        originalSessionId: sessionId,
+        execId: metadata.execId,
+        completionCapability: metadata.completionCapability,
+      });
+    }
     logger.info({ nodeId, sessionId, type, eventId: metadata.eventId, execId: metadata.execId }, 'Session event received from remote node');
+  }
+
+  registerRemoteExecBackground(nodeId: string, input: {
+    sessionId: string;
+    execId: string;
+    completionCapability: string;
+  }): void {
+    this.assertConnectedNodeProtocolCompatible(nodeId);
+    if (!sessionManager.getSessionCatalog(input.sessionId)) {
+      throw new Error(`Node "${nodeId}" supplied invalid remote exec liveness ownership for session "${input.sessionId}".`);
+    }
+    activateRemoteExecLivenessClaim({
+      authenticatedNodeId: nodeId,
+      originalSessionId: input.sessionId,
+      execId: input.execId,
+      completionCapability: input.completionCapability,
+    });
+    logger.info({ nodeId, sessionId: input.sessionId, execId: input.execId }, 'Remote background exec liveness registered');
   }
 
   async handleSessionUserMessage(nodeId: string, sessionId: string, message: string, type: 'background' | 'trigger' | 'onboot' = 'trigger'): Promise<void> {

@@ -1,16 +1,20 @@
 import { logger } from './common';
 import { getChannelId, getChannelType, getConversationId, type ChannelContext } from './channel';
-import { deliverCommittedFinalToAttachments } from './session/channels';
+import { decorateChannelProgressText, deliverCommittedFinalToAttachments, finishChannelTurnProgress, reportChannelTurnProgress } from './session/channels';
 import { defineRpcService, rpcMethod, RpcClient, RpcError, type RpcServiceHandler, type RpcTransport } from './rpc';
-import type { QueueSource } from './types';
+import type { ChannelTurnProgress, QueueSource } from './types';
 export type SessionTurnFinalKind = 'response' | 'error' | 'empty-final';
-export type SessionTurnDeliveryRequest = { sourceSessionId: string; source: QueueSource; outcome: SessionTurnFinalKind; text: string };
-export type SessionTurnIntermediateDeliveryRequest = { sourceSessionId: string; source: QueueSource; text: string };
+export type SessionTurnDeliveryRequest = { sourceSessionId: string; source: QueueSource; turnId?: string; outcome: SessionTurnFinalKind; text: string };
+export type SessionTurnIntermediateDeliveryRequest = { sourceSessionId: string; source: QueueSource; turnId?: string; text: string };
+export type SessionTurnProgressRequest = { sourceSessionId: string; source?: QueueSource; turnId: string; progress: ChannelTurnProgress };
+export type SessionTurnProgressFinishRequest = { sourceSessionId: string; turnId: string };
 export type SessionTurnDeliveryAck = { attempted: number; delivered: number };
 export type ExactFinalSourceContextResolver = (sourceSessionId: string, source: QueueSource) => ChannelContext | undefined | Promise<ChannelContext | undefined>;
-export const sessionTurnDeliveryServiceDescriptor = defineRpcService('session-turn-delivery', 2, {
+export const sessionTurnDeliveryServiceDescriptor = defineRpcService('session-turn-delivery', 3, {
   deliverCommittedFinal: rpcMethod<SessionTurnDeliveryRequest, SessionTurnDeliveryAck>(),
   deliverIntermediateText: rpcMethod<SessionTurnIntermediateDeliveryRequest, SessionTurnDeliveryAck>(),
+  reportProgress: rpcMethod<SessionTurnProgressRequest, void>(),
+  finishProgress: rpcMethod<SessionTurnProgressFinishRequest, void>(),
 });
 function plain(value: unknown, label: string): asserts value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
@@ -110,7 +114,7 @@ export function createSessionTurnDeliveryServiceHandler(options: {
 }): RpcServiceHandler<typeof sessionTurnDeliveryServiceDescriptor> {
   return {
     async deliverCommittedFinal(input) {
-      plain(input, 'request'); exactKeys(input, ['sourceSessionId', 'source', 'outcome', 'text'], 'request');
+      plain(input, 'request'); exactKeys(input, ['sourceSessionId', 'source', 'turnId', 'outcome', 'text'], 'request');
       const sourceSessionId = text(input.sourceSessionId, 'sourceSessionId', 256);
       if (sourceSessionId !== options.expectedSourceSessionId) throw new RpcError('SESSION_TURN_DELIVERY_SOURCE_MISMATCH', 'Committed-final source session mismatch.');
       if (!['response', 'error', 'empty-final'].includes(input.outcome)) throw new RpcError('SESSION_TURN_DELIVERY_INVALID', 'outcome is invalid.');
@@ -118,13 +122,18 @@ export function createSessionTurnDeliveryServiceHandler(options: {
       const finalText = text(input.text, 'text', 1024 * 1024, outcome === 'empty-final');
       if (outcome === 'empty-final' && finalText !== '') throw new RpcError('SESSION_TURN_DELIVERY_INVALID', 'empty-final text must be empty.');
       const source = normalizeSessionTurnDeliverySource(input.source);
-      const deliveryOptions = finalOptions(source, outcome);
+      const turnId = input.turnId === undefined ? undefined : text(input.turnId, 'turnId', 128);
+      const deliveryOptions = { ...finalOptions(source, outcome), ...(turnId ? { channelProgressTurnId: turnId } : {}) };
       if (source.preferDirectReply && options.resolveExactSourceContext) {
         let ctx: ChannelContext | undefined;
         try { ctx = await options.resolveExactSourceContext(sourceSessionId, structuredClone(source)); }
         catch (error) { logger.warn({ err: error, sessionId: sourceSessionId }, 'Exact committed-final source lookup failed; using attachments'); }
         if (ctx && sameSource(snapshotQueueSource(ctx), source)) {
-          try { await ctx.reply(finalText, deliveryOptions); return { attempted: 1, delivered: 1 }; }
+          try {
+            const deliveredText = decorateChannelProgressText({ channelId: source.channelId || source.platform, conversationId: source.conversationId || source.channelUserId }, finalText, deliveryOptions);
+            await ctx.reply(deliveredText, deliveryOptions);
+            return { attempted: 1, delivered: 1 };
+          }
           catch (error: any) {
             logger.error({ err: error, sessionId: sourceSessionId, outcome }, 'Committed final direct delivery failed');
             return { attempted: 1, delivered: 0 };
@@ -134,12 +143,28 @@ export function createSessionTurnDeliveryServiceHandler(options: {
       return deliverAttachments(sourceSessionId, finalText, deliveryOptions);
     },
     async deliverIntermediateText(input) {
-      plain(input, 'request'); exactKeys(input, ['sourceSessionId', 'source', 'text'], 'request');
+      plain(input, 'request'); exactKeys(input, ['sourceSessionId', 'source', 'turnId', 'text'], 'request');
       const sourceSessionId = text(input.sourceSessionId, 'sourceSessionId', 256);
       if (sourceSessionId !== options.expectedSourceSessionId) throw new RpcError('SESSION_TURN_DELIVERY_SOURCE_MISMATCH', 'Intermediate delivery source session mismatch.');
       const source = normalizeSessionTurnDeliverySource(input.source);
+      const turnId = input.turnId === undefined ? undefined : text(input.turnId, 'turnId', 128);
       const intermediateText = text(input.text, 'text', 1024 * 1024);
-      return deliverAttachments(sourceSessionId, intermediateText, intermediateOptions(source));
+      return deliverAttachments(sourceSessionId, intermediateText, { ...intermediateOptions(source), ...(turnId ? { channelProgressTurnId: turnId } : {}) });
+    },
+    async reportProgress(input) {
+      plain(input, 'request'); exactKeys(input, ['sourceSessionId', 'source', 'turnId', 'progress'], 'request');
+      const sourceSessionId = text(input.sourceSessionId, 'sourceSessionId', 256);
+      if (sourceSessionId !== options.expectedSourceSessionId) throw new RpcError('SESSION_TURN_DELIVERY_SOURCE_MISMATCH', 'Progress source session mismatch.');
+      const turnId = text(input.turnId, 'turnId', 128);
+      const source = input.source === undefined ? undefined : normalizeSessionTurnDeliverySource(input.source);
+      plain(input.progress, 'progress');
+      reportChannelTurnProgress(sourceSessionId, turnId, source, input.progress as ChannelTurnProgress);
+    },
+    async finishProgress(input) {
+      plain(input, 'request'); exactKeys(input, ['sourceSessionId', 'turnId'], 'request');
+      const sourceSessionId = text(input.sourceSessionId, 'sourceSessionId', 256);
+      if (sourceSessionId !== options.expectedSourceSessionId) throw new RpcError('SESSION_TURN_DELIVERY_SOURCE_MISMATCH', 'Progress source session mismatch.');
+      await finishChannelTurnProgress(text(input.turnId, 'turnId', 128));
     },
   };
 }
@@ -159,5 +184,13 @@ export async function deliverCommittedFinal(request: SessionTurnDeliveryRequest)
 export async function deliverIntermediateText(request: SessionTurnIntermediateDeliveryRequest): Promise<SessionTurnDeliveryAck> {
   if (!client) throw new RpcError('SESSION_TURN_DELIVERY_UNAVAILABLE', 'Intermediate delivery is unavailable.', true);
   return client.call('deliverIntermediateText', request);
+}
+export async function reportChannelProgress(request: SessionTurnProgressRequest): Promise<void> {
+  if (!client) throw new RpcError('SESSION_TURN_DELIVERY_UNAVAILABLE', 'Progress delivery is unavailable.', true);
+  await client.call('reportProgress', request);
+}
+export async function finishChannelProgress(request: SessionTurnProgressFinishRequest): Promise<void> {
+  if (!client) throw new RpcError('SESSION_TURN_DELIVERY_UNAVAILABLE', 'Progress delivery is unavailable.', true);
+  await client.call('finishProgress', request);
 }
 export async function shutdownSessionTurnDelivery() { client = undefined; transport = undefined; }

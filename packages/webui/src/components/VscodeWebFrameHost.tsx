@@ -177,7 +177,7 @@ const VscodeWebFrameHost = forwardRef<VscodeWebFrameHostHandle, VscodeWebFrameHo
       src={src}
       title="Code"
       allow="clipboard-read; clipboard-write"
-      className="fixed border-0 bg-gray-950"
+      className="fixed border-0 bg-fw-canvas-edge"
       style={{ zIndex: 35, visibility: 'hidden', pointerEvents: 'none' }}
       onLoad={() => {
         bridgeReadyRef.current = false

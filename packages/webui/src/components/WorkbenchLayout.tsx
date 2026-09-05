@@ -11,7 +11,7 @@ interface WorkbenchLayoutProps {
 function ResizeHandle({ direction }: { direction: 'row' | 'column' }) {
   return (
     <Separator className={`group flex shrink-0 items-center justify-center ${direction === 'row' ? 'w-1.5 cursor-col-resize' : 'h-1.5 cursor-row-resize'}`}>
-      <div className={`rounded-full bg-gray-300 transition group-hover:bg-blue-400 dark:bg-gray-700 dark:group-hover:bg-blue-500 ${direction === 'row' ? 'h-10 w-1' : 'h-1 w-10'}`} />
+      <div className={`rounded-full bg-fw-border-strong transition group-hover:bg-fw-accent dark:bg-fw-surface-raised dark:group-hover:bg-fw-accent ${direction === 'row' ? 'h-10 w-1' : 'h-1 w-10'}`} />
     </Separator>
   )
 }

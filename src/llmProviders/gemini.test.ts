@@ -61,6 +61,45 @@ test('convertToGeminiFormat preserves text, thought signatures, tools and images
   assert.deepEqual(converted[2].parts[2], { inlineData: { mimeType: 'image/jpeg', data: 'xyz' } });
 });
 
+test('convertToGeminiFormat deduplicates provider-visible ordinary and tool-result images', () => {
+  const imageData = Buffer.from('same-image').toString('base64');
+  const source: Message[] = [
+    {
+      role: 'user',
+      parts: [
+        { text: 'first' },
+        { inlineData: { mimeType: 'image/png', data: imageData } },
+      ],
+    },
+    {
+      role: 'user',
+      parts: [
+        { text: 'second' },
+        { inlineData: { mimeType: 'image/png', data: imageData } },
+      ],
+    },
+    {
+      role: 'tool',
+      parts: [
+        { functionResponse: { tool_use_id: 'call-1', name: 'read', response: { output: 'one' } } },
+        {
+          toolUseId: 'call-1',
+          imageMeta: { imageId: 'call-1#1', mimeType: 'image/png' },
+          inlineData: { mimeType: 'image/png', data: imageData },
+        },
+      ],
+    },
+  ];
+  const before = structuredClone(source);
+
+  const converted = convertToGeminiFormat(source);
+  const serialized = JSON.stringify(converted);
+
+  assert.equal((serialized.match(/"inlineData"/gu) || []).length, 1);
+  assert.match(serialized, /deduplicated=true/);
+  assert.deepEqual(source, before);
+});
+
 test('convertToGeminiFormat keeps all function responses ahead of timing and interruption text', () => {
   const converted = convertToGeminiFormat([
     {

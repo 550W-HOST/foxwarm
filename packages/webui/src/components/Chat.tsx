@@ -8,7 +8,8 @@ import ContextScrollbar from './ContextScrollbar'
 import type { CodeCommitTarget } from '../commitMarker'
 import ContentHeader from './ContentHeader'
 import ProcessingStatus from './ProcessingStatus'
-import type { Message, MessagePart, ModelStreamToolCall, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
+import type { Message, MessagePart, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
+import { applyModelStreamEvent, applyModelStreamSnapshot, parseStreamingToolArguments, shouldClearDraftAfterHistory, shouldClearDraftForCommittedModel, type StreamingAssistantDraft } from '../streamingAssistantDraft'
 import SessionDebugModal from './SessionDebugModal'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { isSessionRuntimeActive, type SessionRuntimeState } from '../sessionRuntimeState'
@@ -161,27 +162,13 @@ type SessionListRecord = {
   isolated?: boolean
 }
 
-type StreamingAssistantDraft = {
-  streamId: string
-  iteration?: number
-  reasoning: string
-  text: string
-  toolCalls: ModelStreamToolCall[]
-}
-
-const normalizeStreamingToolCalls = (toolCalls: ModelStreamToolCall[] | undefined): ModelStreamToolCall[] => {
-  if (!Array.isArray(toolCalls)) return []
-  return toolCalls.map((toolCall, fallbackIndex) => ({
-    index: Number.isFinite(toolCall.index) ? toolCall.index : fallbackIndex,
-    ...(typeof toolCall.id === 'string' && toolCall.id.trim() ? { id: toolCall.id.trim() } : {}),
-    ...(typeof toolCall.name === 'string' && toolCall.name.trim() ? { name: toolCall.name.trim() } : {}),
-  }))
-}
-
 const buildStreamingAssistantMessage = (draft: StreamingAssistantDraft | null): Message | null => {
   if (!draft) return null
 
   const parts: MessagePart[] = []
+  if (draft.incompletePrefix) {
+    parts.push({ system: 'Live stream joined after generation began; earlier content is unavailable.' })
+  }
   if (draft.reasoning.trim()) {
     parts.push({ thinking: draft.reasoning })
   }
@@ -193,7 +180,7 @@ const buildStreamingAssistantMessage = (draft: StreamingAssistantDraft | null): 
       functionCall: {
         id: toolCall.id || `stream-${draft.streamId}-${toolCall.index}`,
         name: toolCall.name || 'tool call',
-        args: {},
+        args: toolCall.displayArgs ?? parseStreamingToolArguments(toolCall.arguments),
       },
     })
   }
@@ -228,6 +215,11 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const [showMenu, setShowMenu] = useState(false)
   const [showDebugInfo, setShowDebugInfo] = useState(false)
   const [streamingAssistantDraft, setStreamingAssistantDraft] = useState<StreamingAssistantDraft | null>(null)
+  const streamingAssistantDraftRef = useRef<StreamingAssistantDraft | null>(null)
+  const clearStreamingAssistantDraft = useCallback(() => {
+    streamingAssistantDraftRef.current = null
+    setStreamingAssistantDraft(null)
+  }, [])
   const [toolScriptProgress, setToolScriptProgress] = useState<Record<string, ToolScriptSubCall[]>>({})
   const [asrAvailable, setAsrAvailable] = useState(false)
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([])
@@ -286,7 +278,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   useEffect(() => {
     setMessages([])
     setHistoryLoaded(false)
-    setStreamingAssistantDraft(null)
+    clearStreamingAssistantDraft()
     setToolScriptProgress({})
     setQueuedMessages([])
     setSessionRecord(null)
@@ -311,7 +303,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     setPersistentMemorySnapshot('')
     pendingContextScrollbarNavigationRef.current = null
     pendingScrollToTrueTopRef.current = false
-  }, [sessionId])
+  }, [clearStreamingAssistantDraft, sessionId])
 
   useEffect(() => {
     sessionBusyRef.current = sessionBusy
@@ -376,9 +368,9 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
   useEffect(() => {
     if (!sessionBusy) {
-      setStreamingAssistantDraft(null)
+      clearStreamingAssistantDraft()
     }
-  }, [sessionBusy])
+  }, [clearStreamingAssistantDraft, sessionBusy])
 
   useEffect(() => {
     const handleResize = () => {
@@ -714,6 +706,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     const eventVersionAtStart = historyEventVersionRef.current
     const stateEventVersionAtStart = historyStateEventVersionRef.current
     const modelStreamEventVersionAtStart = historyModelStreamEventVersionRef.current
+    const modelStreamDraftAtStart = streamingAssistantDraftRef.current
     const controller = new AbortController()
     historyAbortControllerRef.current = controller
 
@@ -775,7 +768,12 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           if (!hasNewerStreamState && typeof data.queueLength === 'number') {
             setSessionQueueLength(data.queueLength)
           }
-          if (!hasNewerModelStream) setStreamingAssistantDraft(null)
+          if (shouldClearDraftAfterHistory({
+            draftAtRequestStart: modelStreamDraftAtStart,
+            currentDraft: streamingAssistantDraftRef.current,
+            hasNewerStreamEvent: hasNewerModelStream,
+            snapshotMessages,
+          })) clearStreamingAssistantDraft()
           const lastMsg = snapshotMessages[snapshotMessages.length - 1]
           if (lastMsg?.__meta?.timestamp) {
             lastKnownTimestampRef.current = Math.max(lastKnownTimestampRef.current, lastMsg.__meta.timestamp)
@@ -805,7 +803,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       void fetchHistory()
     })
     return requestPromise
-  }, [applySessionState, sessionId])
+  }, [applySessionState, clearStreamingAssistantDraft, sessionId])
 
   const scheduleHistoryRefresh = useCallback((delay = 100) => {
     if (historyRefreshTimeoutRef.current !== null) {
@@ -874,7 +872,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           setQueuedMessages([])
           setMessages([])
           setPersistentMemorySnapshot('')
-          setStreamingAssistantDraft(null)
+          clearStreamingAssistantDraft()
           setHistoryLoaded(true)
           lastKnownTimestampRef.current = 0
           sessionBusyRef.current = false
@@ -887,29 +885,26 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           return
         }
 
+        if (data.type === 'model-stream-snapshot') {
+          historyModelStreamEventVersionRef.current += 1
+          const next = applyModelStreamSnapshot(data.draft || null)
+          streamingAssistantDraftRef.current = next
+          setStreamingAssistantDraft(next)
+          return
+        }
+
         if (data.type === 'session-event') {
           const sessionEvent = data.event as SessionStreamEvent
           if (sessionEvent.type === 'model-stream-reset') {
             historyModelStreamEventVersionRef.current += 1
-            setStreamingAssistantDraft({
-              streamId: sessionEvent.streamId || `stream-${sessionEvent.iteration ?? 'current'}`,
-              iteration: sessionEvent.iteration,
-              reasoning: '',
-              text: '',
-              toolCalls: [],
-            })
+            const next = applyModelStreamEvent(streamingAssistantDraftRef.current, sessionEvent)
+            streamingAssistantDraftRef.current = next
+            setStreamingAssistantDraft(next)
           } else if (sessionEvent.type === 'model-stream-update') {
             historyModelStreamEventVersionRef.current += 1
-            const streamId = sessionEvent.streamId || `stream-${sessionEvent.iteration ?? 'current'}`
-            setStreamingAssistantDraft(prev => ({
-              streamId,
-              iteration: sessionEvent.iteration ?? prev?.iteration,
-              reasoning: sessionEvent.reasoning ?? (prev?.streamId === streamId ? prev.reasoning : ''),
-              text: sessionEvent.text ?? (prev?.streamId === streamId ? prev.text : ''),
-              toolCalls: sessionEvent.toolCalls !== undefined
-                ? normalizeStreamingToolCalls(sessionEvent.toolCalls)
-                : (prev?.streamId === streamId ? prev.toolCalls : []),
-            }))
+            const next = applyModelStreamEvent(streamingAssistantDraftRef.current, sessionEvent)
+            streamingAssistantDraftRef.current = next
+            setStreamingAssistantDraft(next)
           } else if (sessionEvent.type === 'toolscript-progress' && sessionEvent.toolUseId) {
             setToolScriptProgress(prev => ({
               ...prev,
@@ -925,7 +920,9 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           const isUpdateExisting = data.message.__meta?.updateExisting
 
           if (data.message.role === 'model') {
-            setStreamingAssistantDraft(null)
+            if (shouldClearDraftForCommittedModel(streamingAssistantDraftRef.current, data.message.__meta?.timestamp)) {
+              clearStreamingAssistantDraft()
+            }
           }
 
           if (sessionQueueLengthRef.current > 0 || queuedMessagesRef.current.length > 0) {
@@ -980,7 +977,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       },
     })
     return unsubscribe
-  }, [applySessionState, fetchHistory, scheduleHistoryRefresh, sessionId])
+  }, [applySessionState, clearStreamingAssistantDraft, fetchHistory, scheduleHistoryRefresh, sessionId])
 
   const updateSessionModel = useCallback(async (model: string | null) => {
     setModelBusy(true)
@@ -1258,7 +1255,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     if (sessionMissing || (!text.trim() && attachments.length === 0) || loading) return false
 
     setLoading(true)
-    setStreamingAssistantDraft(null)
+    clearStreamingAssistantDraft()
 
     const userMessage = text.trim()
     const isSlashCommand = /^\/[a-zA-Z_\-.]+(?:\s+.*)?$/s.test(userMessage)
@@ -1359,7 +1356,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
     setLoading(false)
     return true
-  }, [loading, scheduleHistoryRefresh, sessionId, sessionMissing])
+  }, [clearStreamingAssistantDraft, loading, scheduleHistoryRefresh, sessionId, sessionMissing])
 
   const sendSessionCommand = useCallback(async (command: string) => {
     if (sessionMissing) return
@@ -1576,7 +1573,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
                 {onOpenCode && (
                   <button
                     onClick={onOpenCode}
-                    className={`inline-flex items-center gap-1 border border-gray-200 px-2 py-2 text-sm text-gray-700 hover:bg-gray-50 sm:px-3 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700 ${onOpenCodeNewWindow ? 'rounded-l-lg' : 'rounded-lg'}`}
+                    className={`inline-flex items-center gap-1 border border-fw-border px-2 py-2 text-sm text-fw-text hover:bg-fw-hover sm:px-3 dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover ${onOpenCodeNewWindow ? 'rounded-l-lg' : 'rounded-lg'}`}
                     title="Open code"
                   >
                     <Code2 className="h-4 w-4" />
@@ -1586,7 +1583,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
                 {onOpenCodeNewWindow && (
                   <button
                     onClick={onOpenCodeNewWindow}
-                    className={`inline-flex items-center justify-center rounded-r-lg border border-gray-200 px-2 text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700 ${onOpenCode ? 'border-l-0' : ''}`}
+                    className={`inline-flex items-center justify-center rounded-r-lg border border-fw-border px-2 text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text dark:hover:bg-fw-hover ${onOpenCode ? 'border-l-0' : ''}`}
                     title="Open code in a new browser tab"
                     aria-label="Open code in a new browser tab"
                   >
@@ -1598,7 +1595,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             {onOpenTerminal && (
               <button
                 onClick={onOpenTerminal}
-                className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                className="inline-flex items-center gap-1 rounded-lg border border-fw-border px-3 py-2 text-sm text-fw-text hover:bg-fw-hover dark:border-fw-border-strong dark:text-fw-text-strong dark:hover:bg-fw-hover"
                 title="Open terminal"
               >
                 <SquareTerminal className="h-4 w-4" />
@@ -1608,16 +1605,16 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             <div className="relative">
               <button
                 onClick={() => setShowMenu(!showMenu)}
-                className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+                className="rounded-lg p-2 text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
                 title="Session options"
               >
                 <Menu size={20} />
               </button>
               {showMenu && (
-                <div className="absolute right-0 mt-2 w-56 rounded-lg border border-gray-200 bg-white text-gray-900 shadow-lg z-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+                <div className="absolute right-0 mt-2 w-56 rounded-lg border border-fw-border bg-fw-surface text-fw-text-strong shadow-lg z-50 dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
                   <button
                     onClick={handleOpenDebugInfo}
-                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
+                    className="w-full px-4 py-2 text-left text-sm hover:bg-fw-hover dark:hover:bg-fw-hover"
                   >
                     debug info
                   </button>
@@ -1630,9 +1627,9 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
       {connectionState !== 'connected' && (
         <div className={`sticky top-0 z-20 px-4 py-2 text-sm ${
-          connectionState === 'connecting' ? 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-300' :
-          connectionState === 'reconnecting' ? 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-300' :
-          'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
+          connectionState === 'connecting' ? 'bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 text-fw-warning dark:text-fw-warning' :
+          connectionState === 'reconnecting' ? 'bg-fw-warning-surface dark:bg-fw-warning-surface-strong/20 text-fw-warning dark:text-fw-warning' :
+          'bg-fw-danger-surface dark:bg-fw-danger-surface-strong/20 text-fw-danger dark:text-fw-danger'
         }`}>
           {connectionState === 'connecting' && 'Connecting...'}
           {connectionState === 'reconnecting' && 'Reconnecting...'}
@@ -1657,7 +1654,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           )}
           <div ref={messagesContentRef} className="foxwarm-chat-messages-content min-w-0 max-w-full">
             {hiddenMessageCount > 0 && !showFullTimeline && (
-              <div className="mb-3 rounded-lg border border-gray-200 bg-white/80 px-3 py-2 text-xs text-gray-500 shadow-sm dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-300">
+              <div className="mb-3 rounded-lg border border-fw-border bg-fw-surface/80 px-3 py-2 text-xs text-fw-text-muted shadow-sm dark:border-fw-border dark:bg-fw-surface/80 dark:text-fw-text">
                 Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
               </div>
             )}
@@ -1688,7 +1685,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         {showScrollTopButton && (
           <button
             onClick={scrollToTop}
-            className="absolute right-4 top-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg transition-all hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+            className="absolute right-4 top-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-text-inverse shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
             aria-label="Scroll to top"
           >
             <svg className="h-[18px] w-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1700,7 +1697,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
         {showScrollButton && (
           <button
             onClick={scrollToBottom}
-            className="absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg transition-all hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+            className="absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-fw-accent text-fw-text-inverse shadow-lg transition-all hover:bg-fw-accent dark:bg-fw-accent dark:hover:bg-fw-accent"
             style={{ bottom: 'calc(var(--chat-composer-offset, 224px) + 1rem)' }}
             aria-label="Scroll to bottom"
           >

@@ -3,8 +3,20 @@ import assert from 'node:assert/strict';
 import os from 'os';
 import path from 'path';
 import fs from 'fs-extra';
+import yaml from 'js-yaml';
 import { buildModelsConfigFromSetupForm, validateAppConfigYaml, writeAppConfigWithChannels, writeRawAppConfig, writeRawModelsConfig } from './setupConfig';
-import { loadModelsConfigFromObject, normalizeNodeProvidersConfig } from './config';
+import { loadModelsConfigFromObject, normalizeHandoffConfirmationEnabled, normalizeNodeProvidersConfig } from './config';
+
+test('handoff confirmation config defaults off and accepts only booleans', () => {
+  assert.equal(normalizeHandoffConfirmationEnabled(undefined), false);
+  assert.equal(normalizeHandoffConfirmationEnabled(false), false);
+  assert.equal(normalizeHandoffConfirmationEnabled(true), true);
+  assert.throws(() => normalizeHandoffConfirmationEnabled('true'), /handoffConfirmation.*boolean/);
+  assert.equal(validateAppConfigYaml('').handoffConfirmation, undefined);
+  assert.equal(validateAppConfigYaml('handoffConfirmation: false\n').handoffConfirmation, false);
+  assert.equal(validateAppConfigYaml('handoffConfirmation: true\n').handoffConfirmation, true);
+  assert.throws(() => validateAppConfigYaml('handoffConfirmation: yes\n'), /handoffConfirmation.*boolean/);
+});
 
 test('raw models setup save writes the provided YAML text exactly', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-setup-models-'));
@@ -15,10 +27,12 @@ providers:
   openai:
     # keep provider comment
     providerType: "openai-completions"
+    historyReasoningField: "reasoning"
     baseUrl: "https://example.test/v1"
     customProviderField: true
     models:
       - id: "gpt-5.2-codex"
+        historyReasoningField: "reasoning_content"
         contextLimit: 400000
         customModelField: "keep"
 `;
@@ -26,6 +40,8 @@ providers:
   writeRawModelsConfig(rawYaml, filePath);
 
   assert.equal(await fs.readFile(filePath, 'utf8'), rawYaml);
+  const loaded = loadModelsConfigFromObject(yaml.load(rawYaml));
+  assert.equal(loaded.models.openai.historyReasoningField, 'reasoning_content');
   await fs.remove(dir);
 });
 
@@ -106,6 +122,18 @@ llm:
   assert.equal(parsed.llm?.compactThresholdPercent, 0.9);
   assert.equal(await fs.readFile(filePath, 'utf8'), rawYaml);
   await fs.remove(dir);
+});
+
+test('app config validates bounded per-instance ordinary-text channel progress', () => {
+  const parsed = validateAppConfigYaml(`channels:\n  telegram-a:\n    type: telegram\n    channelProgress:\n      intervalMs: 60000\n  telegram-b:\n    type: telegram\n    channelProgress: false\n`);
+  assert.equal((parsed.channels?.['telegram-a'] as any).channelProgress.intervalMs, 60_000);
+  assert.equal((parsed.channels?.['telegram-b'] as any).channelProgress, false);
+  for (const value of ['true', '{}', '{ intervalMs: 29999 }', '{ intervalMs: 1800001 }', '{ intervalMs: 60000.5 }']) {
+    assert.throws(
+      () => validateAppConfigYaml(`channels:\n  telegram:\n    type: telegram\n    channelProgress: ${value}\n`),
+      /channels\.telegram\.channelProgress/,
+    );
+  }
 });
 
 test('raw app config setup rejects invalid compaction percentages', () => {
@@ -208,6 +236,7 @@ test('models setup form preserves unknown provider and model fields', () => {
         extraFields: {
           providerExtra: 'keep',
         },
+        historyReasoningField: 'reasoning',
         webSearch: {
           enabled: true,
           toolChoice: 'auto',
@@ -241,6 +270,7 @@ test('models setup form preserves unknown provider and model fields', () => {
   assert.equal(next.providers?.openai.apiKey, 'new-key');
   assert.deepEqual((next.providers?.openai as any).customProviderField, { nested: true });
   assert.deepEqual(next.providers?.openai.extraFields, { providerExtra: 'keep' });
+  assert.equal(next.providers?.openai.historyReasoningField, undefined);
   assert.deepEqual(next.providers?.openai.webSearch, { enabled: true, toolChoice: 'auto' });
   assert.deepEqual(next.providers?.openai.models?.[0], {
     id: 'gpt-5.2-codex',

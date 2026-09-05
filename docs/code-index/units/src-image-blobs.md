@@ -14,6 +14,7 @@ Owns content-addressed image blob storage, inline/legacy-reference materializati
 - `readImageRef` — reads canonical blobs or compatible legacy archive paths with size/hash checks.
 - `externalizeMessageImages`, `externalizeMessages` — clone messages while replacing top-level, nested structured function-response, and legacy image data with canonical references.
 - `externalizeQueueItemImages`, `externalizeQueueItems` — apply the same boundary to queued and managed-inbox work.
+- `stripReservedProviderImageHelperFields` — removes legacy/forged provider-image helper keys from a request-local or persistence-bound message clone without mutating caller input.
 - `hydrateMessagesForProvider` — clones canonical messages, attaches inline base64 only for provider serialization, and normalizes current HEIC/HEIF references to provider-safe JPEG or PNG.
 
 QQ Bot C2C/group image ingress uses the same transient `inlineData` path after
@@ -29,7 +30,8 @@ bytes; it must not introduce a QQ-specific durable image format.
 - Structured `functionResponse.response.inlineData` and `inlineDataItems` images are removed only after all blob writes succeed and are promoted immediately after their response as sibling reference parts carrying the same `tool_use_id`; business response fields and image order remain stable.
 - Conversion functions do not mutate input messages. Callers update canonical state only after every requested conversion succeeds.
 - Legacy path reads are confined to the configured state directory.
-- Provider hydration lazily loads the in-process `libheif-js` WASM decoder only for declared `image/heic` or `image/heif` references, validates actual container/decoded pixels, enforces a 64-megapixel limit before pixel decode, and uses decoded transparency to select PNG versus JPEG. Provider-native PNG/JPEG/GIF/WebP bytes pass through unchanged.
+- Provider hydration lazily loads the in-process `libheif-js` WASM decoder only for declared `image/heic` or `image/heif` references, validates actual container/decoded pixels, enforces a 64-megapixel limit before pixel decode, and uses decoded transparency to select PNG versus JPEG. Provider-native PNG/JPEG/GIF/WebP bytes pass through unchanged. Request-local deduplication hashes this resulting inline payload directly rather than trusting message-carried helper identity.
+- Externalization strips legacy/reserved provider-image helper keys from every converted part, including already-reference-only parts, so those keys cannot enter canonical Session, queue, archive, or WebUI source shapes. Low-level LLM requests apply the same pure scrub to their structured-cloned canonical request before journaling.
 
 ## Dependencies
 

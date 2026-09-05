@@ -12,6 +12,23 @@ import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import { LocalRpcTransport, RpcServiceRegistry } from './rpc';
 import { sessionWorkerPresentationServiceDescriptor } from './sessionWorkerPresentationService';
 import type { Session } from './types';
+import { mergeModelStreamDeltaEvents } from './sessionWorkerHost';
+
+test('worker coalescing composes model and tool argument deltas without losing bytes', () => {
+  const merged = mergeModelStreamDeltaEvents({
+    type: 'model-stream-update', streamVersion: 2, streamId: 's', sequenceStart: 1, sequence: 1,
+    textDelta: { offset: 0, text: 'hel' },
+    toolCallDeltas: [{ index: 0, id: 'c', name: 'exec', argumentsDelta: { offset: 0, text: '{"com' } }],
+  }, {
+    type: 'model-stream-update', streamVersion: 2, streamId: 's', sequenceStart: 2, sequence: 2,
+    textDelta: { offset: 3, text: 'lo' },
+    toolCallDeltas: [{ index: 0, argumentsDelta: { offset: 5, text: 'mand":"x"}' } }],
+  });
+  assert.deepEqual(merged.textDelta, { offset: 0, text: 'hello' });
+  assert.equal(merged.sequenceStart, 1);
+  assert.equal(merged.sequence, 2);
+  assert.deepEqual(merged.toolCallDeltas, [{ index: 0, id: 'c', name: 'exec', argumentsDelta: { offset: 0, text: '{"command":"x"}' } }]);
+});
 
 async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -147,6 +164,31 @@ test('unsubscribed workers forward nothing', async () => {
     await new Promise(resolve => setTimeout(resolve, 300));
     assert.equal(fixture.receivedMessages.length, 0, 'no subscription, zero worker→Main presentation calls');
     assert.equal(fixture.receivedEvents.length, 0);
+  } finally {
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    await fs.remove(root);
+  }
+});
+
+test('worker accumulates an exact-owner draft before the first presentation subscriber', async () => {
+  const sessionId = `mc-pres-bootstrap-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-pres-bootstrap-'));
+  const fixture = makeFixture(root, { FOXWARM_TEST_STREAM_BOOTSTRAP: '1' });
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  try {
+    await fixture.supervisor.reconcileStartupOwnerships();
+    const turn = fixture.ingress.submitEnsuringWorker(sessionId, { type: 'user', parts: [{ text: 'quiet stream' }] });
+    await waitFor(() => fs.pathExists(path.join(root, 'state', `stream-bootstrap-${sessionId}`)));
+    assert.equal(fixture.receivedEvents.length, 0, 'no subscriber means no Worker-to-Main live events');
+    const draft = await fixture.supervisor.loadModelStreamDraft(sessionId);
+    assert.equal(draft?.text, 'quiet accumulated draft');
+    assert.equal(draft?.sequence, 4);
+    assert.equal(draft?.llmRequestId, 'bootstrap-request');
+    assert.equal(draft?.toolCalls[0]?.arguments, '{"filePath":"quiet"}');
+    await fixture.supervisor.setPresentationSubscription(sessionId, true);
+    await turn;
   } finally {
     await fixture.supervisor.shutdown(3_000).catch(() => {});
     fixture.store.close();

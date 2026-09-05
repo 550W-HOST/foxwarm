@@ -14,6 +14,8 @@
     "test:launcher-draft": "node --test test/launcherDraft.test.mjs",
     "test:setup-models-e2e": "node --test test/setupModels.e2e.mjs",
     "test:theme-e2e": "node --test test/themeMarkdownStyles.e2e.mjs",
+    "test:theme-system": "node --test test/themeSystem.test.mjs",
+    "test:thread-card-surfaces-e2e": "node --test test/threadCardSurfaces.e2e.mjs",
     "test:special-blocks-e2e": "node --test test/specialBlocks.e2e.mjs",
     "test:message-overflow-e2e": "node --test test/messageOverflow.e2e.mjs",
     "test:timeline-overflow-boundary-e2e": "node --test test/timelineOverflowBoundary.e2e.mjs",

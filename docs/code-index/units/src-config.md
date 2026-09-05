@@ -51,6 +51,7 @@ Worker placement is startup configuration:
 - `vector` is a connection/feature object, not a general boolean shorthand. Omission or `false` disables Vector; an object opts in unless `enabled:false`. Enabled Vector requires a nonempty absolute HTTP(S) `baseUrl` without credentials, query, or fragment components that already includes its OpenAI-compatible API root; runtime appends only `/embeddings`. `vector.lexicalIndex` is a narrow startup boolean and defaults false. `vector.hybridSearch` also defaults false and normalizes false unless Vector and lexical indexing are both enabled.
 - `sessionWorkers` is experimental and accepts a boolean or object. Omission/`false` keeps the default in-process session runtime. `true` enables default worker settings. An object enables workers unless `enabled:false`; `idleSeconds` defaults to 60 and accepts numeric YAML integers from 1 through 86,400 (boolean and string coercion is rejected).
 - `dbWorkers` is boolean, defaults to `true`, and currently moves only an enabled LanceDB/vector owner into a child process. It has no effect while Vector is disabled.
+- `handoffConfirmation` is a top-level startup boolean, defaults to `false`, and controls only structured confirmation for `send_to_session` / `create_child_session`; cancellation controls are independent. Changing it requires restart.
 - `vectorMaintenance` accepts `false`, `true`, or an options object; the normalized default is enabled with positive-integer `retentionHours` defaulting to `24`. Its exact-owner execution contract is canonical in [D-vector-owner-maintenance](src-vector.md#d-vector-owner-maintenance).
 - Worker placement changes require a process restart. Managed channel hot reload does not change process topology.
 - `nodeProviders` is a startup-only map keyed by bounded provider ID. `type: executable` accepts a fixed command/arguments and bounded request timeout. `type: docker-worktree` accepts a fixed Docker launcher/image, canonical allowed roots, allowed network modes, optional state location, and bounded resource defaults. Both variants reject unknown fields and require restart.
@@ -78,6 +79,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 | Persistent lexical+dense hybrid reads | disabled |
 | Session workers / idle release | disabled / `60` seconds |
 | Vector database worker | enabled |
+| Inter-agent handoff confirmation | disabled |
 | Vector maintenance / version retention | enabled / `24` hours |
 | Node providers / executable request timeout | none / `90` seconds |
 
@@ -87,7 +89,7 @@ These are selected runtime overrides, not an environment-to-YAML migration.
 - Preferred provider field is `models`; legacy `model` remains a reader.
 - `providerType` is current; `provider` is a legacy reader.
 - A single-model provider gets both provider-key and provider/model lookup entries; multi-model providers use provider/model keys.
-- Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly, and `webSearch` settings merge from provider to concrete model override.
+- Provider defaults are applied before model-level overrides. Header overrides merge one level by key. Nested plain objects under `extraFields` merge recursively. `contextLimit` overrides directly, `webSearch` settings merge from provider to concrete model override, and Chat Completions `historyReasoningField` inherits or overrides as one normalized enum.
 - First-class `effort` uses `{ allowed, default }`. Omission allows `none`, `low`, `medium`, `high`, `xhigh`, and `max` with `high` as the default. A model-level `allowed` list replaces the provider list; omitted model fields inherit provider values, and the resulting default must be allowed. Virtual entries cannot configure effort directly and expose the canonical union of reachable concrete levels.
 - `openai`, `openai-responses`, and `openai-completions` receive OpenAI defaults; `anthropic` receives Anthropic defaults; `gemini` defaults to `https://generativelanguage.googleapis.com/v1beta`; custom types must provide their own base URL/protocol-compatible settings.
 - Invalid provider objects, model lists, and cross-strategy fields fail with provider-qualified validation errors.
@@ -138,6 +140,14 @@ The mutable models configuration has one active location: `<data-root>/state/mod
 ### D-config-default-max-output
 
 [2026-08-18, updated 2026-09-02] `llm.maxOutput` remains the single application-level provider output-token override and defaults to `32768` when omitted. The default applies as `max_output_tokens` for OpenAI Responses, `max_tokens` for OpenAI Chat Completions and Anthropic-compatible requests, and `generationConfig.maxOutputTokens` for Gemini; provider/model `extraFields` retain their existing later override position.
+
+### D-config-chat-history-reasoning-field
+
+[2026-08-31] A concrete `openai-completions` provider may select `historyReasoningField: reasoning_content | reasoning`, with omission defaulting to `reasoning_content`; a model object may override the provider value. Other concrete protocols reject the field and virtual providers forbid it. The resolved concrete value participates directly in route fingerprints so a request always serializes from its current destination configuration rather than persisted per-message field-name metadata.
+
+### D-config-handoff-confirmation
+
+[2026-09-04] Top-level `handoffConfirmation` accepts only a boolean and defaults to `false`. It is resolved once at startup and requires restart to change. `true` enables the exact inter-agent confirmation contract and its schema/reminder guidance; omission or `false` disables only that confirmation requirement. Model tool-call cancellation controls remain enabled in both modes.
 
 ## Canonical ownership
 

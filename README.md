@@ -217,11 +217,12 @@ After logging into WebUI, the OOBE page cannot be closed until models are config
 
 OOBE/Setup supports:
 
-1. **Models** — creates `state/models.yaml`; includes a **Test model** button that sends `Please reply ok` without writing conversation history
+1. **Models** — edits and validates `state/models.yaml` as raw YAML
 2. **Channels** — edits `state/config.yaml` and hot-reloads managed channels
 3. **Weixin login** — starts QR login in WebUI, shows the QR image or pairing link when the upstream returns a displayable value, saves the resulting token into channel config, and hot-reloads channels
+4. **Appearance** — selects a built-in WebUI theme or imports, exports, clones, and deletes portable browser-local themes
 
-You can later return to the same page from the WebUI setup/settings button.
+You can later return to the same page from the WebUI setup/settings button. See [WebUI Themes](docs/webui-themes.md) for the portable theme format and safety model.
 
 ## Configuration
 
@@ -254,6 +255,7 @@ vector:
 vectorMaintenance:
   enabled: true
   retentionHours: 24
+handoffConfirmation: false
 ```
 
 `llm.compactKeepPercent` controls the fraction of recent rendered history kept
@@ -274,8 +276,15 @@ still read when top-level `vector` is absent, but new configuration should use
 `vector.baseUrl`. Optional `vector.lexicalIndex: true` enables a dark,
 exact-Vector-owner derived lexical indexing lane; it defaults off and is not
 consumed by recall unless `vector.hybridSearch: true` is also set. Hybrid search
-requires the lexical index and remains disabled by default. Vector, worker placement, and maintenance settings are read
+requires the lexical index and remains disabled by default. Vector, worker placement, maintenance, and handoff-confirmation settings are read
 at process startup.
+
+`handoffConfirmation` defaults to `false`. When set to `true`,
+`send_to_session` and `create_child_session` require the structured confirmation
+shown by their current tool schemas, including an original non-placeholder
+review and final-property placement. This setting affects only inter-agent
+handoff confirmation; model tool-call cancellation controls remain available in
+both modes. Changing it requires a restart.
 
 When explicitly enabled, the lexical derivative follows committed Session rename/fork boundaries and rebuilds incompatible derived schemas through a restart-resumable shadow SQLite file. These operations are best-effort derived maintenance: they do not make Archive commits or dense Vector availability depend on lexical health.
 
@@ -342,6 +351,25 @@ inline images, usage metadata, and SSE streaming are normalized into the same
 Foxwarm history as other providers. `effort: none` maps to Gemini's portable
 zero thinking budget; non-zero effort leaves the selected model's native
 thinking policy unchanged because supported controls differ by model generation.
+
+Some Chat Completions-compatible providers return assistant thinking as
+`reasoning_content` but require that history to be replayed under `reasoning`.
+Configure that request dialect explicitly when needed; omission keeps the
+standard Foxwarm `reasoning_content` behavior:
+
+```yaml
+providers:
+  compatible-chat:
+    providerType: openai-completions
+    historyReasoningField: reasoning
+    models:
+      - compatible-model
+```
+
+`historyReasoningField` accepts only `reasoning_content` or `reasoning`, and is
+valid only for concrete `openai-completions` providers. A model object may
+override its provider value when models behind one endpoint use different
+dialects.
 
 Provider and model entries can declare first-class effort capabilities and a
 default. When omitted, all six levels are allowed and `high` is the default:
@@ -422,10 +450,21 @@ channels:
     type: telegram
     enabled: true
     botToken: "123456:telegram-token"
+    # Optional best-effort ordinary-text tool progress for this channel instance.
+    # Omit it or set it to false to disable. Valid interval: 30000–1800000 ms.
+    channelProgress:
+      intervalMs: 60000
     mainAttachUser: "your-telegram-user-id"
     allowedUsers:
       - "your-telegram-user-id"
 ```
+
+`channelProgress` is common to managed ordinary-text channels. It reports only
+bounded top-level tool names/counts in transient messages; it never stores
+progress in Session history or archives. Each attached channel target keeps an
+independent timer and report baseline. WebUI is excluded, and an active WeWork
+stream card continues to use its native progress instead of receiving a
+duplicate text fallback.
 
 Example Weixin channel:
 
@@ -653,6 +692,7 @@ foxwarm/
 - [Vector Memory](docs/vector-memory.md)
 - [Development](docs/development.md)
 - [Multiprocess Session Workers](docs/multiprocess-session-workers.md)
+- [WebUI Themes](docs/webui-themes.md)
 - [ToolScript examples](examples/toolscript/README.md)
 
 ## Development

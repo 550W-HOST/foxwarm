@@ -17,13 +17,16 @@ import {
   buildSendFileResult,
 } from './helpers';
 import * as sessionManager from '../sessionManager';
-import { armMainWaitLiveness, scheduleMainWaitTimeout, validateMainWaitSessions } from '../mainManagementTools';
+import { armMainWaitLiveness, scheduleMainWaitTimeout, validateMainWaitExecIds, validateMainWaitSessions } from '../mainManagementTools';
 import { logger } from '../common';
 import { requireNotIsolated, checkChannelPermission, checkSendFilePermission } from '../isolatedCheck';
 import { COMPACT_PLAN_TOOL_NAME } from '../session/compactPlan';
+import { HANDOFF_CONFIRMATION_ENABLED } from '../config';
+import { validateInterAgentHandoffConfirmationForMode } from '../toolCallControls';
 
 export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext) {
   await requireNotIsolated(ctx, 'create_child_session');
+  validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED);
   const normalizedArgs = normalizeCreateChildSessionArgs(args);
   const { suffix, fork = false, message, node } = normalizedArgs;
   const afterSend = normalizeAfterSendBehavior(normalizedArgs, 'create_child_session');
@@ -64,7 +67,8 @@ export async function tool_create_child_session(args: ToolArgs, ctx: ToolContext
 }
 
 export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
-  const unknownKeys = Object.keys(args || {}).filter(key => !['sessionId', 'message', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff'].includes(key));
+  validateInterAgentHandoffConfirmationForMode(args, HANDOFF_CONFIRMATION_ENABLED);
+  const unknownKeys = Object.keys(args || {}).filter(key => !['sessionId', 'message', 'afterSend', 'noFurtherAssistantReply', 'waitAfterHandoff', 'confirmation'].includes(key));
   if (unknownKeys.length) throw new Error(`send_to_session received unsupported argument${unknownKeys.length === 1 ? '' : 's'}: ${unknownKeys.join(', ')}.`);
   const { sessionId, message } = args;
   const afterSend = normalizeAfterSendBehavior(args, 'send_to_session');
@@ -128,10 +132,17 @@ export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
     if (waitExecIds) {
       const active = ctx.execRuntime?.listRunningExecs() || [];
       const queued = new Set((ctx.session?.queue || []).map((item: any) => item?.execId).filter((id: unknown): id is string => typeof id === 'string'));
+      const unresolved: string[] = [];
       for (const execId of waitExecIds) {
         const entry = active.find(candidate => candidate.id === execId);
         const owned = entry && entry.sessionId === ctx.sessionId && entry.agentName === (ctx.session?.agent || 'main');
-        if (!owned && !queued.has(execId)) {
+        if (!owned && !queued.has(execId)) unresolved.push(execId);
+      }
+      const remoteActive = unresolved.length
+        ? new Set((await validateMainWaitExecIds({ sourceSessionId: ctx.sessionId, execIds: unresolved })).activeExecIds)
+        : new Set<string>();
+      for (const execId of unresolved) {
+        if (!remoteActive.has(execId)) {
           throw new Error(`waitExecIds entry \`${execId}\` is not an accessible active exec owned by this Session/Agent and has no queued completion. Use the exact execId, never a PID, log path, or command text.`);
         }
       }

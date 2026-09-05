@@ -21,8 +21,6 @@ import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
 import { MASTER_NODE_TARGET, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
 import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget'
 
-type ThemeMode = 'auto' | 'light' | 'dark'
-type UiThemeStyle = 'default' | '550a'
 type AppView = 'session' | 'agents' | 'setup'
 type SendKeyMode = 'modEnter' | 'enter'
 
@@ -57,10 +55,6 @@ type ApiErrorDetails = {
   text: string
 }
 
-const LIGHT_THEME_COLOR = '#f3f4f6'
-const DARK_THEME_COLOR = '#111827'
-const THEME_550A_LIGHT_COLOR = '#f4f3ef'
-const THEME_550A_DARK_COLOR = '#0c0c0c'
 const ARCHITECTURE_HASH = 'agents'
 const SETUP_HASH = 'setup'
 const TAB_HASH_PREFIX = 'tab/'
@@ -70,7 +64,6 @@ const LAST_VISITED_SESSION_STORAGE_KEY = 'foxwarm_last_visited_session_v1'
 const LAST_ACTIVE_TAB_STORAGE_KEY = 'foxwarm_last_active_tab_v1'
 const SIDEBAR_WIDTH_STORAGE_KEY = 'foxwarm_sidebar_width_v1'
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'foxwarm_sidebar_collapsed_v1'
-const UI_THEME_STYLE_STORAGE_KEY = 'foxwarm_ui_theme_style_v1'
 const SEND_KEY_MODE_STORAGE_KEY = 'foxwarm_send_key_mode_v1'
 const GROUP_TOOLS_STORAGE_KEY = 'foxwarm_group_tools_v1'
 const SHOW_USAGE_BADGE_STORAGE_KEY = 'foxwarm_show_usage_badge_v1'
@@ -268,7 +261,7 @@ function applyCustomTabIcon(tabIcon: string) {
 
 function LazyViewFallback({ label = 'Loading…' }: { label?: string }) {
   return (
-    <div className="flex h-full min-h-0 items-center justify-center bg-gray-50 px-6 text-center text-sm text-gray-500 dark:bg-gray-950 dark:text-gray-400">
+    <div className="flex h-full min-h-0 items-center justify-center bg-fw-surface-sunken px-6 text-center text-sm text-fw-text-muted dark:bg-fw-canvas-edge dark:text-fw-text-muted">
       <div>{label}</div>
     </div>
   )
@@ -445,20 +438,6 @@ function App() {
   const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[]>([])
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
   const [showSessionList, setShowSessionList] = useState<boolean>(() => !window.location.hash)
-  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
-    const saved = localStorage.getItem('themeMode')
-    return saved === 'auto' || saved === 'light' || saved === 'dark' ? saved : 'auto'
-  })
-  const [uiThemeStyle, setUiThemeStyle] = useState<UiThemeStyle>(() => {
-    const saved = localStorage.getItem(UI_THEME_STYLE_STORAGE_KEY)
-    return saved === '550a' ? '550a' : 'default'
-  })
-  const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(() => {
-    if (window.matchMedia) {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches
-    }
-    return false
-  })
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY) || 256)
     return Number.isFinite(saved) ? Math.min(420, Math.max(180, saved)) : 256
@@ -499,7 +478,6 @@ function App() {
   const closePane = useWorkbenchStore((state) => state.closePane)
   const updateSplitSizes = useWorkbenchStore((state) => state.updateSplitSizes)
 
-  const darkMode = themeMode === 'dark' || (themeMode === 'auto' && systemPrefersDark)
   const [draggingItem, setDraggingItem] = useState<{ type: 'tab' | 'session'; id: string; title: string } | null>(null)
 
   const pendingRouteTabIdRef = useRef<string | null>(null)
@@ -605,28 +583,6 @@ function App() {
   }
 
   useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark')
-    } else {
-      document.documentElement.classList.remove('dark')
-    }
-    if (uiThemeStyle === '550a') {
-      document.documentElement.setAttribute('data-foxwarm-ui-style', '550a')
-    } else {
-      document.documentElement.removeAttribute('data-foxwarm-ui-style')
-    }
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', uiThemeStyle === '550a' ? (darkMode ? THEME_550A_DARK_COLOR : THEME_550A_LIGHT_COLOR) : darkMode ? DARK_THEME_COLOR : LIGHT_THEME_COLOR)
-  }, [darkMode, uiThemeStyle])
-
-  useEffect(() => {
-    localStorage.setItem('themeMode', themeMode)
-  }, [themeMode])
-
-  useEffect(() => {
-    localStorage.setItem(UI_THEME_STYLE_STORAGE_KEY, uiThemeStyle)
-  }, [uiThemeStyle])
-
-  useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth))
   }, [sidebarWidth])
 
@@ -645,13 +601,6 @@ function App() {
   useEffect(() => {
     localStorage.setItem(SHOW_USAGE_BADGE_STORAGE_KEY, showUsageBadge ? 'true' : 'false')
   }, [showUsageBadge])
-
-  useEffect(() => {
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-    const handleChange = (event: MediaQueryListEvent) => setSystemPrefersDark(event.matches)
-    mediaQuery.addEventListener('change', handleChange)
-    return () => mediaQuery.removeEventListener('change', handleChange)
-  }, [])
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768)
@@ -1546,7 +1495,7 @@ function App() {
     }
 
     if (tab.type === 'vscode') {
-      return <div ref={handleVscodeFrameSlot} className="h-full min-h-0 w-full bg-gray-950" data-foxwarm-vscode-web-slot="true" />
+      return <div ref={handleVscodeFrameSlot} className="h-full min-h-0 w-full bg-fw-canvas-edge" data-foxwarm-vscode-web-slot="true" />
     }
 
     return (
@@ -1611,9 +1560,9 @@ function App() {
     const content = activeTab
       ? renderTabContent(activeTab, onBack)
       : (
-        <div className="flex h-full items-center justify-center bg-gray-50 text-center text-sm text-gray-500 dark:bg-gray-950 dark:text-gray-400">
+        <div className="flex h-full items-center justify-center bg-fw-surface-sunken text-center text-sm text-fw-text-muted dark:bg-fw-canvas-edge dark:text-fw-text-muted">
           <div className="max-w-sm space-y-2 px-6">
-            <div className="text-base font-medium text-gray-700 dark:text-gray-200">Empty pane</div>
+            <div className="text-base font-medium text-fw-text-strong">Empty pane</div>
             <div>Focus this pane and open a chat or terminal from the sidebar/session list.</div>
           </div>
         </div>
@@ -1819,11 +1768,11 @@ function App() {
       {content}
       <DragOverlay>
         {draggingTab ? (
-          <div className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+          <div className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
             <span className="truncate">{draggingTab.title}</span>
           </div>
         ) : draggingItem?.type === 'session' ? (
-          <div data-session-drag-overlay className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-lg dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+          <div data-session-drag-overlay className="inline-flex max-w-[24rem] items-center gap-2 rounded-lg border border-fw-border bg-fw-surface px-3 py-2 text-sm text-fw-text shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
             <span className="truncate">{draggingItem.title}</span>
           </div>
         ) : null}
@@ -1853,10 +1802,6 @@ function App() {
           currentSession={currentContextSessionId}
           currentView={currentView}
           currentSessionRecord={currentContextSessionRecord}
-          themeMode={themeMode}
-          onThemeChange={setThemeMode}
-          uiThemeStyle={uiThemeStyle}
-          onUiThemeStyleChange={setUiThemeStyle}
           sendKeyMode={sendKeyMode}
           onSendKeyModeChange={setSendKeyMode}
           groupTools={groupTools}
@@ -1896,7 +1841,7 @@ function App() {
     const mobilePaneId = focusedPaneId || paneIds[0]
 
     return renderWithVscodeFrame(
-      <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 bg-gray-100 dark:bg-gray-900 overflow-hidden">
+      <div className="foxwarm-safe-area-shell foxwarm-fixed-viewport-shell fixed inset-x-0 bg-fw-canvas overflow-hidden">
         <div className="h-full min-h-0 overflow-hidden p-0">
           {renderWorkbenchSurface(mobilePaneId ? renderPane(mobilePaneId, handleBackToList) : null)}
         </div>
@@ -1905,7 +1850,7 @@ function App() {
   }
 
   return renderWithVscodeFrame(renderWorkbenchSurface(
-    <div className="foxwarm-safe-area-shell foxwarm-viewport-shell relative flex overflow-hidden bg-gray-100 dark:bg-gray-900">
+    <div className="foxwarm-safe-area-shell foxwarm-viewport-shell relative flex overflow-hidden bg-fw-canvas">
       {!sidebarCollapsed ? (
         <div className="relative h-full shrink-0" style={{ width: sidebarWidth }}>
           <Sidebar
@@ -1914,10 +1859,6 @@ function App() {
             currentSession={currentContextSessionId}
             currentView={currentView}
             currentSessionRecord={currentContextSessionRecord}
-            themeMode={themeMode}
-            onThemeChange={setThemeMode}
-            uiThemeStyle={uiThemeStyle}
-            onUiThemeStyleChange={setUiThemeStyle}
             sendKeyMode={sendKeyMode}
             onSendKeyModeChange={setSendKeyMode}
             groupTools={groupTools}
@@ -1954,7 +1895,7 @@ function App() {
             bounded={boundedPresentation}
           />
           <div
-            className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize bg-transparent transition hover:bg-blue-400/40"
+            className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize bg-transparent transition hover:bg-fw-accent/40"
             onMouseDown={startSidebarResize}
           />
         </div>

@@ -6,9 +6,12 @@ import {
   AppConfig,
   getActiveModelsConfigPath,
   ProviderConfigEntry,
+  ProviderModelListItem,
   loadModelsConfigFromObject,
   normalizeDbWorkersEnabled,
+  normalizeHandoffConfirmationEnabled,
   normalizeCompactionConfig,
+  normalizeChannelProgressInterval,
   normalizeNodeProvidersConfig,
   normalizeSessionWorkersConfig,
   normalizeVectorConfig,
@@ -87,12 +90,18 @@ export function validateAppConfigYaml(rawYaml: string): AppConfig {
   if (config.channels !== undefined && !isPlainObject(config.channels)) {
     throw new Error('app config `channels` must be a YAML object.');
   }
+  for (const [channelId, channel] of Object.entries(config.channels || {})) {
+    if (!isPlainObject(channel)) throw new Error(`app config channel \`${channelId}\` must be a YAML object.`);
+    try { normalizeChannelProgressInterval(channel.channelProgress); }
+    catch (error: any) { throw new Error(`channels.${channelId}.${error?.message || error}`); }
+  }
   normalizeNodeProvidersConfig(config.nodeProviders);
   normalizeSessionWorkersConfig(config.sessionWorkers);
   normalizeDbWorkersEnabled(config.dbWorkers);
   normalizeCompactionConfig(config.llm);
   normalizeVectorConfig(config.vector, config.llm?.ollamaBaseUrl);
   normalizeVectorMaintenanceConfig(config.vectorMaintenance);
+  normalizeHandoffConfirmationEnabled(config.handoffConfirmation);
   return config;
 }
 
@@ -252,7 +261,7 @@ export function buildModelsConfigFromSetupForm(body: any, existingConfig: any = 
     if (isVirtual) {
       const targets = splitModelIds(hasOwn(draft, 'targets') ? draft.targets : existingProvider.targets);
       nextProvider.targets = targets;
-      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'asyncCompact'] as const) {
+      for (const field of ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'contextLimit', 'effort', 'historyReasoningField', 'asyncCompact'] as const) {
         delete nextProvider[field];
       }
       if (providerType === 'session-hash') {
@@ -321,6 +330,15 @@ export function buildModelsConfigFromSetupForm(body: any, existingConfig: any = 
 
     const existingModels = existingProvider.models ?? existingProvider.model;
     nextProvider.models = buildModelListPreservingOverrides(existingModels, modelIds);
+    if (providerType !== 'openai-completions') {
+      delete nextProvider.historyReasoningField;
+      nextProvider.models = nextProvider.models.map(model => {
+        if (!isPlainObject(model) || !hasOwn(model, 'historyReasoningField')) return model;
+        const nextModel = cloneConfigValue(model);
+        delete nextModel.historyReasoningField;
+        return nextModel as ProviderModelListItem;
+      });
+    }
     delete nextProvider.model;
 
     nextProviders[providerKey] = nextProvider;

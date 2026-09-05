@@ -33,7 +33,7 @@ Bootstraps the browser application, routes workbench tabs, owns global list/UI p
 - Global `sessions-updated` invalidation refetches only the current root and expanded-child windows through the fixed-delay coalescing contract in [D-webui-app-global-list-gate](#d-webui-app-global-list-gate). Exact watched rows receive filtered deltas through their logical subscription. Registering a new physical socket submits the same coalesced refresh intent, closing the reconnect invalidation gap. Agent and terminal fetches are independent of Session catalog invalidation.
 - Chat per-session runtime/history remains inside Chat.
 - Desktop expanded/collapsed sidebar and mobile shell share the same current tab records.
-- Browser-only theme, UI style, sidebar, send-key, last-tab/session, and Code preferences use local storage. Instance branding comes from server settings.
+- The shared theme runtime initializes before React and owns browser-local theme package/selection state. Sidebar, send-key, last-tab/session, and Code preferences also use local storage. Instance branding comes from server settings.
 - Browser auth storage reads only `foxwarm_token`. The browser E2E helper is exposed only as `window.foxwarmTest`.
 - Main launcher options consume the authenticated node summary. Code persists its standalone node/path target in browser storage; terminal defaults follow the focused session. Session-header terminal placement reuses a lower pane only for the exact normalized node/cwd target and otherwise adds the requested target there.
 - Node-target normalization preserves a connected protocol-incompatible target for diagnosis but makes it unavailable with an `upgrade required` label, so Code and Terminal launch controls cannot dispatch through it. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
@@ -54,7 +54,7 @@ These are independent roots, not CSS-hidden full App instances. Active-target me
 
 ## Code and commit behavior
 
-- Embedded launch creates one singleton Code tab. Restoring that tab without displaying it as active in a visible workbench pane leaves the top-level iframe uncreated, including while the mobile list replaces the workbench surface; its first actual display starts it. Later tab/surface changes hide/reposition the persistent iframe rather than remounting it, while explicit tab close destroys the frame and clears pending bridge state. In the 550A style, the full-screen scanline overlay remains above normal WebUI content but below the iframe so the Code workbench stays visually unobscured and interactive.
+- Embedded launch creates one singleton Code tab. Restoring that tab without displaying it as active in a visible workbench pane leaves the top-level iframe uncreated, including while the mobile list replaces the workbench surface; its first actual display starts it. Later tab/surface changes hide/reposition the persistent iframe rather than remounting it, while explicit tab close destroys the frame and clears pending bridge state. In the console component treatment, the full-screen scanline overlay remains above normal WebUI content but below the iframe so the Code workbench stays visually unobscured and interactive.
 - File-tool paths become typed open-file requests only after node/path/cwd normalization; `read` ranges become selections.
 - Strict standalone model-authored commit markers outside code fences render inert cards. Click dispatches typed `openCommit`; malformed/user markers remain text.
 - New-tab URLs carry one-shot targets. Running iframe transfer/pop-out is not implemented.
@@ -91,4 +91,4 @@ The Code workbench tab is a launcher/slot. The portal-owned iframe starts only w
 
 ### D-webui-app-client-preferences
 
-Theme/style/layout/navigation/Code launch choices stay browser-local unless the setting is explicitly instance-wide.
+Theme package/selection, layout, navigation, and Code launch choices stay browser-local unless the setting is explicitly instance-wide. Theme details are owned by [webui-theme-system](./webui-theme-system.md).

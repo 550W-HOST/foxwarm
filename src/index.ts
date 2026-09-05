@@ -16,6 +16,7 @@ import { performSessionWorkerHandback } from './sessionWorkerHandback';
 import { SessionWorkerSourceContextRegistry } from './sessionWorkerSourceContextRegistry';
 import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
+import { getModelStreamDraft } from './modelStreamDraft';
 import * as mainManagementTools from './mainManagementTools';
 import * as nodeExecution from './nodeExecution';
 import { nodeProviderRegistry } from './nodes/providers';
@@ -409,15 +410,22 @@ async function start() {
             router,
             token,
             enableWebUI: ENABLE_WEBUI,
-            enableTrigger: ENABLE_TRIGGER
+            enableTrigger: ENABLE_TRIGGER,
+            loadModelStreamSnapshot: async sessionId => {
+                const ownership = sessionWorkerStore?.findOwnership(sessionId);
+                if (ownership && ownership.state !== 'inactive') {
+                    return sessionWorkerSupervisor?.loadModelStreamDraft(sessionId) || null;
+                }
+                return getModelStreamDraft(sessionId);
+            },
         });
         
         await webuiChannel.start();
         registerChannel('webui', webuiChannel);
-        // Session-worker transient presentation subscription bridge: SSE
-        // subscriber 0↔1 transitions gate worker-side forwarding.
+        // Session-worker transient presentation subscription bridge: combined
+        // WebUI subscriber 0↔1 transitions gate worker-side forwarding.
         webuiChannel.setPresentationSubscriptionListener((sessionId, active) => {
-            void sessionWorkerSupervisor?.setPresentationSubscription(sessionId, active);
+            return sessionWorkerSupervisor?.setPresentationSubscription(sessionId, active);
         });
         
         // Bridge transport-neutral SessionRuntime events into WebUI SSE.

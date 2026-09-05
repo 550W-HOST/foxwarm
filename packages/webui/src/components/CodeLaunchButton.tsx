@@ -55,8 +55,8 @@ export default function CodeLaunchButton({
   }, [open])
 
   const baseClass = active
-    ? 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/40 dark:text-blue-200 dark:hover:bg-blue-900/60'
-    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700'
+    ? 'bg-fw-accent-surface text-fw-accent hover:bg-fw-accent-surface-strong dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent dark:hover:bg-fw-accent-surface-strong/60'
+    : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
   const selectedTarget = preserveSelectedNodeTarget(nodeTargets, draftNodeId).find(node => node.id === draftNodeId)
   const selectedAvailability = selectedTarget ? getNodeTargetAvailability(selectedTarget, 'vscode-fs') : { available: false, reason: 'unavailable' }
 
@@ -113,24 +113,24 @@ export default function CodeLaunchButton({
       </div>
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-gray-200 bg-white p-3 shadow-xl dark:border-gray-700 dark:bg-gray-800">
-          <div className="text-sm font-semibold text-gray-900 dark:text-white">Open code</div>
+        <div className="absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-fw-border bg-fw-surface p-3 shadow-xl dark:border-fw-border dark:bg-fw-surface">
+          <div className="text-sm font-semibold text-fw-text-strong">Open code</div>
           <div className="mt-3 space-y-3">
             <div>
-              <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Node</label>
+              <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-fw-text-muted">Node</label>
               <NodeTargetSelect
                 value={draftNodeId}
                 nodes={nodeTargets}
                 requiredService="vscode-fs"
                 onChange={handleNodeChange}
               />
-              {nodeTargetsError && <div className="mt-1 text-xs text-red-600 dark:text-red-400">{nodeTargetsError}</div>}
+              {nodeTargetsError && <div className="mt-1 text-xs text-fw-danger dark:text-fw-danger">{nodeTargetsError}</div>}
               {!selectedAvailability.available && !nodeTargetsError && (
-                <div className="mt-1 text-xs text-amber-600 dark:text-amber-400">Selected node is {selectedAvailability.reason}.</div>
+                <div className="mt-1 text-xs text-fw-warning dark:text-fw-warning">Selected node is {selectedAvailability.reason}.</div>
               )}
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Path</label>
+              <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-fw-text-muted">Path</label>
               <input
                 value={draftPath}
                 onChange={(event) => {
@@ -142,24 +142,24 @@ export default function CodeLaunchButton({
                 }}
                 placeholder="/"
                 aria-invalid={pathError ? 'true' : undefined}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                className="w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 text-sm text-fw-text-strong dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong"
               />
-              {pathError && <div className="mt-1 text-xs text-red-600 dark:text-red-400">{pathError}</div>}
+              {pathError && <div className="mt-1 text-xs text-fw-danger dark:text-fw-danger">{pathError}</div>}
             </div>
-            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg px-1 py-1 text-sm text-gray-700 dark:text-gray-200">
+            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg px-1 py-1 text-sm text-fw-text-strong">
               <span>Open in new browser tab</span>
               <input
                 type="checkbox"
                 checked={openInNewWindow}
                 onChange={(event) => onOpenInNewWindowChange(event.target.checked)}
-                className="h-4 w-4 rounded border-gray-300 text-blue-600"
+                className="h-4 w-4 rounded border-fw-border-strong text-fw-accent"
               />
             </label>
             <div className="flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                className="rounded-lg px-3 py-2 text-sm text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover"
               >
                 Cancel
               </button>
@@ -167,7 +167,7 @@ export default function CodeLaunchButton({
                 type="button"
                 onClick={submit}
                 disabled={!selectedAvailability.available}
-                className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-lg bg-fw-accent px-3 py-2 text-sm text-fw-text-inverse hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Open code
               </button>

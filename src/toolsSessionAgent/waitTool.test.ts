@@ -18,6 +18,9 @@ import {
 import { definitions } from '../tools';
 import { tool_wait } from '../toolsSessionAgent';
 import type { Message, MessagePart, Session } from '../types';
+import { issueRemoteExecCompletionCapability, setNodeEventCapabilitySecretForTests } from '../nodes/sessionEventCapability';
+import { activateRemoteExecLivenessClaim, getRemoteExecLivenessRecordsForTests, reserveRemoteExecIdentity, resetRemoteExecLivenessClaimsForTests } from '../nodes/remoteExecLiveness';
+import { nodesManager } from '../nodes/manager';
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -515,6 +518,107 @@ test('waitExecIds require exact owned active exec IDs and are stored in runtime 
     assert.deepEqual(runtimeState.waiting?.waitExecIds, ['exec-a', 'exec-b']);
   } finally {
     await cleanupSession(sessionId);
+  }
+});
+
+test('waitExecIds accept a Main-verified remote background exec for local or Worker tool placement', async () => {
+  const sessionId = makeSessionId('wait_remote_exec');
+  const nodeId = makeSessionId('wait_remote_node');
+  const execId = 'steady-ibis';
+  setNodeEventCapabilitySecretForTests(Buffer.alloc(32, 17));
+  try {
+    const session = await sessionManager.getSession(sessionId);
+    const completionCapability = issueRemoteExecCompletionCapability(nodeId, sessionId, execId);
+    assert.equal(reserveRemoteExecIdentity({
+      authenticatedNodeId: nodeId,
+      canonicalSessionId: sessionId,
+      sessionIdentityIds: [sessionId],
+      agentName: session.agent || 'main',
+      execId,
+      completionCapability,
+    }), true);
+    activateRemoteExecLivenessClaim({ authenticatedNodeId: nodeId, originalSessionId: sessionId, execId, completionCapability });
+    const result = await tool_wait({ waitExecIds: [execId] }, {
+      sessionId,
+      session,
+      sessionPlacement: 'session-worker',
+      execRuntime: { listRunningExecs: (): any[] => [] } as any,
+    });
+    assert.equal(result.output, 'ok');
+    assert.deepEqual((await sessionManager.getSession(sessionId)).meta.wait?.waitExecIds, [execId]);
+  } finally {
+    resetRemoteExecLivenessClaimsForTests();
+    setNodeEventCapabilitySecretForTests();
+    await cleanupSession(sessionId);
+  }
+});
+
+test('renamed local Session accepts an old-ID remote exec claim and deletion clears it', async () => {
+  const oldSessionId = makeSessionId('wait_remote_rename_old');
+  const newSessionId = makeSessionId('wait_remote_rename_new');
+  const nodeId = makeSessionId('wait_remote_rename_node');
+  const execId = 'steady-ibis';
+  setNodeEventCapabilitySecretForTests(Buffer.alloc(32, 19));
+  try {
+    const oldSession = await sessionManager.getSession(oldSessionId);
+    const completionCapability = issueRemoteExecCompletionCapability(nodeId, oldSessionId, execId);
+    assert.equal(reserveRemoteExecIdentity({
+      authenticatedNodeId: nodeId,
+      canonicalSessionId: oldSessionId,
+      sessionIdentityIds: [oldSessionId],
+      agentName: oldSession.agent || 'main',
+      execId,
+      completionCapability,
+    }), true);
+    activateRemoteExecLivenessClaim({ authenticatedNodeId: nodeId, originalSessionId: oldSessionId, execId, completionCapability });
+
+    const moved = await sessionManager.moveSessionToTarget({ sourceSessionId: oldSessionId, newSessionId });
+    assert.equal(moved.targetSessionId, newSessionId);
+    const renamed = await sessionManager.getSession(newSessionId);
+    assert.ok(renamed.aliases?.includes(oldSessionId));
+    const result = await tool_wait({ waitExecIds: [execId] }, {
+      sessionId: newSessionId,
+      session: renamed,
+      execRuntime: { listRunningExecs: (): any[] => [] } as any,
+    });
+    assert.equal(result.output, 'ok');
+    await nodesManager.handleSessionEvent(nodeId, oldSessionId, 'renamed completion', 'background', {
+      eventId: `remote-exec-completion:${execId}`,
+      execId,
+      completionCapability,
+      eventTimestamp: Date.now(),
+    });
+    const completed = await sessionManager.getSession(newSessionId);
+    assert.equal(completed.meta.wait, undefined);
+    assert.equal(completed.queue.some(item => item.execId === execId), true);
+    const reservedExecId = 'calm-heron';
+    assert.equal(reserveRemoteExecIdentity({
+      authenticatedNodeId: nodeId,
+      canonicalSessionId: newSessionId,
+      sessionIdentityIds: [newSessionId, ...(renamed.aliases || [])],
+      agentName: renamed.agent || 'main',
+      execId: reservedExecId,
+      completionCapability: issueRemoteExecCompletionCapability(nodeId, newSessionId, reservedExecId),
+    }), true);
+    const activeExecId = 'swift-raven';
+    const activeCapability = issueRemoteExecCompletionCapability(nodeId, newSessionId, activeExecId);
+    assert.equal(reserveRemoteExecIdentity({
+      authenticatedNodeId: nodeId,
+      canonicalSessionId: newSessionId,
+      sessionIdentityIds: [newSessionId, ...(renamed.aliases || [])],
+      agentName: renamed.agent || 'main',
+      execId: activeExecId,
+      completionCapability: activeCapability,
+    }), true);
+    activateRemoteExecLivenessClaim({ authenticatedNodeId: nodeId, originalSessionId: newSessionId, execId: activeExecId, completionCapability: activeCapability });
+    assert.equal(getRemoteExecLivenessRecordsForTests().length, 2);
+    assert.equal(await sessionManager.deleteSession(newSessionId), true);
+    assert.deepEqual(getRemoteExecLivenessRecordsForTests(), []);
+  } finally {
+    resetRemoteExecLivenessClaimsForTests();
+    setNodeEventCapabilitySecretForTests();
+    await cleanupSession(oldSessionId);
+    await cleanupSession(newSessionId);
   }
 });
 
