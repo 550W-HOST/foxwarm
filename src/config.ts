@@ -1194,6 +1194,14 @@ function applyProviderDefaults(providerEntry: ProviderConfigEntry): ProviderConf
     };
   }
 
+  if (providerType === 'gemini') {
+    return {
+      ...providerEntry,
+      providerType,
+      baseUrl: providerEntry.baseUrl || 'https://generativelanguage.googleapis.com/v1beta',
+    };
+  }
+
   return {
     ...providerEntry,
     providerType,

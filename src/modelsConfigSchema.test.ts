@@ -23,6 +23,34 @@ test('legacy root models + entry model list schema still works', () => {
   assert.equal(parsed.models['openai/gpt-5.2-codex'].contextLimit, 200000);
 });
 
+test('gemini provider resolves the native v1beta default and explicit gateway overrides', () => {
+  const defaults = loadModelsConfigFromObject({
+    default: 'google/gemini-3.1-pro-high',
+    providers: {
+      google: {
+        providerType: 'gemini',
+        apiKey: 'test-key',
+        models: ['gemini-3.1-pro-high'],
+      },
+    },
+  });
+  assert.equal(defaults.models.google.providerType, 'gemini');
+  assert.equal(defaults.models.google.baseUrl, 'https://generativelanguage.googleapis.com/v1beta');
+  assert.equal(defaults.models.google.apiKey, 'test-key');
+
+  const gateway = loadModelsConfigFromObject({
+    default: 'gateway/gemini-3.6-flash-high',
+    providers: {
+      gateway: {
+        providerType: 'gemini',
+        baseUrl: 'https://gateway.example/native/v1beta',
+        models: ['gemini-3.6-flash-high'],
+      },
+    },
+  });
+  assert.equal(gateway.models.gateway.baseUrl, 'https://gateway.example/native/v1beta');
+});
+
 test('new providers root + models object list applies model overrides and merge rules', () => {
   const parsed = loadModelsConfigFromObject({
     default: 'openai/gpt-5.2-codex',

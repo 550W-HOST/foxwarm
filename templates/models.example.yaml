@@ -51,6 +51,17 @@ providers:
     models:
       - claude-opus-5
 
+  # Gemini native generateContent API. The base URL includes `v1beta`; Foxwarm
+  # appends `/models/<model>:streamGenerateContent?alt=sse` and authenticates
+  # with `x-goog-api-key`.
+  # google:
+  #   providerType: gemini
+  #   baseUrl: https://generativelanguage.googleapis.com/v1beta
+  #   apiKey: your-google-ai-key
+  #   models:
+  #     - gemini-2.5-flash
+  #     - gemini-2.5-pro
+
   # A non-empty provider string is shorthand for a single-target session-hash
   # alias. The alias key remains selectable while resolving to this concrete leaf.
   fast: openai/gpt-5.6-sol

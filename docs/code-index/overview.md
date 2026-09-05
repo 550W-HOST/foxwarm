@@ -42,7 +42,7 @@ Nodes, providers, and authenticated CLI Node runtime
 ## Technology map
 
 - Runtime: Node.js and TypeScript
-- LLM providers: OpenAI-compatible APIs and Anthropic
+- LLM providers: OpenAI-compatible APIs, Anthropic, and native Gemini generateContent
 - HTTP/WebSocket: Express and `ws`
 - Frontend: React-compatible Preact build, Monaco, and xterm.js
 - Storage: JSON/JSONL, SQLite, and LanceDB

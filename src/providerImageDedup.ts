@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { Message, MessagePart } from './types';
 import { formatFoxwarmAttributes, parseFoxwarmTagLine } from './utils/promptWrappers';
 
-export type ProviderImageProtocol = 'openai-chat-completions' | 'openai-responses' | 'anthropic';
+export type ProviderImageProtocol = 'openai-chat-completions' | 'openai-responses' | 'anthropic' | 'gemini';
 
 export interface DeduplicatedProviderRequestImages {
   messages: Message[];

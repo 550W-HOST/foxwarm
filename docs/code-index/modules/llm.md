@@ -10,6 +10,7 @@ LLM owns model/provider configuration consumption, prompt snapshots, provider se
 - [src-llm-request-journal](../units/src-llm-request-journal.md) — content-addressed canonical request inputs, bounded manifests, attempts, and reconstruction.
 - [src-model-routing](../units/src-model-routing.md) — virtual target selection and process-local failover health.
 - [src-llm-openai](../units/src-llm-openai.md) — OpenAI Responses/Chat Completions conversion and stream collectors.
+- [src-llm-gemini](../units/src-llm-gemini.md) — native Gemini history conversion, function schemas, thought signatures, and stream collection.
 - [src-mcp-client](../units/src-mcp-client.md) — MCP config, connection lifecycle, discovery, invocation, and result normalization.
 - [src-mcp-external-service](../units/src-mcp-external-service.md) — fixed local RPC ownership boundary used by all current MCP callers.
 - [src-config](../units/src-config.md) — canonical provider/model expansion and path/default resolution.
@@ -29,6 +30,7 @@ Canonical image messages remain blob-reference-only until the provider request b
 - `openai` and `openai-responses` use the Responses API; concrete models may opt into the hosted `web_search` tool, whose completed output items remain provider-owned and model-scoped.
 - `openai-completions` uses Chat Completions.
 - `anthropic` uses Anthropic Messages.
+- `gemini` uses native Gemini `streamGenerateContent` with `x-goog-api-key` authentication.
 - `session-hash` and `failover` resolve strict concrete leaves before provider serialization. Canonical contract: [model routing](../threads/model-routing.md).
 - Provider configuration/default/override rules are canonical in [src-config](../units/src-config.md#model-resolution).
 - Provider-neutral effort selection and concrete-attempt fallback/mapping are canonical in [model routing](../threads/model-routing.md#d-model-routing-effort).
@@ -36,7 +38,7 @@ Canonical image messages remain blob-reference-only until the provider request b
 ## Invariants
 
 - Provider responses normalize to one `ChatResult`/`MessagePart` model.
-- Anthropic and OpenAI serialization share one tool-response formatter.
+- Anthropic, OpenAI, and Gemini serialization share one tool-response formatter.
 - Prompt snapshots use deterministic framework/memory/skill precedence.
 - Outbound payloads replace lone surrogates.
 - Terminal failures throw `LlmRequestError` and never become fake model-visible assistant text.

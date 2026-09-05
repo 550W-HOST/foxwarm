@@ -3,6 +3,7 @@ export const KNOWN_PROVIDER_TYPES = [
   'openai-responses',
   'openai',
   'anthropic',
+  'gemini',
   'session-hash',
   'failover',
 ] as const

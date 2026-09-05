@@ -328,7 +328,29 @@ Provider notes:
 - `openai-completions` uses `/chat/completions`
 - `openai` and `openai-responses` use `/responses`
 - `anthropic` uses Anthropic-compatible requests
+- `gemini` uses Gemini's native `v1beta/models/<model>:streamGenerateContent` API
 - OpenAI-compatible local gateways can be configured by changing `baseUrl` and model ids. `apiKey` may be left empty if your gateway does not require one.
+
+Native Gemini configuration uses the API root through `v1beta`; Foxwarm adds
+the model-specific streaming path and sends `apiKey` as `x-goog-api-key`:
+
+```yaml
+providers:
+  google:
+    providerType: gemini
+    baseUrl: https://generativelanguage.googleapis.com/v1beta
+    apiKey: your-google-ai-key
+    models:
+      - gemini-2.5-flash
+      - gemini-2.5-pro
+```
+
+Gemini-compatible gateways may replace `baseUrl` while retaining the native
+`v1beta` protocol. Native text, thought signatures, function calls/results,
+inline images, usage metadata, and SSE streaming are normalized into the same
+Foxwarm history as other providers. `effort: none` maps to Gemini's portable
+zero thinking budget; non-zero effort leaves the selected model's native
+thinking policy unchanged because supported controls differ by model generation.
 
 Some Chat Completions-compatible providers return assistant thinking as
 `reasoning_content` but require that history to be replayed under `reasoning`.
