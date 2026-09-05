@@ -1,7 +1,6 @@
 import { ChannelContext, getChannelId, getChannelType, getConversationId } from '../channel';
 import { getManagedChannelIds, getChannelRuntimeStatus, listChannelRuntimeStatuses } from '../channelRuntime';
 import { nodesManager } from '../nodes/manager';
-import { nodeProviderRegistry } from '../nodes/providers';
 import { listApprovedNodes, listPendingPairings } from '../nodes/registry';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
@@ -303,7 +302,6 @@ export function buildNodePairHelp(token: string): string {
 export async function buildNodeListReply(currentNode: string, boundNode?: string): Promise<string> {
   const approved = await listApprovedNodes()
   const pending = await listPendingPairings()
-  const available = await nodeProviderRegistry.listNodes()
 
   let reply = '📋 **Nodes**\n\n'
   reply += `💡 Current node: \`${currentNode}\`\n`
@@ -311,19 +309,10 @@ export async function buildNodeListReply(currentNode: string, boundNode?: string
     reply += `🔒 Runtime is bound by agent isolation to \`${boundNode}\`.\n`
   }
 
-  reply += '\n**Available Nodes**\n'
-  for (const node of available) {
-    const currentMarker = currentNode === node.id ? '✅ ' : ''
-    const reason = node.unavailable ? ` ⚠️ ${node.unavailable.code}: ${node.unavailable.message}` : ''
-    reply += `- ${currentMarker}\`${node.id}\` [${node.kind}; ${node.type}] ${node.availability}${reason}\n`
-  }
-  if (available.length === 0) reply += '- (No nodes are currently available)\n'
+  reply += '\n**Nodes**\n'
+  reply += '- `master` [master] ready\n'
 
-  reply += '\n**Approved Authenticated Remote Nodes**\n'
-
-  if (approved.length === 0) {
-    reply += '- (No approved remote nodes yet)\n'
-  } else {
+  if (approved.length > 0) {
     for (const node of approved) {
       const runtimeNode = nodesManager.getNode(node.nodeId)
       const connected = !!runtimeNode
@@ -333,8 +322,7 @@ export async function buildNodeListReply(currentNode: string, boundNode?: string
         : connected ? '✅ online' : 'offline'
       const requestedName = node.requestedName && node.requestedName !== node.nodeId ? ` requested=\`${node.requestedName}\`` : ''
       const lastSeen = node.lastSeenAt ? ` lastSeen=${new Date(node.lastSeenAt).toLocaleString()}` : ''
-      const currentMarker = currentNode === node.nodeId ? '✅ ' : ''
-      reply += `- ${currentMarker}\`${node.nodeId}\` [${node.nodeType}] ${online}${requestedName}${lastSeen}\n`
+      reply += `- \`${node.nodeId}\` [${node.nodeType}] ${online}${requestedName}${lastSeen}\n`
     }
   }
 
