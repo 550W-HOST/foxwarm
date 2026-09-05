@@ -90,11 +90,11 @@ test('one realtime transport multiplexes every page subscription onto one socket
   const sessionMessages = []
   const opens = []
   const statuses = []
-  const unsubscribeListA = transport.subscribeSessionList(['main-list-alias'], { onMessage: message => listA.push(message), onOpen: () => opens.push('list-a') })
-  const unsubscribeListB = transport.subscribeSessionList(['child/one'], { onMessage: message => listB.push(message), onOpen: () => opens.push('list-b') })
+  const unsubscribeListA = transport.subscribeSessionList(['main-list-alias'], { onMessage: message => listA.push(message), onOpen: generation => opens.push(`list-a:${generation}`) })
+  const unsubscribeListB = transport.subscribeSessionList(['child/one'], { onMessage: message => listB.push(message), onOpen: generation => opens.push(`list-b:${generation}`) })
   const unsubscribeSession = transport.subscribeSession('main-alias', {
     onMessage: message => sessionMessages.push(message),
-    onOpen: () => opens.push('session'),
+    onOpen: generation => opens.push(`session:${generation}`),
     onStatus: status => statuses.push(status),
   })
 
@@ -119,7 +119,7 @@ test('one realtime transport multiplexes every page subscription onto one socket
   sockets[0].receive({ type: 'session-list-delta', sessions: [{ id: 'child/one' }], deletedIds: [] })
   assert.equal(listA.length, 1)
   assert.equal(listB.length, 1)
-  assert.deepEqual(opens, ['list-a', 'list-b', 'session'])
+  assert.deepEqual(opens, ['list-a:1', 'list-b:1', 'session:1'])
   assert.equal(statuses.at(-1), 'connected')
 
   unsubscribeListA()
@@ -135,7 +135,7 @@ test('one realtime transport multiplexes every page subscription onto one socket
   assert.equal(sessionMessages.length, 2, 'unrelated subscription churn preserves the last accepted alias mapping')
 
   const laterOpens = []
-  const unsubscribeLaterSession = transport.subscribeSession('child/two', { onMessage() {}, onOpen: () => laterOpens.push('child/two') })
+  const unsubscribeLaterSession = transport.subscribeSession('child/two', { onMessage() {}, onOpen: generation => laterOpens.push(`child/two:${generation}`) })
   assert.deepEqual(sockets[0].sent.at(-1), {
     type: 'set-subscriptions',
     revision: 5,
@@ -144,8 +144,8 @@ test('one realtime transport multiplexes every page subscription onto one socket
     sessionIds: ['main-alias', 'child/two'],
   })
   sockets[0].receive({ type: 'subscriptions-accepted', revision: 5, sessionListResolutions: { 'child/one': 'child/one' }, sessionResolutions: { 'main-alias': 'agent/main', 'child/two': 'child/two' } })
-  assert.deepEqual(laterOpens, ['child/two'])
-  assert.deepEqual(opens, ['list-a', 'list-b', 'session'], 'existing consumers do not bootstrap again for an unrelated subscription')
+  assert.deepEqual(laterOpens, ['child/two:1'])
+  assert.deepEqual(opens, ['list-a:1', 'list-b:1', 'session:1'], 'existing consumers do not bootstrap again for an unrelated subscription')
   unsubscribeLaterSession()
 
   sockets[0].drop()
@@ -161,6 +161,8 @@ test('one realtime transport multiplexes every page subscription onto one socket
     sessionListIds: ['child/one'],
     sessionIds: ['main-alias'],
   })
+  sockets[1].receive({ type: 'subscriptions-accepted', revision: 6, sessionListResolutions: { 'child/one': 'child/one' }, sessionResolutions: { 'main-alias': 'agent/main' } })
+  assert.deepEqual(opens, ['list-a:1', 'list-b:1', 'session:1', 'list-b:2', 'session:2'], 'physical reconnect opens every retained logical subscription with a new generation')
 
   unsubscribeListB()
   unsubscribeSession()
@@ -188,6 +190,48 @@ test('disposed transport fences stale socket callbacks and reconnect timers', as
   sockets[0].onclose?.({})
   assert.equal(clock.pendingCount(), 0)
   assert.equal(sockets.length, 1)
+})
+
+test('a list controller can resync once per physical socket generation across logical focus churn', async () => {
+  const { WebUiRealtimeTransport } = await loadTransport()
+  const sockets = []
+  const clock = fakeClock()
+  const transport = new WebUiRealtimeTransport({
+    createSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+    random: () => 0.5,
+  })
+  let lastResyncedGeneration = null
+  const resyncedGenerations = []
+  const handlers = {
+    onMessage() {},
+    onOpen(generation) {
+      if (lastResyncedGeneration === generation) return
+      lastResyncedGeneration = generation
+      resyncedGenerations.push(generation)
+    },
+  }
+
+  const keepAlive = transport.subscribeSession('agent/main', { onMessage() {} })
+  let unsubscribeList = transport.subscribeSessionList(['agent/main'], handlers)
+  sockets[0].open()
+  sockets[0].receive({ type: 'subscriptions-accepted', revision: 2 })
+  assert.deepEqual(resyncedGenerations, [1], 'initial registration closes the mount race once')
+
+  unsubscribeList()
+  unsubscribeList = transport.subscribeSessionList(['agent/other'], handlers)
+  sockets[0].receive({ type: 'subscriptions-accepted', revision: 4 })
+  assert.deepEqual(resyncedGenerations, [1], 'focus-ID subscription churn on the same socket does not resync again')
+
+  sockets[0].drop()
+  clock.runNext()
+  sockets[1].open()
+  sockets[1].receive({ type: 'subscriptions-accepted', revision: 4 })
+  assert.deepEqual(resyncedGenerations, [1, 2], 'a physical reconnect gets one new safety resync')
+
+  unsubscribeList()
+  keepAlive()
 })
 
 test('all current list and Chat surfaces use the shared transport instead of EventSource', async () => {

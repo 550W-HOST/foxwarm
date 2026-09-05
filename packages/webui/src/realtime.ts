@@ -13,7 +13,7 @@ export type WebUiRealtimeStatus = 'disconnected' | 'connecting' | 'connected' | 
 
 export type WebUiRealtimeHandlers = {
   onMessage: (message: WebUiRealtimeMessage) => void
-  onOpen?: () => void
+  onOpen?: (socketGeneration: number) => void
   onStatus?: (status: WebUiRealtimeStatus, retryInSeconds?: number) => void
 }
 
@@ -185,12 +185,12 @@ export class WebUiRealtimeTransport {
       for (const subscription of this.listSubscriptions.values()) {
         if (subscription.registeredGeneration === generation) continue
         subscription.registeredGeneration = generation
-        subscription.handlers.onOpen?.()
+        subscription.handlers.onOpen?.(generation)
       }
       for (const subscription of this.sessionSubscriptions.values()) {
         if (subscription.registeredGeneration === generation) continue
         subscription.registeredGeneration = generation
-        subscription.handlers.onOpen?.()
+        subscription.handlers.onOpen?.(generation)
       }
       return
     }

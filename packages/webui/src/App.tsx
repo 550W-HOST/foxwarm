@@ -3,7 +3,7 @@ import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSe
 import Chat from './components/Chat'
 import SessionList from './components/SessionList'
 import Sidebar from './components/Sidebar'
-import CollapsedSidebar from './components/CollapsedSidebar'
+import CollapsedSidebarContainer from './components/CollapsedSidebarContainer'
 import WorkbenchLayout from './components/WorkbenchLayout'
 import WorkbenchPane from './components/WorkbenchPane'
 import VscodeWebFrameHost, { type VscodeWebFrameHostHandle } from './components/VscodeWebFrameHost'
@@ -514,8 +514,6 @@ function App() {
   }, [isMobile, showSessionList, focusedPane, paneNodes, tabsById])
   const exactSessionIds = useMemo(() => allTabs.flatMap(tab => isChatTab(tab) ? [tab.sessionId] : []), [allTabs])
   const boundedSessions = useBoundedSessionList({ focusIds: currentContextSessionId ? [currentContextSessionId] : [], exactIds: exactSessionIds, includeGlobalSummary: true })
-  const collapsedSessions = useBoundedSessionList({ focusIds: currentContextSessionId ? [currentContextSessionId] : [],
-    rootLimit: 20, childLimit: 1, includeIdleWatches: false })
   const sessions = boundedSessions.knownSessions
   const sidebarSessions = boundedSessions.sessions
   const notificationOpenSessionRef = useRef<((sessionId: string) => void) | null>(null)
@@ -1900,8 +1898,7 @@ function App() {
           />
         </div>
       ) : (
-        <CollapsedSidebar
-          sessions={collapsedSessions.sessions}
+        <CollapsedSidebarContainer
           currentSession={currentContextSessionId}
           onSelectSession={openChatTab}
           onCreateSession={handleQuickCreateSession}
