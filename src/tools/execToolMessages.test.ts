@@ -290,7 +290,10 @@ test('read tool returns full content for unified output guard', async () => {
     await fs.writeFile(filePath, 'a'.repeat(40000));
     const result = await read({ filePath }, { session: { agent: 'main' } } as any);
 
-    assert.equal(String(result), 'a'.repeat(40000));
+    assert.equal(
+      String(result),
+      `${'a'.repeat(40000)}\n---\nFile has 1 line.\nFile size: 40000 bytes.\nFile has no trailing newline.`,
+    );
   } finally {
     await fs.remove(tempDir);
   }

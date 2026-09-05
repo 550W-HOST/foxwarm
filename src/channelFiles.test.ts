@@ -65,7 +65,7 @@ test('saveInboundSessionFile reports a master absolute Path that remains readabl
     assert.doesNotMatch(text, /Tool path|Use read/i);
 
     const readResult = await read({ filePath: saved.promptPath }, { session } as any);
-    assert.equal(readResult, 'hello from upload');
+    assert.equal(readResult, 'hello from upload\n---\nFile has 1 line.\nFile size: 17 bytes.\nFile has no trailing newline.');
     const siblingNames = await fs.readdir(path.dirname(saved.promptPath));
     assert.equal(siblingNames.some(name => name.endsWith('.tmp')), false);
   } finally {

@@ -170,8 +170,18 @@ test('node read treats startLine/endLine 0 as omitted', async () => {
   try {
     await fs.ensureDir(baseDir);
     await fs.writeFile(filePath, 'one\ntwo\nthree');
-    assert.equal(await read({ filePath: 'note.txt', startLine: 0, endLine: 0 }, { session: { agent: agentName } }), 'one\ntwo\nthree');
-    assert.equal(await read({ filePath: 'note.txt', startLine: 2, endLine: 0 }, { session: { agent: agentName } }), 'two\nthree');
+    assert.equal(
+      await read({ filePath: 'note.txt', startLine: 0, endLine: 0 }, { session: { agent: agentName } }),
+      'one\ntwo\nthree\n---\nFile has 3 lines.\nFile size: 13 bytes.\nFile has no trailing newline.',
+    );
+    assert.equal(
+      await read({ filePath: 'note.txt', startLine: 2, endLine: 0 }, { session: { agent: agentName } }),
+      'two\nthree\n---\nSelected lines 2-3 of 3.\nFile size: 13 bytes.\nFile has no trailing newline.',
+    );
+    assert.equal(
+      await read({ filePath: 'note.txt', startLine: 9, endLine: 12 }, { session: { agent: agentName } }),
+      '(no content in requested line range 9-12)\n---\nFile has 3 lines.\nFile size: 13 bytes.',
+    );
   } finally {
     await cleanupAgent(agentName);
   }

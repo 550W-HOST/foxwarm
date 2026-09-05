@@ -84,7 +84,10 @@ test('tool output guard saved path is absolute and cwd-independent', async () =>
     assert.equal(path.isAbsolute(result.outputFullPath), true);
     assert.doesNotMatch(result.output, /Use read|Tool path/i);
     const readResult = await read({ filePath: result.outputFullPath }, { session: { id: sessionId, agent: 'main', cwd } } as any);
-    assert.equal(readResult, content);
+    assert.equal(
+      readResult,
+      `${content}\n---\nFile has 2 lines.\nFile size: ${Buffer.byteLength(content)} bytes.\nFile has no trailing newline.`,
+    );
   } finally {
     await fs.remove(cwd);
   }
@@ -247,7 +250,10 @@ test('builtin and MCP magic-looking text stays ordinary text outside remote-node
     const responses = toolMessage.parts
       .map(part => part.functionResponse?.response)
       .filter((response): response is Record<string, any> => !!response);
-    assert.deepEqual(responses.map(response => response.output), [builtinMagic, mcpMagic]);
+    assert.deepEqual(responses.map(response => response.output), [
+      `${builtinMagic}\n---\nFile has 1 line.\nFile size: ${Buffer.byteLength(builtinMagic)} bytes.\nFile has no trailing newline.`,
+      mcpMagic,
+    ]);
   } finally {
     (mcpClient as any).callTool = originalCallTool;
     await fs.remove(fullPath);
@@ -344,6 +350,7 @@ test('read returns full content to unified guard instead of old 10000-char trunc
   const relativePath = path.join('.temp', 'tool-output-guard-read', `${sessionId}.txt`);
   const fullPath = path.join(getAgentDir('main'), relativePath);
   const content = Array.from({ length: 1200 }, (_, index) => `READ_FULL_CONTENT_${index + 1}_${'R'.repeat(60)}`).join('\n');
+  const expectedReadOutput = `${content}\n---\nFile has 1200 lines.\nFile size: ${Buffer.byteLength(content)} bytes.\nFile has no trailing newline.`;
   await fs.ensureDir(path.dirname(fullPath));
   await fs.writeFile(fullPath, content, 'utf8');
 
@@ -355,13 +362,13 @@ test('read returns full content to unified guard instead of old 10000-char trunc
 
   const response = toolMessage.parts[0].functionResponse?.response;
   assert.equal(response.outputTruncated, true);
-  assert.equal(response.outputOriginalLengthChars, content.length);
+  assert.equal(response.outputOriginalLengthChars, expectedReadOutput.length);
   assert.doesNotMatch(String(response.output), /Showing first 10000 chars only/);
   const omission = String(response.output).match(/^--- \[foxwarm: (\d+) lines \(line range (\d+)-(\d+)\) omitted because (.+)\] ---$/m);
   assert.ok(omission);
   assert.match(String(response.output), /Foxwarm placeholders above \(line-range omission placeholders\) are not original output content\./);
   assert.ok(String(response.output).includes(`Omitted ${omission[1]} line(s) from original line range ${omission[2]}-${omission[3]} because ${omission[4]}.`));
-  assert.match(String(response.output), /Original output: 1200 line\(s\), \d+ character\(s\)\./);
-  assert.equal(await readSaved(response.outputFullPath), content);
+  assert.match(String(response.output), /Original output: 1204 line\(s\), \d+ character\(s\)\./);
+  assert.equal(await readSaved(response.outputFullPath), expectedReadOutput);
   assert.ok(formatToolResponsePayload(response).length < TOOL_OUTPUT_GUARD_CHAR_LIMIT);
 });
