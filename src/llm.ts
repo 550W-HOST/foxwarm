@@ -23,6 +23,7 @@ import {
     convertToOpenAIFormat as convertToOpenAIFormatProvider,
     convertToOpenAIResponsesFormat as convertToOpenAIResponsesFormatProvider,
 } from './llmProviders/openai';
+import type { OpenAIWsHistoryAppendFinalizer, OpenAIWsHistoryAppendOutcome } from './llmProviders/openaiWsState';
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
@@ -195,6 +196,30 @@ type RequestLlmOnceOptions = {
     purpose?: LlmRequestPurpose;
     currentSessionEffects?: CurrentSessionEffects;
 };
+
+type InternalLlmResult = {
+    result: ChatResult;
+    /**
+     * Provider-local completion held outside the reusable pool until the
+     * exact assistant Message has crossed the canonical history boundary.
+     * This callback is an optimization finalizer only: its failure must never
+     * turn an already committed assistant Message into a failed model turn.
+     */
+    finalizeHistoryAppend?: OpenAIWsHistoryAppendFinalizer;
+};
+
+function settleHistoryAppendFinalizer(
+    finalizer: OpenAIWsHistoryAppendFinalizer | undefined,
+    outcome: OpenAIWsHistoryAppendOutcome,
+    context: string,
+): void {
+    if (!finalizer) return;
+    try {
+        finalizer(outcome);
+    } catch (error) {
+        logger.warn({ err: error }, context);
+    }
+}
 
 /** In-process current-session effects used by the normal turn path. Not an RPC contract. */
 export interface CurrentSessionEffects {
@@ -1971,7 +1996,7 @@ export async function chat(
     if (session.id && session.promptCacheKey !== previousPromptCacheKey) {
         await currentSessionEffects.persistSession(session);
     }
-    const result = await requestLlmOnce({
+    const completion = await requestLlmOnceInternal({
         contents: contentsForLlm,
         systemPrompt,
         model: session.model,
@@ -1988,33 +2013,55 @@ export async function chat(
         purpose: options?.purpose || 'normal-turn',
         currentSessionEffects: options?.currentSessionEffects,
     });
+    const result = completion.result;
 
-    if (result.usage) {
-        logger.info(`Token Usage: Cached: ${result.usage.cachedTokens || 0} | Input: ${result.usage.inputTokens} | Output: ${result.usage.outputTokens} | Reasoning: ${result.usage.reasoningTokens ?? 'n/a'} | Calls: ${(result.toolCalls || []).length}`);
+    try {
+        if (result.usage) {
+            logger.info(`Token Usage: Cached: ${result.usage.cachedTokens || 0} | Input: ${result.usage.inputTokens} | Output: ${result.usage.outputTokens} | Reasoning: ${result.usage.reasoningTokens ?? 'n/a'} | Calls: ${(result.toolCalls || []).length}`);
 
-        // Update session accumulated usage stats
-        session.stats.totalInputTokens += result.usage.inputTokens || 0;
-        session.stats.totalCachedTokens += result.usage.cachedTokens || 0;
-        session.stats.totalOutputTokens += result.usage.outputTokens || 0;
-    }
+            // Update session accumulated usage stats
+            session.stats.totalInputTokens += result.usage.inputTokens || 0;
+            session.stats.totalCachedTokens += result.usage.cachedTokens || 0;
+            session.stats.totalOutputTokens += result.usage.outputTokens || 0;
+        }
 
-    // Add assistant message to history
-    if (result.allParts && result.allParts.length > 0) {
-        const llmRequestTiming = toPersistedLlmRequestTiming(result.previousLlmRequest);
-        const assistantMeta = {
-            ...(result.modelId ? { modelId: result.modelId } : {}),
-            ...(result.virtualModelKey ? { virtualModelKey: result.virtualModelKey } : {}),
-            ...(result.usage ? { usage: result.usage } : {}),
-            ...(llmRequestTiming ? { llmRequestTiming } : {}),
-            ...(result.llmRequestId ? { llmRequestId: result.llmRequestId, llmAttempt: result.llmAttempt } : {}),
-        };
-        const assistantMsg: Message = {
-            role: 'model',
-            parts: result.allParts,
-            ...(result.providerMeta ? { providerMeta: result.providerMeta } : {}),
-            ...(Object.keys(assistantMeta).length > 0 ? { __meta: assistantMeta } : {}),
-        };
-        await appendMessage(assistantMsg);
+        // Add assistant message to history. A stateful provider completion is
+        // deliberately not reusable until this exact object has committed.
+        if (result.allParts && result.allParts.length > 0) {
+            const llmRequestTiming = toPersistedLlmRequestTiming(result.previousLlmRequest);
+            const assistantMeta = {
+                ...(result.modelId ? { modelId: result.modelId } : {}),
+                ...(result.virtualModelKey ? { virtualModelKey: result.virtualModelKey } : {}),
+                ...(result.usage ? { usage: result.usage } : {}),
+                ...(llmRequestTiming ? { llmRequestTiming } : {}),
+                ...(result.llmRequestId ? { llmRequestId: result.llmRequestId, llmAttempt: result.llmAttempt } : {}),
+            };
+            const assistantMsg: Message = {
+                role: 'model',
+                parts: result.allParts,
+                ...(result.providerMeta ? { providerMeta: result.providerMeta } : {}),
+                ...(Object.keys(assistantMeta).length > 0 ? { __meta: assistantMeta } : {}),
+            };
+            await appendMessage(assistantMsg);
+            settleHistoryAppendFinalizer(
+                completion.finalizeHistoryAppend,
+                { appended: true, message: assistantMsg },
+                'Failed to finalize provider state after assistant history commit',
+            );
+        } else {
+            settleHistoryAppendFinalizer(
+                completion.finalizeHistoryAppend,
+                { appended: false },
+                'Failed to discard provider state without an assistant history commit',
+            );
+        }
+    } catch (error) {
+        settleHistoryAppendFinalizer(
+            completion.finalizeHistoryAppend,
+            { appended: false },
+            'Failed to discard provider state after assistant history failure',
+        );
+        throw error;
     }
 
     return result;
@@ -2596,7 +2643,7 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
     };
 }
 
-export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<ChatResult> {
+async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<InternalLlmResult> {
     // Repair the provider-neutral source form first. This exact canonical
     // array is journaled before clone-only provider hydration, so durable
     // session image references are never expanded into provider base64 here.
@@ -2774,6 +2821,7 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             }
 
             let attemptRawStreamLog: ReturnType<typeof createRawStreamLogCapture> | null = null;
+            let attemptHistoryAppendFinalizer: OpenAIWsHistoryAppendFinalizer | undefined;
             let resp: any;
             let response: AxiosResponse | undefined;
             try {
@@ -2846,8 +2894,16 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                     outcome: 'success',
                     result: completedResult,
                 }).catch(error => logger.error({ err: error, requestId, attempt }, 'Failed to append successful LLM attempt result after provider response'));
-                return completedResult;
+                return {
+                    result: completedResult,
+                    ...(attemptHistoryAppendFinalizer ? { finalizeHistoryAppend: attemptHistoryAppendFinalizer } : {}),
+                };
             } catch (error: any) {
+                settleHistoryAppendFinalizer(
+                    attemptHistoryAppendFinalizer,
+                    { appended: false },
+                    'Failed to discard provider state after LLM attempt failure',
+                );
                 if (isAbortError(error)) {
                     responseAttempts.push({
                         attempt,
@@ -2963,4 +3019,16 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         maxRetries: maxAttempts,
         attempts: responseAttempts,
     });
+}
+
+export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<ChatResult> {
+    const completion = await requestLlmOnceInternal(options);
+    // Low-level callers do not cross chat()'s canonical assistant-history
+    // boundary, so a provider-local state chain cannot become reusable here.
+    settleHistoryAppendFinalizer(
+        completion.finalizeHistoryAppend,
+        { appended: false },
+        'Failed to discard provider state after low-level LLM request',
+    );
+    return completion.result;
 }

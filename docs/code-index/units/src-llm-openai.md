@@ -1,6 +1,6 @@
 # Unit: src-llm-openai
 
-Files: src/llmProviders/openai.ts, src/llmProviders/openai.test.ts
+Files: src/llmProviders/openai.ts, src/llmProviders/openaiWsState.ts, src/llmProviders/openai.test.ts
 
 ## Purpose
 
@@ -12,6 +12,8 @@ Implements the OpenAI LLM provider, handling conversion of internal message form
 - `convertToOpenAIResponsesFormat(contents, concreteModelId?)` — Converts internal `Message[]` to OpenAI Responses API input format and replays same-concrete-model hosted output metadata in order
 - `collectOpenAIResponsesStream(stream, signal, options?)` — Collects and reassembles a streamed OpenAI Responses API SSE response; options can receive raw decoded chunks and complete SSE blocks
 - `collectOpenAIChatCompletionsStream(stream, signal, options?)` — Collects and reassembles a streamed OpenAI Chat Completions SSE response; options can receive raw decoded chunks and complete SSE blocks
+- `fingerprintOpenAIWsRequest(data)` / `extendOpenAIWsPrefix(prefix, replayItems)` — Build stable item-boundary hash chains over final provider-visible Responses requests and exact assistant replay projections
+- `OpenAIWsCompletedChainPool` — Process-local idle-chain matching/retention primitive; active transport leases remain outside the pool
 - `OpenAIStreamProgressSnapshot` — Type for progress callback snapshots
 - `OpenAIStreamToolCallSnapshot` — Type for tool call state during streaming
 
@@ -48,6 +50,7 @@ Implements the OpenAI LLM provider, handling conversion of internal message form
 - **SSE stream collection**: Both stream collectors parse chunked SSE data using a buffer with `\n\n` delimiters, handle `[DONE]` sentinel, and support abort signals. They incrementally build up the response object from deltas. They also expose optional `onRawChunk(text)` and `onRawSseBlock(block)` callbacks so the caller can log exact decoded provider stream data without changing parser semantics.
 - **Progress reporting**: Both collectors emit cumulative `onProgress` snapshots containing reasoning, output text, and per-call index/id/name plus cumulative raw argument JSON. Chat Completions preserves its reused-index split rules; Responses uses provider output indexes. The upstream emitter owns wire-delta conversion and throttling.
 - **Responses API specifics**: Handles `response.output_item.added`, text/refusal/arguments deltas, URL annotation events, reasoning summary parts, and `response.completed`. Preserves completed `web_search_call` output items and annotations for provider-neutral history replay; the request serializer emits them only for their producing concrete model and keeps their output order. When `response.completed.output` is condensed relative to interleaved streamed output indexes, the streamed indexed sequence remains authoritative; completed-output enrichment is used only when the full arrays are contiguous, equal-length, same-type, and nonconflicting by present IDs. Hosted search items are never converted into Foxwarm function calls.
+- **Stateful Responses preparation**: `openaiWsState` currently provides transport-independent rolling SHA-256 prefix fingerprints and a bounded completed-idle chain pool without activating a provider route. Fingerprints start from every final request field except transport-owned `input`, `previous_response_id`, and `stream`, then advance at exact Responses input-item boundaries using canonical JSON. A candidate matches only the same connection/invariant identity and exact expected prefix, with longest-prefix then most-recent selection. The pool stores no messages and closes evicted resources through its caller-supplied cleanup boundary.
 - **Reasoning summary boundaries**: Indexed streamed reasoning-summary parts preserve their provider-defined order and boundaries. The final completed payload can enrich aligned reasoning items and supply summaries when the stream produced none, but cannot replace a usable streamed summary array with a condensed entry.
 - **Chat Completions specifics**: Accumulates `content`, `reasoning_content`, compatible `reasoning`, and `tool_calls` from choice deltas, tracks `finish_reason` and `usage`, and exposes either reasoning field in transient progress. Canonical response parsing prefers non-empty `reasoning_content` and otherwise accepts non-empty `reasoning`; outbound canonical thinking uses the resolved concrete provider's `historyReasoningField`, defaulting to `reasoning_content`, and never sends both keys. Tool calls retain normal provider-index ordering; a fresh function identity can split broken compatible-provider streams which reuse an index, while id-only fragments continue the current call. The collector captures JSON-object `delta.provider_specific_fields` onto the assembled message. `convertToOpenAIFormat` echoes persisted fields only when `Message.providerMeta.sourceModelId` exactly matches the concrete destination model.
 
