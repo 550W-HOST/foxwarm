@@ -1185,7 +1185,7 @@ function applyProviderDefaults(providerEntry: ProviderConfigEntry): ProviderConf
     };
   }
 
-  if (providerType === 'openai' || providerType === 'openai-responses' || providerType === 'openai-completions') {
+  if (providerType === 'openai' || providerType === 'openai-responses' || providerType === 'openai-ws' || providerType === 'openai-completions') {
     return {
       ...providerEntry,
       providerType,
@@ -1203,6 +1203,9 @@ function applyProviderDefaults(providerEntry: ProviderConfigEntry): ProviderConf
 function buildResolvedModelEntry(providerKey: string, providerEntry: ProviderConfigEntry, modelId: string, modelOverride?: ModelConfigOverride): ModelConfigEntry {
   const resolvedProviderEntry = applyProviderDefaults(providerEntry);
   const providerType = resolvedProviderEntry.providerType;
+  if (providerType === 'openai-ws' && resolvedProviderEntry.requestCompression) {
+    throw new Error(`Provider \`${providerKey}\` requestCompression is not supported for openai-ws providers.`);
+  }
   const hasProviderHistoryReasoningField = resolvedProviderEntry.historyReasoningField !== undefined;
   const hasModelHistoryReasoningField = modelOverride?.historyReasoningField !== undefined;
   if (providerType !== 'openai-completions' && (hasProviderHistoryReasoningField || hasModelHistoryReasoningField)) {

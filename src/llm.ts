@@ -24,6 +24,7 @@ import {
     convertToOpenAIResponsesFormat as convertToOpenAIResponsesFormatProvider,
 } from './llmProviders/openai';
 import type { OpenAIWsHistoryAppendFinalizer, OpenAIWsHistoryAppendOutcome } from './llmProviders/openaiWsState';
+import { requestOpenAIResponsesWs } from './llmProviders/openaiWsTransport';
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
@@ -672,7 +673,7 @@ async function resolvePromptCacheKeyForRequest(options: RequestLlmOnceOptions): 
 }
 
 export function getOpenAIRequestApi(providerType: string): 'responses' | 'chat-completions' | null {
-    if (providerType === 'openai' || providerType === 'openai-responses') {
+    if (providerType === 'openai' || providerType === 'openai-responses' || providerType === 'openai-ws') {
         return 'responses';
     }
 
@@ -2081,6 +2082,7 @@ type ConcreteRequestPlan = {
     requestBody: any;
     compressionHeaders: Record<string, string>;
     useOpenAIResponsesApi: boolean;
+    useOpenAIResponsesWs: boolean;
     useOpenAIChatCompletionsApi: boolean;
     useStreamingApi: boolean;
 };
@@ -2293,8 +2295,12 @@ function buildConcreteRequestPlan(options: {
     const providerContents = prepareHistoryForConcreteModel(fixedContents, modelId);
     const openaiRequestApi = getOpenAIRequestApi(providerType);
     const useOpenAIResponsesApi = openaiRequestApi === 'responses';
+    const useOpenAIResponsesWs = providerType === 'openai-ws';
     const useOpenAIChatCompletionsApi = openaiRequestApi === 'chat-completions';
-    const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatCompletionsApi;
+    const useStreamingApi = !useOpenAIResponsesWs && (useOpenAIResponsesApi || useOpenAIChatCompletionsApi);
+    if (useOpenAIResponsesWs && modelEntry.requestCompression) {
+        throw new Error('requestCompression is not supported for openai-ws providers.');
+    }
     const webSearchConfig = useOpenAIResponsesApi
         && request.purpose !== 'compact-plan'
         && request.purpose !== 'setup-test'
@@ -2329,10 +2335,12 @@ function buildConcreteRequestPlan(options: {
             ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
             'user-agent': 'codex-tui/0.118.0 (Debian 13.0.0; x86_64) xterm.js_6.1.0-beta.191_ (codex-tui; 0.118.0)',
             'originator': 'codex-tui',
-            'x-codex-turn-metadata': `{"session_id":"${promptCacheKey}","turn_id":"${
-                crypto.createHash('md5').update(`turn_id_${request.sessionId || 'default'}_${Date.now()}_${attempt}`).digest('hex')
-            }","sandbox":"seccomp"}`,
-            'x-client-request-id': crypto.createHash('md5').update(`req_id_${request.sessionId || 'default'}_${Date.now()}_${attempt}`).digest('hex'),
+            ...(!useOpenAIResponsesWs ? {
+                'x-codex-turn-metadata': `{"session_id":"${promptCacheKey}","turn_id":"${
+                    crypto.createHash('md5').update(`turn_id_${request.sessionId || 'default'}_${Date.now()}_${attempt}`).digest('hex')
+                }","sandbox":"seccomp"}`,
+                'x-client-request-id': crypto.createHash('md5').update(`req_id_${request.sessionId || 'default'}_${Date.now()}_${attempt}`).digest('hex'),
+            } : {}),
         };
         data = {
             model: modelName,
@@ -2355,7 +2363,7 @@ function buildConcreteRequestPlan(options: {
             store: false,
             include: effectiveEffort === 'none' ? undefined : ['reasoning.encrypted_content'],
             prompt_cache_key: promptCacheKey,
-            stream: true,
+            ...(!useOpenAIResponsesWs ? { stream: true } : {}),
         };
     } else if (useOpenAIChatCompletionsApi) {
         messages = convertToOpenAIFormatProvider(
@@ -2419,8 +2427,19 @@ function buildConcreteRequestPlan(options: {
         TURN_ID: turnId,
     };
     const extraFields = expandTemplateVariables(modelEntry.extraFields || {}, templateVars);
+    if (useOpenAIResponsesWs) {
+        const reserved = ['input', 'previous_response_id', 'stream', 'type', 'background', 'context_management', 'stream_id'].filter(field =>
+            Object.prototype.hasOwnProperty.call(extraFields, field));
+        if (reserved.length > 0) {
+            throw new Error(`openai-ws extraFields cannot set transport-owned field${reserved.length === 1 ? '' : 's'}: ${reserved.join(', ')}.`);
+        }
+        if (Object.prototype.hasOwnProperty.call(extraFields, 'store') && extraFields.store !== false) {
+            throw new Error('openai-ws requires store:false; extraFields cannot enable provider storage.');
+        }
+    }
     Object.assign(data, extraFields);
     applyFirstClassEffort(data, providerType, effectiveEffort);
+    if (useOpenAIResponsesWs) data.store = false;
 
     const sanitizedRequestPayload = sanitizeProviderRequestPayload(data);
     if (sanitizedRequestPayload.replacementCount > 0) {
@@ -2453,6 +2472,7 @@ function buildConcreteRequestPlan(options: {
         requestBody,
         compressionHeaders,
         useOpenAIResponsesApi,
+        useOpenAIResponsesWs,
         useOpenAIChatCompletionsApi,
         useStreamingApi,
     };
@@ -2824,46 +2844,95 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
             let attemptHistoryAppendFinalizer: OpenAIWsHistoryAppendFinalizer | undefined;
             let resp: any;
             let response: AxiosResponse | undefined;
+            let responseStatus = '';
+            let responseHeaders: any;
             try {
                 if (requestStartedAt === undefined) {
                     requestStartedAt = performance.now();
                 }
-                logger.debug({ modelKey, iteration, attempt, url: plan.url }, 'Dispatching LLM HTTP request');
-                response = await axios.post(plan.url, plan.requestBody, {
-                    headers: { ...plan.headers, ...plan.compressionHeaders },
-                    timeout: options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS,
-                    validateStatus: () => true,
-                    signal: abortController.signal,
-                    ...(plan.useStreamingApi ? { responseType: 'stream' as const } : {}),
-                });
+                attemptRawStreamLog = (plan.useStreamingApi || plan.useOpenAIResponsesWs)
+                    ? createRawStreamLogCapture()
+                    : null;
+                const streamCollectOptions = {
+                    onProgress: shouldNotifySessionEvents
+                        ? (snapshot: any) => modelStreamEmitter.emit(snapshot)
+                        : undefined,
+                    onRawChunk: (text: string) => attemptRawStreamLog?.appendChunk(text),
+                    onRawSseBlock: (block: string) => attemptRawStreamLog?.appendSseBlock(block),
+                };
 
-                if (response.status !== 200) {
-                    const errorBody = plan.useStreamingApi
-                        ? await readStreamAsText(response.data, abortController.signal)
-                        : response.data;
-                    const status = `${response.status} ${response.statusText}`.trim();
-                    const classification = classifyHttpFailure(response.status, errorBody);
-                    throw new ConcreteAttemptFailure(summarizeRetryReason(errorBody || status), {
-                        kind: 'http-error',
-                        status,
-                        ...classification,
-                        logDetail: { headers: response.headers, body: errorBody },
+                if (plan.useOpenAIResponsesWs) {
+                    logger.debug({ modelKey, iteration, attempt, url: plan.url }, 'Dispatching LLM WebSocket request');
+                    const pending = await requestOpenAIResponsesWs({
+                        url: plan.url,
+                        headers: plan.headers,
+                        concreteIdentity: plan.modelKey,
+                        data: plan.data,
+                        placement: options.currentSessionEffects?.placement || 'local',
+                        signal: abortController.signal,
+                        timeoutMs: options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS,
+                        onProgress: streamCollectOptions.onProgress,
+                        onRawFrame: frame => {
+                            attemptRawStreamLog?.appendChunk(`${frame}\n`);
+                            attemptRawStreamLog?.appendSseBlock(frame);
+                        },
                     });
+                    resp = pending.response;
+                    responseStatus = '101 WebSocket';
+                    responseHeaders = {};
+                    const unsafeReplayProjection = Array.isArray(resp?.output)
+                        && resp.output.some((item: any) => (
+                            item?.type === 'message'
+                                && Array.isArray(item.content)
+                                && item.content.some((part: any) => part?.type === 'refusal')
+                        ) || (
+                            item?.type === 'function_call'
+                                && !(typeof (item.call_id || item.id) === 'string' && (item.call_id || item.id).trim())
+                        ));
+                    attemptHistoryAppendFinalizer = outcome => {
+                        if (!outcome.appended || unsafeReplayProjection) {
+                            pending.finalize(false);
+                            return;
+                        }
+                        try {
+                            const replayMessage = prepareHistoryForConcreteModel([outcome.message], plan.modelId);
+                            const replayItems = convertToOpenAIResponsesFormatProvider(replayMessage, plan.modelId);
+                            pending.finalize(replayItems);
+                        } catch (error) {
+                            pending.finalize(false);
+                            throw error;
+                        }
+                    };
+                } else {
+                    logger.debug({ modelKey, iteration, attempt, url: plan.url }, 'Dispatching LLM HTTP request');
+                    response = await axios.post(plan.url, plan.requestBody, {
+                        headers: { ...plan.headers, ...plan.compressionHeaders },
+                        timeout: options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS,
+                        validateStatus: () => true,
+                        signal: abortController.signal,
+                        ...(plan.useStreamingApi ? { responseType: 'stream' as const } : {}),
+                    });
+                    responseStatus = `${response.status} ${response.statusText}`.trim();
+                    responseHeaders = response.headers;
+                    if (response.status !== 200) {
+                        const errorBody = plan.useStreamingApi
+                            ? await readStreamAsText(response.data, abortController.signal)
+                            : response.data;
+                        const classification = classifyHttpFailure(response.status, errorBody);
+                        throw new ConcreteAttemptFailure(summarizeRetryReason(errorBody || responseStatus), {
+                            kind: 'http-error',
+                            status: responseStatus,
+                            ...classification,
+                            logDetail: { headers: response.headers, body: errorBody },
+                        });
+                    }
                 }
 
-                if (plan.useStreamingApi) {
-                    attemptRawStreamLog = createRawStreamLogCapture();
-                    const streamCollectOptions = {
-                        onProgress: shouldNotifySessionEvents
-                            ? (snapshot: any) => modelStreamEmitter.emit(snapshot)
-                            : undefined,
-                        onRawChunk: (text: string) => attemptRawStreamLog?.appendChunk(text),
-                        onRawSseBlock: (block: string) => attemptRawStreamLog?.appendSseBlock(block),
-                    };
+                if (plan.useStreamingApi && response) {
                     resp = plan.useOpenAIResponsesApi
                         ? await collectOpenAIResponsesStreamProvider(response.data, abortController.signal, streamCollectOptions)
                         : await collectOpenAIChatCompletionsStreamProvider(response.data, abortController.signal, streamCollectOptions);
-                } else {
+                } else if (!plan.useOpenAIResponsesWs && response) {
                     resp = response.data;
                 }
 
@@ -2874,8 +2943,8 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     recordVirtualTargetSuccess(virtualRoutingRequest, selection.targetKey);
                 }
                 await logResponse({
-                    status: `${response.status} ${response.statusText}`.trim(),
-                    headers: response.headers,
+                    status: responseStatus,
+                    headers: responseHeaders,
                     body: resp,
                     ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
                     ...(responseAttempts.length > 0 ? { attempts: responseAttempts } : {}),

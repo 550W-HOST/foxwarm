@@ -34,7 +34,11 @@ providers:
       - gpt-5.6-terra
       - gpt-5.6-luna
 
-  # `openai` and `openai-responses` both use the newer Responses API.
+  # `openai` and `openai-responses` use the newer Responses API over HTTP/SSE.
+  # `openai-ws` uses the same request/event format over a provider WebSocket;
+  # it rejects requestCompression and transport-owned extraFields (`input`,
+  # `previous_response_id`, `stream`, `type`, `background`, `context_management`,
+  # and `stream_id`).
   # Use `openai-completions` when you explicitly need the older /chat/completions API.
   # To enable hosted web search, first change providerType to openai-responses.
   # It is not sent for compact/setup-test requests:

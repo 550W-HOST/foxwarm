@@ -97,7 +97,17 @@ export class OpenAIWsCompletedChainPool<Resource> {
     takeLongest(
         connectionFingerprint: string,
         request: OpenAIWsRequestFingerprint,
+        freshness?: { now: number; maxAgeMs: number },
     ): OpenAIWsChainMatch<Resource> | undefined {
+        if (freshness) {
+            for (let index = this.idle.length - 1; index >= 0; index -= 1) {
+                const candidate = this.idle[index];
+                if (freshness.now - candidate.createdAt >= freshness.maxAgeMs) {
+                    this.idle.splice(index, 1);
+                    this.safeClose(candidate.resource);
+                }
+            }
+        }
         const requestHashesByCount = new Map(request.prefixes.map(prefix => [prefix.itemCount, prefix.hash]));
         let selectedIndex = -1;
 

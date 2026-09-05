@@ -1,6 +1,6 @@
 # Unit: src-llm
 
-Files: src/llm.ts, src/modelStreamDraft.ts, src/llmRequestTiming.ts, src/providerImageDedup.ts, src/llm.test.ts, src/llmRequestTiming.test.ts, src/llmRouting.test.ts, src/llmVirtualRouting.test.ts, src/llmVirtualMessageMeta.test.ts, src/providerImageDedup.test.ts, src/parallelToolExecution.test.ts
+Files: src/llm.ts, src/modelStreamDraft.ts, src/llmRequestTiming.ts, src/providerImageDedup.ts, src/llm.test.ts, src/openaiWsChat.integration.test.ts, src/llmRequestTiming.test.ts, src/llmRouting.test.ts, src/llmVirtualRouting.test.ts, src/llmVirtualMessageMeta.test.ts, src/providerImageDedup.test.ts, src/parallelToolExecution.test.ts
 Secondary files: src/llmRequestJournal.ts, src/llmProviders/openaiWsState.ts
 
 ## Purpose
@@ -28,6 +28,7 @@ Owns provider request routing, Anthropic conversion/parsing, session prompt snap
 | `providerType` | Request path / format |
 |---|---|
 | `openai`, `openai-responses` | OpenAI Responses API at `<baseUrl>/responses` |
+| `openai-ws` | OpenAI Responses request/events over WebSocket at `<baseUrl>/responses` |
 | `openai-completions` | OpenAI Chat Completions at `<baseUrl>/chat/completions` |
 | `anthropic` | Anthropic Messages at `<baseUrl>/v1/messages` |
 | `session-hash`, `failover` | Resolve a concrete leaf per outer attempt, then use that leaf's protocol |
@@ -51,6 +52,7 @@ Anthropic conversion and both OpenAI serializers use `packages/shared/src/toolRe
 ## Request behavior
 
 - Provider payloads are sanitized for lone surrogates and may be gzip/brotli compressed per model config.
+- `openai-ws` keeps the same complete provider-visible plan and outer retry/failover ownership, but its transport omits `stream`, owns input suffixing and `previous_response_id`, and rejects request compression or conflicting transport-owned `extraFields`. A failed or ambiguous sent attempt closes only its leased socket and retries from full context without HTTP fallback.
 - Canonical image references are hydrated into cloned messages immediately before provider serialization for all three protocols. That shared boundary normalizes current HEIC/HEIF references to provider-safe raster data while persisted messages remain reference-only, and request/virtual-route diagnostics redact hydrated image payloads. Canonical contract: [image blob lifecycle](../threads/image-blob-lifecycle.md).
 - Each concrete physical attempt applies one provider-neutral request-local image dedup helper after history compatibility filtering. Protocol-specific eligibility determines which occurrences can seed the seen set; later identical provider-visible bytes/MIME retain descriptor or image-guidance context without base64. Tool serializers pre-associate the complete tool message so canonical response-then-image order and deduplicated orphan tool IDs remain model-visible. Canonical contract: [D-image-provider-request-dedup](../threads/image-blob-lifecycle.md#d-image-provider-request-dedup).
 - OpenAI and Anthropic payloads receive current tool schemas and current Foxwarm system/source wrappers.

@@ -1,6 +1,7 @@
 export const KNOWN_PROVIDER_TYPES = [
   'openai-completions',
   'openai-responses',
+  'openai-ws',
   'openai',
   'anthropic',
   'session-hash',

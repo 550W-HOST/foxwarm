@@ -8,6 +8,11 @@ This thread owns the cross-module contract for concrete and virtual model select
 
 Concrete provider entries continue to use `providerType` plus provider connection fields and `models`. The preferred field remains `providerType`; persisted legacy `provider` is only a reader when `providerType` is absent.
 
+The concrete `openai-ws` type uses OpenAI Responses request/event semantics over
+a provider WebSocket. It remains a concrete leaf for virtual routing; completed
+connection state is scoped to that exact selected leaf and cannot cross a
+failover or configuration boundary.
+
 A non-empty string value in the preferred `providers` map is alias shorthand. At provider expansion it becomes exactly one virtual `session-hash` entry targeting the trimmed string; it does not create a separate alias or routing mechanism. The legacy root `models` naturally uses the same entry reader, while generated examples use `providers`.
 
 Two virtual `providerType` values are supported:
@@ -34,6 +39,7 @@ The resolved virtual model reports:
 1. `requestLlmOnce` resolves one models-config snapshot and one prompt-cache routing key for the entire outer request.
 2. A concrete model uses its resolved entry directly. A virtual model selects one concrete target for the current attempt.
 3. Every outer attempt rebuilds the selected leaf's URL, credentials, headers, payload, request compression, provider serializer, stream collector, and response parser. Historical model reasoning is compatibility-filtered against that attempt's canonical concrete destination, then Chat Completions emits it under that leaf's resolved `historyReasoningField`.
+   For `openai-ws`, the rebuilt complete plan is matched against process-local completed chains only after this boundary; a match changes only the transport wire suffix, not the semantic request or journal.
 4. One optional provider-neutral requested effort is captured for the outer request. Each concrete attempt uses it when allowed by that leaf, otherwise it falls back to that leaf's configured default. An omitted request also uses each selected leaf's default.
 5. A successful result records the concrete provider-qualified model ID. The session's selected model remains the virtual key.
 6. Retry callbacks retain the compatibility `maxRetries` field, whose value is the total attempt limit. The default total attempt limit is six.
