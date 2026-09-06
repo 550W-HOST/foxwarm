@@ -11,6 +11,7 @@ import {
 } from './openaiWsState';
 
 const OPENAI_WS_MAX_CHAIN_AGE_MS = 60 * 60 * 1000;
+const OPENAI_WS_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const OPENAI_WS_LOCAL_IDLE_LIMIT = 5;
 const OPENAI_WS_WORKER_IDLE_LIMIT = 1;
 
@@ -42,10 +43,19 @@ export type OpenAIWsPendingCompletion = {
 };
 
 type SocketFactory = (url: string, headers: Record<string, any>) => SocketLike;
+type IdleTimer = { unref?: () => void };
+type IdleTimerHooks = {
+    set(callback: () => void, delayMs: number): IdleTimer;
+    clear(timer: IdleTimer): void;
+};
 
 let socketSequence = 0;
 let now = () => Date.now();
 let socketFactory: SocketFactory = (url, headers) => new WebSocket(url, { headers });
+let idleTimers: IdleTimerHooks = {
+    set: (callback, delayMs) => setTimeout(callback, delayMs),
+    clear: timer => clearTimeout(timer as NodeJS.Timeout),
+};
 
 function closeResource(resource: OpenAIWsResource): void {
     try {
@@ -137,6 +147,7 @@ function openSocket(url: string, headers: Record<string, any>, signal: AbortSign
 }
 
 function installIdleRemoval(chain: OpenAIWsCompletedChain<OpenAIWsResource>): void {
+    let idleTimer: IdleTimer | undefined;
     const remove = () => {
         completedPool.remove(chain.id);
         chain.resource.removeIdleListeners?.();
@@ -151,7 +162,16 @@ function installIdleRemoval(chain: OpenAIWsCompletedChain<OpenAIWsResource>): vo
     chain.resource.removeIdleListeners = () => {
         chain.resource.socket.off('close', remove);
         chain.resource.socket.off('error', removeAfterError);
+        if (idleTimer) {
+            idleTimers.clear(idleTimer);
+            idleTimer = undefined;
+        }
     };
+    idleTimer = idleTimers.set(() => {
+        idleTimer = undefined;
+        if (completedPool.remove(chain.id)) closeResource(chain.resource);
+    }, OPENAI_WS_IDLE_TIMEOUT_MS);
+    idleTimer.unref?.();
     chain.resource.socket._socket?.unref?.();
 }
 
@@ -333,8 +353,16 @@ export function getOpenAIWsCompletedChainCountForTests(): number {
     return completedPool.size;
 }
 
-export function setOpenAIWsTransportTestHooks(hooks?: { socketFactory?: SocketFactory; now?: () => number }): void {
+export function setOpenAIWsTransportTestHooks(hooks?: {
+    socketFactory?: SocketFactory;
+    now?: () => number;
+    idleTimers?: IdleTimerHooks;
+}): void {
     clearOpenAIWsCompletedChains();
     socketFactory = hooks?.socketFactory || ((url, headers) => new WebSocket(url, { headers }));
     now = hooks?.now || (() => Date.now());
+    idleTimers = hooks?.idleTimers || {
+        set: (callback, delayMs) => setTimeout(callback, delayMs),
+        clear: timer => clearTimeout(timer as NodeJS.Timeout),
+    };
 }

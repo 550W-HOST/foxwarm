@@ -61,6 +61,22 @@ function baseData(input: any[], overrides: Record<string, any> = {}) {
 
 const signal = () => new AbortController().signal;
 
+class FakeIdleTimers {
+  entries: Array<{ callback: () => void; delayMs: number; cleared: boolean; unrefs: number; timer: any }> = [];
+  hooks = {
+    set: (callback: () => void, delayMs: number) => {
+      const entry = { callback, delayMs, cleared: false, unrefs: 0, timer: undefined as any };
+      entry.timer = { unref: () => { entry.unrefs += 1; } };
+      this.entries.push(entry);
+      return entry.timer;
+    },
+    clear: (timer: any) => {
+      const entry = this.entries.find(candidate => timer === candidate.timer);
+      if (entry) entry.cleared = true;
+    },
+  };
+}
+
 afterEach(() => setOpenAIWsTransportTestHooks());
 
 test('openai-ws sends a full first request then reuses the exact completed prefix with only the suffix', async () => {
@@ -347,4 +363,70 @@ test('close after response.completed but before assistant append invalidates the
   socket.terminate();
   pending.finalize([]);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
+});
+
+test('completed idle chains actively expire and close after ten minutes without another request', async () => {
+  const timers = new FakeIdleTimers();
+  let socket!: FakeSocket;
+  setOpenAIWsTransportTestHooks({ idleTimers: timers.hooks, socketFactory: () => {
+    socket = new FakeSocket((_request, current) => current.frame(completed('idle-expiry')));
+    return socket as any;
+  }});
+  const pending = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), timeoutMs: 1000 });
+  assert.equal(timers.entries.length, 0);
+  pending.finalize([]);
+  assert.equal(timers.entries.length, 1);
+  assert.equal(timers.entries[0].delayMs, 10 * 60 * 1000);
+  assert.equal(timers.entries[0].unrefs, 1);
+  assert.equal(getOpenAIWsCompletedChainCountForTests(), 1);
+  timers.entries[0].callback();
+  assert.equal(socket.terminated, 1);
+  assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
+});
+
+test('reuse cancels the old idle timer and successful release starts a fresh idle period', async () => {
+  const timers = new FakeIdleTimers();
+  let socket!: FakeSocket;
+  setOpenAIWsTransportTestHooks({ idleTimers: timers.hooks, socketFactory: () => {
+    socket = new FakeSocket((_request, current) => current.frame(completed(`reuse-${current.sent.length}`)));
+    return socket as any;
+  }});
+  const data = baseData([{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'reuse' }] }]);
+  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), timeoutMs: 1000 });
+  first.finalize([]);
+  const oldTimer = timers.entries[0];
+  const second = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), timeoutMs: 1000 });
+  assert.equal(oldTimer.cleared, true);
+  assert.equal(timers.entries.length, 1);
+  oldTimer.callback();
+  assert.equal(socket.terminated, 0);
+  assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
+  second.finalize([]);
+  assert.equal(timers.entries.length, 2);
+  assert.equal(timers.entries[1].cleared, false);
+  assert.equal(getOpenAIWsCompletedChainCountForTests(), 1);
+  timers.entries[1].callback();
+  assert.equal(socket.terminated, 1);
+});
+
+test('LRU eviction and pool clear cancel every affected idle timer', async () => {
+  const timers = new FakeIdleTimers();
+  const sockets: FakeSocket[] = [];
+  setOpenAIWsTransportTestHooks({ idleTimers: timers.hooks, socketFactory: () => {
+    const socket = new FakeSocket((_request, current) => current.frame(completed(`lru-${sockets.length}`)));
+    sockets.push(socket);
+    return socket as any;
+  }});
+  for (let index = 0; index < 6; index += 1) {
+    const pending = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: `leaf-${index}`, data: baseData([]), placement: 'local', signal: signal(), timeoutMs: 1000 });
+    pending.finalize([]);
+  }
+  assert.equal(timers.entries.length, 6);
+  assert.equal(timers.entries[0].cleared, true);
+  assert.equal(sockets[0].terminated, 1);
+  assert.equal(getOpenAIWsCompletedChainCountForTests(), 5);
+  clearOpenAIWsCompletedChains();
+  assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
+  assert.ok(timers.entries.every(entry => entry.cleared));
+  assert.ok(sockets.every(socket => socket.terminated === 1));
 });
