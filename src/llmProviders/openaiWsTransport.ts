@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { PassThrough } from 'stream';
 import WebSocket, { RawData } from 'ws';
 import { hashJournalValue } from '../llmRequestJournal';
+import { createStreamingAttemptWatchdog } from '../llmStreamingTimeout';
 import { collectOpenAIResponsesStream, OpenAIStreamProgressSnapshot } from './openai';
 import {
     extendOpenAIWsPrefix,
@@ -32,7 +33,7 @@ type OpenAIWsRequestOptions = {
     data: Record<string, any>;
     placement: 'local' | 'session-worker';
     signal: AbortSignal;
-    timeoutMs: number;
+    hardTimeoutMs?: number;
     onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
     onRawFrame?: (frame: string) => void;
 };
@@ -184,9 +185,29 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
         now: now(),
         maxAgeMs: OPENAI_WS_MAX_CHAIN_AGE_MS,
     });
+    const attemptAbortController = new AbortController();
+    const abortAttemptFromOuter = () => attemptAbortController.abort();
+    if (options.signal.aborted) attemptAbortController.abort();
+    else options.signal.addEventListener('abort', abortAttemptFromOuter, { once: true });
+    let streamingTimeoutError: Error | undefined;
+    const watchdog = createStreamingAttemptWatchdog({
+        hardTimeoutMs: options.hardTimeoutMs,
+        onTimeout: error => {
+            streamingTimeoutError = error;
+            attemptAbortController.abort();
+        },
+    });
+    const attemptSignal = attemptAbortController.signal;
     matched?.chain.resource.removeIdleListeners?.();
     if (matched) matched.chain.resource.removeIdleListeners = undefined;
-    const resource = matched?.chain.resource || await openSocket(wsUrl, options.headers, options.signal);
+    let resource: OpenAIWsResource;
+    try {
+        resource = matched?.chain.resource || await openSocket(wsUrl, options.headers, attemptSignal);
+    } catch (error) {
+        watchdog.finish();
+        options.signal.removeEventListener('abort', abortAttemptFromOuter);
+        throw streamingTimeoutError || error;
+    }
     resource.socket._socket?.ref?.();
     const input = Array.isArray(options.data.input) ? options.data.input : [];
     const responseRequest: Record<string, any> = {
@@ -204,16 +225,16 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
     let phase: 'active' | 'pending' | 'finished' = 'active';
     let pendingInvalidated = false;
     let completed = false;
-    let timer: NodeJS.Timeout | undefined;
 
     const closeLeased = () => closeResource(resource);
     const cleanupStreaming = () => {
-        if (timer) clearTimeout(timer);
+        watchdog.finish();
         resource.socket.off('message', onMessage as any);
     };
     const cleanupAll = () => {
         cleanupStreaming();
-        options.signal.removeEventListener('abort', onAbort);
+        attemptSignal.removeEventListener('abort', onAbort);
+        options.signal.removeEventListener('abort', abortAttemptFromOuter);
         resource.socket.off('close', onClose as any);
         resource.socket.off('error', onError as any);
     };
@@ -279,23 +300,16 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
         }
     };
 
-    options.signal.addEventListener('abort', onAbort, { once: true });
+    attemptSignal.addEventListener('abort', onAbort, { once: true });
     resource.socket.on('message', onMessage as any);
     resource.socket.once('close', onClose as any);
     resource.socket.once('error', onError as any);
-    timer = setTimeout(() => {
-        if (phase !== 'active') return;
-        phase = 'finished';
-        closeLeased();
-        stream.destroy(new Error(`OpenAI Responses WebSocket request timed out after ${options.timeoutMs}ms.`));
-    }, options.timeoutMs);
-    timer.unref?.();
-
     try {
         const envelope = JSON.stringify({ type: 'response.create', ...responseRequest });
         resource.socket.send(envelope);
-        const response = await collectOpenAIResponsesStream(stream, options.signal, {
+        const response = await collectOpenAIResponsesStream(stream, attemptSignal, {
             onProgress: options.onProgress,
+            onMeaningfulProgress: () => watchdog.markMeaningfulProgress(),
         });
         cleanupStreaming();
         const responseId = typeof response?.id === 'string' && response.id.trim() ? response.id.trim() : '';
@@ -346,7 +360,7 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
         phase = 'finished';
         cleanupAll();
         closeLeased();
-        throw error;
+        throw streamingTimeoutError || error;
     }
 }
 

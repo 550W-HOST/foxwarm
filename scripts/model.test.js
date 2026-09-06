@@ -43,6 +43,7 @@ function runtime(overrides = {}) {
 }
 
 test('parseArgs rejects unknown options, missing values, and invalid timeouts', () => {
+  assert.equal(parseArgs([]).timeoutMs, undefined);
   assert.throws(() => parseArgs(['--wat']), error => error instanceof CliUsageError && /Unknown/.test(error.message));
   assert.throws(() => parseArgs(['--model']), error => error instanceof CliUsageError && /requires a value/.test(error.message));
   assert.throws(() => parseArgs(['--timeout', 'NaN']), error => error instanceof CliUsageError && /positive number/.test(error.message));
@@ -92,6 +93,19 @@ test('model CLI reads stdin and rejects unknown model keys and empty responses',
     }),
     /empty text response/,
   );
+});
+
+test('model CLI leaves timeout unspecified unless the user supplies an explicit bound', async () => {
+  let captured;
+  await runModelCli(['--prompt', 'hello'], {
+    runtimeLoader: () => runtime({
+      requestLlmOnce: async options => {
+        captured = options;
+        return { text: 'ok', modelId: 'provider/model', usage: null };
+      },
+    }),
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(captured, 'timeoutMs'), false);
 });
 
 test('model CLI lists and forwards virtual model keys through the production request contract', async () => {

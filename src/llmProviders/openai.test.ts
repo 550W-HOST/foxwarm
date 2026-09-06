@@ -713,6 +713,38 @@ test('collectOpenAIResponsesStream rejects official incomplete and top-level err
   );
 });
 
+test('OpenAI collectors report only genuinely new generated content as timeout activity', async () => {
+  let responsesMeaningful = 0;
+  await collectOpenAIResponsesStream(makeStream([
+    { type: 'response.created', response: { id: 'r1', status: 'in_progress' } },
+    { type: 'response.in_progress', response: { id: 'r1', status: 'in_progress' } },
+    { type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } },
+    { type: 'response.output_item.added', output_index: 4, item: { type: 'web_search_call', id: 'ws1', status: 'in_progress' } },
+    { type: 'response.output_item.done', output_index: 4, item: { type: 'web_search_call', id: 'ws1', status: 'completed' } },
+    { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: '' },
+    { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'a' },
+    { type: 'response.output_text.done', output_index: 0, content_index: 0, text: 'a' },
+    { type: 'response.reasoning_summary_text.delta', output_index: 1, summary_index: 0, delta: 'r' },
+    { type: 'response.function_call_arguments.delta', output_index: 2, delta: '{' },
+    { type: 'response.refusal.delta', output_index: 3, content_index: 0, delta: 'n' },
+    { type: 'response.completed', response: { id: 'r1', status: 'completed', output: [], usage: { input_tokens: 1, output_tokens: 1 } } },
+  ]), new AbortController().signal, { onMeaningfulProgress: () => { responsesMeaningful += 1; } });
+  assert.equal(responsesMeaningful, 4);
+
+  let chatMeaningful = 0;
+  await collectOpenAIChatCompletionsStream(makeStream([
+    { choices: [{ index: 0, delta: { role: 'assistant' } }] },
+    { choices: [{ index: 0, delta: { content: '' } }] },
+    { choices: [{ index: 0, delta: { content: 'a' } }] },
+    { choices: [{ index: 0, delta: { reasoning_content: 'r' } }] },
+    { choices: [{ index: 0, delta: { reasoning: 'x' } }] },
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'c', type: 'function', function: { name: 'f', arguments: '' } }] } }] },
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{' } }] } }] },
+    { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+  ]), new AbortController().signal, { onMeaningfulProgress: () => { chatMeaningful += 1; } });
+  assert.equal(chatMeaningful, 4);
+});
+
 test('convertToOpenAIResponsesFormat replays ordered web search metadata only to its source model', () => {
   const webSearchCall = {
     type: 'web_search_call',

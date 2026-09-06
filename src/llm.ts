@@ -25,6 +25,7 @@ import {
 } from './llmProviders/openai';
 import type { OpenAIWsHistoryAppendFinalizer, OpenAIWsHistoryAppendOutcome } from './llmProviders/openaiWsState';
 import { requestOpenAIResponsesWs } from './llmProviders/openaiWsTransport';
+import { createStreamingAttemptWatchdog } from './llmStreamingTimeout';
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
@@ -2846,6 +2847,8 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
             let response: AxiosResponse | undefined;
             let responseStatus = '';
             let responseHeaders: any;
+            let cleanupStreamingAttempt = () => {};
+            let streamingTimeoutError: Error | undefined;
             try {
                 if (requestStartedAt === undefined) {
                     requestStartedAt = performance.now();
@@ -2853,10 +2856,32 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                 attemptRawStreamLog = (plan.useStreamingApi || plan.useOpenAIResponsesWs)
                     ? createRawStreamLogCapture()
                     : null;
+                let attemptSignal = abortController.signal;
+                let markMeaningfulProgress: (() => void) | undefined;
+                if (plan.useStreamingApi) {
+                    const attemptAbortController = new AbortController();
+                    const abortAttemptFromOuter = () => attemptAbortController.abort();
+                    if (abortController.signal.aborted) attemptAbortController.abort();
+                    else abortController.signal.addEventListener('abort', abortAttemptFromOuter, { once: true });
+                    const watchdog = createStreamingAttemptWatchdog({
+                        hardTimeoutMs: options.timeoutMs,
+                        onTimeout: error => {
+                            streamingTimeoutError = error;
+                            attemptAbortController.abort();
+                        },
+                    });
+                    attemptSignal = attemptAbortController.signal;
+                    markMeaningfulProgress = () => watchdog.markMeaningfulProgress();
+                    cleanupStreamingAttempt = () => {
+                        watchdog.finish();
+                        abortController.signal.removeEventListener('abort', abortAttemptFromOuter);
+                    };
+                }
                 const streamCollectOptions = {
                     onProgress: shouldNotifySessionEvents
                         ? (snapshot: any) => modelStreamEmitter.emit(snapshot)
                         : undefined,
+                    onMeaningfulProgress: markMeaningfulProgress,
                     onRawChunk: (text: string) => attemptRawStreamLog?.appendChunk(text),
                     onRawSseBlock: (block: string) => attemptRawStreamLog?.appendSseBlock(block),
                 };
@@ -2870,7 +2895,7 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                         data: plan.data,
                         placement: options.currentSessionEffects?.placement || 'local',
                         signal: abortController.signal,
-                        timeoutMs: options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS,
+                        hardTimeoutMs: options.timeoutMs,
                         onProgress: streamCollectOptions.onProgress,
                         onRawFrame: frame => {
                             attemptRawStreamLog?.appendChunk(`${frame}\n`);
@@ -2910,16 +2935,16 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     logger.debug({ modelKey, iteration, attempt, url: plan.url }, 'Dispatching LLM HTTP request');
                     response = await axios.post(plan.url, plan.requestBody, {
                         headers: { ...plan.headers, ...plan.compressionHeaders },
-                        timeout: options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS,
+                        timeout: plan.useStreamingApi ? 0 : (options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS),
                         validateStatus: () => true,
-                        signal: abortController.signal,
+                        signal: attemptSignal,
                         ...(plan.useStreamingApi ? { responseType: 'stream' as const } : {}),
                     });
                     responseStatus = `${response.status} ${response.statusText}`.trim();
                     responseHeaders = response.headers;
                     if (response.status !== 200) {
                         const errorBody = plan.useStreamingApi
-                            ? await readStreamAsText(response.data, abortController.signal)
+                            ? await readStreamAsText(response.data, attemptSignal)
                             : response.data;
                         const classification = classifyHttpFailure(response.status, errorBody);
                         throw new ConcreteAttemptFailure(summarizeRetryReason(errorBody || responseStatus), {
@@ -2933,12 +2958,13 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
 
                 if (plan.useStreamingApi && response) {
                     resp = plan.useOpenAIResponsesApi
-                        ? await collectOpenAIResponsesStreamProvider(response.data, abortController.signal, streamCollectOptions)
-                        : await collectOpenAIChatCompletionsStreamProvider(response.data, abortController.signal, streamCollectOptions);
+                        ? await collectOpenAIResponsesStreamProvider(response.data, attemptSignal, streamCollectOptions)
+                        : await collectOpenAIChatCompletionsStreamProvider(response.data, attemptSignal, streamCollectOptions);
                 } else if (!plan.useOpenAIResponsesWs && response) {
                     resp = response.data;
                 }
 
+                cleanupStreamingAttempt();
                 const result = parseConcreteProviderResponse(plan, resp);
                 const completedAt = Date.now();
                 const durationMs = Math.max(0, performance.now() - requestStartedAt);
@@ -2971,6 +2997,8 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                     ...(attemptHistoryAppendFinalizer ? { finalizeHistoryAppend: attemptHistoryAppendFinalizer } : {}),
                 };
             } catch (error: any) {
+                cleanupStreamingAttempt();
+                if (streamingTimeoutError) error = streamingTimeoutError;
                 settleHistoryAppendFinalizer(
                     attemptHistoryAppendFinalizer,
                     { appended: false },

@@ -12,6 +12,11 @@ import {
 } from './openaiWsTransport';
 import { convertToOpenAIResponsesFormat } from './openai';
 import type { Message } from '../types';
+import {
+  DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
+  DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS,
+  setStreamingTimeoutTestHooks,
+} from '../llmStreamingTimeout';
 
 class FakeSocket extends EventEmitter {
   readyState: number = WebSocket.CONNECTING;
@@ -20,9 +25,9 @@ class FakeSocket extends EventEmitter {
   refs = 0;
   unrefs = 0;
   _socket = { ref: () => { this.refs += 1; }, unref: () => { this.unrefs += 1; } };
-  constructor(private readonly responder?: (request: any, socket: FakeSocket) => void) {
+  constructor(private readonly responder?: (request: any, socket: FakeSocket) => void, autoOpen = true) {
     super();
-    process.nextTick(() => {
+    if (autoOpen) process.nextTick(() => {
       this.readyState = WebSocket.OPEN;
       this.emit('open');
     });
@@ -79,7 +84,10 @@ class FakeIdleTimers {
   };
 }
 
-afterEach(() => setOpenAIWsTransportTestHooks());
+afterEach(() => {
+  setOpenAIWsTransportTestHooks();
+  setStreamingTimeoutTestHooks();
+});
 
 test('openai-ws sends a full first request then reuses the exact completed prefix with only the suffix', async () => {
   const sockets: FakeSocket[] = [];
@@ -95,7 +103,7 @@ test('openai-ws sends a full first request then reuses the exact completed prefi
   const firstInput = [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'one' }] }];
   const first = await requestOpenAIResponsesWs({
     url: 'https://example.test/v1/responses', headers: { Authorization: 'Bearer secret' }, concreteIdentity: 'leaf/model',
-    data: baseData(firstInput), placement: 'local', signal: signal(), timeoutMs: 1000,
+    data: baseData(firstInput), placement: 'local', signal: signal(), hardTimeoutMs: 1000,
   });
   first.finalize([{ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'ok' }] }]);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 1);
@@ -104,7 +112,7 @@ test('openai-ws sends a full first request then reuses the exact completed prefi
   const second = await requestOpenAIResponsesWs({
     url: 'https://example.test/v1/responses', headers: { Authorization: 'Bearer secret' }, concreteIdentity: 'leaf/model',
     data: baseData([...firstInput, { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'ok' }] }, ...suffix]),
-    placement: 'local', signal: signal(), timeoutMs: 1000,
+    placement: 'local', signal: signal(), hardTimeoutMs: 1000,
   });
   assert.equal(sockets.length, 1);
   assert.equal(handshakes[0].url, 'wss://example.test/v1/responses');
@@ -127,13 +135,13 @@ test('openai-ws invariant or connection changes force a fresh full request', asy
     sockets.push(socket); return socket as any;
   }});
   const input = [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'x' }] }];
-  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: { Authorization: 'Bearer a' }, concreteIdentity: 'leaf/a', data: baseData(input), placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: { Authorization: 'Bearer a' }, concreteIdentity: 'leaf/a', data: baseData(input), placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   first.finalize([]);
-  const second = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: { Authorization: 'Bearer a' }, concreteIdentity: 'leaf/a', data: baseData(input, { max_output_tokens: 101 }), placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const second = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: { Authorization: 'Bearer a' }, concreteIdentity: 'leaf/a', data: baseData(input, { max_output_tokens: 101 }), placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   assert.equal(sockets.length, 2);
   assert.deepEqual(sockets[1].sent[0].input, input);
   second.finalize([]);
-  const third = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: { Authorization: 'Bearer changed' }, concreteIdentity: 'leaf/a', data: baseData(input, { max_output_tokens: 101 }), placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const third = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: { Authorization: 'Bearer changed' }, concreteIdentity: 'leaf/a', data: baseData(input, { max_output_tokens: 101 }), placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   assert.equal(sockets.length, 3);
   third.finalize(false);
 });
@@ -157,14 +165,14 @@ test('openai-ws full-plan invariants and compact-style history rewrites cannot r
     { headers: { 'x-route': 'other' } },
     { data: { input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'rewritten compact history' }] }] } },
   ];
-  const seed = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: { 'x-route': 'base' }, concreteIdentity: 'leaf/model', data: baseData(originalInput), placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const seed = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: { 'x-route': 'base' }, concreteIdentity: 'leaf/model', data: baseData(originalInput), placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   seed.finalize([]);
   for (const variant of cases) {
     const fullData = { ...baseData(originalInput), ...(variant.data || {}) };
     const pending = await requestOpenAIResponsesWs({
       url: 'https://a.test/v1/responses', headers: variant.headers || { 'x-route': 'base' },
       concreteIdentity: variant.identity || 'leaf/model', data: fullData,
-      placement: 'local', signal: signal(), timeoutMs: 1000,
+      placement: 'local', signal: signal(), hardTimeoutMs: 1000,
     });
     const wire = sockets.at(-1)!.sent[0];
     assert.equal(wire.previous_response_id, undefined);
@@ -181,7 +189,7 @@ test('openai-ws assistant reasoning, hosted search, and tool-call replay stay in
     sockets.push(socket); return socket as any;
   }});
   const user = { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'search then read' }] };
-  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'leaf/model', data: baseData([user]), placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'leaf/model', data: baseData([user]), placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   const assistant: Message = {
     role: 'model',
     __meta: { modelId: 'leaf/model' },
@@ -197,7 +205,7 @@ test('openai-ws assistant reasoning, hosted search, and tool-call replay stay in
   const toolOutput = { type: 'function_call_output', call_id: 'call1', output: 'done' };
   const second = await requestOpenAIResponsesWs({
     url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'leaf/model',
-    data: baseData([user, ...replay, toolOutput]), placement: 'local', signal: signal(), timeoutMs: 1000,
+    data: baseData([user, ...replay, toolOutput]), placement: 'local', signal: signal(), hardTimeoutMs: 1000,
   });
   assert.equal(sockets.length, 1);
   assert.deepEqual(sockets[0].sent[1].input, [toolOutput]);
@@ -217,17 +225,17 @@ test('openai-ws continuation omits only the wire cap while failure recovery rest
   }});
   const firstInput = [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'one' }] }];
   const firstData = baseData(firstInput);
-  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: firstData, placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: firstData, placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   first.finalize([]);
   const nextData = baseData([...firstInput, { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'two' }] }]);
   await assert.rejects(
-    requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: nextData, placement: 'local', signal: signal(), timeoutMs: 1000 }),
+    requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: nextData, placement: 'local', signal: signal(), hardTimeoutMs: 1000 }),
     /closed before completion/,
   );
   assert.equal(Object.prototype.hasOwnProperty.call(sockets[0].sent[1], 'max_output_tokens'), false);
   assert.equal(nextData.max_output_tokens, 100);
 
-  const recovered = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: nextData, placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const recovered = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: nextData, placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   assert.equal(sockets.length, 2);
   assert.equal(sockets[1].sent[0].previous_response_id, undefined);
   assert.equal(sockets[1].sent[0].max_output_tokens, 100);
@@ -242,10 +250,10 @@ test('openai-ws keeps busy chains outside matching and enforces worker idle limi
     sockets.push(socket); return socket as any;
   }});
   const input = [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'x' }] }];
-  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData(input), placement: 'session-worker', signal: signal(), timeoutMs: 1000 });
+  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData(input), placement: 'session-worker', signal: signal(), hardTimeoutMs: 1000 });
   first.finalize([]);
-  const busy = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData(input), placement: 'session-worker', signal: signal(), timeoutMs: 1000 });
-  const parallel = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData(input), placement: 'session-worker', signal: signal(), timeoutMs: 1000 });
+  const busy = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData(input), placement: 'session-worker', signal: signal(), hardTimeoutMs: 1000 });
+  const parallel = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData(input), placement: 'session-worker', signal: signal(), hardTimeoutMs: 1000 });
   assert.equal(sockets.length, 2);
   busy.finalize([]);
   parallel.finalize([]);
@@ -261,10 +269,10 @@ test('openai-ws rotates a completed chain at the sixty-minute boundary', async (
     sockets.push(socket); return socket as any;
   }});
   const data = baseData([{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'x' }] }]);
-  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   first.finalize([]);
   clock = 60 * 60 * 1000;
-  const second = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const second = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   assert.equal(sockets.length, 2);
   assert.equal(sockets[0].terminated, 1);
   second.finalize(false);
@@ -281,7 +289,7 @@ test('openai-ws abort, malformed frames, and mid-stream close discard the leased
       return socket as any;
     }});
     const controller = new AbortController();
-    const pending = requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: controller.signal, timeoutMs: 1000 });
+    const pending = requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: controller.signal, hardTimeoutMs: 1000 });
     if (mode === 'abort') process.nextTick(() => controller.abort());
     await assert.rejects(pending, mode === 'abort' ? /abort/i : /malformed|closed/i);
     assert.equal(socket.terminated, 1);
@@ -303,7 +311,7 @@ test('openai-ws failed, error, and incomplete terminal events invalidate the cha
     }});
     const startedAt = Date.now();
     await assert.rejects(
-      requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), timeoutMs: 5000 }),
+      requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), hardTimeoutMs: 5000 }),
       /failed response|provider error|incomplete response|compatible provider error/,
     );
     assert.ok(Date.now() - startedAt < 1000, `${mode} should reject immediately rather than waiting for timeout`);
@@ -318,7 +326,7 @@ test('explicit cleanup closes idle sockets and removes process-owned resources',
     socket = new FakeSocket((_request, current) => current.frame(completed('r1')));
     return socket as any;
   }});
-  const pending = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const pending = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   pending.finalize([]);
   clearOpenAIWsCompletedChains();
   assert.equal(socket.terminated, 1);
@@ -331,7 +339,7 @@ test('idle socket close removes its completed chain immediately', async () => {
     socket = new FakeSocket((_request, current) => current.frame(completed('r1')));
     return socket as any;
   }});
-  const pending = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const pending = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   pending.finalize([]);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 1);
   socket.terminate();
@@ -386,12 +394,12 @@ test('active and pending-append sockets stay referenced, idle sockets unref, and
     sockets.push(socket); return socket as any;
   }});
   const data = baseData([{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'one' }] }]);
-  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   assert.equal(sockets[0].refs, 1);
   assert.equal(sockets[0].unrefs, 0);
   first.finalize([]);
   assert.equal(sockets[0].unrefs, 1);
-  const second = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const second = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   assert.equal(sockets[0].refs, 2);
   second.finalize(false);
 });
@@ -402,10 +410,62 @@ test('close after response.completed but before assistant append invalidates the
     socket = new FakeSocket((_request, current) => current.frame(completed('pending-close')));
     return socket as any;
   }});
-  const pending = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const pending = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   socket.terminate();
   pending.finalize([]);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
+});
+
+test('openai-ws first-content watchdog covers handshake and ignores response scaffolding', async () => {
+  for (const mode of ['handshake', 'scaffolding'] as const) {
+    const timers = new FakeIdleTimers();
+    setStreamingTimeoutTestHooks(timers.hooks);
+    let socket!: FakeSocket;
+    setOpenAIWsTransportTestHooks({ socketFactory: () => {
+      socket = new FakeSocket(mode === 'scaffolding' ? (_request, current) => {
+        current.frame({ type: 'response.created', response: { id: 'r1', status: 'in_progress' } });
+        current.frame({ type: 'response.in_progress', response: { id: 'r1', status: 'in_progress' } });
+        current.frame({ type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } });
+        current.frame({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: '' });
+      } : undefined, mode !== 'handshake');
+      return socket as any;
+    }});
+    const pending = requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal() });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(timers.entries.length, 1);
+    assert.equal(timers.entries[0].delayMs, DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS);
+    timers.entries[0].callback();
+    await assert.rejects(pending, /before first meaningful generated content/);
+    assert.equal(socket.terminated, 1);
+  }
+});
+
+test('openai-ws meaningful deltas switch to and reset the one-minute inactivity watchdog', async () => {
+  const timers = new FakeIdleTimers();
+  setStreamingTimeoutTestHooks(timers.hooks);
+  let socket!: FakeSocket;
+  setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    socket = new FakeSocket((_request, current) => {
+      current.frame({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'a' });
+      current.frame({ type: 'response.output_text.done', output_index: 0, content_index: 0, text: 'a' });
+      current.frame({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'b' });
+    });
+    return socket as any;
+  }});
+  const pending = requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal() });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(timers.entries.map(entry => entry.delayMs), [
+    DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS,
+    DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
+    DEFAULT_STREAM_CONTENT_INACTIVITY_TIMEOUT_MS,
+  ]);
+  assert.equal(timers.entries[0].cleared, true);
+  assert.equal(timers.entries[1].cleared, true);
+  timers.entries[1].callback();
+  assert.equal(socket.terminated, 0);
+  timers.entries[2].callback();
+  await assert.rejects(pending, /between meaningful generated content increments/);
+  assert.equal(socket.terminated, 1);
 });
 
 test('completed idle chains actively expire and close after one minute without another request', async () => {
@@ -415,7 +475,7 @@ test('completed idle chains actively expire and close after one minute without a
     socket = new FakeSocket((_request, current) => current.frame(completed('idle-expiry')));
     return socket as any;
   }});
-  const pending = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const pending = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   assert.equal(timers.entries.length, 0);
   pending.finalize([]);
   assert.equal(timers.entries.length, 1);
@@ -435,10 +495,10 @@ test('reuse cancels the old idle timer and successful release starts a fresh idl
     return socket as any;
   }});
   const data = baseData([{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'reuse' }] }]);
-  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   first.finalize([]);
   const oldTimer = timers.entries[0];
-  const second = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), timeoutMs: 1000 });
+  const second = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
   assert.equal(oldTimer.cleared, true);
   assert.equal(timers.entries.length, 1);
   oldTimer.callback();
@@ -462,7 +522,7 @@ test('LRU eviction and pool clear cancel every affected idle timer', async () =>
     return socket as any;
   }});
   for (let index = 0; index < 6; index += 1) {
-    const pending = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: `leaf-${index}`, data: baseData([]), placement: 'local', signal: signal(), timeoutMs: 1000 });
+    const pending = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: `leaf-${index}`, data: baseData([]), placement: 'local', signal: signal(), hardTimeoutMs: 1000 });
     pending.finalize([]);
   }
   assert.equal(timers.entries.length, 6);

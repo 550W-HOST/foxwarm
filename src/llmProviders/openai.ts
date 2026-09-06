@@ -74,6 +74,7 @@ export type OpenAIStreamProgressSnapshot = {
 
 type OpenAIStreamProgressOptions = {
     onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
+    onMeaningfulProgress?: () => void;
     onRawChunk?: (text: string) => void;
     onRawSseBlock?: (block: string) => void;
 };
@@ -865,6 +866,7 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.output_text.delta':
+                    if (typeof event.delta === 'string' && event.delta.length > 0) options?.onMeaningfulProgress?.();
                     if (typeof event.output_index === 'number' && typeof event.content_index === 'number') {
                         const part = ensureContentPart(event.output_index, event.content_index, { type: 'output_text' });
                         if (part) {
@@ -901,6 +903,7 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.refusal.delta':
+                    if (typeof event.delta === 'string' && event.delta.length > 0) options?.onMeaningfulProgress?.();
                     if (typeof event.output_index === 'number' && typeof event.content_index === 'number') {
                         const part = ensureContentPart(event.output_index, event.content_index, { type: 'refusal' });
                         if (part) {
@@ -922,6 +925,7 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.function_call_arguments.delta':
+                    if (typeof event.delta === 'string' && event.delta.length > 0) options?.onMeaningfulProgress?.();
                     if (typeof event.output_index === 'number') {
                         const item = ensureOutputItem(event.output_index, { type: 'function_call' });
                         if (item) {
@@ -949,6 +953,7 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.reasoning_summary_text.delta':
+                    if (typeof event.delta === 'string' && event.delta.length > 0) options?.onMeaningfulProgress?.();
                     summaryParts.set(key, `${summaryParts.get(key) || ''}${event.delta || ''}`);
                     emitSummaryUpdate();
                     return;
@@ -1181,6 +1186,7 @@ export async function collectOpenAIChatCompletionsStream(
                 }
 
                 const nextContent = appendDelta(message.content, delta.content);
+                if (typeof delta.content === 'string' && delta.content.length > 0) options?.onMeaningfulProgress?.();
                 if (nextContent !== message.content) {
                     message.content = nextContent || '';
                     changed = true;
@@ -1188,11 +1194,13 @@ export async function collectOpenAIChatCompletionsStream(
                     message.content = message.content || '';
                 }
                 const nextReasoningContent = appendDelta(message.reasoning_content, delta.reasoning_content);
+                if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) options?.onMeaningfulProgress?.();
                 if (nextReasoningContent !== message.reasoning_content) {
                     message.reasoning_content = nextReasoningContent;
                     changed = true;
                 }
                 const nextReasoning = appendDelta(message.reasoning, delta.reasoning);
+                if (typeof delta.reasoning === 'string' && delta.reasoning.length > 0) options?.onMeaningfulProgress?.();
                 if (nextReasoning !== message.reasoning) {
                     message.reasoning = nextReasoning;
                     changed = true;
@@ -1219,6 +1227,9 @@ export async function collectOpenAIChatCompletionsStream(
                             entry.type = toolCallDelta.type;
                         }
                         if (toolCallDelta.function) {
+                            if (typeof toolCallDelta.function.arguments === 'string' && toolCallDelta.function.arguments.length > 0) {
+                                options?.onMeaningfulProgress?.();
+                            }
                             entry.function.name = appendDelta(entry.function.name, toolCallDelta.function.name) || entry.function.name;
                             entry.function.arguments = appendDelta(entry.function.arguments, toolCallDelta.function.arguments) || entry.function.arguments;
                         }
