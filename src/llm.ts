@@ -2515,6 +2515,9 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
                 continue;
             }
             if (item.type === 'message' && item.role === 'assistant') {
+                const phase = item.phase === 'commentary' || item.phase === 'final_answer'
+                    ? item.phase
+                    : undefined;
                 for (const contentPart of item.content || []) {
                     if (contentPart.type === 'output_text' && typeof contentPart.text === 'string') {
                         responseText += contentPart.text;
@@ -2523,6 +2526,7 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
                             : undefined;
                         allParts.push({
                             text: contentPart.text,
+                            ...(phase ? { phase } : {}),
                             ...(annotations ? {
                                 providerMeta: {
                                     openaiResponses: {
@@ -2534,7 +2538,7 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
                         });
                     } else if (contentPart.type === 'refusal' && typeof contentPart.refusal === 'string') {
                         responseText += contentPart.refusal;
-                        allParts.push({ text: contentPart.refusal });
+                        allParts.push({ text: contentPart.refusal, ...(phase ? { phase } : {}) });
                     }
                 }
                 continue;

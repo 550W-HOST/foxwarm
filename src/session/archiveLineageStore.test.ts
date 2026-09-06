@@ -148,7 +148,7 @@ test('archive message and block identities allow identical replay but reject con
   const archiveStore = await import('./archiveStore');
   const message: any = {
     v: 1, kind: 'message', sessionId: 'immutable', agent: 'main', seq: 1,
-    timestamp: 1000, role: 'user', message: { role: 'user', parts: [{ text: 'original' }], __meta: { seq: 1, timestamp: 1000 } },
+    timestamp: 1000, role: 'model', message: { role: 'model', parts: [{ text: 'original', phase: 'commentary' }], __meta: { seq: 1, timestamp: 1000 } },
   };
   const block: any = {
     v: 1, kind: 'block', sessionId: 'immutable', agent: 'main', id: 1, level: 1,
@@ -163,7 +163,7 @@ test('archive message and block identities allow identical replay but reject con
   await assert.rejects(() => archiveStore.writeArchiveBlocks([block, { ...block, sessionId: 'other' }]), /exactly one session ID/);
   await archiveStore.writeArchiveBlocks([structuredClone(block)]);
   await assert.rejects(() => archiveStore.writeArchiveBlocks([{ ...block, summary: 'conflict' }]), /Immutable archive block conflict/);
-  assert.equal((await archiveStore.readLocalArchiveMessages('immutable'))[0].message.parts[0].text, 'original');
+  assert.deepEqual((await archiveStore.readLocalArchiveMessages('immutable'))[0].message.parts[0], { text: 'original', phase: 'commentary' });
   assert.equal((await archiveStore.readLocalArchiveBlocks('immutable'))[0].summary, 'original summary');
   await fs.remove(tempRoot);
 });

@@ -91,13 +91,14 @@ test('activated turn persistence verifies ownership and writes no mailbox acknow
   await withStore(async store => {
     const owner = activate(store, 'turn-save');
     const current = session('turn-save');
-    current.history.push({ role: 'model', parts: [{ text: 'committed turn' }] });
+    current.history.push({ role: 'model', parts: [{ text: 'committed turn', phase: 'final_answer' }] });
     let durable: Session | undefined;
     const persistence = new SessionWorkerPersistence(store, {
       writeState: async value => { durable = structuredClone(value); },
     });
     const projection = await persistence.persistActivated(current, owner.generation, owner.incarnationId);
     assert.equal(durable?.history.length, 1);
+    assert.equal(durable?.history[0].parts[0].phase, 'final_answer');
     assert.equal(projection.messageCount, 1);
     assert.equal(store.getOwnership('turn-save').mailboxCursor, 0);
     await assert.rejects(

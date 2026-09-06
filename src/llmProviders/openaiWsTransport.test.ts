@@ -196,11 +196,13 @@ test('openai-ws assistant reasoning, hosted search, and tool-call replay stay in
     parts: [
       { thinking: 'checked', providerMeta: { thinkingSummaries: ['checked'], encryptedThinking: 'encrypted' } },
       { providerMeta: { openaiResponses: { sourceModelId: 'leaf/model', outputItem: { type: 'web_search_call', id: 'ws1', status: 'completed' } } } },
-      { text: 'I found it.', providerMeta: { openaiResponses: { sourceModelId: 'leaf/model', annotations: [{ type: 'url_citation', url: 'https://example.test' }] } } },
+      { text: 'I found it.', phase: 'commentary', providerMeta: { openaiResponses: { sourceModelId: 'leaf/model', annotations: [{ type: 'url_citation', url: 'https://example.test' }] } } },
       { functionCall: { id: 'call1', name: 'read', args: { filePath: 'README.md' } } },
+      { text: 'Read complete.', phase: 'final_answer' },
     ],
   };
   const replay = convertToOpenAIResponsesFormat([assistant], 'leaf/model');
+  assert.deepEqual(replay.filter((item: any) => item.type === 'message').map((item: any) => item.phase), ['commentary', 'final_answer']);
   first.finalize(replay);
   const toolOutput = { type: 'function_call_output', call_id: 'call1', output: 'done' };
   const second = await requestOpenAIResponsesWs({

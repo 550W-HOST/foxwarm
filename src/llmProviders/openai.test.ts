@@ -824,7 +824,7 @@ test('convertToOpenAIResponsesFormat replays ordered web search metadata only to
     {
       type: 'message',
       role: 'assistant',
-      phase: 'final_answer',
+      phase: 'commentary',
       content: [{ type: 'output_text', text: 'Hello', annotations }],
     },
     { type: 'function_call', call_id: 'call_1', name: 'read', arguments: '{"filePath":"README.md"}' },
@@ -835,11 +835,53 @@ test('convertToOpenAIResponsesFormat replays ordered web search metadata only to
     {
       type: 'message',
       role: 'assistant',
-      phase: 'final_answer',
+      phase: 'commentary',
       content: [{ type: 'output_text', text: 'Hello' }],
     },
     { type: 'function_call', call_id: 'call_1', name: 'read', arguments: '{"filePath":"README.md"}' },
   ]);
+});
+
+test('convertToOpenAIResponsesFormat preserves explicit assistant phases and applies the legacy tool-call heuristic', () => {
+  const history: Message[] = [{
+    role: 'model',
+    parts: [
+      { text: 'I will inspect that.', phase: 'commentary' },
+      { functionCall: { id: 'call_1', name: 'read', args: { filePath: 'README.md' } } },
+      { text: 'The inspection is complete.', phase: 'final_answer' },
+      { text: 'Legacy text has no phase.' },
+    ],
+  }];
+
+  assert.deepEqual(convertToOpenAIResponsesFormat(history, 'openai/other-model'), [
+    {
+      type: 'message', role: 'assistant', phase: 'commentary',
+      content: [{ type: 'output_text', text: 'I will inspect that.' }],
+    },
+    { type: 'function_call', call_id: 'call_1', name: 'read', arguments: '{"filePath":"README.md"}' },
+    {
+      type: 'message', role: 'assistant', phase: 'final_answer',
+      content: [{ type: 'output_text', text: 'The inspection is complete.' }],
+    },
+    {
+      type: 'message', role: 'assistant', phase: 'commentary',
+      content: [{ type: 'output_text', text: 'Legacy text has no phase.' }],
+    },
+  ]);
+
+  assert.deepEqual(convertToOpenAIResponsesFormat([{
+    role: 'model', parts: [{ text: 'Legacy final text.' }],
+  }]), [{
+    type: 'message', role: 'assistant', phase: 'final_answer',
+    content: [{ type: 'output_text', text: 'Legacy final text.' }],
+  }]);
+
+  assert.deepEqual(convertToOpenAIResponsesFormat([{
+    role: 'model', parts: [{ text: 'Unknown phase stays absent.', phase: 'analysis' } as any],
+  }]), [{
+    type: 'message', role: 'assistant',
+    content: [{ type: 'output_text', text: 'Unknown phase stays absent.' }],
+  }]);
 });
 
 test('collectOpenAIResponsesStream rebuilds refusals when completed payload omits content', async () => {

@@ -559,6 +559,7 @@ function isCanonicalMessage(value: unknown): boolean {
   return value.parts.every((part: unknown) => {
     if (!isRecord(part)) return false;
     for (const key of ['text', 'system', 'thinking', 'toolUseId'] as const) if (part[key] !== undefined && typeof part[key] !== 'string') return false;
+    if (part.phase !== undefined && part.phase !== 'commentary' && part.phase !== 'final_answer') return false;
     if (part.systemPayload !== undefined && typeof part.systemPayload !== 'boolean') return false;
     if (part.functionCall !== undefined && (!isRecord(part.functionCall) || typeof part.functionCall.id !== 'string' || typeof part.functionCall.name !== 'string' || !isRecord(part.functionCall.args))) return false;
     if (part.functionResponse !== undefined && (!isRecord(part.functionResponse) || typeof part.functionResponse.tool_use_id !== 'string' || typeof part.functionResponse.name !== 'string' || part.functionResponse.response === undefined)) return false;

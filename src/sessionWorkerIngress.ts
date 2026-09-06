@@ -17,7 +17,7 @@ import { isSystemPayloadTextPart } from './utils/systemMessageParts';
 
 const MAX_INGRESS_BYTES = 1024 * 1024;
 const ITEM_KEYS = ['type', 'source', 'sourceSessionId', 'sourceSessionRelation', 'clientMessageId', 'parts', 'message', 'waitTimeoutId', 'execId', 'waitLivenessFingerprint', 'waitLivenessWaitId', 'externalEventId'];
-const PART_KEYS = ['text', 'system', 'systemPayload', 'inlineDataRef', 'imageMeta'];
+const PART_KEYS = ['text', 'system', 'systemPayload', 'phase', 'inlineDataRef', 'imageMeta'];
 const SOURCE_KEYS = ['platform', 'channelId', 'channelType', 'channelUserId', 'conversationId', 'username', 'senderId', 'weworkStreamId', 'qqbotMessageId', 'preferDirectReply'];
 
 function invalid(message: string): never { throw new RpcError('SESSION_WORKER_INGRESS_INVALID', message); }
@@ -83,6 +83,10 @@ function normalizePart(value: unknown, index: number): MessagePart {
   if (Object.prototype.hasOwnProperty.call(value, 'text')) { if (typeof value.text !== 'string') invalid(`${label}.text must be a string.`); result.text = value.text; }
   if (Object.prototype.hasOwnProperty.call(value, 'system')) { if (typeof value.system !== 'string') invalid(`${label}.system must be a string.`); result.system = value.system; }
   if (Object.prototype.hasOwnProperty.call(value, 'systemPayload')) { if (typeof value.systemPayload !== 'boolean') invalid(`${label}.systemPayload must be boolean.`); result.systemPayload = value.systemPayload; }
+  if (Object.prototype.hasOwnProperty.call(value, 'phase')) {
+    if (value.phase !== 'commentary' && value.phase !== 'final_answer') invalid(`${label}.phase must be commentary or final_answer.`);
+    result.phase = value.phase;
+  }
   if (Object.prototype.hasOwnProperty.call(value, 'inlineDataRef')) result.inlineDataRef = normalizeInlineDataRef(value.inlineDataRef, `${label}.inlineDataRef`);
   if (Object.prototype.hasOwnProperty.call(value, 'imageMeta')) result.imageMeta = normalizeImageMeta(value.imageMeta, `${label}.imageMeta`);
   if (result.systemPayload === true && !isSystemPayloadTextPart(result)) invalid(`${label}.systemPayload:true requires text.`);

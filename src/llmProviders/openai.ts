@@ -444,6 +444,10 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
     contents = preparedImages.messages;
     const isDeduplicated = preparedImages.isDeduplicated;
     const responseInput = [];
+    let messagePhase: MessagePart['phase'];
+
+    const getMessagePhase = (value: unknown): MessagePart['phase'] =>
+        value === 'commentary' || value === 'final_answer' ? value : undefined;
 
     const getCompatibleResponsesMeta = (part: MessagePart) => {
         const metadata = part.providerMeta?.openaiResponses;
@@ -464,12 +468,29 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
             content: [...content]
         };
 
-        if (role === 'assistant') {
-            message.phase = 'final_answer';
+        if (role === 'assistant' && messagePhase) {
+            message.phase = messagePhase;
         }
 
         responseInput.push(message);
         content.length = 0;
+        messagePhase = undefined;
+    };
+
+    const prepareMessageContent = (
+        role: 'user' | 'assistant',
+        content: Array<OpenAIResponsesContent>,
+        part: MessagePart,
+        fallbackPhase: MessagePart['phase'],
+    ) => {
+        if (role !== 'assistant') return;
+        const nextPhase = Object.prototype.hasOwnProperty.call(part, 'phase')
+            ? getMessagePhase(part.phase)
+            : fallbackPhase;
+        if (content.length > 0 && nextPhase !== messagePhase) {
+            flushMessageContent(role, content);
+        }
+        messagePhase = nextPhase;
     };
 
     for (const msg of contents) {
@@ -584,6 +605,9 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
 
         const role = msg.role === 'model' ? 'assistant' : 'user';
         const content: Array<OpenAIResponsesContent> = [];
+        const fallbackPhase: MessagePart['phase'] = role === 'assistant'
+            ? msg.parts?.some(part => !!part.functionCall) ? 'commentary' : 'final_answer'
+            : undefined;
 
         for (const part of msg.parts || []) {
             const responsesMeta = getCompatibleResponsesMeta(part);
@@ -594,6 +618,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
             }
 
             if (part.system) {
+                prepareMessageContent(role, content, part, fallbackPhase);
                 content.push({
                     type: role === 'assistant' ? 'output_text' : 'input_text',
                     text: formatSystemPartForModel(part.system)
@@ -610,6 +635,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
             }
 
             if (part.text) {
+                prepareMessageContent(role, content, part, fallbackPhase);
                 const outputTextPart: any = {
                     type: role === 'assistant' ? 'output_text' : 'input_text',
                     text: part.text
