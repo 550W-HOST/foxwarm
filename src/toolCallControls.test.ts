@@ -64,13 +64,14 @@ test('default model-facing schemas omit handoff confirmation while always append
 
 test('enabled model-facing schemas require confirmation before unconditional cancellation controls', () => {
   const enabled = buildToolDefinitions(true).map(addToolCancellationSchema);
+  const expectedDescription = `Required final argument property. Review the handoff honestly. If you discover a problem that means it should not proceed, do not append the final approval sentence merely to pass validation; cancel the call with __cancelTool: true instead.\n\nFor a handoff that should proceed, use: ${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
   for (const name of ['create_child_session', 'send_to_session']) {
     const definition = enabled.find(item => item.name === name)!;
     const keys = Object.keys(definition.parameters.properties);
     assert.equal(keys.at(-3), 'confirmation');
     assert.deepEqual(keys.slice(-2), ['__cancelTool', '__cancelAllToolsThisTurn']);
     assert(definition.parameters.required?.includes('confirmation'));
-    assert.match(String(definition.parameters.properties.confirmation.description), /do not copy this placeholder verbatim/);
+    assert.equal(definition.parameters.properties.confirmation.description, expectedDescription);
   }
 });
 
