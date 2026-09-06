@@ -12,6 +12,7 @@ import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './tools/placement';
 import { resolveObjectArgWithJsonFallback } from './jsonObjectArgs';
 import type { Message, MessagePart, Session, ToolScriptSubCall } from './types';
 import { RpcError } from './rpc';
+import { isToolAuthorizationPolicyUnavailable } from './toolAuthorization';
 
 type ToolArgs = Record<string, any>;
 
@@ -1360,6 +1361,7 @@ async function advanceExecution(args: {
       }
       progress = await progress.resume(result);
     } catch (error: any) {
+      if (isToolAuthorizationPolicyUnavailable(error)) throw error;
       if (shouldPauseForTimeout(record)) {
         record.snapshotBase64 = await dumpMontySnapshot(progress);
         markRunWaiting(record, buildTimeoutWaitingState(record, runtimeState, {
@@ -1505,7 +1507,9 @@ async function startRun(record: ToolScriptRunRecord, code: string, scriptArgs: a
     });
     return await advanceExecution({ progress, record, runtimeState, ctx: { ...ctx, toolScriptRunId: record.runId }, monty });
   } catch (error: any) {
-    return await failRun(record, runtimeState, error, 'ToolScript run failed during startup');
+    const result = await failRun(record, runtimeState, error, 'ToolScript run failed during startup');
+    if (record.mode === 'foreground' && isToolAuthorizationPolicyUnavailable(error)) throw error;
+    return result;
   } finally {
     await montySession?.close().catch(() => {});
   }
@@ -1542,7 +1546,9 @@ async function resumeRun(record: ToolScriptRunRecord, resumeValue: any, ctx: Too
       : await snapshot.resume(normalizeMontyValue(resumeValue));
     return await advanceExecution({ progress: resumed, record, runtimeState, ctx: { ...ctx, toolScriptRunId: record.runId }, monty });
   } catch (error: any) {
-    return await failRun(record, runtimeState, error, logMessage);
+    const result = await failRun(record, runtimeState, error, logMessage);
+    if (record.mode === 'foreground' && isToolAuthorizationPolicyUnavailable(error)) throw error;
+    return result;
   } finally {
     await montySession?.close().catch(() => {});
   }

@@ -495,6 +495,32 @@ test('worker tool-stop finalizes the iteration without a duplicate model-text de
   } finally { (llm as any).chat = originalChat; (llm as any).executeTools = originalExecuteTools; }
 });
 
+test('fatal tool-loop metadata preserves pairing, delivers one terminal error, and releases busy', async () => {
+  const initial = baseSession(`worker-tool-policy-fatal-${Date.now()}`);
+  const originalChat = llm.chat; const originalExecuteTools = llm.executeTools;
+  const finals: Array<{ text: string; outcome: string }> = [];
+  (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
+    if (parts) await options.appendMessage({ role: 'user', parts });
+    const toolCall = { id: 'policy-fatal', name: 'session', args: { action: 'status' } };
+    await options.appendMessage({ role: 'model', parts: [{ functionCall: toolCall }] });
+    return { text: '', toolCalls: [toolCall], allParts: [{ functionCall: toolCall }] };
+  };
+  (llm as any).executeTools = async () => ({
+    role: 'tool',
+    parts: [{ functionResponse: { tool_use_id: 'policy-fatal', name: 'session', response: { error: 'policy unavailable', code: 'TOOL_AUTH_POLICY_UNAVAILABLE' } } }],
+    __toolLoopControl: { stopCurrentTurn: true, fatalError: { code: 'TOOL_AUTH_POLICY_UNAVAILABLE', message: 'policy unavailable' } },
+  });
+  try {
+    await withLocalHost(initial, async ({ host, store, readDurable }) => {
+      store.enqueueIntent(initial.id, 'policy-fatal', 'enqueue', { type: 'user', source: { platform: 'test', channelUserId: 'room' }, parts: [{ text: 'run' }] });
+      await host.runPending(8);
+      assert.deepEqual(readDurable().history.map((message: any) => message.role), ['user', 'model', 'tool', 'model']);
+      assert.equal(readDurable().busy, false);
+      assert.deepEqual(finals, [{ text: 'Error: policy unavailable', outcome: 'error' }]);
+    }, true, undefined, async (_source, text, outcome) => { finals.push({ text, outcome }); });
+  } finally { (llm as any).chat = originalChat; (llm as any).executeTools = originalExecuteTools; }
+});
+
 test('automatic compact maintenance failure after a delivered success resyncs without a second final', async () => {
   const initial = baseSession('worker-auto-compact-failure'); initial.compactThresholdTokens = 1;
   const originalChat = llm.chat; const originalCompact = sessionHistory.processSessionCompactionRequest;

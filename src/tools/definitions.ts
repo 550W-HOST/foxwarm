@@ -940,6 +940,19 @@ Example:
             }
         },
         {
+            name: 'set_tool_rules',
+            defaultInject: false,
+            description: 'Validate a complete tool authorization policy prepared in a master-side file, then atomically replace the active state/tool-authorization.yaml file. The current policy must authorize both this setter and reading the candidate path.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    filePath: { type: 'string', description: 'Master-side path to the complete candidate YAML policy.' }
+                },
+                required: ['filePath'],
+                additionalProperties: false
+            }
+        },
+        {
             name: 'move_session',
             description: 'Move/rename a session, optionally to a different agent or create a new agent. Old session ID becomes an alias.',
             parameters: {

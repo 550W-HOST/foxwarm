@@ -157,6 +157,7 @@ export const tool_delete_session = (args: ToolArgs, ctx?: ToolContext) => execut
 export const tool_node_bootstrap_info = (args: ToolArgs = {}, ctx?: ToolContext) => executeMainManagementTool('node_bootstrap_info', args, ctx);
 export const tool_node_pair_list = (args: ToolArgs = {}, ctx?: ToolContext) => executeMainManagementTool('node_pair_list', args, ctx);
 export const tool_node_pair_approve = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('node_pair_approve', args, ctx);
+export const tool_set_tool_rules = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('set_tool_rules', args, ctx);
 
 export function getMainManagementToolServiceStatus(): { placement: 'local' | 'child-reverse'; ready: boolean } {
   return { placement, ready: !!client };

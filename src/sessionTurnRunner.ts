@@ -1250,6 +1250,13 @@ export class SessionTurnRunner {
           results: this.getToolResultProgress(toolResultMsg),
         }, session, turnId, turnSource);
 
+        const fatalToolError = (toolResultMsg as any).__toolLoopControl?.fatalError;
+        if (fatalToolError && typeof fatalToolError.code === 'string' && typeof fatalToolError.message === 'string') {
+          const error = new Error(fatalToolError.message) as Error & { code?: string };
+          error.code = fatalToolError.code;
+          throw error;
+        }
+
         const waitForReply = (toolResultMsg as any).__toolPostAction?.waitForReply === true;
         if (waitForReply && !session.stopping && !session.meta?.wait) {
           const targets = (toolResultMsg as any).__toolPostAction?.successfulWaitAfterSendTargets;

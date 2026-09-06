@@ -12,6 +12,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 - [src-tools-session-agent](../units/src-tools-session-agent.md) — session, agent, timer, skill, recall, goal, channel, and wait tools.
 - [src-tool-utils](../units/src-tool-utils.md) — argument serialization, output guards, and image normalization.
 - [src-permissions](../units/src-permissions.md) — exact persisted agent tool-rule validation/matching and default isolated fallback behavior.
+- [src-tool-authorization](../units/src-tool-authorization.md) — generic ordered runtime policy, cached strict loading, canonical request matching, and atomic replacement.
 - [src-isolated-check](../units/src-isolated-check.md) — current isolated-session tool, path, channel, timer, and archive checks.
 - [src-apply-patch](../units/src-apply-patch.md) — structured patch parsing and application.
 - [src-browser](../units/src-browser.md) — Puppeteer browser manager.
@@ -25,13 +26,14 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 - `fileDeliveryServiceDescriptor` and `deliverFile` — bounded operation-specific file-delivery boundary with no file bytes on reverse RPC.
 - `callTool(toolName, args, context)` — builtin dispatch entry.
 - `search_tools` and `call_tool` — unified discovery and invocation across builtin, MCP, and node sources.
-- `checkToolPermission` and `checkPathAccess` — current isolation checks.
+- `checkToolPermission` and `checkPathAccess` — generic policy entry plus current isolation checks.
 - `normalizeAgentToolRules`, `findExactAgentToolRule`, and `isDefaultIsolatedCapabilityAllowed` — exact persisted rule and fallback evaluation.
 - Shared file, memory, image, browser, patch, exec, and output-guard helpers.
 
 ## Invariants
 
 - Optional exact agent-level `toolRules` are inert for non-isolated agents. For isolated agents, exact deny overrides the default allow behavior and exact allow may add a capability without bypassing structural, service, path, or relationship guards.
+- The separate instance-level ordered policy applies to every Session after canonical target resolution. Its allow result never bypasses the current exact isolated rules or structural guards; its deny result may further restrict isolated or non-isolated callers.
 - On the master, an isolated agent may access only its own agent directory. On its bound/current node, it may use default or exactly allowed capabilities subject to the authenticated advertised-tool boundary.
 - Non-isolated file operations may use absolute, home-relative, or session-cwd-relative paths.
 - Master and node read/write wrappers share `packages/shared/src/fileToolCore.ts` after their own context and permission handling.

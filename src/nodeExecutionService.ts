@@ -254,6 +254,7 @@ export function createNodeExecutionServiceHandler(options: {
       }
 
       const source = await requireNodeExecutionAccess(sourceSessionId, nodeId);
+      await checkToolPermission({ source: 'node', node: nodeId, tool: toolName }, sourceSessionId, nodeId, args);
       const providerRouting = routingSnapshot || (!options.expectedSourceSessionId && source.currentNode === nodeId
         ? { currentNode: nodeId, ...(typeof source.cwd === 'string' ? { cwd: source.cwd } : {}) }
         : undefined);
