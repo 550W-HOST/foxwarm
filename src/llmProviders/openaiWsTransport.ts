@@ -175,7 +175,10 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
     };
     delete responseRequest.stream;
     delete responseRequest.previous_response_id;
-    if (matched) responseRequest.previous_response_id = matched.chain.previousResponseId;
+    if (matched) {
+        responseRequest.previous_response_id = matched.chain.previousResponseId;
+        delete responseRequest.max_output_tokens;
+    }
 
     const stream = new PassThrough();
     let phase: 'active' | 'pending' | 'finished' = 'active';

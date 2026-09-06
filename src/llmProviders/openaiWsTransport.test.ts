@@ -93,10 +93,12 @@ test('openai-ws sends a full first request then reuses the exact completed prefi
   assert.deepEqual(handshakes[0].headers, { Authorization: 'Bearer secret' });
   assert.equal(sockets[0].sent[0].type, 'response.create');
   assert.equal(Object.prototype.hasOwnProperty.call(sockets[0].sent[0], 'response'), false);
+  assert.equal(sockets[0].sent[0].max_output_tokens, 100);
   assert.deepEqual(sockets[0].sent[0].input, firstInput);
   assert.equal(sockets[0].sent[0].previous_response_id, undefined);
   assert.deepEqual(sockets[0].sent[1].input, suffix);
   assert.equal(sockets[0].sent[1].previous_response_id, 'resp-1');
+  assert.equal(Object.prototype.hasOwnProperty.call(sockets[0].sent[1], 'max_output_tokens'), false);
   second.finalize(false);
 });
 
@@ -182,7 +184,37 @@ test('openai-ws assistant reasoning, hosted search, and tool-call replay stay in
   assert.equal(sockets.length, 1);
   assert.deepEqual(sockets[0].sent[1].input, [toolOutput]);
   assert.equal(sockets[0].sent[1].input.filter((item: any) => item.type === 'function_call_output').length, 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(sockets[0].sent[1], 'max_output_tokens'), false);
   second.finalize(false);
+});
+
+test('openai-ws continuation omits only the wire cap while failure recovery restores the full cap', async () => {
+  const sockets: FakeSocket[] = [];
+  setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    const socket = new FakeSocket((_request, current) => {
+      if (sockets.length === 1 && current.sent.length === 2) current.terminate();
+      else current.frame(completed(`r${sockets.length}`));
+    });
+    sockets.push(socket); return socket as any;
+  }});
+  const firstInput = [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'one' }] }];
+  const firstData = baseData(firstInput);
+  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: firstData, placement: 'local', signal: signal(), timeoutMs: 1000 });
+  first.finalize([]);
+  const nextData = baseData([...firstInput, { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'two' }] }]);
+  await assert.rejects(
+    requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: nextData, placement: 'local', signal: signal(), timeoutMs: 1000 }),
+    /closed before completion/,
+  );
+  assert.equal(Object.prototype.hasOwnProperty.call(sockets[0].sent[1], 'max_output_tokens'), false);
+  assert.equal(nextData.max_output_tokens, 100);
+
+  const recovered = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: nextData, placement: 'local', signal: signal(), timeoutMs: 1000 });
+  assert.equal(sockets.length, 2);
+  assert.equal(sockets[1].sent[0].previous_response_id, undefined);
+  assert.equal(sockets[1].sent[0].max_output_tokens, 100);
+  assert.equal(nextData.max_output_tokens, 100);
+  recovered.finalize(false);
 });
 
 test('openai-ws keeps busy chains outside matching and enforces worker idle limit one', async () => {
