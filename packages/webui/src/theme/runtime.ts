@@ -1,5 +1,5 @@
 import { DEFAULT_THEME_ID } from './builtins'
-import { themeVariantCssVariables, type ResolvedThemeMode, type ThemeColorMode, type ThemeManifestV1 } from './manifest'
+import { themeVariantCssVariables, type ResolvedThemeMode, type ThemeColorMode, type ThemeManifest } from './manifest'
 import {
   CUSTOM_THEMES_STORAGE_KEY,
   THEME_SELECTION_STORAGE_KEY,
@@ -19,7 +19,7 @@ export const THEME_CHANGED_EVENT = 'foxwarm-theme-changed'
 export type ThemeRuntimeSnapshot = {
   selection: ThemeSelection
   effectiveMode: ResolvedThemeMode
-  activeTheme: ThemeManifestV1
+  activeTheme: ThemeManifest
   registry: ThemeRegistrySnapshot
   systemPrefersDark: boolean
 }
@@ -37,11 +37,15 @@ function browserStorage(): Storage | null {
 function resolveSnapshot(): ThemeRuntimeSnapshot {
   const storage = browserStorage()
   const registry = readThemeRegistry(storage)
-  let selection = readThemeSelection(storage)
-  let activeTheme = registry.themes.find(theme => theme.id === selection.themeId)
+  const persistedSelection = readThemeSelection(storage)
+  let selection = persistedSelection
+  let activeTheme = registry.themes.find(theme => theme.id === persistedSelection.themeId)
   if (!activeTheme) {
-    selection = { ...selection, themeId: DEFAULT_THEME_ID }
-    writeThemeSelection(storage, selection)
+    // A different tab may still be running an older WebUI bundle whose
+    // built-in registry does not know a newly added foxwarm.* theme. Fall
+    // back only in this runtime: persisting Default here would make that
+    // stale tab immediately overwrite the newer tab's valid selection.
+    selection = { ...persistedSelection, themeId: DEFAULT_THEME_ID }
     activeTheme = registry.themes.find(theme => theme.id === DEFAULT_THEME_ID)!
   }
   const systemPrefersDark = mediaQuery?.matches
@@ -67,6 +71,13 @@ function applySnapshot(next: ThemeRuntimeSnapshot): void {
   root.dataset.foxwarmTheme = next.activeTheme.id
   root.dataset.foxwarmThemeMode = next.effectiveMode
   root.dataset.foxwarmComponentTreatment = variant.componentTreatment
+  root.dataset.foxwarmThemeDensity = variant.composition.density
+  root.dataset.foxwarmCardTreatment = variant.composition.card
+  root.dataset.foxwarmHeaderTreatment = variant.composition.header
+  root.dataset.foxwarmControlTreatment = variant.composition.control
+  root.dataset.foxwarmSeparatorTreatment = variant.composition.separator
+  root.dataset.foxwarmLabelTreatment = variant.composition.labels
+  root.dataset.foxwarmIconTreatment = variant.composition.icons
 
   // Compatibility variables consumed by the existing console-treatment CSS.
   // Their values are derived exclusively from the public semantic manifest;
@@ -190,7 +201,7 @@ export function setThemeSelection(update: Partial<Pick<ThemeSelection, 'themeId'
   if (!(['auto', 'light', 'dark'] as ThemeColorMode[]).includes(colorMode)) {
     throw new Error(`Color mode ${colorMode} is not supported`)
   }
-  const selection: ThemeSelection = { version: 1, themeId, colorMode }
+  const selection: ThemeSelection = { version: 2, themeId, colorMode }
   if (!writeThemeSelection(browserStorage(), selection)) {
     throw new Error('Theme selection could not be persisted')
   }

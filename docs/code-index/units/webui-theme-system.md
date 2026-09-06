@@ -9,10 +9,10 @@ Defines the portable, browser-local WebUI theme contract, built-in registry, per
 
 ## Public contract
 
-- `ThemeManifestV1` is a strict, versioned JSON manifest with one complete `light` variant and one complete `dark` variant.
-- Each variant supplies semantic colors, typography, shape/effects, a bounded background pattern, and a bounded `componentTreatment` (`standard` or `console`).
+- `ThemeManifest` is a strict version-2 JSON manifest with one complete `light` variant and one complete `dark` variant. Version-1 theme files are rejected rather than assigned guessed values for new semantic roles.
+- Each variant supplies semantic colors—including dedicated `tool*`, syntax-role, and diff foreground families—typography, role-specific geometry, effects, a bounded composition recipe, a procedural background pattern, and a bounded `componentTreatment` (`standard` or `console`).
 - `validateThemeManifest`, `parseThemeManifestJson`, and `serializeThemeManifest` validate and canonically serialize the portable file format.
-- `BUILTIN_THEMES` contains immutable `foxwarm.default` and `foxwarm.550a` manifests. The `foxwarm.*` namespace is reserved.
+- `BUILTIN_THEMES` contains immutable built-ins in the reserved `foxwarm.*` namespace, with one source file per built-in.
 - `initializeThemeRuntime`, `setThemeSelection`, `subscribeThemeRuntime`, and `getThemeSnapshot` expose the external runtime store; `useTheme` is its React adapter.
 - `themeVariantCssVariables` provides the semantic CSS-variable projection. `terminalThemeFromSnapshot`, `monacoThemeFromSnapshot`, and `mermaidThemeFromSnapshot` adapt the same resolved variant to third-party renderers.
 
@@ -20,28 +20,30 @@ Defines the portable, browser-local WebUI theme contract, built-in registry, per
 
 - `main.tsx` initializes the selected theme before rendering React, avoiding a default-theme flash. The runtime applies the complete selected variant atomically to the document root.
 - Theme family and color mode are separate preferences. Color mode is `auto`, `light`, or `dark`; `auto` follows `prefers-color-scheme` and reacts live.
-- Existing `themeMode` and `foxwarm_ui_theme_style_v1` values migrate once into the versioned `foxwarm_theme_selection_v1` shape when no valid new selection exists.
+- Existing `foxwarm_theme_selection_v1`, `themeMode`, and `foxwarm_ui_theme_style_v1` values migrate once into the versioned `foxwarm_theme_selection_v2` shape when no valid current selection exists. The separate V2 key prevents an older live WebUI bundle from overwriting a newly added built-in selection that its compiled registry does not recognize.
 - Custom manifests are local to the current browser. Storage is bounded to 32 themes; malformed entries are skipped without breaking the built-in registry.
 - Import validates before writing, rejects reserved IDs, and requires explicit replacement on ID conflict. Export is canonical JSON. Clone re-enters through the same validator/install path. Deleting the active custom theme falls back atomically to Default.
 - Validation rejects unknown keys, incomplete variants, non-hex colors, arbitrary CSS/selectors/scripts, URLs, and unbounded string/numeric values. Core text/surface pairs produce contrast warnings.
 - Setup's Appearance tab owns theme family selection and import/export/clone/delete, and places `Auto`, `Light`, and `Dark` directly above the active palette preview. The compact global UI menu exposes the same color-mode selection for quick access but no theme-family/file operations.
-- Semantic `--foxwarm-color-*` variables back `fw-*` Tailwind utilities and non-utility CSS. Components do not branch on a theme ID.
+- Semantic `--foxwarm-color-*` variables back `fw-*` Tailwind utilities and non-utility CSS. Components do not branch on a theme ID. Completed tool cards, tags, response separators, action controls, and ContextScrollbar activity segments all consume the same `tool`, `toolSurface`, `toolSurfaceStrong`, and `toolBorder` family; actual success notifications continue to consume `success*`. Lightweight code highlighting consumes explicit `syntax*` roles, while diff counts, headers, and refined tokens consume `diffAddedText`/`diffRemovedText` rather than borrowing accent/warning status colors.
 - Semantic `*Surface` and `*SurfaceStrong` tokens carry the theme's named colors, including any alpha intentionally supplied by the manifest. Standard treatment may apply stable component-owned opacity composition for its established translucent visual grammar. Console treatment consumes named Tool status, Reasoning, and System surface pairs as final colors so a portable console theme is not diluted a second time; neutral console cards use the treatment's panel/hover pair because the manifest intentionally has no `neutralSurfaceStrong` field.
 - `componentTreatment` is a small declarative treatment selector, not arbitrary CSS. The 550A built-in selects `console`; an exported and reimported manifest selecting `console` follows the same rendering path.
+- `composition` independently selects bounded density (`compact|comfortable|airy`), card (`flat|outlined|elevated`), header (`integrated|banded|tab`), control (`plain|soft|pill`), separator (`rail|line|segmented|chevron|chevron-right`), label, and icon recipes. Runtime exposes these choices as document data attributes; generic CSS recipes consume them without theme-ID branches.
+- Role-specific radii and card gap/inset values let message bubbles, thread cards, controls, tags, and the composer develop separate silhouettes and balanced internal rhythm. Procedural `grid`, `dots`, `lines`, and `scanlines` patterns remain URL/asset-free.
 - xterm updates its palette when the runtime theme changes. Monaco redefines and applies its generated theme, including before lazy editor creation. Mermaid receives per-render variables from the active variant.
 - Cross-window `storage` events, system color-mode changes, and local changes converge through the same runtime store and theme-change event.
 
 ## Persistence keys
 
-- `foxwarm_theme_selection_v1` — `{ version, themeId, colorMode }`.
-- `foxwarm_custom_themes_v1` — bounded validated custom manifest registry.
+- `foxwarm_theme_selection_v2` — `{ version, themeId, colorMode }`; V1 is migration input only.
+- `foxwarm_custom_themes_v2` — bounded validated version-2 custom manifest registry, isolated from stale live bundles.
 - `themeMode`, `foxwarm_ui_theme_style_v1` — read-only legacy migration inputs.
 
 ## Tests
 
 - `themeSystem.test.mjs` covers built-in validation, canonical round trips, strict rejection, legacy migration, bounded custom install/conflict/replace/export/delete, reserved IDs, and portable 550A clone equivalence.
 - `themeMarkdownStyles.e2e.mjs` covers Default and console-treatment Markdown/code pairings.
-- `threadCardSurfaces.e2e.mjs` mounts every thread-card family and verifies raw plus visibly composited body/header and ToolTag colors across Default and 550A light/dark. Its contrast helper composites foreground alpha before measuring. The fixture protects standard treatment's established opacity contract, built-in Default System-tag contrast, console treatment's final-surface contract, full-strength 550A status surfaces/tags, Tool Group tone hooks, named Reasoning-token use in a distinct imported console manifest, and semantic wiring (not a universal AA guarantee) in a distinct imported standard manifest.
+- `threadCardSurfaces.e2e.mjs` mounts every thread-card family and verifies raw plus visibly composited body/header and ToolTag colors across Default and 550A light/dark. Its contrast helper composites foreground alpha before measuring. The fixture protects standard treatment's established opacity contract, built-in Default System-tag contrast, console treatment's final-surface contract, full-strength 550A status surfaces/tags, Tool Group tone hooks, named Reasoning-token use in a distinct imported console manifest, and semantic wiring (not a universal AA guarantee) in a distinct imported standard manifest. Built-ins are not given separate visual test matrices; registry-wide validation plus representative synthetic manifests test the theme engine, while individual built-in aesthetics remain a review concern.
 - Setup E2E covers Appearance-tab selection, treatment activation, clone/delete, and keyboard tab behavior.
 - Settings-menu E2E asserts that the compact menu contains color mode only.
 - Existing Code overlay, editor, terminal, Mermaid, and component E2Es protect integration surfaces.
@@ -68,6 +70,8 @@ Defines the portable, browser-local WebUI theme contract, built-in registry, per
 
 [2026-09-03] Surface composition is treatment-owned. Standard treatment retains its established component opacity layers. Console treatment treats named Tool status, Reasoning, and System surface pairs as final colors because a portable console manifest may already encode intentional translucency; applying the standard opacity layer again would make those cards depend incorrectly on their parent background. Neutral console cards use the bounded treatment-level panel/hover pair rather than adding a manifest field or branching on a theme ID. Console Reasoning must use `reasoningSurface`/`reasoningSurfaceStrong`, not generic panel/hover aliases, so imported themes can choose a distinct reasoning palette.
 
-[2026-09-04] ToolTag composition follows the same treatment boundary. Standard keeps its established tone classes. Console tags consume final tone surfaces: neutral and system use the console input surface with their semantic border/text allocation, while success/error use their complete semantic surface, border, and text colors. The rule keys on `data-tool-tag-tone`, not a theme ID or a component-specific class, so Tool Group and specialized timeline tags cannot bypass it.
+[2026-09-06] Theme schema V2 separates ordinary tool-operation color from success status through the required `tool`, `toolSurface`, `toolSurfaceStrong`, and `toolBorder` family. Tool cards, ToolTags, tool controls, separators, and ContextScrollbar activity use that family across both component treatments. Built-in Default and 550A explicitly preserve their historical success-colored tool values, while other V2 themes can coordinate tools with their own palette. V1 theme files are rejected with validation details rather than guessed or conditionally migrated. This avoids theme-ID and treatment conditionals while keeping Default pixel-compatible.
+
+[2026-09-06] V2's visual grammar was expanded before publication rather than creating a migration-bearing V3. The immutable registry was reduced to five deliberately differentiated built-ins: Default, 550A, Paper, Sea Glass, and Vector. Density, surface/header/control/separator recipes, role-specific geometry and card gaps, label/icon treatment, elevation, and safe procedural patterns now complement semantic color. Default retains its previous measurements and composition, while imported manifests use the identical recipe path.
 
 [2026-09-04] Built-in Default System/Event tag text must not reuse `systemAccent`, whose direction and contrast are intentionally suitable for low-emphasis thread lines rather than compact label text. Keep the existing standard System tag background, derive its foreground with a bounded `info`/`systemText` mix, and use `infoBorder`. The wiring remains portable because it depends only on semantic tokens, but custom manifests determine the derived contrast and the validator's warnings remain advisory; this decision does not promise AA for every legal token combination. Console treatment retains its separate exact override.

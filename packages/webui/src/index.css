@@ -285,7 +285,7 @@ html.dark {
   .foxwarm-context-scrollbar-tone-assistant { background: var(--foxwarm-color-assistant-surface); }
   .foxwarm-context-scrollbar-tone-reasoning { background: var(--foxwarm-color-text-subtle); }
   .foxwarm-context-scrollbar-tone-tool-neutral { background: var(--foxwarm-color-neutral); }
-  .foxwarm-context-scrollbar-tone-tool-success { background: var(--foxwarm-color-success); }
+  .foxwarm-context-scrollbar-tone-tool-success { background: var(--foxwarm-color-tool); }
   .foxwarm-context-scrollbar-tone-tool-error { background: var(--foxwarm-color-danger); }
   .foxwarm-context-scrollbar-tone-system { background: var(--foxwarm-color-info); }
   .foxwarm-context-scrollbar-tone-context-block { background: var(--foxwarm-color-text-subtle); }
@@ -396,7 +396,7 @@ html.dark {
   .foxwarm-context-scrollbar-legend-value { color: var(--foxwarm-color-text-muted); font-variant-numeric: tabular-nums; }
   .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-snapshot,
   .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-system { background: var(--foxwarm-color-info); }
-  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-tools { background: var(--foxwarm-color-success); }
+  .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-tools { background: var(--foxwarm-color-tool); }
   .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-user { background: var(--foxwarm-color-user-surface); }
   .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-reasoning { background: var(--foxwarm-color-text-subtle); }
   .foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-free { background: rgb(var(--foxwarm-color-text-subtle-rgb) / 0.12); }
@@ -856,11 +856,15 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-context-block-card > .
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-success {
-  background-color: var(--foxwarm-color-success-surface);
+  background-color: var(--foxwarm-color-tool-surface);
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-success .foxwarm-tool-header {
-  background-color: var(--foxwarm-color-success-surface-strong);
+  background-color: var(--foxwarm-color-tool-surface-strong);
+}
+
+html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-success .foxwarm-tool-thread-line {
+  color: var(--foxwarm-color-tool) !important;
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card.foxwarm-tool-tone-error {
@@ -886,9 +890,9 @@ html[data-foxwarm-component-treatment="console"] [data-tool-tag-tone="neutral"] 
 }
 
 html[data-foxwarm-component-treatment="console"] [data-tool-tag-tone="success"] {
-  background-color: var(--foxwarm-color-success-surface) !important;
-  border-color: var(--foxwarm-color-success-border) !important;
-  color: var(--foxwarm-color-success) !important;
+  background-color: var(--foxwarm-color-tool-surface) !important;
+  border-color: var(--foxwarm-color-tool-border) !important;
+  color: var(--foxwarm-color-tool) !important;
 }
 
 html[data-foxwarm-component-treatment="console"] [data-tool-tag-tone="error"] {
@@ -1362,14 +1366,14 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-reasoning-body :where(
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-tool-action-buttons {
-  --foxwarm-tool-action-idle-bg: var(--foxwarm-console-green-button-idle);
-  --foxwarm-tool-action-idle-hover-bg: var(--foxwarm-console-green-button-idle-hover);
-  --foxwarm-tool-action-border: var(--foxwarm-console-green-border);
-  --foxwarm-tool-action-color: var(--foxwarm-console-green);
-  --foxwarm-tool-action-active-bg: var(--foxwarm-console-green-deep);
-  --foxwarm-tool-action-active-hover-bg: var(--foxwarm-console-green-deep-hover);
-  --foxwarm-tool-action-active-color: var(--foxwarm-console-green-button-active-text);
-  --foxwarm-tool-action-glow: var(--foxwarm-console-green-glow);
+  --foxwarm-tool-action-idle-bg: var(--foxwarm-color-tool-surface);
+  --foxwarm-tool-action-idle-hover-bg: var(--foxwarm-color-tool-surface-strong);
+  --foxwarm-tool-action-border: var(--foxwarm-color-tool-border);
+  --foxwarm-tool-action-color: var(--foxwarm-color-tool);
+  --foxwarm-tool-action-active-bg: var(--foxwarm-color-tool-border);
+  --foxwarm-tool-action-active-hover-bg: var(--foxwarm-color-tool);
+  --foxwarm-tool-action-active-color: var(--foxwarm-color-text-inverse);
+  --foxwarm-tool-action-glow: color-mix(in srgb, var(--foxwarm-color-tool) 24%, transparent);
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-tool-action-buttons-neutral {
@@ -1384,14 +1388,14 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-tool-action-buttons-ne
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-tool-action-buttons-success {
-  --foxwarm-tool-action-idle-bg: var(--foxwarm-console-green-button-idle);
-  --foxwarm-tool-action-idle-hover-bg: var(--foxwarm-console-green-button-idle-hover);
-  --foxwarm-tool-action-border: var(--foxwarm-console-green-border);
-  --foxwarm-tool-action-color: var(--foxwarm-console-green);
-  --foxwarm-tool-action-active-bg: var(--foxwarm-console-green-deep);
-  --foxwarm-tool-action-active-hover-bg: var(--foxwarm-console-green-deep-hover);
-  --foxwarm-tool-action-active-color: var(--foxwarm-console-green-button-active-text);
-  --foxwarm-tool-action-glow: var(--foxwarm-console-green-glow);
+  --foxwarm-tool-action-idle-bg: var(--foxwarm-color-tool-surface);
+  --foxwarm-tool-action-idle-hover-bg: var(--foxwarm-color-tool-surface-strong);
+  --foxwarm-tool-action-border: var(--foxwarm-color-tool-border);
+  --foxwarm-tool-action-color: var(--foxwarm-color-tool);
+  --foxwarm-tool-action-active-bg: var(--foxwarm-color-tool-border);
+  --foxwarm-tool-action-active-hover-bg: var(--foxwarm-color-tool);
+  --foxwarm-tool-action-active-color: var(--foxwarm-color-text-inverse);
+  --foxwarm-tool-action-glow: color-mix(in srgb, var(--foxwarm-color-tool) 24%, transparent);
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-tool-action-buttons-error {
@@ -1441,12 +1445,203 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview {
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card .foxwarm-diff-removed-count,
 html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-removed-header {
-  color: var(--foxwarm-console-orange) !important;
+  color: var(--foxwarm-color-diff-removed-text) !important;
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-tool-card .foxwarm-diff-added-count,
 html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-added-header {
-  color: var(--foxwarm-console-green) !important;
+  color: var(--foxwarm-color-diff-added-text) !important;
+}
+
+/* Portable composition recipes. These are bounded manifest choices rather
+ * than theme-ID selectors, so imported themes receive the same visual grammar
+ * as built-ins without arbitrary CSS. */
+:root {
+  --foxwarm-thread-card-gap: 2px;
+  --foxwarm-thread-header-py: 4px;
+  --foxwarm-markdown-block-gap: 0.5em;
+  --foxwarm-effective-control-radius: var(--foxwarm-control-radius-px);
+}
+
+html[data-foxwarm-theme-density="compact"] {
+  --foxwarm-thread-card-gap: 1px;
+  --foxwarm-thread-header-py: 2px;
+  --foxwarm-markdown-block-gap: 0.3em;
+}
+
+html[data-foxwarm-theme-density="airy"] {
+  --foxwarm-thread-card-gap: 5px;
+  --foxwarm-thread-header-py: 6px;
+  --foxwarm-markdown-block-gap: 0.8em;
+}
+
+html[data-foxwarm-theme-density] :is(.foxwarm-tool-card, [data-model-thread-card], .foxwarm-system-message-card, .foxwarm-context-block-card) {
+  margin-block: var(--foxwarm-card-gap-px) !important;
+  padding-left: var(--foxwarm-card-inset-px) !important;
+  padding-right: var(--foxwarm-card-inset-px) !important;
+  border-radius: var(--foxwarm-card-radius-px);
+}
+
+/* The collapse rail remains a full-height hit target, but its visible stroke
+ * terminates inside rounded corners instead of cutting through their arc. */
+html[data-foxwarm-theme-density] :is(.foxwarm-tool-card, [data-model-thread-card], .foxwarm-system-message-card, .foxwarm-context-block-card) > .foxwarm-thread-line-button > .foxwarm-thread-line-stroke {
+  margin-top: min(var(--foxwarm-card-radius-px), 16px);
+  margin-bottom: min(var(--foxwarm-card-radius-px), 16px);
+  border-radius: 999px;
+}
+
+html[data-foxwarm-theme-density] :is(.foxwarm-tool-header, .foxwarm-reasoning-header, .foxwarm-web-search-header, .foxwarm-system-message-header, .foxwarm-context-block-header) {
+  padding-block: var(--foxwarm-thread-header-py) !important;
+  border-radius: var(--foxwarm-card-radius-px) var(--foxwarm-card-radius-px) 0 0;
+}
+
+html[data-foxwarm-theme-density] .foxwarm-assistant-message-card,
+html[data-foxwarm-theme-density] .foxwarm-user-message-bubble {
+  border-radius: var(--foxwarm-message-radius-px) !important;
+}
+
+html[data-foxwarm-theme-density] .foxwarm-chat-composer-form {
+  border-radius: var(--foxwarm-composer-radius-px) !important;
+}
+
+html[data-foxwarm-card-treatment="outlined"] :is(.foxwarm-tool-card, [data-model-thread-card], .foxwarm-system-message-card, .foxwarm-context-block-card, .foxwarm-assistant-message-card) {
+  box-sizing: border-box;
+  border-width: var(--foxwarm-border-width-px);
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--foxwarm-color-border-strong) 72%, transparent);
+  box-shadow: none;
+}
+
+html[data-foxwarm-card-treatment="elevated"] :is(.foxwarm-tool-card, [data-model-thread-card], .foxwarm-system-message-card, .foxwarm-context-block-card, .foxwarm-assistant-message-card) {
+  box-sizing: border-box;
+  border-width: var(--foxwarm-border-width-px);
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--foxwarm-color-border-strong) 52%, transparent);
+  box-shadow: var(--foxwarm-panel-shadow);
+}
+
+html[data-foxwarm-header-treatment="integrated"] :is(.foxwarm-tool-header, .foxwarm-reasoning-header, .foxwarm-web-search-header, .foxwarm-system-message-header, .foxwarm-context-block-header) {
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+html[data-foxwarm-header-treatment="tab"] :is(.foxwarm-tool-header, .foxwarm-reasoning-header, .foxwarm-web-search-header, .foxwarm-system-message-header, .foxwarm-context-block-header) {
+  background-color: transparent !important;
+  border-bottom: 0 !important;
+  background-image: linear-gradient(90deg, transparent, var(--foxwarm-color-border) 10%, var(--foxwarm-color-border) 90%, transparent) !important;
+  background-position: bottom;
+  background-repeat: no-repeat;
+  background-size: 100% var(--foxwarm-border-width-px);
+  box-shadow: none !important;
+}
+
+html[data-foxwarm-control-treatment="plain"] { --foxwarm-effective-control-radius: 2px; }
+html[data-foxwarm-control-treatment="pill"] { --foxwarm-effective-control-radius: 999px; }
+
+:is([data-theme-control], [data-tool-tag-tone], input:not([type="checkbox"]):not([type="radio"]), textarea, select) {
+  border-radius: var(--foxwarm-effective-control-radius) !important;
+}
+
+[data-tool-tag-tone] {
+  border-radius: var(--foxwarm-tag-radius-px) !important;
+}
+
+html[data-foxwarm-control-treatment="pill"] [data-tool-tag-tone] {
+  border-radius: 999px !important;
+}
+
+html[data-foxwarm-label-treatment="normal"] [data-tool-tag-tone] {
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+html[data-foxwarm-label-treatment="tracked"] [data-tool-tag-tone] {
+  letter-spacing: 0.08em;
+  text-transform: none;
+}
+
+html[data-foxwarm-label-treatment="uppercase"] [data-tool-tag-tone] {
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+html[data-foxwarm-icon-treatment="compact"] .lucide {
+  stroke-width: 2.25;
+}
+
+html[data-foxwarm-separator-treatment="line"] .foxwarm-thread-line-stroke {
+  width: 1px;
+  opacity: 0.55;
+}
+
+html[data-foxwarm-separator-treatment="segmented"] .foxwarm-thread-line-stroke {
+  background-color: transparent !important;
+  background-image: repeating-linear-gradient(to bottom, currentColor 0 4px, transparent 4px 7px);
+}
+
+html[data-foxwarm-card-treatment="outlined"][data-foxwarm-separator-treatment="segmented"] .foxwarm-thread-line-stroke {
+  transform: translateX(calc(-1 * var(--foxwarm-border-width-px)));
+}
+
+/* Rounded card families use a conventional disclosure affordance rather than
+ * forcing a vertical timeline rail into curved geometry. */
+html:is([data-foxwarm-separator-treatment="chevron"], [data-foxwarm-separator-treatment="chevron-right"]) .foxwarm-thread-line-button {
+  bottom: auto !important;
+  top: var(--foxwarm-thread-header-py) !important;
+  width: 18px !important;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--foxwarm-tag-radius-px);
+}
+
+/* Disclosure controls are contained by these card families, so their role
+ * surfaces can be clipped as one coherent rounded shape. Edge-rail themes
+ * intentionally remain unclipped because their rail lives outside the card. */
+html:is([data-foxwarm-separator-treatment="chevron"], [data-foxwarm-separator-treatment="chevron-right"]) :is(.foxwarm-tool-card, [data-model-thread-card], .foxwarm-system-message-card, .foxwarm-context-block-card) {
+  overflow: hidden;
+}
+
+html[data-foxwarm-separator-treatment="chevron"] .foxwarm-thread-line-button {
+  left: 4px !important;
+}
+
+html[data-foxwarm-separator-treatment="chevron-right"] .foxwarm-thread-line-button {
+  left: auto !important;
+  right: 4px;
+}
+
+html:is([data-foxwarm-separator-treatment="chevron"], [data-foxwarm-separator-treatment="chevron-right"]) .foxwarm-thread-line-button:hover {
+  background-color: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+html:is([data-foxwarm-separator-treatment="chevron"], [data-foxwarm-separator-treatment="chevron-right"]) .foxwarm-thread-line-stroke {
+  display: none;
+}
+
+html:is([data-foxwarm-separator-treatment="chevron"], [data-foxwarm-separator-treatment="chevron-right"]) .foxwarm-thread-disclosure-icon {
+  display: block !important;
+  transition: transform var(--foxwarm-transition-ms) ease;
+}
+
+html:is([data-foxwarm-separator-treatment="chevron"], [data-foxwarm-separator-treatment="chevron-right"]) .foxwarm-thread-line-button[aria-expanded="true"] .foxwarm-thread-disclosure-icon {
+  transform: rotate(90deg);
+}
+
+html[data-foxwarm-separator-treatment="chevron"] :is(.foxwarm-tool-header, .foxwarm-reasoning-header, .foxwarm-web-search-header, .foxwarm-system-message-header, .foxwarm-context-block-header) {
+  padding-left: 22px !important;
+}
+
+html[data-foxwarm-separator-treatment="chevron-right"] :is(.foxwarm-tool-header, .foxwarm-reasoning-header, .foxwarm-web-search-header, .foxwarm-system-message-header, .foxwarm-context-block-header) {
+  padding-right: 26px !important;
+}
+
+html[data-foxwarm-separator-treatment="chevron-right"] .foxwarm-tool-action-buttons {
+  right: 26px !important;
+}
+
+html[data-foxwarm-theme-density] .foxwarm-markdown :where(p, ul, ol, blockquote):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  margin-block: var(--foxwarm-markdown-block-gap);
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-removed-line,
@@ -1456,11 +1651,11 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-removed-token {
   background-color: var(--foxwarm-console-diff-removed-surface-strong) !important;
-  color: var(--foxwarm-console-orange) !important;
+  color: var(--foxwarm-color-diff-removed-text) !important;
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-removed-token :where(*) {
-  color: var(--foxwarm-console-orange) !important;
+  color: var(--foxwarm-color-diff-removed-text) !important;
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-added-line,
@@ -1470,11 +1665,11 @@ html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-added-token {
   background-color: var(--foxwarm-console-diff-added-surface-strong) !important;
-  color: var(--foxwarm-console-green) !important;
+  color: var(--foxwarm-color-diff-added-text) !important;
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-added-token :where(*) {
-  color: var(--foxwarm-console-green) !important;
+  color: var(--foxwarm-color-diff-added-text) !important;
 }
 
 html[data-foxwarm-component-treatment="console"] .foxwarm-diff-preview .foxwarm-diff-removed-header,

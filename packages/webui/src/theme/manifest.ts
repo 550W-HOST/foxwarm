@@ -1,4 +1,4 @@
-export const THEME_SCHEMA_VERSION = 1 as const
+export const THEME_SCHEMA_VERSION = 2 as const
 export const THEME_FILE_SUFFIX = '.foxwarm-theme.json'
 export const THEME_MAX_FILE_BYTES = 64 * 1024
 
@@ -8,13 +8,16 @@ export const THEME_COLOR_KEYS = [
   'textSubtle', 'textStrong', 'textInverse', 'accent', 'accentMuted', 'accentSurface',
   'accentSurfaceStrong', 'accentBorder', 'focusRing', 'neutral', 'neutralSurface',
   'neutralBorder', 'info', 'infoSurface', 'infoSurfaceStrong', 'infoBorder', 'success',
-  'successSurface', 'successSurfaceStrong', 'successBorder', 'warning', 'warningSurface',
+  'successSurface', 'successSurfaceStrong', 'successBorder', 'tool', 'toolSurface',
+  'toolSurfaceStrong', 'toolBorder', 'warning', 'warningSurface',
   'warningSurfaceStrong', 'warningBorder', 'danger', 'dangerSurface', 'dangerSurfaceStrong',
   'dangerBorder', 'special', 'specialSurface', 'specialBorder', 'userSurface', 'userText',
   'assistantSurface', 'assistantText', 'threadText', 'reasoningSurface', 'reasoningSurfaceStrong',
   'systemSurface', 'systemSurfaceStrong', 'systemText', 'systemAccent', 'systemBorder', 'codeSurface',
   'codeText', 'assistantCodeSurface', 'assistantCodeText', 'inlineCodeSurface', 'inlineCodeText', 'diffAddedSurface',
-  'diffAddedSurfaceStrong', 'diffRemovedSurface', 'diffRemovedSurfaceStrong',
+  'diffAddedSurfaceStrong', 'diffAddedText', 'diffRemovedSurface', 'diffRemovedSurfaceStrong', 'diffRemovedText',
+  'syntaxComment', 'syntaxString', 'syntaxNumber', 'syntaxKeyword', 'syntaxLiteral',
+  'syntaxHeading', 'syntaxTag', 'syntaxAttribute', 'syntaxProperty',
   'scrollbarTrack', 'scrollbarThumb', 'scrollbarThumbHover', 'contextViewport', 'terminalBackground',
   'terminalForeground', 'terminalCursor', 'terminalSelection',
 ] as const
@@ -25,7 +28,8 @@ export const THEME_TYPOGRAPHY_NUMBER_KEYS = [
   'composerFontSizePx', 'codeFontSizePx', 'uiLineHeight', 'messageLineHeight', 'codeLineHeight',
 ] as const
 export const THEME_SHAPE_KEYS = [
-  'radiusSmallPx', 'radiusMediumPx', 'radiusLargePx', 'borderWidthPx', 'controlHeightPx',
+  'radiusSmallPx', 'radiusMediumPx', 'radiusLargePx', 'messageRadiusPx', 'cardRadiusPx',
+  'controlRadiusPx', 'tagRadiusPx', 'composerRadiusPx', 'cardGapPx', 'cardInsetPx', 'borderWidthPx', 'controlHeightPx',
 ] as const
 export const THEME_EFFECT_NUMBER_KEYS = [
   'shadowOpacity', 'shadowBlurPx', 'glowOpacity', 'pressOffsetPx', 'transitionMs',
@@ -42,7 +46,17 @@ export type ResolvedThemeMode = Exclude<ThemeColorMode, 'auto'>
 
 export type ThemeBackgroundPattern =
   | { kind: 'none' }
-  | { kind: 'grid'; sizePx: number; opacity: number }
+  | { kind: 'grid' | 'dots' | 'lines' | 'scanlines'; sizePx: number; opacity: number }
+
+export type ThemeComposition = {
+  density: 'compact' | 'comfortable' | 'airy'
+  card: 'flat' | 'outlined' | 'elevated'
+  header: 'integrated' | 'banded' | 'tab'
+  control: 'plain' | 'soft' | 'pill'
+  separator: 'rail' | 'line' | 'segmented' | 'chevron' | 'chevron-right'
+  labels: 'normal' | 'tracked' | 'uppercase'
+  icons: 'compact' | 'standard'
+}
 
 export type ThemeVariant = {
   componentTreatment: 'standard' | 'console'
@@ -50,10 +64,11 @@ export type ThemeVariant = {
   typography: Record<ThemeTypographyStringKey, string> & Record<ThemeTypographyNumberKey, number>
   shape: Record<ThemeShapeKey, number>
   effects: { shadowColor: string } & Record<ThemeEffectNumberKey, number>
+  composition: ThemeComposition
   backgroundPattern: ThemeBackgroundPattern
 }
 
-export type ThemeManifestV1 = {
+export type ThemeManifest = {
   schemaVersion: typeof THEME_SCHEMA_VERSION
   id: string
   name: string
@@ -66,12 +81,13 @@ export type ThemeManifestV1 = {
 }
 
 export type ThemeValidationResult =
-  | { ok: true; value: ThemeManifestV1; warnings: string[] }
+  | { ok: true; value: ThemeManifest; warnings: string[] }
   | { ok: false; errors: string[] }
 
 const ROOT_KEYS = new Set(['schemaVersion', 'id', 'name', 'description', 'author', 'variants'])
-const VARIANT_KEYS = new Set(['componentTreatment', 'colors', 'typography', 'shape', 'effects', 'backgroundPattern'])
+const VARIANT_KEYS = new Set(['componentTreatment', 'colors', 'typography', 'shape', 'effects', 'composition', 'backgroundPattern'])
 const EFFECT_KEYS = new Set(['shadowColor', ...THEME_EFFECT_NUMBER_KEYS])
+const COMPOSITION_KEYS = new Set(['density', 'card', 'header', 'control', 'separator', 'labels', 'icons'])
 const PATTERN_KEYS = new Set(['kind', 'sizePx', 'opacity'])
 const HEX_COLOR = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i
 const THEME_ID = /^[a-z0-9][a-z0-9._-]{2,63}$/
@@ -159,6 +175,13 @@ const SHAPE_RANGES: Record<ThemeShapeKey, readonly [number, number]> = {
   radiusSmallPx: [0, 24],
   radiusMediumPx: [0, 32],
   radiusLargePx: [0, 48],
+  messageRadiusPx: [0, 48],
+  cardRadiusPx: [0, 48],
+  controlRadiusPx: [0, 48],
+  tagRadiusPx: [0, 24],
+  composerRadiusPx: [0, 48],
+  cardGapPx: [0, 12],
+  cardInsetPx: [2, 16],
   borderWidthPx: [0, 4],
   controlHeightPx: [24, 64],
 }
@@ -228,6 +251,25 @@ function normalizeVariant(value: unknown, path: string, errors: string[]): Theme
     })) as Record<ThemeEffectNumberKey, number>,
   }
 
+  const compositionRaw = isRecord(raw.composition) ? raw.composition : {}
+  if (!isRecord(raw.composition)) errors.push(`${path}.composition must be an object`)
+  rejectUnknownKeys(compositionRaw, COMPOSITION_KEYS, `${path}.composition`, errors)
+  const enumValue = <T extends string>(key: keyof ThemeComposition, allowed: readonly T[], fallback: T): T => {
+    const value = compositionRaw[key]
+    if (typeof value === 'string' && allowed.includes(value as T)) return value as T
+    errors.push(`${path}.composition.${key} must be one of ${allowed.join(', ')}`)
+    return fallback
+  }
+  const composition: ThemeComposition = {
+    density: enumValue('density', ['compact', 'comfortable', 'airy'], 'comfortable'),
+    card: enumValue('card', ['flat', 'outlined', 'elevated'], 'flat'),
+    header: enumValue('header', ['integrated', 'banded', 'tab'], 'banded'),
+    control: enumValue('control', ['plain', 'soft', 'pill'], 'soft'),
+    separator: enumValue('separator', ['rail', 'line', 'segmented', 'chevron', 'chevron-right'], 'rail'),
+    labels: enumValue('labels', ['normal', 'tracked', 'uppercase'], 'uppercase'),
+    icons: enumValue('icons', ['compact', 'standard'], 'standard'),
+  }
+
   const patternRaw = isRecord(raw.backgroundPattern) ? raw.backgroundPattern : {}
   if (!isRecord(raw.backgroundPattern)) errors.push(`${path}.backgroundPattern must be an object`)
   rejectUnknownKeys(patternRaw, PATTERN_KEYS, `${path}.backgroundPattern`, errors)
@@ -235,16 +277,16 @@ function normalizeVariant(value: unknown, path: string, errors: string[]): Theme
   if (patternRaw.kind === 'none') {
     backgroundPattern = { kind: 'none' }
     if ('sizePx' in patternRaw || 'opacity' in patternRaw) {
-      errors.push(`${path}.backgroundPattern must not include grid settings when kind is none`)
+      errors.push(`${path}.backgroundPattern must not include pattern settings when kind is none`)
     }
-  } else if (patternRaw.kind === 'grid') {
+  } else if (patternRaw.kind === 'grid' || patternRaw.kind === 'dots' || patternRaw.kind === 'lines' || patternRaw.kind === 'scanlines') {
     backgroundPattern = {
-      kind: 'grid',
+      kind: patternRaw.kind,
       sizePx: normalizeNumber(patternRaw.sizePx, `${path}.backgroundPattern.sizePx`, errors, 4, 128),
       opacity: normalizeNumber(patternRaw.opacity, `${path}.backgroundPattern.opacity`, errors, 0, 0.25),
     }
   } else {
-    errors.push(`${path}.backgroundPattern.kind must be none or grid`)
+    errors.push(`${path}.backgroundPattern.kind must be none, grid, dots, lines, or scanlines`)
     backgroundPattern = { kind: 'none' }
   }
 
@@ -254,6 +296,7 @@ function normalizeVariant(value: unknown, path: string, errors: string[]): Theme
     typography: { ...typographyStrings, ...typographyNumbers },
     shape,
     effects,
+    composition,
     backgroundPattern,
   }
 }
@@ -281,7 +324,7 @@ export function validateThemeManifest(value: unknown): ThemeValidationResult {
   const dark = normalizeVariant(variantsRaw.dark, 'theme.variants.dark', errors)
 
   if (errors.length > 0) return { ok: false, errors }
-  const normalized: ThemeManifestV1 = {
+  const normalized: ThemeManifest = {
     schemaVersion: THEME_SCHEMA_VERSION,
     id,
     name,
@@ -297,6 +340,7 @@ export function validateThemeManifest(value: unknown): ThemeValidationResult {
       [colors.textStrong, colors.canvas, 'strong text on canvas', 4.5],
       [colors.surface, colors.textStrong, 'surface text on strong fill', 4.5],
       [colors.textInverse, colors.accent, 'inverse text on accent', 3],
+      [colors.tool, colors.toolSurface, 'tool text on tool surface', 3],
     ] as const) {
       const ratio = colorContrastRatio(foreground, background)
       if (ratio < threshold) warnings.push(`${mode} ${label} contrast is ${ratio.toFixed(2)}:1 (recommended: ${threshold.toFixed(1)}:1)`)
@@ -331,7 +375,7 @@ export function parseThemeManifestJson(text: string): ThemeValidationResult {
   }
 }
 
-export function serializeThemeManifest(manifest: ThemeManifestV1): string {
+export function serializeThemeManifest(manifest: ThemeManifest): string {
   const result = validateThemeManifest(manifest)
   if (!result.ok) throw new Error(`Cannot serialize invalid theme: ${result.errors.join('; ')}`)
   return `${JSON.stringify(result.value, null, 2)}\n`
@@ -367,11 +411,19 @@ export function themeVariantCssVariables(variant: ThemeVariant): Record<string, 
     const suffix = key.endsWith('Px') ? 'px' : key.endsWith('Ms') ? 'ms' : ''
     variables[`--foxwarm-${toKebab(key)}`] = `${variant.effects[key]}${suffix}`
   }
-  variables['--foxwarm-background-image'] = variant.backgroundPattern.kind === 'grid'
-    ? `linear-gradient(rgb(${hexColorChannels(variant.colors.accent)} / ${variant.backgroundPattern.opacity}) 1px, transparent 1px), linear-gradient(90deg, rgb(${hexColorChannels(variant.colors.accent)} / ${variant.backgroundPattern.opacity}) 1px, transparent 1px)`
-    : 'none'
-  variables['--foxwarm-background-size'] = variant.backgroundPattern.kind === 'grid'
-    ? `${variant.backgroundPattern.sizePx}px ${variant.backgroundPattern.sizePx}px`
-    : 'auto'
+  const pattern = variant.backgroundPattern
+  const patternColor = pattern.kind === 'none' ? '' : `rgb(${hexColorChannels(variant.colors.accent)} / ${pattern.opacity})`
+  variables['--foxwarm-background-image'] = pattern.kind === 'grid'
+    ? `linear-gradient(${patternColor} 1px, transparent 1px), linear-gradient(90deg, ${patternColor} 1px, transparent 1px)`
+    : pattern.kind === 'dots'
+      ? `radial-gradient(circle, ${patternColor} 1px, transparent 1.25px)`
+      : pattern.kind === 'lines'
+        ? `linear-gradient(${patternColor} 1px, transparent 1px)`
+        : pattern.kind === 'scanlines'
+          ? `repeating-linear-gradient(0deg, transparent 0, transparent ${Math.max(2, pattern.sizePx - 1)}px, ${patternColor} ${pattern.sizePx}px)`
+          : 'none'
+  variables['--foxwarm-background-size'] = pattern.kind === 'none'
+    ? 'auto'
+    : `${pattern.sizePx}px ${pattern.sizePx}px`
   return variables
 }

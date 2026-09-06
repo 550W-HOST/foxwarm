@@ -201,6 +201,24 @@ test('heavy system and non-channel messages use kind-tagged thread cards while d
   assert.equal(await page.$$('#event img').then(nodes => nodes.length), 1, 'event image remains rendered')
 })
 
+test('user metadata follows userText rather than an unrelated inverse-control color', async () => {
+  await mountFixture()
+  await page.evaluate(() => {
+    window.setFixtureTheme('default', true)
+    document.documentElement.style.setProperty('--foxwarm-color-text-inverse', '#0b1220')
+    document.documentElement.style.setProperty('--foxwarm-color-user-surface', '#263b60')
+    document.documentElement.style.setProperty('--foxwarm-color-user-text', '#eef3fb')
+  })
+  const colors = await page.$eval('#direct .foxwarm-user-message-bubble', bubble => ({
+    body: getComputedStyle(bubble.querySelector('.foxwarm-user-message-text')).color,
+    metadata: getComputedStyle(bubble.querySelector('.foxwarm-lightweight-metadata-line')).color,
+    background: getComputedStyle(bubble).backgroundColor,
+  }))
+  assert.equal(colors.metadata, colors.body)
+  assert.notEqual(colors.metadata, 'rgb(11, 18, 32)', 'metadata does not borrow the dark inverse label color')
+  assert.equal(colors.background, 'rgb(38, 59, 96)')
+})
+
 test('system cards expand/collapse, preserve session links, and retain width containment', async () => {
   await mountFixture(390)
   await page.click('#event [data-system-message-card]')

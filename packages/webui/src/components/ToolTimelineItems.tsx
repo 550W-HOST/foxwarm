@@ -83,19 +83,19 @@ type ToolThreadTone = 'neutral' | 'success' | 'error'
 
 const toolThreadLineToneClasses: Record<ToolThreadTone, string> = {
   neutral: 'text-fw-text hover:text-fw-text-muted focus-visible:text-fw-text-muted dark:text-fw-text dark:hover:text-fw-text-muted dark:focus-visible:text-fw-text-muted',
-  success: 'text-fw-success hover:text-fw-success focus-visible:text-fw-success dark:text-fw-success dark:hover:text-fw-success dark:focus-visible:text-fw-success',
+  success: 'text-fw-tool hover:text-fw-tool focus-visible:text-fw-tool dark:text-fw-tool dark:hover:text-fw-tool dark:focus-visible:text-fw-tool',
   error: 'text-fw-danger hover:text-fw-danger focus-visible:text-fw-danger dark:text-fw-danger dark:hover:text-fw-danger dark:focus-visible:text-fw-danger',
 }
 
 const toolSurfaceToneClasses: Record<ToolThreadTone, string> = {
   neutral: 'my-0.5 bg-fw-neutral-surface/45 dark:bg-fw-surface/20',
-  success: 'my-0.5 bg-fw-success-surface/55 dark:bg-fw-success-surface/10',
+  success: 'my-0.5 bg-fw-tool-surface/55 dark:bg-fw-tool-surface/10',
   error: 'my-0.5 bg-fw-danger-surface/55 dark:bg-fw-danger-surface-strong/10',
 }
 
 const toolHeaderToneClasses: Record<ToolThreadTone, string> = {
   neutral: '-ml-2 bg-fw-neutral-border/80 pl-2 pr-0 py-1 dark:bg-fw-surface-raised/25',
-  success: '-ml-2 bg-fw-success-surface/80 pl-2 pr-0 py-1 dark:bg-fw-success-surface/20',
+  success: '-ml-2 bg-fw-tool-surface/80 pl-2 pr-0 py-1 dark:bg-fw-tool-surface/20',
   error: '-ml-2 bg-fw-danger-surface/85 pl-2 pr-0 py-1 dark:bg-fw-danger-surface-strong/20',
 }
 
@@ -213,9 +213,9 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
         {lineCounts ? (
           (lineCounts.removed > 0 || lineCounts.added > 0) && (
             <span className="shrink-0 text-xs">
-              {lineCounts.removed > 0 && <span className="foxwarm-diff-removed-count text-fw-warning">-{lineCounts.removed}</span>}
+              {lineCounts.removed > 0 && <span className="foxwarm-diff-removed-count text-fw-diff-removed-text">-{lineCounts.removed}</span>}
               {lineCounts.removed > 0 && lineCounts.added > 0 && <span className="foxwarm-diff-count-separator mx-1 text-fw-text-muted">/</span>}
-              {lineCounts.added > 0 && <span className="foxwarm-diff-added-count text-fw-accent">+{lineCounts.added}</span>}
+              {lineCounts.added > 0 && <span className="foxwarm-diff-added-count text-fw-diff-added-text">+{lineCounts.added}</span>}
             </span>
           )
         ) : (
@@ -357,7 +357,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
             if (operation.action === 'add') {
               return (
                 <div key={operationIdx} className="space-y-1">
-                  <div className="text-xs font-semibold text-fw-success dark:text-fw-success"><ToolCodePath prefix="Add " filePath={operation.filePath} onOpenCodeFile={call.name === 'apply_patch' ? options.onOpenCodeFile : undefined} /></div>
+                  <div className="text-xs font-semibold text-fw-diff-added-text"><ToolCodePath prefix="Add " filePath={operation.filePath} onOpenCodeFile={call.name === 'apply_patch' ? options.onOpenCodeFile : undefined} /></div>
                   <DiffPreview oldText="" newText={operation.lines.join('\n')} diffViewMode={diffViewMode} filePath={operation.filePath} />
                 </div>
               )
@@ -696,13 +696,13 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
               {hasResponseContent && !hasToolScriptProgress && (
                 <div className="text-fw-text">
                   {responses.length > 0 && responses.map((resp, idx) => (
-                    <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-success-border dark:border-fw-success-border/40'}` : ''}>
+                    <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-tool-border dark:border-fw-tool-border/40'}` : ''}>
                       {renderToolResponseContent(resp, true, call)}
                     </div>
                   ))}
 
                   {imageParts.length > 0 && (
-                    <div className={responses.length > 0 ? `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-success-border dark:border-fw-success-border/40'}` : ''}>
+                    <div className={responses.length > 0 ? `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-tool-border dark:border-fw-tool-border/40'}` : ''}>
                       <ImageParts imageParts={imageParts} keyPrefix={`tool-pair-${call?.id || primaryName}`} />
                     </div>
                   )}
@@ -716,7 +716,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
                   {responses.length > 0 && responses.map((resp, idx) => {
                     const content = renderToolScriptResultContent(resp, true)
                     return content ? (
-                      <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-toolscript-result-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-success-border dark:border-fw-success-border/40'}` : ''}>
+                      <div key={`${resp.tool_use_id || call?.id || call?.name || resp.name}-toolscript-result-${idx}`} className={idx > 0 ? `pt-2 border-t ${isError ? 'border-fw-danger-border dark:border-fw-danger-border/40' : 'border-fw-tool-border dark:border-fw-tool-border/40'}` : ''}>
                         {content}
                       </div>
                     ) : null

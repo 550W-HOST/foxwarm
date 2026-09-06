@@ -149,13 +149,19 @@ export default function ThemeManager() {
             </div>
           </div>
           <div className="flex gap-1.5" aria-label={`${theme.activeTheme.name} color preview`}>
-            {[variant.colors.canvas, variant.colors.surface, variant.colors.textStrong, variant.colors.accent, variant.colors.success, variant.colors.warning, variant.colors.danger, variant.colors.special].map((color, index) => (
-              <span key={`${color}-${index}`} className="h-7 min-w-0 flex-1 rounded border border-fw-border" style={{ backgroundColor: color }} />
+            {[
+              ['Canvas', variant.colors.canvas], ['Surface', variant.colors.surface], ['Text', variant.colors.textStrong],
+              ['Accent', variant.colors.accent], ['Tool', variant.colors.tool], ['Success', variant.colors.success],
+              ['Warning', variant.colors.warning], ['Danger', variant.colors.danger], ['Special', variant.colors.special],
+            ].map(([label, color]) => (
+              <span key={label} title={`${label}: ${color}`} aria-label={`${label}: ${color}`} className="h-7 min-w-0 flex-1 rounded border border-fw-border" style={{ backgroundColor: color }} />
             ))}
           </div>
           <h3 className="mt-3 text-sm font-semibold text-fw-text-strong">{theme.activeTheme.name}</h3>
           <p className="mt-1 text-xs leading-5 text-fw-text-muted">{theme.activeTheme.description || 'No description.'}</p>
-          <div className="mt-1 font-mono text-[10px] text-fw-text-subtle">Schema v{theme.activeTheme.schemaVersion} · {theme.effectiveMode} preview</div>
+          <div className="mt-1 font-mono text-[10px] text-fw-text-subtle">
+            Schema v{theme.activeTheme.schemaVersion} · {theme.effectiveMode} · {variant.composition.density} · {variant.composition.card} · {variant.composition.header}
+          </div>
           <input ref={fileInputRef} type="file" accept=".json,.foxwarm-theme.json,application/json" className="hidden" onChange={event => { void importTheme(event.currentTarget.files?.[0]) }} />
           <div className="mt-4 grid grid-cols-2 gap-2">
             <button type="button" data-theme-control onClick={() => fileInputRef.current?.click()} className={actionClass}><Upload className="h-3.5 w-3.5" /> Import</button>

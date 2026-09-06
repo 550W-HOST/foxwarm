@@ -49,14 +49,14 @@ const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode, 
         elements.push(
           <div key={i} className="foxwarm-diff-removed-line bg-fw-diff-removed-surface pl-2">
             {charDiff.map((part, j) => part.removed
-              ? <span key={j} className="foxwarm-diff-removed-token bg-fw-diff-removed-surface-strong text-fw-warning"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
+              ? <span key={j} className="foxwarm-diff-removed-token bg-fw-diff-removed-surface-strong text-fw-diff-removed-text"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
               : !part.added ? <span key={j} className="text-fw-text-strong"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span> : null)}
           </div>
         )
         elements.push(
           <div key={i + 1} className="foxwarm-diff-added-line bg-fw-diff-added-surface pl-2">
             {charDiff.map((part, j) => part.added
-              ? <span key={j} className="foxwarm-diff-added-token bg-fw-diff-added-surface-strong text-fw-accent"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
+              ? <span key={j} className="foxwarm-diff-added-token bg-fw-diff-added-surface-strong text-fw-diff-added-text"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
               : !part.removed ? <span key={j} className="text-fw-text-strong"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span> : null)}
           </div>
         )
@@ -99,14 +99,14 @@ const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode, 
           oldElements.push(
             <div key={`${i}-old-${lineIdx}`} className="foxwarm-diff-removed-line bg-fw-diff-removed-surface block">
               {charDiff.map((part, j) => part.removed
-                ? <span key={j} className="foxwarm-diff-removed-token bg-fw-diff-removed-surface-strong text-fw-warning"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
+                ? <span key={j} className="foxwarm-diff-removed-token bg-fw-diff-removed-surface-strong text-fw-diff-removed-text"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
                 : !part.added ? <span key={j} className="text-fw-text-strong"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span> : null)}
             </div>
           )
           newElements.push(
             <div key={`${i}-new-${lineIdx}`} className="foxwarm-diff-added-line bg-fw-diff-added-surface block">
               {charDiff.map((part, j) => part.added
-                ? <span key={j} className="foxwarm-diff-added-token bg-fw-diff-added-surface-strong text-fw-accent"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
+                ? <span key={j} className="foxwarm-diff-added-token bg-fw-diff-added-surface-strong text-fw-diff-added-text"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span>
                 : !part.removed ? <span key={j} className="text-fw-text-strong"><SyntaxHighlightedText text={part.value} filePath={filePath} /></span> : null)}
             </div>
           )
@@ -145,13 +145,13 @@ const DiffPreview = memo(function DiffPreview({ oldText, newText, diffViewMode, 
     <div className="foxwarm-diff-preview font-mono text-xs border border-fw-border-strong rounded overflow-hidden cursor-text">
       <div className="grid grid-cols-2">
         <div className="bg-fw-surface-sunken dark:bg-fw-canvas">
-          <div className="foxwarm-diff-removed-header bg-fw-diff-removed-surface text-fw-warning font-semibold px-2 py-1 border-b border-fw-border-strong">- Old</div>
+          <div className="foxwarm-diff-removed-header bg-fw-diff-removed-surface text-fw-diff-removed-text font-semibold px-2 py-1 border-b border-fw-border-strong">- Old</div>
           <div ref={diffOldScrollRefs} onScroll={handleOldScroll} className="p-2 whitespace-pre overflow-auto max-h-[80vh]">
             <div className="inline-block min-w-full">{oldElements}</div>
           </div>
         </div>
         <div className="bg-fw-surface-sunken dark:bg-fw-canvas border-l border-fw-border-strong">
-          <div className="foxwarm-diff-added-header bg-fw-diff-added-surface text-fw-accent font-semibold px-2 py-1 border-b border-fw-border-strong">+ New</div>
+          <div className="foxwarm-diff-added-header bg-fw-diff-added-surface text-fw-diff-added-text font-semibold px-2 py-1 border-b border-fw-border-strong">+ New</div>
           <div ref={diffNewScrollRefs} onScroll={handleNewScroll} className="p-2 whitespace-pre overflow-auto max-h-[80vh]">
             <div className="inline-block min-w-full">{newElements}</div>
           </div>
