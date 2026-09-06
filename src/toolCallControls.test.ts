@@ -176,13 +176,20 @@ test('the same cancellation preflight works with an authoritative Session-worker
   }
 });
 
-test('handoff confirmation validates exact framing, non-empty review, and final-property placement', () => {
+test('handoff confirmation accepts optional review separators while preserving exact framing', () => {
   const valid = { sessionId: 'target', message: 'hello', confirmation: confirmation() };
   assert.doesNotThrow(() => validateInterAgentHandoffConfirmation(valid));
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}same-line review${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX} review with spaces ${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\r\nCRLF review\r\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nmultiline\nreview\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
   assert.throws(() => validateInterAgentHandoffConfirmation({ sessionId: 'target', message: 'hello' }), /prefix and suffix/);
   assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `wrong\nreview\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /prefix and suffix/);
   assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nreview\nwrong` }), /prefix and suffix/);
+  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /non-empty/);
+  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX} ${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /non-empty/);
   assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n \n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /non-empty/);
+  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /replace the documented placeholder/);
   assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /replace the documented placeholder/);
   assert.throws(() => validateInterAgentHandoffConfirmation({ confirmation: confirmation(), sessionId: 'target', message: 'hello' }), /final argument property/);
   assert.doesNotThrow(() => validateInterAgentHandoffConfirmationForMode({ sessionId: 'target', message: 'hello' }, false));

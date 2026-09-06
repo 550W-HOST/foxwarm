@@ -90,8 +90,8 @@ export function isSingleToolCancellationRequested(call: FunctionCall): boolean {
 
 export function validateInterAgentHandoffConfirmation(args: Record<string, any>): void {
   const confirmation = args?.confirmation;
-  const prefix = `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n`;
-  const suffix = `\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
+  const prefix = INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX;
+  const suffix = INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX;
   if (typeof confirmation !== 'string' || !confirmation.startsWith(prefix) || !confirmation.endsWith(suffix)) {
     throw new Error('Inter-agent handoff confirmation must contain the exact required prefix and suffix separated by a non-empty review.');
   }
