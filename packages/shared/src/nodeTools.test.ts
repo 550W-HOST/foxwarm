@@ -450,15 +450,19 @@ test('node exec uses the process-wide acknowledged dispatcher with durable compl
   }
 });
 
-test('node startup recovery delivers a persisted finished exec without waiting for another exec call', async () => {
+test('node startup recovery delivers a current completion and prunes an expired tracking record', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-exec-startup-recovery-'));
   const previousAgentDir = process.env.FOXWARM_AGENT_DIR;
   const agentName = uniqueAgent('node_exec_startup_recovery');
   const execId = `calm-heron`;
+  const currentExecId = `brisk-otter`;
   const execDir = path.join(root, '.temp', 'exec');
   const logPath = path.join(execDir, `${execId}.log`);
   const statusPath = `${logPath}.exit.json`;
   const cwdPath = `${logPath}.cwd.txt`;
+  const currentLogPath = path.join(execDir, `${currentExecId}.log`);
+  const currentStatusPath = `${currentLogPath}.exit.json`;
+  const currentCwdPath = `${currentLogPath}.cwd.txt`;
   const events: any[] = [];
   process.env.FOXWARM_AGENT_DIR = root;
   setNodeToolSessionEventDispatcher(async (sessionId, message, type, metadata) => {
@@ -468,6 +472,9 @@ test('node startup recovery delivers a persisted finished exec without waiting f
     await fs.ensureDir(execDir);
     await fs.writeFile(logPath, 'finished output\n');
     await fs.writeJson(statusPath, { exitCode: 0, finishedAt: new Date(1_700_000_000_000).toISOString() });
+    const currentFinishedAt = Date.now();
+    await fs.writeFile(currentLogPath, 'current output\n');
+    await fs.writeJson(currentStatusPath, { exitCode: 0, finishedAt: new Date(currentFinishedAt).toISOString() });
     await fs.writeJson(path.join(execDir, 'running-exec.json'), { execs: [{
       id: execId,
       pid: 99_999_997,
@@ -481,13 +488,29 @@ test('node startup recovery delivers a persisted finished exec without waiting f
       startedAt: 1_699_999_999_000,
       notifyOnCompletion: true,
       completionCapability: 'startup-recovery-capability',
+    }, {
+      id: currentExecId,
+      pid: 99_999_996,
+      command: 'echo current output',
+      sessionId: 'startup-recovery-current-session',
+      agentName,
+      nodeId: 'startup-recovery-node',
+      logPath: currentLogPath,
+      statusPath: currentStatusPath,
+      cwdPath: currentCwdPath,
+      startedAt: currentFinishedAt - 1_000,
+      notifyOnCompletion: true,
+      completionCapability: 'startup-recovery-current-capability',
     }] });
 
     await initializeNodeToolExecRecovery();
     assert.equal(events.length, 1);
-    assert.equal(events[0].sessionId, 'startup-recovery-session');
-    assert.equal(events[0].metadata.eventId, `remote-exec-completion:${execId}`);
-    assert.equal(events[0].metadata.eventTimestamp, 1_700_000_000_000);
+    assert.equal(events[0].sessionId, 'startup-recovery-current-session');
+    assert.match(events[0].message, /Background Process Finished/);
+    assert.equal(events[0].metadata.eventId, `remote-exec-completion:${currentExecId}`);
+    assert.equal(events[0].metadata.execId, currentExecId);
+    assert.equal(events[0].metadata.completionCapability, 'startup-recovery-current-capability');
+    assert.equal(events[0].metadata.eventTimestamp, currentFinishedAt);
     assert.deepEqual((await fs.readJson(path.join(execDir, 'running-exec.json'))).execs, []);
   } finally {
     setNodeToolSessionEventDispatcher(undefined);
