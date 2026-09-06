@@ -4,6 +4,7 @@ import { PassThrough } from 'node:stream';
 import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import axios from 'axios';
 import { DEFAULT_STREAM_FIRST_CONTENT_TIMEOUT_MS, setStreamingTimeoutTestHooks } from './llmStreamingTimeout';
 
@@ -155,4 +156,81 @@ test('explicit streaming timeout remains a hard attempt bound and Stop remains a
     (axios as any).post = originalPost;
     setStreamingTimeoutTestHooks();
   }
+});
+
+test('real Axios active SSE aborts and watchdog timeouts do not emit uncaught stream errors', async () => {
+  const modulePath = path.join(__dirname, 'llm.js');
+  const script = `
+    const http = require('http');
+    const fs = require('fs-extra');
+    const os = require('os');
+    const path = require('path');
+    process.once('uncaughtException', error => { console.error('UNCAUGHT:' + error.stack); process.exit(7); });
+    process.once('unhandledRejection', error => { console.error('UNHANDLED:' + (error && error.stack || error)); process.exit(8); });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-active-sse-abort-'));
+    fs.ensureDirSync(path.join(root, 'state'));
+    process.env.FOXWARM_DATA_DIR = root;
+    let mode = '';
+    let activeAbort;
+    const server = http.createServer((_req, res) => {
+      res.on('error', () => {});
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+      if (mode === 'chat-stop') {
+        res.write('data: ' + JSON.stringify({ choices: [{ index: 0, delta: { role: 'assistant' } }] }) + '\\n\\n');
+      } else {
+        res.write('data: ' + JSON.stringify({ type: 'response.created', response: { id: 'r', status: 'in_progress' } }) + '\\n\\n');
+      }
+      if (mode.endsWith('-stop')) setTimeout(() => activeAbort.abort(), 50);
+    });
+    const fail = (error, code) => {
+      console.error(error && error.stack || error);
+      server.closeAllConnections?.();
+      server.close();
+      fs.removeSync(root);
+      process.exit(code);
+    };
+    server.listen(0, '127.0.0.1', async () => {
+      const port = server.address().port;
+      fs.writeFileSync(path.join(root, 'state', 'models.yaml'),
+        'default: responses/model\\nproviders:\\n' +
+        '  responses:\\n    providerType: openai-responses\\n    baseUrl: http://127.0.0.1:' + port + '/v1\\n    models: [model]\\n' +
+        '  chat:\\n    providerType: openai-completions\\n    baseUrl: http://127.0.0.1:' + port + '/v1\\n    models: [model]\\n');
+      const { requestLlmOnce } = require(${JSON.stringify(modulePath)});
+      const request = (model, extra = {}) => requestLlmOnce({
+        contents: [{ role: 'user', parts: [{ text: 'hello' }] }], systemPrompt: '', model,
+        promptCacheKey: mode, toolDefinitions: [], notifySessionEvents: false, registerAbortController: false,
+        maxRetries: 1, ...extra,
+      });
+      try {
+        for (const [nextMode, model] of [['responses-stop', 'responses/model'], ['chat-stop', 'chat/model']]) {
+          mode = nextMode;
+          activeAbort = new AbortController();
+          let stopped = false;
+          try { await request(model, { abortSignal: activeAbort.signal }); }
+          catch (error) { stopped = error && (error.name === 'CanceledError' || error.name === 'AbortError'); }
+          if (!stopped) throw new Error(nextMode + ' did not reject as an ordinary abort');
+          await new Promise(resolve => setImmediate(resolve));
+        }
+        mode = 'responses-timeout';
+        let timedOut = false;
+        try { await request('responses/model', { timeoutMs: 40 }); }
+        catch (error) { timedOut = /explicit caller deadline after 40ms/.test(String(error && error.message)); }
+        if (!timedOut) throw new Error('active Responses SSE did not reject with the watchdog timeout');
+        await new Promise(resolve => setImmediate(resolve));
+        server.closeAllConnections?.();
+        server.close();
+        fs.removeSync(root);
+        process.exit(0);
+      } catch (error) { fail(error, 9); }
+    });
+  `;
+  const result = await new Promise<{ code: number | null; stderr: string }>(resolve => {
+    const child = spawn(process.execPath, ['-e', script], { cwd: path.dirname(__dirname) });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('exit', code => resolve({ code, stderr }));
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /UNCAUGHT:|UNHANDLED:/);
 });

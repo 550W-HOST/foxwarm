@@ -1015,10 +1015,14 @@ export async function collectOpenAIResponsesStream(
         };
 
         const onAbort = () => {
+            const error = makeAbortError();
+            finish(() => reject(error));
             try {
-                stream.destroy?.(makeAbortError());
+                // This collector owns the abort rejection. Destroy without an
+                // error after removing listeners so Node cannot emit a queued
+                // unhandled stream error after the promise has settled.
+                stream.destroy?.();
             } catch {}
-            finish(() => reject(makeAbortError()));
         };
 
         const onData = (chunk: any) => {
@@ -1205,6 +1209,9 @@ export async function collectOpenAIChatCompletionsStream(
                     message.reasoning = nextReasoning;
                     changed = true;
                 }
+                if (typeof delta.refusal === 'string' && delta.refusal.length > 0) {
+                    options?.onMeaningfulProgress?.();
+                }
 
                 // Opaque provider fields (e.g. reasoning_signature) are captured
                 // verbatim so later requests to the same concrete model can
@@ -1277,10 +1284,14 @@ export async function collectOpenAIChatCompletionsStream(
         };
 
         const onAbort = () => {
+            const error = makeAbortError();
+            finish(() => reject(error));
             try {
-                stream.destroy?.(makeAbortError());
+                // This collector owns the abort rejection. Destroy without an
+                // error after removing listeners so Node cannot emit a queued
+                // unhandled stream error after the promise has settled.
+                stream.destroy?.();
             } catch {}
-            finish(() => reject(makeAbortError()));
         };
 
         const onData = (chunk: any) => {

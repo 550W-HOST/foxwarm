@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
+import { spawn } from 'node:child_process';
+import path from 'node:path';
 import { collectOpenAIChatCompletionsStream, collectOpenAIResponsesStream, convertToOpenAIFormat, convertToOpenAIResponsesFormat } from './openai';
 import type { Message } from '../types';
 
@@ -738,11 +740,44 @@ test('OpenAI collectors report only genuinely new generated content as timeout a
     { choices: [{ index: 0, delta: { content: 'a' } }] },
     { choices: [{ index: 0, delta: { reasoning_content: 'r' } }] },
     { choices: [{ index: 0, delta: { reasoning: 'x' } }] },
+    { choices: [{ index: 0, delta: { refusal: 'no' } }] },
     { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'c', type: 'function', function: { name: 'f', arguments: '' } }] } }] },
     { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{' } }] } }] },
     { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
   ]), new AbortController().signal, { onMeaningfulProgress: () => { chatMeaningful += 1; } });
-  assert.equal(chatMeaningful, 4);
+  assert.equal(chatMeaningful, 5);
+});
+
+test('standalone OpenAI collectors reject abort without an uncaught destroyed-stream error', async () => {
+  const modulePath = path.join(__dirname, 'openai.js');
+  const script = `
+    const { PassThrough } = require('stream');
+    const collectors = require(${JSON.stringify(modulePath)});
+    process.once('uncaughtException', error => { console.error('UNCAUGHT:' + error.stack); process.exit(7); });
+    process.once('unhandledRejection', error => { console.error('UNHANDLED:' + (error && error.stack || error)); process.exit(8); });
+    (async () => {
+      for (const name of ['collectOpenAIResponsesStream', 'collectOpenAIChatCompletionsStream']) {
+        const stream = new PassThrough();
+        const controller = new AbortController();
+        const pending = collectors[name](stream, controller.signal);
+        controller.abort();
+        let aborted = false;
+        try { await pending; } catch (error) { aborted = error && error.name === 'AbortError'; }
+        if (!aborted) throw new Error(name + ' did not reject with AbortError');
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      process.exit(0);
+    })().catch(error => { console.error(error.stack); process.exit(9); });
+  `;
+  const result = await new Promise<{ code: number | null; stderr: string }>(resolve => {
+    const child = spawn(process.execPath, ['-e', script]);
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('exit', code => resolve({ code, stderr }));
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /UNCAUGHT:|UNHANDLED:/);
 });
 
 test('convertToOpenAIResponsesFormat replays ordered web search metadata only to its source model', () => {
