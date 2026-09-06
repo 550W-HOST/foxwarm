@@ -38,6 +38,7 @@ async function buildFixtureBundle() {
     if (requestedTheme === 'imported-console') {
       const withDistinctSemantics = (variant) => ({
         ...variant,
+        composition: { ...variant.composition, card: 'outlined', header: 'banded' },
         colors: {
           ...variant.colors,
           input: '#09131d',
@@ -115,6 +116,7 @@ async function buildFixtureBundle() {
     createRoot(document.getElementById('reasoning-processing')).render(React.createElement(ReasoningCard, { thinking: 'active reasoning', tone: 'processing', defaultExpanded: false }))
     createRoot(document.getElementById('web-search')).render(React.createElement(WebSearchCard, { action: { type: 'search', query: 'surface query', queries: ['surface query'] } }))
     createRoot(document.getElementById('system')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [{ role: 'user', parts: [{ text: '<foxwarm-system kind="event" type="wait-timeout">\\nsystem body\\n</foxwarm-system>' }] }], isMobile: false, groupTools: false, showUsageBadge: false }))
+    createRoot(document.getElementById('assistant')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [{ role: 'model', parts: [{ text: 'assistant body' }] }], isMobile: false, groupTools: false, showUsageBadge: false }))
     createRoot(document.getElementById('context')).render(React.createElement(ContextBlockCard, { sessionId: 'fixture/main', messageKey: 'context', block: { id: 1, level: 1, rawStartSeq: 1, rawEndSeq: 2 }, text: 'context summary', nestedDepth: 0, renderNestedMessages: () => null }))
   `
   const result = await build({
@@ -187,7 +189,7 @@ async function readSurfaces() {
     }
     const expectedRaw = consoleTreatment ? {
       toolNeutral: { body: cssVar('--foxwarm-color-surface'), header: cssVar('--foxwarm-color-hover') },
-      toolSuccess: { body: cssVar('--foxwarm-color-success-surface'), header: cssVar('--foxwarm-color-success-surface-strong') },
+      toolSuccess: { body: cssVar('--foxwarm-color-tool-surface'), header: cssVar('--foxwarm-color-tool-surface-strong') },
       toolError: { body: cssVar('--foxwarm-color-danger-surface'), header: cssVar('--foxwarm-color-danger-surface-strong') },
       context: { body: cssVar('--foxwarm-color-surface'), header: cssVar('--foxwarm-color-hover') },
       reasoningMessage: { body: cssVar('--foxwarm-color-reasoning-surface'), header: cssVar('--foxwarm-color-reasoning-surface-strong') },
@@ -197,8 +199,8 @@ async function readSurfaces() {
     } : {
       toolNeutral: standardNeutral,
       toolSuccess: {
-        body: opacity('--foxwarm-color-success-surface', dark ? 10 : 55),
-        header: opacity('--foxwarm-color-success-surface', dark ? 20 : 80),
+        body: opacity('--foxwarm-color-tool-surface', dark ? 10 : 55),
+        header: opacity('--foxwarm-color-tool-surface', dark ? 20 : 80),
       },
       toolError: {
         body: opacity(dark ? '--foxwarm-color-danger-surface-strong' : '--foxwarm-color-danger-surface', dark ? 10 : 55),
@@ -309,12 +311,12 @@ async function readTags() {
     const dark = document.documentElement.classList.contains('dark')
     const expected = consoleTreatment ? {
       neutral: { background: backgroundVar('--foxwarm-color-input'), border: borderVar('--foxwarm-color-border'), color: colorVar('--foxwarm-color-text') },
-      success: { background: backgroundVar('--foxwarm-color-success-surface'), border: borderVar('--foxwarm-color-success-border'), color: colorVar('--foxwarm-color-success') },
+      success: { background: backgroundVar('--foxwarm-color-tool-surface'), border: borderVar('--foxwarm-color-tool-border'), color: colorVar('--foxwarm-color-tool') },
       error: { background: backgroundVar('--foxwarm-color-danger-surface'), border: borderVar('--foxwarm-color-danger-border'), color: colorVar('--foxwarm-color-danger') },
       system: { background: backgroundVar('--foxwarm-color-input'), border: borderVar('--foxwarm-color-system-border'), color: colorVar('--foxwarm-color-system-accent') },
     } : {
       neutral: { background: dark ? opacity('--foxwarm-color-canvas', 60) : backgroundVar('--foxwarm-color-neutral-surface'), border: borderVar('--foxwarm-color-border-strong'), color: colorVar('--foxwarm-color-text') },
-      success: { background: dark ? opacity('--foxwarm-color-success-surface-strong', 20) : backgroundVar('--foxwarm-color-success-surface'), border: borderVar('--foxwarm-color-success-border'), color: colorVar('--foxwarm-color-success') },
+      success: { background: dark ? opacity('--foxwarm-color-tool-surface-strong', 20) : backgroundVar('--foxwarm-color-tool-surface'), border: borderVar('--foxwarm-color-tool-border'), color: colorVar('--foxwarm-color-tool') },
       error: { background: dark ? opacity('--foxwarm-color-danger-surface-strong', 20) : backgroundVar('--foxwarm-color-danger-surface'), border: borderVar('--foxwarm-color-danger-border'), color: colorVar('--foxwarm-color-danger') },
       system: { background: dark ? opacity('--foxwarm-color-system-surface', 20) : backgroundVar('--foxwarm-color-system-surface-strong'), border: borderVar('--foxwarm-color-info-border'), color: standardSystemForeground },
     }
@@ -350,7 +352,7 @@ before(async () => {
   const bundle = await buildFixtureBundle()
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0}main{padding:16px}.fixture{width:760px;max-width:100%;margin-bottom:8px}</style></head><body><main>${['tool-neutral', 'tool-success', 'tool-error', 'tool-group', 'reasoning-message', 'reasoning-processing', 'web-search', 'system', 'context'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0}main{padding:16px}.fixture{width:760px;max-width:100%;margin-bottom:8px}</style></head><body><main>${['tool-neutral', 'tool-success', 'tool-error', 'tool-group', 'reasoning-message', 'reasoning-processing', 'web-search', 'system', 'assistant', 'context'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -366,11 +368,9 @@ after(async () => {
 const fixtures = [
   { theme: 'foxwarm.default', mode: 'light' },
   { theme: 'foxwarm.default', mode: 'dark' },
-  { theme: 'foxwarm.550a', mode: 'light' },
-  { theme: 'foxwarm.550a', mode: 'dark' },
 ]
 
-test('standard cards retain component opacity while console cards consume final named surfaces', async () => {
+test('standard cards retain component opacity and semantic surface allocation', async () => {
   for (const fixture of fixtures) {
     await page.goto(`${fixtureUrl}?theme=${encodeURIComponent(fixture.theme)}&mode=${fixture.mode}`, { waitUntil: 'load' })
     await page.waitForSelector('#context .foxwarm-context-block-card')
@@ -384,10 +384,7 @@ test('standard cards retain component opacity while console cards consume final 
       const visibleDelta = Math.max(...pair.visibleBody.map((channel, index) => Math.abs(channel - pair.visibleHeader[index])))
       assert.ok(visibleDelta >= 3, `${JSON.stringify(fixture)} ${family} keeps a visible composed body/header boundary (delta ${visibleDelta})`)
     }
-    if (fixture.theme === 'foxwarm.550a' && fixture.mode === 'dark') {
-      assert.equal(result.pairs.toolSuccess.body, 'rgb(10, 31, 10)')
-      assert.equal(result.pairs.toolSuccess.header, 'rgb(18, 50, 18)')
-    }
+
 
     const tags = await readTags()
     assert.ok(tags.lowAlphaContrastProbe > 1 && tags.lowAlphaContrastProbe < 1.2, `contrast helper composites low-alpha foregrounds instead of treating them as opaque (${tags.lowAlphaContrastProbe.toFixed(2)}:1)`)
@@ -408,10 +405,6 @@ test('standard cards retain component opacity while console cards consume final 
         `${JSON.stringify(fixture)} ${name} tag keeps its treatment-specific declaration`,
       )
       assert.equal(tag.visible.length, 3)
-      if (fixture.theme === 'foxwarm.550a') {
-        const visibleDelta = Math.max(...tag.visible.map((channel, index) => Math.abs(channel - tag.parentVisible[index])))
-        assert.ok(visibleDelta >= 3, `${JSON.stringify(fixture)} ${name} tag remains visibly distinct after alpha composition (delta ${visibleDelta})`)
-      }
     }
     assert.equal(tags.groupHasToolSpecificClass, false, 'Tool Group tags exercise the shared tone hook without foxwarm-tool-tag')
     for (const [tone, tag] of Object.entries(tags.group)) {

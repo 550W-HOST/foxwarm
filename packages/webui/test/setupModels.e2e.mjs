@@ -476,14 +476,14 @@ test('Setup uses accessible Models, Config, and Appearance tabs with status icon
   await page.type('input[aria-label="Cloned theme ID"]', 'custom.setup-e2e')
   await page.$eval('[data-theme-manager]', manager => Array.from(manager.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Create theme')?.click())
   await page.waitForSelector('button[data-theme-option="custom.setup-e2e"][aria-pressed="true"]')
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_custom_themes_v1')).themes[0].id), 'custom.setup-e2e')
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_custom_themes_v2')).themes[0].id), 'custom.setup-e2e')
   assert.equal(await page.evaluate(() => document.documentElement.getAttribute('data-foxwarm-component-treatment')), 'console')
   assert.deepEqual(await page.evaluate(() => ['--foxwarm-color-canvas', '--foxwarm-color-accent', '--foxwarm-ui-font-family'].map(name => getComputedStyle(document.documentElement).getPropertyValue(name).trim())), builtinConsoleTokens)
   const deleteDialog = new Promise(resolve => page.once('dialog', async dialog => { await dialog.accept(); resolve() }))
   await page.$eval('[data-theme-manager]', manager => Array.from(manager.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Delete')?.click())
   await deleteDialog
   await page.waitForFunction(() => !document.querySelector('button[data-theme-option="custom.setup-e2e"]'))
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_theme_selection_v1')).themeId), 'foxwarm.default')
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_theme_selection_v2')).themeId), 'foxwarm.default')
   await page.waitForFunction(() => document.documentElement.getAttribute('data-foxwarm-component-treatment') === 'standard')
 
   await page.focus('[data-setup-tab="appearance"]')
@@ -1336,7 +1336,7 @@ test('normal Chat keeps the icon-only model settings callback and singleton Setu
   try {
     await normalPage.evaluateOnNewDocument(() => {
       try {
-        localStorage.setItem('foxwarm_theme_selection_v1', JSON.stringify({ version: 1, themeId: 'foxwarm.550a', colorMode: 'auto' }))
+        localStorage.setItem('foxwarm_theme_selection_v2', JSON.stringify({ version: 2, themeId: 'foxwarm.550a', colorMode: 'auto' }))
       } catch {}
     })
     await normalPage.goto(`${baseUrl}/normal/#session/model-filter-normal`, { waitUntil: 'networkidle2' })

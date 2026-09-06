@@ -381,7 +381,7 @@ const isHeavySystemLikeMessage = (message: Message): boolean => {
 const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser }: { systemText: string; isUser: boolean }) {
   return (
     <pre
-      className={`max-w-full whitespace-pre-wrap break-words font-sans ${isUser ? 'text-fw-text-inverse' : 'text-fw-text-muted'}`}
+      className={`max-w-full whitespace-pre-wrap break-words font-sans ${isUser ? 'text-fw-user-text' : 'text-fw-text-muted'}`}
       style={{ lineHeight: '1.3em' }}
     >
       {systemText.split('\n').map((line, lineIdx) => {

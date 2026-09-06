@@ -1,4 +1,4 @@
-import type { ThemeManifestV1, ThemeVariant } from '../manifest'
+import type { ThemeManifest, ThemeVariant } from '../manifest'
 import { validateThemeManifest } from '../manifest'
 
 export const SYSTEM_FONT = "ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'"
@@ -10,7 +10,13 @@ type VariantInput = {
   typography?: Partial<ThemeVariant['typography']>
   shape?: Partial<ThemeVariant['shape']>
   effects?: Partial<ThemeVariant['effects']>
+  composition?: Partial<ThemeVariant['composition']>
   backgroundPattern?: ThemeVariant['backgroundPattern']
+  displayEffect?: ThemeVariant['displayEffect']
+}
+
+type VariantOverrides = Partial<Omit<VariantInput, 'colors'>> & {
+  colors: Partial<ThemeVariant['colors']>
 }
 
 export function variant(input: VariantInput): ThemeVariant {
@@ -36,6 +42,13 @@ export function variant(input: VariantInput): ThemeVariant {
       radiusSmallPx: 4,
       radiusMediumPx: 8,
       radiusLargePx: 16,
+      messageRadiusPx: 8,
+      cardRadiusPx: 0,
+      controlRadiusPx: 4,
+      tagRadiusPx: 6,
+      composerRadiusPx: 30,
+      cardGapPx: 2,
+      cardInsetPx: 8,
       borderWidthPx: 1,
       controlHeightPx: 36,
       ...input.shape,
@@ -49,11 +62,36 @@ export function variant(input: VariantInput): ThemeVariant {
       transitionMs: 150,
       ...input.effects,
     },
+    composition: {
+      density: 'comfortable',
+      card: 'flat',
+      header: 'banded',
+      control: 'soft',
+      separator: 'rail',
+      labels: 'uppercase',
+      icons: 'standard',
+      ...input.composition,
+    },
     backgroundPattern: input.backgroundPattern || { kind: 'none' },
+    displayEffect: input.displayEffect || { kind: 'none' },
   }
 }
 
-export function checkedBuiltin(manifest: ThemeManifestV1): ThemeManifestV1 {
+/** Build a complete built-in variant while keeping the semantic token set explicit at the registry boundary. */
+export function derivedVariant(base: ThemeVariant, overrides: VariantOverrides): ThemeVariant {
+  return variant({
+    componentTreatment: overrides.componentTreatment || base.componentTreatment,
+    colors: { ...base.colors, ...overrides.colors },
+    typography: { ...base.typography, ...overrides.typography },
+    shape: { ...base.shape, ...overrides.shape },
+    effects: { ...base.effects, ...overrides.effects },
+    composition: { ...base.composition, ...overrides.composition },
+    backgroundPattern: overrides.backgroundPattern || base.backgroundPattern,
+    displayEffect: overrides.displayEffect || base.displayEffect,
+  })
+}
+
+export function checkedBuiltin(manifest: ThemeManifest): ThemeManifest {
   const result = validateThemeManifest(manifest)
   if (!result.ok) throw new Error(`Invalid built-in theme ${manifest.id}: ${result.errors.join('; ')}`)
   return result.value
