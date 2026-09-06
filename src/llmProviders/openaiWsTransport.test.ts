@@ -412,7 +412,8 @@ test('reuse cancels the old idle timer and successful release starts a fresh idl
 test('LRU eviction and pool clear cancel every affected idle timer', async () => {
   const timers = new FakeIdleTimers();
   const sockets: FakeSocket[] = [];
-  setOpenAIWsTransportTestHooks({ idleTimers: timers.hooks, socketFactory: () => {
+  let clock = 0;
+  setOpenAIWsTransportTestHooks({ idleTimers: timers.hooks, now: () => ++clock, socketFactory: () => {
     const socket = new FakeSocket((_request, current) => current.frame(completed(`lru-${sockets.length}`)));
     sockets.push(socket);
     return socket as any;
