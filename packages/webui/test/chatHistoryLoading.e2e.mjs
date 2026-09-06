@@ -66,6 +66,7 @@ async function buildFixtureBundle() {
     window.fetch = async (input, init) => {
       const url = String(input)
       window.fixtureRequests.push(url)
+      const bootstrapFailure = new URLSearchParams(location.search).has('bootstrapFailure')
       if (url.includes('/state')) {
         window.fixtureStateProbeCount += 1
         return new Promise((resolve, reject) => stateProbeResolvers.push({ resolve, reject }))
@@ -89,9 +90,13 @@ async function buildFixtureBundle() {
         return new Promise((resolve, reject) => messageResponseResolvers.push({ resolve, reject }))
       }
       if (url.includes('/debug-file')) return new Response(JSON.stringify({ resolvedPath: '/redacted/session.json', payload: { history: [], persistentMemorySnapshot: 'debug snapshot' } }), { status: 200, headers: { 'Content-Type': 'application/json' } })
-      if (url.includes('/models')) return new Response(JSON.stringify({ models: [{ key: 'fixture/model', contextLimit: 1000 }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
-      if (url.includes('/asr/status')) return new Response(JSON.stringify({ configured: false, available: false }), { status: 200, headers: { 'Content-Type': 'application/json' } })
-      if (url.includes('/commands')) return new Response(JSON.stringify({ commands: [
+      if (url.includes('/models')) return bootstrapFailure
+        ? new Response('{}', { status: 503 })
+        : new Response(JSON.stringify({ models: [{ key: 'fixture/model', contextLimit: 1000 }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      if (url.includes('/asr/status')) return bootstrapFailure
+        ? new Response('{}', { status: 503 })
+        : new Response(JSON.stringify({ configured: false, available: false }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      if (url.includes('/commands')) return bootstrapFailure ? new Response('{}', { status: 503 }) : new Response(JSON.stringify({ commands: [
         { name: '/status', description: 'Show status', usage: '/status', requiresSession: true },
         { name: '/session', description: 'Manage sessions', usage: '/session', requiresSession: true },
       ] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
@@ -143,9 +148,14 @@ async function buildFixtureBundle() {
     window.emitFixtureEvent = payload => FixtureWebSocket.instances.at(-1)?.emit(payload)
     window.emitFixtureMessage = message => window.emitFixtureEvent({ type: 'message', message })
 
-    createRoot(document.getElementById('root')).render(React.createElement(Chat, {
-      sessionId: 'fixture/main', canonicalSessionId: 'fixture/main', sessionDisplayName: 'Fixture',
-    }))
+    const fixtureRoot = createRoot(document.getElementById('root'))
+    window.renderFixtureChats = (count = 1, generation = 0) => fixtureRoot.render(React.createElement('div', {},
+      ...Array.from({ length: count }, (_, index) => React.createElement(Chat, {
+        key: generation + '-' + index,
+        sessionId: 'fixture/main', canonicalSessionId: 'fixture/main', sessionDisplayName: 'Fixture',
+      })),
+    ))
+    window.renderFixtureChats()
   `
   const result = await build({
     stdin: { contents: source, resolveDir: packageDir, sourcefile: 'chat-history-loading-fixture.tsx' },
@@ -177,6 +187,49 @@ before(async () => {
 after(async () => {
   await browser?.close()
   await new Promise(resolve => server?.close(resolve))
+})
+
+test('page bootstrap endpoints are fetched once across panes, remounts, and model popup opens', async () => {
+  page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  const endpointCounts = () => page.evaluate(() => Object.fromEntries(['/asr/status', '/models', '/commands'].map(endpoint => [
+    endpoint,
+    window.fixtureRequests.filter(url => url.includes(endpoint)).length,
+  ])))
+  await page.waitForFunction(() => ['/asr/status', '/models', '/commands'].every(endpoint => window.fixtureRequests.some(url => url.includes(endpoint))))
+  assert.deepEqual(await endpointCounts(), { '/asr/status': 1, '/models': 1, '/commands': 1 })
+
+  await page.evaluate(() => window.renderFixtureChats(3, 1))
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.deepEqual(await endpointCounts(), { '/asr/status': 1, '/models': 1, '/commands': 1 })
+  await page.click('[aria-haspopup="dialog"]')
+  await page.waitForSelector('[data-model-selector-popup="true"]')
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.deepEqual(await endpointCounts(), { '/asr/status': 1, '/models': 1, '/commands': 1 })
+
+  await page.evaluate(() => window.renderFixtureChats(1, 2))
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.deepEqual(await endpointCounts(), { '/asr/status': 1, '/models': 1, '/commands': 1 })
+  await page.close()
+})
+
+test('failed page bootstrap endpoints remain cached across remounts', async () => {
+  page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(`${fixtureUrl}?bootstrapFailure=1`, { waitUntil: 'load' })
+  const endpointCounts = () => page.evaluate(() => Object.fromEntries(['/asr/status', '/models', '/commands'].map(endpoint => [
+    endpoint,
+    window.fixtureRequests.filter(url => url.includes(endpoint)).length,
+  ])))
+  await page.waitForFunction(() => ['/asr/status', '/models', '/commands'].every(endpoint => window.fixtureRequests.some(url => url.includes(endpoint))))
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.deepEqual(await endpointCounts(), { '/asr/status': 1, '/models': 1, '/commands': 1 })
+  assert.equal(await page.$eval('[aria-haspopup="dialog"]', button => button.textContent.includes('!')), true)
+  await page.evaluate(() => window.renderFixtureChats(2, 1))
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.deepEqual(await endpointCounts(), { '/asr/status': 1, '/models': 1, '/commands': 1 })
+  await page.close()
 })
 
 test('history snapshot is lazy-debug independent and a delayed response preserves newer SSE', async () => {
@@ -230,7 +283,7 @@ test('history bootstrap paints the latest 100 before one guarded prefix request 
   assert.deepEqual(await page.$eval('.foxwarm-chat-messages', element => ({
     native: element.dataset.showSystemScrollbar,
     minimap: element.dataset.showContextMinimap,
-  })), { native: 'false', minimap: 'false' })
+  })), { native: 'false', minimap: 'true' })
   await page.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
   assert.deepEqual(await page.evaluate(() => window.fixtureRequests.filter(url => url.includes('/history')).map(url => new URL(url, location.href).search)), [
     '?tail=100', '?prefixLength=20&historyVersion=7',

@@ -104,7 +104,7 @@ test('closing active system and chat tabs advances the route instead of hydratin
   assert.notEqual(decodeURIComponent(await page.evaluate(() => window.location.hash)), `#tab/${chatTabId}`)
 })
 
-test('model popup refreshes models and opens the singleton Setup models editor', async () => {
+test('model popup reuses page models and opens the singleton Setup models editor', async () => {
   await page.setViewport({ width: 1440, height: 900 })
   const sessionId = 'e2e-model-settings-session'
   await page.evaluate((id) => { window.location.hash = `session/${encodeURIComponent(id)}` }, sessionId)
@@ -117,10 +117,7 @@ test('model popup refreshes models and opens the singleton Setup models editor',
   await modelButton.click()
   await page.waitForFunction(() => !!document.activeElement?.closest('[data-model-selector-popup="true"]'))
   await page.waitForFunction(() => document.activeElement?.matches('input[aria-label="Filter models"]'))
-  const requestDeadline = Date.now() + 5_000
-  while (modelListRequestCount <= previousRequests && Date.now() < requestDeadline) {
-    await new Promise((resolve) => setTimeout(resolve, 50))
-  }
+  await new Promise((resolve) => setTimeout(resolve, 150))
   const configureButton = await page.waitForSelector('button[aria-label="Configure models"]', { timeout: 15_000 })
   assert.equal((await configureButton.evaluate((button) => button.textContent || '')).trim(), '')
   assert.equal(await configureButton.evaluate((button) => button.title), 'Configure models')
@@ -133,7 +130,7 @@ test('model popup refreshes models and opens the singleton Setup models editor',
     return !!active?.closest('[data-monaco-model-uri="inmemory://foxwarm/setup/foxwarm-models.yaml"]')
   }, { timeout: 15_000 })
   assert.equal(await page.$$eval('[data-tab-id="system:setup"]', (elements) => elements.length), 1)
-  assert.ok(modelListRequestCount > previousRequests)
+  assert.equal(modelListRequestCount, previousRequests)
 })
 
 test('Close all directly empties a multi-tab pane without route hydration', async () => {

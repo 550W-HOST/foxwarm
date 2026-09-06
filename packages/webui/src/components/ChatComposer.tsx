@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from '
 import { createPortal } from 'react-dom'
 import { ArrowUp, Mic, Paperclip, Plus, Settings, Square } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
+import { loadPageOnce } from '../modelOptionsLoader'
 import {
   clearMessageAttachmentDraft,
   getMessageAttachmentDraft,
@@ -565,14 +566,14 @@ const ChatComposer = memo(function ChatComposer({
       setCommandsError(null)
 
       try {
-        const res = await fetch(`${API_BASE_PATH}/commands`)
-        if (!res.ok) {
-          throw new Error(`Failed to load commands (${res.status})`)
-        }
-
-        const data = await res.json()
+        const commands = await loadPageOnce<SlashCommandOption[]>('webui:commands', async () => {
+          const res = await fetch(`${API_BASE_PATH}/commands`)
+          if (!res.ok) throw new Error(`Failed to load commands (${res.status})`)
+          const data = await res.json()
+          return Array.isArray(data.commands) ? data.commands : []
+        })
         if (!cancelled) {
-          setAvailableCommands(Array.isArray(data.commands) ? data.commands : [])
+          setAvailableCommands(commands)
         }
       } catch (e) {
         if (!cancelled) {

@@ -17,7 +17,7 @@ import { isSessionTurnIncomplete } from '../sessionContinuation'
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
 import { appendOptimisticAttachmentTag } from '../utils/attachmentPreview'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
-import { createLatestRequestGate, runLatestModelOptionsRequest } from '../modelOptionsLoader'
+import { createLatestRequestGate, loadPageOnce, runLatestModelOptionsRequest } from '../modelOptionsLoader'
 import { webUiRealtime } from '../realtime'
 import {
   advanceHistorySeqFrontier,
@@ -369,12 +369,13 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
     const fetchAsrStatus = async () => {
       try {
-        const res = await fetch(`${API_BASE_PATH}/asr/status`)
-        if (!res.ok) return
-        const data = await res.json()
-        if (!cancelled) {
-          setAsrAvailable(Boolean(data?.configured && data?.available))
-        }
+        const available = await loadPageOnce('webui:asr-status', async () => {
+          const res = await fetch(`${API_BASE_PATH}/asr/status`)
+          if (!res.ok) throw new Error(`Failed to load ASR status (${res.status})`)
+          const data = await res.json()
+          return Boolean(data?.configured && data?.available)
+        })
+        if (!cancelled) setAsrAvailable(available)
       } catch (e) {
         if (!cancelled) {
           setAsrAvailable(false)
@@ -389,12 +390,12 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   }, [])
 
   const fetchModels = useCallback(async () => {
-    await runLatestModelOptionsRequest(modelRequestGateRef.current, async () => {
+    await runLatestModelOptionsRequest(modelRequestGateRef.current, () => loadPageOnce('webui:models', async () => {
       const res = await fetch(`${API_BASE_PATH}/models`)
       if (!res.ok) throw new Error(`Failed to load models (${res.status})`)
       const data = await res.json()
       return (Array.isArray(data.models) ? data.models : []) as ModelOption[]
-    }, (state) => {
+    }), (state) => {
       if (state.options) setModelOptions(state.options)
       if (state.error !== undefined) {
         setModelError(state.error)

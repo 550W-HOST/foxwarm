@@ -119,7 +119,7 @@ const ContextScrollbar = memo(function ContextScrollbar({ messages, persistentMe
     const container = containerRef.current
     if (!container) return
     container.dataset.showSystemScrollbar = String(settings.showScrollbar)
-    container.dataset.showContextMinimap = String(settings.showMinimap && historyComplete)
+    container.dataset.showContextMinimap = String(settings.showMinimap)
     return () => {
       delete container.dataset.showSystemScrollbar
       delete container.dataset.showContextMinimap

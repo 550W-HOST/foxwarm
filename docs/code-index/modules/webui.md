@@ -96,7 +96,7 @@ History, message streams, CTX expansion, and Debug expose authenticated deployme
 
 ### D-webui-model-settings-navigation
 
-The Chat model popup refreshes `/api/models` whenever it opens. Its settings action activates the existing singleton Setup surface and requests focus for the Models YAML editor without creating a second instance: normal App uses the workbench callback, while Code-embedded Chat uses the nonce-bound fixed bridge to activate the Setup custom editor and deliver a one-shot focus signal. Neither path mutates the hash directly. This preserves workbench ownership, split-pane behavior, Code editor identity, and deployment subpaths.
+The Chat model popup reuses the page-lifetime singleton `/api/models` result; opening it does not refresh model metadata. Its settings action activates the existing singleton Setup surface and requests focus for the Models YAML editor without creating a second instance: normal App uses the workbench callback, while Code-embedded Chat uses the nonce-bound fixed bridge to activate the Setup custom editor and deliver a one-shot focus signal. Neither path mutates the hash directly. Setup edits may require a page reload before cached choices change. This preserves workbench ownership, split-pane behavior, Code editor identity, and deployment subpaths.
 
 ### D-webui-removed-workspace
 

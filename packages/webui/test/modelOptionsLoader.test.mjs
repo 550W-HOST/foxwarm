@@ -21,7 +21,7 @@ await esbuild.build({
   logLevel: 'silent',
 })
 
-const { createLatestRequestGate, runLatestModelOptionsRequest } = await import(pathToFileURL(bundledPath).href)
+const { createLatestRequestGate, loadPageOnce, runLatestModelOptionsRequest } = await import(pathToFileURL(bundledPath).href)
 
 function deferred() {
   let resolve
@@ -78,4 +78,43 @@ test('a stale older failure cannot erase a newer successful model list or publis
 
   assert.deepEqual(harness.state, { options: [{ key: 'new/model' }], error: null, loading: false })
   assert.equal(harness.updates.some((update) => update.error === 'stale request failed'), false)
+})
+
+test('page-lifetime loads share one parsed result across concurrent and later consumers', async () => {
+  let requests = 0
+  const pending = deferred()
+  const first = loadPageOnce('models-success', async () => {
+    requests += 1
+    return pending.promise
+  })
+  const second = loadPageOnce('models-success', async () => {
+    requests += 1
+    return [{ key: 'unexpected' }]
+  })
+  await Promise.resolve()
+  assert.equal(requests, 1)
+  pending.resolve([{ key: 'shared/model' }])
+  assert.deepEqual(await first, [{ key: 'shared/model' }])
+  assert.deepEqual(await second, [{ key: 'shared/model' }])
+  assert.deepEqual(await loadPageOnce('models-success', async () => [{ key: 'later' }]), [{ key: 'shared/model' }])
+  assert.equal(requests, 1)
+})
+
+test('page-lifetime loads cache failures and a fresh module lifetime starts empty', async () => {
+  let failedRequests = 0
+  const request = () => {
+    failedRequests += 1
+    return Promise.reject(new Error('cached failure'))
+  }
+  await assert.rejects(loadPageOnce('models-failure', request), /cached failure/)
+  await assert.rejects(loadPageOnce('models-failure', request), /cached failure/)
+  assert.equal(failedRequests, 1)
+
+  const fresh = await import(`${pathToFileURL(bundledPath).href}?fresh-page=1`)
+  let freshRequests = 0
+  assert.deepEqual(await fresh.loadPageOnce('models-failure', async () => {
+    freshRequests += 1
+    return [{ key: 'fresh/model' }]
+  }), [{ key: 'fresh/model' }])
+  assert.equal(freshRequests, 1)
 })
