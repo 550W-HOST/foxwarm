@@ -12,6 +12,7 @@ type VariantInput = {
   effects?: Partial<ThemeVariant['effects']>
   composition?: Partial<ThemeVariant['composition']>
   backgroundPattern?: ThemeVariant['backgroundPattern']
+  displayEffect?: ThemeVariant['displayEffect']
 }
 
 type VariantOverrides = Partial<Omit<VariantInput, 'colors'>> & {
@@ -72,6 +73,7 @@ export function variant(input: VariantInput): ThemeVariant {
       ...input.composition,
     },
     backgroundPattern: input.backgroundPattern || { kind: 'none' },
+    displayEffect: input.displayEffect || { kind: 'none' },
   }
 }
 
@@ -85,6 +87,7 @@ export function derivedVariant(base: ThemeVariant, overrides: VariantOverrides):
     effects: { ...base.effects, ...overrides.effects },
     composition: { ...base.composition, ...overrides.composition },
     backgroundPattern: overrides.backgroundPattern || base.backgroundPattern,
+    displayEffect: overrides.displayEffect || base.displayEffect,
   })
 }
 

@@ -78,6 +78,41 @@ function applySnapshot(next: ThemeRuntimeSnapshot): void {
   root.dataset.foxwarmSeparatorTreatment = variant.composition.separator
   root.dataset.foxwarmLabelTreatment = variant.composition.labels
   root.dataset.foxwarmIconTreatment = variant.composition.icons
+  root.dataset.foxwarmDisplayEffect = variant.displayEffect.kind
+
+  const displayEffect = variant.displayEffect
+  if (displayEffect.kind === 'crt') {
+    const dpr = Math.max(1, window.devicePixelRatio || 1)
+    const snap = (value: number) => Math.max(1 / dpr, Math.round(value * dpr) / dpr)
+    const maskPitch = snap(displayEffect.maskPitchPx)
+    let maskImage = displayEffect.mask === 'none'
+      ? 'none'
+      : `repeating-linear-gradient(90deg, rgb(0 0 0 / ${displayEffect.maskOpacity}) 0 ${1 / dpr}px, transparent ${1 / dpr}px ${maskPitch}px)`
+    let maskSize = `${maskPitch}px 100%`
+    if (displayEffect.mask === 'aperture-grille') {
+      const stripe = maskPitch / 3
+      maskImage = `repeating-linear-gradient(90deg, rgb(255 48 48 / ${displayEffect.maskOpacity}) 0 ${stripe}px, rgb(64 190 96 / ${displayEffect.maskOpacity}) ${stripe}px ${stripe * 2}px, rgb(72 116 255 / ${displayEffect.maskOpacity}) ${stripe * 2}px ${maskPitch}px)`
+    } else if (displayEffect.mask === 'slot-mask') {
+      maskImage = `radial-gradient(ellipse, rgb(0 0 0 / ${displayEffect.maskOpacity}) 0 30%, transparent 48%)`
+      maskSize = `${maskPitch}px ${maskPitch * 1.5}px`
+    }
+    root.dataset.foxwarmCrtMask = displayEffect.mask
+    root.dataset.foxwarmCrtBezel = displayEffect.bezel
+    root.style.setProperty('--foxwarm-crt-scan-pitch', `${snap(displayEffect.scanPitchPx)}px`)
+    root.style.setProperty('--foxwarm-crt-scan-opacity', String(displayEffect.scanOpacity))
+    root.style.setProperty('--foxwarm-crt-mask-image', maskImage)
+    root.style.setProperty('--foxwarm-crt-mask-size', maskSize)
+    root.style.setProperty('--foxwarm-crt-bloom-px', `${displayEffect.bloomPx}px`)
+    root.style.setProperty('--foxwarm-crt-bloom-color', `color-mix(in srgb, ${variant.colors.textStrong} ${displayEffect.bloomOpacity * 100}%, transparent)`)
+    root.style.setProperty('--foxwarm-crt-vignette-opacity', String(displayEffect.vignetteOpacity))
+    root.style.setProperty('--foxwarm-crt-reflection-opacity', String(displayEffect.reflectionOpacity))
+    root.style.setProperty('--foxwarm-crt-roll-opacity', String(displayEffect.rollOpacity))
+    root.style.setProperty('--foxwarm-crt-roll-duration', `${displayEffect.rollDurationSec}s`)
+    root.style.setProperty('--foxwarm-crt-glass-radius', `${displayEffect.glassRadiusPx}px`)
+  } else {
+    delete root.dataset.foxwarmCrtMask
+    delete root.dataset.foxwarmCrtBezel
+  }
 
   // Compatibility variables consumed by the existing console-treatment CSS.
   // Their values are derived exclusively from the public semantic manifest;

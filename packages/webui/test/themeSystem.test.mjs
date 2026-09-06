@@ -117,6 +117,24 @@ test('manifest validation is strict and rejects arbitrary style surface', () => 
   assert.ok(result.errors.some(error => error.includes('light.composition')))
 })
 
+test('CRT display effects are portable bounded data rather than executable styling', () => {
+  const candidate = structuredClone(theme.DEFAULT_THEME)
+  candidate.id = 'example.crt'
+  candidate.variants.light.displayEffect = {
+    kind: 'crt', mask: 'monochrome', bezel: 'frame', scanPitchPx: 6, scanOpacity: 0.12,
+    maskPitchPx: 4, maskOpacity: 0.03, bloomPx: 0.8, bloomOpacity: 0.12,
+    vignetteOpacity: 0.12, reflectionOpacity: 0.06, rollOpacity: 0.04,
+    rollDurationSec: 18, glassRadiusPx: 14,
+  }
+  assert.equal(theme.validateThemeManifest(candidate).ok, true)
+  candidate.variants.light.displayEffect.scanOpacity = 0.9
+  candidate.variants.light.displayEffect.shader = 'remote-code'
+  const invalid = theme.validateThemeManifest(candidate)
+  assert.equal(invalid.ok, false)
+  assert.ok(invalid.errors.some(error => error.includes('displayEffect.scanOpacity')))
+  assert.ok(invalid.errors.some(error => error.includes('displayEffect.shader is not supported')))
+})
+
 test('version-1 manifests are rejected instead of receiving implicit visual semantics', () => {
   const legacy = structuredClone(theme.DEFAULT_THEME)
   legacy.schemaVersion = 1
@@ -256,6 +274,11 @@ test('shape, effects, typography, and procedural backgrounds project to runtime 
     variant.backgroundPattern = { kind, sizePx: 12, opacity: 0.04 }
     assert.notEqual(theme.themeVariantCssVariables(variant)['--foxwarm-background-image'], 'none')
   }
+  variant.backgroundPattern = { kind: 'scanlines', sizePx: 8, opacity: 0.07 }
+  const crtVariables = theme.themeVariantCssVariables(variant)
+  assert.equal((crtVariables['--foxwarm-background-image'].match(/repeating-linear-gradient/g) || []).length, 1)
+  assert.doesNotMatch(crtVariables['--foxwarm-background-image'], /radial-gradient|90deg/)
+  assert.equal(crtVariables['--foxwarm-background-size'], '8px 8px')
 })
 
 test('WebUI TypeScript components use semantic theme utilities rather than fixed Tailwind palettes', async () => {

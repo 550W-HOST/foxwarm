@@ -9,7 +9,7 @@ Theme packages and the active selection are stored in the current browser. They 
 Foxwarm ships five immutable built-ins. The registry stays intentionally small so each option has a distinct visual grammar rather than being a palette-only variation:
 
 - `foxwarm.default` — the standard Foxwarm appearance.
-- `foxwarm.550a` — the dense console-inspired appearance.
+- `foxwarm.550a` — a restrained machine-console theme inspired by the 550-series computer design language: gray-white modular housings, dark instrumentation, rectilinear panel seams, and one focused red sensor beacon rather than broad red decoration.
 - `foxwarm.paper` — a warm outlined parchment/editorial theme with serif reading text.
 - `foxwarm.seaglass` — a structured teal workspace with moderate-radius outlined panels, banded headers, right-side disclosure, and a dotted depth field.
 - `foxwarm.vector` — Vector: a modern technical workbench with restrained geometry, integrated headers, right disclosure, cyan operations, and magenta system signals.
@@ -44,6 +44,7 @@ Each variant is complete and contains:
 - `effects` — bounded shadow, glow, press-offset, and transition values;
 - `composition` — bounded density, card, header, control, separator, label, and icon treatments;
 - `backgroundPattern` — `none`, `grid`, `dots`, `lines`, or `scanlines`, generated locally from semantic colors;
+- `displayEffect` — either `none` or a bounded CRT display treatment with validated scan, phosphor-mask, bloom, glass, vignette, reflection, and refresh-roll parameters;
 - `componentTreatment` — `standard` or `console`.
 
 Exporting a built-in is the authoritative way to obtain all required version-2 fields. Export output is canonical JSON and can be imported into another Foxwarm browser. Version-1 files are rejected with a visible validation error rather than receiving guessed values for newly introduced semantic roles.
@@ -55,6 +56,7 @@ Theme files are declarative data. Foxwarm rejects:
 - unknown or missing fields;
 - unsupported schema versions;
 - arbitrary CSS, selectors, scripts, or remote assets;
+- custom shaders, textures, or executable display effects;
 - non-hex colors;
 - out-of-range numeric values;
 - oversized files and an oversized local custom-theme registry.

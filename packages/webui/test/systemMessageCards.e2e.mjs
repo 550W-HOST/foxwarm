@@ -38,8 +38,8 @@ async function buildFixtureBundle() {
     import { initializeThemeRuntime, setThemeSelection } from './src/theme/runtime'
 
     initializeThemeRuntime()
-    window.setFixtureTheme = (style, dark) => setThemeSelection({
-      themeId: style === '550a' ? 'foxwarm.550a' : 'foxwarm.default',
+    window.setFixtureTheme = (_style, dark) => setThemeSelection({
+      themeId: 'foxwarm.default',
       colorMode: dark ? 'dark' : 'light',
     })
 
@@ -126,7 +126,7 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-test('550A reasoning selectors do not retain system-blue declarations', async () => {
+test('console reasoning selectors do not borrow system-message declarations', async () => {
   const css = await readFile(new URL('../src/index.css', import.meta.url), 'utf8')
   const reasoningBlocks = css.match(/[^{}]+\{[^{}]*\}/g)?.filter(block => (
     block.includes('data-foxwarm-component-treatment="console"') && block.includes('.foxwarm-reasoning')
@@ -267,24 +267,22 @@ test('system cards expand/collapse, preserve session links, and retain width con
 })
 
 test('inter-agent preview and expanded body preserve matching body text styling', async () => {
-  for (const style of ['default', '550a']) {
-    await mountFixture(900, false, style)
-    const collapsed = await page.$eval('#interAgent .foxwarm-system-message-result-preview', preview => ({
-      color: getComputedStyle(preview).color,
-      opacity: getComputedStyle(preview).opacity,
-    }))
+  await mountFixture()
+  const collapsed = await page.$eval('#interAgent .foxwarm-system-message-result-preview', preview => ({
+    color: getComputedStyle(preview).color,
+    opacity: getComputedStyle(preview).opacity,
+  }))
 
-    await page.click('#interAgent [data-system-message-card]')
-    const expanded = await page.$eval('#interAgent .foxwarm-system-message-body', body => {
-      const firstBodyLine = [...body.querySelectorAll('span')].find(line => line.textContent?.includes('first inter-agent preview line'))
-      return {
-        color: firstBodyLine ? getComputedStyle(firstBodyLine).color : '',
-        opacity: firstBodyLine ? getComputedStyle(firstBodyLine).opacity : '',
-      }
-    })
+  await page.click('#interAgent [data-system-message-card]')
+  const expanded = await page.$eval('#interAgent .foxwarm-system-message-body', body => {
+    const firstBodyLine = [...body.querySelectorAll('span')].find(line => line.textContent?.includes('first inter-agent preview line'))
+    return {
+      color: firstBodyLine ? getComputedStyle(firstBodyLine).color : '',
+      opacity: firstBodyLine ? getComputedStyle(firstBodyLine).opacity : '',
+    }
+  })
 
-    assert.deepEqual(expanded, collapsed, `${style} inter-agent preview and expanded body use the same text color and opacity`)
-  }
+  assert.deepEqual(expanded, collapsed)
 })
 
 test('every system kind uses the blue thread-card palette in default light and dark themes', async () => {
@@ -354,85 +352,6 @@ test('every system kind uses the blue thread-card palette in default light and d
   assert.deepEqual(normalizeCssColors(systemDark.event), expectedDark)
   assert.deepEqual(normalizeCssColors(systemDark.interAgent), expectedDark)
   assert.deepEqual(previewDark, ['rgb(203, 213, 225)', 'rgb(203, 213, 225)'])
-})
-
-test('550A reserves blue semantic chrome for system cards while both reasoning tones stay neutral', async () => {
-  for (const dark of [false, true]) {
-    await mountFixture(900, dark, '550a')
-    await page.click('#event [data-system-message-card]')
-    await page.mouse.move(0, 0)
-    const colors = await page.evaluate(() => {
-      const style = (selector) => getComputedStyle(document.querySelector(selector))
-      const resolveVariable = (name, property = 'color') => {
-        const probe = document.createElement('div')
-        probe.style.setProperty(property, `var(${name})`)
-        document.body.appendChild(probe)
-        const resolved = getComputedStyle(probe).getPropertyValue(property)
-        probe.remove()
-        return resolved
-      }
-      const systemCard = style('#event [data-system-message-card]')
-      const systemHeader = style('#event .foxwarm-system-message-header')
-      const systemTag = style('#event .foxwarm-system-message-tag')
-      const systemLine = style('#event .foxwarm-system-message-thread-line > span')
-      const systemBody = style('#event .foxwarm-system-message-body')
-      const reasoning = (id) => {
-        const card = style(`#${id} .foxwarm-reasoning-card`)
-        const header = style(`#${id} .foxwarm-reasoning-header`)
-        const tag = style(`#${id} .foxwarm-reasoning-tag`)
-        const line = style(`#${id} .foxwarm-reasoning-thread-line > span`)
-        const strong = style(`#${id} .foxwarm-reasoning-body strong`)
-        const code = style(`#${id} .foxwarm-reasoning-body code`)
-        return { surface: card.backgroundColor, header: header.backgroundColor, tag: tag.backgroundColor, tagBorder: tag.borderColor, line: line.backgroundColor, headerColor: header.color, strong: strong.color, codeBackground: code.backgroundColor, codeBorder: code.borderColor, shadow: card.boxShadow }
-      }
-      return {
-        blue: {
-          surface: resolveVariable('--foxwarm-console-blue-surface', 'background-color'),
-          strong: resolveVariable('--foxwarm-console-blue-surface-strong', 'background-color'),
-          border: resolveVariable('--foxwarm-console-blue-border', 'border-color'),
-          color: resolveVariable('--foxwarm-console-blue'),
-          input: resolveVariable('--foxwarm-console-input', 'background-color'),
-        },
-        neutral: {
-          panel: resolveVariable('--foxwarm-console-panel', 'background-color'),
-          input: resolveVariable('--foxwarm-console-input', 'background-color'),
-          hover: resolveVariable('--foxwarm-console-hover', 'background-color'),
-          border: resolveVariable('--foxwarm-console-border-panel', 'border-color'),
-          text: resolveVariable('--foxwarm-console-text'),
-          bright: resolveVariable('--foxwarm-console-text-bright'),
-          dim: resolveVariable('--foxwarm-console-text-dim'),
-        },
-        system: { surface: systemCard.backgroundColor, shadow: systemCard.boxShadow, header: systemHeader.backgroundColor, tag: systemTag.backgroundColor, tagBorder: systemTag.borderColor, line: systemLine.backgroundColor, body: systemBody.color, bodySurface: systemBody.backgroundColor, bodyBorderWidth: systemBody.borderTopWidth, bodyShadow: systemBody.boxShadow },
-        message: reasoning('reasoningMessage'),
-        processing: reasoning('reasoningProcessing'),
-      }
-    })
-    assert.equal(colors.system.surface, colors.blue.surface)
-    assert.notEqual(colors.system.shadow, 'none', 'the blue System card retains its 550A outer ring')
-    assert.match(colors.system.shadow, /inset/, 'the blue System card outer ring remains inset')
-    assert.equal(colors.system.header, colors.blue.strong)
-    assert.equal(colors.system.tag, colors.blue.input)
-    assert.equal(colors.system.tagBorder, colors.blue.border)
-    assert.equal(colors.system.line, colors.blue.color)
-    assert.equal(colors.system.body, colors.neutral.text)
-    assert.equal(colors.system.bodySurface, 'rgba(0, 0, 0, 0)')
-    assert.equal(colors.system.bodyBorderWidth, '0px')
-    assert.equal(colors.system.bodyShadow, 'none')
-
-    assert.equal(colors.message.surface, colors.neutral.panel)
-    assert.equal(colors.processing.surface, colors.neutral.panel)
-    for (const reasoning of [colors.message, colors.processing]) {
-      assert.equal(reasoning.header, colors.neutral.hover)
-      assert.equal(reasoning.tag, colors.neutral.input)
-      assert.equal(reasoning.tagBorder, colors.neutral.border)
-      assert.equal(reasoning.line, colors.neutral.dim)
-      assert.equal(reasoning.headerColor, colors.neutral.text)
-      assert.equal(reasoning.strong, colors.neutral.bright)
-      assert.equal(reasoning.codeBackground, colors.neutral.input)
-      assert.equal(reasoning.codeBorder, colors.neutral.border)
-      assert.doesNotMatch(reasoning.shadow, /119, 170, 187|58, 106, 154/)
-    }
-  }
 })
 
 test('default reasoning retains its finished slate and active processing-blue distinction', async () => {

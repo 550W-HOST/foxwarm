@@ -48,10 +48,29 @@ export type ThemeBackgroundPattern =
   | { kind: 'none' }
   | { kind: 'grid' | 'dots' | 'lines' | 'scanlines'; sizePx: number; opacity: number }
 
+export type ThemeDisplayEffect =
+  | { kind: 'none' }
+  | {
+      kind: 'crt'
+      mask: 'none' | 'monochrome' | 'aperture-grille' | 'slot-mask'
+      bezel: 'none' | 'inset' | 'frame'
+      scanPitchPx: number
+      scanOpacity: number
+      maskPitchPx: number
+      maskOpacity: number
+      bloomPx: number
+      bloomOpacity: number
+      vignetteOpacity: number
+      reflectionOpacity: number
+      rollOpacity: number
+      rollDurationSec: number
+      glassRadiusPx: number
+    }
+
 export type ThemeComposition = {
   density: 'compact' | 'comfortable' | 'airy'
   card: 'flat' | 'outlined' | 'elevated'
-  header: 'integrated' | 'banded' | 'tab'
+  header: 'integrated' | 'banded' | 'tab' | 'plate'
   control: 'plain' | 'soft' | 'pill'
   separator: 'rail' | 'line' | 'segmented' | 'chevron' | 'chevron-right'
   labels: 'normal' | 'tracked' | 'uppercase'
@@ -66,6 +85,7 @@ export type ThemeVariant = {
   effects: { shadowColor: string } & Record<ThemeEffectNumberKey, number>
   composition: ThemeComposition
   backgroundPattern: ThemeBackgroundPattern
+  displayEffect: ThemeDisplayEffect
 }
 
 export type ThemeManifest = {
@@ -85,10 +105,15 @@ export type ThemeValidationResult =
   | { ok: false; errors: string[] }
 
 const ROOT_KEYS = new Set(['schemaVersion', 'id', 'name', 'description', 'author', 'variants'])
-const VARIANT_KEYS = new Set(['componentTreatment', 'colors', 'typography', 'shape', 'effects', 'composition', 'backgroundPattern'])
+const VARIANT_KEYS = new Set(['componentTreatment', 'colors', 'typography', 'shape', 'effects', 'composition', 'backgroundPattern', 'displayEffect'])
 const EFFECT_KEYS = new Set(['shadowColor', ...THEME_EFFECT_NUMBER_KEYS])
 const COMPOSITION_KEYS = new Set(['density', 'card', 'header', 'control', 'separator', 'labels', 'icons'])
 const PATTERN_KEYS = new Set(['kind', 'sizePx', 'opacity'])
+const DISPLAY_EFFECT_KEYS = new Set([
+  'kind', 'mask', 'bezel', 'scanPitchPx', 'scanOpacity', 'maskPitchPx', 'maskOpacity',
+  'bloomPx', 'bloomOpacity', 'vignetteOpacity', 'reflectionOpacity', 'rollOpacity',
+  'rollDurationSec', 'glassRadiusPx',
+])
 const HEX_COLOR = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i
 const THEME_ID = /^[a-z0-9][a-z0-9._-]{2,63}$/
 
@@ -263,7 +288,7 @@ function normalizeVariant(value: unknown, path: string, errors: string[]): Theme
   const composition: ThemeComposition = {
     density: enumValue('density', ['compact', 'comfortable', 'airy'], 'comfortable'),
     card: enumValue('card', ['flat', 'outlined', 'elevated'], 'flat'),
-    header: enumValue('header', ['integrated', 'banded', 'tab'], 'banded'),
+    header: enumValue('header', ['integrated', 'banded', 'tab', 'plate'], 'banded'),
     control: enumValue('control', ['plain', 'soft', 'pill'], 'soft'),
     separator: enumValue('separator', ['rail', 'line', 'segmented', 'chevron', 'chevron-right'], 'rail'),
     labels: enumValue('labels', ['normal', 'tracked', 'uppercase'], 'uppercase'),
@@ -290,6 +315,45 @@ function normalizeVariant(value: unknown, path: string, errors: string[]): Theme
     backgroundPattern = { kind: 'none' }
   }
 
+  const displayRaw = isRecord(raw.displayEffect) ? raw.displayEffect : {}
+  if (!isRecord(raw.displayEffect)) errors.push(`${path}.displayEffect must be an object`)
+  rejectUnknownKeys(displayRaw, DISPLAY_EFFECT_KEYS, `${path}.displayEffect`, errors)
+  let displayEffect: ThemeDisplayEffect
+  if (displayRaw.kind === 'none') {
+    displayEffect = { kind: 'none' }
+    if (Object.keys(displayRaw).some(key => key !== 'kind')) {
+      errors.push(`${path}.displayEffect must not include CRT settings when kind is none`)
+    }
+  } else if (displayRaw.kind === 'crt') {
+    const mask = displayRaw.mask === 'none' || displayRaw.mask === 'monochrome' || displayRaw.mask === 'aperture-grille' || displayRaw.mask === 'slot-mask'
+      ? displayRaw.mask
+      : 'none'
+    if (mask !== displayRaw.mask) errors.push(`${path}.displayEffect.mask must be none, monochrome, aperture-grille, or slot-mask`)
+    const bezel = displayRaw.bezel === 'none' || displayRaw.bezel === 'inset' || displayRaw.bezel === 'frame'
+      ? displayRaw.bezel
+      : 'none'
+    if (bezel !== displayRaw.bezel) errors.push(`${path}.displayEffect.bezel must be none, inset, or frame`)
+    displayEffect = {
+      kind: 'crt',
+      mask,
+      bezel,
+      scanPitchPx: normalizeNumber(displayRaw.scanPitchPx, `${path}.displayEffect.scanPitchPx`, errors, 3, 16),
+      scanOpacity: normalizeNumber(displayRaw.scanOpacity, `${path}.displayEffect.scanOpacity`, errors, 0, 0.3),
+      maskPitchPx: normalizeNumber(displayRaw.maskPitchPx, `${path}.displayEffect.maskPitchPx`, errors, 2, 12),
+      maskOpacity: normalizeNumber(displayRaw.maskOpacity, `${path}.displayEffect.maskOpacity`, errors, 0, 0.12),
+      bloomPx: normalizeNumber(displayRaw.bloomPx, `${path}.displayEffect.bloomPx`, errors, 0, 2.5),
+      bloomOpacity: normalizeNumber(displayRaw.bloomOpacity, `${path}.displayEffect.bloomOpacity`, errors, 0, 0.3),
+      vignetteOpacity: normalizeNumber(displayRaw.vignetteOpacity, `${path}.displayEffect.vignetteOpacity`, errors, 0, 0.35),
+      reflectionOpacity: normalizeNumber(displayRaw.reflectionOpacity, `${path}.displayEffect.reflectionOpacity`, errors, 0, 0.2),
+      rollOpacity: normalizeNumber(displayRaw.rollOpacity, `${path}.displayEffect.rollOpacity`, errors, 0, 0.15),
+      rollDurationSec: normalizeNumber(displayRaw.rollDurationSec, `${path}.displayEffect.rollDurationSec`, errors, 8, 60),
+      glassRadiusPx: normalizeNumber(displayRaw.glassRadiusPx, `${path}.displayEffect.glassRadiusPx`, errors, 0, 32),
+    }
+  } else {
+    errors.push(`${path}.displayEffect.kind must be none or crt`)
+    displayEffect = { kind: 'none' }
+  }
+
   return {
     componentTreatment,
     colors,
@@ -298,6 +362,7 @@ function normalizeVariant(value: unknown, path: string, errors: string[]): Theme
     effects,
     composition,
     backgroundPattern,
+    displayEffect,
   }
 }
 
@@ -412,7 +477,12 @@ export function themeVariantCssVariables(variant: ThemeVariant): Record<string, 
     variables[`--foxwarm-${toKebab(key)}`] = `${variant.effects[key]}${suffix}`
   }
   const pattern = variant.backgroundPattern
-  const patternColor = pattern.kind === 'none' ? '' : `rgb(${hexColorChannels(variant.colors.accent)} / ${pattern.opacity})`
+  const patternOpacity = pattern.kind === 'none' ? 0 : pattern.opacity
+  const patternColor = pattern.kind === 'none' ? '' : `rgb(${hexColorChannels(variant.colors.accent)} / ${patternOpacity})`
+  const canvasChannels = [1, 3, 5].map(offset => parseInt(variant.colors.canvas.slice(offset, offset + 2), 16))
+  const darkCanvas = (canvasChannels[0] * 0.2126 + canvasChannels[1] * 0.7152 + canvasChannels[2] * 0.0722) < 128
+  const scanlineGap = `rgb(0 0 0 / ${patternOpacity * (darkCanvas ? 0.9 : 0.58)})`
+  const scanlineBloom = `rgb(255 255 255 / ${patternOpacity * (darkCanvas ? 0.18 : 0.36)})`
   variables['--foxwarm-background-image'] = pattern.kind === 'grid'
     ? `linear-gradient(${patternColor} 1px, transparent 1px), linear-gradient(90deg, ${patternColor} 1px, transparent 1px)`
     : pattern.kind === 'dots'
@@ -420,7 +490,7 @@ export function themeVariantCssVariables(variant: ThemeVariant): Record<string, 
       : pattern.kind === 'lines'
         ? `linear-gradient(${patternColor} 1px, transparent 1px)`
         : pattern.kind === 'scanlines'
-          ? `repeating-linear-gradient(0deg, transparent 0, transparent ${Math.max(2, pattern.sizePx - 1)}px, ${patternColor} ${pattern.sizePx}px)`
+          ? `repeating-linear-gradient(0deg, transparent 0 ${Math.max(2, pattern.sizePx - 2)}px, ${scanlineBloom} ${Math.max(2, pattern.sizePx - 2)}px ${Math.max(3, pattern.sizePx - 1)}px, ${scanlineGap} ${Math.max(3, pattern.sizePx - 1)}px ${pattern.sizePx}px)`
           : 'none'
   variables['--foxwarm-background-size'] = pattern.kind === 'none'
     ? 'auto'
