@@ -17,12 +17,17 @@ import { isSessionTurnIncomplete } from '../sessionContinuation'
 import { shouldAppendOptimisticMessage } from '../utils/chatOptimistic'
 import { appendOptimisticAttachmentTag } from '../utils/attachmentPreview'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
-import { createLatestRequestGate, runLatestModelOptionsRequest } from '../modelOptionsLoader'
+import { createLatestRequestGate, loadPageOnce, runLatestModelOptionsRequest } from '../modelOptionsLoader'
 import { webUiRealtime } from '../realtime'
 import {
+  advanceHistorySeqFrontier,
   buildOptimisticUserMessage,
+  countCommittedHistoryMessages,
+  decideHistoryReconciliation,
   getClientMessageId,
+  getLatestCommittedMessageSeq,
   hasStableHistoryIdentity,
+  mergeHistoryMessages,
   mergeHistorySnapshot,
   reconcileHistoryMessage,
 } from '../chatHistoryState'
@@ -54,6 +59,22 @@ type AsrTranscribeResult = {
 const ASR_CONTEXT_MAX_CHARS = 2400
 const ASR_CONTEXT_MAX_MESSAGES = 8
 const DEFAULT_VISIBLE_TIMELINE_MESSAGES = 100
+
+type HistoryResponse = {
+  session?: SessionListRecord
+  messages?: Message[]
+  persistentMemorySnapshot?: string
+  queuedMessages?: Message[]
+  queueLength?: number
+  latestSeq?: number
+  historyVersion?: number
+  prefixLength?: number
+  historyComplete?: boolean
+  code?: string
+  error?: string
+}
+
+type HistoryFetchMode = 'bootstrap' | 'full' | 'after' | 'reconcile'
 
 type PendingViewportRestore =
   | { kind: 'state'; state: ChatViewportState; interactionVersion: number }
@@ -230,6 +251,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const [persistentMemorySnapshot, setPersistentMemorySnapshot] = useState('')
   const [showFullTimeline, setShowFullTimeline] = useState(false)
   const [historyLoaded, setHistoryLoaded] = useState(false)
+  const [isFullHistoryLoaded, setIsFullHistoryLoaded] = useState(false)
+  const [earlierHistoryError, setEarlierHistoryError] = useState(false)
   const sessionHeaderSubtitle = formatSessionHeaderSubtitle(sessionId, sessionRecord?.cwd)
   const chatMessageContainerId = `foxwarm-chat-messages-${useId()}`
 
@@ -248,6 +271,15 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const sessionQueueLengthRef = useRef(0)
   const sessionMessageCountRef = useRef(0)
   const sessionHistoryVersionRef = useRef(0)
+  const representedMessageCountRef = useRef(0)
+  const representedHistoryVersionRef = useRef(0)
+  const latestCommittedSeqRef = useRef(0)
+  const hasTrustedHistoryFrontierRef = useRef(false)
+  const historyBootstrapStartedRef = useRef(false)
+  const fullHistoryLoadedRef = useRef(false)
+  const reconnectAwaitingStateRef = useRef(false)
+  const queueRefreshNeededRef = useRef(false)
+  const historyGapDetectedRef = useRef(false)
   const queuedMessagesRef = useRef<Message[]>([])
   const sessionStateInitializedRef = useRef(false)
   const composerHeightRef = useRef<number | null>(null)
@@ -278,6 +310,8 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   useEffect(() => {
     setMessages([])
     setHistoryLoaded(false)
+    setIsFullHistoryLoaded(false)
+    setEarlierHistoryError(false)
     clearStreamingAssistantDraft()
     setToolScriptProgress({})
     setQueuedMessages([])
@@ -288,6 +322,15 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     sessionQueueLengthRef.current = 0
     sessionMessageCountRef.current = 0
     sessionHistoryVersionRef.current = 0
+    representedMessageCountRef.current = 0
+    representedHistoryVersionRef.current = 0
+    latestCommittedSeqRef.current = 0
+    hasTrustedHistoryFrontierRef.current = false
+    historyBootstrapStartedRef.current = false
+    fullHistoryLoadedRef.current = false
+    reconnectAwaitingStateRef.current = false
+    queueRefreshNeededRef.current = false
+    historyGapDetectedRef.current = false
     queuedMessagesRef.current = []
     pendingSentMessageIdsRef.current.clear()
     sessionStateInitializedRef.current = false
@@ -326,12 +369,13 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
 
     const fetchAsrStatus = async () => {
       try {
-        const res = await fetch(`${API_BASE_PATH}/asr/status`)
-        if (!res.ok) return
-        const data = await res.json()
-        if (!cancelled) {
-          setAsrAvailable(Boolean(data?.configured && data?.available))
-        }
+        const available = await loadPageOnce('webui:asr-status', async () => {
+          const res = await fetch(`${API_BASE_PATH}/asr/status`)
+          if (!res.ok) throw new Error(`Failed to load ASR status (${res.status})`)
+          const data = await res.json()
+          return Boolean(data?.configured && data?.available)
+        })
+        if (!cancelled) setAsrAvailable(available)
       } catch (e) {
         if (!cancelled) {
           setAsrAvailable(false)
@@ -346,12 +390,12 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   }, [])
 
   const fetchModels = useCallback(async () => {
-    await runLatestModelOptionsRequest(modelRequestGateRef.current, async () => {
+    await runLatestModelOptionsRequest(modelRequestGateRef.current, () => loadPageOnce('webui:models', async () => {
       const res = await fetch(`${API_BASE_PATH}/models`)
       if (!res.ok) throw new Error(`Failed to load models (${res.status})`)
       const data = await res.json()
       return (Array.isArray(data.models) ? data.models : []) as ModelOption[]
-    }, (state) => {
+    }), (state) => {
       if (state.options) setModelOptions(state.options)
       if (state.error !== undefined) {
         setModelError(state.error)
@@ -695,7 +739,27 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     setSessionQueueLength(nextQueueLength)
   }, [])
 
-  const fetchHistory = useCallback(async () => {
+  const fetchHistory = useCallback(async (requestedMode: HistoryFetchMode = 'full') => {
+    let mode = requestedMode
+    if (mode === 'reconcile') {
+      if (!historyBootstrapStartedRef.current) return true
+      const decision = decideHistoryReconciliation({
+        fullHistoryLoaded: fullHistoryLoadedRef.current,
+        serverMessageCount: sessionMessageCountRef.current,
+        representedMessageCount: representedMessageCountRef.current,
+        serverHistoryVersion: sessionHistoryVersionRef.current,
+        representedHistoryVersion: representedHistoryVersionRef.current,
+        hasTrustedFrontier: hasTrustedHistoryFrontierRef.current,
+        queueRefreshNeeded: queueRefreshNeededRef.current,
+        gapDetected: historyGapDetectedRef.current,
+      })
+      if (decision === 'none') {
+        reconnectAwaitingStateRef.current = false
+        return true
+      }
+      mode = decision
+    }
+
     const activeRequest = historyInFlightRef.current
     if (activeRequest?.sessionId === sessionId) {
       historyTrailingRefreshRef.current = true
@@ -710,87 +774,208 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
     const controller = new AbortController()
     historyAbortControllerRef.current = controller
 
+    const requestJson = async (query = ''): Promise<{ response: Response; data: HistoryResponse }> => {
+      const response = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/history${query}`, {
+        signal: controller.signal,
+      })
+      const data = await response.json().catch(() => ({})) as HistoryResponse
+      return { response, data }
+    }
+
     const requestPromise = (async () => {
-      try {
-        const res = await fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/history`, {
-          signal: controller.signal,
-        })
-        if (!historyRequestGateRef.current.isCurrent(requestSequence)) return true
-
-        if (res.status === 404) {
-          if (historyStateEventVersionRef.current > stateEventVersionAtStart) return true
-          setSessionMissing(true)
-          setMessages([])
-          setQueuedMessages([])
-          setSessionQueueLength(0)
-          setPersistentMemorySnapshot('')
-          lastKnownTimestampRef.current = 0
-          setHistoryLoaded(true)
-          return false
+      const isCurrent = () => historyRequestGateRef.current.isCurrent(requestSequence)
+      const handleMissing = (response: Response): boolean | null => {
+        if (response.status !== 404) return null
+        if (historyStateEventVersionRef.current > stateEventVersionAtStart) return true
+        setSessionMissing(true)
+        setMessages([])
+        setQueuedMessages([])
+        setSessionQueueLength(0)
+        setPersistentMemorySnapshot('')
+        lastKnownTimestampRef.current = 0
+        representedMessageCountRef.current = 0
+        latestCommittedSeqRef.current = 0
+        hasTrustedHistoryFrontierRef.current = false
+        fullHistoryLoadedRef.current = true
+        setIsFullHistoryLoaded(true)
+        setHistoryLoaded(true)
+        return false
+      }
+      const concurrentMessages = () => historyEventsRef.current
+        .filter(entry => entry.version > eventVersionAtStart)
+        .map(entry => entry.message)
+      const updateFrontier = (data: HistoryResponse, snapshotMessages: Message[], complete: boolean) => {
+        const version = typeof data.historyVersion === 'number'
+          ? data.historyVersion
+          : typeof data.session?.historyVersion === 'number' ? data.session.historyVersion : 0
+        representedHistoryVersionRef.current = version
+        const responseLatestSeq = typeof data.latestSeq === 'number' ? data.latestSeq : getLatestCommittedMessageSeq(snapshotMessages)
+        latestCommittedSeqRef.current = Math.max(responseLatestSeq, getLatestCommittedMessageSeq(concurrentMessages()))
+        hasTrustedHistoryFrontierRef.current = typeof data.latestSeq === 'number'
+        if (complete) {
+          fullHistoryLoadedRef.current = true
+          setIsFullHistoryLoaded(true)
+          setEarlierHistoryError(false)
         }
-
-        if (res.ok) {
-          const data = await res.json()
-          if (!historyRequestGateRef.current.isCurrent(requestSequence)) return true
-
-          const concurrentMessages = historyEventsRef.current
-            .filter(entry => entry.version > eventVersionAtStart)
-            .map(entry => entry.message)
-          const snapshotMessages = Array.isArray(data.messages) ? data.messages as Message[] : []
-          const hasNewerStreamState = historyStateEventVersionRef.current > stateEventVersionAtStart
-          const hasNewerModelStream = historyModelStreamEventVersionRef.current > modelStreamEventVersionAtStart
-          const historyQueueLength = typeof data.queueLength === 'number' ? data.queueLength : null
-          const hasNewerMismatchedQueue = hasNewerStreamState
-            && historyQueueLength !== null
-            && historyQueueLength !== sessionQueueLengthRef.current
-
-          if (!hasNewerStreamState) {
-            setSessionMissing(false)
-            applySessionState(data.session)
-          }
-          setMessages(currentMessages => mergeHistorySnapshot({
+      }
+      const applyMetadata = (data: HistoryResponse) => {
+        const hasNewerStreamState = historyStateEventVersionRef.current > stateEventVersionAtStart
+        const historyQueueLength = typeof data.queueLength === 'number' ? data.queueLength : null
+        const hasNewerMismatchedQueue = hasNewerStreamState
+          && historyQueueLength !== null
+          && historyQueueLength !== sessionQueueLengthRef.current
+        if (!hasNewerStreamState) {
+          setSessionMissing(false)
+          applySessionState(data.session)
+        }
+        if (hasNewerMismatchedQueue) {
+          queueRefreshNeededRef.current = true
+          historyTrailingRefreshRef.current = true
+        } else {
+          setQueuedMessages(Array.isArray(data.queuedMessages) ? data.queuedMessages : [])
+          queueRefreshNeededRef.current = false
+        }
+        setPersistentMemorySnapshot(typeof data.persistentMemorySnapshot === 'string' ? data.persistentMemorySnapshot : '')
+        if (!hasNewerStreamState && typeof data.queueLength === 'number') setSessionQueueLength(data.queueLength)
+      }
+      const maybeClearDraft = (snapshotMessages: Message[]) => {
+        if (shouldClearDraftAfterHistory({
+          draftAtRequestStart: modelStreamDraftAtStart,
+          currentDraft: streamingAssistantDraftRef.current,
+          hasNewerStreamEvent: historyModelStreamEventVersionRef.current > modelStreamEventVersionAtStart,
+          snapshotMessages,
+        })) clearStreamingAssistantDraft()
+      }
+      const updateLastTimestamp = (snapshotMessages: Message[]) => {
+        const lastTimestamp = snapshotMessages.reduce((latest, message) => Math.max(latest, message.__meta?.timestamp || 0), 0)
+        lastKnownTimestampRef.current = Math.max(lastKnownTimestampRef.current, lastTimestamp)
+      }
+      const applyFullSnapshot = (data: HistoryResponse, snapshotMessages: Message[]) => {
+        const concurrent = concurrentMessages()
+        setMessages(currentMessages => {
+          const merged = mergeHistorySnapshot({
             snapshot: snapshotMessages,
-            concurrentMessages,
+            concurrentMessages: concurrent,
+            currentMessages,
+            pendingClientMessageIds: pendingSentMessageIdsRef.current,
+          })
+          representedMessageCountRef.current = countCommittedHistoryMessages(merged)
+          return merged
+        })
+        for (const message of snapshotMessages) {
+          const clientMessageId = getClientMessageId(message)
+          if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
+        }
+        updateFrontier(data, snapshotMessages, true)
+        updateLastTimestamp(snapshotMessages)
+      }
+      const fetchAndApplyFull = async (): Promise<boolean> => {
+        const { response, data } = await requestJson()
+        if (!isCurrent()) return true
+        const missing = handleMissing(response)
+        if (missing !== null) return missing
+        if (!response.ok) throw new Error(data.error || `Failed to fetch history (${response.status})`)
+        const snapshotMessages = Array.isArray(data.messages) ? data.messages : []
+        applyMetadata(data)
+        applyFullSnapshot(data, snapshotMessages)
+        maybeClearDraft(snapshotMessages)
+        historyGapDetectedRef.current = false
+        reconnectAwaitingStateRef.current = false
+        historyEventsRef.current = []
+        if (historyStateEventVersionRef.current > stateEventVersionAtStart) historyTrailingRefreshRef.current = true
+        setHistoryLoaded(true)
+        return true
+      }
+
+      try {
+        if (mode === 'bootstrap') {
+          const { response, data } = await requestJson(`?tail=${DEFAULT_VISIBLE_TIMELINE_MESSAGES}`)
+          if (!isCurrent()) return true
+          const missing = handleMissing(response)
+          if (missing !== null) return missing
+          if (!response.ok) throw new Error(data.error || `Failed to fetch recent history (${response.status})`)
+          const tailMessages = Array.isArray(data.messages) ? data.messages : []
+          applyMetadata(data)
+          const concurrent = concurrentMessages()
+          setMessages(currentMessages => mergeHistorySnapshot({
+            snapshot: tailMessages,
+            concurrentMessages: concurrent,
             currentMessages,
             pendingClientMessageIds: pendingSentMessageIdsRef.current,
           }))
-          for (const message of snapshotMessages) {
-            const clientMessageId = getClientMessageId(message)
-            if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
-          }
-          const nextQueuedMessages = Array.isArray(data.queuedMessages) ? data.queuedMessages : []
-          if (hasNewerMismatchedQueue) {
-            historyTrailingRefreshRef.current = true
+          updateFrontier(data, tailMessages, false)
+          updateLastTimestamp(tailMessages)
+          maybeClearDraft(tailMessages)
+
+          const prefixLength = typeof data.prefixLength === 'number' ? data.prefixLength : 0
+          const historyVersion = typeof data.historyVersion === 'number'
+            ? data.historyVersion
+            : typeof data.session?.historyVersion === 'number' ? data.session.historyVersion : 0
+          if (prefixLength > 0) {
+            const prefixResult = await requestJson(`?prefixLength=${prefixLength}&historyVersion=${historyVersion}`)
+            if (!isCurrent()) return true
+            if (prefixResult.response.status === 409 && prefixResult.data.code === 'SESSION_HISTORY_BOUNDARY_STALE') {
+              return fetchAndApplyFull()
+            }
+            if (!prefixResult.response.ok) {
+              setEarlierHistoryError(true)
+              return true
+            }
+            const prefixMessages = Array.isArray(prefixResult.data.messages) ? prefixResult.data.messages : []
+            applyFullSnapshot(data, [...prefixMessages, ...tailMessages])
           } else {
-            setQueuedMessages(nextQueuedMessages)
-          }
-          setPersistentMemorySnapshot(typeof data.persistentMemorySnapshot === 'string' ? data.persistentMemorySnapshot : '')
-          if (!hasNewerStreamState && typeof data.queueLength === 'number') {
-            setSessionQueueLength(data.queueLength)
-          }
-          if (shouldClearDraftAfterHistory({
-            draftAtRequestStart: modelStreamDraftAtStart,
-            currentDraft: streamingAssistantDraftRef.current,
-            hasNewerStreamEvent: hasNewerModelStream,
-            snapshotMessages,
-          })) clearStreamingAssistantDraft()
-          const lastMsg = snapshotMessages[snapshotMessages.length - 1]
-          if (lastMsg?.__meta?.timestamp) {
-            lastKnownTimestampRef.current = Math.max(lastKnownTimestampRef.current, lastMsg.__meta.timestamp)
+            setMessages(currentMessages => {
+              representedMessageCountRef.current = countCommittedHistoryMessages(currentMessages)
+              return currentMessages
+            })
+            updateFrontier(data, tailMessages, true)
           }
           historyEventsRef.current = []
+          if (historyStateEventVersionRef.current > stateEventVersionAtStart) historyTrailingRefreshRef.current = true
           setHistoryLoaded(true)
           return true
         }
+
+        if (mode === 'full') return fetchAndApplyFull()
+
+        const historyVersion = representedHistoryVersionRef.current
+        const afterSeq = latestCommittedSeqRef.current
+        const { response, data } = await requestJson(`?afterSeq=${afterSeq}&historyVersion=${historyVersion}`)
+        if (!isCurrent()) return true
+        const missing = handleMissing(response)
+        if (missing !== null) return missing
+        if (response.status === 409 && data.code === 'SESSION_HISTORY_BOUNDARY_STALE') return fetchAndApplyFull()
+        if (!response.ok) throw new Error(data.error || `Failed to reconcile history (${response.status})`)
+        const appendedMessages = Array.isArray(data.messages) ? data.messages : []
+        applyMetadata(data)
+        setMessages(currentMessages => {
+          const merged = mergeHistoryMessages(currentMessages, appendedMessages)
+          representedMessageCountRef.current = countCommittedHistoryMessages(merged)
+          return merged
+        })
+        for (const message of appendedMessages) {
+          const clientMessageId = getClientMessageId(message)
+          if (clientMessageId) pendingSentMessageIdsRef.current.delete(clientMessageId)
+        }
+        updateFrontier(data, appendedMessages, true)
+        updateLastTimestamp(appendedMessages)
+        maybeClearDraft(appendedMessages)
+        historyGapDetectedRef.current = false
+        reconnectAwaitingStateRef.current = false
+        historyEventsRef.current = []
+        if (historyStateEventVersionRef.current > stateEventVersionAtStart) historyTrailingRefreshRef.current = true
+        setHistoryLoaded(true)
         return true
-      } catch (e) {
+      } catch (error) {
         if (controller.signal.aborted) return true
-        console.error('Failed to fetch history:', e)
+        console.error('Failed to fetch history:', error)
+        if (mode === 'bootstrap') {
+          setEarlierHistoryError(true)
+          setHistoryLoaded(true)
+        }
         return true
       } finally {
-        if (historyAbortControllerRef.current === controller) {
-          historyAbortControllerRef.current = null
-        }
+        if (historyAbortControllerRef.current === controller) historyAbortControllerRef.current = null
       }
     })()
 
@@ -800,18 +985,19 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       historyInFlightRef.current = null
       if (!historyTrailingRefreshRef.current || !historyRequestGateRef.current.isCurrent(requestSequence)) return
       historyTrailingRefreshRef.current = false
-      void fetchHistory()
+      historyRefreshTimeoutRef.current = window.setTimeout(() => {
+        historyRefreshTimeoutRef.current = null
+        void fetchHistory('reconcile')
+      }, 0)
     })
     return requestPromise
   }, [applySessionState, clearStreamingAssistantDraft, sessionId])
 
   const scheduleHistoryRefresh = useCallback((delay = 100) => {
-    if (historyRefreshTimeoutRef.current !== null) {
-      window.clearTimeout(historyRefreshTimeoutRef.current)
-    }
+    if (historyRefreshTimeoutRef.current !== null) window.clearTimeout(historyRefreshTimeoutRef.current)
     historyRefreshTimeoutRef.current = window.setTimeout(() => {
       historyRefreshTimeoutRef.current = null
-      void fetchHistory()
+      void fetchHistory('reconcile')
     }, delay)
   }, [fetchHistory])
 
@@ -821,7 +1007,12 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       onOpen: () => {
         setConnectionState('connected')
         setReconnectCountdown(0)
-        void fetchHistory().then((sessionExists) => {
+        if (historyBootstrapStartedRef.current) {
+          reconnectAwaitingStateRef.current = true
+          return
+        }
+        historyBootstrapStartedRef.current = true
+        void fetchHistory('bootstrap').then((sessionExists) => {
           if (sessionExists) return
           unsubscribe()
           setConnectionState('disconnected')
@@ -844,12 +1035,19 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           const nextHistoryVersion = typeof data.session?.historyVersion === 'number' ? data.session.historyVersion : 0
           setSessionMissing(false)
           applySessionState(data.session)
-          if (hadSessionState && (
-            nextQueueLength !== previousQueueLength ||
-            nextMessageCount !== previousMessageCount ||
-            nextHistoryVersion !== previousHistoryVersion ||
-            (nextQueueLength === 0 && queuedMessagesRef.current.length > 0)
-          )) {
+          if (!hadSessionState) return
+          if (!fullHistoryLoadedRef.current) {
+            if (reconnectAwaitingStateRef.current && historyInFlightRef.current === null) scheduleHistoryRefresh()
+            return
+          }
+          if (nextQueueLength !== previousQueueLength
+            || (nextQueueLength === 0 && queuedMessagesRef.current.length > 0)) {
+            queueRefreshNeededRef.current = true
+          }
+          if (reconnectAwaitingStateRef.current
+            || nextMessageCount !== previousMessageCount
+            || nextHistoryVersion !== previousHistoryVersion
+            || queueRefreshNeededRef.current) {
             scheduleHistoryRefresh()
           }
           return
@@ -879,6 +1077,12 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           sessionQueueLengthRef.current = 0
           sessionMessageCountRef.current = 0
           sessionHistoryVersionRef.current = 0
+          representedMessageCountRef.current = 0
+          representedHistoryVersionRef.current = 0
+          latestCommittedSeqRef.current = 0
+          hasTrustedHistoryFrontierRef.current = false
+          fullHistoryLoadedRef.current = true
+          setIsFullHistoryLoaded(true)
           queuedMessagesRef.current = []
           unsubscribe()
           setConnectionState('disconnected')
@@ -926,6 +1130,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
           }
 
           if (sessionQueueLengthRef.current > 0 || queuedMessagesRef.current.length > 0) {
+            queueRefreshNeededRef.current = true
             scheduleHistoryRefresh()
           }
 
@@ -946,7 +1151,20 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             })
           }
 
-          setMessages(prev => reconcileHistoryMessage(prev, incomingMessage))
+          if (fullHistoryLoadedRef.current && !isCommandResponse && !isUpdateExisting) {
+            const frontier = advanceHistorySeqFrontier(latestCommittedSeqRef.current, incomingMessage.__meta?.seq)
+            latestCommittedSeqRef.current = frontier.latestSeq
+            if (frontier.gapDetected) historyGapDetectedRef.current = true
+          }
+
+          setMessages(prev => {
+            const beforeCount = countCommittedHistoryMessages(prev)
+            const next = reconcileHistoryMessage(prev, incomingMessage)
+            representedMessageCountRef.current += countCommittedHistoryMessages(next) - beforeCount
+            return next
+          })
+
+          if (fullHistoryLoadedRef.current && historyGapDetectedRef.current) scheduleHistoryRefresh()
 
           if (msgTimestamp && !isCommandResponse && !isUpdateExisting) {
             lastKnownTimestampRef.current = Math.max(lastKnownTimestampRef.current, msgTimestamp)
@@ -1329,7 +1547,10 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
       })
       .then(response => {
         if (!response.ok) throw new Error(`Failed to send message (${response.status})`)
-        if (!appendOptimistic) scheduleHistoryRefresh()
+        if (!appendOptimistic && !isSlashCommand) {
+          queueRefreshNeededRef.current = true
+          scheduleHistoryRefresh()
+        }
       })
       .catch(e => {
         console.error('Failed to send message:', e)
@@ -1645,6 +1866,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
                 messages={messages}
                 persistentMemorySnapshot={snapshotSystemMessage}
                 contextLimit={contextLimit}
+                historyComplete={isFullHistoryLoaded}
                 containerId={chatMessageContainerId}
                 containerRef={messagesContainerRef}
                 timelineRef={committedTimelineRef}
@@ -1656,6 +1878,21 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             {hiddenMessageCount > 0 && !showFullTimeline && (
               <div className="mb-3 rounded-lg border border-fw-border bg-fw-surface/80 px-3 py-2 text-xs text-fw-text-muted shadow-sm dark:border-fw-border dark:bg-fw-surface/80 dark:text-fw-text">
                 Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
+              </div>
+            )}
+            {earlierHistoryError && !isFullHistoryLoaded && (
+              <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-fw-border bg-fw-surface/80 px-3 py-2 text-xs text-fw-text-muted shadow-sm dark:border-fw-border dark:bg-fw-surface/80 dark:text-fw-text">
+                <span>Earlier messages could not be loaded.</span>
+                <button
+                  type="button"
+                  className="font-medium text-fw-accent hover:underline"
+                  onClick={() => {
+                    setEarlierHistoryError(false)
+                    void fetchHistory('full')
+                  }}
+                >
+                  Retry
+                </button>
               </div>
             )}
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">

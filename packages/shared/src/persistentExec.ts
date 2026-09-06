@@ -68,6 +68,7 @@ const EXEC_PATHS_POLL_INTERVAL_MS = 25;
 const BACKGROUND_COMMAND_PREVIEW_LIMIT = 100;
 export const BACKGROUND_PROCESS_CMDLINE_LIMIT = 100;
 export const BACKGROUND_PROCESS_TREE_LIMIT = 40;
+export const BACKGROUND_COMPLETION_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const BACKGROUND_PROCESS_TREE_MAX_INDENT = 20;
 export interface ExecStatus {
   exitCode: number | null;
@@ -140,6 +141,8 @@ export interface PersistentExecManagerOptions {
   onRegistryIdle?: () => void;
   /** Test seam for petname selection. Production uses crypto.randomInt. */
   randomInt?: (maxExclusive: number) => number;
+  /** Test seam for completion-retention boundary checks. Production uses Date.now. */
+  now?: () => number;
   logger?: {
     info?: (payload?: any, message?: string) => void;
     warn?: (payload?: any, message?: string) => void;
@@ -999,6 +1002,15 @@ export class PersistentExecManager {
   private async reconcileRunningExecs(): Promise<void> {
     for (const entry of Array.from(this.runningExecs.values())) {
       if (!entry.notifyOnCompletion) continue;
+      if ((this.options.now?.() ?? Date.now()) - entry.startedAt > BACKGROUND_COMPLETION_EVENT_RETENTION_MS) {
+        try {
+          await this.removeRunningExec(entry.id);
+          this.options.logger?.info?.({ execId: entry.id, pid: entry.pid, sessionId: entry.sessionId }, 'Removed expired background exec tracking record');
+        } catch (err) {
+          this.options.logger?.warn?.({ err, execId: entry.id, sessionId: entry.sessionId }, 'Failed to remove expired background exec tracking record; will retry');
+        }
+        continue;
+      }
       let status: ExecStatus | null = null;
       try {
         status = await this.ensureFallbackStatus(entry);

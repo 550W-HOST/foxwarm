@@ -211,6 +211,54 @@ function makeResponsesStream(text = 'ok', usage: Record<string, unknown> = {
   return stream;
 }
 
+function makeResponsesPhaseStream(): PassThrough {
+  const events: any[] = [
+    {
+      type: 'response.output_item.added', output_index: 0,
+      item: { type: 'message', role: 'assistant', phase: 'commentary', content: [] },
+    },
+    {
+      type: 'response.output_text.done', output_index: 0, content_index: 0,
+      text: 'I will inspect that.',
+    },
+    {
+      type: 'response.output_item.added', output_index: 1,
+      item: { type: 'function_call', call_id: 'call_phase', name: 'read', arguments: '' },
+    },
+    {
+      type: 'response.function_call_arguments.done', output_index: 1,
+      arguments: '{"filePath":"README.md"}',
+    },
+    {
+      type: 'response.output_item.added', output_index: 2,
+      item: { type: 'message', role: 'assistant', phase: 'final_answer', content: [] },
+    },
+    {
+      type: 'response.output_text.done', output_index: 2, content_index: 0,
+      text: 'Inspection complete.',
+    },
+    {
+      type: 'response.output_item.added', output_index: 3,
+      item: { type: 'message', role: 'assistant', phase: 'analysis', content: [] },
+    },
+    {
+      type: 'response.output_text.done', output_index: 3, content_index: 0,
+      text: 'Unknown phase.',
+    },
+    {
+      type: 'response.completed',
+      response: { output: [], usage: { input_tokens: 1, output_tokens: 8 } },
+    },
+  ];
+  const stream = new PassThrough();
+  process.nextTick(() => {
+    for (const event of events) stream.write(`data: ${JSON.stringify(event)}\n\n`);
+    stream.write('data: [DONE]\n\n');
+    stream.end();
+  });
+  return stream;
+}
+
 function makeResponsesWebSearchStream(): PassThrough {
   const citation = {
     type: 'url_citation',
@@ -805,6 +853,39 @@ test('OpenAI Responses parsing persists native web search output and URL annotat
       url: 'https://example.com/article',
       title: 'Example article',
     }]);
+  } finally {
+    (axios as any).post = originalPost;
+  }
+});
+
+test('OpenAI Responses parsing preserves assistant message phases around function calls', async () => {
+  const originalPost = axios.post;
+  (axios as any).post = async () => ({
+    status: 200, statusText: 'OK', headers: {}, data: makeResponsesPhaseStream(),
+  });
+
+  try {
+    const result = await requestLlmOnce({
+      contents: [{ role: 'user', parts: [{ text: 'inspect this' }] }],
+      systemPrompt: '',
+      modelEntryOverride: {
+        providerKey: 'fixture', providerType: 'openai-responses', baseUrl: 'https://fixture.example',
+        apiKey: '', model: 'gpt-5.6', extraFields: {}, extraHeaders: {},
+      } as any,
+      toolDefinitions: [], notifySessionEvents: false, registerAbortController: false,
+    });
+
+    assert.deepEqual(result.allParts, [
+      { text: 'I will inspect that.', phase: 'commentary' },
+      {
+        functionCall: {
+          id: 'call_phase', name: 'read', args: { filePath: 'README.md' },
+          rawArgsText: '{"filePath":"README.md"}',
+        },
+      },
+      { text: 'Inspection complete.', phase: 'final_answer' },
+      { text: 'Unknown phase.' },
+    ]);
   } finally {
     (axios as any).post = originalPost;
   }

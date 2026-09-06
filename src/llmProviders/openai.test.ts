@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
+import { spawn } from 'node:child_process';
+import path from 'node:path';
 import { collectOpenAIChatCompletionsStream, collectOpenAIResponsesStream, convertToOpenAIFormat, convertToOpenAIResponsesFormat } from './openai';
 import type { Message } from '../types';
 
@@ -697,6 +699,87 @@ test('collectOpenAIResponsesStream reports raw SSE body and blocks', async () =>
   assert.equal(rawBlocks[rawBlocks.length - 1], 'data: [DONE]');
 });
 
+test('collectOpenAIResponsesStream rejects official incomplete and top-level error terminal events', async () => {
+  await assert.rejects(
+    collectOpenAIResponsesStream(makeStream([{
+      type: 'response.incomplete',
+      response: { status: 'incomplete', error: { message: 'output limit reached', code: 'max_output_tokens' } },
+    }]), new AbortController().signal),
+    /output limit reached.*status=incomplete.*code=max_output_tokens/,
+  );
+  await assert.rejects(
+    collectOpenAIResponsesStream(makeStream([{
+      type: 'error', message: 'server unavailable', status: 503, code: 'server_error',
+    }]), new AbortController().signal),
+    /server unavailable.*status=503.*code=server_error/,
+  );
+});
+
+test('OpenAI collectors report only genuinely new generated content as timeout activity', async () => {
+  let responsesMeaningful = 0;
+  await collectOpenAIResponsesStream(makeStream([
+    { type: 'response.created', response: { id: 'r1', status: 'in_progress' } },
+    { type: 'response.in_progress', response: { id: 'r1', status: 'in_progress' } },
+    { type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } },
+    { type: 'response.output_item.added', output_index: 4, item: { type: 'web_search_call', id: 'ws1', status: 'in_progress' } },
+    { type: 'response.output_item.done', output_index: 4, item: { type: 'web_search_call', id: 'ws1', status: 'completed' } },
+    { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: '' },
+    { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'a' },
+    { type: 'response.output_text.done', output_index: 0, content_index: 0, text: 'a' },
+    { type: 'response.reasoning_summary_text.delta', output_index: 1, summary_index: 0, delta: 'r' },
+    { type: 'response.function_call_arguments.delta', output_index: 2, delta: '{' },
+    { type: 'response.refusal.delta', output_index: 3, content_index: 0, delta: 'n' },
+    { type: 'response.completed', response: { id: 'r1', status: 'completed', output: [], usage: { input_tokens: 1, output_tokens: 1 } } },
+  ]), new AbortController().signal, { onMeaningfulProgress: () => { responsesMeaningful += 1; } });
+  assert.equal(responsesMeaningful, 4);
+
+  let chatMeaningful = 0;
+  await collectOpenAIChatCompletionsStream(makeStream([
+    { choices: [{ index: 0, delta: { role: 'assistant' } }] },
+    { choices: [{ index: 0, delta: { content: '' } }] },
+    { choices: [{ index: 0, delta: { content: 'a' } }] },
+    { choices: [{ index: 0, delta: { reasoning_content: 'r' } }] },
+    { choices: [{ index: 0, delta: { reasoning: 'x' } }] },
+    { choices: [{ index: 0, delta: { refusal: 'no' } }] },
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'c', type: 'function', function: { name: 'f', arguments: '' } }] } }] },
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{' } }] } }] },
+    { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+  ]), new AbortController().signal, { onMeaningfulProgress: () => { chatMeaningful += 1; } });
+  assert.equal(chatMeaningful, 5);
+});
+
+test('standalone OpenAI collectors reject abort without an uncaught destroyed-stream error', async () => {
+  const modulePath = path.join(__dirname, 'openai.js');
+  const script = `
+    const { PassThrough } = require('stream');
+    const collectors = require(${JSON.stringify(modulePath)});
+    process.once('uncaughtException', error => { console.error('UNCAUGHT:' + error.stack); process.exit(7); });
+    process.once('unhandledRejection', error => { console.error('UNHANDLED:' + (error && error.stack || error)); process.exit(8); });
+    (async () => {
+      for (const name of ['collectOpenAIResponsesStream', 'collectOpenAIChatCompletionsStream']) {
+        const stream = new PassThrough();
+        const controller = new AbortController();
+        const pending = collectors[name](stream, controller.signal);
+        controller.abort();
+        let aborted = false;
+        try { await pending; } catch (error) { aborted = error && error.name === 'AbortError'; }
+        if (!aborted) throw new Error(name + ' did not reject with AbortError');
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      process.exit(0);
+    })().catch(error => { console.error(error.stack); process.exit(9); });
+  `;
+  const result = await new Promise<{ code: number | null; stderr: string }>(resolve => {
+    const child = spawn(process.execPath, ['-e', script]);
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('exit', code => resolve({ code, stderr }));
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /UNCAUGHT:|UNHANDLED:/);
+});
+
 test('convertToOpenAIResponsesFormat replays ordered web search metadata only to its source model', () => {
   const webSearchCall = {
     type: 'web_search_call',
@@ -741,7 +824,7 @@ test('convertToOpenAIResponsesFormat replays ordered web search metadata only to
     {
       type: 'message',
       role: 'assistant',
-      phase: 'final_answer',
+      phase: 'commentary',
       content: [{ type: 'output_text', text: 'Hello', annotations }],
     },
     { type: 'function_call', call_id: 'call_1', name: 'read', arguments: '{"filePath":"README.md"}' },
@@ -752,11 +835,53 @@ test('convertToOpenAIResponsesFormat replays ordered web search metadata only to
     {
       type: 'message',
       role: 'assistant',
-      phase: 'final_answer',
+      phase: 'commentary',
       content: [{ type: 'output_text', text: 'Hello' }],
     },
     { type: 'function_call', call_id: 'call_1', name: 'read', arguments: '{"filePath":"README.md"}' },
   ]);
+});
+
+test('convertToOpenAIResponsesFormat preserves explicit assistant phases and applies the legacy tool-call heuristic', () => {
+  const history: Message[] = [{
+    role: 'model',
+    parts: [
+      { text: 'I will inspect that.', phase: 'commentary' },
+      { functionCall: { id: 'call_1', name: 'read', args: { filePath: 'README.md' } } },
+      { text: 'The inspection is complete.', phase: 'final_answer' },
+      { text: 'Legacy text has no phase.' },
+    ],
+  }];
+
+  assert.deepEqual(convertToOpenAIResponsesFormat(history, 'openai/other-model'), [
+    {
+      type: 'message', role: 'assistant', phase: 'commentary',
+      content: [{ type: 'output_text', text: 'I will inspect that.' }],
+    },
+    { type: 'function_call', call_id: 'call_1', name: 'read', arguments: '{"filePath":"README.md"}' },
+    {
+      type: 'message', role: 'assistant', phase: 'final_answer',
+      content: [{ type: 'output_text', text: 'The inspection is complete.' }],
+    },
+    {
+      type: 'message', role: 'assistant', phase: 'commentary',
+      content: [{ type: 'output_text', text: 'Legacy text has no phase.' }],
+    },
+  ]);
+
+  assert.deepEqual(convertToOpenAIResponsesFormat([{
+    role: 'model', parts: [{ text: 'Legacy final text.' }],
+  }]), [{
+    type: 'message', role: 'assistant', phase: 'final_answer',
+    content: [{ type: 'output_text', text: 'Legacy final text.' }],
+  }]);
+
+  assert.deepEqual(convertToOpenAIResponsesFormat([{
+    role: 'model', parts: [{ text: 'Unknown phase stays absent.', phase: 'analysis' } as any],
+  }]), [{
+    type: 'message', role: 'assistant',
+    content: [{ type: 'output_text', text: 'Unknown phase stays absent.' }],
+  }]);
 });
 
 test('collectOpenAIResponsesStream rebuilds refusals when completed payload omits content', async () => {

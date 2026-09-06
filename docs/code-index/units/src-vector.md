@@ -90,6 +90,7 @@ Exact/current-Session model-facing recall may supplement these dense families wi
 - `vectorServiceManager.ts` starts the child, waits until LanceDB is open, reports retryable unavailability while it is down, and restarts an unexpected exit with bounded backoff. It never opens a local fallback owner after a child failure.
 - Graceful drain rejects new RPC requests, waits for accepted RPC and indexing/backfill work, closes LanceDB, and then disconnects the child. Supervisor shutdown retains ownership until exit is observed, escalating through bounded wait, SIGTERM, and SIGKILL; an unconfirmed exit is reported without releasing the fence.
 - `vectorWorker.ts` is the child entry point. Archive and vector-checkpoint SQLite remain direct durable inputs; they are not moved behind the vector RPC service.
+- The child entry point sets the presentation-only process title `foxwarm:vector`; generation, PID, IPC, and ownership checks remain authoritative.
 
 ## Compatibility
 

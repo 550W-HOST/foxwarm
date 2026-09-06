@@ -5,6 +5,8 @@ export interface MessagePart {
   text?: string;
   system?: string;
   systemPayload?: boolean;
+  /** OpenAI Responses assistant message phase, preserved when provided. */
+  phase?: 'commentary' | 'final_answer';
   thinking?: string;
   providerMeta?: {
     thinkingSummaries?: string[]; // OpenAI Responses

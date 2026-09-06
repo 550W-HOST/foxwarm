@@ -23,6 +23,9 @@ import {
     convertToOpenAIFormat as convertToOpenAIFormatProvider,
     convertToOpenAIResponsesFormat as convertToOpenAIResponsesFormatProvider,
 } from './llmProviders/openai';
+import type { OpenAIWsHistoryAppendFinalizer, OpenAIWsHistoryAppendOutcome } from './llmProviders/openaiWsState';
+import { requestOpenAIResponsesWs } from './llmProviders/openaiWsTransport';
+import { createStreamingAttemptWatchdog } from './llmStreamingTimeout';
 import { parseFunctionCallArgs } from './toolCallArgs';
 import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 import { isSystemPayloadTextPart } from './utils/systemMessageParts';
@@ -195,6 +198,30 @@ type RequestLlmOnceOptions = {
     purpose?: LlmRequestPurpose;
     currentSessionEffects?: CurrentSessionEffects;
 };
+
+type InternalLlmResult = {
+    result: ChatResult;
+    /**
+     * Provider-local completion held outside the reusable pool until the
+     * exact assistant Message has crossed the canonical history boundary.
+     * This callback is an optimization finalizer only: its failure must never
+     * turn an already committed assistant Message into a failed model turn.
+     */
+    finalizeHistoryAppend?: OpenAIWsHistoryAppendFinalizer;
+};
+
+function settleHistoryAppendFinalizer(
+    finalizer: OpenAIWsHistoryAppendFinalizer | undefined,
+    outcome: OpenAIWsHistoryAppendOutcome,
+    context: string,
+): void {
+    if (!finalizer) return;
+    try {
+        finalizer(outcome);
+    } catch (error) {
+        logger.warn({ err: error }, context);
+    }
+}
 
 /** In-process current-session effects used by the normal turn path. Not an RPC contract. */
 export interface CurrentSessionEffects {
@@ -647,7 +674,7 @@ async function resolvePromptCacheKeyForRequest(options: RequestLlmOnceOptions): 
 }
 
 export function getOpenAIRequestApi(providerType: string): 'responses' | 'chat-completions' | null {
-    if (providerType === 'openai' || providerType === 'openai-responses') {
+    if (providerType === 'openai' || providerType === 'openai-responses' || providerType === 'openai-ws') {
         return 'responses';
     }
 
@@ -1971,7 +1998,7 @@ export async function chat(
     if (session.id && session.promptCacheKey !== previousPromptCacheKey) {
         await currentSessionEffects.persistSession(session);
     }
-    const result = await requestLlmOnce({
+    const completion = await requestLlmOnceInternal({
         contents: contentsForLlm,
         systemPrompt,
         model: session.model,
@@ -1988,33 +2015,55 @@ export async function chat(
         purpose: options?.purpose || 'normal-turn',
         currentSessionEffects: options?.currentSessionEffects,
     });
+    const result = completion.result;
 
-    if (result.usage) {
-        logger.info(`Token Usage: Cached: ${result.usage.cachedTokens || 0} | Input: ${result.usage.inputTokens} | Output: ${result.usage.outputTokens} | Reasoning: ${result.usage.reasoningTokens ?? 'n/a'} | Calls: ${(result.toolCalls || []).length}`);
+    try {
+        if (result.usage) {
+            logger.info(`Token Usage: Cached: ${result.usage.cachedTokens || 0} | Input: ${result.usage.inputTokens} | Output: ${result.usage.outputTokens} | Reasoning: ${result.usage.reasoningTokens ?? 'n/a'} | Calls: ${(result.toolCalls || []).length}`);
 
-        // Update session accumulated usage stats
-        session.stats.totalInputTokens += result.usage.inputTokens || 0;
-        session.stats.totalCachedTokens += result.usage.cachedTokens || 0;
-        session.stats.totalOutputTokens += result.usage.outputTokens || 0;
-    }
+            // Update session accumulated usage stats
+            session.stats.totalInputTokens += result.usage.inputTokens || 0;
+            session.stats.totalCachedTokens += result.usage.cachedTokens || 0;
+            session.stats.totalOutputTokens += result.usage.outputTokens || 0;
+        }
 
-    // Add assistant message to history
-    if (result.allParts && result.allParts.length > 0) {
-        const llmRequestTiming = toPersistedLlmRequestTiming(result.previousLlmRequest);
-        const assistantMeta = {
-            ...(result.modelId ? { modelId: result.modelId } : {}),
-            ...(result.virtualModelKey ? { virtualModelKey: result.virtualModelKey } : {}),
-            ...(result.usage ? { usage: result.usage } : {}),
-            ...(llmRequestTiming ? { llmRequestTiming } : {}),
-            ...(result.llmRequestId ? { llmRequestId: result.llmRequestId, llmAttempt: result.llmAttempt } : {}),
-        };
-        const assistantMsg: Message = {
-            role: 'model',
-            parts: result.allParts,
-            ...(result.providerMeta ? { providerMeta: result.providerMeta } : {}),
-            ...(Object.keys(assistantMeta).length > 0 ? { __meta: assistantMeta } : {}),
-        };
-        await appendMessage(assistantMsg);
+        // Add assistant message to history. A stateful provider completion is
+        // deliberately not reusable until this exact object has committed.
+        if (result.allParts && result.allParts.length > 0) {
+            const llmRequestTiming = toPersistedLlmRequestTiming(result.previousLlmRequest);
+            const assistantMeta = {
+                ...(result.modelId ? { modelId: result.modelId } : {}),
+                ...(result.virtualModelKey ? { virtualModelKey: result.virtualModelKey } : {}),
+                ...(result.usage ? { usage: result.usage } : {}),
+                ...(llmRequestTiming ? { llmRequestTiming } : {}),
+                ...(result.llmRequestId ? { llmRequestId: result.llmRequestId, llmAttempt: result.llmAttempt } : {}),
+            };
+            const assistantMsg: Message = {
+                role: 'model',
+                parts: result.allParts,
+                ...(result.providerMeta ? { providerMeta: result.providerMeta } : {}),
+                ...(Object.keys(assistantMeta).length > 0 ? { __meta: assistantMeta } : {}),
+            };
+            await appendMessage(assistantMsg);
+            settleHistoryAppendFinalizer(
+                completion.finalizeHistoryAppend,
+                { appended: true, message: assistantMsg },
+                'Failed to finalize provider state after assistant history commit',
+            );
+        } else {
+            settleHistoryAppendFinalizer(
+                completion.finalizeHistoryAppend,
+                { appended: false },
+                'Failed to discard provider state without an assistant history commit',
+            );
+        }
+    } catch (error) {
+        settleHistoryAppendFinalizer(
+            completion.finalizeHistoryAppend,
+            { appended: false },
+            'Failed to discard provider state after assistant history failure',
+        );
+        throw error;
     }
 
     return result;
@@ -2034,6 +2083,7 @@ type ConcreteRequestPlan = {
     requestBody: any;
     compressionHeaders: Record<string, string>;
     useOpenAIResponsesApi: boolean;
+    useOpenAIResponsesWs: boolean;
     useOpenAIChatCompletionsApi: boolean;
     useStreamingApi: boolean;
 };
@@ -2246,8 +2296,12 @@ function buildConcreteRequestPlan(options: {
     const providerContents = prepareHistoryForConcreteModel(fixedContents, modelId);
     const openaiRequestApi = getOpenAIRequestApi(providerType);
     const useOpenAIResponsesApi = openaiRequestApi === 'responses';
+    const useOpenAIResponsesWs = providerType === 'openai-ws';
     const useOpenAIChatCompletionsApi = openaiRequestApi === 'chat-completions';
-    const useStreamingApi = useOpenAIResponsesApi || useOpenAIChatCompletionsApi;
+    const useStreamingApi = !useOpenAIResponsesWs && (useOpenAIResponsesApi || useOpenAIChatCompletionsApi);
+    if (useOpenAIResponsesWs && modelEntry.requestCompression) {
+        throw new Error('requestCompression is not supported for openai-ws providers.');
+    }
     const webSearchConfig = useOpenAIResponsesApi
         && request.purpose !== 'compact-plan'
         && request.purpose !== 'setup-test'
@@ -2282,10 +2336,12 @@ function buildConcreteRequestPlan(options: {
             ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
             'user-agent': 'codex-tui/0.118.0 (Debian 13.0.0; x86_64) xterm.js_6.1.0-beta.191_ (codex-tui; 0.118.0)',
             'originator': 'codex-tui',
-            'x-codex-turn-metadata': `{"session_id":"${promptCacheKey}","turn_id":"${
-                crypto.createHash('md5').update(`turn_id_${request.sessionId || 'default'}_${Date.now()}_${attempt}`).digest('hex')
-            }","sandbox":"seccomp"}`,
-            'x-client-request-id': crypto.createHash('md5').update(`req_id_${request.sessionId || 'default'}_${Date.now()}_${attempt}`).digest('hex'),
+            ...(!useOpenAIResponsesWs ? {
+                'x-codex-turn-metadata': `{"session_id":"${promptCacheKey}","turn_id":"${
+                    crypto.createHash('md5').update(`turn_id_${request.sessionId || 'default'}_${Date.now()}_${attempt}`).digest('hex')
+                }","sandbox":"seccomp"}`,
+                'x-client-request-id': crypto.createHash('md5').update(`req_id_${request.sessionId || 'default'}_${Date.now()}_${attempt}`).digest('hex'),
+            } : {}),
         };
         data = {
             model: modelName,
@@ -2308,7 +2364,7 @@ function buildConcreteRequestPlan(options: {
             store: false,
             include: effectiveEffort === 'none' ? undefined : ['reasoning.encrypted_content'],
             prompt_cache_key: promptCacheKey,
-            stream: true,
+            ...(!useOpenAIResponsesWs ? { stream: true } : {}),
         };
     } else if (useOpenAIChatCompletionsApi) {
         messages = convertToOpenAIFormatProvider(
@@ -2372,8 +2428,19 @@ function buildConcreteRequestPlan(options: {
         TURN_ID: turnId,
     };
     const extraFields = expandTemplateVariables(modelEntry.extraFields || {}, templateVars);
+    if (useOpenAIResponsesWs) {
+        const reserved = ['input', 'previous_response_id', 'stream', 'type', 'background', 'context_management', 'conversation', 'stream_id'].filter(field =>
+            Object.prototype.hasOwnProperty.call(extraFields, field));
+        if (reserved.length > 0) {
+            throw new Error(`openai-ws extraFields cannot set transport-owned field${reserved.length === 1 ? '' : 's'}: ${reserved.join(', ')}.`);
+        }
+        if (Object.prototype.hasOwnProperty.call(extraFields, 'store') && extraFields.store !== false) {
+            throw new Error('openai-ws requires store:false; extraFields cannot enable provider storage.');
+        }
+    }
     Object.assign(data, extraFields);
     applyFirstClassEffort(data, providerType, effectiveEffort);
+    if (useOpenAIResponsesWs) data.store = false;
 
     const sanitizedRequestPayload = sanitizeProviderRequestPayload(data);
     if (sanitizedRequestPayload.replacementCount > 0) {
@@ -2406,6 +2473,7 @@ function buildConcreteRequestPlan(options: {
         requestBody,
         compressionHeaders,
         useOpenAIResponsesApi,
+        useOpenAIResponsesWs,
         useOpenAIChatCompletionsApi,
         useStreamingApi,
     };
@@ -2447,6 +2515,9 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
                 continue;
             }
             if (item.type === 'message' && item.role === 'assistant') {
+                const phase = item.phase === 'commentary' || item.phase === 'final_answer'
+                    ? item.phase
+                    : undefined;
                 for (const contentPart of item.content || []) {
                     if (contentPart.type === 'output_text' && typeof contentPart.text === 'string') {
                         responseText += contentPart.text;
@@ -2455,6 +2526,7 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
                             : undefined;
                         allParts.push({
                             text: contentPart.text,
+                            ...(phase ? { phase } : {}),
                             ...(annotations ? {
                                 providerMeta: {
                                     openaiResponses: {
@@ -2466,7 +2538,7 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
                         });
                     } else if (contentPart.type === 'refusal' && typeof contentPart.refusal === 'string') {
                         responseText += contentPart.refusal;
-                        allParts.push({ text: contentPart.refusal });
+                        allParts.push({ text: contentPart.refusal, ...(phase ? { phase } : {}) });
                     }
                 }
                 continue;
@@ -2596,7 +2668,7 @@ function parseConcreteProviderResponse(plan: ConcreteRequestPlan, resp: any): Ch
     };
 }
 
-export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<ChatResult> {
+async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<InternalLlmResult> {
     // Repair the provider-neutral source form first. This exact canonical
     // array is journaled before clone-only provider hydration, so durable
     // session image references are never expanded into provider base64 here.
@@ -2774,51 +2846,136 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
             }
 
             let attemptRawStreamLog: ReturnType<typeof createRawStreamLogCapture> | null = null;
+            let attemptHistoryAppendFinalizer: OpenAIWsHistoryAppendFinalizer | undefined;
             let resp: any;
             let response: AxiosResponse | undefined;
+            let responseStatus = '';
+            let responseHeaders: any;
+            let cleanupStreamingAttempt = () => {};
+            let streamingTimeoutError: Error | undefined;
             try {
                 if (requestStartedAt === undefined) {
                     requestStartedAt = performance.now();
                 }
-                logger.debug({ modelKey, iteration, attempt, url: plan.url }, 'Dispatching LLM HTTP request');
-                response = await axios.post(plan.url, plan.requestBody, {
-                    headers: { ...plan.headers, ...plan.compressionHeaders },
-                    timeout: options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS,
-                    validateStatus: () => true,
-                    signal: abortController.signal,
-                    ...(plan.useStreamingApi ? { responseType: 'stream' as const } : {}),
-                });
-
-                if (response.status !== 200) {
-                    const errorBody = plan.useStreamingApi
-                        ? await readStreamAsText(response.data, abortController.signal)
-                        : response.data;
-                    const status = `${response.status} ${response.statusText}`.trim();
-                    const classification = classifyHttpFailure(response.status, errorBody);
-                    throw new ConcreteAttemptFailure(summarizeRetryReason(errorBody || status), {
-                        kind: 'http-error',
-                        status,
-                        ...classification,
-                        logDetail: { headers: response.headers, body: errorBody },
+                attemptRawStreamLog = (plan.useStreamingApi || plan.useOpenAIResponsesWs)
+                    ? createRawStreamLogCapture()
+                    : null;
+                let attemptSignal = abortController.signal;
+                let markMeaningfulProgress: (() => void) | undefined;
+                if (plan.useStreamingApi) {
+                    const attemptAbortController = new AbortController();
+                    const abortAttemptFromOuter = () => attemptAbortController.abort();
+                    if (abortController.signal.aborted) attemptAbortController.abort();
+                    else abortController.signal.addEventListener('abort', abortAttemptFromOuter, { once: true });
+                    const watchdog = createStreamingAttemptWatchdog({
+                        hardTimeoutMs: options.timeoutMs,
+                        onTimeout: error => {
+                            streamingTimeoutError = error;
+                            attemptAbortController.abort();
+                        },
                     });
+                    attemptSignal = attemptAbortController.signal;
+                    markMeaningfulProgress = () => watchdog.markMeaningfulProgress();
+                    cleanupStreamingAttempt = () => {
+                        watchdog.finish();
+                        abortController.signal.removeEventListener('abort', abortAttemptFromOuter);
+                    };
+                }
+                const streamCollectOptions = {
+                    onProgress: shouldNotifySessionEvents
+                        ? (snapshot: any) => modelStreamEmitter.emit(snapshot)
+                        : undefined,
+                    onMeaningfulProgress: markMeaningfulProgress,
+                    onRawChunk: (text: string) => attemptRawStreamLog?.appendChunk(text),
+                    onRawSseBlock: (block: string) => attemptRawStreamLog?.appendSseBlock(block),
+                };
+
+                if (plan.useOpenAIResponsesWs) {
+                    logger.debug({ modelKey, iteration, attempt, url: plan.url }, 'Dispatching LLM WebSocket request');
+                    const pending = await requestOpenAIResponsesWs({
+                        url: plan.url,
+                        headers: plan.headers,
+                        concreteIdentity: plan.modelKey,
+                        data: plan.data,
+                        placement: options.currentSessionEffects?.placement || 'local',
+                        signal: abortController.signal,
+                        hardTimeoutMs: options.timeoutMs,
+                        diagnostics: {
+                            sessionId: options.sessionId,
+                            purpose: options.purpose || 'low-level',
+                            llmRequestId: requestId,
+                            iteration,
+                            attempt,
+                        },
+                        onProgress: streamCollectOptions.onProgress,
+                        onRawFrame: frame => {
+                            attemptRawStreamLog?.appendChunk(`${frame}\n`);
+                            attemptRawStreamLog?.appendSseBlock(frame);
+                        },
+                    });
+                    resp = pending.response;
+                    responseStatus = '101 WebSocket';
+                    responseHeaders = {};
+                    const unsafeReplayProjection = Array.isArray(resp?.output)
+                        && resp.output.some((item: any) => (
+                            item?.type === 'message'
+                                && Array.isArray(item.content)
+                                && item.content.some((part: any) => part?.type === 'refusal')
+                        ) || (
+                            item?.type === 'function_call'
+                                && (
+                                    !(typeof (item.call_id || item.id) === 'string' && (item.call_id || item.id).trim())
+                                    || !!parseFunctionCallArgs(item.arguments).argsParseError
+                                )
+                        ));
+                    attemptHistoryAppendFinalizer = outcome => {
+                        if (!outcome.appended || unsafeReplayProjection) {
+                            pending.finalize(false);
+                            return;
+                        }
+                        try {
+                            const replayMessage = prepareHistoryForConcreteModel([outcome.message], plan.modelId);
+                            const replayItems = convertToOpenAIResponsesFormatProvider(replayMessage, plan.modelId);
+                            pending.finalize(replayItems);
+                        } catch (error) {
+                            pending.finalize(false);
+                            throw error;
+                        }
+                    };
+                } else {
+                    logger.debug({ modelKey, iteration, attempt, url: plan.url }, 'Dispatching LLM HTTP request');
+                    response = await axios.post(plan.url, plan.requestBody, {
+                        headers: { ...plan.headers, ...plan.compressionHeaders },
+                        timeout: plan.useStreamingApi ? 0 : (options.timeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS),
+                        validateStatus: () => true,
+                        signal: attemptSignal,
+                        ...(plan.useStreamingApi ? { responseType: 'stream' as const } : {}),
+                    });
+                    responseStatus = `${response.status} ${response.statusText}`.trim();
+                    responseHeaders = response.headers;
+                    if (response.status !== 200) {
+                        const errorBody = plan.useStreamingApi
+                            ? await readStreamAsText(response.data, attemptSignal)
+                            : response.data;
+                        const classification = classifyHttpFailure(response.status, errorBody);
+                        throw new ConcreteAttemptFailure(summarizeRetryReason(errorBody || responseStatus), {
+                            kind: 'http-error',
+                            status: responseStatus,
+                            ...classification,
+                            logDetail: { headers: response.headers, body: errorBody },
+                        });
+                    }
                 }
 
-                if (plan.useStreamingApi) {
-                    attemptRawStreamLog = createRawStreamLogCapture();
-                    const streamCollectOptions = {
-                        onProgress: shouldNotifySessionEvents
-                            ? (snapshot: any) => modelStreamEmitter.emit(snapshot)
-                            : undefined,
-                        onRawChunk: (text: string) => attemptRawStreamLog?.appendChunk(text),
-                        onRawSseBlock: (block: string) => attemptRawStreamLog?.appendSseBlock(block),
-                    };
+                if (plan.useStreamingApi && response) {
                     resp = plan.useOpenAIResponsesApi
-                        ? await collectOpenAIResponsesStreamProvider(response.data, abortController.signal, streamCollectOptions)
-                        : await collectOpenAIChatCompletionsStreamProvider(response.data, abortController.signal, streamCollectOptions);
-                } else {
+                        ? await collectOpenAIResponsesStreamProvider(response.data, attemptSignal, streamCollectOptions)
+                        : await collectOpenAIChatCompletionsStreamProvider(response.data, attemptSignal, streamCollectOptions);
+                } else if (!plan.useOpenAIResponsesWs && response) {
                     resp = response.data;
                 }
 
+                cleanupStreamingAttempt();
                 const result = parseConcreteProviderResponse(plan, resp);
                 const completedAt = Date.now();
                 const durationMs = Math.max(0, performance.now() - requestStartedAt);
@@ -2826,8 +2983,8 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                     recordVirtualTargetSuccess(virtualRoutingRequest, selection.targetKey);
                 }
                 await logResponse({
-                    status: `${response.status} ${response.statusText}`.trim(),
-                    headers: response.headers,
+                    status: responseStatus,
+                    headers: responseHeaders,
                     body: resp,
                     ...(attemptRawStreamLog ? { rawStream: attemptRawStreamLog.snapshot() } : {}),
                     ...(responseAttempts.length > 0 ? { attempts: responseAttempts } : {}),
@@ -2846,8 +3003,18 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
                     outcome: 'success',
                     result: completedResult,
                 }).catch(error => logger.error({ err: error, requestId, attempt }, 'Failed to append successful LLM attempt result after provider response'));
-                return completedResult;
+                return {
+                    result: completedResult,
+                    ...(attemptHistoryAppendFinalizer ? { finalizeHistoryAppend: attemptHistoryAppendFinalizer } : {}),
+                };
             } catch (error: any) {
+                cleanupStreamingAttempt();
+                if (streamingTimeoutError) error = streamingTimeoutError;
+                settleHistoryAppendFinalizer(
+                    attemptHistoryAppendFinalizer,
+                    { appended: false },
+                    'Failed to discard provider state after LLM attempt failure',
+                );
                 if (isAbortError(error)) {
                     responseAttempts.push({
                         attempt,
@@ -2963,4 +3130,16 @@ export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<Ch
         maxRetries: maxAttempts,
         attempts: responseAttempts,
     });
+}
+
+export async function requestLlmOnce(options: RequestLlmOnceOptions): Promise<ChatResult> {
+    const completion = await requestLlmOnceInternal(options);
+    // Low-level callers do not cross chat()'s canonical assistant-history
+    // boundary, so a provider-local state chain cannot become reusable here.
+    settleHistoryAppendFinalizer(
+        completion.finalizeHistoryAppend,
+        { appended: false },
+        'Failed to discard provider state after low-level LLM request',
+    );
+    return completion.result;
 }

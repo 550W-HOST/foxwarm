@@ -153,6 +153,27 @@ test('history reasoning field rejects invalid values and non-Chat concrete or vi
   );
 });
 
+test('openai-ws is a concrete Responses provider with OpenAI defaults and rejects request compression', () => {
+  const parsed = loadModelsConfigFromObject({
+    default: 'socket',
+    providers: {
+      socket: { providerType: 'openai-ws', models: ['gpt-test'] },
+    },
+  });
+  assert.equal(parsed.models.socket.providerType, 'openai-ws');
+  assert.equal(parsed.models.socket.baseUrl, 'https://api.openai.com/v1');
+  assert.equal(parsed.models.socket.model, 'gpt-test');
+  assert.throws(
+    () => loadModelsConfigFromObject({
+      default: 'socket',
+      providers: {
+        socket: { providerType: 'openai-ws', requestCompression: 'gzip', models: ['gpt-test'] },
+      },
+    }),
+    /requestCompression is not supported for openai-ws/,
+  );
+});
+
 test('effort capabilities default, inherit, and replace at model level', () => {
   const parsed = loadModelsConfigFromObject({
     default: 'openai/model-a',

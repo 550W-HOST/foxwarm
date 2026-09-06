@@ -32,6 +32,54 @@ function findStableMessageIndex(messages: Message[], incoming: Message): number 
   return -1
 }
 
+export function isCommittedHistoryMessage(message: Message): boolean {
+  return message.__meta?.temporary !== true && message.__meta?.optimistic !== true
+}
+
+export function countCommittedHistoryMessages(messages: Message[]): number {
+  return messages.filter(isCommittedHistoryMessage).length
+}
+
+export function getLatestCommittedMessageSeq(messages: Message[]): number {
+  return messages.reduce((latest, message) => {
+    const seq = message.__meta?.seq
+    return Number.isSafeInteger(seq) && (seq || 0) > latest ? seq! : latest
+  }, 0)
+}
+
+export type HistoryReconciliationMode = 'none' | 'after' | 'full'
+
+export function decideHistoryReconciliation(options: {
+  fullHistoryLoaded: boolean
+  serverMessageCount: number
+  representedMessageCount: number
+  serverHistoryVersion: number
+  representedHistoryVersion: number
+  hasTrustedFrontier: boolean
+  queueRefreshNeeded: boolean
+  gapDetected: boolean
+}): HistoryReconciliationMode {
+  if (!options.fullHistoryLoaded
+    || options.serverHistoryVersion !== options.representedHistoryVersion) return 'full'
+  if (options.gapDetected) return options.hasTrustedFrontier ? 'after' : 'full'
+  if (options.serverMessageCount < options.representedMessageCount) return 'full'
+  if (options.serverMessageCount > options.representedMessageCount || options.queueRefreshNeeded) {
+    return options.hasTrustedFrontier ? 'after' : 'full'
+  }
+  return 'none'
+}
+
+export function advanceHistorySeqFrontier(latestSeq: number, incomingSeq: unknown): {
+  latestSeq: number
+  gapDetected: boolean
+} {
+  if (!Number.isSafeInteger(incomingSeq) || (incomingSeq as number) <= latestSeq) {
+    return { latestSeq, gapDetected: false }
+  }
+  if (incomingSeq === latestSeq + 1) return { latestSeq: incomingSeq as number, gapDetected: false }
+  return { latestSeq, gapDetected: true }
+}
+
 function findMessageIndex(messages: Message[], incoming: Message): number {
   const stableIndex = findStableMessageIndex(messages, incoming)
   if (stableIndex !== -1) return stableIndex
@@ -72,7 +120,22 @@ export function reconcileHistoryMessage(messages: Message[], incoming: Message):
     }
   }
 
+  const incomingSeq = incoming.__meta?.seq
+  if (Number.isSafeInteger(incomingSeq)) {
+    const nextSeqIndex = messages.findIndex(message => {
+      const seq = message.__meta?.seq
+      return Number.isSafeInteger(seq) && (seq || 0) > incomingSeq!
+    })
+    if (nextSeqIndex !== -1) {
+      return [...messages.slice(0, nextSeqIndex), incoming, ...messages.slice(nextSeqIndex)]
+    }
+  }
+
   return [...messages, incoming]
+}
+
+export function mergeHistoryMessages(messages: Message[], incoming: Message[]): Message[] {
+  return incoming.reduce(reconcileHistoryMessage, messages)
 }
 
 export function mergeHistorySnapshot(options: {

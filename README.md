@@ -327,8 +327,19 @@ Provider notes:
 
 - `openai-completions` uses `/chat/completions`
 - `openai` and `openai-responses` use `/responses`
+- `openai-ws` uses the Responses request/event format over a provider WebSocket
 - `anthropic` uses Anthropic-compatible requests
 - OpenAI-compatible local gateways can be configured by changing `baseUrl` and model ids. `apiKey` may be left empty if your gateway does not require one.
+
+`openai-ws` is an internal transport optimization. Foxwarm still constructs
+the complete provider-visible request from canonical history on every turn.
+Completed process-local connections may continue an exact matching Responses
+prefix with `previous_response_id`; configuration or history changes naturally
+start a full request. The optimization is not persisted and does not survive a
+process restart. Request compression is not supported for this transport, and
+`extraFields` may not set transport/envelope fields such as `input`,
+`previous_response_id`, `stream`, `type`, `background`, `context_management`,
+`conversation`, or `stream_id`.
 
 Some Chat Completions-compatible providers return assistant thinking as
 `reasoning_content` but require that history to be replayed under `reasoning`.

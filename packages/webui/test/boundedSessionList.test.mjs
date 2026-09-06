@@ -8,6 +8,7 @@ const files = {
   client: await readFile(new URL('../src/boundedSessionList.ts', import.meta.url), 'utf8'),
   list: await readFile(new URL('../src/components/SessionListCore.tsx', import.meta.url), 'utf8'),
   collapsed: await readFile(new URL('../src/components/CollapsedSidebar.tsx', import.meta.url), 'utf8'),
+  collapsedContainer: await readFile(new URL('../src/components/CollapsedSidebarContainer.tsx', import.meta.url), 'utf8'),
   architecture: await readFile(new URL('../src/components/ArchitectureView.tsx', import.meta.url), 'utf8'),
   webuiChannel: await readFile(new URL('../../../src/channels/webuiChannel.ts', import.meta.url), 'utf8'),
 }
@@ -32,15 +33,47 @@ test('bounded cache owns exact watches, focus paths, pages, latest generations, 
   assert.match(files.client, /generation !== windowGenerationRef\.current/)
   assert.doesNotMatch(files.client, /slice\(0, 100\)/)
   assert.match(files.client, /createSessionListRefreshScheduler/)
+  assert.match(files.client, /refreshRef\.current = refresh/)
+  assert.match(files.client, /createSessionListRefreshScheduler\(\(\) => refreshRef\.current\(\)\)/)
   assert.match(files.client, /getSessionIdleUnreadIds/)
   assert.match(files.client, /session-list-delta/)
   assert.match(files.client, /sessions-updated/)
   assert.match(files.client, /session-list\/descendant-activity/)
   assert.match(files.client, /invalidationVersion/)
   assert.match(files.client, /webUiRealtime\.subscribeSessionList\(subscriptionIds/)
-  assert.match(files.client, /onOpen: \(\) => requestSessionListStreamOpenResync\(schedulerRef\.current\)/)
+  assert.match(files.client, /lastResyncedSocketGenerationRef/)
+  assert.match(files.client, /onOpen: socketGeneration =>/)
+  assert.match(files.client, /lastResyncedSocketGenerationRef\.current === socketGeneration/)
   assert.match(files.client, /\[subscriptionIds\.join\('\\0'\), options\.connectStream, invalidate\]/)
   assert.doesNotMatch(files.client, /new EventSource/)
+})
+
+test('collapsed desktop rail owns its bounded controller only while its container is mounted', () => {
+  assert.doesNotMatch(files.app, /const collapsedSessions = useBoundedSessionList/)
+  assert.match(files.app, /<CollapsedSidebarContainer/)
+  assert.match(files.collapsedContainer, /useBoundedSessionList\(\{/)
+  assert.match(files.collapsedContainer, /rootLimit: 20/)
+  assert.match(files.collapsedContainer, /childLimit: 1/)
+  assert.match(files.collapsedContainer, /includeIdleWatches: false/)
+  assert.match(files.collapsedContainer, /<CollapsedSidebar \{\.\.\.props\} sessions=\{collapsedSessions\.sessions\}/)
+})
+
+test('bounded controller unmount fences every async publication lane', () => {
+  assert.match(files.client, /mountedRef\.current = false/)
+  assert.match(files.client, /ownerEpochRef/)
+  assert.match(files.client, /reportErrorIfCurrent/)
+  assert.match(files.client, /generationRef\.current === generation/)
+  for (const generation of ['windowGenerationRef', 'branchLoadGenerationRef', 'exactGenerationRef', 'searchGenerationRef', 'badgeGenerationRef', 'summaryGenerationRef']) {
+    assert.match(files.client, new RegExp(`\\+\\+${generation}\\.current`))
+  }
+  assert.match(files.client, /if \(!mountedRef\.current\) return[\s\S]*mergeHttpRows/)
+  assert.match(files.client, /!isCurrentOwner\(ownerEpoch\) \|\| generation !== windowGenerationRef\.current/)
+  assert.match(files.client, /!isCurrentOwner\(ownerEpoch\) \|\| generation !== exactGenerationRef\.current/)
+  assert.match(files.client, /!isCurrentOwner\(ownerEpoch\) \|\| generation !== searchGenerationRef\.current/)
+  assert.match(files.client, /!isCurrentOwner\(ownerEpoch\) \|\| generation !== badgeGenerationRef\.current/)
+  assert.match(files.client, /!isCurrentOwner\(ownerEpoch\) \|\| generation !== summaryGenerationRef\.current\) return false/)
+  assert.match(files.client, /if \(!exactCurrent \|\| !isCurrentOwner\(ownerEpoch\)\) return/)
+  assert.match(files.client, /if \(!summaryCurrent \|\| !isCurrentOwner\(ownerEpoch\)\) return/)
 })
 
 test('bounded active-path expansion owns branch intent and presents loading or retry before continuation', () => {
@@ -48,9 +81,9 @@ test('bounded active-path expansion owns branch intent and presents loading or r
   assert.match(files.client, /expandBranches/)
   assert.match(files.client, /branchLoadStates/)
   assert.match(files.client, /retryBranch/)
-  assert.match(files.client, /new Map\(branchTargetsRef\.current\)\)\.then\(loadSummary\)/)
-  assert.doesNotMatch(files.client, /replayOwnedWindows\(stateRef\.current\.rootTarget, new Map\(\)\)\.then\(loadSummary\)/)
-  assert.match(files.client, /if \(generation !== windowGenerationRef\.current\) return false[\s\S]*loadState\.status === 'loading' && branchTargetsRef\.current\.has\(branch\)/)
+  assert.match(files.client, /if \(!replayed \|\| !isCurrentOwner\(ownerEpoch\)/)
+  assert.doesNotMatch(files.client, /\.then\(loadSummary\)/)
+  assert.match(files.client, /if \(!isCurrentOwner\(ownerEpoch\) \|\| generation !== windowGenerationRef\.current\) return false[\s\S]*loadState\.status === 'loading' && branchTargetsRef\.current\.has\(branch\)/)
   assert.match(files.client, /\+\+windowGenerationRef\.current; \+\+branchLoadGenerationRef\.current/)
   assert.match(files.list, /bounded\.onExpandBranches\(sessionsToExpand\)/)
   assert.match(files.list, /data-session-branch-loading/)

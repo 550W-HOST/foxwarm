@@ -23,7 +23,7 @@ function parseArgs(argv) {
     list: false,
     json: false,
     help: false,
-    timeoutMs: 300_000,
+    timeoutMs: undefined,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -74,7 +74,8 @@ Options:
   -l, --list             List available model keys
       --list-models      Same as --list
   -j, --json             Output text, model id, and usage as JSON
-  -t, --timeout <secs>   Per-request timeout in seconds (default: 300)
+  -t, --timeout <secs>   Explicit whole-attempt upper bound in seconds
+                        (streaming otherwise uses 3m first-content / 1m inactivity)
   -h, --help             Show this help
 `);
 }
@@ -164,7 +165,7 @@ async function runModelCli(argv, options = {}) {
     notifySessionEvents: false,
     registerAbortController: false,
     purpose: 'cli',
-    timeoutMs: args.timeoutMs,
+    ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
   });
 
   if (!result.text || !result.text.trim()) {

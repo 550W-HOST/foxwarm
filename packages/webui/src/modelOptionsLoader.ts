@@ -1,5 +1,15 @@
 export type LatestRequestGate = ReturnType<typeof createLatestRequestGate>
 
+const pageRequestCache = new Map<string, Promise<unknown>>()
+
+export function loadPageOnce<T>(key: string, request: () => Promise<T>): Promise<T> {
+  const existing = pageRequestCache.get(key)
+  if (existing) return existing as Promise<T>
+  const promise = Promise.resolve().then(request)
+  pageRequestCache.set(key, promise)
+  return promise
+}
+
 export type ModelOptionsLoadState<T> = {
   options?: T[]
   error?: string | null

@@ -4,6 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import fs from 'fs-extra';
 import {
+  BACKGROUND_COMPLETION_EVENT_RETENTION_MS,
   BACKGROUND_PROCESS_CMDLINE_LIMIT,
   BACKGROUND_PROCESS_TREE_LIMIT,
   MAX_FULL_LOG_READ_BYTES,
@@ -450,6 +451,63 @@ test('persistent exec retains a finished background entry across restart until c
   } finally {
     await fs.remove(root);
   }
+});
+
+test('persistent exec expires background tracking records strictly after 24 hours without inspecting or notifying', async t => {
+  const fixedNow = 1_800_000_000_000;
+
+  async function createRecoveredManager(options: { id: string; ageMs: number; notifyOnCompletion: boolean; finished?: boolean }) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-persistent-exec-expiry-'));
+    const registryPath = path.join(root, 'running-exec.json');
+    const logPath = path.join(root, `${options.id}.log`);
+    const entry = buildExecEntry(logPath, {
+      id: options.id,
+      pid: 99_999_997,
+      startedAt: fixedNow - options.ageMs,
+      notifyOnCompletion: options.notifyOnCompletion,
+    });
+    await fs.writeFile(logPath, 'done\n');
+    if (options.finished) await fs.writeJson(entry.statusPath, { exitCode: 0, finishedAt: new Date(fixedNow).toISOString() });
+    await fs.writeJson(registryPath, { execs: [entry] });
+    let dispatches = 0;
+    let livenessChecks = 0;
+    const manager = new PersistentExecManager({
+      registryPath,
+      nodeId: 'master',
+      getDefaultCwd: () => root,
+      getExecTempDir: () => root,
+      completionDispatcher: async () => { dispatches += 1; },
+      processOperations: { ...nativeProcessOperations, isRunning: () => { livenessChecks += 1; return !options.finished; } },
+      now: () => fixedNow,
+    });
+    return { root, registryPath, manager, counts: () => ({ dispatches, livenessChecks }) };
+  }
+
+  await t.test('removes an alive background entry older than 24 hours without a liveness check', async () => {
+    const { root, registryPath, manager, counts } = await createRecoveredManager({
+      id: 'exec_expiry_alive', ageMs: BACKGROUND_COMPLETION_EVENT_RETENTION_MS + 1, notifyOnCompletion: true,
+    });
+    try {
+      await manager.initialize();
+      assert.deepEqual(manager.listRunningExecs(), []);
+      assert.deepEqual(counts(), { dispatches: 0, livenessChecks: 0 });
+      assert.deepEqual((await fs.readJson(registryPath)).execs, []);
+    } finally { await manager.shutdown(); await fs.remove(root); }
+  });
+
+  for (const [label, ageMs] of [['under', BACKGROUND_COMPLETION_EVENT_RETENTION_MS - 1], ['equal', BACKGROUND_COMPLETION_EVENT_RETENTION_MS]] as const) {
+    await t.test(`keeps existing finished-process delivery ${label} the 24-hour boundary`, async () => {
+      const { root, manager, counts } = await createRecoveredManager({
+        id: `exec_expiry_${label}`, ageMs, notifyOnCompletion: true, finished: true,
+      });
+      try {
+        await manager.initialize();
+        assert.deepEqual(counts(), { dispatches: 1, livenessChecks: 0 });
+        assert.deepEqual(manager.listRunningExecs(), []);
+      } finally { await manager.shutdown(); await fs.remove(root); }
+    });
+  }
+
 });
 
 test('persistent exec keeps ordinary and truncated-small text behavior', async () => {

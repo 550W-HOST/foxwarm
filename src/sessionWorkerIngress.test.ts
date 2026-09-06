@@ -279,7 +279,7 @@ test('Main submitAndRun ensures, spawns, and owns exact worker ingress without M
     } };
     assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validMessageItem }), { sessionId, item: validMessageItem });
     const validSystemPayloadItem = { type: 'intersession' as const, message: {
-      role: 'user' as const, parts: [{ text: 'payload', systemPayload: true }, { system: 'ordinary system', systemPayload: false }],
+      role: 'user' as const, parts: [{ text: 'payload', systemPayload: true }, { system: 'ordinary system', systemPayload: false, phase: 'commentary' as const }],
     } };
     assert.deepEqual(normalizeSessionWorkerIngressRequest({ sessionId, item: validSystemPayloadItem }), { sessionId, item: validSystemPayloadItem });
     const validExternalEventItem = {
@@ -297,6 +297,7 @@ test('Main submitAndRun ensures, spawns, and owns exact worker ingress without M
       { type: 'user', parts: [{}] }, { type: 'intersession', message: {} },
       { type: 'intersession', message: { role: 'user', parts: [{ text: 'x' }], extra: true } },
       { type: 'intersession', message: { role: 'user', parts: [{ system: 'inverted payload', systemPayload: true }] } },
+      { type: 'intersession', message: { role: 'model', parts: [{ text: 'invalid phase', phase: 'analysis' }] } },
       { type: 'user', parts: [{ text: 'x' }], message: { role: 'user', parts: [{ text: 'x' }] } },
       { type: 'user', parts: [{ text: 'x' }], clientMessageId: 7 },
       { type: 'user', parts: [{ text: 'x' }], clientMessageId: 'x'.repeat(513) },

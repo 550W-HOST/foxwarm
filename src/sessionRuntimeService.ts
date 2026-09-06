@@ -68,7 +68,16 @@ export type SessionRuntimeHistoryDto = {
   messages: Message[];
   queue: QueueItem[];
   persistentMemorySnapshot: string;
+  latestSeq: number;
 };
+
+function getLatestSessionHistorySeq(session: Pick<Session, 'history' | 'nextMessageSeq'>): number {
+  return session.history.reduce((latest, message) => Math.max(
+    latest,
+    Number.isSafeInteger(message.__meta?.seq) ? message.__meta!.seq! : 0,
+    Number.isSafeInteger(message.__meta?.contextBlock?.rawEndSeq) ? message.__meta!.contextBlock!.rawEndSeq : 0,
+  ), Math.max(0, (session.nextMessageSeq || 1) - 1));
+}
 
 export type SessionRuntimeSettingsPatchDto = {
   cwd?: string | null;
@@ -143,7 +152,7 @@ export type SessionListProjectionBatchDto = {
   revision: string;
 };
 
-export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 10, {
+export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 11, {
   getSession: rpcMethod<{ sessionId: string }, { session: SessionRuntimeSessionDto | null }>(),
   listSessions: rpcMethod<{ limit?: number; offset?: number }, { sessions: SessionRuntimeSessionDto[]; total: number }>(),
   getSessionListProjections: rpcMethod<{ sessionIds: string[]; includeVolatile?: boolean; currentOwnersOnly?: boolean }, SessionListProjectionBatchDto>(),
@@ -585,6 +594,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
           messages: detached.history,
           queue: [...(detached.queue || []), ...pending],
           persistentMemorySnapshot: detached.persistentMemorySnapshot || '',
+          latestSeq: getLatestSessionHistorySeq(detached),
         };
       }
       const history = session.history;
@@ -608,6 +618,7 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         messages: session.history,
         queue: session.queue || [],
         persistentMemorySnapshot: session.persistentMemorySnapshot || '',
+        latestSeq: getLatestSessionHistorySeq(session),
       };
     },
     async enqueue(input) {

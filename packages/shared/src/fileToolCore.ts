@@ -142,17 +142,6 @@ class RangeByteCollector {
     this.tail = Buffer.concat([this.tail, part]).subarray(Math.max(0, this.tail.length + part.length - 5000));
   }
 
-  trimTrailingLf(): void {
-    if (this.totalBytes === 0 || this.tail[this.tail.length - 1] !== 0x0a) return;
-    this.totalBytes -= 1;
-    this.tail = this.tail.subarray(0, -1);
-    if (this.totalBytes < 5000) this.head = this.head.subarray(0, -1);
-    if (this.fullParts?.length) {
-      const last = this.fullParts.length - 1;
-      this.fullParts[last] = this.fullParts[last].subarray(0, -1);
-    }
-  }
-
   fullBuffer(): Buffer | null {
     return this.fullParts ? Buffer.concat(this.fullParts) : null;
   }
@@ -162,40 +151,191 @@ class RangeByteCollector {
   }
 }
 
-async function readLineRangeBounded(
+type ExactLineEnding = 'lf' | 'crlf' | 'bare-cr' | 'none' | 'empty';
+
+type ExactLineScanResult = {
+  selected: RangeByteCollector;
+  selectedStartLine?: number;
+  selectedEndLine?: number;
+  selectedLineCount: number;
+  selectedLinesHaveContent: boolean;
+  selectedEnding: ExactLineEnding;
+  reachedEof: boolean;
+  totalLineCount?: number;
+  fileEnding?: ExactLineEnding;
+};
+
+class ExactLineScanner {
+  private readonly selected = new RangeByteCollector();
+  private lineNumber = 1;
+  private completedLineCount = 0;
+  private currentLineHasContent = false;
+  private pendingCr = false;
+  private selectedStartLine?: number;
+  private selectedEndLine?: number;
+  private selectedLineCount = 0;
+  private selectedLinesHaveContent = false;
+  private selectedEnding: ExactLineEnding = 'empty';
+  private fileEnding: ExactLineEnding = 'empty';
+
+  constructor(
+    private readonly startLine: number,
+    private readonly endLine: number | undefined,
+    private readonly stopAfterEnd: boolean,
+  ) {}
+
+  private includesCurrentLine(): boolean {
+    return this.lineNumber >= this.startLine && (this.endLine === undefined || this.lineNumber <= this.endLine);
+  }
+
+  private appendContent(content: Buffer): void {
+    if (content.length === 0) return;
+    this.currentLineHasContent = true;
+    this.fileEnding = 'none';
+    if (this.includesCurrentLine()) this.selected.append(Buffer.from(content));
+  }
+
+  private finishLine(ending: Exclude<ExactLineEnding, 'empty'>, terminator?: Buffer): boolean {
+    const included = this.includesCurrentLine();
+    if (included) {
+      if (terminator?.length) this.selected.append(terminator);
+      this.selectedStartLine ??= this.lineNumber;
+      this.selectedEndLine = this.lineNumber;
+      this.selectedLineCount += 1;
+      if (this.currentLineHasContent) this.selectedLinesHaveContent = true;
+      this.selectedEnding = ending;
+    }
+    this.completedLineCount += 1;
+    const completedLine = this.lineNumber;
+    this.lineNumber += 1;
+    this.currentLineHasContent = false;
+    this.fileEnding = ending;
+    return this.stopAfterEnd && this.endLine !== undefined && completedLine === this.endLine;
+  }
+
+  consume(buffer: Buffer): { stopped: boolean; consumed: number } {
+    let index = 0;
+    if (this.pendingCr) {
+      this.pendingCr = false;
+      if (buffer[0] === 0x0a) {
+        if (this.finishLine('crlf', Buffer.from([0x0d, 0x0a]))) return { stopped: true, consumed: 1 };
+        index = 1;
+      } else if (this.finishLine('bare-cr', Buffer.from([0x0d]))) {
+        return { stopped: true, consumed: 0 };
+      }
+    }
+
+    let contentStart = index;
+    while (index < buffer.length) {
+      const byte = buffer[index];
+      if (byte !== 0x0a && byte !== 0x0d) {
+        index += 1;
+        continue;
+      }
+      this.appendContent(buffer.subarray(contentStart, index));
+      if (byte === 0x0a) {
+        index += 1;
+        if (this.finishLine('lf', Buffer.from([0x0a]))) return { stopped: true, consumed: index };
+      } else if (index + 1 < buffer.length) {
+        if (buffer[index + 1] === 0x0a) {
+          index += 2;
+          if (this.finishLine('crlf', Buffer.from([0x0d, 0x0a]))) return { stopped: true, consumed: index };
+        } else {
+          index += 1;
+          if (this.finishLine('bare-cr', Buffer.from([0x0d]))) return { stopped: true, consumed: index };
+        }
+      } else {
+        this.pendingCr = true;
+        index += 1;
+      }
+      contentStart = index;
+    }
+    this.appendContent(buffer.subarray(contentStart));
+    return { stopped: false, consumed: buffer.length };
+  }
+
+  finishEof(): ExactLineScanResult {
+    if (this.pendingCr) {
+      this.pendingCr = false;
+      this.finishLine('bare-cr', Buffer.from([0x0d]));
+    } else if (this.currentLineHasContent) {
+      this.finishLine('none');
+    }
+    return this.result(true);
+  }
+
+  result(reachedEof: boolean): ExactLineScanResult {
+    return {
+      selected: this.selected,
+      selectedStartLine: this.selectedStartLine,
+      selectedEndLine: this.selectedEndLine,
+      selectedLineCount: this.selectedLineCount,
+      selectedLinesHaveContent: this.selectedLinesHaveContent,
+      selectedEnding: this.selectedEnding,
+      reachedEof,
+      ...(reachedEof ? { totalLineCount: this.completedLineCount, fileEnding: this.fileEnding } : {}),
+    };
+  }
+}
+
+async function scanFileLineRange(
   operations: FileOperations,
   fullPath: string,
   sourceSize: number,
   startLine: number,
   endLine?: number,
-): Promise<{ selected: RangeByteCollector; endedAtRequestedLine: boolean }> {
-  const selected = new RangeByteCollector();
-  let line = 1;
+  stopAfterEnd = true,
+): Promise<ExactLineScanResult> {
+  const scanner = new ExactLineScanner(startLine, endLine, stopAfterEnd);
   let offset = 0;
-  let endedAtRequestedLine = false;
-  outer: while (offset < sourceSize) {
+  while (offset < sourceSize) {
     const buffer = await operations.read(fullPath, offset, Math.min(64 * 1024, sourceSize - offset));
     if (buffer.length === 0) break;
     offset += buffer.length;
-    let segmentStart = -1;
-    for (let index = 0; index < buffer.length; index += 1) {
-      const include = line >= startLine && (endLine === undefined || line <= endLine);
-      if (include && segmentStart < 0) segmentStart = index;
-      if (buffer[index] !== 0x0a) continue;
-      if (include && segmentStart >= 0) {
-        selected.append(Buffer.from(buffer.subarray(segmentStart, index + 1)));
-        segmentStart = -1;
-      }
-      if (endLine !== undefined && line === endLine) {
-        endedAtRequestedLine = true;
-        break outer;
-      }
-      line += 1;
+    const consumed = scanner.consume(buffer);
+    if (consumed.stopped) {
+      return consumed.consumed === buffer.length && offset >= sourceSize
+        ? scanner.finishEof()
+        : scanner.result(false);
     }
-    if (segmentStart >= 0) selected.append(Buffer.from(buffer.subarray(segmentStart)));
   }
-  if (endedAtRequestedLine) selected.trimTrailingLf();
-  return { selected, endedAtRequestedLine };
+  return offset >= sourceSize ? scanner.finishEof() : scanner.result(false);
+}
+
+function formatRequestedLineRange(startLine: number, endLine?: number): string {
+  return endLine === undefined ? `${startLine}-end` : `${startLine}-${endLine}`;
+}
+
+function lineCountText(lineCount: number): string {
+  return `File has ${lineCount} ${lineCount === 1 ? 'line' : 'lines'}.`;
+}
+
+function formatSelectedLines(scan: ExactLineScanResult, requestedStart: number, requestedEnd?: number): string {
+  const start = scan.selectedStartLine!;
+  const end = scan.selectedEndLine!;
+  const selected = start === end ? `Selected line ${start}` : `Selected lines ${start}-${end}`;
+  const total = scan.totalLineCount === undefined ? '' : ` of ${scan.totalLineCount}`;
+  const requested = requestedEnd !== undefined && end < requestedEnd
+    ? ` (requested lines ${requestedStart}-${requestedEnd})`
+    : '';
+  return `${selected}${total}${requested}.`;
+}
+
+function formatTextResult(content: string, ending: ExactLineEnding, footerLines: string[]): string {
+  return `${content}${footerSeparatorForEnding(ending)}---\n${footerLines.join('\n')}`;
+}
+
+function footerSeparatorForEnding(ending: ExactLineEnding): string {
+  return ending === 'lf' || ending === 'crlf' || ending === 'bare-cr' ? '' : '\n';
+}
+
+function buildRangeFooter(scan: ExactLineScanResult, start: number, end: number | undefined, sourceSize: number): string[] {
+  const lines = [formatSelectedLines(scan, start, end), `File size: ${sourceSize} bytes.`];
+  if (!scan.selectedLinesHaveContent) lines.push('Selected lines contain only empty content.');
+  if (scan.reachedEof && scan.selectedEndLine === scan.totalLineCount && scan.fileEnding === 'none') {
+    lines.push('File has no trailing newline.');
+  }
+  return lines;
 }
 
 function formatBoundedFileRead(
@@ -205,6 +345,8 @@ function formatBoundedFileRead(
   tail: Buffer,
   selectedByteCount: number,
   label: string,
+  metadataLines: string[] = [],
+  footerSeparator = '\n',
 ): string {
   const excerpt = buildBoundedTextExcerpt(head, tail, {
     headMayEndMidCodePoint: true,
@@ -213,8 +355,17 @@ function formatBoundedFileRead(
   const conversionNote = excerpt.escapedByteCount > 0
     ? `\n${formatDisplayByteConversionDisclaimer('file content')}`
     : '';
-  const footer = `\n---\nFile content was shortened for inline display.\nOriginal file size: ${originalFileSize} bytes.\nComplete content remains in source file: ${displayPath}.${conversionNote}`;
-  if (excerpt.isBinary) return `${formatBoundedBinaryHexPreview(head, tail, selectedByteCount, label, label === 'selected file range' ? 'selected range' : 'file')}${footer}`;
+  const footerLines = [
+    'File content was shortened for inline display.',
+    ...metadataLines,
+    `File size: ${originalFileSize} bytes.`,
+    `Complete content remains in source file: ${displayPath}.`,
+  ];
+  const footerBody = `---\n${footerLines.join('\n')}${conversionNote}`;
+  if (excerpt.isBinary) {
+    return `${formatBoundedBinaryHexPreview(head, tail, selectedByteCount, label, label === 'selected file range' ? 'selected range' : 'file')}\n${footerBody}`;
+  }
+  const footer = `${footerSeparator}${footerBody}`;
   const escapedByteNote = excerpt.escapedByteCount > 0 ? `; escaped ${excerpt.escapedByteCount} byte(s)` : '';
   return [
     excerpt.renderedHead!,
@@ -252,13 +403,38 @@ export async function readFileToolPath(
     if (normalizedStartLine !== undefined || normalizedEndLine !== undefined) {
       const start = normalizedStartLine !== undefined ? Math.max(1, Math.floor(normalizedStartLine)) : 1;
       const end = normalizedEndLine !== undefined ? Math.max(0, Math.floor(normalizedEndLine)) : undefined;
-      const { selected } = await readLineRangeBounded(operations, fullPath, stats.size, start, end);
-      const fullSelected = selected.fullBuffer();
-      if (fullSelected) {
-        return `${fullSelected.toString('utf8')}\n---\nOriginal file size: ${stats.size} bytes.\nComplete content remains in source file: ${displayPath}.`;
+      if (end !== undefined && end < start) {
+        return `(no content in requested line range ${formatRequestedLineRange(start, end)})\n---\nFile size: ${stats.size} bytes.`;
       }
-      const { head, tail } = selected.samples();
-      return formatBoundedFileRead(displayPath, stats.size, head, tail, selected.totalBytes, 'selected file range');
+      const scan = await scanFileLineRange(operations, fullPath, stats.size, start, end);
+      if (scan.selectedLineCount === 0) {
+        const footer = [
+          ...(scan.totalLineCount !== undefined ? [lineCountText(scan.totalLineCount)] : []),
+          `File size: ${stats.size} bytes.`,
+        ];
+        return `(no content in requested line range ${formatRequestedLineRange(start, end)})\n---\n${footer.join('\n')}`;
+      }
+      const fullSelected = scan.selected.fullBuffer();
+      if (fullSelected) {
+        const selectedContent = fullSelected.toString('utf8');
+        return `${formatTextResult(selectedContent, scan.selectedEnding, buildRangeFooter(scan, start, end, stats.size))}\nComplete content remains in source file: ${displayPath}.`;
+      }
+      const { head, tail } = scan.selected.samples();
+      const metadata = [formatSelectedLines(scan, start, end)];
+      if (!scan.selectedLinesHaveContent) metadata.push('Selected lines contain only empty content.');
+      if (scan.reachedEof && scan.selectedEndLine === scan.totalLineCount && scan.fileEnding === 'none') {
+        metadata.push('File has no trailing newline.');
+      }
+      return formatBoundedFileRead(
+        displayPath,
+        stats.size,
+        head,
+        tail,
+        scan.selected.totalBytes,
+        'selected file range',
+        metadata,
+        footerSeparatorForEnding(scan.selectedEnding),
+      );
     }
     const sampleLength = Math.min(5000, stats.size);
     const head = await operations.read(fullPath, 0, sampleLength);
@@ -266,14 +442,29 @@ export async function readFileToolPath(
     return formatBoundedFileRead(displayPath, stats.size, head, tail, stats.size, 'file content');
   }
 
-  let content = (await operations.read(fullPath, 0, stats.size)).toString('utf8');
-  if (normalizedStartLine !== undefined || normalizedEndLine !== undefined) {
-    const lines = content.split('\n');
-    const start = normalizedStartLine !== undefined ? Math.max(0, normalizedStartLine - 1) : 0;
-    const end = normalizedEndLine !== undefined ? Math.min(lines.length, normalizedEndLine) : lines.length;
-    content = lines.slice(start, end).join('\n');
+  const buffer = await operations.read(fullPath, 0, stats.size);
+  const hasRange = normalizedStartLine !== undefined || normalizedEndLine !== undefined;
+  const start = normalizedStartLine !== undefined ? Math.max(1, Math.floor(normalizedStartLine)) : 1;
+  const end = normalizedEndLine !== undefined ? Math.max(0, Math.floor(normalizedEndLine)) : undefined;
+  const scanner = new ExactLineScanner(start, end, false);
+  scanner.consume(buffer);
+  const scan = scanner.finishEof();
+
+  if (!hasRange) {
+    if (scan.totalLineCount === 0) {
+      return `(empty file)\n---\n${lineCountText(0)}\nFile size: ${stats.size} bytes.`;
+    }
+    const footer = [lineCountText(scan.totalLineCount!), `File size: ${stats.size} bytes.`];
+    if (!scan.selectedLinesHaveContent) footer.push('File content contains only empty lines.');
+    if (scan.fileEnding === 'none') footer.push('File has no trailing newline.');
+    return formatTextResult(buffer.toString('utf8'), scan.fileEnding!, footer);
   }
-  return content;
+
+  if (end !== undefined && end < start || scan.selectedLineCount === 0) {
+    return `(no content in requested line range ${formatRequestedLineRange(start, end)})\n---\n${lineCountText(scan.totalLineCount!)}\nFile size: ${stats.size} bytes.`;
+  }
+  const selected = scan.selected.fullBuffer()!;
+  return formatTextResult(selected.toString('utf8'), scan.selectedEnding, buildRangeFooter(scan, start, end, stats.size));
 }
 
 export async function findWriteParentIssue(fullPath: string, operations: FileOperations = nativeFileOperations): Promise<WriteParentIssue | null> {

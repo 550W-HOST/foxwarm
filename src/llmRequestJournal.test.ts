@@ -56,7 +56,7 @@ test('request journal reconstructs checkpoint and bounded delta inputs exactly',
   const sessionId = unique('journal_delta');
   const firstMessages: any[] = [
     { role: 'user', parts: [{ text: 'one' }] },
-    { role: 'model', parts: [{ text: 'two' }] },
+    { role: 'model', parts: [{ text: 'two', phase: 'commentary' }] },
   ];
   const first = await beginLlmRequestJournal({ sessionId, purpose: 'normal-turn', systemPrompt: 'system A', toolDefinitions: tools as any, messages: firstMessages, requestedModelKey: 'fixture/model', promptCacheKey: 'cache-a' });
   const secondMessages: any[] = [

@@ -1,4 +1,5 @@
 import { verifyRemoteExecCompletionCapability } from './sessionEventCapability';
+import { BACKGROUND_COMPLETION_EVENT_RETENTION_MS } from '../../packages/shared/dist/persistentExec';
 
 export type RemoteExecLivenessState = 'reserved' | 'active' | 'outcome-unknown';
 
@@ -15,6 +16,17 @@ export type RemoteExecLivenessClaim = {
 
 const records = new Map<string, RemoteExecLivenessClaim>();
 
+export function pruneExpiredRemoteExecLivenessClaims(now = Date.now()): number {
+  let removed = 0;
+  for (const [key, record] of records) {
+    const trackedAt = record.activatedAt ?? record.reservedAt;
+    if (now - trackedAt <= BACKGROUND_COMPLETION_EVENT_RETENTION_MS) continue;
+    records.delete(key);
+    removed += 1;
+  }
+  return removed;
+}
+
 function recordKey(originalSessionId: string, execId: string): string {
   return `${originalSessionId}\u0000${execId}`;
 }
@@ -25,6 +37,7 @@ function exactRecord(input: {
   execId: string;
   completionCapability: string;
 }): RemoteExecLivenessClaim | undefined {
+  pruneExpiredRemoteExecLivenessClaims();
   const record = records.get(recordKey(input.originalSessionId, input.execId));
   if (!record || record.nodeId !== input.authenticatedNodeId
     || record.completionCapability !== input.completionCapability
@@ -44,6 +57,7 @@ export function reserveRemoteExecIdentity(input: {
   execId: string;
   completionCapability: string;
 }): boolean {
+  pruneExpiredRemoteExecLivenessClaims();
   const identityIds = new Set([input.canonicalSessionId, ...input.sessionIdentityIds]);
   if (!input.authenticatedNodeId || !input.canonicalSessionId || !input.agentName || !input.execId
     || !verifyRemoteExecCompletionCapability(input.completionCapability, {
@@ -111,6 +125,7 @@ export function markRemoteExecOutcomeUnknown(input: {
 }
 
 export function hasRemoteExecLivenessClaim(sessionIdentityIds: string[], agentName: string, execId: string): boolean {
+  pruneExpiredRemoteExecLivenessClaims();
   const identityIds = new Set(sessionIdentityIds);
   for (const record of records.values()) {
     if (record.state === 'active' && record.execId === execId
@@ -130,6 +145,7 @@ export function clearRemoteExecLivenessClaim(input: {
 }
 
 export function rebindRemoteExecSessionAgent(sessionIdentityIds: string[], agentName: string): void {
+  pruneExpiredRemoteExecLivenessClaims();
   const identityIds = new Set(sessionIdentityIds);
   for (const record of records.values()) {
     if (identityIds.has(record.originalSessionId)) record.agentName = agentName;
@@ -137,6 +153,7 @@ export function rebindRemoteExecSessionAgent(sessionIdentityIds: string[], agent
 }
 
 export function clearRemoteExecStateForSession(sessionIdentityIds: string[]): number {
+  pruneExpiredRemoteExecLivenessClaims();
   const identityIds = new Set(sessionIdentityIds);
   let cleared = 0;
   for (const [key, record] of records) {
@@ -148,6 +165,7 @@ export function clearRemoteExecStateForSession(sessionIdentityIds: string[]): nu
 }
 
 export function getRemoteExecLivenessRecordsForTests(): RemoteExecLivenessClaim[] {
+  pruneExpiredRemoteExecLivenessClaims();
   return [...records.values()].map(record => ({ ...record }));
 }
 

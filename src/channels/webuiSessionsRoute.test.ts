@@ -11,7 +11,7 @@ import * as sessionManager from '../sessionManager';
 import { buildWebUiSessionListProjection, getBoundedSessionListChildTotal, setWebUiDeleteLifecycleTestHookForTests, WebUIChannel } from './webuiChannel';
 import { loadSessionsMetadataSnapshot, readSessionHistorySnapshot, serializeSessionHistoryPayload } from '../session/metadataStore';
 import { markSessionCatalogStub } from '../sessionRuntimeState';
-import type { Session } from '../types';
+import type { Message, Session } from '../types';
 import { formatFoxwarmMessage } from '../utils/promptWrappers';
 import fs from 'fs-extra';
 import { getAgentDir } from '../config';
@@ -722,6 +722,92 @@ test('WebUI history route returns queued preview messages separately from commit
     session.busy = false;
     await sessionManager.deleteSession(sessionId).catch(() => {});
     if (blobId) await fs.remove(resolveImageBlobPath(blobId));
+  }
+});
+
+test('WebUI history route serves guarded tail, prefix, and after-seq ranges', async () => {
+  const sessionId = makeSessionId('webui_history_ranges');
+  const session = await sessionManager.getSession(sessionId);
+  session.history = Array.from({ length: 102 }, (_, index): Message => ({
+    role: index % 2 ? 'model' : 'user',
+    parts: [{ text: `range row ${index + 1}` }],
+    __meta: { seq: index + 1, timestamp: index + 1 },
+  }));
+  session.history.push({
+    role: 'model',
+    parts: [{ text: 'final context block' }],
+    __meta: { timestamp: 200, contextBlock: { id: 1, level: 1, rawStartSeq: 103, rawEndSeq: 150, sourceKind: 'message', sourceStart: 103, sourceEnd: 150 } },
+  });
+  session.nextMessageSeq = 151;
+  session.historyVersion = 4;
+  session.queue = [];
+  session.persistentMemorySnapshot = 'range snapshot';
+  session.stats = { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null };
+  session.meta = { lastMessageTime: 200 } as Session['meta'];
+  await sessionManager.saveSession(sessionId);
+
+  const port = 36500 + Math.floor(Math.random() * 500);
+  const server = new HttpServer(port, 'history-range-token');
+  setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token: 'history-range-token', enableTrigger: false, enableWebUI: true });
+  await server.start();
+  const get = (query = '') => fetch(`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(sessionId)}/history${query}`, {
+    headers: { Authorization: 'Bearer history-range-token' },
+  });
+
+  try {
+    const tailResponse = await get('?tail=100');
+    assert.equal(tailResponse.status, 200);
+    const tail = await tailResponse.json() as any;
+    assert.equal(tail.messages.length, 100);
+    assert.equal(tail.messages[0].parts[0].text, 'range row 4');
+    assert.equal(tail.messages.at(-1).parts[0].text, 'final context block');
+    assert.equal(tail.prefixLength, 3);
+    assert.equal(tail.historyComplete, false);
+    assert.equal(tail.latestSeq, 150, 'latestSeq comes from the exact authority frontier, not the final row');
+    assert.equal(tail.historyVersion, 4);
+
+    session.history.push({ role: 'user', parts: [{ text: 'append after tail' }], __meta: { seq: 151, timestamp: 201 } });
+    session.nextMessageSeq = 152;
+    await sessionManager.saveSession(sessionId);
+
+    const prefixResponse = await get('?prefixLength=3&historyVersion=4');
+    assert.equal(prefixResponse.status, 200);
+    const prefix = await prefixResponse.json() as any;
+    assert.deepEqual(prefix.messages.map((message: Message) => message.parts[0].text), ['range row 1', 'range row 2', 'range row 3']);
+    assert.equal(prefix.latestSeq, 151);
+    assert.equal(prefix.historyComplete, true);
+
+    const afterResponse = await get('?afterSeq=150&historyVersion=4');
+    assert.equal(afterResponse.status, 200);
+    const after = await afterResponse.json() as any;
+    assert.deepEqual(after.messages.map((message: Message) => message.parts[0].text), ['append after tail']);
+    assert.equal(after.queueLength, 0);
+
+    session.historyVersion = 5;
+    await sessionManager.saveSession(sessionId);
+    const stale = await get('?prefixLength=3&historyVersion=4');
+    assert.equal(stale.status, 409);
+    assert.deepEqual(await stale.json(), {
+      error: 'History changed while the requested range was loading.',
+      code: 'SESSION_HISTORY_BOUNDARY_STALE',
+      retryable: true,
+      historyVersion: 5,
+    });
+
+    const legacyQuery = await get('?offset=1');
+    assert.equal(legacyQuery.status, 200);
+    assert.equal((await legacyQuery.json() as any).messages.length, 104);
+
+    for (const query of ['?tail=0', '?tail=100&afterSeq=1', '?prefixLength=1', '?afterSeq=1', '?historyVersion=4', '?tail=100&offset=1']) {
+      const invalid = await get(query);
+      assert.equal(invalid.status, 400, query);
+      assert.equal((await invalid.json() as any).code, 'HISTORY_RANGE_INVALID');
+    }
+  } finally {
+    await server.stop();
+    setHttpServer(null);
+    await sessionManager.deleteSession(sessionId).catch(() => {});
   }
 });
 

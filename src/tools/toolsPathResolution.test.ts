@@ -48,7 +48,7 @@ test('file tools resolve relative paths from session cwd', async () => {
     assert.equal(await fs.readFile(path.join(nestedDir, 'note.txt'), 'utf8'), 'hello');
 
     const readResult = await read({ filePath: 'note.txt' }, ctx as any);
-    assert.equal(readResult, 'hello');
+    assert.equal(readResult, 'hello\n---\nFile has 1 line.\nFile size: 5 bytes.\nFile has no trailing newline.');
 
     await edit({ filePath: 'note.txt', oldText: 'hello', newText: 'world' }, ctx as any);
     assert.equal(await fs.readFile(path.join(nestedDir, 'note.txt'), 'utf8'), 'world');
@@ -114,9 +114,22 @@ test('read treats startLine/endLine 0 as omitted for files and directories', asy
     await fs.writeFile(filePath, 'one\ntwo\nthree');
     await fs.writeFile(path.join(baseDir, 'item.txt'), 'item');
 
-    assert.equal(await read({ filePath, startLine: 0, endLine: 0 }, ctx as any), 'one\ntwo\nthree');
-    assert.equal(await read({ filePath, startLine: 2, endLine: 0 }, ctx as any), 'two\nthree');
-    assert.equal(await read({ filePath, startLine: 0, endLine: 2 }, ctx as any), 'one\ntwo');
+    assert.equal(
+      await read({ filePath, startLine: 0, endLine: 0 }, ctx as any),
+      'one\ntwo\nthree\n---\nFile has 3 lines.\nFile size: 13 bytes.\nFile has no trailing newline.',
+    );
+    assert.equal(
+      await read({ filePath, startLine: 2, endLine: 0 }, ctx as any),
+      'two\nthree\n---\nSelected lines 2-3 of 3.\nFile size: 13 bytes.\nFile has no trailing newline.',
+    );
+    assert.equal(
+      await read({ filePath, startLine: 0, endLine: 2 }, ctx as any),
+      'one\ntwo\n---\nSelected lines 1-2 of 3.\nFile size: 13 bytes.',
+    );
+    assert.equal(
+      await read({ filePath, startLine: 9, endLine: 12 }, ctx as any),
+      '(no content in requested line range 9-12)\n---\nFile has 3 lines.\nFile size: 13 bytes.',
+    );
 
     const listing = String(await read({ filePath: baseDir, startLine: 0, endLine: 0 }, ctx as any));
     assert.match(listing, /Directory listing/);
@@ -412,7 +425,7 @@ test('non-isolated read accepts absolute paths outside the agent directory', asy
   try {
     await fs.writeFile(outsidePath, 'outside');
     const result = await read({ filePath: outsidePath }, { session: { agent: 'main' } } as any);
-    assert.equal(result, 'outside');
+    assert.equal(result, 'outside\n---\nFile has 1 line.\nFile size: 7 bytes.\nFile has no trailing newline.');
   } finally {
     await fs.remove(outsidePath);
   }

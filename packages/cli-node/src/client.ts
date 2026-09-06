@@ -8,6 +8,7 @@ import crypto from 'crypto';
 import fs from 'fs-extra';
 import http from 'http';
 import path from 'path';
+import { setNodeProcessTitle } from './processTitle';
 import WebSocket from 'ws';
 import { initializeNodeToolExecRecovery, nodeTools, setNodeToolSessionEventDispatcher, type NodeSessionEventMetadata } from '../../shared/dist/nodeTools';
 import { nativeFileOperations } from '../../shared/dist/fileOperations';
@@ -966,7 +967,15 @@ function parseArgs(): NodeClientOptions {
 
 async function main() {
   const options = parseArgs();
-  const client = new NodeClient(options);
+  setNodeProcessTitle(options.nodeId);
+  const client = new NodeClient({
+    ...options,
+    onStatus: (event, detail) => {
+      if (event === 'registered' || event === 'pair_approved') {
+        setNodeProcessTitle(typeof detail?.nodeId === 'string' ? detail.nodeId : options.nodeId);
+      }
+    },
+  });
 
 
   await client.startLocalTriggerServer();

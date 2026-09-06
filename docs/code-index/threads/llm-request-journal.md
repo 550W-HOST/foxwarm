@@ -46,6 +46,11 @@ The canonical journal contains the same model-visible prompt/message classes nee
 
 Provider-specific wire replay is explicitly outside this contract. Exact wire capture would require a separate opt-in security and retention design.
 
+The `openai-ws` transport does not alter this boundary. The journal records the
+complete provider-neutral request and the complete semantic Responses payload;
+process-local prefix fingerprints, response IDs, socket identity, and wire
+suffixes are not persisted.
+
 ## Design decisions
 
 ### D-llm-request-journal-canonical-boundary

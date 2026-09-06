@@ -74,6 +74,7 @@ export type OpenAIStreamProgressSnapshot = {
 
 type OpenAIStreamProgressOptions = {
     onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
+    onMeaningfulProgress?: () => void;
     onRawChunk?: (text: string) => void;
     onRawSseBlock?: (block: string) => void;
 };
@@ -443,6 +444,10 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
     contents = preparedImages.messages;
     const isDeduplicated = preparedImages.isDeduplicated;
     const responseInput = [];
+    let messagePhase: MessagePart['phase'];
+
+    const getMessagePhase = (value: unknown): MessagePart['phase'] =>
+        value === 'commentary' || value === 'final_answer' ? value : undefined;
 
     const getCompatibleResponsesMeta = (part: MessagePart) => {
         const metadata = part.providerMeta?.openaiResponses;
@@ -463,12 +468,29 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
             content: [...content]
         };
 
-        if (role === 'assistant') {
-            message.phase = 'final_answer';
+        if (role === 'assistant' && messagePhase) {
+            message.phase = messagePhase;
         }
 
         responseInput.push(message);
         content.length = 0;
+        messagePhase = undefined;
+    };
+
+    const prepareMessageContent = (
+        role: 'user' | 'assistant',
+        content: Array<OpenAIResponsesContent>,
+        part: MessagePart,
+        fallbackPhase: MessagePart['phase'],
+    ) => {
+        if (role !== 'assistant') return;
+        const nextPhase = Object.prototype.hasOwnProperty.call(part, 'phase')
+            ? getMessagePhase(part.phase)
+            : fallbackPhase;
+        if (content.length > 0 && nextPhase !== messagePhase) {
+            flushMessageContent(role, content);
+        }
+        messagePhase = nextPhase;
     };
 
     for (const msg of contents) {
@@ -583,6 +605,9 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
 
         const role = msg.role === 'model' ? 'assistant' : 'user';
         const content: Array<OpenAIResponsesContent> = [];
+        const fallbackPhase: MessagePart['phase'] = role === 'assistant'
+            ? msg.parts?.some(part => !!part.functionCall) ? 'commentary' : 'final_answer'
+            : undefined;
 
         for (const part of msg.parts || []) {
             const responsesMeta = getCompatibleResponsesMeta(part);
@@ -593,6 +618,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
             }
 
             if (part.system) {
+                prepareMessageContent(role, content, part, fallbackPhase);
                 content.push({
                     type: role === 'assistant' ? 'output_text' : 'input_text',
                     text: formatSystemPartForModel(part.system)
@@ -609,6 +635,7 @@ export function convertToOpenAIResponsesFormat(contents: Message[], concreteMode
             }
 
             if (part.text) {
+                prepareMessageContent(role, content, part, fallbackPhase);
                 const outputTextPart: any = {
                     type: role === 'assistant' ? 'output_text' : 'input_text',
                     text: part.text
@@ -837,6 +864,15 @@ export async function collectOpenAIResponsesStream(
             });
         };
 
+        const buildTerminalError = (label: string, source: any) => {
+            const detail = source?.error && typeof source.error === 'object' ? source.error : source;
+            const message = detail?.message || source?.message || label;
+            const status = detail?.status || source?.status;
+            const code = detail?.code || source?.code;
+            const suffix = [status ? `status=${status}` : '', code ? `code=${code}` : ''].filter(Boolean).join(', ');
+            return new Error(suffix ? `${message} (${suffix})` : message);
+        };
+
         const handleEvent = (event: any) => {
             const key = `${event.output_index ?? 0}:${event.summary_index ?? 0}`;
 
@@ -856,6 +892,7 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.output_text.delta':
+                    if (typeof event.delta === 'string' && event.delta.length > 0) options?.onMeaningfulProgress?.();
                     if (typeof event.output_index === 'number' && typeof event.content_index === 'number') {
                         const part = ensureContentPart(event.output_index, event.content_index, { type: 'output_text' });
                         if (part) {
@@ -892,6 +929,7 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.refusal.delta':
+                    if (typeof event.delta === 'string' && event.delta.length > 0) options?.onMeaningfulProgress?.();
                     if (typeof event.output_index === 'number' && typeof event.content_index === 'number') {
                         const part = ensureContentPart(event.output_index, event.content_index, { type: 'refusal' });
                         if (part) {
@@ -913,6 +951,7 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.function_call_arguments.delta':
+                    if (typeof event.delta === 'string' && event.delta.length > 0) options?.onMeaningfulProgress?.();
                     if (typeof event.output_index === 'number') {
                         const item = ensureOutputItem(event.output_index, { type: 'function_call' });
                         if (item) {
@@ -940,6 +979,7 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.reasoning_summary_text.delta':
+                    if (typeof event.delta === 'string' && event.delta.length > 0) options?.onMeaningfulProgress?.();
                     summaryParts.set(key, `${summaryParts.get(key) || ''}${event.delta || ''}`);
                     emitSummaryUpdate();
                     return;
@@ -955,10 +995,16 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.failed':
-                    finish(() => reject(new Error(event.response?.error?.message || 'OpenAI Responses request failed.')));
+                    finish(() => reject(buildTerminalError('OpenAI Responses request failed.', event.response)));
+                    return;
+                case 'response.incomplete':
+                    finish(() => reject(buildTerminalError('OpenAI Responses request was incomplete.', event.response)));
                     return;
                 case 'response.error':
-                    finish(() => reject(new Error(event.error?.message || 'OpenAI Responses stream error.')));
+                    finish(() => reject(buildTerminalError('OpenAI Responses stream error.', event.error)));
+                    return;
+                case 'error':
+                    finish(() => reject(buildTerminalError('OpenAI Responses stream error.', event)));
                     return;
                 default:
                     return;
@@ -995,10 +1041,14 @@ export async function collectOpenAIResponsesStream(
         };
 
         const onAbort = () => {
+            const error = makeAbortError();
+            finish(() => reject(error));
             try {
-                stream.destroy?.(makeAbortError());
+                // This collector owns the abort rejection. Destroy without an
+                // error after removing listeners so Node cannot emit a queued
+                // unhandled stream error after the promise has settled.
+                stream.destroy?.();
             } catch {}
-            finish(() => reject(makeAbortError()));
         };
 
         const onData = (chunk: any) => {
@@ -1166,6 +1216,7 @@ export async function collectOpenAIChatCompletionsStream(
                 }
 
                 const nextContent = appendDelta(message.content, delta.content);
+                if (typeof delta.content === 'string' && delta.content.length > 0) options?.onMeaningfulProgress?.();
                 if (nextContent !== message.content) {
                     message.content = nextContent || '';
                     changed = true;
@@ -1173,14 +1224,19 @@ export async function collectOpenAIChatCompletionsStream(
                     message.content = message.content || '';
                 }
                 const nextReasoningContent = appendDelta(message.reasoning_content, delta.reasoning_content);
+                if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) options?.onMeaningfulProgress?.();
                 if (nextReasoningContent !== message.reasoning_content) {
                     message.reasoning_content = nextReasoningContent;
                     changed = true;
                 }
                 const nextReasoning = appendDelta(message.reasoning, delta.reasoning);
+                if (typeof delta.reasoning === 'string' && delta.reasoning.length > 0) options?.onMeaningfulProgress?.();
                 if (nextReasoning !== message.reasoning) {
                     message.reasoning = nextReasoning;
                     changed = true;
+                }
+                if (typeof delta.refusal === 'string' && delta.refusal.length > 0) {
+                    options?.onMeaningfulProgress?.();
                 }
 
                 // Opaque provider fields (e.g. reasoning_signature) are captured
@@ -1204,6 +1260,9 @@ export async function collectOpenAIChatCompletionsStream(
                             entry.type = toolCallDelta.type;
                         }
                         if (toolCallDelta.function) {
+                            if (typeof toolCallDelta.function.arguments === 'string' && toolCallDelta.function.arguments.length > 0) {
+                                options?.onMeaningfulProgress?.();
+                            }
                             entry.function.name = appendDelta(entry.function.name, toolCallDelta.function.name) || entry.function.name;
                             entry.function.arguments = appendDelta(entry.function.arguments, toolCallDelta.function.arguments) || entry.function.arguments;
                         }
@@ -1251,10 +1310,14 @@ export async function collectOpenAIChatCompletionsStream(
         };
 
         const onAbort = () => {
+            const error = makeAbortError();
+            finish(() => reject(error));
             try {
-                stream.destroy?.(makeAbortError());
+                // This collector owns the abort rejection. Destroy without an
+                // error after removing listeners so Node cannot emit a queued
+                // unhandled stream error after the promise has settled.
+                stream.destroy?.();
             } catch {}
-            finish(() => reject(makeAbortError()));
         };
 
         const onData = (chunk: any) => {

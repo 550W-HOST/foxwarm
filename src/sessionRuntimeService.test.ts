@@ -403,6 +403,7 @@ test('SessionRuntime overlays only the exact current Worker and reads detached a
     const history = await client.call('getHistory', { sessionId: alias });
     assert.equal(history!.session.id, sessionId); assert.deepEqual(history!.session.aliases, [alias]);
     assert.equal(history!.messages[0].parts[0].text, 'authoritative worker history');
+    assert.equal(history!.latestSeq, 1);
     assert.equal(history!.messages[0].__meta?.seq, 1);
     assert.equal(history!.queue[0].parts![0].text, 'authoritative worker queue 1');
     assert.equal(history!.persistentMemorySnapshot, 'worker prompt');

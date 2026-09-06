@@ -23,10 +23,31 @@ await esbuild.build({
 })
 
 const {
+  advanceHistorySeqFrontier,
   buildOptimisticUserMessage,
+  decideHistoryReconciliation,
   mergeHistorySnapshot,
   reconcileHistoryMessage,
 } = await import(pathToFileURL(bundledPath).href)
+
+test('history frontier transitions distinguish contiguous append, gap catch-up, and full rewrite', () => {
+  assert.deepEqual(advanceHistorySeqFrontier(1, 2), { latestSeq: 2, gapDetected: false })
+  assert.deepEqual(advanceHistorySeqFrontier(1, 3), { latestSeq: 1, gapDetected: true })
+  const base = {
+    fullHistoryLoaded: true,
+    serverMessageCount: 2,
+    representedMessageCount: 2,
+    serverHistoryVersion: 4,
+    representedHistoryVersion: 4,
+    hasTrustedFrontier: true,
+    queueRefreshNeeded: false,
+    gapDetected: false,
+  }
+  assert.equal(decideHistoryReconciliation(base), 'none')
+  assert.equal(decideHistoryReconciliation({ ...base, gapDetected: true }), 'after')
+  assert.equal(decideHistoryReconciliation({ ...base, serverHistoryVersion: 5 }), 'full')
+  assert.equal(decideHistoryReconciliation({ ...base, serverMessageCount: 1 }), 'full')
+})
 
 const optimistic = (id, text, timestamp) => buildOptimisticUserMessage({
   clientMessageId: id,
@@ -83,6 +104,14 @@ test('stable seq messages are not dropped merely because a legacy timestamp coll
   const duplicateLegacy = { role: 'model', parts: [{ text: 'legacy duplicate' }], __meta: { timestamp: 10 } }
   assert.strictEqual(reconcileHistoryMessage([first], duplicateLegacy)[0], first)
   assert.equal(reconcileHistoryMessage([first], duplicateLegacy).length, 1)
+})
+
+test('a missing seq recovered after a later realtime row is inserted in canonical order', () => {
+  const first = { role: 'user', parts: [{ text: 'first' }], __meta: { seq: 1, timestamp: 10 } }
+  const third = { role: 'model', parts: [{ text: 'third' }], __meta: { seq: 3, timestamp: 30 } }
+  const second = { role: 'user', parts: [{ text: 'second' }], __meta: { seq: 2, timestamp: 20 } }
+  const recovered = reconcileHistoryMessage([first, third], second)
+  assert.deepEqual(recovered.map(message => message.__meta.seq), [1, 2, 3])
 })
 
 test('browser-local command responses survive refresh in their existing slot but not remount', () => {

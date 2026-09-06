@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { BACKGROUND_COMPLETION_EVENT_RETENTION_MS } from '../../packages/shared/dist/persistentExec';
 import { issueRemoteExecCompletionCapability, setNodeEventCapabilitySecretForTests } from './sessionEventCapability';
 import {
   activateRemoteExecLivenessClaim,
@@ -7,6 +8,7 @@ import {
   clearRemoteExecStateForSession,
   getRemoteExecLivenessRecordsForTests,
   hasRemoteExecLivenessClaim,
+  pruneExpiredRemoteExecLivenessClaims,
   releaseRemoteExecReservation,
   reserveRemoteExecIdentity,
   resetRemoteExecLivenessClaimsForTests,
@@ -53,6 +55,34 @@ test('remote exec liveness requires an exact Main reservation and preserves capa
       authenticatedNodeId: identity.nodeId, originalSessionId: identity.sessionId,
       execId: identity.execId, completionCapability,
     }), true);
+  } finally {
+    resetRemoteExecLivenessClaimsForTests();
+    setNodeEventCapabilitySecretForTests();
+  }
+});
+
+test('remote exec liveness expires strictly after the shared 24-hour tracking boundary', () => {
+  setNodeEventCapabilitySecretForTests(Buffer.alloc(32, 31));
+  try {
+    const reservedIdentity = { nodeId: 'node-a', sessionId: 'reserved-session', agentName: 'main', execId: 'quiet-otter' };
+    reserve(reservedIdentity);
+    const reservedAt = getRemoteExecLivenessRecordsForTests()[0].reservedAt;
+    assert.equal(pruneExpiredRemoteExecLivenessClaims(reservedAt + BACKGROUND_COMPLETION_EVENT_RETENTION_MS), 0);
+    assert.equal(getRemoteExecLivenessRecordsForTests().length, 1);
+    assert.equal(pruneExpiredRemoteExecLivenessClaims(reservedAt + BACKGROUND_COMPLETION_EVENT_RETENTION_MS + 1), 1);
+
+    const activeIdentity = { nodeId: 'node-a', sessionId: 'active-session', agentName: 'main', execId: 'steady-ibis' };
+    const { completionCapability } = reserve(activeIdentity);
+    const active = activateRemoteExecLivenessClaim({
+      authenticatedNodeId: activeIdentity.nodeId,
+      originalSessionId: activeIdentity.sessionId,
+      execId: activeIdentity.execId,
+      completionCapability,
+    });
+    assert.equal(pruneExpiredRemoteExecLivenessClaims(active.activatedAt! + BACKGROUND_COMPLETION_EVENT_RETENTION_MS), 0);
+    assert.equal(hasRemoteExecLivenessClaim([activeIdentity.sessionId], activeIdentity.agentName, activeIdentity.execId), true);
+    assert.equal(pruneExpiredRemoteExecLivenessClaims(active.activatedAt! + BACKGROUND_COMPLETION_EVENT_RETENTION_MS + 1), 1);
+    assert.equal(hasRemoteExecLivenessClaim([activeIdentity.sessionId], activeIdentity.agentName, activeIdentity.execId), false);
   } finally {
     resetRemoteExecLivenessClaimsForTests();
     setNodeEventCapabilitySecretForTests();

@@ -44,7 +44,7 @@ Provides the installable `foxwarm` command, its `model` subcommand for one-shot 
 
 - Requires `npm run build` output before live model requests; help/version parsing does not require the build.
 - Installed or linked packages expose `foxwarm`; source checkouts can call `node scripts/foxwarm.js` directly.
-- Unknown flags, positional arguments, missing option values, invalid timeouts, unknown model keys, absent prompts, and empty model responses fail instead of silently falling back.
+- Unknown flags, positional arguments, missing option values, invalid timeouts, unknown model keys, absent prompts, and empty model responses fail instead of silently falling back. Omitted `--timeout` leaves the core request timeout unspecified so streaming uses the default first-content/inactivity watchdog while nonstreaming retains its five-minute default. An explicit `--timeout` remains a whole-attempt upper bound in addition to streaming progress deadlines.
 - The selected model is validated using `loadModelsConfig`; requests go through `requestLlmOnce` with no tools and a fresh prompt-cache key.
 - CLI requests use request-journal purpose `cli`; they are reconstructable even though no session history exists.
 - Model listing and request forwarding accept virtual keys without reimplementing their routing; result JSON continues to report the concrete `modelId`. Canonical contract: [model routing](../threads/model-routing.md).

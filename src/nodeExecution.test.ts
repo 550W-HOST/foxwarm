@@ -304,7 +304,10 @@ test('primitive Node backends derive canonical file tools and preserve provider-
   assert.deepEqual(tools['primitive-rw'], ['read', 'write', 'edit', 'apply_patch']);
   assert.deepEqual(tools['primitive-ro'], ['read']);
   const base = { sourceSessionId: 'source', nodeId: 'primitive-rw', context: { agent: 'agent', currentNode: 'primitive-rw', cwd: 'urn:cwd' } };
-  assert.equal(await registry.invokeTool({ ...base, toolName: 'read', args: { filePath: 'urn:existing' } }), 'hello world\n');
+  assert.equal(
+    await registry.invokeTool({ ...base, toolName: 'read', args: { filePath: 'urn:existing' } }),
+    'hello world\n---\nFile has 1 line.\nFile size: 12 bytes.',
+  );
   await registry.invokeTool({ ...base, toolName: 'edit', args: { filePath: 'urn:existing', oldText: 'world', newText: 'primitive' } });
   await registry.invokeTool({ ...base, toolName: 'apply_patch', args: { input: '*** Begin Patch\n*** Update File: urn:existing\n@@\n-hello primitive\n+hello canonical\n*** Add File: urn:added\n+added\n*** End Patch' } });
   await registry.invokeTool({ ...base, toolName: 'write', args: { filePath: 'urn:new', content: 'new', overwrite: true, createDirs: true } });

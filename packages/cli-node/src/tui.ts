@@ -4,6 +4,7 @@ process.env.FOXWARM_NO_CONSOLE_LOG = '1';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput } from 'ink';
 import { NodeClient, CliNodeHistoryMessage, CliNodeSessionSummary } from './client';
+import { setNodeProcessTitle } from './processTitle';
 
 type Opts = {
   host: string;
@@ -130,6 +131,9 @@ function App({ opts }: { opts: Opts }) {
         });
       },
       onStatus: (event, detail) => {
+        if (event === 'registered' || event === 'pair_approved') {
+          setNodeProcessTitle(typeof detail?.nodeId === 'string' ? detail.nodeId : opts.nodeId);
+        }
         setStatus({ event, detail, at: Date.now() });
         if (event === 'registered' || event === 'pair_approved') setTimeout(() => void refresh(), 300);
       },
@@ -217,4 +221,6 @@ function App({ opts }: { opts: Opts }) {
   );
 }
 
-render(React.createElement(App, { opts: parseArgs() }));
+const opts = parseArgs();
+setNodeProcessTitle(opts.nodeId);
+render(React.createElement(App, { opts }));

@@ -64,13 +64,14 @@ test('default model-facing schemas omit handoff confirmation while always append
 
 test('enabled model-facing schemas require confirmation before unconditional cancellation controls', () => {
   const enabled = buildToolDefinitions(true).map(addToolCancellationSchema);
+  const expectedDescription = `Required final argument property. Review the handoff honestly. If you discover a problem that means it should not proceed, do not append the final approval sentence merely to pass validation; cancel the call with __cancelTool: true instead.\n\nFor a handoff that should proceed, use: ${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}`;
   for (const name of ['create_child_session', 'send_to_session']) {
     const definition = enabled.find(item => item.name === name)!;
     const keys = Object.keys(definition.parameters.properties);
     assert.equal(keys.at(-3), 'confirmation');
     assert.deepEqual(keys.slice(-2), ['__cancelTool', '__cancelAllToolsThisTurn']);
     assert(definition.parameters.required?.includes('confirmation'));
-    assert.match(String(definition.parameters.properties.confirmation.description), /do not copy this placeholder verbatim/);
+    assert.equal(definition.parameters.properties.confirmation.description, expectedDescription);
   }
 });
 
@@ -176,13 +177,20 @@ test('the same cancellation preflight works with an authoritative Session-worker
   }
 });
 
-test('handoff confirmation validates exact framing, non-empty review, and final-property placement', () => {
+test('handoff confirmation accepts optional review separators while preserving exact framing', () => {
   const valid = { sessionId: 'target', message: 'hello', confirmation: confirmation() };
   assert.doesNotThrow(() => validateInterAgentHandoffConfirmation(valid));
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}same-line review${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX} review with spaces ${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\r\nCRLF review\r\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
+  assert.doesNotThrow(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nmultiline\nreview\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }));
   assert.throws(() => validateInterAgentHandoffConfirmation({ sessionId: 'target', message: 'hello' }), /prefix and suffix/);
   assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `wrong\nreview\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /prefix and suffix/);
   assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\nreview\nwrong` }), /prefix and suffix/);
+  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /non-empty/);
+  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX} ${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /non-empty/);
   assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n \n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /non-empty/);
+  assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /replace the documented placeholder/);
   assert.throws(() => validateInterAgentHandoffConfirmation({ ...valid, confirmation: `${INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX}\n${INTER_AGENT_HANDOFF_REVIEW_PLACEHOLDER}\n${INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX}` }), /replace the documented placeholder/);
   assert.throws(() => validateInterAgentHandoffConfirmation({ confirmation: confirmation(), sessionId: 'target', message: 'hello' }), /final argument property/);
   assert.doesNotThrow(() => validateInterAgentHandoffConfirmationForMode({ sessionId: 'target', message: 'hello' }, false));
