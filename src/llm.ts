@@ -2428,7 +2428,7 @@ function buildConcreteRequestPlan(options: {
     };
     const extraFields = expandTemplateVariables(modelEntry.extraFields || {}, templateVars);
     if (useOpenAIResponsesWs) {
-        const reserved = ['input', 'previous_response_id', 'stream', 'type', 'background', 'context_management', 'stream_id'].filter(field =>
+        const reserved = ['input', 'previous_response_id', 'stream', 'type', 'background', 'context_management', 'conversation', 'stream_id'].filter(field =>
             Object.prototype.hasOwnProperty.call(extraFields, field));
         if (reserved.length > 0) {
             throw new Error(`openai-ws extraFields cannot set transport-owned field${reserved.length === 1 ? '' : 's'}: ${reserved.join(', ')}.`);
@@ -2887,7 +2887,10 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                                 && item.content.some((part: any) => part?.type === 'refusal')
                         ) || (
                             item?.type === 'function_call'
-                                && !(typeof (item.call_id || item.id) === 'string' && (item.call_id || item.id).trim())
+                                && (
+                                    !(typeof (item.call_id || item.id) === 'string' && (item.call_id || item.id).trim())
+                                    || !!parseFunctionCallArgs(item.arguments).argsParseError
+                                )
                         ));
                     attemptHistoryAppendFinalizer = outcome => {
                         if (!outcome.appended || unsafeReplayProjection) {

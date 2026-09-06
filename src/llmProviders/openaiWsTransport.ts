@@ -15,7 +15,7 @@ const OPENAI_WS_LOCAL_IDLE_LIMIT = 5;
 const OPENAI_WS_WORKER_IDLE_LIMIT = 1;
 
 type SocketLike = Pick<WebSocket, 'readyState' | 'send' | 'close' | 'terminate' | 'on' | 'once' | 'off'> & {
-    _socket?: { unref?: () => void };
+    _socket?: { ref?: () => void; unref?: () => void };
 };
 
 type OpenAIWsResource = {
@@ -113,7 +113,6 @@ function openSocket(url: string, headers: Record<string, any>, signal: AbortSign
             reject(makeAbortError());
         });
         const onOpen = () => finish(() => {
-            socket._socket?.unref?.();
             resolve(resource);
         });
         const onError = (error: Error) => finish(() => {
@@ -168,6 +167,7 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
     matched?.chain.resource.removeIdleListeners?.();
     if (matched) matched.chain.resource.removeIdleListeners = undefined;
     const resource = matched?.chain.resource || await openSocket(wsUrl, options.headers, options.signal);
+    resource.socket._socket?.ref?.();
     const input = Array.isArray(options.data.input) ? options.data.input : [];
     const responseRequest: Record<string, any> = {
         ...options.data,
@@ -178,44 +178,66 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
     if (matched) responseRequest.previous_response_id = matched.chain.previousResponseId;
 
     const stream = new PassThrough();
-    let sent = false;
-    let settled = false;
+    let phase: 'active' | 'pending' | 'finished' = 'active';
+    let pendingInvalidated = false;
     let completed = false;
     let timer: NodeJS.Timeout | undefined;
 
     const closeLeased = () => closeResource(resource);
-    const cleanup = () => {
+    const cleanupStreaming = () => {
         if (timer) clearTimeout(timer);
-        options.signal.removeEventListener('abort', onAbort);
         resource.socket.off('message', onMessage as any);
+    };
+    const cleanupAll = () => {
+        cleanupStreaming();
+        options.signal.removeEventListener('abort', onAbort);
         resource.socket.off('close', onClose as any);
         resource.socket.off('error', onError as any);
     };
+    const invalidatePending = (close: boolean) => {
+        if (phase !== 'pending') return;
+        pendingInvalidated = true;
+        phase = 'finished';
+        cleanupAll();
+        if (close) closeLeased();
+    };
     const onAbort = () => {
-        if (settled) return;
-        settled = true;
+        if (phase === 'finished') return;
+        if (phase === 'pending') {
+            invalidatePending(true);
+            return;
+        }
+        phase = 'finished';
         closeLeased();
         stream.destroy(makeAbortError());
     };
     const onClose = (code: number, reason: Buffer) => {
-        if (settled) return;
-        settled = true;
+        if (phase === 'finished') return;
+        if (phase === 'pending') {
+            invalidatePending(false);
+            return;
+        }
+        phase = 'finished';
         stream.destroy(new Error(`OpenAI Responses WebSocket closed before completion (${code}${reason?.length ? `: ${reason.toString('utf8')}` : ''}).`));
     };
     const onError = (error: Error) => {
-        if (settled) return;
-        settled = true;
+        if (phase === 'finished') return;
+        if (phase === 'pending') {
+            invalidatePending(true);
+            return;
+        }
+        phase = 'finished';
         stream.destroy(error);
     };
     const onMessage = (raw: RawData) => {
-        if (settled) return;
+        if (phase !== 'active') return;
         const frame = normalizeFrame(raw);
         options.onRawFrame?.(frame);
         let event: any;
         try {
             event = JSON.parse(frame);
         } catch {
-            settled = true;
+            phase = 'finished';
             closeLeased();
             stream.destroy(new Error('OpenAI Responses WebSocket received a malformed JSON frame.'));
             return;
@@ -223,7 +245,8 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
         stream.write(`data: ${frame}\n\n`);
         if (event?.type === 'response.completed') {
             completed = true;
-            settled = true;
+            phase = 'pending';
+            cleanupStreaming();
             stream.end();
         }
     };
@@ -233,8 +256,8 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
     resource.socket.once('close', onClose as any);
     resource.socket.once('error', onError as any);
     timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
+        if (phase !== 'active') return;
+        phase = 'finished';
         closeLeased();
         stream.destroy(new Error(`OpenAI Responses WebSocket request timed out after ${options.timeoutMs}ms.`));
     }, options.timeoutMs);
@@ -243,13 +266,16 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
     try {
         const envelope = JSON.stringify({ type: 'response.create', ...responseRequest });
         resource.socket.send(envelope);
-        sent = true;
         const response = await collectOpenAIResponsesStream(stream, options.signal, {
             onProgress: options.onProgress,
         });
-        cleanup();
+        cleanupStreaming();
         const responseId = typeof response?.id === 'string' && response.id.trim() ? response.id.trim() : '';
-        if (!completed || !responseId || (response?.status && response.status !== 'completed')) {
+        if (!completed || pendingInvalidated || options.signal.aborted
+            || resource.socket.readyState !== WebSocket.OPEN
+            || !responseId || (response?.status && response.status !== 'completed')) {
+            phase = 'finished';
+            cleanupAll();
             closeLeased();
             throw new Error('OpenAI Responses WebSocket returned an incomplete completion or omitted its response id.');
         }
@@ -259,11 +285,17 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
             finalize(replayItems) {
                 if (finalized) return;
                 finalized = true;
-                if (replayItems === false) {
+                const reusable = replayItems !== false
+                    && !pendingInvalidated
+                    && !options.signal.aborted
+                    && resource.socket.readyState === WebSocket.OPEN;
+                phase = 'finished';
+                cleanupAll();
+                if (!reusable) {
                     closeLeased();
                     return;
                 }
-                const expected = extendOpenAIWsPrefix(fingerprint.finalPrefix, replayItems);
+                const expected = extendOpenAIWsPrefix(fingerprint.finalPrefix, replayItems as readonly unknown[]);
                 const timestamp = now();
                 const chain: OpenAIWsCompletedChain<OpenAIWsResource> = {
                     id: resource.id,
@@ -283,8 +315,9 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
             },
         };
     } catch (error) {
-        cleanup();
-        if (sent) closeLeased();
+        phase = 'finished';
+        cleanupAll();
+        closeLeased();
         throw error;
     }
 }

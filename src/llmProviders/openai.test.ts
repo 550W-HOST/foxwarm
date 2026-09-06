@@ -697,6 +697,22 @@ test('collectOpenAIResponsesStream reports raw SSE body and blocks', async () =>
   assert.equal(rawBlocks[rawBlocks.length - 1], 'data: [DONE]');
 });
 
+test('collectOpenAIResponsesStream rejects official incomplete and top-level error terminal events', async () => {
+  await assert.rejects(
+    collectOpenAIResponsesStream(makeStream([{
+      type: 'response.incomplete',
+      response: { status: 'incomplete', error: { message: 'output limit reached', code: 'max_output_tokens' } },
+    }]), new AbortController().signal),
+    /output limit reached.*status=incomplete.*code=max_output_tokens/,
+  );
+  await assert.rejects(
+    collectOpenAIResponsesStream(makeStream([{
+      type: 'error', message: 'server unavailable', status: 503, code: 'server_error',
+    }]), new AbortController().signal),
+    /server unavailable.*status=503.*code=server_error/,
+  );
+});
+
 test('convertToOpenAIResponsesFormat replays ordered web search metadata only to its source model', () => {
   const webSearchCall = {
     type: 'web_search_call',

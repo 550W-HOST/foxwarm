@@ -837,6 +837,15 @@ export async function collectOpenAIResponsesStream(
             });
         };
 
+        const buildTerminalError = (label: string, source: any) => {
+            const detail = source?.error && typeof source.error === 'object' ? source.error : source;
+            const message = detail?.message || source?.message || label;
+            const status = detail?.status || source?.status;
+            const code = detail?.code || source?.code;
+            const suffix = [status ? `status=${status}` : '', code ? `code=${code}` : ''].filter(Boolean).join(', ');
+            return new Error(suffix ? `${message} (${suffix})` : message);
+        };
+
         const handleEvent = (event: any) => {
             const key = `${event.output_index ?? 0}:${event.summary_index ?? 0}`;
 
@@ -955,10 +964,16 @@ export async function collectOpenAIResponsesStream(
                     }
                     return;
                 case 'response.failed':
-                    finish(() => reject(new Error(event.response?.error?.message || 'OpenAI Responses request failed.')));
+                    finish(() => reject(buildTerminalError('OpenAI Responses request failed.', event.response)));
+                    return;
+                case 'response.incomplete':
+                    finish(() => reject(buildTerminalError('OpenAI Responses request was incomplete.', event.response)));
                     return;
                 case 'response.error':
-                    finish(() => reject(new Error(event.error?.message || 'OpenAI Responses stream error.')));
+                    finish(() => reject(buildTerminalError('OpenAI Responses stream error.', event.error)));
+                    return;
+                case 'error':
+                    finish(() => reject(buildTerminalError('OpenAI Responses stream error.', event)));
                     return;
                 default:
                     return;

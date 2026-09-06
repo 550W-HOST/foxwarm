@@ -339,7 +339,7 @@ start a full request. The optimization is not persisted and does not survive a
 process restart. Request compression is not supported for this transport, and
 `extraFields` may not set transport/envelope fields such as `input`,
 `previous_response_id`, `stream`, `type`, `background`, `context_management`,
-or `stream_id`.
+`conversation`, or `stream_id`.
 
 Some Chat Completions-compatible providers return assistant thinking as
 `reasoning_content` but require that history to be replayed under `reasoning`.

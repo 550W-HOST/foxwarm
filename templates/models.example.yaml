@@ -38,7 +38,7 @@ providers:
   # `openai-ws` uses the same request/event format over a provider WebSocket;
   # it rejects requestCompression and transport-owned extraFields (`input`,
   # `previous_response_id`, `stream`, `type`, `background`, `context_management`,
-  # and `stream_id`).
+  # `conversation`, and `stream_id`).
   # Use `openai-completions` when you explicitly need the older /chat/completions API.
   # To enable hosted web search, first change providerType to openai-responses.
   # It is not sent for compact/setup-test requests:

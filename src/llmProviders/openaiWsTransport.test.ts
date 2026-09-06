@@ -15,7 +15,9 @@ class FakeSocket extends EventEmitter {
   readyState: number = WebSocket.CONNECTING;
   sent: any[] = [];
   terminated = 0;
-  _socket = { unref() {} };
+  refs = 0;
+  unrefs = 0;
+  _socket = { ref: () => { this.refs += 1; }, unref: () => { this.unrefs += 1; } };
   constructor(private readonly responder?: (request: any, socket: FakeSocket) => void) {
     super();
     process.nextTick(() => {
@@ -238,20 +240,23 @@ test('openai-ws abort, malformed frames, and mid-stream close discard the leased
 });
 
 test('openai-ws failed, error, and incomplete terminal events invalidate the chain', async () => {
-  for (const mode of ['failed', 'error', 'incomplete'] as const) {
+  for (const mode of ['failed', 'error', 'incomplete', 'compatibility-error'] as const) {
     let socket!: FakeSocket;
     setOpenAIWsTransportTestHooks({ socketFactory: () => {
       socket = new FakeSocket((_request, current) => {
         if (mode === 'failed') current.frame({ type: 'response.failed', response: { error: { message: 'failed response' } } });
-        if (mode === 'error') current.frame({ type: 'response.error', error: { message: 'provider error' } });
-        if (mode === 'incomplete') current.frame({ ...completed('incomplete'), response: { ...completed('incomplete').response, status: 'incomplete' } });
+        if (mode === 'error') current.frame({ type: 'error', message: 'provider error', status: 500, code: 'server_error' });
+        if (mode === 'incomplete') current.frame({ type: 'response.incomplete', response: { status: 'incomplete', error: { message: 'incomplete response', code: 'max_output_tokens' } } });
+        if (mode === 'compatibility-error') current.frame({ type: 'response.error', error: { message: 'compatible provider error' } });
       });
       return socket as any;
     }});
+    const startedAt = Date.now();
     await assert.rejects(
-      requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), timeoutMs: 1000 }),
-      /failed response|provider error|incomplete completion/,
+      requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), timeoutMs: 5000 }),
+      /failed response|provider error|incomplete response|compatible provider error/,
     );
+    assert.ok(Date.now() - startedAt < 1000, `${mode} should reject immediately rather than waiting for timeout`);
     assert.equal(socket.terminated, 1);
     assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
   }
@@ -280,5 +285,34 @@ test('idle socket close removes its completed chain immediately', async () => {
   pending.finalize([]);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 1);
   socket.terminate();
+  assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
+});
+
+test('active and pending-append sockets stay referenced, idle sockets unref, and reuse refs again', async () => {
+  const sockets: FakeSocket[] = [];
+  setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    const socket = new FakeSocket((_request, current) => current.frame(completed(`r${sockets.length}`)));
+    sockets.push(socket); return socket as any;
+  }});
+  const data = baseData([{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'one' }] }]);
+  const first = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), timeoutMs: 1000 });
+  assert.equal(sockets[0].refs, 1);
+  assert.equal(sockets[0].unrefs, 0);
+  first.finalize([]);
+  assert.equal(sockets[0].unrefs, 1);
+  const second = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data, placement: 'local', signal: signal(), timeoutMs: 1000 });
+  assert.equal(sockets[0].refs, 2);
+  second.finalize(false);
+});
+
+test('close after response.completed but before assistant append invalidates the pending chain', async () => {
+  let socket!: FakeSocket;
+  setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    socket = new FakeSocket((_request, current) => current.frame(completed('pending-close')));
+    return socket as any;
+  }});
+  const pending = await requestOpenAIResponsesWs({ url: 'https://a.test/v1/responses', headers: {}, concreteIdentity: 'a', data: baseData([]), placement: 'local', signal: signal(), timeoutMs: 1000 });
+  socket.terminate();
+  pending.finalize([]);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
 });

@@ -128,6 +128,26 @@ test('refusal normalization conservatively refuses chain reuse', async () => {
   assert.equal(transport.getOpenAIWsCompletedChainCountForTests(), 0);
 });
 
+test('malformed function-call arguments conservatively refuse chain reuse', async () => {
+  const { chat } = await llmPromise;
+  const transport = await transportPromise;
+  let socket!: FakeSocket;
+  transport.setOpenAIWsTransportTestHooks({ socketFactory: () => {
+    socket = new FakeSocket(() => ({
+      id: 'malformed-function-response',
+      output: [{ type: 'function_call', call_id: 'call-bad', name: 'read', arguments: '{bad' }],
+    }));
+    return socket as any;
+  }});
+  const current = session('malformed-function');
+  await chat([{ text: 'request' }], current, 0, {
+    appendMessage: async message => { current.history.push(message); },
+    notifySessionEvents: false, registerAbortController: false, toolDefinitions: [],
+  });
+  assert.equal(socket.terminated, 1);
+  assert.equal(transport.getOpenAIWsCompletedChainCountForTests(), 0);
+});
+
 test('openai-ws rejects transport-owned extra fields, provider storage, and HTTP request compression', async () => {
   const { requestLlmOnce } = await llmPromise;
   const base: {
@@ -144,6 +164,10 @@ test('openai-ws rejects transport-owned extra fields, provider storage, and HTTP
   await assert.rejects(
     requestLlmOnce({ ...base, modelEntryOverride: entry({ extraFields: { input: [] } }) as any }),
     /transport-owned field: input/,
+  );
+  await assert.rejects(
+    requestLlmOnce({ ...base, modelEntryOverride: entry({ extraFields: { conversation: 'provider-state' } }) as any }),
+    /transport-owned field: conversation/,
   );
   await assert.rejects(
     requestLlmOnce({ ...base, modelEntryOverride: entry({ extraFields: { store: true } }) as any }),
