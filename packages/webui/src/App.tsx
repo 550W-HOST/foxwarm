@@ -67,6 +67,7 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = 'foxwarm_sidebar_collapsed_v1'
 const SEND_KEY_MODE_STORAGE_KEY = 'foxwarm_send_key_mode_v1'
 const GROUP_TOOLS_STORAGE_KEY = 'foxwarm_group_tools_v1'
 const SHOW_USAGE_BADGE_STORAGE_KEY = 'foxwarm_show_usage_badge_v1'
+const SHOW_USER_MESSAGE_METADATA_STORAGE_KEY = 'foxwarm_show_user_message_metadata_v1'
 const FOXWARM_TOKEN_KEY = 'foxwarm_token'
 const LEGACY_PREVIEW_CHAT_TAB_ID = 'chat:__preview__'
 const CUSTOM_FAVICON_LINK_ID = 'foxwarm-custom-favicon'
@@ -449,6 +450,7 @@ function App() {
   })
   const [groupTools, setGroupTools] = useState<boolean>(() => localStorage.getItem(GROUP_TOOLS_STORAGE_KEY) === 'true')
   const [showUsageBadge, setShowUsageBadge] = useState<boolean>(() => localStorage.getItem(SHOW_USAGE_BADGE_STORAGE_KEY) !== 'false')
+  const [showUserMessageMetadata, setShowUserMessageMetadata] = useState<boolean>(() => localStorage.getItem(SHOW_USER_MESSAGE_METADATA_STORAGE_KEY) === 'true')
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [vscodeFrameStarted, setVscodeFrameStarted] = useState(false)
   const [vscodeFrameSlot, setVscodeFrameSlot] = useState<HTMLElement | null>(null)
@@ -599,6 +601,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem(SHOW_USAGE_BADGE_STORAGE_KEY, showUsageBadge ? 'true' : 'false')
   }, [showUsageBadge])
+
+  useEffect(() => {
+    localStorage.setItem(SHOW_USER_MESSAGE_METADATA_STORAGE_KEY, showUserMessageMetadata ? 'true' : 'false')
+  }, [showUserMessageMetadata])
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768)
@@ -1454,6 +1460,11 @@ function App() {
           sendKeyMode={sendKeyMode}
           groupTools={groupTools}
           showUsageBadge={showUsageBadge}
+          showUserMessageMetadata={showUserMessageMetadata}
+          onSendKeyModeChange={setSendKeyMode}
+          onGroupToolsChange={setGroupTools}
+          onShowUsageBadgeChange={setShowUsageBadge}
+          onShowUserMessageMetadataChange={setShowUserMessageMetadata}
           onDraftEdited={() => handleChatDraftEdited(tab.id)}
         />
       )
@@ -1487,6 +1498,9 @@ function App() {
             onClose={setupOobe ? undefined : () => { void closeWorkbenchTab(tab.id) }}
             onSetupChanged={() => { void fetchSetupStatus() }}
             focusModelsRequest={focusModelsRequest}
+            webUiSettings={webUiSettings}
+            onInstanceNameChange={saveWebUiInstanceName}
+            onTabIconChange={saveWebUiTabIcon}
           />
         </Suspense>
       )
@@ -1800,16 +1814,6 @@ function App() {
           currentSession={currentContextSessionId}
           currentView={currentView}
           currentSessionRecord={currentContextSessionRecord}
-          sendKeyMode={sendKeyMode}
-          onSendKeyModeChange={setSendKeyMode}
-          groupTools={groupTools}
-          onGroupToolsChange={setGroupTools}
-          showUsageBadge={showUsageBadge}
-          onShowUsageBadgeChange={setShowUsageBadge}
-          instanceName={webUiSettings.instanceName}
-          onInstanceNameChange={saveWebUiInstanceName}
-          tabIcon={webUiSettings.tabIcon}
-          onTabIconChange={saveWebUiTabIcon}
           onSelectSession={openChatTab}
           onKeepSession={openKeptChatTab}
           onSelectArchitecture={openAgentsView}
@@ -1857,16 +1861,6 @@ function App() {
             currentSession={currentContextSessionId}
             currentView={currentView}
             currentSessionRecord={currentContextSessionRecord}
-            sendKeyMode={sendKeyMode}
-            onSendKeyModeChange={setSendKeyMode}
-            groupTools={groupTools}
-            onGroupToolsChange={setGroupTools}
-            showUsageBadge={showUsageBadge}
-            onShowUsageBadgeChange={setShowUsageBadge}
-            instanceName={webUiSettings.instanceName}
-            onInstanceNameChange={saveWebUiInstanceName}
-            tabIcon={webUiSettings.tabIcon}
-            onTabIconChange={saveWebUiTabIcon}
             onSelectSession={openChatTab}
             onKeepSession={openKeptChatTab}
             onSelectArchitecture={openAgentsView}

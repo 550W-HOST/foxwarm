@@ -1,84 +1,31 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { RefreshCw, Settings } from 'lucide-react'
-import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings, writeContextScrollbarSettings } from '../contextScrollbarSettings'
 import { useTheme } from '../theme/useTheme'
 import ReloadAppButton from './ReloadAppButton'
 import { MENU_VIEWPORT_GUTTER, clampAnchoredMenuHorizontally, readHorizontalViewportBounds } from './menuPositioning'
 
-type SendKeyMode = 'modEnter' | 'enter'
-
 interface GlobalUiSettingsMenuProps {
-  sendKeyMode: SendKeyMode
-  onSendKeyModeChange: (mode: SendKeyMode) => void
-  groupTools: boolean
-  onGroupToolsChange: (enabled: boolean) => void
-  showUsageBadge: boolean
-  onShowUsageBadgeChange: (enabled: boolean) => void
-  instanceName: string
-  onInstanceNameChange: (name: string) => Promise<void> | void
-  tabIcon: string
-  onTabIconChange: (tabIcon: string) => Promise<void> | void
   menuAlign?: 'start' | 'end'
   onOpenSetup?: () => void
   setupActive?: boolean
 }
 
-export default function GlobalUiSettingsMenu({
-  sendKeyMode,
-  onSendKeyModeChange,
-  groupTools,
-  onGroupToolsChange,
-  showUsageBadge,
-  onShowUsageBadgeChange,
-  instanceName,
-  onInstanceNameChange,
-  tabIcon,
-  onTabIconChange,
-  menuAlign = 'end',
-  onOpenSetup,
-  setupActive = false,
-}: GlobalUiSettingsMenuProps) {
+export default function GlobalUiSettingsMenu({ menuAlign = 'end', onOpenSetup, setupActive = false }: GlobalUiSettingsMenuProps) {
   const theme = useTheme()
   const [open, setOpen] = useState(false)
-  const [renamingInstance, setRenamingInstance] = useState(false)
-  const [editingTabIcon, setEditingTabIcon] = useState(false)
-  const [draftInstanceName, setDraftInstanceName] = useState(instanceName)
-  const [draftTabIcon, setDraftTabIcon] = useState(tabIcon)
-  const [savingInstanceName, setSavingInstanceName] = useState(false)
-  const [savingTabIcon, setSavingTabIcon] = useState(false)
-  const [instanceNameError, setInstanceNameError] = useState('')
-  const [tabIconError, setTabIconError] = useState('')
   const [menuOffset, setMenuOffset] = useState(0)
   const [menuPositioned, setMenuPositioned] = useState(false)
-  const [contextScrollbarSettings, setContextScrollbarSettings] = useState(readContextScrollbarSettings)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
-    const sync = () => setContextScrollbarSettings(readContextScrollbarSettings())
-    window.addEventListener(CONTEXT_SCROLLBAR_SETTINGS_EVENT, sync)
-    window.addEventListener('storage', sync)
-    return () => {
-      window.removeEventListener(CONTEXT_SCROLLBAR_SETTINGS_EVENT, sync)
-      window.removeEventListener('storage', sync)
-    }
-  }, [])
-
-  useEffect(() => {
     if (!open) return
-
     const handlePointerDown = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node) && !menuRef.current?.contains(event.target as Node)) {
-        setOpen(false)
-      }
+      if (!rootRef.current?.contains(event.target as Node) && !menuRef.current?.contains(event.target as Node)) setOpen(false)
     }
-
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setOpen(false)
-      }
+      if (event.key === 'Escape') setOpen(false)
     }
-
     document.addEventListener('mousedown', handlePointerDown)
     document.addEventListener('keydown', handleEscape)
     return () => {
@@ -93,26 +40,18 @@ export default function GlobalUiSettingsMenu({
       setMenuPositioned(false)
       return
     }
-
     let animationFrame = 0
     let lastGeometry = ''
-
     const updatePosition = () => {
       const anchor = rootRef.current
       const menu = menuRef.current
       if (!anchor || !menu) return
-
       const viewport = readHorizontalViewportBounds()
       const maxWidth = Math.max(0, viewport.right - viewport.left - MENU_VIEWPORT_GUTTER * 2)
-      const maxWidthStyle = `${maxWidth}px`
-      if (menu.style.maxWidth !== maxWidthStyle) {
-        menu.style.maxWidth = maxWidthStyle
-      }
-
+      menu.style.maxWidth = `${maxWidth}px`
       const anchorRect = anchor.getBoundingClientRect()
       const menuRect = menu.getBoundingClientRect()
       const geometry = [anchorRect.left, anchorRect.right, menuRect.width, viewport.left, viewport.right, menuAlign].join(':')
-
       if (geometry !== lastGeometry) {
         lastGeometry = geometry
         const placement = clampAnchoredMenuHorizontally({
@@ -122,72 +61,26 @@ export default function GlobalUiSettingsMenu({
           viewport,
           align: menuAlign,
         })
-        setMenuOffset((current) => Math.abs(current - placement.offset) < 0.25 ? current : placement.offset)
+        setMenuOffset(current => Math.abs(current - placement.offset) < 0.25 ? current : placement.offset)
         setMenuPositioned(true)
       }
     }
-
     const watchGeometry = () => {
       updatePosition()
       animationFrame = window.requestAnimationFrame(watchGeometry)
     }
     watchGeometry()
-
     return () => window.cancelAnimationFrame(animationFrame)
   }, [menuAlign, open])
 
-  const menuButtonClass = 'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-fw-text hover:bg-fw-hover disabled:cursor-wait disabled:opacity-70 dark:text-fw-text dark:hover:bg-fw-hover'
-  const modifierLabel = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent) ? 'Cmd' : 'Ctrl'
-  const toggleRowClass = 'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover'
+  const menuButtonClass = 'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover'
   const menuAlignClass = menuAlign === 'start' ? 'left-0' : 'right-0'
-
-  useEffect(() => {
-    if (open && !renamingInstance) {
-      setDraftInstanceName(instanceName)
-      setInstanceNameError('')
-    }
-  }, [instanceName, open, renamingInstance])
-
-  useEffect(() => {
-    if (open && !editingTabIcon) {
-      setDraftTabIcon(tabIcon)
-      setTabIconError('')
-    }
-  }, [tabIcon, open, editingTabIcon])
-
-  const submitInstanceName = async (name: string) => {
-    setSavingInstanceName(true)
-    setInstanceNameError('')
-    try {
-      await onInstanceNameChange(name)
-      setRenamingInstance(false)
-      setOpen(false)
-    } catch (error: any) {
-      setInstanceNameError(error?.message || 'Failed to save instance name')
-    } finally {
-      setSavingInstanceName(false)
-    }
-  }
-
-  const submitTabIcon = async (nextTabIcon: string) => {
-    setSavingTabIcon(true)
-    setTabIconError('')
-    try {
-      await onTabIconChange(nextTabIcon)
-      setEditingTabIcon(false)
-      setOpen(false)
-    } catch (error: any) {
-      setTabIconError(error?.message || 'Failed to save tab icon')
-    } finally {
-      setSavingTabIcon(false)
-    }
-  }
 
   return (
     <div ref={rootRef} className="relative">
       <button
         type="button"
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => setOpen(current => !current)}
         className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border transition ${setupActive ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent dark:border-fw-accent-border dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : 'border-fw-border text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:border-fw-border dark:text-fw-text dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse'}`}
         title="UI settings"
         aria-label="Open UI settings"
@@ -206,7 +99,7 @@ export default function GlobalUiSettingsMenu({
           <div className="border-b border-fw-border px-4 py-3 dark:border-fw-border">
             <div className="mb-2 text-xs font-medium text-fw-text-muted">Color mode</div>
             <div className="flex gap-1">
-              {(['auto', 'light', 'dark'] as const).map((mode) => (
+              {(['auto', 'light', 'dark'] as const).map(mode => (
                 <button
                   key={mode}
                   type="button"
@@ -222,203 +115,9 @@ export default function GlobalUiSettingsMenu({
             </div>
           </div>
 
-          <div className="border-b border-fw-border px-4 py-3 dark:border-fw-border">
-            <div className="mb-2 text-xs font-medium text-fw-text-muted">Input</div>
-            <div className="flex gap-1">
-              {([
-                { value: 'modEnter' as const, label: `${modifierLabel}+Enter` },
-                { value: 'enter' as const, label: 'Enter' },
-              ]).map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => onSendKeyModeChange(option.value)}
-                  className={`flex-1 rounded px-2 py-1 text-xs ${sendKeyMode === option.value ? 'bg-fw-accent text-fw-text-inverse' : 'bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised dark:text-fw-text dark:hover:bg-fw-hover'}`}
-                  title={`${option.label} sends`}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="border-b border-fw-border px-4 py-3 dark:border-fw-border">
-            <div className="mb-2 text-xs font-medium text-fw-text-muted">Chat</div>
-            <div className="space-y-1">
-              <button
-                type="button"
-                onClick={() => onGroupToolsChange(!groupTools)}
-                className={toggleRowClass}
-              >
-                <span>Group tools</span>
-                <span className={`ml-3 inline-flex h-4 w-7 items-center rounded-full transition ${groupTools ? 'bg-fw-accent' : 'bg-fw-border-strong dark:bg-fw-text'}`}>
-                  <span className={`h-3 w-3 rounded-full bg-fw-surface transition ${groupTools ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => onShowUsageBadgeChange(!showUsageBadge)}
-                className={toggleRowClass}
-              >
-                <span>Show usage badges</span>
-                <span className={`ml-3 inline-flex h-4 w-7 items-center rounded-full transition ${showUsageBadge ? 'bg-fw-accent' : 'bg-fw-border-strong dark:bg-fw-text'}`}>
-                  <span className={`h-3 w-3 rounded-full bg-fw-surface transition ${showUsageBadge ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
-                </span>
-              </button>
-              <button
-                type="button"
-                disabled={contextScrollbarSettings.showMinimap && !contextScrollbarSettings.showScrollbar}
-                onClick={() => {
-                  const next = { ...contextScrollbarSettings, showMinimap: !contextScrollbarSettings.showMinimap }
-                  setContextScrollbarSettings(writeContextScrollbarSettings(next))
-                }}
-                className={`${toggleRowClass} disabled:cursor-not-allowed disabled:opacity-50`}
-              >
-                <span>Show minimap</span>
-                <span className={`ml-3 inline-flex h-4 w-7 items-center rounded-full transition ${contextScrollbarSettings.showMinimap ? 'bg-fw-accent' : 'bg-fw-border-strong dark:bg-fw-text'}`}>
-                  <span className={`h-3 w-3 rounded-full bg-fw-surface transition ${contextScrollbarSettings.showMinimap ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
-                </span>
-              </button>
-            </div>
-          </div>
-
-          <div className="border-t border-fw-border px-4 py-3 dark:border-fw-border">
+          <div className="px-4 py-3">
             <div className="mb-2 text-xs font-medium text-fw-text-muted">Application</div>
             <div className="space-y-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setDraftInstanceName(instanceName)
-                  setInstanceNameError('')
-                  setEditingTabIcon(false)
-                  setRenamingInstance((current) => !current)
-                }}
-                className={menuButtonClass}
-              >
-                <span>WebUI: Rename instance</span>
-                <span className="ml-3 max-w-[7rem] truncate text-[10px] text-fw-text-muted">
-                  {instanceName || 'Foxwarm'}
-                </span>
-              </button>
-              {renamingInstance && (
-                <form
-                  className="rounded-md border border-fw-border bg-fw-surface-sunken p-2 dark:border-fw-border dark:bg-fw-canvas/50"
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    void submitInstanceName(draftInstanceName)
-                  }}
-                >
-                  <label className="block text-[11px] font-medium text-fw-text" htmlFor="webui-instance-name">
-                    Instance name
-                  </label>
-                  <input
-                    id="webui-instance-name"
-                    type="text"
-                    value={draftInstanceName}
-                    maxLength={80}
-                    onChange={(event) => setDraftInstanceName(event.target.value)}
-                    placeholder="e.g. blackwell-node"
-                    disabled={savingInstanceName}
-                    className="mt-1 w-full rounded border border-fw-border-strong bg-fw-surface px-2 py-1 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring disabled:opacity-70 dark:border-fw-border-strong dark:bg-fw-surface dark:text-fw-text-strong"
-                  />
-                  <p className="mt-1 text-[10px] leading-snug text-fw-text-muted">
-                    Stored on this Foxwarm server. It changes the browser tab title for everyone using this instance.
-                  </p>
-                  {instanceNameError && <p className="mt-1 text-[10px] text-fw-danger dark:text-fw-danger">{instanceNameError}</p>}
-                  <div className="mt-2 flex items-center justify-end gap-1">
-                    <button
-                      type="button"
-                      disabled={savingInstanceName || !instanceName}
-                      onClick={() => void submitInstanceName('')}
-                      className="rounded px-2 py-1 text-xs text-fw-text-muted hover:bg-fw-hover disabled:cursor-not-allowed disabled:opacity-50 dark:text-fw-text dark:hover:bg-fw-hover"
-                    >
-                      Clear
-                    </button>
-                    <button
-                      type="button"
-                      disabled={savingInstanceName}
-                      onClick={() => setRenamingInstance(false)}
-                      className="rounded px-2 py-1 text-xs text-fw-text-muted hover:bg-fw-hover disabled:opacity-50 dark:text-fw-text dark:hover:bg-fw-hover"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={savingInstanceName}
-                      className="rounded bg-fw-accent px-2 py-1 text-xs font-medium text-fw-text-inverse hover:bg-fw-accent disabled:cursor-wait disabled:opacity-70"
-                    >
-                      {savingInstanceName ? 'Saving…' : 'Save'}
-                    </button>
-                  </div>
-                </form>
-              )}
-              <button
-                type="button"
-                onClick={() => {
-                  setDraftTabIcon(tabIcon)
-                  setTabIconError('')
-                  setRenamingInstance(false)
-                  setEditingTabIcon((current) => !current)
-                }}
-                className={menuButtonClass}
-              >
-                <span>WebUI: Change tab icon</span>
-                <span className="ml-3 max-w-[7rem] truncate text-base leading-none text-fw-text-muted dark:text-fw-text">
-                  {tabIcon || '🦊'}
-                </span>
-              </button>
-              {editingTabIcon && (
-                <form
-                  className="rounded-md border border-fw-border bg-fw-surface-sunken p-2 dark:border-fw-border dark:bg-fw-canvas/50"
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    void submitTabIcon(draftTabIcon)
-                  }}
-                >
-                  <label className="block text-[11px] font-medium text-fw-text" htmlFor="webui-tab-icon">
-                    Browser tab icon
-                  </label>
-                  <input
-                    id="webui-tab-icon"
-                    type="text"
-                    value={draftTabIcon}
-                    maxLength={32}
-                    onChange={(event) => setDraftTabIcon(event.target.value)}
-                    placeholder="e.g. 🚀"
-                    disabled={savingTabIcon}
-                    className="mt-1 w-full rounded border border-fw-border-strong bg-fw-surface px-2 py-1 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-1 focus:ring-fw-focus-ring disabled:opacity-70 dark:border-fw-border-strong dark:bg-fw-surface dark:text-fw-text-strong"
-                  />
-                  <p className="mt-1 text-[10px] leading-snug text-fw-text-muted">
-                    Use an emoji or very short text. It changes the favicon shown in the browser tab for this Foxwarm instance.
-                  </p>
-                  {tabIconError && <p className="mt-1 text-[10px] text-fw-danger dark:text-fw-danger">{tabIconError}</p>}
-                  <div className="mt-2 flex items-center justify-end gap-1">
-                    <button
-                      type="button"
-                      disabled={savingTabIcon || !tabIcon}
-                      onClick={() => void submitTabIcon('')}
-                      className="rounded px-2 py-1 text-xs text-fw-text-muted hover:bg-fw-hover disabled:cursor-not-allowed disabled:opacity-50 dark:text-fw-text dark:hover:bg-fw-hover"
-                    >
-                      Clear
-                    </button>
-                    <button
-                      type="button"
-                      disabled={savingTabIcon}
-                      onClick={() => setEditingTabIcon(false)}
-                      className="rounded px-2 py-1 text-xs text-fw-text-muted hover:bg-fw-hover disabled:opacity-50 dark:text-fw-text dark:hover:bg-fw-hover"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={savingTabIcon}
-                      className="rounded bg-fw-accent px-2 py-1 text-xs font-medium text-fw-text-inverse hover:bg-fw-accent disabled:cursor-wait disabled:opacity-70"
-                    >
-                      {savingTabIcon ? 'Saving…' : 'Save'}
-                    </button>
-                  </div>
-                </form>
-              )}
               {onOpenSetup && (
                 <button
                   type="button"

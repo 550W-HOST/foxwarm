@@ -23,34 +23,18 @@ async function buildFixtureBundle() {
     function Fixture() {
       const [anchorLeft, setAnchorLeft] = useState('640px')
       const [align, setAlign] = useState('end')
-      const [themeMode, setThemeMode] = useState('auto')
-      const [selectionCount, setSelectionCount] = useState(0)
-
       useEffect(() => {
         window.settingsMenuFixture = {
           place(left, nextAlign = 'end') {
             setAnchorLeft(left)
             setAlign(nextAlign)
           },
-          selectionCount() { return selectionCount },
         }
-      }, [selectionCount])
+      }, [])
 
       return React.createElement(React.Fragment, null,
         React.createElement('div', { id: 'anchor', style: { position: 'absolute', top: '24px', left: anchorLeft } },
           React.createElement(GlobalUiSettingsMenu, {
-            themeMode,
-            onThemeChange(mode) { setThemeMode(mode); setSelectionCount(count => count + 1) },
-            sendKeyMode: 'modEnter',
-            onSendKeyModeChange() {},
-            groupTools: true,
-            onGroupToolsChange() {},
-            showUsageBadge: true,
-            onShowUsageBadgeChange() {},
-            instanceName: '',
-            onInstanceNameChange() {},
-            tabIcon: '',
-            onTabIconChange() {},
             menuAlign: align,
             onOpenSetup() {},
           })
@@ -214,12 +198,6 @@ test('Escape, outside click, and menu-item selection retain their dismissal beha
   await mountFixture({ width: 900, height: 760, isMobile: false, hasTouch: false, deviceScaleFactor: 1 })
   await placeAnchor('500px')
   await openMenu()
-  const beforeExpansion = await readGeometry()
-  const renameButton = await page.evaluateHandle(() => Array.from(document.querySelectorAll('button')).find(button => button.textContent?.includes('Rename instance')))
-  await renameButton.click()
-  await page.waitForSelector('#webui-instance-name')
-  const afterExpansion = await readGeometry()
-  assert.ok(Math.abs(afterExpansion.menu.left - beforeExpansion.menu.left) <= 1)
   await page.keyboard.press('Escape')
   await page.waitForSelector('[data-global-ui-settings-menu]', { hidden: true })
 
@@ -234,35 +212,14 @@ test('Escape, outside click, and menu-item selection retain their dismissal beha
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('foxwarm_theme_selection_v2')).colorMode), 'light')
 })
 
-test('global Show minimap recovers scrollbar-only mode and normalizes an invalid persisted pair', async () => {
-  await mountFixture({ width: 900, height: 760, isMobile: false, hasTouch: false, deviceScaleFactor: 1 })
-  await page.evaluate(() => {
-    localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', 'false')
-    localStorage.setItem('foxwarm.contextScrollbar.showMinimap', 'false')
-  })
-  await page.reload({ waitUntil: 'load' })
-  await page.waitForFunction(() => !!window.settingsMenuFixture)
-  assert.deepEqual(await page.evaluate(() => ({ scrollbar: localStorage.getItem('foxwarm.contextScrollbar.showScrollbar'), minimap: localStorage.getItem('foxwarm.contextScrollbar.showMinimap') })), { scrollbar: 'false', minimap: 'true' })
-  await openMenu()
-  assert.equal(await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent?.includes('Show minimap'))?.disabled), true, 'the sole enabled minimap cannot be turned off')
-  await page.evaluate(() => {
-    localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', 'true')
-    localStorage.setItem('foxwarm.contextScrollbar.showMinimap', 'false')
-    window.dispatchEvent(new Event('foxwarm-context-scrollbar-settings'))
-  })
-  await page.waitForFunction(() => [...document.querySelectorAll('button')].find(button => button.textContent?.includes('Show minimap'))?.disabled === false)
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent?.includes('Show minimap'))?.click())
-  assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm.contextScrollbar.showMinimap')), 'true')
-  await page.evaluate(() => {
-    localStorage.removeItem('foxwarm.contextScrollbar.showScrollbar')
-    localStorage.removeItem('foxwarm.contextScrollbar.showMinimap')
-  })
-})
-
 test('global UI settings keeps only the Auto, Light, and Dark color-mode controls', async () => {
   await mountFixture({ width: 900, height: 760, isMobile: false, hasTouch: false, deviceScaleFactor: 1 })
   await openMenu()
   assert.equal(await page.$('select[aria-label="Theme"]'), null)
   assert.equal(await page.$('button::-p-text(Import)'), null)
+  const text = await page.$eval('[data-global-ui-settings-menu]', menu => menu.textContent || '')
+  for (const movedLabel of ['Input', 'Chat', 'Group tools', 'Show minimap', 'Rename instance', 'tab icon']) {
+    assert.equal(text.includes(movedLabel), false, `${movedLabel} is not duplicated in global settings`)
+  }
   assert.deepEqual(await page.$$eval('[data-global-ui-settings-menu] button', buttons => buttons.map(button => button.textContent?.trim()).filter(text => ['auto', 'light', 'dark'].includes(text?.toLowerCase() || '')).map(text => text?.toLowerCase())), ['auto', 'light', 'dark'])
 })

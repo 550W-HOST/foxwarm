@@ -6,6 +6,7 @@ import { APP_CONFIG_YAML_MODEL_URI, MODELS_YAML_MODEL_URI } from '../yamlConfigS
 import ContentHeader from './ContentHeader'
 import SimpleCodeEditor from './SimpleCodeEditor'
 import ThemeManager from './ThemeManager'
+import WebUiBrandingSettings, { type WebUiBrandingSettingsValue } from './WebUiBrandingSettings'
 
 type SetupStatus = {
   oobe: boolean
@@ -43,6 +44,9 @@ interface SetupViewProps {
   onClose?: () => void
   onSetupChanged?: () => void
   focusModelsRequest?: number
+  webUiSettings?: WebUiBrandingSettingsValue
+  onInstanceNameChange?: (name: string) => Promise<void> | void
+  onTabIconChange?: (tabIcon: string) => Promise<void> | void
 }
 
 const DEFAULT_MODELS_YAML = buildModelsYaml([makeDefaultProvider(0)], 'openai/gpt-5.6-sol')
@@ -80,8 +84,8 @@ function StatusPill({ ok, label }: { ok: boolean; label: string }) {
 }
 
 type SaveResult = { kind: 'success' | 'error'; message: string }
-type SetupTab = 'models' | 'config' | 'appearance'
-const SETUP_TABS: SetupTab[] = ['models', 'config', 'appearance']
+type SetupTab = 'appearance' | 'models' | 'config'
+const SETUP_TABS: SetupTab[] = ['appearance', 'models', 'config']
 
 function SaveFeedback({ section, result }: { section: 'models' | 'config'; result: SaveResult | null }) {
   if (!result) return null
@@ -108,8 +112,8 @@ function normalizeWeixinQrPayload(value: string): { imageSrc: string | null; raw
   return { imageSrc: null, raw: trimmed }
 }
 
-export default function SetupView({ forced = false, onClose, onSetupChanged, focusModelsRequest = 0 }: SetupViewProps) {
-  const [activeTab, setActiveTab] = useState<SetupTab>('models')
+export default function SetupView({ forced = false, onClose, onSetupChanged, focusModelsRequest = 0, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
+  const [activeTab, setActiveTab] = useState<SetupTab>('appearance')
   const [modelsEditorFocusRequest, setModelsEditorFocusRequest] = useState(0)
   const [status, setStatus] = useState<SetupStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -414,6 +418,22 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
             <div className="border-b border-fw-border px-2 pt-2 dark:border-fw-border-muted">
               <div role="tablist" aria-label="Setup sections" className="flex gap-1">
                 <button
+                  ref={appearanceTabRef}
+                  id="setup-tab-appearance"
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'appearance'}
+                  aria-controls="setup-panel-appearance"
+                  tabIndex={activeTab === 'appearance' ? 0 : -1}
+                  data-setup-tab="appearance"
+                  onClick={() => activateTab('appearance')}
+                  onKeyDown={handleTabKeyDown}
+                  className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'appearance' ? 'border-fw-accent-border text-fw-accent' : 'border-transparent text-fw-text hover:bg-fw-hover hover:text-fw-text-strong'}`}
+                >
+                  <Palette className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>Appearance</span>
+                </button>
+                <button
                   ref={modelsTabRef}
                   id="setup-tab-models"
                   type="button"
@@ -452,24 +472,15 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
                   {configTabStatus === 'attention' && <XCircle data-setup-tab-status="attention" className="h-4 w-4 shrink-0 text-fw-warning dark:text-fw-warning" aria-hidden="true" />}
                   {configTabStatus && <span className="sr-only">{configTabStatus === 'complete' ? 'Channels ready' : 'Channels need attention'}</span>}
                 </button>
-                <button
-                  ref={appearanceTabRef}
-                  id="setup-tab-appearance"
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === 'appearance'}
-                  aria-controls="setup-panel-appearance"
-                  tabIndex={activeTab === 'appearance' ? 0 : -1}
-                  data-setup-tab="appearance"
-                  onClick={() => activateTab('appearance')}
-                  onKeyDown={handleTabKeyDown}
-                  className={`inline-flex min-w-0 items-center gap-2 rounded-t-lg border-b-2 px-4 py-3 text-sm font-medium transition-colors ${activeTab === 'appearance' ? 'border-fw-accent-border text-fw-accent' : 'border-transparent text-fw-text hover:bg-fw-hover hover:text-fw-text-strong'}`}
-                >
-                  <Palette className="h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span>Appearance</span>
-                </button>
               </div>
             </div>
+
+            <section id="setup-panel-appearance" role="tabpanel" aria-labelledby="setup-tab-appearance" data-setup-section="appearance" hidden={activeTab !== 'appearance'} className="p-4 md:p-5">
+              <ThemeManager />
+              {webUiSettings && onInstanceNameChange && onTabIconChange && (
+                <WebUiBrandingSettings value={webUiSettings} onInstanceNameChange={onInstanceNameChange} onTabIconChange={onTabIconChange} />
+              )}
+            </section>
 
             <section ref={modelsSectionRef} id="setup-panel-models" role="tabpanel" aria-labelledby="setup-tab-models" data-setup-section="models" hidden={activeTab !== 'models'} className="scroll-mt-4 p-4 md:p-5">
               <div>
@@ -535,9 +546,6 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
               </div>
             </section>
 
-            <section id="setup-panel-appearance" role="tabpanel" aria-labelledby="setup-tab-appearance" data-setup-section="appearance" hidden={activeTab !== 'appearance'} className="p-4 md:p-5">
-              <ThemeManager />
-            </section>
           </div>
         </div>
       </div>

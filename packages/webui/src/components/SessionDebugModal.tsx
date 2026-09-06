@@ -23,6 +23,7 @@ export type SessionDebugSource = {
   queuedPreviewCount: number
   groupTools: boolean
   showUsageBadge: boolean
+  showUserMessageMetadata: boolean
   sendKeyMode: 'modEnter' | 'enter'
   loading: boolean
   asrAvailable: boolean
@@ -74,6 +75,7 @@ function buildSessionDebugSnapshotText(
       queuedPreviewCount: source.queuedPreviewCount,
       groupTools: source.groupTools,
       showUsageBadge: source.showUsageBadge,
+      showUserMessageMetadata: source.showUserMessageMetadata,
       sendKeyBehavior: source.sendKeyMode === 'enter' ? 'Enter sends; Shift+Enter inserts a new line.' : 'Ctrl/Cmd+Enter sends; Enter inserts a new line.',
       loading: source.loading,
       asrAvailable: source.asrAvailable,

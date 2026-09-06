@@ -9,8 +9,10 @@ import {
   getSystemMessagePreviewDescriptor,
   isCollapsibleSystemText,
   isHeavySystemTextLine,
+  isLightweightSystemTextLine,
   isLightweightStructuredSystem,
   isSystemLikeText,
+  parseFoxwarmMetadataLine,
   renderAssistantMarkdownSegments,
   handleMarkdownLinkClick,
   renderSystemTextWithSessionLinks,
@@ -58,6 +60,7 @@ interface ChatTimelineProps {
   isMobile: boolean
   groupTools: boolean
   showUsageBadge: boolean
+  showUserMessageMetadata?: boolean
   onOpenCodeFile?: OpenCodeFileHandler
   onOpenCodeCommit?: OpenCodeCommitHandler
   nestedDepth?: number
@@ -378,7 +381,16 @@ const isHeavySystemLikeMessage = (message: Message): boolean => {
   )
 }
 
-const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser }: { systemText: string; isUser: boolean }) {
+const isUserAttachmentMetadataLine = (line: string): boolean => {
+  const tag = parseFoxwarmMetadataLine(line)
+  return tag?.tagName === 'foxwarm-image' || tag?.tagName === 'foxwarm-file'
+}
+
+const shouldRenderUserLine = (line: string, showUserMessageMetadata: boolean): boolean => (
+  showUserMessageMetadata || !isLightweightSystemTextLine(line) || isUserAttachmentMetadataLine(line)
+)
+
+const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser, showUserMessageMetadata = true }: { systemText: string; isUser: boolean; showUserMessageMetadata?: boolean }) {
   return (
     <pre
       className={`max-w-full whitespace-pre-wrap break-words font-sans ${isUser ? 'text-fw-user-text' : 'text-fw-text-muted'}`}
@@ -386,6 +398,7 @@ const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser }: { sy
     >
       {systemText.split('\n').map((line, lineIdx) => {
         const isMetaLine = isSystemLikeText(line)
+        if (isUser && !shouldRenderUserLine(line, showUserMessageMetadata)) return null
         return (
           <span
             key={lineIdx}
@@ -403,7 +416,7 @@ const InlineMetaPart = memo(function InlineMetaPart({ systemText, isUser }: { sy
   )
 })
 
-const CollapsibleUserText = memo(function CollapsibleUserText({ text }: { text: string }) {
+const CollapsibleUserText = memo(function CollapsibleUserText({ text, showUserMessageMetadata }: { text: string; showUserMessageMetadata: boolean }) {
   const isSystemMessage = isCollapsibleSystemText(text)
   const [expanded, setExpanded] = useState(false)
   const shouldCollapse = isSystemMessage && !expanded
@@ -414,6 +427,7 @@ const CollapsibleUserText = memo(function CollapsibleUserText({ text }: { text: 
         <pre className="foxwarm-user-message-text max-w-full whitespace-pre-wrap break-words font-sans" style={{ lineHeight: '1.5em' }}>
           {text.split('\n').map((line, lineIdx) => {
             const isPrefix = isSystemLikeText(line)
+            if (!shouldRenderUserLine(line, showUserMessageMetadata)) return null
             return (
               <span
                 key={lineIdx}
@@ -660,6 +674,7 @@ interface MessageRowProps {
   isMobile: boolean
   groupTools: boolean
   showUsageBadge: boolean
+  showUserMessageMetadata: boolean
   groupKey: string
   summaryTagItems: ToolTagItem[]
   groupUsage: NormalizedTokenUsage | null
@@ -685,6 +700,7 @@ const MessageRow = memo(function MessageRow({
   isMobile,
   groupTools,
   showUsageBadge,
+  showUserMessageMetadata,
   groupKey,
   summaryTagItems,
   groupUsage,
@@ -761,8 +777,8 @@ const MessageRow = memo(function MessageRow({
             {textLikeParts.map((part, partIdx) => (
               <div key={`user-part-${partIdx}`}>
                 {part.system
-                  ? <InlineMetaPart systemText={formatStructuredSystemText(part.system)} isUser={true} />
-                  : <CollapsibleUserText text={part.text || ''} />}
+                  ? <InlineMetaPart systemText={formatStructuredSystemText(part.system)} isUser={true} showUserMessageMetadata={showUserMessageMetadata} />
+                  : <CollapsibleUserText text={part.text || ''} showUserMessageMetadata={showUserMessageMetadata} />}
               </div>
             ))}
             <ImageParts imageParts={imageParts} keyPrefix={`user-${messageKey}`} />
@@ -811,6 +827,7 @@ const MessageRow = memo(function MessageRow({
   prev.isMobile === next.isMobile &&
   prev.groupTools === next.groupTools &&
   prev.showUsageBadge === next.showUsageBadge &&
+  (prev.msg.role !== 'user' || isHeavySystemLikeMessage(prev.msg) || prev.showUserMessageMetadata === next.showUserMessageMetadata) &&
   prev.groupKey === next.groupKey &&
   prev.summaryTagItems === next.summaryTagItems &&
   prev.groupUsage === next.groupUsage &&
@@ -823,10 +840,10 @@ const MessageRow = memo(function MessageRow({
   prev.nestedDepth === next.nestedDepth &&
   prev.onOpenCodeFile === next.onOpenCodeFile &&
   prev.onOpenCodeCommit === next.onOpenCodeCommit &&
-  prev.renderNestedMessages === next.renderNestedMessages
+  (!getContextBlockMetaFromMessage(prev.msg) || prev.renderNestedMessages === next.renderNestedMessages)
 ))
 
-const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
+const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile, groupTools, showUsageBadge, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0 }: ChatTimelineProps) {
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const requestTimingByIndex = useMemo(() => deriveRequestTimings(messages), [messages])
 
@@ -838,11 +855,12 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
       isMobile={isMobile}
       groupTools={groupTools}
       showUsageBadge={nextNestedDepth > 0 ? false : showUsageBadge}
+      showUserMessageMetadata={showUserMessageMetadata}
       onOpenCodeFile={onOpenCodeFile}
       onOpenCodeCommit={onOpenCodeCommit}
       nestedDepth={nextNestedDepth}
     />
-  ), [groupTools, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge])
+  ), [groupTools, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge, showUserMessageMetadata])
 
   const toolGroupMeta = useMemo(() => {
     const messageKeys = messages.map((msg, idx) => getMessageStableKey(msg, idx))
@@ -1045,6 +1063,7 @@ const ChatTimeline = memo(function ChatTimeline({ sessionId, messages, isMobile,
             isMobile={isMobile}
             groupTools={groupTools}
             showUsageBadge={showUsageBadge}
+            showUserMessageMetadata={showUserMessageMetadata}
             groupKey={groupKey}
             summaryTagItems={toolGroupMeta.summaryTagItemsByIndex[idx]}
             groupUsage={toolGroupMeta.groupUsageByIndex[idx]}

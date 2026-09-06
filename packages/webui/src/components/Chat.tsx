@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Code2, ExternalLink, Menu, MessageSquareText, SquareTerminal } from 'lucide-react'
+import { Code2, ExternalLink, MessageSquareText, SquareTerminal } from 'lucide-react'
 import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
@@ -19,6 +19,7 @@ import { appendOptimisticAttachmentTag } from '../utils/attachmentPreview'
 import { formatSessionHeaderSubtitle } from '../sessionHeader'
 import { createLatestRequestGate, loadPageOnce, runLatestModelOptionsRequest } from '../modelOptionsLoader'
 import { webUiRealtime } from '../realtime'
+import SessionUiSettingsMenu from './SessionUiSettingsMenu'
 import {
   advanceHistorySeqFrontier,
   buildOptimisticUserMessage,
@@ -141,6 +142,11 @@ interface ChatProps {
   sendKeyMode?: 'modEnter' | 'enter'
   groupTools?: boolean
   showUsageBadge?: boolean
+  showUserMessageMetadata?: boolean
+  onSendKeyModeChange?: (mode: 'modEnter' | 'enter') => void
+  onGroupToolsChange?: (enabled: boolean) => void
+  onShowUsageBadgeChange?: (enabled: boolean) => void
+  onShowUserMessageMetadataChange?: (enabled: boolean) => void
   onDraftEdited?: (draftText: string) => void
 }
 
@@ -183,7 +189,7 @@ type SessionListRecord = {
   isolated?: boolean
 }
 
-const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, onDraftEdited }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayName, onBack, onOpenTerminal, onOpenCode, onOpenCodeNewWindow, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', groupTools = false, showUsageBadge = true, showUserMessageMetadata = false, onSendKeyModeChange = () => {}, onGroupToolsChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {}, onDraftEdited }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [sessionMissing, setSessionMissing] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -195,7 +201,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   const [reconnectCountdown, setReconnectCountdown] = useState<number>(0)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const [showScrollTopButton, setShowScrollTopButton] = useState(false)
-  const [showMenu, setShowMenu] = useState(false)
   const [showDebugInfo, setShowDebugInfo] = useState(false)
   const [streamingAssistantDraft, setStreamingAssistantDraft] = useState<StreamingAssistantDraft | null>(null)
   const streamingAssistantDraftRef = useRef<StreamingAssistantDraft | null>(null)
@@ -1423,7 +1428,6 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   }, [captureCurrentViewportState])
 
   const handleOpenDebugInfo = useCallback(() => {
-    setShowMenu(false)
     setShowDebugInfo(true)
   }, [])
 
@@ -1785,25 +1789,17 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
                 <span className="hidden md:inline">Open terminal</span>
               </button>
             )}
-            <div className="relative">
-              <button
-                onClick={() => setShowMenu(!showMenu)}
-                className="rounded-lg p-2 text-fw-text hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse"
-                title="Session options"
-              >
-                <Menu size={20} />
-              </button>
-              {showMenu && (
-                <div className="absolute right-0 mt-2 w-56 rounded-lg border border-fw-border bg-fw-surface text-fw-text-strong shadow-lg z-50 dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
-                  <button
-                    onClick={handleOpenDebugInfo}
-                    className="w-full px-4 py-2 text-left text-sm hover:bg-fw-hover dark:hover:bg-fw-hover"
-                  >
-                    debug info
-                  </button>
-                </div>
-              )}
-            </div>
+            <SessionUiSettingsMenu
+              sendKeyMode={sendKeyMode}
+              onSendKeyModeChange={onSendKeyModeChange}
+              groupTools={groupTools}
+              onGroupToolsChange={onGroupToolsChange}
+              showUsageBadge={showUsageBadge}
+              onShowUsageBadgeChange={onShowUsageBadgeChange}
+              showUserMessageMetadata={showUserMessageMetadata}
+              onShowUserMessageMetadataChange={onShowUserMessageMetadataChange}
+              onOpenDebugInfo={handleOpenDebugInfo}
+            />
           </>
         )}
       />
@@ -1859,7 +1855,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             )}
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
+                <ChatTimeline sessionId={sessionId} messages={timelineMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
               </ToolScriptProgressContext.Provider>
             </div>
             <ProcessingStatus
@@ -1875,7 +1871,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             />
             {queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
-                <ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
+                <ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} groupTools={groupTools} showUsageBadge={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} />
               </div>
             )}
             <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
@@ -1959,6 +1955,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             queuedPreviewCount: queuedMessages.length,
             groupTools,
             showUsageBadge,
+            showUserMessageMetadata,
             sendKeyMode,
             loading,
             asrAvailable,
@@ -1980,6 +1977,14 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
   && prev.onOpenCodeFile === next.onOpenCodeFile
   && prev.onOpenCodeCommit === next.onOpenCodeCommit
   && prev.onOpenModelSettings === next.onOpenModelSettings
+  && prev.sendKeyMode === next.sendKeyMode
+  && prev.groupTools === next.groupTools
+  && prev.showUsageBadge === next.showUsageBadge
+  && prev.showUserMessageMetadata === next.showUserMessageMetadata
+  && prev.onSendKeyModeChange === next.onSendKeyModeChange
+  && prev.onGroupToolsChange === next.onGroupToolsChange
+  && prev.onShowUsageBadgeChange === next.onShowUsageBadgeChange
+  && prev.onShowUserMessageMetadataChange === next.onShowUserMessageMetadataChange
 ))
 
 export default Chat

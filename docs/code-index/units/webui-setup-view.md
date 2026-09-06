@@ -1,6 +1,6 @@
 # Unit: WebUI Setup view
 
-Files: packages/webui/src/components/SetupView.tsx, packages/webui/src/setupModels.ts, packages/webui/test/setupModels.test.mjs, packages/webui/test/setupModels.e2e.mjs
+Files: packages/webui/src/components/SetupView.tsx, packages/webui/src/components/WebUiBrandingSettings.tsx, packages/webui/src/setupModels.ts, packages/webui/test/setupModels.test.mjs, packages/webui/test/setupModels.e2e.mjs
 Secondary files: packages/webui/package.json, packages/webui/src/yamlConfigSchemas.ts, packages/webui/src/components/SimpleCodeEditor.tsx, packages/webui/src/components/ThemeManager.tsx
 
 ## Purpose
@@ -31,7 +31,7 @@ The server retains structured `/setup/models` request handling and `/setup/model
 - The generated initial YAML defaults to `openai/gpt-5.6-sol` and lists `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
 - Raw model and app-config saves preserve user text after canonical backend validation. Comments, key order, quoting, custom fields, and formatting survive.
 - Each Models or Config save reports its success or validation error beside (or immediately below on narrow layouts) that section's own Save button using an announced status. Load and Weixin errors remain in the page-level error area.
-- Setup presents Models, Config, and Appearance as an accessible three-tab surface. Inactive panels are hidden while both editor instances remain mounted, preserving Monaco model/diagnostic lifecycle and each tab's local state without visibly stacking the editors.
+- Setup presents Appearance, Models, and Config as an accessible three-tab surface. Appearance is first and selected by default. Inactive panels are hidden while both editor instances remain mounted, preserving Monaco model/diagnostic lifecycle and each tab's local state without visibly stacking the editors.
 - The former checklist is removed. Completion/attention icons appear in the tab labels: Models reflects usable model configuration; Config reflects enabled channel health and omits its icon when no enabled channel provides a meaningful status. Disabled channels do not create attention state.
 - The two editors use distinct model URIs and static frontend schemas. Suggestions/markers are advisory and never disable Save; canonical behavior is [D-editor-local-yaml-assistance](./webui-editor.md#d-editor-local-yaml-assistance).
 - Both YAML editor wrappers use the exact responsive height `calc(min(600px, 80vh))`; the same wrapper height applies to Monaco and the plain-text fallback without widening the mobile layout.
@@ -40,7 +40,7 @@ The server retains structured `/setup/models` request handling and `/setup/model
 - Weixin login is the final section in the Config tab. Start renders image/base64/pairing payloads as a QR code without exposing internal session keys or pairing payload text; wait persists connected token/user/channel fields server-side.
 - Forced mode is closable only after the active models file exists. WebUI itself makes the channel-availability check non-blocking.
 - A positive `focusModelsRequest` activates the Models tab, scrolls to its panel, and focuses its Monaco editor.
-- Appearance hosts `ThemeManager` for theme-family selection, in-place Auto/Light/Dark palette preview, and portable import/export/clone/delete. The compact global settings menu also retains color mode as a quick control. Theme behavior is owned by [webui-theme-system](./webui-theme-system.md).
+- Appearance hosts `ThemeManager` for theme-family selection, in-place Auto/Light/Dark palette preview, and portable import/export/clone/delete. A separate section below theme management edits the server-backed browser instance name and tab icon with the existing save/clear/cancel/error behavior. The compact global settings menu retains color mode as a quick control. Theme behavior is owned by [webui-theme-system](./webui-theme-system.md).
 - If lazy editor support loading or configuration rejects, the Models and app-config surfaces remain controlled plain-text editors, so OOBE can still be completed and canonical backend validation still owns Save. Internal worker health is not probed after initialization; Monaco remains editable if schema assistance later degrades.
 
 ## Integration
@@ -53,7 +53,7 @@ The server retains structured `/setup/models` request handling and `/setup/model
 
 ## Function index
 
-- `SetupView` — loads status and renders accessible Models/Config/Appearance tabs, raw editors, channel status, bottom-of-Config Weixin controls, and theme management.
+- `SetupView` — loads status and renders accessible Appearance/Models/Config tabs, raw editors, channel status, bottom-of-Config Weixin controls, theme management, and controlled browser-branding settings.
 - `loadStatus` — refreshes diagnostics and hydrates raw editor text.
 - `saveModels` / `saveConfig` — send raw YAML to backend-authoritative validators/writers.
 - `startWeixinLogin` / `waitWeixinLogin` — manage pairing and persisted channel setup.
@@ -83,7 +83,7 @@ Models save success/errors belong beside or immediately below the Models Save bu
 
 ### D-setup-tab-layout
 
-[2026-09-03] Setup uses three accessible tabs: `Models`, `Config`, and `Appearance`. Completion/attention status is shown on the configuration tabs. Only the active panel is visible, while both editor instances remain mounted to preserve editor lifecycle and document state. Weixin login is the final section of Config. Model-focus requests always activate Models before focusing its editor, including the Code-embedded Setup surface. Appearance owns theme-family and theme-file management; see [D-webui-theme-controls](./webui-theme-system.md#d-webui-theme-controls).
+[2026-09-03, updated 2026-09-06] Setup uses three accessible tabs in this order: `Appearance`, `Models`, and `Config`. Appearance is the initial default. Completion/attention status is shown on the configuration tabs. Only the active panel is visible, while both editor instances remain mounted to preserve editor lifecycle and document state. Weixin login is the final section of Config. Model-focus requests always activate Models before focusing its editor, including the Code-embedded Setup surface. Appearance owns theme-family/theme-file management and the server-backed browser name/icon section; see [D-webui-theme-controls](./webui-theme-system.md#d-webui-theme-controls) and [D-webui-settings-placement](../modules/webui.md#d-webui-settings-placement).
 
 ## Canonical ownership
 

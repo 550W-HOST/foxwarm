@@ -38,6 +38,7 @@
     "test:session-list-drag-e2e": "node --test test/sessionListDrag.e2e.mjs",
     "test:session-header-e2e": "node --test test/sessionHeader.e2e.mjs",
     "test:settings-menu-e2e": "node --test test/settingsMenuPosition.e2e.mjs",
+    "test:chat-settings-placement-e2e": "node --test test/chatSettingsPlacement.e2e.mjs",
     "test:context-menu-e2e": "node --test test/contextMenu.e2e.mjs",
     "preview": "vite preview"
   },

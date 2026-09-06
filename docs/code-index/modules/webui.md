@@ -36,7 +36,7 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - Mounted Chat owns one session's history and logical runtime subscription; the page realtime transport owns the physical connection.
 - App/Sidebar/Architecture own their list data and logical subscriptions on the shared transport. Stream-triggered refreshes use fixed-delay, non-overlapping coalescing, while the session-list request gate remains latest-wins; the canonical contract is [D-webui-app-global-list-gate](../units/webui-app.md#d-webui-app-global-list-gate).
 - Workbench store owns tab/pane/split layout. Chat viewport state is ephemeral in-memory state keyed by canonical session ID.
-- Browser-only theme packages/selection, layout, draft, and Code preferences remain local; instance name/icon are server settings.
+- Browser-only theme packages/selection, chat/input display preferences, layout, draft, and Code preferences remain local; instance name/icon are server settings.
 
 ## Invariants
 
@@ -97,6 +97,10 @@ History, message streams, CTX expansion, and Debug expose authenticated deployme
 ### D-webui-model-settings-navigation
 
 The Chat model popup reuses the page-lifetime singleton `/api/models` result; opening it does not refresh model metadata. Its settings action activates the existing singleton Setup surface and requests focus for the Models YAML editor without creating a second instance: normal App uses the workbench callback, while Code-embedded Chat uses the nonce-bound fixed bridge to activate the Setup custom editor and deliver a one-shot focus signal. Neither path mutates the hash directly. Setup edits may require a page reload before cached choices change. This preserves workbench ownership, split-pane behavior, Code editor identity, and deployment subpaths.
+
+### D-webui-settings-placement
+
+[2026-09-06] The global sidebar settings menu is limited to the quick color-mode control plus Setup/reload actions. Browser-local Input and Chat preferences belong in each Chat session header menu, where `Show user message metadata` defaults off and hides only already-classified lightweight direct-user metadata; attachment descriptor tags remain visible, and heavy/system-like cards are unchanged. Instance-wide browser name and tab icon controls belong below theme management in Setup's Appearance tab. Appearance is Setup's first/default tab, while explicit model-configuration navigation still activates and focuses Models. Moving controls does not change their browser-local versus server-backed authority.
 
 ### D-webui-removed-workspace
 
