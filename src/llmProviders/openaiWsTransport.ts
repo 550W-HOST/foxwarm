@@ -1,6 +1,6 @@
-import crypto from 'crypto';
 import { PassThrough } from 'stream';
 import WebSocket, { RawData } from 'ws';
+import { logger } from '../common';
 import { hashJournalValue } from '../llmRequestJournal';
 import { createStreamingAttemptWatchdog } from '../llmStreamingTimeout';
 import { collectOpenAIResponsesStream, OpenAIStreamProgressSnapshot } from './openai';
@@ -23,7 +23,23 @@ type SocketLike = Pick<WebSocket, 'readyState' | 'send' | 'close' | 'terminate' 
 type OpenAIWsResource = {
     socket: SocketLike;
     id: string;
+    connectionStartedAt: number;
+    connectionOpenedAt?: number;
+    activeAttempt?: OpenAIWsAttemptDiagnostics & {
+        connectionMode: 'fresh' | 'reused';
+        appendFromItemIndex: number;
+        idleBeforeReuseMs?: number;
+    };
+    closeRecorded?: boolean;
     removeIdleListeners?: () => void;
+};
+
+export type OpenAIWsAttemptDiagnostics = {
+    sessionId?: string;
+    purpose?: string;
+    llmRequestId?: string;
+    iteration?: number;
+    attempt?: number;
 };
 
 type OpenAIWsRequestOptions = {
@@ -34,6 +50,7 @@ type OpenAIWsRequestOptions = {
     placement: 'local' | 'session-worker';
     signal: AbortSignal;
     hardTimeoutMs?: number;
+    diagnostics?: OpenAIWsAttemptDiagnostics;
     onProgress?: (snapshot: OpenAIStreamProgressSnapshot) => void;
     onRawFrame?: (frame: string) => void;
 };
@@ -49,17 +66,89 @@ type IdleTimerHooks = {
     set(callback: () => void, delayMs: number): IdleTimer;
     clear(timer: IdleTimer): void;
 };
+type DiagnosticLogger = Pick<typeof logger, 'info' | 'warn'>;
 
 let socketSequence = 0;
 let now = () => Date.now();
 let socketFactory: SocketFactory = (url, headers) => new WebSocket(url, { headers });
+let diagnosticLogger: DiagnosticLogger = logger;
 let idleTimers: IdleTimerHooks = {
     set: (callback, delayMs) => setTimeout(callback, delayMs),
     clear: timer => clearTimeout(timer as NodeJS.Timeout),
 };
 
-function closeResource(resource: OpenAIWsResource): void {
+function boundedDiagnosticText(value: unknown, maxLength = 240): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const normalized = value.replace(/[\r\n\t]+/g, ' ').trim();
+    if (!normalized) return undefined;
+    return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength)}…`;
+}
+
+function emitDiagnostic(level: 'info' | 'warn', fields: Record<string, unknown>, message: string): void {
     try {
+        diagnosticLogger[level](fields, message);
+    } catch {
+        // Lifecycle diagnostics must never change socket cleanup or retry behavior.
+    }
+}
+
+function attemptDiagnosticFields(resource: OpenAIWsResource): Record<string, unknown> {
+    return {
+        providerType: 'openai-ws',
+        socketId: resource.id,
+        ...resource.activeAttempt,
+        connectionStartedAt: resource.connectionStartedAt,
+        ...(resource.connectionOpenedAt !== undefined ? { connectionOpenedAt: resource.connectionOpenedAt } : {}),
+    };
+}
+
+function recordSocketClose(resource: OpenAIWsResource, options: {
+    origin: 'local' | 'upstream';
+    cause: string;
+    phase: string;
+    code?: number;
+    reason?: unknown;
+    error?: unknown;
+    chain?: OpenAIWsCompletedChain<OpenAIWsResource>;
+    details?: Record<string, unknown>;
+}): void {
+    if (resource.closeRecorded) return;
+    resource.closeRecorded = true;
+    const timestamp = now();
+    const chain = options.chain;
+    const error = options.error as any;
+    const fields = {
+        ...attemptDiagnosticFields(resource),
+        ...options.details,
+        closeOrigin: options.origin,
+        closeCause: options.cause,
+        closePhase: options.phase,
+        ...(options.code !== undefined ? { closeCode: options.code } : {}),
+        ...(boundedDiagnosticText(options.reason) ? { closeReason: boundedDiagnosticText(options.reason) } : {}),
+        ...(error?.name ? { errorName: boundedDiagnosticText(error.name, 80) } : {}),
+        ...(error?.code ? { errorCode: boundedDiagnosticText(String(error.code), 80) } : {}),
+        connectionAgeMs: Math.max(0, timestamp - (resource.connectionOpenedAt || resource.connectionStartedAt)),
+        ...(chain ? {
+            chainAgeMs: Math.max(0, timestamp - chain.createdAt),
+            idleDurationMs: Math.max(0, timestamp - chain.lastUsedAt),
+        } : {}),
+    };
+    if (options.origin === 'upstream') emitDiagnostic('warn', fields, 'OpenAI Responses WebSocket closed by upstream');
+    else emitDiagnostic('info', fields, 'OpenAI Responses WebSocket closed locally');
+}
+
+function closeResource(
+    resource: OpenAIWsResource,
+    cause = 'transport-cleanup',
+    options?: { phase?: string; chain?: OpenAIWsCompletedChain<OpenAIWsResource> },
+): void {
+    try {
+        recordSocketClose(resource, {
+            origin: 'local',
+            cause,
+            phase: options?.phase || 'unknown',
+            chain: options?.chain,
+        });
         resource.removeIdleListeners?.();
         resource.removeIdleListeners = undefined;
         if (resource.socket.readyState === WebSocket.OPEN || resource.socket.readyState === WebSocket.CONNECTING) {
@@ -68,7 +157,9 @@ function closeResource(resource: OpenAIWsResource): void {
     } catch {}
 }
 
-const completedPool = new OpenAIWsCompletedChainPool<OpenAIWsResource>(closeResource);
+const completedPool = new OpenAIWsCompletedChainPool<OpenAIWsResource>((resource, cause, chain) => {
+    closeResource(resource, cause, { phase: 'idle', chain });
+});
 
 function makeAbortError(message = 'The operation was aborted'): Error & { code: string } {
     const error = new Error(message) as Error & { code: string };
@@ -100,10 +191,21 @@ function normalizeFrame(data: RawData | unknown): string {
     return String(data);
 }
 
-function openSocket(url: string, headers: Record<string, any>, signal: AbortSignal): Promise<OpenAIWsResource> {
+function openSocket(
+    url: string,
+    headers: Record<string, any>,
+    signal: AbortSignal,
+    diagnostics?: OpenAIWsAttemptDiagnostics,
+    abortCause?: () => string,
+): Promise<OpenAIWsResource> {
     if (signal.aborted) return Promise.reject(makeAbortError());
     const socket = socketFactory(url, headers);
-    const resource = { socket, id: `openai-ws-${process.pid}-${++socketSequence}-${crypto.randomUUID()}` };
+    const resource: OpenAIWsResource = {
+        socket,
+        id: `openai-ws-${process.pid}-${++socketSequence}`,
+        connectionStartedAt: now(),
+        activeAttempt: { ...diagnostics, connectionMode: 'fresh', appendFromItemIndex: 0 },
+    };
     return new Promise((resolve, reject) => {
         let settled = false;
         const cleanup = () => {
@@ -120,21 +222,32 @@ function openSocket(url: string, headers: Record<string, any>, signal: AbortSign
             callback();
         };
         const onAbort = () => finish(() => {
-            closeResource(resource);
+            closeResource(resource, abortCause?.() || 'handshake-abort', { phase: 'handshake' });
             reject(makeAbortError());
         });
         const onOpen = () => finish(() => {
+            resource.connectionOpenedAt = now();
             resolve(resource);
         });
         const onError = (error: Error) => finish(() => {
-            closeResource(resource);
+            recordSocketClose(resource, { origin: 'upstream', cause: 'handshake-error', phase: 'handshake', error });
+            closeResource(resource, 'handshake-error', { phase: 'handshake' });
             reject(error);
         });
-        const onClose = (code: number, reason: Buffer) => finish(() => reject(new Error(
-            `OpenAI Responses WebSocket closed during handshake (${code}${reason?.length ? `: ${reason.toString('utf8')}` : ''}).`,
-        )));
+        const onClose = (code: number, reason: Buffer) => finish(() => {
+            recordSocketClose(resource, { origin: 'upstream', cause: 'handshake-close', phase: 'handshake', code, reason: reason?.toString('utf8') });
+            reject(new Error(
+                `OpenAI Responses WebSocket closed during handshake (${code}${reason?.length ? `: ${reason.toString('utf8')}` : ''}).`,
+            ));
+        });
         const onUnexpectedResponse = (_request: unknown, response: any) => finish(() => {
-            closeResource(resource);
+            recordSocketClose(resource, {
+                origin: 'upstream',
+                cause: 'handshake-http-response',
+                phase: 'handshake',
+                code: response?.statusCode,
+            });
+            closeResource(resource, 'handshake-http-response', { phase: 'handshake' });
             const error: any = new Error(`OpenAI Responses WebSocket handshake failed with HTTP ${response?.statusCode || 'unknown'}.`);
             error.statusCode = response?.statusCode;
             reject(error);
@@ -149,14 +262,29 @@ function openSocket(url: string, headers: Record<string, any>, signal: AbortSign
 
 function installIdleRemoval(chain: OpenAIWsCompletedChain<OpenAIWsResource>): void {
     let idleTimer: IdleTimer | undefined;
-    const remove = () => {
+    const remove = (code?: number, reason?: Buffer) => {
+        recordSocketClose(chain.resource, {
+            origin: 'upstream',
+            cause: 'idle-upstream-close',
+            phase: 'idle',
+            code,
+            reason: reason?.toString('utf8'),
+            chain,
+        });
         completedPool.remove(chain.id);
         chain.resource.removeIdleListeners?.();
         chain.resource.removeIdleListeners = undefined;
     };
-    const removeAfterError = () => {
-        remove();
-        closeResource(chain.resource);
+    const removeAfterError = (error: Error) => {
+        recordSocketClose(chain.resource, {
+            origin: 'upstream',
+            cause: 'idle-upstream-error',
+            phase: 'idle',
+            error,
+            chain,
+        });
+        completedPool.remove(chain.id);
+        closeResource(chain.resource, 'idle-upstream-error', { phase: 'idle', chain });
     };
     chain.resource.socket.once('close', remove);
     chain.resource.socket.once('error', removeAfterError);
@@ -170,7 +298,7 @@ function installIdleRemoval(chain: OpenAIWsCompletedChain<OpenAIWsResource>): vo
     };
     idleTimer = idleTimers.set(() => {
         idleTimer = undefined;
-        if (completedPool.remove(chain.id)) closeResource(chain.resource);
+        if (completedPool.remove(chain.id)) closeResource(chain.resource, 'idle-timeout', { phase: 'idle', chain });
     }, OPENAI_WS_IDLE_TIMEOUT_MS);
     idleTimer.unref?.();
     chain.resource.socket._socket?.unref?.();
@@ -202,17 +330,42 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
     if (matched) matched.chain.resource.removeIdleListeners = undefined;
     let resource: OpenAIWsResource;
     try {
-        resource = matched?.chain.resource || await openSocket(wsUrl, options.headers, attemptSignal);
+        resource = matched?.chain.resource || await openSocket(
+            wsUrl,
+            options.headers,
+            attemptSignal,
+            options.diagnostics,
+            () => streamingTimeoutError ? 'handshake-timeout' : 'handshake-abort',
+        );
     } catch (error) {
         watchdog.finish();
         options.signal.removeEventListener('abort', abortAttemptFromOuter);
+        const failure = (streamingTimeoutError || error) as any;
+        emitDiagnostic('warn', {
+            providerType: 'openai-ws',
+            ...options.diagnostics,
+            connectionMode: 'fresh',
+            appendFromItemIndex: 0,
+            discardCause: streamingTimeoutError ? 'handshake-timeout' : (options.signal.aborted ? 'handshake-abort' : 'handshake-failure'),
+            ...(failure?.name ? { errorName: boundedDiagnosticText(failure.name, 80) } : {}),
+            ...(failure?.code ? { errorCode: boundedDiagnosticText(String(failure.code), 80) } : {}),
+        }, 'OpenAI Responses WebSocket attempt discarded before dispatch');
         throw streamingTimeoutError || error;
     }
+    const connectionMode = matched ? 'reused' : 'fresh';
+    const appendFromItemIndex = matched?.appendFromItemIndex || 0;
+    const idleBeforeReuseMs = matched ? Math.max(0, now() - matched.chain.lastUsedAt) : undefined;
+    resource.activeAttempt = {
+        ...options.diagnostics,
+        connectionMode,
+        appendFromItemIndex,
+        ...(idleBeforeReuseMs !== undefined ? { idleBeforeReuseMs } : {}),
+    };
     resource.socket._socket?.ref?.();
     const input = Array.isArray(options.data.input) ? options.data.input : [];
     const responseRequest: Record<string, any> = {
         ...options.data,
-        input: input.slice(matched?.appendFromItemIndex || 0),
+        input: input.slice(appendFromItemIndex),
     };
     delete responseRequest.stream;
     delete responseRequest.previous_response_id;
@@ -225,8 +378,52 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
     let phase: 'active' | 'pending' | 'finished' = 'active';
     let pendingInvalidated = false;
     let completed = false;
+    let createSentAt: number | undefined;
+    let firstFrameAt: number | undefined;
+    let firstContentAt: number | undefined;
+    let frameCount = 0;
+    let frameBytes = 0;
+    let discardLogged = false;
+    let failureCause: string | undefined;
+    let failurePhase: string | undefined;
 
-    const closeLeased = () => closeResource(resource);
+    const summaryFields = () => {
+        const timestamp = now();
+        return {
+            ...attemptDiagnosticFields(resource),
+            requestInputItemCount: input.length,
+            sentInputItemCount: responseRequest.input.length,
+            ...(createSentAt !== undefined ? {
+                createSentAt,
+                elapsedSinceCreateMs: Math.max(0, timestamp - createSentAt),
+            } : {}),
+            frameCount,
+            frameBytes,
+            ...(createSentAt !== undefined && firstFrameAt !== undefined
+                ? { firstFrameElapsedMs: Math.max(0, firstFrameAt - createSentAt) }
+                : {}),
+            ...(createSentAt !== undefined && firstContentAt !== undefined
+                ? { firstContentElapsedMs: Math.max(0, firstContentAt - createSentAt) }
+                : {}),
+        };
+    };
+    const logDiscard = (cause: string, error?: unknown, discardPhase: string = phase) => {
+        if (discardLogged) return;
+        discardLogged = true;
+        const failure = error as any;
+        emitDiagnostic('warn', {
+            ...summaryFields(),
+            discardCause: cause,
+            discardPhase,
+            ...(failure?.name ? { errorName: boundedDiagnosticText(failure.name, 80) } : {}),
+            ...(failure?.code ? { errorCode: boundedDiagnosticText(String(failure.code), 80) } : {}),
+        }, 'OpenAI Responses WebSocket attempt discarded');
+    };
+
+    const closeLeased = (cause: string, closePhase: string = phase) => {
+        recordSocketClose(resource, { origin: 'local', cause, phase: closePhase, details: summaryFields() });
+        closeResource(resource, cause, { phase: closePhase });
+    };
     const cleanupStreaming = () => {
         watchdog.finish();
         resource.socket.off('message', onMessage as any);
@@ -238,21 +435,26 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
         resource.socket.off('close', onClose as any);
         resource.socket.off('error', onError as any);
     };
-    const invalidatePending = (close: boolean) => {
+    const invalidatePending = (close: boolean, cause: string) => {
         if (phase !== 'pending') return;
         pendingInvalidated = true;
+        failureCause = cause;
+        failurePhase = 'pending';
+        logDiscard(cause, undefined, failurePhase);
         phase = 'finished';
         cleanupAll();
-        if (close) closeLeased();
+        if (close) closeLeased(cause, failurePhase);
     };
     const onAbort = () => {
         if (phase === 'finished') return;
         if (phase === 'pending') {
-            invalidatePending(true);
+            invalidatePending(true, streamingTimeoutError ? 'pending-timeout' : 'pending-abort');
             return;
         }
+        failureCause = streamingTimeoutError ? 'attempt-timeout' : 'attempt-abort';
+        failurePhase = 'active';
         phase = 'finished';
-        closeLeased();
+        closeLeased(failureCause, failurePhase);
         // The shared collector observes this same AbortSignal and owns the
         // AbortError rejection. Destroying with an error here races its abort
         // cleanup: the collector can remove the stream error listener before
@@ -262,32 +464,57 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
     };
     const onClose = (code: number, reason: Buffer) => {
         if (phase === 'finished') return;
+        recordSocketClose(resource, {
+            origin: 'upstream',
+            cause: phase === 'pending' ? 'pending-upstream-close' : 'active-upstream-close',
+            phase,
+            code,
+            reason: reason?.toString('utf8'),
+            details: summaryFields(),
+        });
         if (phase === 'pending') {
-            invalidatePending(false);
+            invalidatePending(false, 'pending-upstream-close');
             return;
         }
+        failureCause = 'active-upstream-close';
+        failurePhase = 'active';
         phase = 'finished';
         stream.destroy(new Error(`OpenAI Responses WebSocket closed before completion (${code}${reason?.length ? `: ${reason.toString('utf8')}` : ''}).`));
     };
     const onError = (error: Error) => {
         if (phase === 'finished') return;
+        recordSocketClose(resource, {
+            origin: 'upstream',
+            cause: phase === 'pending' ? 'pending-upstream-error' : 'active-upstream-error',
+            phase,
+            error,
+            details: summaryFields(),
+        });
         if (phase === 'pending') {
-            invalidatePending(true);
+            invalidatePending(true, 'pending-upstream-error');
             return;
         }
+        failureCause = 'active-upstream-error';
+        failurePhase = 'active';
         phase = 'finished';
         stream.destroy(error);
     };
     const onMessage = (raw: RawData) => {
         if (phase !== 'active') return;
         const frame = normalizeFrame(raw);
+        const frameAt = now();
+        if (firstFrameAt === undefined) firstFrameAt = frameAt;
+        frameCount += 1;
+        frameBytes += Buffer.byteLength(frame);
         options.onRawFrame?.(frame);
         let event: any;
         try {
             event = JSON.parse(frame);
         } catch {
+            failureCause = 'malformed-frame';
+            failurePhase = 'active';
             phase = 'finished';
-            closeLeased();
+            closeLeased(failureCause, failurePhase);
             stream.destroy(new Error('OpenAI Responses WebSocket received a malformed JSON frame.'));
             return;
         }
@@ -306,21 +533,38 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
     resource.socket.once('error', onError as any);
     try {
         const envelope = JSON.stringify({ type: 'response.create', ...responseRequest });
+        createSentAt = now();
         resource.socket.send(envelope);
+        emitDiagnostic('info', {
+            ...summaryFields(),
+            connectionAgeMs: Math.max(0, createSentAt - (resource.connectionOpenedAt || resource.connectionStartedAt)),
+        }, 'OpenAI Responses WebSocket request dispatched');
         const response = await collectOpenAIResponsesStream(stream, attemptSignal, {
             onProgress: options.onProgress,
-            onMeaningfulProgress: () => watchdog.markMeaningfulProgress(),
+            onMeaningfulProgress: () => {
+                if (firstContentAt === undefined) firstContentAt = now();
+                watchdog.markMeaningfulProgress();
+            },
         });
         cleanupStreaming();
         const responseId = typeof response?.id === 'string' && response.id.trim() ? response.id.trim() : '';
         if (!completed || pendingInvalidated || options.signal.aborted
             || resource.socket.readyState !== WebSocket.OPEN
             || !responseId || (response?.status && response.status !== 'completed')) {
+            const incompletePhase = phase;
+            failurePhase = incompletePhase;
+            failureCause = 'incomplete-completion';
+            logDiscard(failureCause, undefined, failurePhase);
             phase = 'finished';
             cleanupAll();
-            closeLeased();
+            closeLeased(failureCause, failurePhase);
             throw new Error('OpenAI Responses WebSocket returned an incomplete completion or omitted its response id.');
         }
+        emitDiagnostic('info', {
+            ...summaryFields(),
+            completionPhase: phase,
+            responseStatus: boundedDiagnosticText(response?.status || 'completed', 80),
+        }, 'OpenAI Responses WebSocket request completed');
         let finalized = false;
         return {
             response,
@@ -334,7 +578,15 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
                 phase = 'finished';
                 cleanupAll();
                 if (!reusable) {
-                    closeLeased();
+                    const cause = pendingInvalidated
+                        ? (failureCause || 'pending-invalidated')
+                        : options.signal.aborted
+                            ? 'finalizer-after-abort'
+                            : resource.socket.readyState !== WebSocket.OPEN
+                                ? 'finalizer-socket-not-open'
+                                : 'finalizer-discard';
+                    logDiscard(cause, undefined, 'pending');
+                    closeLeased(cause, 'pending');
                     return;
                 }
                 const expected = extendOpenAIWsPrefix(fingerprint.finalPrefix, replayItems as readonly unknown[]);
@@ -357,9 +609,12 @@ export async function requestOpenAIResponsesWs(options: OpenAIWsRequestOptions):
             },
         };
     } catch (error) {
+        const cause = failureCause
+            || (streamingTimeoutError ? 'attempt-timeout' : options.signal.aborted ? 'attempt-abort' : 'collector-or-transport-error');
+        logDiscard(cause, streamingTimeoutError || error, failurePhase || phase);
         phase = 'finished';
         cleanupAll();
-        closeLeased();
+        closeLeased(cause, failurePhase || 'active');
         throw streamingTimeoutError || error;
     }
 }
@@ -376,10 +631,12 @@ export function setOpenAIWsTransportTestHooks(hooks?: {
     socketFactory?: SocketFactory;
     now?: () => number;
     idleTimers?: IdleTimerHooks;
+    diagnosticLogger?: DiagnosticLogger;
 }): void {
     clearOpenAIWsCompletedChains();
     socketFactory = hooks?.socketFactory || ((url, headers) => new WebSocket(url, { headers }));
     now = hooks?.now || (() => Date.now());
+    diagnosticLogger = hooks?.diagnosticLogger || logger;
     idleTimers = hooks?.idleTimers || {
         set: (callback, delayMs) => setTimeout(callback, delayMs),
         clear: timer => clearTimeout(timer as NodeJS.Timeout),

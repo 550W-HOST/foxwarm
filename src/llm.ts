@@ -2900,6 +2900,13 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions): Promise<I
                         placement: options.currentSessionEffects?.placement || 'local',
                         signal: abortController.signal,
                         hardTimeoutMs: options.timeoutMs,
+                        diagnostics: {
+                            sessionId: options.sessionId,
+                            purpose: options.purpose || 'low-level',
+                            llmRequestId: requestId,
+                            iteration,
+                            attempt,
+                        },
                         onProgress: streamCollectOptions.onProgress,
                         onRawFrame: frame => {
                             attemptRawStreamLog?.appendChunk(`${frame}\n`);

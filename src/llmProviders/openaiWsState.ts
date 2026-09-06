@@ -38,6 +38,8 @@ export type OpenAIWsChainMatch<Resource> = {
     appendFromItemIndex: number;
 };
 
+export type OpenAIWsPoolCloseCause = 'age-expired' | 'duplicate-replaced' | 'lru-eviction' | 'pool-clear';
+
 function sha256(value: string): string {
     return crypto.createHash('sha256').update(value).digest('hex');
 }
@@ -92,7 +94,11 @@ export function extendOpenAIWsPrefix(
 export class OpenAIWsCompletedChainPool<Resource> {
     private readonly idle: OpenAIWsCompletedChain<Resource>[] = [];
 
-    constructor(private readonly closeResource: (resource: Resource) => void) {}
+    constructor(private readonly closeResource: (
+        resource: Resource,
+        cause: OpenAIWsPoolCloseCause,
+        chain: OpenAIWsCompletedChain<Resource>,
+    ) => void) {}
 
     takeLongest(
         connectionFingerprint: string,
@@ -104,7 +110,7 @@ export class OpenAIWsCompletedChainPool<Resource> {
                 const candidate = this.idle[index];
                 if (freshness.now - candidate.createdAt >= freshness.maxAgeMs) {
                     this.idle.splice(index, 1);
-                    this.safeClose(candidate.resource);
+                    this.safeClose(candidate, 'age-expired');
                 }
             }
         }
@@ -142,13 +148,13 @@ export class OpenAIWsCompletedChainPool<Resource> {
         const duplicateIndex = this.idle.findIndex(candidate => candidate.id === chain.id);
         if (duplicateIndex >= 0) {
             const [duplicate] = this.idle.splice(duplicateIndex, 1);
-            if (duplicate.resource !== chain.resource) this.safeClose(duplicate.resource);
+            if (duplicate.resource !== chain.resource) this.safeClose(duplicate, 'duplicate-replaced');
         }
         this.idle.push(chain);
         this.idle.sort((left, right) => right.lastUsedAt - left.lastUsedAt);
         while (this.idle.length > maxIdle) {
             const evicted = this.idle.pop();
-            if (evicted) this.safeClose(evicted.resource);
+            if (evicted) this.safeClose(evicted, 'lru-eviction');
         }
     }
 
@@ -159,16 +165,16 @@ export class OpenAIWsCompletedChainPool<Resource> {
     }
 
     clear(): void {
-        for (const chain of this.idle.splice(0)) this.safeClose(chain.resource);
+        for (const chain of this.idle.splice(0)) this.safeClose(chain, 'pool-clear');
     }
 
     get size(): number {
         return this.idle.length;
     }
 
-    private safeClose(resource: Resource): void {
+    private safeClose(chain: OpenAIWsCompletedChain<Resource>, cause: OpenAIWsPoolCloseCause): void {
         try {
-            this.closeResource(resource);
+            this.closeResource(chain.resource, cause, chain);
         } catch {
             // Pool eviction is best-effort optimization cleanup. Transport
             // owners retain their own error diagnostics and close handling.

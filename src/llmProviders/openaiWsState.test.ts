@@ -25,8 +25,8 @@ test('OpenAI WS pool selects longest exact prefix then newest equal prefix', () 
 });
 
 test('OpenAI WS pool closes LRU entries above five and excludes leased entries from idle count', () => {
-  const closed: string[] = [];
-  const pool = new OpenAIWsCompletedChainPool<string>(resource => closed.push(resource));
+  const closed: Array<{ resource: string; cause: string }> = [];
+  const pool = new OpenAIWsCompletedChainPool<string>((resource, cause) => closed.push({ resource, cause }));
   for (let index = 0; index < 6; index += 1) {
     const fingerprint = request([{ index }]);
     pool.release({
@@ -36,8 +36,27 @@ test('OpenAI WS pool closes LRU entries above five and excludes leased entries f
     }, 5);
   }
   assert.equal(pool.size, 5);
-  assert.deepEqual(closed, ['r0']);
+  assert.deepEqual(closed, [{ resource: 'r0', cause: 'lru-eviction' }]);
   const selected = request([{ index: 5 }]);
   assert.equal(pool.takeLongest('connection-5', selected)?.chain.id, 'c5');
   assert.equal(pool.size, 4);
+});
+
+test('OpenAI WS pool reports age expiry and manual clear as distinct local close causes', () => {
+  const closed: Array<{ resource: string; cause: string }> = [];
+  const pool = new OpenAIWsCompletedChainPool<string>((resource, cause) => closed.push({ resource, cause }));
+  const fingerprint = request([{ n: 1 }]);
+  const chain = (id: string, createdAt: number) => ({
+    id, resource: id, connectionFingerprint: 'connection', invariantHash: fingerprint.invariantHash,
+    expectedPrefixHash: fingerprint.finalPrefix.hash, expectedPrefixItemCount: 1,
+    previousResponseId: `response-${id}`, createdAt, lastUsedAt: createdAt,
+  });
+  pool.release(chain('expired', 0), 5);
+  pool.release(chain('retained', 99), 5);
+  pool.takeLongest('other-connection', fingerprint, { now: 100, maxAgeMs: 50 });
+  pool.clear();
+  assert.deepEqual(closed, [
+    { resource: 'expired', cause: 'age-expired' },
+    { resource: 'retained', cause: 'pool-clear' },
+  ]);
 });

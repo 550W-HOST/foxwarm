@@ -58,7 +58,13 @@ test('normal chat commits provider replay once and the next turn sends only the 
   const { chat } = await llmPromise;
   const transport = await transportPromise;
   const sockets: FakeSocket[] = [];
-  transport.setOpenAIWsTransportTestHooks({ socketFactory: () => {
+  const diagnostics: Array<{ fields: any; message: string }> = [];
+  transport.setOpenAIWsTransportTestHooks({
+    diagnosticLogger: {
+      info(fields: any, message: string) { diagnostics.push({ fields, message }); },
+      warn(fields: any, message: string) { diagnostics.push({ fields, message }); },
+    } as any,
+    socketFactory: () => {
     const socket = new FakeSocket(() => ({
       id: `response-${sockets.length}-${socket.sent.length}`,
       output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'answer' }] }],
@@ -75,6 +81,15 @@ test('normal chat commits provider replay once and the next turn sends only the 
   const secondWire = sockets[0].sent[1];
   assert.equal(secondWire.previous_response_id, 'response-1-1');
   assert.deepEqual(secondWire.input, [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'second' }] }]);
+  const dispatches = diagnostics.filter(entry => entry.message === 'OpenAI Responses WebSocket request dispatched');
+  assert.equal(dispatches.length, 2);
+  assert.equal(dispatches[0].fields.sessionId, 'normal');
+  assert.equal(dispatches[0].fields.purpose, 'normal-turn');
+  assert.equal(dispatches[0].fields.iteration, 0);
+  assert.equal(dispatches[1].fields.iteration, 1);
+  assert.equal(dispatches[0].fields.attempt, 1);
+  assert.match(dispatches[0].fields.llmRequestId, /^[0-9a-f-]{36}$/);
+  assert.notEqual(dispatches[0].fields.llmRequestId, dispatches[1].fields.llmRequestId);
   transport.clearOpenAIWsCompletedChains();
 });
 

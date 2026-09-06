@@ -84,6 +84,17 @@ class FakeIdleTimers {
   };
 }
 
+function captureDiagnostics() {
+  const entries: Array<{ level: 'info' | 'warn'; fields: any; message: string }> = [];
+  return {
+    entries,
+    logger: {
+      info(fields: any, message: string) { entries.push({ level: 'info', fields, message }); },
+      warn(fields: any, message: string) { entries.push({ level: 'warn', fields, message }); },
+    } as any,
+  };
+}
+
 afterEach(() => {
   setOpenAIWsTransportTestHooks();
   setStreamingTimeoutTestHooks();
@@ -126,6 +137,131 @@ test('openai-ws sends a full first request then reuses the exact completed prefi
   assert.equal(sockets[0].sent[1].previous_response_id, 'resp-1');
   assert.equal(Object.prototype.hasOwnProperty.call(sockets[0].sent[1], 'max_output_tokens'), false);
   second.finalize(false);
+});
+
+test('openai-ws diagnostics correlate fresh, reused, completion, discard, and close without request secrets', async () => {
+  const diagnostics = captureDiagnostics();
+  const sockets: FakeSocket[] = [];
+  let clock = 1_000;
+  setOpenAIWsTransportTestHooks({
+    now: () => ++clock,
+    diagnosticLogger: diagnostics.logger,
+    socketFactory: () => {
+      const socket = new FakeSocket((_request, current) => {
+        current.frame({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'DO_NOT_LOG_CONTENT_SENTINEL' });
+        current.frame(completed(`DO_NOT_LOG_RESPONSE_ID_SENTINEL-${current.sent.length}`));
+      });
+      sockets.push(socket);
+      return socket as any;
+    },
+  });
+  const context = { sessionId: 'session-1', purpose: 'chat', llmRequestId: 'request-1', iteration: 3, attempt: 2 };
+  const firstInput = [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'DO_NOT_LOG_PROMPT_SENTINEL' }] }];
+  const replay = [{ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'DO_NOT_LOG_CONTENT_SENTINEL' }] }];
+  const first = await requestOpenAIResponsesWs({
+    url: 'https://example.test/v1/responses?credential=DO_NOT_LOG_URL_SENTINEL',
+    headers: { Authorization: 'DO_NOT_LOG_HEADER_SENTINEL' }, concreteIdentity: 'leaf/model',
+    data: baseData(firstInput, { instructions: 'DO_NOT_LOG_INSTRUCTION_SENTINEL' }), placement: 'local', signal: signal(),
+    hardTimeoutMs: 1000, diagnostics: context,
+  });
+  first.finalize(replay);
+  clock += 25;
+  const second = await requestOpenAIResponsesWs({
+    url: 'https://example.test/v1/responses?credential=DO_NOT_LOG_URL_SENTINEL',
+    headers: { Authorization: 'DO_NOT_LOG_HEADER_SENTINEL' }, concreteIdentity: 'leaf/model',
+    data: baseData([...firstInput, ...replay], { instructions: 'DO_NOT_LOG_INSTRUCTION_SENTINEL' }), placement: 'local', signal: signal(),
+    hardTimeoutMs: 1000, diagnostics: { ...context, iteration: 4, attempt: 1 },
+  });
+  second.finalize(false);
+
+  assert.equal(sockets.length, 1);
+  const dispatches = diagnostics.entries.filter(entry => entry.message === 'OpenAI Responses WebSocket request dispatched');
+  const completions = diagnostics.entries.filter(entry => entry.message === 'OpenAI Responses WebSocket request completed');
+  const discards = diagnostics.entries.filter(entry => entry.message === 'OpenAI Responses WebSocket attempt discarded');
+  const closes = diagnostics.entries.filter(entry => entry.message.includes('closed locally'));
+  assert.equal(dispatches.length, 2);
+  assert.equal(completions.length, 2);
+  assert.equal(discards.length, 1);
+  assert.equal(closes.length, 1);
+  assert.ok(dispatches.every(entry => entry.level === 'info'));
+  assert.ok(completions.every(entry => entry.level === 'info'));
+  assert.equal(discards[0].level, 'warn');
+  assert.equal(closes[0].level, 'info');
+  assert.equal(dispatches[0].fields.connectionMode, 'fresh');
+  assert.equal(dispatches[0].fields.appendFromItemIndex, 0);
+  assert.equal(dispatches[1].fields.connectionMode, 'reused');
+  assert.equal(dispatches[1].fields.appendFromItemIndex, 2);
+  assert.equal(dispatches[1].fields.sentInputItemCount, 0);
+  assert.ok(dispatches[1].fields.idleBeforeReuseMs >= 25);
+  assert.equal(dispatches[0].fields.socketId, dispatches[1].fields.socketId);
+  assert.equal(dispatches[1].fields.sessionId, 'session-1');
+  assert.equal(dispatches[1].fields.llmRequestId, 'request-1');
+  assert.equal(dispatches[1].fields.iteration, 4);
+  assert.equal(dispatches[1].fields.attempt, 1);
+  assert.equal(typeof dispatches[0].fields.connectionOpenedAt, 'number');
+  assert.equal(typeof dispatches[0].fields.createSentAt, 'number');
+  assert.equal(completions[0].fields.frameCount, 2);
+  assert.ok(completions[0].fields.frameBytes > 0);
+  assert.equal(typeof completions[0].fields.firstFrameElapsedMs, 'number');
+  assert.equal(typeof completions[0].fields.firstContentElapsedMs, 'number');
+  assert.equal(discards[0].fields.discardCause, 'finalizer-discard');
+  assert.equal(closes[0].fields.closeCause, 'finalizer-discard');
+  const serialized = JSON.stringify(diagnostics.entries);
+  for (const sentinel of ['DO_NOT_LOG_URL_SENTINEL', 'DO_NOT_LOG_HEADER_SENTINEL', 'DO_NOT_LOG_PROMPT_SENTINEL', 'DO_NOT_LOG_INSTRUCTION_SENTINEL', 'DO_NOT_LOG_RESPONSE_ID_SENTINEL', 'DO_NOT_LOG_CONTENT_SENTINEL']) {
+    assert.equal(serialized.includes(sentinel), false, `diagnostics leaked ${sentinel}`);
+  }
+});
+
+test('openai-ws diagnostics retain bounded upstream close code, reason, and physical attempt context', async () => {
+  const diagnostics = captureDiagnostics();
+  setOpenAIWsTransportTestHooks({
+    diagnosticLogger: diagnostics.logger,
+    socketFactory: () => new FakeSocket((_request, current) => {
+      current.readyState = WebSocket.CLOSED;
+      current.emit('close', 1011, Buffer.from(`upstream websocket proxy failed\n${'x'.repeat(400)}`));
+    }) as any,
+  });
+  await assert.rejects(requestOpenAIResponsesWs({
+    url: 'https://example.test/v1/responses', headers: {}, concreteIdentity: 'leaf/model',
+    data: baseData([]), placement: 'local', signal: signal(), diagnostics: {
+      sessionId: 'session-close', purpose: 'chat', llmRequestId: 'request-close', iteration: 7, attempt: 1,
+    },
+  }), /closed before completion/);
+  const close = diagnostics.entries.find(entry => entry.message === 'OpenAI Responses WebSocket closed by upstream');
+  const discard = diagnostics.entries.find(entry => entry.message === 'OpenAI Responses WebSocket attempt discarded');
+  assert.ok(close);
+  assert.equal(close.level, 'warn');
+  assert.equal(close.fields.closeCode, 1011);
+  assert.equal(close.fields.closeCause, 'active-upstream-close');
+  assert.equal(close.fields.closePhase, 'active');
+  assert.match(close.fields.closeReason, /^upstream websocket proxy failed/);
+  assert.ok(close.fields.closeReason.length <= 241);
+  assert.equal(close.fields.frameCount, 0);
+  assert.equal(close.fields.frameBytes, 0);
+  assert.equal(typeof close.fields.elapsedSinceCreateMs, 'number');
+  assert.equal(close.fields.sessionId, 'session-close');
+  assert.equal(close.fields.llmRequestId, 'request-close');
+  assert.equal(discard?.fields.discardCause, 'active-upstream-close');
+});
+
+test('openai-ws diagnostic sink failures cannot change request or cleanup behavior', async () => {
+  let socket!: FakeSocket;
+  setOpenAIWsTransportTestHooks({
+    diagnosticLogger: {
+      info() { throw new Error('diagnostic sink unavailable'); },
+      warn() { throw new Error('diagnostic sink unavailable'); },
+    } as any,
+    socketFactory: () => {
+      socket = new FakeSocket((_request, current) => current.frame(completed('sink-failure')));
+      return socket as any;
+    },
+  });
+  const pending = await requestOpenAIResponsesWs({
+    url: 'https://example.test/v1/responses', headers: {}, concreteIdentity: 'leaf/model',
+    data: baseData([]), placement: 'local', signal: signal(),
+  });
+  pending.finalize(false);
+  assert.equal(socket.terminated, 1);
 });
 
 test('openai-ws invariant or connection changes force a fresh full request', async () => {
@@ -472,8 +608,9 @@ test('openai-ws meaningful deltas switch to and reset the one-minute inactivity 
 
 test('completed idle chains actively expire and close after one minute without another request', async () => {
   const timers = new FakeIdleTimers();
+  const diagnostics = captureDiagnostics();
   let socket!: FakeSocket;
-  setOpenAIWsTransportTestHooks({ idleTimers: timers.hooks, socketFactory: () => {
+  setOpenAIWsTransportTestHooks({ idleTimers: timers.hooks, diagnosticLogger: diagnostics.logger, socketFactory: () => {
     socket = new FakeSocket((_request, current) => current.frame(completed('idle-expiry')));
     return socket as any;
   }});
@@ -487,6 +624,10 @@ test('completed idle chains actively expire and close after one minute without a
   timers.entries[0].callback();
   assert.equal(socket.terminated, 1);
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
+  const close = diagnostics.entries.find(entry => entry.message === 'OpenAI Responses WebSocket closed locally');
+  assert.equal(close?.fields.closeCause, 'idle-timeout');
+  assert.equal(close?.fields.closePhase, 'idle');
+  assert.equal(typeof close?.fields.idleDurationMs, 'number');
 });
 
 test('reuse cancels the old idle timer and successful release starts a fresh idle period', async () => {
@@ -516,9 +657,10 @@ test('reuse cancels the old idle timer and successful release starts a fresh idl
 
 test('LRU eviction and pool clear cancel every affected idle timer', async () => {
   const timers = new FakeIdleTimers();
+  const diagnostics = captureDiagnostics();
   const sockets: FakeSocket[] = [];
   let clock = 0;
-  setOpenAIWsTransportTestHooks({ idleTimers: timers.hooks, now: () => ++clock, socketFactory: () => {
+  setOpenAIWsTransportTestHooks({ idleTimers: timers.hooks, now: () => ++clock, diagnosticLogger: diagnostics.logger, socketFactory: () => {
     const socket = new FakeSocket((_request, current) => current.frame(completed(`lru-${sockets.length}`)));
     sockets.push(socket);
     return socket as any;
@@ -535,4 +677,9 @@ test('LRU eviction and pool clear cancel every affected idle timer', async () =>
   assert.equal(getOpenAIWsCompletedChainCountForTests(), 0);
   assert.ok(timers.entries.every(entry => entry.cleared));
   assert.ok(sockets.every(socket => socket.terminated === 1));
+  const closeCauses = diagnostics.entries
+    .filter(entry => entry.message === 'OpenAI Responses WebSocket closed locally')
+    .map(entry => entry.fields.closeCause);
+  assert.equal(closeCauses.filter(cause => cause === 'lru-eviction').length, 1);
+  assert.equal(closeCauses.filter(cause => cause === 'pool-clear').length, 5);
 });
