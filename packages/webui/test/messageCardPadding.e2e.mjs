@@ -82,13 +82,13 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-test('assistant and user cards keep an 8px inset in every built-in light and dark variant', async () => {
+test('assistant and user cards keep their shared vertical and role-specific horizontal insets in every built-in variant', async () => {
   const cases = await page.evaluate(() => window.themeCases)
   assert.equal(cases.length, 12)
   for (const { themeId, colorMode } of cases) {
     await page.evaluate(({ themeId, colorMode }) => window.selectFixtureTheme(themeId, colorMode), { themeId, colorMode })
     assert.deepEqual(await readPadding('.foxwarm-assistant-message-card'), ['8px', '8px', '8px', '8px'], `${themeId} ${colorMode} assistant`)
-    assert.deepEqual(await readPadding('.foxwarm-user-message-bubble'), ['8px', '8px', '8px', '8px'], `${themeId} ${colorMode} user`)
+    assert.deepEqual(await readPadding('.foxwarm-user-message-bubble'), ['8px', '12px', '8px', '12px'], `${themeId} ${colorMode} user`)
   }
 })
 

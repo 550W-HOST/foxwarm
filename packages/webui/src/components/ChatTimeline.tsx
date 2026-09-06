@@ -750,7 +750,7 @@ const MessageRow = memo(function MessageRow({
       <div
         className={`min-w-0 ${widthClass} ${
           !systemLikeMessage && msg.role === 'user'
-            ? 'foxwarm-user-message-bubble bg-fw-user-surface text-fw-user-text px-2 py-2 rounded-lg'
+            ? 'foxwarm-user-message-bubble bg-fw-user-surface text-fw-user-text px-3 py-2 rounded-lg'
             : ''
         }`}
       >
