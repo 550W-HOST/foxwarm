@@ -20,12 +20,14 @@ import { deliverCommittedFinal, deliverIntermediateText, finishChannelProgress, 
 import { shutdownToolScriptRuntime } from './toolscript';
 import { VECTOR_ENABLED } from './config';
 import * as agentMetadata from './session/agentMetadata';
+import { setFoxwarmProcessTitle } from './processTitle';
 
 async function start(): Promise<void> {
   const sessionId = process.env.FOXWARM_SESSION_WORKER_SESSION_ID || '';
   const incarnationId = process.env.FOXWARM_SESSION_WORKER_INCARNATION_ID || '';
   const storePath = process.env.FOXWARM_SESSION_WORKER_STORE_PATH || '';
   const generation = Number(process.env.FOXWARM_SESSION_WORKER_GENERATION || 0);
+  setFoxwarmProcessTitle('session', sessionId);
   const processIdentity = readSessionWorkerProcessIdentity(process.pid);
   if (!sessionId || !incarnationId || !storePath || !processIdentity
     || !Number.isSafeInteger(generation) || generation <= 0) {

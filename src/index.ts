@@ -59,6 +59,9 @@ import { scheduleLogRotation } from './logRotation';
 import { startWithRetry } from './startupUtils';
 import { initializeTimers } from './timers';
 import { initializeExecManager } from './execManager';
+import { setFoxwarmProcessTitle } from './processTitle';
+
+setFoxwarmProcessTitle('main');
 
 // Global error handlers
 process.on('unhandledRejection', (reason: any, promise) => {

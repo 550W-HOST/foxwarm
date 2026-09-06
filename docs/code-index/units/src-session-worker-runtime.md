@@ -31,6 +31,7 @@ Ordinary-text channel progress uses the same fixed reverse delivery service: the
 - `SessionWorkerStore.deleteSessionRows()` / `teardownSessionWorkerForDelete()` — the worker-fenced half of closed delete: interrupt, graceful stop with handback, durable fence/mailbox removal requiring an inactive fence; lifecycle failures propagate so callers fail closed.
 - `readSessionWorkerProcessIdentity()` — Linux boot-ID plus proc start-tick identity used to distinguish an exact old process from PID reuse.
 - `sessionWorker.ts` — child bootstrap for the shared-gate control and runtime services.
+- The child bootstrap sets the presentation-only title `foxwarm:session <session-id>` after reading its launch environment. The role-first prefix remains recognizable under Linux's short `comm` display; the existing PID, boot ID, start ticks, generation, and incarnation remain the only lifecycle identity.
 
 ## Durable records
 

@@ -48,6 +48,7 @@ None — this file is the application entry point and does not export any symbol
 
 ## Behavior
 
+- The executable sets the presentation-only process title `foxwarm:main` during bootstrap. The title is not used for runtime identity, lifecycle, or authorization.
 - Registers global `unhandledRejection` and `uncaughtException` handlers (exits on uncaught exception).
 - Initializes the framework-level `agents/00_SYSTEM.md` from `templates/agents/00_SYSTEM.md` for fresh installs, but if legacy `agents/main/memory/00_SYSTEM.md` already exists it leaves the root file absent so runtime fallback preserves the user's existing framework prompt.
 - Initializes main agent memory from `templates/main/memory/` if the memory directory is absent or empty; that template no longer carries the framework `00_SYSTEM.md`, avoiding duplicate prompt injection on fresh installs.

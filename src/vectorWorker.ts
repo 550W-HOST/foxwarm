@@ -2,9 +2,11 @@ import { logger } from './common';
 import { ProcessRpcServer, RpcServiceRegistry } from './rpc';
 import { createVectorServiceHandler, vectorServiceDescriptor } from './vectorService';
 import * as runtime from './vectorRuntime';
+import { setFoxwarmProcessTitle } from './processTitle';
 
 async function start(): Promise<void> {
   const generation = Number(process.env.FOXWARM_VECTOR_WORKER_GENERATION || 0);
+  setFoxwarmProcessTitle('vector');
   if (!Number.isSafeInteger(generation) || generation <= 0) {
     throw new Error('Vector worker requires a positive FOXWARM_VECTOR_WORKER_GENERATION.');
   }
