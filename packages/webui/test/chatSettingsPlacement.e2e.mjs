@@ -16,12 +16,12 @@ let fixtureUrl
 
 async function buildFixtureBundle() {
   const source = `
-    import React, { useEffect, useState } from 'react'
+    import React, { useEffect } from 'react'
     import { createRoot } from 'react-dom/client'
     import SessionUiSettingsMenu from ${JSON.stringify(menuEntry)}
     import ChatTimeline from ${JSON.stringify(timelineEntry)}
+    import { useChatPreferences } from ${JSON.stringify(new URL('../src/chatPreferences.ts', import.meta.url).pathname)}
 
-    const metadataKey = 'foxwarm_show_user_message_metadata_v1'
     const directText = '<foxwarm-message type="channel">\\nuser body\\n</foxwarm-message>\\n<foxwarm-metadata kind="group-message" mentioned="true" />\\n<foxwarm-file name="notes.txt" mime="text/plain" />\\n<foxwarm-image name="photo.png" />'
     const messages = [
       { role: 'user', parts: [{ text: directText }], __meta: { seq: 1 } },
@@ -31,16 +31,10 @@ async function buildFixtureBundle() {
     ]
 
     function Fixture() {
-      const [sendKeyMode, setSendKeyMode] = useState(() => localStorage.getItem('foxwarm_send_key_mode_v1') === 'enter' ? 'enter' : 'modEnter')
-      const [groupTools, setGroupTools] = useState(() => localStorage.getItem('foxwarm_group_tools_v1') === 'true')
-      const [showUsageBadge, setShowUsageBadge] = useState(() => localStorage.getItem('foxwarm_show_usage_badge_v1') !== 'false')
-      const [showMetadata, setShowMetadata] = useState(() => localStorage.getItem(metadataKey) === 'true')
-      useEffect(() => { localStorage.setItem('foxwarm_send_key_mode_v1', sendKeyMode) }, [sendKeyMode])
-      useEffect(() => { localStorage.setItem('foxwarm_group_tools_v1', groupTools ? 'true' : 'false') }, [groupTools])
-      useEffect(() => { localStorage.setItem('foxwarm_show_usage_badge_v1', showUsageBadge ? 'true' : 'false') }, [showUsageBadge])
-      useEffect(() => { localStorage.setItem(metadataKey, showMetadata ? 'true' : 'false') }, [showMetadata])
-      useEffect(() => { window.chatSettingsFixture = { showMetadata } }, [showMetadata])
-      return React.createElement('div', { style: { width: '100%', minWidth: 0 } },
+      const preferences = useChatPreferences()
+      const { sendKeyMode, setSendKeyMode, groupTools, setGroupTools, showUsageBadge, setShowUsageBadge, showUserMessageMetadata: showMetadata, setShowUserMessageMetadata: setShowMetadata } = preferences
+      useEffect(() => { window.chatSettingsFixture = { ...preferences, showMetadata } }, [preferences, showMetadata])
+      return React.createElement('div', { className: 'foxwarm-chat-root', style: { width: '100%', minWidth: 0, overflow: 'hidden' } },
         React.createElement('header', { style: { display: 'flex', justifyContent: 'flex-end', padding: '8px' } },
           React.createElement(SessionUiSettingsMenu, {
             sendKeyMode, onSendKeyModeChange: setSendKeyMode,
@@ -117,7 +111,7 @@ after(async () => {
 
 test('user metadata defaults hidden while bodies, attachment tags, and old system cards remain visible', async () => {
   await mountFixture()
-  assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_show_user_message_metadata_v1')), 'false')
+  assert.notEqual(await page.evaluate(() => localStorage.getItem('foxwarm_show_user_message_metadata_v1')), 'true')
   const text = await page.$eval('main', element => element.textContent || '')
   assert.equal(text.includes('<foxwarm-message'), false)
   assert.equal(text.includes('<foxwarm-metadata'), false)
@@ -182,4 +176,61 @@ test('session menu preserves the minimap re-enable invariant and fits mobile', a
   assert.ok(geometry.right <= geometry.viewport - 7.5)
   assert.equal(await page.evaluate(() => [...document.querySelectorAll('[data-session-ui-settings-menu] button')].find(button => button.textContent?.includes('Show minimap'))?.disabled), true)
   assert.deepEqual(await page.evaluate(() => ({ scrollbar: localStorage.getItem('foxwarm.contextScrollbar.showScrollbar'), minimap: localStorage.getItem('foxwarm.contextScrollbar.showMinimap') })), { scrollbar: 'false', minimap: 'true' })
+})
+
+test('session menu clamps inside a narrow left split pane instead of clipping past its edge', async () => {
+  await mountFixture(1000)
+  await page.$eval('.foxwarm-chat-root', root => {
+    root.style.width = '210px'
+  })
+  await openMenu()
+  const geometry = await page.evaluate(() => {
+    const root = document.querySelector('.foxwarm-chat-root').getBoundingClientRect()
+    const menu = document.querySelector('[data-session-ui-settings-menu]').getBoundingClientRect()
+    return { rootLeft: root.left, rootRight: root.right, menuLeft: menu.left, menuRight: menu.right, menuWidth: menu.width }
+  })
+  assert.ok(geometry.menuLeft >= geometry.rootLeft + 7.5)
+  assert.ok(geometry.menuRight <= geometry.rootRight - 7.5)
+  assert.ok(geometry.menuWidth <= 194.5)
+})
+
+test('outer and embedded Chat roots synchronize all relocated preferences in both directions', async () => {
+  await mountFixture()
+  await page.evaluate(() => {
+    for (const key of ['foxwarm_send_key_mode_v1', 'foxwarm_group_tools_v1', 'foxwarm_show_usage_badge_v1', 'foxwarm_show_user_message_metadata_v1']) localStorage.removeItem(key)
+  })
+  await page.reload({ waitUntil: 'load' })
+  await page.waitForFunction(() => !!window.chatSettingsFixture)
+  await page.evaluate(src => {
+    const iframe = document.createElement('iframe')
+    iframe.id = 'embedded-preferences'
+    iframe.src = src
+    iframe.style.cssText = 'width:420px;height:640px;border:0'
+    document.body.appendChild(iframe)
+  }, fixtureUrl)
+  const embeddedFrame = await page.waitForFrame(frame => frame.parentFrame() === page.mainFrame() && frame.url().startsWith(fixtureUrl))
+  await embeddedFrame.waitForFunction(() => !!window.chatSettingsFixture)
+
+  await openMenu()
+  await clickMenuLabel('Enter')
+  await clickMenuLabel('Group tools')
+  await embeddedFrame.waitForFunction(() => window.chatSettingsFixture?.sendKeyMode === 'enter' && window.chatSettingsFixture?.groupTools === true)
+
+  await embeddedFrame.$eval('button[aria-label="Open session options"]', button => button.click())
+  await embeddedFrame.waitForSelector('[data-session-ui-settings-menu]')
+  await embeddedFrame.evaluate(() => {
+    const buttons = [...document.querySelectorAll('[data-session-ui-settings-menu] button')]
+    for (const label of ['Show usage badges', 'Show user message metadata']) {
+      const button = buttons.find(candidate => candidate.textContent?.trim() === label)
+      if (!(button instanceof HTMLButtonElement)) throw new Error(`Missing embedded menu button: ${label}`)
+      button.click()
+    }
+  })
+  await page.waitForFunction(() => window.chatSettingsFixture?.showUsageBadge === false && window.chatSettingsFixture?.showUserMessageMetadata === true)
+  assert.deepEqual(await page.evaluate(() => ({
+    sendKeyMode: window.chatSettingsFixture.sendKeyMode,
+    groupTools: window.chatSettingsFixture.groupTools,
+    showUsageBadge: window.chatSettingsFixture.showUsageBadge,
+    showUserMessageMetadata: window.chatSettingsFixture.showUserMessageMetadata,
+  })), { sendKeyMode: 'enter', groupTools: true, showUsageBadge: false, showUserMessageMetadata: true })
 })

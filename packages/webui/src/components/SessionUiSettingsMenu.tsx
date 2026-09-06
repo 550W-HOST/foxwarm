@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Menu } from 'lucide-react'
 import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings, writeContextScrollbarSettings } from '../contextScrollbarSettings'
+import { MENU_VIEWPORT_GUTTER, clampAnchoredMenuHorizontally, readHorizontalViewportBounds } from './menuPositioning'
 
 type SendKeyMode = 'modEnter' | 'enter'
 
@@ -29,7 +30,10 @@ export default function SessionUiSettingsMenu({
 }: SessionUiSettingsMenuProps) {
   const [open, setOpen] = useState(false)
   const [contextScrollbarSettings, setContextScrollbarSettings] = useState(readContextScrollbarSettings)
+  const [menuOffset, setMenuOffset] = useState(0)
+  const [menuPositioned, setMenuPositioned] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
   const modifierLabel = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent) ? 'Cmd' : 'Ctrl'
   const toggleRowClass = 'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-fw-text hover:bg-fw-hover dark:text-fw-text dark:hover:bg-fw-hover'
 
@@ -59,6 +63,49 @@ export default function SessionUiSettingsMenu({
     }
   }, [open])
 
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuOffset(0)
+      setMenuPositioned(false)
+      return
+    }
+    let animationFrame = 0
+    let lastGeometry = ''
+    const updatePosition = () => {
+      const anchor = rootRef.current
+      const menu = menuRef.current
+      if (!anchor || !menu) return
+      const viewport = readHorizontalViewportBounds()
+      const chatRect = anchor.closest<HTMLElement>('.foxwarm-chat-root')?.getBoundingClientRect()
+      const bounds = chatRect
+        ? { left: Math.max(viewport.left, chatRect.left), right: Math.min(viewport.right, chatRect.right) }
+        : viewport
+      const safeBounds = bounds.right > bounds.left ? bounds : viewport
+      menu.style.maxWidth = `${Math.max(0, safeBounds.right - safeBounds.left - MENU_VIEWPORT_GUTTER * 2)}px`
+      const anchorRect = anchor.getBoundingClientRect()
+      const menuRect = menu.getBoundingClientRect()
+      const geometry = [anchorRect.left, anchorRect.right, menuRect.width, safeBounds.left, safeBounds.right].join(':')
+      if (geometry !== lastGeometry) {
+        lastGeometry = geometry
+        const placement = clampAnchoredMenuHorizontally({
+          anchorLeft: anchorRect.left,
+          anchorRight: anchorRect.right,
+          menuWidth: menuRect.width,
+          viewport: safeBounds,
+          align: 'end',
+        })
+        setMenuOffset(current => Math.abs(current - placement.offset) < 0.25 ? current : placement.offset)
+        setMenuPositioned(true)
+      }
+    }
+    const watchGeometry = () => {
+      updatePosition()
+      animationFrame = window.requestAnimationFrame(watchGeometry)
+    }
+    watchGeometry()
+    return () => window.cancelAnimationFrame(animationFrame)
+  }, [open])
+
   const toggle = (enabled: boolean) => (
     <span className={`ml-3 inline-flex h-4 w-7 items-center rounded-full transition ${enabled ? 'bg-fw-accent' : 'bg-fw-border-strong dark:bg-fw-text'}`}>
       <span className={`h-3 w-3 rounded-full bg-fw-surface transition ${enabled ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
@@ -78,7 +125,12 @@ export default function SessionUiSettingsMenu({
         <Menu size={20} />
       </button>
       {open && (
-        <div data-session-ui-settings-menu className="absolute right-0 z-50 mt-2 max-h-[min(36rem,calc(100vh-5rem))] w-72 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-lg border border-fw-border bg-fw-surface text-fw-text-strong shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong">
+        <div
+          ref={menuRef}
+          data-session-ui-settings-menu
+          className="absolute right-0 z-50 mt-2 max-h-[min(36rem,calc(100vh-5rem))] w-72 overflow-y-auto rounded-lg border border-fw-border bg-fw-surface text-fw-text-strong shadow-lg dark:border-fw-border dark:bg-fw-surface dark:text-fw-text-strong"
+          style={{ transform: `translateX(${menuOffset}px)`, visibility: menuPositioned ? 'visible' : 'hidden' }}
+        >
           <div className="border-b border-fw-border px-4 py-3 dark:border-fw-border">
             <div className="mb-2 text-xs font-medium text-fw-text-muted">Input</div>
             <div className="flex gap-1">

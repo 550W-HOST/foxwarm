@@ -273,8 +273,16 @@ async function attachRequestMocks(targetPage, options = {}) {
       webUiSettingsRequests.push(body)
       if (webUiSettingsError) void respondJson(request, { error: webUiSettingsError }, 400)
       else {
-        webUiSettings = { instanceName: body.instanceName || '', tabIcon: body.tabIcon || '' }
-        void respondJson(request, { settings: webUiSettings })
+        webUiSettings = {
+          instanceName: Object.prototype.hasOwnProperty.call(body, 'instanceName') ? body.instanceName || '' : webUiSettings.instanceName,
+          tabIcon: Object.prototype.hasOwnProperty.call(body, 'tabIcon') ? body.tabIcon || '' : webUiSettings.tabIcon,
+        }
+        const responseSettings = { ...webUiSettings }
+        if (options.heldWebUiSettingsSaves && options.heldWebUiSettingsSaves.length < 2) {
+          options.heldWebUiSettingsSaves.push({ request, body, responseSettings })
+        } else {
+          void respondJson(request, { settings: responseSettings })
+        }
       }
       return
     }
@@ -527,7 +535,7 @@ test('Appearance owns browser name and tab icon editing with save, cancel, and s
   await page.type('#webui-instance-name', 'Renamed fixture')
   await page.click('button::-p-text(Save name)')
   await page.waitForFunction(() => document.querySelector('#webui-instance-name')?.value === 'Renamed fixture')
-  assert.deepEqual(webUiSettingsRequests.at(-1), { instanceName: 'Renamed fixture', tabIcon: '🧪' })
+  assert.deepEqual(webUiSettingsRequests.at(-1), { instanceName: 'Renamed fixture' })
 
   webUiSettingsError = 'Tab icon is too long'
   await page.click('#webui-tab-icon', { clickCount: 3 })
@@ -536,6 +544,59 @@ test('Appearance owns browser name and tab icon editing with save, cancel, and s
   await page.waitForFunction(() => document.querySelector('[data-webui-branding-settings] [role="alert"]')?.textContent?.includes('Tab icon is too long'))
   assert.equal(await page.$eval('#webui-tab-icon', input => input.value), 'icon that is too long')
   webUiSettingsError = null
+})
+
+test('overlapping browser name and icon saves keep both server and UI fields across reversed responses', async () => {
+  const heldWebUiSettingsSaves = []
+  const racePage = await browser.newPage()
+  webUiSettings = { instanceName: 'Before name', tabIcon: '🔵' }
+  await attachRequestMocks(racePage, { heldWebUiSettingsSaves })
+  try {
+    await racePage.goto(`${baseUrl}/branding-race/#setup`, { waitUntil: 'networkidle2' })
+    await racePage.waitForSelector('[data-webui-branding-settings]')
+    await racePage.$eval('#webui-instance-name', (input, value) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }, 'After name')
+    await racePage.click('button::-p-text(Save name)')
+    await racePage.$eval('#webui-tab-icon', (input, value) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }, '🟢')
+    await racePage.click('button::-p-text(Save icon)')
+    const deadline = Date.now() + 10_000
+    while (heldWebUiSettingsSaves.length < 2 && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+    assert.equal(heldWebUiSettingsSaves.length, 2)
+    assert.deepEqual(heldWebUiSettingsSaves.map(entry => entry.body), [{ instanceName: 'After name' }, { tabIcon: '🟢' }])
+    assert.deepEqual(webUiSettings, { instanceName: 'After name', tabIcon: '🟢' })
+
+    await respondJson(heldWebUiSettingsSaves[1].request, { settings: heldWebUiSettingsSaves[1].responseSettings })
+    await respondJson(heldWebUiSettingsSaves[0].request, { settings: heldWebUiSettingsSaves[0].responseSettings })
+    await racePage.waitForFunction(() => (
+      document.querySelector('#webui-instance-name')?.value === 'After name'
+      && document.querySelector('#webui-tab-icon')?.value === '🟢'
+      && [...document.querySelectorAll('[data-webui-branding-settings] button')].some(button => button.textContent?.trim() === 'Save name')
+      && [...document.querySelectorAll('[data-webui-branding-settings] button')].some(button => button.textContent?.trim() === 'Save icon')
+    ))
+
+    webUiSettingsError = 'Rejected icon'
+    await racePage.$eval('#webui-tab-icon', (input, value) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }, 'bad icon')
+    await racePage.click('button::-p-text(Save icon)')
+    await racePage.waitForSelector('[data-webui-branding-settings] [role="alert"]')
+    assert.equal(await racePage.$eval('#webui-instance-name', input => input.value), 'After name')
+    assert.equal(webUiSettings.instanceName, 'After name')
+  } finally {
+    webUiSettingsError = null
+    await racePage.close()
+  }
 })
 
 test('Config tab status reflects enabled channel health and ignores disabled channels', async () => {

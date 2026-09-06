@@ -1,6 +1,6 @@
 # Unit: webui-settings-menu
 
-Files: packages/webui/src/components/GlobalUiSettingsMenu.tsx, packages/webui/src/components/SessionUiSettingsMenu.tsx, packages/webui/src/contextScrollbarSettings.ts, packages/webui/src/components/menuPositioning.ts, packages/webui/test/settingsMenuPosition.e2e.mjs, packages/webui/test/chatSettingsPlacement.e2e.mjs
+Files: packages/webui/src/components/GlobalUiSettingsMenu.tsx, packages/webui/src/components/SessionUiSettingsMenu.tsx, packages/webui/src/chatPreferences.ts, packages/webui/src/contextScrollbarSettings.ts, packages/webui/src/components/menuPositioning.ts, packages/webui/test/settingsMenuPosition.e2e.mjs, packages/webui/test/chatSettingsPlacement.e2e.mjs
 
 ## Purpose
 
@@ -34,9 +34,11 @@ Renders the compact global UI dropdown for color mode, Setup, and reload plus th
 - Provides only the frequent `Auto` / `Light` / `Dark` color-mode control. Setup's Appearance tab repeats color mode above its palette preview and exclusively owns theme-family and portable file management.
 - The session-header menu provides `groupTools`, `showUsageBadge`, browser-local `Show minimap`, and `Show user message metadata`. Minimap remains disabled only when it is the sole enabled context display, so scrollbar/minimap preferences cannot become both disabled.
 - The session-header menu detects macOS/iOS to display the correct modifier key label (Cmd vs Ctrl) for the send-key option.
+- `useChatPreferences` is the single browser-local owner used by ordinary and embedded Chat roots. Setters write the established keys and update their own root; `storage` events update other roots without writeback effects or stale echoes.
 - The global menu closes automatically after color-mode change or Setup activation. Both menus close on Escape/outside click; opening Debug also closes the session menu.
 - `menuAlign` remains the preferred start/end alignment rather than an absolute promise. While open, the component measures the trigger/menu against the body and visual viewport, preserves the preferred alignment when it fits, and translates the menu only enough to keep an 8px horizontal gutter on both edges.
 - Horizontal placement stays live while the menu is open, so viewport resize, sidebar width/position changes, scroll, browser zoom/pinch zoom, and menu width changes are re-clamped without closing the menu. Menu height-only changes do not alter horizontal placement.
+- The session-header menu uses the same placement helpers and intersects the viewport with its nearest Chat root, so a narrow split pane shrinks and clamps the menu inside the pane's clipping boundary.
 - The menu keeps its existing in-tree absolute positioning and z-index rather than moving into a global portal, so Code iframe/stacking behavior and unrelated dropdowns/popovers are unchanged.
 - Both the normal and Code-embedded sidebars prefer `menuAlign="end"`. When `setupActive` is true, the gear trigger and Setup menu row use the same blue selected treatment.
 

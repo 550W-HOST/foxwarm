@@ -41,6 +41,7 @@ The server retains structured `/setup/models` request handling and `/setup/model
 - Forced mode is closable only after the active models file exists. WebUI itself makes the channel-availability check non-blocking.
 - A positive `focusModelsRequest` activates the Models tab, scrolls to its panel, and focuses its Monaco editor.
 - Appearance hosts `ThemeManager` for theme-family selection, in-place Auto/Light/Dark palette preview, and portable import/export/clone/delete. A separate section below theme management edits the server-backed browser instance name and tab icon with the existing save/clear/cancel/error behavior. The compact global settings menu retains color mode as a quick control. Theme behavior is owned by [webui-theme-system](./webui-theme-system.md).
+- Browser name/icon saves send only the field being edited. Each successful response merges only that field into current UI state, preserving a successful sibling-field save even when two requests resolve out of order; failed saves leave the other field unchanged.
 - If lazy editor support loading or configuration rejects, the Models and app-config surfaces remain controlled plain-text editors, so OOBE can still be completed and canonical backend validation still owns Save. Internal worker health is not probed after initialization; Monaco remains editable if schema assistance later degrades.
 
 ## Integration
