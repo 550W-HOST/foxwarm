@@ -4,26 +4,27 @@ import {
   serializeThemeManifest,
   validateThemeManifest,
   type ThemeColorMode,
-  type ThemeManifestV1,
+  type ThemeManifest,
 } from './manifest'
 
-export const THEME_SELECTION_STORAGE_KEY = 'foxwarm_theme_selection_v1'
-export const CUSTOM_THEMES_STORAGE_KEY = 'foxwarm_custom_themes_v1'
+export const THEME_SELECTION_STORAGE_KEY = 'foxwarm_theme_selection_v2'
+export const LEGACY_THEME_SELECTION_STORAGE_KEY = 'foxwarm_theme_selection_v1'
+export const CUSTOM_THEMES_STORAGE_KEY = 'foxwarm_custom_themes_v2'
 export const LEGACY_COLOR_MODE_STORAGE_KEY = 'themeMode'
 export const LEGACY_THEME_STYLE_STORAGE_KEY = 'foxwarm_ui_theme_style_v1'
 export const MAX_CUSTOM_THEMES = 32
 
 export type ThemeStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
-export type ThemeSelection = { version: 1; themeId: string; colorMode: ThemeColorMode }
+export type ThemeSelection = { version: 2; themeId: string; colorMode: ThemeColorMode }
 export type ThemeSummary = { id: string; name: string; description?: string; author?: string; builtIn: boolean }
 export type ThemeRegistrySnapshot = {
-  themes: readonly ThemeManifestV1[]
+  themes: readonly ThemeManifest[]
   summaries: readonly ThemeSummary[]
-  customThemes: readonly ThemeManifestV1[]
+  customThemes: readonly ThemeManifest[]
   errors: readonly string[]
 }
 
-type StoredCustomThemes = { version: 1; themes: ThemeManifestV1[] }
+type StoredCustomThemes = { version: 2; themes: ThemeManifest[] }
 
 const COLOR_MODES = new Set<ThemeColorMode>(['auto', 'light', 'dark'])
 
@@ -43,8 +44,8 @@ function safeSet(storage: ThemeStorage | null | undefined, key: string, value: s
 function normalizeSelection(value: unknown): ThemeSelection | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const raw = value as Record<string, unknown>
-  if (raw.version !== 1 || typeof raw.themeId !== 'string' || !COLOR_MODES.has(raw.colorMode as ThemeColorMode)) return null
-  return { version: 1, themeId: raw.themeId, colorMode: raw.colorMode as ThemeColorMode }
+  if (raw.version !== 2 || typeof raw.themeId !== 'string' || !COLOR_MODES.has(raw.colorMode as ThemeColorMode)) return null
+  return { version: 2, themeId: raw.themeId, colorMode: raw.colorMode as ThemeColorMode }
 }
 
 export function readThemeSelection(storage: ThemeStorage | null | undefined): ThemeSelection {
@@ -56,13 +57,28 @@ export function readThemeSelection(storage: ThemeStorage | null | undefined): Th
     } catch {}
   }
 
+  // V2 isolates current selection writes from older live WebUI bundles. Those
+  // bundles listen to and may rewrite the V1 key when they encounter a newer
+  // built-in ID that is absent from their compiled registry.
+  const previousSelection = safeGet(storage, LEGACY_THEME_SELECTION_STORAGE_KEY)
+  if (previousSelection) {
+    try {
+      const raw = JSON.parse(previousSelection) as Record<string, unknown>
+      if (raw.version === 1 && typeof raw.themeId === 'string' && COLOR_MODES.has(raw.colorMode as ThemeColorMode)) {
+        const migrated: ThemeSelection = { version: 2, themeId: raw.themeId, colorMode: raw.colorMode as ThemeColorMode }
+        safeSet(storage, THEME_SELECTION_STORAGE_KEY, JSON.stringify(migrated))
+        return migrated
+      }
+    } catch {}
+  }
+
   const legacyMode = safeGet(storage, LEGACY_COLOR_MODE_STORAGE_KEY)
   const colorMode: ThemeColorMode = COLOR_MODES.has(legacyMode as ThemeColorMode)
     ? legacyMode as ThemeColorMode
     : 'auto'
   const legacyStyle = safeGet(storage, LEGACY_THEME_STYLE_STORAGE_KEY)
   const selection: ThemeSelection = {
-    version: 1,
+    version: 2,
     themeId: legacyStyle === '550a' ? 'foxwarm.550a' : DEFAULT_THEME_ID,
     colorMode,
   }
@@ -76,15 +92,15 @@ export function writeThemeSelection(storage: ThemeStorage | null | undefined, se
   return safeSet(storage, THEME_SELECTION_STORAGE_KEY, JSON.stringify(normalized))
 }
 
-function readStoredCustomThemes(storage: ThemeStorage | null | undefined): { themes: ThemeManifestV1[]; errors: string[] } {
+function readStoredCustomThemes(storage: ThemeStorage | null | undefined): { themes: ThemeManifest[]; errors: string[] } {
   const serialized = safeGet(storage, CUSTOM_THEMES_STORAGE_KEY)
   if (!serialized) return { themes: [], errors: [] }
   try {
-    const raw = JSON.parse(serialized) as Partial<StoredCustomThemes>
-    if (raw.version !== 1 || !Array.isArray(raw.themes)) {
+    const raw = JSON.parse(serialized) as { version?: unknown; themes?: unknown }
+    if (raw.version !== 2 || !Array.isArray(raw.themes)) {
       return { themes: [], errors: ['custom theme storage has an unsupported shape'] }
     }
-    const themes: ThemeManifestV1[] = []
+    const themes: ThemeManifest[] = []
     const errors: string[] = []
     const ids = new Set<string>()
     for (const [index, candidate] of raw.themes.slice(0, MAX_CUSTOM_THEMES).entries()) {
@@ -111,9 +127,9 @@ function readStoredCustomThemes(storage: ThemeStorage | null | undefined): { the
   }
 }
 
-function writeCustomThemes(storage: ThemeStorage | null | undefined, themes: readonly ThemeManifestV1[]): boolean {
+function writeCustomThemes(storage: ThemeStorage | null | undefined, themes: readonly ThemeManifest[]): boolean {
   if (themes.length > MAX_CUSTOM_THEMES) return false
-  const payload: StoredCustomThemes = { version: 1, themes: [...themes] }
+  const payload: StoredCustomThemes = { version: 2, themes: [...themes] }
   return safeSet(storage, CUSTOM_THEMES_STORAGE_KEY, JSON.stringify(payload))
 }
 
@@ -135,8 +151,8 @@ export function readThemeRegistry(storage: ThemeStorage | null | undefined): The
 }
 
 export type InstallThemeResult =
-  | { ok: true; theme: ThemeManifestV1; replaced: boolean; warnings: string[] }
-  | { ok: false; errors: string[]; conflictTheme?: ThemeManifestV1 }
+  | { ok: true; theme: ThemeManifest; replaced: boolean; warnings: string[] }
+  | { ok: false; errors: string[]; conflictTheme?: ThemeManifest }
 
 export function installThemeFromJson(
   storage: ThemeStorage | null | undefined,

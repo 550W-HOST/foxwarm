@@ -6,22 +6,25 @@ Theme packages and the active selection are stored in the current browser. They 
 
 ## Built-ins
 
-Foxwarm ships two immutable built-ins:
+Foxwarm ships five immutable built-ins. The registry stays intentionally small so each option has a distinct visual grammar rather than being a palette-only variation:
 
 - `foxwarm.default` — the standard Foxwarm appearance.
-- `foxwarm.550a` — the dense console-inspired appearance.
+- `foxwarm.550a` — a restrained machine-console theme inspired by the 550-series computer design language: gray-white modular housings, dark instrumentation, rectilinear panel seams, and one focused red sensor beacon rather than broad red decoration.
+- `foxwarm.paper` — a warm outlined parchment/editorial theme with serif reading text.
+- `foxwarm.seaglass` — a structured teal workspace with moderate-radius outlined panels, banded headers, right-side disclosure, and a dotted depth field.
+- `foxwarm.vector` — Vector: a modern technical workbench with restrained geometry, integrated headers, right disclosure, cyan operations, and magenta system signals.
 
-Both are ordinary version-1 manifests and use the same runtime as imported themes. Export either built-in from Appearance to obtain a complete starting file, then use **Clone** or edit the exported file with a new ID.
+All are ordinary version-2 manifests and use the same runtime as imported themes. Export any built-in from Appearance to obtain a complete starting file, then use **Clone** or edit the exported file with a new ID.
 
 IDs beginning with `foxwarm.` are reserved. A custom theme ID must contain 3–64 lowercase letters, numbers, dots, underscores, or hyphens.
 
 ## Portable file contract
 
-The conventional suffix is `.foxwarm-theme.json`. A version-1 file has this top-level shape:
+The conventional suffix is `.foxwarm-theme.json`. A version-2 file has this top-level shape:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "example.my-theme",
   "name": "My Theme",
   "description": "Optional description",
@@ -35,14 +38,16 @@ The conventional suffix is `.foxwarm-theme.json`. A version-1 file has this top-
 
 Each variant is complete and contains:
 
-- `colors` — semantic canvas, surface, border, text, accent, status, message, code, diff, scrollbar, and terminal colors;
+- `colors` — semantic canvas, surface, border, text, accent, status, tool-operation, message, code/syntax, diff surface/text, scrollbar, and terminal colors. Version 2 gives tool operations, activity/minimap segments, syntax roles, and diff foregrounds dedicated families instead of borrowing status colors;
 - `typography` — UI/message/code font stacks, bounded sizes, and line heights;
-- `shape` — bounded radii, border width, and control height;
+- `shape` — bounded general plus role-specific message/card/control/tag/composer radii, card gap/inset, border width, and control height;
 - `effects` — bounded shadow, glow, press-offset, and transition values;
-- `backgroundPattern` — `none` or a bounded semantic-color grid;
+- `composition` — bounded density, card, header, control, separator, label, and icon treatments;
+- `backgroundPattern` — `none`, `grid`, `dots`, `lines`, or `scanlines`, generated locally from semantic colors;
+- `displayEffect` — either `none` or a bounded CRT display treatment with validated scan, phosphor-mask, bloom, glass, vignette, reflection, and refresh-roll parameters;
 - `componentTreatment` — `standard` or `console`.
 
-Exporting a built-in is the authoritative way to obtain all required version-1 fields. Export output is canonical JSON and can be imported into another Foxwarm browser.
+Exporting a built-in is the authoritative way to obtain all required version-2 fields. Export output is canonical JSON and can be imported into another Foxwarm browser. Version-1 files are rejected with a visible validation error rather than receiving guessed values for newly introduced semantic roles.
 
 ## Safety and validation
 
@@ -51,6 +56,7 @@ Theme files are declarative data. Foxwarm rejects:
 - unknown or missing fields;
 - unsupported schema versions;
 - arbitrary CSS, selectors, scripts, or remote assets;
+- custom shaders, textures, or executable display effects;
 - non-hex colors;
 - out-of-range numeric values;
 - oversized files and an oversized local custom-theme registry.

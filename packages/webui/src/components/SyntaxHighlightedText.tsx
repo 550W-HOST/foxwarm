@@ -2,15 +2,15 @@ import type { ReactNode } from 'react'
 import { inferSimpleLanguage, type SimpleLanguage } from '../utils/languages'
 
 const tokenClass = {
-  comment: 'text-fw-text-muted italic',
-  string: 'text-fw-success dark:text-fw-success',
-  number: 'text-fw-accent dark:text-fw-accent',
-  keyword: 'text-fw-special dark:text-fw-special font-semibold',
-  literal: 'text-fw-info font-semibold',
-  heading: 'text-fw-text-strong font-semibold',
-  tag: 'text-fw-danger dark:text-fw-danger',
-  attr: 'text-fw-warning dark:text-fw-warning',
-  property: 'text-fw-info dark:text-fw-info',
+  comment: 'text-fw-syntax-comment italic',
+  string: 'text-fw-syntax-string',
+  number: 'text-fw-syntax-number',
+  keyword: 'text-fw-syntax-keyword font-semibold',
+  literal: 'text-fw-syntax-literal font-semibold',
+  heading: 'text-fw-syntax-heading font-semibold',
+  tag: 'text-fw-syntax-tag',
+  attr: 'text-fw-syntax-attribute',
+  property: 'text-fw-syntax-property',
 } as const
 
 type TokenKind = keyof typeof tokenClass

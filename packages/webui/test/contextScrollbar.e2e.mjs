@@ -387,8 +387,10 @@ test('tool error bars retain their final error tone instead of the legend tool c
   await mount(1000, 1000, 720, false, true)
   const colors = await page.evaluate(() => ({
     errorBar: getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-tone-tool-error')).backgroundColor,
+    completedBar: getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-tone-tool-success')).backgroundColor,
     legendTool: getComputedStyle(document.querySelector('.foxwarm-context-scrollbar-legend-swatch.foxwarm-context-scrollbar-category-tools')).backgroundColor,
   }))
+  assert.equal(colors.completedBar, colors.legendTool)
   assert.notEqual(colors.errorBar, colors.legendTool)
 })
 

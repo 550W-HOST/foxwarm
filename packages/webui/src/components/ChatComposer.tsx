@@ -1476,7 +1476,7 @@ const ChatComposer = memo(function ChatComposer({
           <button
             type="submit"
             disabled={loading || sessionMissing || (!input.trim() && attachments.length === 0)}
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-fw-text-strong text-fw-surface transition hover:bg-fw-text disabled:bg-fw-border-strong disabled:text-fw-text-muted disabled:cursor-not-allowed"
+            className="foxwarm-composer-send-button inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-fw-text-strong text-fw-surface transition hover:bg-fw-text disabled:bg-fw-border-strong disabled:text-fw-text-muted disabled:cursor-not-allowed"
             aria-label="Send message"
             title="Send message"
           >

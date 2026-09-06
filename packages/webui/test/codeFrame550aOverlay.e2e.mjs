@@ -36,19 +36,16 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-test('550A scanlines remain above WebUI content but below the persistent Code iframe', async () => {
+test('console treatment avoids a page-wide overlay while Code keeps its established layer', async () => {
   await page.goto(fixtureUrl, { waitUntil: 'load' })
   const layers = await page.evaluate(() => {
-    const scanlines = getComputedStyle(document.body, '::after')
+    const overlay = getComputedStyle(document.body, '::after')
     const frame = document.querySelector('[data-foxwarm-vscode-web-frame]')
     return {
-      scanlineZIndex: Number(scanlines.zIndex),
+      overlayContent: overlay.content,
       frameZIndex: Number(getComputedStyle(frame).zIndex),
-      scanlinePointerEvents: scanlines.pointerEvents,
     }
   })
-  assert.equal(layers.scanlinePointerEvents, 'none')
-  assert.equal(layers.scanlineZIndex, 34, 'scanlines remain layered over ordinary WebUI content')
+  assert.equal(layers.overlayContent, 'none')
   assert.equal(layers.frameZIndex, 35, 'the persistent Code iframe keeps its established layer')
-  assert.ok(layers.frameZIndex > layers.scanlineZIndex, 'the persistent Code iframe stays above the 550A scanlines')
 })

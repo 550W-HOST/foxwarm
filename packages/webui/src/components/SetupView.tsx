@@ -378,7 +378,7 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-fw-surface-sunken dark:bg-fw-canvas-edge">
+    <div className="flex h-full min-h-0 flex-col bg-fw-canvas">
       <ContentHeader
         icon={<Settings className="h-5 w-5" />}
         title={forced ? 'Foxwarm first-time setup' : 'Foxwarm Setup'}
@@ -407,10 +407,10 @@ export default function SetupView({ forced = false, onClose, onSetupChanged, foc
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">
         <div className="mx-auto max-w-5xl">
-          {loading && <div className="rounded-xl border border-fw-border bg-fw-surface p-4 text-sm text-fw-text dark:border-fw-border-muted dark:bg-fw-canvas dark:text-fw-text">Loading setup status…</div>}
+          {loading && <div className="rounded-xl border border-fw-border bg-fw-surface p-4 text-sm text-fw-text dark:border-fw-border-muted dark:text-fw-text">Loading setup status…</div>}
           {error && <div className="mt-4 rounded-xl border border-fw-danger-border bg-fw-danger-surface p-4 text-sm text-fw-danger dark:border-fw-danger-border/60 dark:bg-fw-danger-surface-strong/30 dark:text-fw-danger">{error}</div>}
 
-          <div className="overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-sm dark:border-fw-border-muted dark:bg-fw-canvas">
+          <div className="overflow-hidden rounded-xl border border-fw-border bg-fw-surface shadow-sm dark:border-fw-border-muted">
             <div className="border-b border-fw-border px-2 pt-2 dark:border-fw-border-muted">
               <div role="tablist" aria-label="Setup sections" className="flex gap-1">
                 <button

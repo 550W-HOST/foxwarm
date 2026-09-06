@@ -1919,6 +1919,7 @@ const Chat = memo(function Chat({ sessionId, canonicalSessionId, sessionDisplayN
             <div aria-hidden="true" style={{ height: 'var(--chat-composer-offset, 224px)' }} />
           </div>
         </div>
+        <div className="foxwarm-display-effect-overlay" aria-hidden="true" />
         {showScrollTopButton && (
           <button
             onClick={scrollToTop}

@@ -778,7 +778,7 @@ export interface ToolTagItem {
 
 const toolTagToneClasses: Record<ToolTagTone, string> = {
   neutral: 'border-fw-border-strong bg-fw-neutral-surface text-fw-text dark:border-fw-border-strong dark:bg-fw-canvas/60 dark:text-fw-text',
-  success: 'border-fw-success-border bg-fw-success-surface text-fw-success dark:border-fw-success-border dark:bg-fw-success-surface-strong/20 dark:text-fw-success',
+  success: 'border-fw-tool-border bg-fw-tool-surface text-fw-tool dark:border-fw-tool-border dark:bg-fw-tool-surface-strong/20 dark:text-fw-tool',
   error: 'border-fw-danger-border bg-fw-danger-surface text-fw-danger dark:border-fw-danger-border dark:bg-fw-danger-surface-strong/20 dark:text-fw-danger',
   system: 'border-fw-system-border bg-fw-system-surface-strong text-fw-system-accent dark:bg-fw-system-surface/20',
 }
